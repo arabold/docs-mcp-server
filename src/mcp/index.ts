@@ -550,13 +550,9 @@ ${formattedResults.join("")}`,
     await server.connect(transport);
     logger.info("Documentation MCP server running on stdio");
 
-    // Handle cleanup
-    process.on("SIGINT", async () => {
-      await pipelineManager.stop(); // Stop the pipeline manager
-      await docService.shutdown();
+    return async () => {
       await server.close();
-      process.exit(0);
-    });
+    };
   } catch (error) {
     await docService.shutdown(); // Ensure docService shutdown on error too
     logger.error(`❌ Fatal Error: ${error}`);
