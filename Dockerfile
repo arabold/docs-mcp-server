@@ -36,5 +36,7 @@ ENV DOCS_MCP_STORE_PATH=/data
 # Define volumes
 VOLUME /data
 
+EXPOSE 3000
+
 # Set the command to run the application
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/main.js"]
