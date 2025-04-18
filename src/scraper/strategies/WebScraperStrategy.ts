@@ -3,6 +3,19 @@ import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
 import { hasSameDomain, hasSameHostname, isSubpath } from "../../utils/url";
 import { HttpFetcher } from "../fetcher";
+import type { RawContent } from "../fetcher/types";
+import { ContentProcessingPipeline } from "../middleware/ContentProcessorPipeline";
+// Import new and updated middleware from index
+import {
+  HtmlDomParserMiddleware,
+  HtmlLinkExtractorMiddleware,
+  HtmlMetadataExtractorMiddleware,
+  HtmlSanitizerMiddleware,
+  HtmlToMarkdownMiddleware,
+  MarkdownLinkExtractorMiddleware,
+  MarkdownMetadataExtractorMiddleware,
+} from "../middleware/components";
+import type { ContentProcessingContext } from "../middleware/types";
 import type { ScraperOptions, ScraperProgress } from "../types";
 import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
 
@@ -68,43 +81,97 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       };
 
       // Pass options to fetcher
-      const rawContent = await this.httpFetcher.fetch(url, fetchOptions);
-      const processor = this.getProcessor(rawContent.mimeType);
-      const result = await processor.process(rawContent);
+      const rawContent: RawContent = await this.httpFetcher.fetch(url, fetchOptions);
 
-      // Filter out links
-      const baseUrl = new URL(options.url);
-      const links = result.links.filter((link) => {
+      // --- Start Middleware Pipeline ---
+      const initialContext: ContentProcessingContext = {
+        content: rawContent.content,
+        contentType: rawContent.mimeType,
+        source: rawContent.source, // Use the final source URL after redirects
+        metadata: {},
+        links: [],
+        errors: [],
+        options,
+        fetcher: this.httpFetcher,
+      };
+
+      let pipeline: ContentProcessingPipeline;
+      if (initialContext.contentType.startsWith("text/html")) {
+        // Updated HTML pipeline order
+        pipeline = new ContentProcessingPipeline([
+          new HtmlDomParserMiddleware(),
+          new HtmlMetadataExtractorMiddleware(),
+          new HtmlLinkExtractorMiddleware(), // Extract links before cleaning
+          new HtmlSanitizerMiddleware(),
+          new HtmlToMarkdownMiddleware(),
+        ]);
+      } else if (
+        initialContext.contentType === "text/markdown" ||
+        initialContext.contentType === "text/plain" // Treat plain text as markdown
+      ) {
+        pipeline = new ContentProcessingPipeline([
+          new MarkdownMetadataExtractorMiddleware(),
+          new MarkdownLinkExtractorMiddleware(), // Placeholder for now
+        ]);
+      } else {
+        // Unsupported content type, treat as error or skip
+        logger.warn(
+          `Unsupported content type "${initialContext.contentType}" for URL ${url}. Skipping processing.`,
+        );
+        // Return empty result, allowing crawl to potentially continue if links were somehow extracted elsewhere
+        return { document: undefined, links: [] };
+      }
+
+      const finalContext = await pipeline.run(initialContext);
+      // --- End Middleware Pipeline ---
+
+      // Log errors from pipeline
+      for (const err of finalContext.errors) {
+        logger.warn(`Processing error for ${url}: ${err.message}`);
+      }
+
+      // Check if content processing resulted in usable content
+      if (typeof finalContext.content !== "string" || !finalContext.content.trim()) {
+        logger.warn(`No processable content found for ${url} after pipeline execution.`);
+        // Return empty but allow crawl to continue based on extracted links
+        return { document: undefined, links: finalContext.links };
+      }
+
+      // Filter extracted links based on scope and custom filter
+      const baseUrl = new URL(options.url); // Use the original base URL for scope calculation
+      const filteredLinks = finalContext.links.filter((link) => {
         try {
-          const targetUrl = new URL(link, baseUrl);
-
-          // Determine scope - use 'subpages' as default
+          const targetUrl = new URL(link); // Links should be absolute now
           const scope = options.scope || "subpages";
-
-          // Apply scope and custom filter logic
           return (
             this.isInScope(baseUrl, targetUrl, scope) &&
             (!this.shouldFollowLinkFn || this.shouldFollowLinkFn(baseUrl, targetUrl))
           );
         } catch {
-          return false;
+          return false; // Ignore invalid URLs
         }
       });
 
       return {
         document: {
-          content: result.content,
+          content: finalContext.content, // Final processed content (Markdown)
           metadata: {
-            url: result.source,
-            title: result.title,
+            url: finalContext.source, // URL after redirects
+            // Ensure title is a string, default to "Untitled"
+            title:
+              typeof finalContext.metadata.title === "string"
+                ? finalContext.metadata.title
+                : "Untitled",
             library: options.library,
             version: options.version,
+            // Add other metadata from context if needed
           },
         } satisfies Document,
-        links,
+        links: filteredLinks, // Use the filtered links
       };
     } catch (error) {
-      logger.error(`Failed to scrape page ${url}: ${error}`);
+      // Log fetch errors or pipeline execution errors (if run throws)
+      logger.error(`Failed processing page ${url}: ${error}`);
       throw error;
     }
   }

@@ -7,7 +7,6 @@ import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_PAGES } from "../config";
 import { PipelineManager } from "../pipeline/PipelineManager";
 import { PipelineJobStatus } from "../pipeline/types";
 import { FileFetcher, HttpFetcher } from "../scraper/fetcher";
-import { HtmlProcessor } from "../scraper/processor";
 import { DocumentManagementService } from "../store/DocumentManagementService";
 import {
   CancelJobTool,
@@ -49,11 +48,8 @@ export async function startServer() {
       getJobInfo: new GetJobInfoTool(pipelineManager),
       cancelJob: new CancelJobTool(pipelineManager),
       remove: new RemoveTool(docService),
-      fetchUrl: new FetchUrlTool(
-        new HttpFetcher(),
-        new FileFetcher(),
-        new HtmlProcessor(),
-      ),
+      // FetchUrlTool now uses middleware pipeline internally
+      fetchUrl: new FetchUrlTool(new HttpFetcher(), new FileFetcher()),
     };
 
     const server = new McpServer(

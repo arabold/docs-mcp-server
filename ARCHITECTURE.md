@@ -29,7 +29,10 @@ src/
 │   │   └── LocalFileStrategy.ts     # Handles local filesystem content
 │   │   └── ...
 │   ├── fetcher/                     # Content fetching abstractions
-│   ├── processor/                   # Content processing abstractions
+│   ├── middleware/                  # Content processing pipeline & middleware
+│   │   ├── Pipeline.ts              # Orchestrates middleware execution
+│   │   ├── types.ts                 # Context and middleware interfaces
+│   │   └── components/              # Individual middleware implementations
 │   └── ...
 ├── splitter/                        # Document splitting and chunking
 ├── store/                           # Document storage and retrieval
@@ -56,20 +59,69 @@ Each source type has a dedicated strategy that understands its specific protocol
 
 ### Content Processing Flow
 
+Raw content fetched by a strategy's `fetcher` (e.g., HTML, Markdown) is processed through a configurable middleware pipeline. See the Middleware Pipeline section below for details.
+
 ```mermaid
-graph LR
-    S[Source URL] --> R[Registry]
-    R --> ST[Strategy Selection]
-    ST --> F[Fetch Content]
-    F --> P[Process Content]
-    P --> D[Document Creation]
+graph TD
+    subgraph Strategy Execution
+        F[Fetcher Fetches RawContent]
+        CtxIn[Create Initial Context]
+        Pipe[Run Pipeline]
+        CtxOut[Get Final Context]
+        Doc[Create Document from Context]
+    end
+
+    subgraph ContentProcessingPipeline
+        direction LR
+        M1[Middleware 1] --> M2[Middleware 2] --> M3[...]
+    end
+
+    F --> CtxIn
+    CtxIn --> Pipe
+    Pipe -- Passes Context --> M1
+    M1 -- Passes Context --> M2
+    M2 -- Passes Context --> M3
+    M3 -- Returns Final Context --> CtxOut
+    CtxOut --> Doc
 ```
 
-The registry automatically selects the appropriate strategy based on the URL scheme, ensuring:
+- **`ContentProcessingContext`**: An object passed through the pipeline, carrying the content (initially raw, potentially transformed), MIME type, source URL, extracted metadata, links, errors, and options. HTML processing also uses a `dom` property on the context to hold the parsed JSDOM object.
+- **`ContentProcessorMiddleware`**: Individual, reusable components that perform specific tasks on the context, such as:
+  - Parsing HTML (`HtmlDomParserMiddleware`)
+  - Extracting metadata (`HtmlMetadataExtractorMiddleware`, `MarkdownMetadataExtractorMiddleware`)
+  - Extracting links (`HtmlLinkExtractorMiddleware`, `MarkdownLinkExtractorMiddleware`)
+  - Sanitizing and cleaning HTML (`HtmlSanitizerMiddleware`)
+  - Converting HTML to Markdown (`HtmlToMarkdownMiddleware`)
+- **`ContentProcessingPipeline`**: Executes a sequence of middleware components in order, passing the context object between them.
+- **Strategies (`WebScraperStrategy`, `LocalFileStrategy`, etc.)**: Construct and run the appropriate pipeline based on the fetched content's MIME type. After the pipeline completes, the strategy uses the final `content` and `metadata` from the context to create the `Document` object.
 
-- Consistent handling across different content sources
-- Unified document format for storage
-- Reusable content processing logic
+This middleware approach ensures:
+
+- **Modularity:** Processing steps are isolated and reusable.
+- **Configurability:** Pipelines can be easily assembled for different content types.
+- **Testability:** Individual middleware components can be tested independently.
+- **Consistency:** Ensures a unified document format regardless of the source.
+
+### Middleware Pipeline
+
+The core of content processing is the middleware pipeline (`ContentProcessingPipeline` located in `src/scraper/middleware/`). This pattern allows for modular and reusable processing steps.
+
+- **`ContentProcessingContext`**: An object passed through the pipeline, carrying the content (initially raw, potentially transformed), MIME type, source URL, extracted metadata, links, errors, and options. HTML processing also uses a `dom` property on the context to hold the parsed JSDOM object.
+- **`ContentProcessorMiddleware`**: Individual, reusable components that perform specific tasks on the context, such as:
+  - Parsing HTML (`HtmlDomParserMiddleware`)
+  - Extracting metadata (`HtmlMetadataExtractorMiddleware`, `MarkdownMetadataExtractorMiddleware`)
+  - Extracting links (`HtmlLinkExtractorMiddleware`, `MarkdownLinkExtractorMiddleware`)
+  - Sanitizing and cleaning HTML (`HtmlSanitizerMiddleware`)
+  - Converting HTML to Markdown (`HtmlToMarkdownMiddleware`)
+- **`ContentProcessingPipeline`**: Executes a sequence of middleware components in order, passing the context object between them.
+- **Strategies (`WebScraperStrategy`, `LocalFileStrategy`, etc.)**: Construct and run the appropriate pipeline based on the fetched content's MIME type. After the pipeline completes, the strategy uses the final `content` and `metadata` from the context to create the `Document` object.
+
+This middleware approach ensures:
+
+- **Modularity:** Processing steps are isolated and reusable.
+- **Configurability:** Pipelines can be easily assembled for different content types.
+- **Testability:** Individual middleware components can be tested independently.
+- **Consistency:** Ensures a unified document format regardless of the source.
 
 ## Tools Layer
 

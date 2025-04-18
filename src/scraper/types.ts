@@ -25,7 +25,7 @@ export interface ScraperOptions {
   /**
    * Defines the allowed crawling boundary relative to the starting URL
    * - 'subpages': Only crawl URLs on the same hostname and within the same starting path (default)
-   * - 'hostname': Crawl any URL on the same hostname, regardless of path
+   * - 'hostname': Crawl any URL on the same exact hostname, regardless of path
    * - 'domain': Crawl any URL on the same top-level domain, including subdomains
    */
   scope?: "subpages" | "hostname" | "domain";
@@ -37,6 +37,10 @@ export interface ScraperOptions {
   followRedirects?: boolean;
   maxConcurrency?: number;
   ignoreErrors?: boolean;
+  /** CSS selectors for elements to exclude during HTML processing */
+  excludeSelectors?: string[];
+  /** Optional AbortSignal for cancellation */
+  signal?: AbortSignal;
 }
 
 /**

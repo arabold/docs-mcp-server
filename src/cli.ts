@@ -5,7 +5,6 @@ import packageJson from "../package.json";
 import { DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_DEPTH, DEFAULT_MAX_PAGES } from "./config";
 import { PipelineManager } from "./pipeline/PipelineManager";
 import { FileFetcher, HttpFetcher } from "./scraper/fetcher";
-import { HtmlProcessor } from "./scraper/processor";
 import { DocumentManagementService } from "./store/DocumentManagementService";
 import {
   FetchUrlTool,
@@ -36,11 +35,7 @@ async function main() {
       findVersion: new FindVersionTool(docService),
       scrape: new ScrapeTool(docService, pipelineManager), // Pass manager
       search: new SearchTool(docService),
-      fetchUrl: new FetchUrlTool(
-        new HttpFetcher(),
-        new FileFetcher(),
-        new HtmlProcessor(),
-      ),
+      fetchUrl: new FetchUrlTool(new HttpFetcher(), new FileFetcher()),
     };
 
     const program = new Command();

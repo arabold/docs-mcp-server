@@ -238,8 +238,25 @@ describe("LocalFileStrategy", () => {
       },
       "/",
     );
-    await expect(strategy.scrape(options, progressCallback)).rejects.toThrowError(
-      "Empty Markdown content",
+
+    await strategy.scrape(options, progressCallback);
+
+    // Expect the callback to be called once with an empty document
+    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pagesScraped: 1,
+        currentUrl: "file:///testdir/empty.md",
+        document: {
+          content: "", // Expect empty string content
+          metadata: expect.objectContaining({
+            title: "Untitled", // Expect default title
+            url: "file:///testdir/empty.md",
+            library: "test",
+            version: "1.0",
+          }),
+        },
+      }),
     );
   });
 });
