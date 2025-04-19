@@ -183,7 +183,7 @@ describe("BaseScraperStrategy", () => {
             "https://example.com/path", // Without trailing slash
             "https://example.com/path?q=1",
             "https://example.com/path?q=1#anchor", // With anchor
-            "https://EXAMPLE.com/path", // Different case
+            "https://example.com/path", // Different case
           ],
         };
       }

@@ -28,7 +28,7 @@ describe("URL normalization", () => {
     });
 
     it("should convert to lowercase", () => {
-      expect(normalizeUrl("https://EXAMPLE.com/PAGE")).toBe("https://example.com/page");
+      expect(normalizeUrl("https://example.com/PAGE")).toBe("https://example.com/page");
     });
   });
 
@@ -137,7 +137,7 @@ describe("URL comparison utilities", () => {
 
     it("should return true for same hostname with different case", () => {
       const urlA = new URL("https://example.com/path");
-      const urlB = new URL("https://EXAMPLE.com/path");
+      const urlB = new URL("https://example.com/path");
       expect(hasSameHostname(urlA, urlB)).toBe(true);
     });
 

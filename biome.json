@@ -12,5 +12,17 @@
   },
   "files": {
     "include": ["src/**/*.ts"]
-  }
+  },
+  "overrides": [
+    {
+      "include": ["src/**/*.test.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    }
+  ]
 }

@@ -3,7 +3,6 @@ import { CancellationError } from "../../pipeline/errors";
 import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import { type UrlNormalizerOptions, normalizeUrl } from "../../utils/url";
-import { type ContentProcessor, HtmlProcessor, MarkdownProcessor } from "../processor";
 import type { ScraperOptions, ScraperProgress, ScraperStrategy } from "../types";
 
 // Define defaults for optional options
@@ -47,12 +46,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     links?: string[];
   }>;
 
-  protected getProcessor(mimeType: string): ContentProcessor {
-    if (mimeType.startsWith("text/html")) {
-      return new HtmlProcessor();
-    }
-    return new MarkdownProcessor();
-  }
+  // Removed getProcessor method as processing is now handled by strategies using middleware pipelines
 
   protected async processBatch(
     batch: QueueItem[],

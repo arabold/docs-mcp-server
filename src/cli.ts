@@ -5,7 +5,7 @@ import packageJson from "../package.json";
 import { DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_DEPTH, DEFAULT_MAX_PAGES } from "./config";
 import { PipelineManager } from "./pipeline/PipelineManager";
 import { FileFetcher, HttpFetcher } from "./scraper/fetcher";
-import { HtmlProcessor } from "./scraper/processor";
+import { ScrapeMode } from "./scraper/types"; // Import ScrapeMode enum
 import { DocumentManagementService } from "./store/DocumentManagementService";
 import {
   FetchUrlTool,
@@ -36,11 +36,7 @@ async function main() {
       findVersion: new FindVersionTool(docService),
       scrape: new ScrapeTool(docService, pipelineManager), // Pass manager
       search: new SearchTool(docService),
-      fetchUrl: new FetchUrlTool(
-        new HttpFetcher(),
-        new FileFetcher(),
-        new HtmlProcessor(),
-      ),
+      fetchUrl: new FetchUrlTool(new HttpFetcher(), new FileFetcher()),
     };
 
     const program = new Command();
@@ -97,6 +93,21 @@ async function main() {
         "--no-follow-redirects",
         "Disable following HTTP redirects (default: follow redirects)",
       )
+      .option(
+        "--scrape-mode <mode>",
+        `HTML processing strategy: '${ScrapeMode.Fetch}', '${ScrapeMode.Playwright}', '${ScrapeMode.Auto}' (default)`,
+        (value: string): ScrapeMode => {
+          const validModes = Object.values(ScrapeMode);
+          if (!validModes.includes(value as ScrapeMode)) {
+            console.warn(
+              `Warning: Invalid scrape mode '${value}'. Using default '${ScrapeMode.Auto}'.`,
+            );
+            return ScrapeMode.Auto;
+          }
+          return value as ScrapeMode; // Cast to enum type
+        },
+        ScrapeMode.Auto, // Use enum default
+      )
       .action(async (library, url, options) => {
         // Update action parameters
         const result = await tools.scrape.execute({
@@ -110,6 +121,7 @@ async function main() {
             ignoreErrors: options.ignoreErrors,
             scope: options.scope,
             followRedirects: options.followRedirects, // This will be `true` by default, or `false` if --no-follow-redirects is used
+            scrapeMode: options.scrapeMode, // Pass the new scrapeMode option
           },
           // CLI always waits for completion (default behavior)
         });
@@ -217,10 +229,26 @@ async function main() {
         "--no-follow-redirects",
         "Disable following HTTP redirects (default: follow redirects)",
       )
+      .option(
+        "--scrape-mode <mode>",
+        `HTML processing strategy: '${ScrapeMode.Fetch}', '${ScrapeMode.Playwright}', '${ScrapeMode.Auto}' (default)`,
+        (value: string): ScrapeMode => {
+          const validModes = Object.values(ScrapeMode);
+          if (!validModes.includes(value as ScrapeMode)) {
+            console.warn(
+              `Warning: Invalid scrape mode '${value}'. Using default '${ScrapeMode.Auto}'.`,
+            );
+            return ScrapeMode.Auto;
+          }
+          return value as ScrapeMode; // Cast to enum type
+        },
+        ScrapeMode.Auto, // Use enum default
+      )
       .action(async (url, options) => {
         const content = await tools.fetchUrl.execute({
           url,
           followRedirects: options.followRedirects,
+          scrapeMode: options.scrapeMode, // Pass the scrapeMode option
         });
         console.log(content);
       });

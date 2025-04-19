@@ -32,9 +32,11 @@
     "lint": "biome check .",
     "format": "biome format . --write",
     "db:generate": "drizzle-kit generate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "postinstall": "npx playwright install --no-shell --with-deps chromium"
   },
   "dependencies": {
+    "@joplin/turndown-plugin-gfm": "^1.0.61",
     "@langchain/aws": "^0.1.8",
     "@langchain/community": "^0.3.34",
     "@langchain/google-genai": "^0.2.3",
@@ -53,6 +55,7 @@
     "jsdom": "^26.0.0",
     "langchain": "0.3.19",
     "pg": "^8.14.0",
+    "playwright": "^1.52.0",
     "psl": "^1.15.0",
     "remark": "^15.0.1",
     "remark-gfm": "^4.0.1",

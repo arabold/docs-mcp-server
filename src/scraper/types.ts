@@ -1,5 +1,13 @@
-import type { Document } from "../types";
-import type { ProgressCallback } from "../types";
+import type { Document, ProgressCallback } from "../types";
+
+/**
+ * Enum defining the available HTML processing strategies.
+ */
+export enum ScrapeMode {
+  Fetch = "fetch",
+  Playwright = "playwright",
+  Auto = "auto",
+}
 
 /**
  * Strategy interface for implementing different scraping behaviors
@@ -25,7 +33,7 @@ export interface ScraperOptions {
   /**
    * Defines the allowed crawling boundary relative to the starting URL
    * - 'subpages': Only crawl URLs on the same hostname and within the same starting path (default)
-   * - 'hostname': Crawl any URL on the same hostname, regardless of path
+   * - 'hostname': Crawl any URL on the same exact hostname, regardless of path
    * - 'domain': Crawl any URL on the same top-level domain, including subdomains
    */
   scope?: "subpages" | "hostname" | "domain";
@@ -37,6 +45,18 @@ export interface ScraperOptions {
   followRedirects?: boolean;
   maxConcurrency?: number;
   ignoreErrors?: boolean;
+  /** CSS selectors for elements to exclude during HTML processing */
+  excludeSelectors?: string[];
+  /**
+   * Determines the HTML processing strategy.
+   * - 'fetch': Use a simple DOM parser (faster, less JS support).
+   * - 'playwright': Use a headless browser (slower, full JS support).
+   * - 'auto': Automatically select the best strategy (currently defaults to 'playwright').
+   * @default ScrapeMode.Auto
+   */
+  scrapeMode?: ScrapeMode;
+  /** Optional AbortSignal for cancellation */
+  signal?: AbortSignal;
 }
 
 /**

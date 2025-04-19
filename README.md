@@ -267,7 +267,8 @@ docs-cli fetch-url <url> [options]
 
 **Options:**
 
-- `--no-follow-redirects`: Disable following HTTP redirects (default: follow redirects)
+- `--no-follow-redirects`: Disable following HTTP redirects (default: follow redirects).
+- `--scrape-mode <mode>`: HTML processing strategy: 'fetch' (fast, less JS), 'playwright' (slow, full JS), 'auto' (default).
 
 **Examples:**
 
@@ -292,6 +293,9 @@ docs-cli scrape <library> <url> [options]
 - `-p, --max-pages <number>`: Maximum pages to scrape (default: 1000).
 - `-d, --max-depth <number>`: Maximum navigation depth (default: 3).
 - `-c, --max-concurrency <number>`: Maximum concurrent requests (default: 3).
+- `--scope <scope>`: Defines the crawling boundary: 'subpages' (default), 'hostname', or 'domain'.
+- `--no-follow-redirects`: Disable following HTTP redirects (default: follow redirects).
+- `--scrape-mode <mode>`: HTML processing strategy: 'fetch' (fast, less JS), 'playwright' (slow, full JS), 'auto' (default).
 - `--ignore-errors`: Ignore errors during scraping (default: true).
 
 **Examples:**

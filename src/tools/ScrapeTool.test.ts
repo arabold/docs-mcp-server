@@ -1,17 +1,16 @@
 import { type Mock, beforeEach, describe, expect, it, vi } from "vitest";
-import { PipelineManager } from "../pipeline/PipelineManager"; // Import new manager
-import type { PipelineJob, PipelineManagerCallbacks } from "../pipeline/types"; // Import manager types
+import { PipelineManager } from "../pipeline/PipelineManager";
+import type { PipelineJob, PipelineManagerCallbacks } from "../pipeline/types";
 import { PipelineJobStatus } from "../pipeline/types";
-import type { ScraperProgress } from "../scraper/types";
+import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import type { ProgressResponse } from "../types";
-import type { Document } from "../types"; // Import local Document type
-import { logger } from "../utils/logger";
+import type { Document } from "../types";
 import { ScrapeTool, type ScrapeToolOptions } from "./ScrapeTool";
 
 // Mock dependencies
 vi.mock("../store/DocumentManagementService");
-vi.mock("../pipeline/PipelineManager"); // Mock the new manager
+vi.mock("../pipeline/PipelineManager");
 vi.mock("../utils/logger");
 
 describe("ScrapeTool", () => {
@@ -143,6 +142,7 @@ describe("ScrapeTool", () => {
         maxDepth: 2, // Overridden
         maxConcurrency: 5, // Test override
         ignoreErrors: false, // Overridden
+        scrapeMode: ScrapeMode.Auto, // Use enum
       },
     );
     expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);

@@ -32,8 +32,16 @@ describe("SearchTool", () => {
   };
 
   const mockSearchResults: StoreSearchResult[] = [
-    { url: "http://example.com/page1", content: "Content for result 1", score: 0.9 },
-    { url: "http://example.com/page2", content: "Content for result 2", score: 0.8 },
+    {
+      url: "http://example.com/page1",
+      content: "Content for result 1",
+      score: 0.9,
+    },
+    {
+      url: "http://example.com/page2",
+      content: "Content for result 2",
+      score: 0.8,
+    },
   ];
 
   // --- Search Logic & Version Resolution Tests ---
