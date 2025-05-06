@@ -1,4 +1,13 @@
-import { type Mock, afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  type Mock,
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { VECTOR_DIMENSION } from "./types";
 
 // --- Mocking Setup ---
@@ -16,17 +25,19 @@ import { createEmbeddingModel } from "./embeddings/EmbeddingFactory";
   embedDocuments: vi.fn(),
 });
 
-// Mock better-sqlite3
+/**
+ * Initial generic mocks for better-sqlite3.
+ * Will be replaced with dynamic mocks after vi.mock due to hoisting.
+ */
 const mockStatementAll = vi.fn().mockReturnValue([]);
-// Ensure the mock statement object covers methods used by *all* statements prepared in DocumentStore
 const mockStatement = {
   all: mockStatementAll,
-  run: vi.fn().mockReturnValue({ changes: 0, lastInsertRowid: 1 }), // Mock run for insert/delete
-  get: vi.fn().mockReturnValue(undefined), // Mock get for getById/checkExists etc.
+  run: vi.fn().mockReturnValue({ changes: 0, lastInsertRowid: 1 }),
+  get: vi.fn().mockReturnValue(undefined),
 };
-const mockPrepare = vi.fn().mockReturnValue(mockStatement);
+let mockPrepare = vi.fn().mockReturnValue(mockStatement);
 const mockDb = {
-  prepare: mockPrepare,
+  prepare: (...args: unknown[]) => mockPrepare(...args),
   exec: vi.fn(),
   transaction: vi.fn(
     (fn) =>
@@ -36,8 +47,19 @@ const mockDb = {
   close: vi.fn(),
 };
 vi.mock("better-sqlite3", () => ({
-  default: vi.fn(() => mockDb), // Mock the default export (constructor)
+  default: vi.fn(() => mockDb),
 }));
+
+/**
+ * Simplified mockPrepare: always returns a generic statement object.
+ * Test-specific SQL overrides are set up in each test/describe as needed.
+ */
+mockPrepare = vi.fn(() => ({
+  get: vi.fn().mockReturnValue(undefined),
+  run: vi.fn().mockReturnValue({ changes: 1, lastInsertRowid: 1 }),
+  all: mockStatementAll,
+}));
+mockDb.prepare = (...args: unknown[]) => mockPrepare(...args);
 
 // Mock sqlite-vec
 vi.mock("sqlite-vec", () => ({
@@ -59,14 +81,14 @@ describe("DocumentStore", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks(); // Clear call history etc.
+    mockStatementAll.mockClear();
+    mockStatementAll.mockReturnValue([]);
 
     // Reset the mock factory implementation for this test run
     (createEmbeddingModel as ReturnType<typeof vi.fn>).mockReturnValue({
       embedQuery: mockEmbedQuery,
       embedDocuments: mockEmbedDocuments,
     });
-    mockPrepare.mockReturnValue(mockStatement); // <-- Re-configure prepare mock return value
-
     // Reset embedQuery to handle initialization vector
     mockEmbedQuery.mockResolvedValue(new Array(VECTOR_DIMENSION).fill(0.1));
 
@@ -284,35 +306,85 @@ describe("DocumentStore", () => {
   });
 
   describe("Embedding Model Dimensions", () => {
+    let getLibraryIdByNameMock: Mock;
+    let insertLibraryMock: Mock;
+    let lastInsertedVector: number[];
+
+    beforeEach(() => {
+      getLibraryIdByNameMock = vi.fn().mockReturnValue({ id: 1 });
+      insertLibraryMock = vi.fn().mockReturnValue({ changes: 1, lastInsertRowid: 1 });
+      lastInsertedVector = [];
+
+      mockPrepare.mockImplementation((sql: string) => {
+        if (sql.includes("SELECT id FROM libraries WHERE name = ?")) {
+          return {
+            get: getLibraryIdByNameMock,
+            run: vi.fn(),
+            all: mockStatementAll,
+          };
+        }
+        if (sql.includes("INSERT INTO libraries")) {
+          return {
+            run: insertLibraryMock,
+            get: vi.fn(),
+            all: mockStatementAll,
+          };
+        }
+        if (sql.includes("INSERT INTO documents_vec")) {
+          return {
+            run: vi.fn((...args) => {
+              if (typeof args[3] === "string") {
+                try {
+                  const arr = JSON.parse(args[3]);
+                  if (Array.isArray(arr)) lastInsertedVector = arr;
+                } catch {}
+              }
+              return { changes: 1, lastInsertRowid: 1 };
+            }),
+            get: vi.fn(),
+            all: mockStatementAll,
+          };
+        }
+        return {
+          get: vi.fn(),
+          run: vi.fn().mockReturnValue({ changes: 1, lastInsertRowid: 1 }),
+          all: mockStatementAll,
+        };
+      });
+    });
+
+    afterEach(() => {
+      mockPrepare.mockImplementation(() => ({
+        get: vi.fn().mockReturnValue(undefined),
+        run: vi.fn().mockReturnValue({ changes: 1, lastInsertRowid: 1 }),
+        all: mockStatementAll,
+      }));
+    });
+
     it("should accept a model that produces ${VECTOR_DIMENSION}-dimensional vectors", async () => {
-      // Mock a ${VECTOR_DIMENSION}-dimensional vector
       mockEmbedQuery.mockResolvedValueOnce(new Array(VECTOR_DIMENSION).fill(0.1));
       documentStore = new DocumentStore(":memory:");
       await expect(documentStore.initialize()).resolves.not.toThrow();
     });
 
     it("should accept and pad vectors from models with smaller dimensions", async () => {
-      // Mock 768-dimensional vectors
       mockEmbedQuery.mockResolvedValueOnce(new Array(768).fill(0.1));
       mockEmbedDocuments.mockResolvedValueOnce([new Array(768).fill(0.1)]);
 
       documentStore = new DocumentStore(":memory:");
       await documentStore.initialize();
 
-      // Should pad to ${VECTOR_DIMENSION} when inserting
       const doc = {
         pageContent: "test content",
         metadata: { title: "test", url: "http://test.com", path: ["test"] },
       };
 
-      // This should succeed (vectors are padded internally)
       await expect(
         documentStore.addDocuments("test-lib", "1.0.0", [doc]),
       ).resolves.not.toThrow();
     });
 
     it("should reject models that produce vectors larger than ${VECTOR_DIMENSION} dimensions", async () => {
-      // Mock a 3072-dimensional vector (like text-embedding-3-large)
       mockEmbedQuery.mockResolvedValueOnce(new Array(3072).fill(0.1));
       documentStore = new DocumentStore(":memory:");
       await expect(documentStore.initialize()).rejects.toThrow(
@@ -321,12 +393,11 @@ describe("DocumentStore", () => {
     });
 
     it("should pad both document and query vectors consistently", async () => {
-      // Mock 768-dimensional vectors for both init and subsequent operations
       const smallVector = new Array(768).fill(0.1);
       mockEmbedQuery
-        .mockResolvedValueOnce(smallVector) // for initialization
-        .mockResolvedValueOnce(smallVector); // for search query
-      mockEmbedDocuments.mockResolvedValueOnce([smallVector]); // for document embeddings
+        .mockResolvedValueOnce(smallVector)
+        .mockResolvedValueOnce(smallVector);
+      mockEmbedDocuments.mockResolvedValueOnce([smallVector]);
 
       documentStore = new DocumentStore(":memory:");
       await documentStore.initialize();
@@ -336,24 +407,26 @@ describe("DocumentStore", () => {
         metadata: { title: "test", url: "http://test.com", path: ["test"] },
       };
 
-      // Add a document (this pads the document vector)
+      mockStatementAll.mockImplementationOnce(() => [
+        {
+          id: "id1",
+          content: "content",
+          metadata: JSON.stringify({}),
+          vec_score: 1,
+          fts_score: 1,
+        },
+      ]);
+
       await documentStore.addDocuments("test-lib", "1.0.0", [doc]);
 
-      // Search should work (query vector gets padded too)
       await expect(
         documentStore.findByContent("test-lib", "1.0.0", "test query", 5),
       ).resolves.not.toThrow();
 
-      // Verify both vectors were padded (via the JSON stringification)
-      const insertCall = mockStatement.run.mock.calls.find(
-        (call) => call[0]?.toString().startsWith("1"), // Looking for rowid=1
-      );
       const searchCall = mockStatementAll.mock.lastCall;
-
-      // Both vectors should be stringified arrays of length ${VECTOR_DIMENSION}
-      const insertVector = JSON.parse(insertCall?.[3] || "[]");
       const searchVector = JSON.parse(searchCall?.[2] || "[]");
-      expect(insertVector.length).toBe(VECTOR_DIMENSION);
+
+      expect(lastInsertedVector.length).toBe(VECTOR_DIMENSION);
       expect(searchVector.length).toBe(VECTOR_DIMENSION);
     });
   });
