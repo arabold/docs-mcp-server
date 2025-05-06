@@ -48,6 +48,8 @@ export class DocumentStore {
     getPrecedingSiblings: Database.Statement;
     getSubsequentSiblings: Database.Statement;
     getParentChunk: Database.Statement;
+    insertLibrary: Database.Statement;
+    getLibraryIdByName: Database.Statement;
   };
 
   /**
@@ -116,19 +118,32 @@ export class DocumentStore {
     const statements = {
       getById: this.db.prepare("SELECT * FROM documents WHERE id = ?"),
       insertDocument: this.db.prepare(
-        "INSERT INTO documents (library, version, url, content, metadata, sort_order, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)", // Added indexed_at
+        "INSERT INTO documents (library_id, version, url, content, metadata, sort_order, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
       ),
       insertEmbedding: this.db.prepare<[number, string]>(
         "INSERT INTO documents_vec (rowid, library, version, embedding) VALUES (?, ?, ?, ?)",
       ),
+      insertLibrary: this.db.prepare(
+        "INSERT INTO libraries (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
+      ),
+      getLibraryIdByName: this.db.prepare("SELECT id FROM libraries WHERE name = ?"),
       deleteDocuments: this.db.prepare(
-        "DELETE FROM documents WHERE library = ? AND version = ?",
+        `DELETE FROM documents
+         WHERE library_id = (SELECT id FROM libraries WHERE name = ?)
+         AND version = ?`,
       ),
       queryVersions: this.db.prepare(
-        "SELECT DISTINCT version FROM documents WHERE library = ? ORDER BY version",
+        `SELECT DISTINCT d.version
+         FROM documents d
+         JOIN libraries l ON d.library_id = l.id
+         WHERE l.name = ?
+         ORDER BY d.version`,
       ),
       checkExists: this.db.prepare(
-        "SELECT id FROM documents WHERE library = ? AND version = ? LIMIT 1",
+        `SELECT id FROM documents
+         WHERE library_id = (SELECT id FROM libraries WHERE name = ?)
+         AND version = ?
+         LIMIT 1`,
       ),
       queryLibraryVersions: this.db.prepare(
         `SELECT
@@ -142,44 +157,48 @@ export class DocumentStore {
         ORDER BY library, version`,
       ),
       getChildChunks: this.db.prepare(`
-        SELECT * FROM documents
-        WHERE library = ? 
-        AND version = ? 
-        AND url = ?
-        AND json_array_length(json_extract(metadata, '$.path')) = ?
-        AND json_extract(metadata, '$.path') LIKE ? || '%'
-        AND sort_order > (SELECT sort_order FROM documents WHERE id = ?)
-        ORDER BY sort_order
+        SELECT d.* FROM documents d
+        JOIN libraries l ON d.library_id = l.id
+        WHERE l.name = ?
+        AND d.version = ?
+        AND d.url = ?
+        AND json_array_length(json_extract(d.metadata, '$.path')) = ?
+        AND json_extract(d.metadata, '$.path') LIKE ? || '%'
+        AND d.sort_order > (SELECT sort_order FROM documents WHERE id = ?)
+        ORDER BY d.sort_order
         LIMIT ?
       `),
       getPrecedingSiblings: this.db.prepare(`
-        SELECT * FROM documents 
-        WHERE library = ? 
-        AND version = ? 
-        AND url = ?
-        AND sort_order < (SELECT sort_order FROM documents WHERE id = ?)
-        AND json_extract(metadata, '$.path') = ?
-        ORDER BY sort_order DESC
+        SELECT d.* FROM documents d
+        JOIN libraries l ON d.library_id = l.id
+        WHERE l.name = ?
+        AND d.version = ?
+        AND d.url = ?
+        AND d.sort_order < (SELECT sort_order FROM documents WHERE id = ?)
+        AND json_extract(d.metadata, '$.path') = ?
+        ORDER BY d.sort_order DESC
         LIMIT ?
       `),
       getSubsequentSiblings: this.db.prepare(`
-        SELECT * FROM documents 
-        WHERE library = ? 
-        AND version = ? 
-        AND url = ?
-        AND sort_order > (SELECT sort_order FROM documents WHERE id = ?)
-        AND json_extract(metadata, '$.path') = ?
-        ORDER BY sort_order
+        SELECT d.* FROM documents d
+        JOIN libraries l ON d.library_id = l.id
+        WHERE l.name = ?
+        AND d.version = ?
+        AND d.url = ?
+        AND d.sort_order > (SELECT sort_order FROM documents WHERE id = ?)
+        AND json_extract(d.metadata, '$.path') = ?
+        ORDER BY d.sort_order
         LIMIT ?
       `),
       getParentChunk: this.db.prepare(`
-        SELECT * FROM documents 
-        WHERE library = ? 
-        AND version = ? 
-        AND url = ?
-        AND json_extract(metadata, '$.path') = ?
-        AND sort_order < (SELECT sort_order FROM documents WHERE id = ?)
-        ORDER BY sort_order DESC
+        SELECT d.* FROM documents d
+        JOIN libraries l ON d.library_id = l.id
+        WHERE l.name = ?
+        AND d.version = ?
+        AND d.url = ?
+        AND json_extract(d.metadata, '$.path') = ?
+        AND d.sort_order < (SELECT sort_order FROM documents WHERE id = ?)
+        ORDER BY d.sort_order DESC
         LIMIT 1
       `),
     };
@@ -379,6 +398,16 @@ export class DocumentStore {
       const rawEmbeddings = await this.embeddings.embedDocuments(texts);
       const paddedEmbeddings = rawEmbeddings.map((vector) => this.padVector(vector));
 
+      // Insert or get library_id
+      this.statements.insertLibrary.run(library.toLowerCase());
+      const libraryIdRow = this.statements.getLibraryIdByName.get(
+        library.toLowerCase(),
+      ) as { id: number } | undefined;
+      if (!libraryIdRow || typeof libraryIdRow.id !== "number") {
+        throw new StoreError(`Failed to resolve library_id for library: ${library}`);
+      }
+      const libraryId = libraryIdRow.id;
+
       // Insert documents in a transaction
       const transaction = this.db.transaction((docs: typeof documents) => {
         for (let i = 0; i < docs.length; i++) {
@@ -390,7 +419,7 @@ export class DocumentStore {
 
           // Insert into main documents table
           const result = this.statements.insertDocument.run(
-            library.toLowerCase(),
+            libraryId,
             version.toLowerCase(),
             url,
             doc.pageContent,
@@ -400,7 +429,7 @@ export class DocumentStore {
           );
           const rowId = result.lastInsertRowid;
 
-          // Insert into vector table
+          // Insert into vector table (still uses library/version for now)
           this.statements.insertEmbedding.run(
             BigInt(rowId),
             library.toLowerCase(),
@@ -468,14 +497,16 @@ export class DocumentStore {
       const stmt = this.db.prepare(`
         WITH vec_scores AS (
           SELECT
-            rowid as id,
-            distance as vec_score
-          FROM documents_vec
-          WHERE library = ?
-            AND version = ?
-            AND embedding MATCH ?
-          ORDER BY vec_score
-          LIMIT ?
+            dv.rowid as id,
+            dv.distance as vec_score
+          FROM documents_vec dv
+          JOIN documents d ON dv.rowid = d.id
+          JOIN libraries l ON d.library_id = l.id
+          WHERE l.name = ?
+            AND d.version = ?
+            AND dv.embedding MATCH ?
+            AND dv.k = ?
+          ORDER BY dv.distance
         ),
         fts_scores AS (
           SELECT
@@ -483,7 +514,8 @@ export class DocumentStore {
             bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
           FROM documents_fts f
           JOIN documents d ON f.rowid = d.rowid
-          WHERE d.library = ?
+          JOIN libraries l ON d.library_id = l.id
+          WHERE l.name = ?
             AND d.version = ?
             AND documents_fts MATCH ?
           ORDER BY fts_score
@@ -695,7 +727,9 @@ export class DocumentStore {
       // Use parameterized query for variable number of IDs
       const placeholders = ids.map(() => "?").join(",");
       const stmt = this.db.prepare(
-        `SELECT * FROM documents WHERE library = ? AND version = ? AND id IN (${placeholders}) ORDER BY sort_order`,
+        `SELECT d.* FROM documents d
+         JOIN libraries l ON d.library_id = l.id
+         WHERE l.name = ? AND d.version = ? AND d.id IN (${placeholders}) ORDER BY d.sort_order`,
       );
       const rows = stmt.all(
         library.toLowerCase(),
