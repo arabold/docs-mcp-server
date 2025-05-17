@@ -285,13 +285,31 @@ describe("DocumentStore", () => {
         .mockResolvedValueOnce(firstBatchEmbeddings)
         .mockResolvedValueOnce(secondBatchEmbeddings);
 
-      // Mock insertDocument to return sequential rowids
-      for (let i = 0; i < numDocuments; i++) {
-        mockStatement.run.mockReturnValueOnce({
-          changes: 1,
-          lastInsertRowid: BigInt(i + 1),
-        });
-      }
+      // Patch mockPrepare for this test to handle library id resolution for test-lib-large-batch
+      const originalMockPrepare = mockPrepare;
+      mockPrepare = vi.fn((sql: string) => {
+        if (sql.includes("SELECT id FROM libraries WHERE name = ?")) {
+          return {
+            get: (name: string) =>
+              name === "test-lib-large-batch" ? { id: 1 } : undefined,
+            run: vi.fn(),
+            all: mockStatementAll,
+          };
+        }
+        if (sql.includes("INSERT INTO libraries")) {
+          return {
+            run: vi.fn(),
+            get: vi.fn(),
+            all: mockStatementAll,
+          };
+        }
+        return originalMockPrepare(sql);
+      });
+      mockDb.prepare = (...args: unknown[]) => mockPrepare(...args);
+
+      // Re-instantiate DocumentStore after patching mockPrepare
+      documentStore = new DocumentStore(":memory:");
+      await documentStore.initialize();
 
       await documentStore.addDocuments("test-lib-large-batch", "1.0.0", documents);
 
