@@ -490,41 +490,27 @@ This hierarchy ensures:
 
 ## Testing Conventions
 
-This section outlines conventions and best practices for writing tests within this project.
+Our testing philosophy emphasizes verifying public contracts and ensuring tests are robust and maintainable.
 
-### Mocking with Vitest
+### 1. Test Public API Behavior
 
-When mocking modules or functions using `vitest`, it's crucial to follow a specific order due to how `vi.mock` hoisting works. `vi.mock` calls are moved to the top of the file before any imports. This means you cannot define helper functions _before_ `vi.mock` and then use them _within_ the mock setup directly.
+- Focus tests on public methods: verify correct outputs or observable side effects for given inputs.
+- Avoid assertions on internal implementation details (private methods, internal state). Tests should remain resilient to refactoring.
 
-To correctly mock dependencies, follow these steps:
+### 2. Mocking Principles
 
-1.  **Declare the Mock:** Call `vi.mock('./path/to/module-to-mock')` at the top of your test file, before any imports or other code.
-2.  **Define Mock Implementations:** _After_ the `vi.mock` call, define any helper functions, variables, or mock implementations you'll need.
-3.  **Import the Actual Module:** Import the specific functions or classes you intend to mock from the original module.
-4.  **Apply the Mock:** Use the defined mock implementations to replace the behavior of the imported functions/classes. You might need to cast the imported item as a `Mock` type (`import { type Mock } from 'vitest'`).
+- Mock only true external dependencies (e.g., databases, external APIs, file system).
+- When mocking modules with Vitest, be aware that `vi.mock` is hoisted. Define top-level mock functions/objects before the `vi.mock` call, and assign them within the mock factory.
+- Set default behaviors for mocks globally; override them locally in tests or describe blocks as needed.
+- Use shared spies for repeated calls (e.g., a database statement's `.all()`), and reset them in `beforeEach`.
 
-**Example Structure:**
+### 3. Test Structure & Assertions
 
-```typescript
-import { vi, type Mock } from "vitest";
+- Organize related tests with `describe`, and use `beforeEach`/`afterEach` for setup and cleanup.
+- Assert expected return values and observable side effects. Use `expect(...).resolves/.rejects` for async code.
+- Only assert direct calls to mocks if that interaction is a key part of the contract being tested.
 
-// 1. Declare the mock (hoisted to top)
-vi.mock("./dependency");
-
-// 2. Define mock function/variable *after* vi.mock
-const mockImplementation = vi.fn(() => "mocked result");
-
-// 3. Import the actual function/class *after* defining mocks
-import { functionToMock } from "./dependency";
-
-// 4. Apply the mock implementation
-(functionToMock as Mock).mockImplementation(mockImplementation);
-
-// ... rest of your test code using the mocked functionToMock ...
-// expect(functionToMock()).toBe('mocked result');
-```
-
-This structure ensures that mocks are set up correctly before the modules that depend on them are imported and used in your tests.
+These guidelines help ensure tests are clear, maintainable, and focused on the system's observable behavior.
 
 ## Releasing
 
