@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileFetcher, HttpFetcher } from "../scraper/fetcher";
+import { JsonPipeline } from "../scraper/pipelines/JsonPipeline";
 import { ScraperError } from "../utils/errors";
 import { logger } from "../utils/logger";
 import { FetchUrlTool, type FetchUrlToolOptions } from "./FetchUrlTool";
@@ -173,5 +174,22 @@ describe("FetchUrlTool", () => {
       expect.stringContaining("Unsupported content type"),
     );
     expect(result).toBe(imageBuffer.toString("utf-8"));
+  });
+
+  it("should process .json files using the JsonPipeline", async () => {
+    mockHttpFetcher.canFetch = vi.fn().mockReturnValue(true); // Ensure fetcher is selected
+    mockHttpFetcher.fetch = vi.fn().mockResolvedValue({
+      content: JSON.stringify({ x: [10, 20], y: { z: "ok" } }),
+      mimeType: "application/json",
+      source: "https://example.com/data.json",
+    });
+    const tool = new FetchUrlTool(
+      mockHttpFetcher as HttpFetcher,
+      mockFileFetcher as FileFetcher,
+    );
+    const result = await tool.execute({ url: "https://example.com/data.json" });
+    const parsed = JSON.parse(result);
+    expect(parsed.x).toEqual([10, 20]);
+    expect(parsed.y).toEqual({ z: "ok" });
   });
 });

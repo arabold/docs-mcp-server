@@ -2,9 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
+import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FileFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
 import { HtmlPipeline } from "../pipelines/HtmlPipeline";
+import { JsonPipeline } from "../pipelines/JsonPipeline";
 import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
 import type { ScraperOptions, ScraperProgress } from "../types";
 import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
@@ -13,13 +15,15 @@ export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly fileFetcher = new FileFetcher();
   private readonly htmlPipeline: HtmlPipeline;
   private readonly markdownPipeline: MarkdownPipeline;
-  private readonly pipelines: [HtmlPipeline, MarkdownPipeline];
+  private readonly jsonPipeline: JsonPipeline;
+  private readonly pipelines: [HtmlPipeline, MarkdownPipeline, JsonPipeline];
 
   constructor() {
     super();
     this.htmlPipeline = new HtmlPipeline();
     this.markdownPipeline = new MarkdownPipeline();
-    this.pipelines = [this.htmlPipeline, this.markdownPipeline];
+    this.jsonPipeline = new JsonPipeline();
+    this.pipelines = [this.htmlPipeline, this.markdownPipeline, this.jsonPipeline];
   }
 
   canHandle(url: string): boolean {
@@ -92,6 +96,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     } finally {
       await this.htmlPipeline.close();
       await this.markdownPipeline.close();
+      await this.jsonPipeline.close();
     }
   }
 }

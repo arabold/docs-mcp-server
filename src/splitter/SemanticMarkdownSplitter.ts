@@ -10,6 +10,7 @@ import { logger } from "../utils/logger";
 import { fullTrim } from "../utils/string";
 import { ContentSplitterError, MinimumChunkSizeError } from "./errors";
 import { CodeContentSplitter } from "./splitters/CodeContentSplitter";
+import { JsonContentSplitter } from "./splitters/JsonContentSplitter";
 import { TableContentSplitter } from "./splitters/TableContentSplitter";
 import { TextContentSplitter } from "./splitters/TextContentSplitter";
 import type { ContentChunk, DocumentSplitter, SectionContentType } from "./types";
@@ -40,6 +41,7 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
   public textSplitter: TextContentSplitter;
   public codeSplitter: CodeContentSplitter;
   public tableSplitter: TableContentSplitter;
+  public jsonSplitter: JsonContentSplitter;
 
   constructor(
     private preferredChunkSize: number,
@@ -95,6 +97,9 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
       chunkSize: this.maxChunkSize,
     });
     this.tableSplitter = new TableContentSplitter({
+      chunkSize: this.maxChunkSize,
+    });
+    this.jsonSplitter = new JsonContentSplitter({
       chunkSize: this.maxChunkSize,
     });
   }
@@ -233,7 +238,27 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
               break;
             }
             case "code": {
-              splitContent = await this.codeSplitter.split(content.text);
+              // Detect JSON code blocks
+              if (/^```json\s*/i.test(content.text)) {
+                // Remove code block markers for splitting
+                const jsonBody = content.text
+                  .replace(/^```json\s*/i, "")
+                  .replace(/```\s*$/, "");
+                // Account for code block wrapper overhead
+                const wrapperSize = "```json\n".length + "\n```".length; // 9 + 4 = 13
+                const allowedChunkSize = Math.max(1, this.maxChunkSize - wrapperSize);
+                // Use a temporary JsonContentSplitter with reduced chunk size
+                const jsonSplitter = new JsonContentSplitter({
+                  chunkSize: allowedChunkSize,
+                });
+                splitContent = await jsonSplitter.split(jsonBody);
+                // Re-wrap as code blocks
+                splitContent = splitContent.map((chunk) =>
+                  ["```json", chunk, "```"].join("\n"),
+                );
+              } else {
+                splitContent = await this.codeSplitter.split(content.text);
+              }
               break;
             }
             case "table": {

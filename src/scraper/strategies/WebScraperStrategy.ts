@@ -5,6 +5,7 @@ import { hasSameDomain, hasSameHostname, isSubpath } from "../../utils/url";
 import { HttpFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
 import { HtmlPipeline } from "../pipelines/HtmlPipeline";
+import { JsonPipeline } from "../pipelines/JsonPipeline";
 import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
 import type { ContentPipeline, ProcessedContent } from "../pipelines/types";
 import type { ScraperOptions, ScraperProgress } from "../types";
@@ -20,6 +21,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private readonly shouldFollowLinkFn?: (baseUrl: URL, targetUrl: URL) => boolean;
   private readonly htmlPipeline: HtmlPipeline;
   private readonly markdownPipeline: MarkdownPipeline;
+  private readonly jsonPipeline: JsonPipeline;
   private readonly pipelines: ContentPipeline[];
 
   constructor(options: WebScraperStrategyOptions = {}) {
@@ -27,7 +29,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     this.shouldFollowLinkFn = options.shouldFollowLink;
     this.htmlPipeline = new HtmlPipeline();
     this.markdownPipeline = new MarkdownPipeline();
-    this.pipelines = [this.htmlPipeline, this.markdownPipeline];
+    this.jsonPipeline = new JsonPipeline();
+    this.pipelines = [this.htmlPipeline, this.markdownPipeline, this.jsonPipeline];
   }
 
   canHandle(url: string): boolean {

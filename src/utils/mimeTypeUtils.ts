@@ -55,5 +55,16 @@ export class MimeTypeUtils {
     return mimeType.startsWith("text/");
   }
 
-  // Extend with more helpers as needed (isJson, isXml, isPdf, etc.)
+  /**
+   * Checks if a MIME type represents JSON content.
+   */
+  public static isJson(mimeType: string): boolean {
+    return (
+      mimeType === "application/json" ||
+      mimeType === "application/ld+json" ||
+      mimeType.endsWith("+json") ||
+      mimeType === "text/json" ||
+      mimeType === "application/json5"
+    );
+  }
 }

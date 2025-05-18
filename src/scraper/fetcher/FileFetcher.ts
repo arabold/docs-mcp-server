@@ -47,6 +47,8 @@ export class FileFetcher implements ContentFetcher {
         return "text/markdown";
       case ".txt":
         return "text/plain";
+      case ".json":
+        return "application/json";
       default:
         return "application/octet-stream";
     }

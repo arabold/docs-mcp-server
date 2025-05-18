@@ -492,4 +492,25 @@ describe("WebScraperStrategy", () => {
     expect(docCall![0].document.content).toContain(expectedMarkdown);
     expect(docCall![0].document.metadata.title).toBe(expectedTitle);
   });
+
+  it("should process .json files using the JsonPipeline", async () => {
+    const progressCallback = vi.fn();
+    const testUrl = "https://example.com/data.json";
+    options.url = testUrl;
+    const jsonContent = JSON.stringify({ foo: [1, 2, 3], bar: { baz: true } });
+    mockFetchFn.mockResolvedValue({
+      content: jsonContent,
+      mimeType: "application/json",
+      source: testUrl,
+    });
+    await strategy.scrape(options, progressCallback);
+    expect(progressCallback).toHaveBeenCalled();
+    const call = progressCallback.mock.calls[0][0];
+    expect(call.currentUrl).toBe(testUrl);
+    // Parse the output and check structure, not formatting
+    const parsed = JSON.parse(call.document.content);
+    expect(parsed.foo).toEqual([1, 2, 3]);
+    expect(parsed.bar).toEqual({ baz: true });
+    expect(call.document.metadata.url).toBe(testUrl);
+  });
 });

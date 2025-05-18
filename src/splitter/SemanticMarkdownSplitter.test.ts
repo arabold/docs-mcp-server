@@ -371,4 +371,36 @@ ${codeLines}
     // Each chunk should be under the max size
     expect(result.every((chunk) => chunk.content.length <= 20)).toBe(true);
   });
+
+  it("should split large JSON code blocks into valid JSON chunks", async () => {
+    const splitter = new SemanticMarkdownSplitter(10, 50); // small chunk size for test
+    const jsonArray = Array.from({ length: 10 }, (_, i) => ({ id: i, value: `val${i}` }));
+    const markdown = ["```json", JSON.stringify(jsonArray), "```"].join("\n");
+    const result = await splitter.splitText(markdown);
+    // All chunks should be code, valid JSON, and within size
+    expect(result.length).toBeGreaterThan(1);
+    for (const chunk of result) {
+      expect(chunk.types).toEqual(["code"]);
+      expect(chunk.content).toMatch(/^```json\n[\s\S]*\n```$/);
+      // Extract JSON body
+      const body = chunk.content.replace(/^```json\n/, "").replace(/\n```$/, "");
+      expect(() => JSON.parse(body)).not.toThrow();
+      expect(chunk.content.length).toBeLessThanOrEqual(50);
+    }
+  });
+
+  it("should fall back to normal code splitting for non-JSON code blocks", async () => {
+    const splitter = new SemanticMarkdownSplitter(10, 50);
+    const codeLines = Array.from({ length: 10 }, (_, i) => `console.log(${i});`).join(
+      "\n",
+    );
+    const markdown = ["```js", codeLines, "```"].join("\n");
+    const result = await splitter.splitText(markdown);
+    expect(result.length).toBeGreaterThan(1);
+    for (const chunk of result) {
+      expect(chunk.types).toEqual(["code"]);
+      expect(chunk.content).toMatch(/^```js\n[\s\S]*\n```$/);
+      expect(chunk.content.length).toBeLessThanOrEqual(50);
+    }
+  });
 });

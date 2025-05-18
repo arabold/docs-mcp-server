@@ -208,4 +208,35 @@ describe("LocalFileStrategy", () => {
       }),
     );
   });
+
+  it("should process .json files using the JsonPipeline", async () => {
+    const strategy = new LocalFileStrategy();
+    const options: ScraperOptions = {
+      url: "file:///testdir",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 1,
+      maxConcurrency: 1,
+    };
+    const progressCallback = vi.fn();
+    const jsonContent = JSON.stringify({ a: 1, b: [2, 3, 4], c: { d: 5 } });
+    vol.fromJSON(
+      {
+        "/testdir/data.json": jsonContent,
+      },
+      "/",
+    );
+
+    await strategy.scrape(options, progressCallback);
+    expect(progressCallback).toHaveBeenCalledTimes(1);
+    const call = progressCallback.mock.calls[0][0];
+    expect(call.currentUrl).toBe("file:///testdir/data.json");
+    // Parse the output and check structure, not formatting
+    const parsed = JSON.parse(call.document.content);
+    expect(parsed.a).toBe(1);
+    expect(parsed.b).toEqual([2, 3, 4]);
+    expect(parsed.c).toEqual({ d: 5 });
+    expect(call.document.metadata.url).toBe("file:///testdir/data.json");
+  });
 });

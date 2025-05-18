@@ -5,10 +5,12 @@ import type {
   RawContent,
 } from "../scraper/fetcher";
 import { HtmlPipeline } from "../scraper/pipelines/HtmlPipeline";
+import { JsonPipeline } from "../scraper/pipelines/JsonPipeline";
 import { MarkdownPipeline } from "../scraper/pipelines/MarkdownPipeline";
 import { ScrapeMode } from "../scraper/types";
 import { ScraperError } from "../utils/errors";
 import { logger } from "../utils/logger";
+import { MimeTypeUtils } from "../utils/mimeTypeUtils";
 import { ToolError } from "./errors";
 
 export interface FetchUrlToolOptions {
@@ -72,7 +74,8 @@ export class FetchUrlTool {
     const fetcher = this.fetchers[fetcherIndex];
     const htmlPipeline = new HtmlPipeline();
     const markdownPipeline = new MarkdownPipeline();
-    const pipelines = [htmlPipeline, markdownPipeline];
+    const jsonPipeline = new JsonPipeline();
+    const pipelines = [htmlPipeline, markdownPipeline, jsonPipeline];
 
     try {
       logger.info(`📡 Fetching ${url}...`);
