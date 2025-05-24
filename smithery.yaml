@@ -1,0 +1,35 @@
+# Smithery configuration file: https://smithery.ai/docs/build/project-config
+
+build:
+  dockerfile: Dockerfile
+  dockerBuildPath: .
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required:
+      - OPENAI_API_KEY
+    properties:
+      OPENAI_API_KEY:
+        type: string
+        description: Your OpenAI API Key for accessing embedding models.
+  commandFunction:
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    |
+    (config) => {
+      // Ensure the config object and the key exist before accessing.
+      const apiKey = config?.OPENAI_API_KEY;
+      if (!apiKey) {
+        // Smithery should prevent this based on 'required', but good practice to check.
+        throw new Error('OPENAI_API_KEY is missing in the configuration.');
+      }
+      return {
+        command: 'node',
+        args: ['dist/server.js'],
+        // Pass the API key from the config to the server's environment.
+        env: {
+          OPENAI_API_KEY: apiKey
+        }
+      };
+    }

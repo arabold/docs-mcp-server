@@ -1,5 +1,7 @@
 # Docs MCP Server: Your AI's Up-to-Date Documentation Expert
 
+[![smithery badge](https://smithery.ai/badge/@arabold/docs-mcp-server)](https://smithery.ai/server/@arabold/docs-mcp-server)
+
 AI coding assistants often struggle with outdated documentation, leading to incorrect suggestions or hallucinated code examples. Verifying AI responses against specific library versions can be time-consuming and inefficient.
 
 The **Docs MCP Server** solves this by acting as a personal, always-current knowledge base for your AI assistant. Its primary purpose is to **index 3rd party documentation** – the libraries you actually use in your codebase. It scrapes websites, GitHub repositories, package managers (npm, PyPI), and even local files, cataloging the docs locally. It then provides powerful search tools via the Model Context Protocol (MCP) to your coding agent.
@@ -48,6 +50,7 @@ Get up and running quickly! We recommend using Docker Desktop (Docker Compose) f
 - [Recommended: Docker Desktop](#recommended-docker-desktop)
 - [Alternative: Using Docker](#alternative-using-docker)
 - [Alternative: Using npx](#alternative-using-npx)
+- [Alternative: Using Smithery](#installing-via-smithery)
 
 ## Recommended: Docker Desktop
 
@@ -358,6 +361,14 @@ npx -y @arabold/docs-mcp-server list
 The `npx` approach will use the default data directory on your system (typically in your home directory), ensuring consistency.
 
 For detailed command usage, run the CLI with the --help flag (e.g., `npx -y @arabold/docs-mcp-server --help`).
+
+## Installing via Smithery
+
+To install Documentation MCP Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@arabold/docs-mcp-server):
+
+```bash
+npx -y @smithery/cli install @arabold/docs-mcp-server --client claude
+```
 
 ## Configuration
 
