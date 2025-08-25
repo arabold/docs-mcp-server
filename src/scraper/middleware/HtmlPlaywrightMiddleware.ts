@@ -55,12 +55,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   }
 
   /**
-   * Waits for common loading indicators (spinners, loaders) that are currently visible to disappear from the page.
+   * Waits for common loading indicators (spinners, loaders) that are currently visible to disappear from the page or frame.
    * Only waits for selectors that are present and visible at the time of check.
    *
-   * @param page The Playwright page instance to operate on.
+   * @param pageOrFrame The Playwright page or frame instance to operate on.
    */
-  private async waitForLoadingToComplete(page: Page): Promise<void> {
+  private async waitForLoadingToComplete(
+    pageOrFrame:
+      | Page
+      | { waitForSelector: Page["waitForSelector"]; isVisible: Page["isVisible"] },
+  ): Promise<void> {
     const commonLoadingSelectors = [
       '[class*="loading"]',
       '[class*="spinner"]',
@@ -77,10 +81,10 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     for (const selector of commonLoadingSelectors) {
       try {
         // Use page.isVisible to check if any matching element is visible (legacy API, but works for any visible match)
-        const isVisible = await page.isVisible(selector).catch(() => false);
+        const isVisible = await pageOrFrame.isVisible(selector).catch(() => false);
         if (isVisible) {
           waitPromises.push(
-            page
+            pageOrFrame
               .waitForSelector(selector, {
                 state: "hidden",
                 timeout: DEFAULT_PAGE_TIMEOUT,
@@ -94,6 +98,99 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     }
     if (waitPromises.length > 0) {
       await Promise.all(waitPromises);
+    }
+  }
+
+  /**
+   * Waits for all iframes on the page to load their content.
+   * For each iframe, waits for the body to appear and loading indicators to disappear.
+   *
+   * @param page The Playwright page instance to operate on.
+   */
+  private async waitForIframesToLoad(page: Page): Promise<void> {
+    try {
+      // Get all iframe elements
+      const iframes = await page.$$("iframe");
+      if (iframes.length === 0) {
+        return;
+      }
+
+      logger.debug(`Found ${iframes.length} iframe(s) on ${page.url()}`);
+
+      // Wait for all iframes to load in parallel
+      const iframePromises = iframes.map(async (iframe, index) => {
+        try {
+          const src = await iframe.getAttribute("src");
+          if (
+            !src ||
+            src.startsWith("data:") ||
+            src.startsWith("javascript:") ||
+            src === "about:blank"
+          ) {
+            logger.debug(`Skipping iframe ${index + 1} - no valid src (${src})`);
+            return;
+          }
+
+          logger.debug(`Waiting for iframe ${index + 1} to load: ${src}`);
+
+          // Get the frame content
+          const frame = await iframe.contentFrame();
+          if (!frame) {
+            logger.debug(`Could not access content frame for iframe ${index + 1}`);
+            return;
+          }
+
+          // Wait for the iframe body to load
+          await frame.waitForSelector("body", { timeout: 10000 }).catch(() => {
+            logger.debug(`Timeout waiting for body in iframe ${index + 1}`);
+          });
+
+          // Wait for loading indicators in the iframe to complete
+          await this.waitForLoadingToComplete(frame);
+
+          // Extract iframe body content and replace the iframe element
+          try {
+            const frameBodyHtml = await frame.$eval("body", (el) => el.innerHTML);
+            if (frameBodyHtml && frameBodyHtml.trim().length > 0) {
+              // Replace the iframe element with its content in the main page
+              await page.evaluate(
+                (args: [number, string]) => {
+                  const [iframeIndex, bodyContent] = args;
+                  const iframe = document.querySelectorAll("iframe")[iframeIndex];
+                  if (iframe && bodyContent) {
+                    // Create a replacement div with the iframe content
+                    const replacement = document.createElement("div");
+                    replacement.innerHTML = bodyContent;
+
+                    // Replace the iframe with the extracted content
+                    iframe.parentNode?.replaceChild(replacement, iframe);
+                  }
+                },
+                [index, frameBodyHtml] as [number, string],
+              );
+
+              logger.debug(
+                `Successfully extracted and replaced content for iframe ${index + 1}: ${src}`,
+              );
+            } else {
+              logger.debug(`Iframe ${index + 1} body content is empty: ${src}`);
+            }
+          } catch (extractError) {
+            logger.debug(
+              `Error extracting content from iframe ${index + 1}: ${extractError}`,
+            );
+          }
+
+          logger.debug(`Successfully loaded iframe ${index + 1}: ${src}`);
+        } catch (error) {
+          logger.debug(`Error waiting for iframe ${index + 1}: ${error}`);
+        }
+      });
+
+      await Promise.all(iframePromises);
+      logger.debug(`Finished waiting for all iframes to load`);
+    } catch (error) {
+      logger.debug(`Error during iframe loading for ${page.url()}: ${error}`);
     }
   }
 
@@ -167,9 +264,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             body: context.content, // context.content is always a string in middleware
           });
         }
-        // Abort non-essential resources
+        // Abort non-essential resources (but keep stylesheets for modern web apps)
         const resourceType = route.request().resourceType();
-        if (["image", "stylesheet", "font", "media"].includes(resourceType)) {
+        if (["image", "font", "media"].includes(resourceType)) {
           return route.abort();
         }
         // Use helper to merge headers
@@ -186,8 +283,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       // Load initial HTML content
       await page.goto(context.source, { waitUntil: "load" });
       await page.waitForSelector("body");
+
+      // Wait for network idle to let dynamic content initialize
+      try {
+        await page.waitForLoadState("networkidle", { timeout: 5000 });
+      } catch {
+        logger.debug("Network idle timeout (5s), proceeding anyway");
+      }
+
       await this.waitForLoadingToComplete(page);
-      // await page.waitForLoadState("networkidle");
+      await this.waitForIframesToLoad(page);
 
       renderedHtml = await page.content();
       logger.debug(`Playwright: Successfully rendered content for ${context.source}`);
