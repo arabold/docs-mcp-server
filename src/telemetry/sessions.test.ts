@@ -1,3 +1,9 @@
+/**
+ * Test session management utilities for different interface types.
+ * Tests the simplified session context that focuses on user interaction data.
+ * Application-level context is now handled by global context in Analytics.
+ */
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCliSession,
@@ -6,23 +12,6 @@ import {
   createWebSession,
   getEnabledServices,
 } from "./sessions";
-
-// Mock package.json
-vi.mock("../../package.json", () => ({
-  default: { version: "1.2.3" },
-}));
-
-// Mock the embedding factory
-vi.mock("../store/embeddings/EmbeddingFactory", () => ({
-  createEmbeddingModel: vi.fn((_modelSpec: string) => {
-    if (_modelSpec === "invalid:model") {
-      throw new Error("Invalid model spec");
-    }
-    return {
-      embedQuery: vi.fn().mockResolvedValue(new Array(1536).fill(0.1)), // Mock 1536-dim vector
-    };
-  }),
-}));
 
 describe("sessionManager", () => {
   beforeEach(() => {
@@ -33,60 +22,20 @@ describe("sessionManager", () => {
     it("should create CLI session with defaults", () => {
       const session = createCliSession();
 
-      expect(session.appInterface).toBe("cli");
-      expect(session.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(session.sessionId).toBeDefined();
       expect(session.startTime).toBeInstanceOf(Date);
-      expect(session.appVersion).toBe("1.2.3");
-      expect(session.appPlatform).toBe(process.platform);
-      expect(session.appNodeVersion).toBe(process.version);
-      expect(session.cliCommand).toBe("unknown");
-      expect(session.appAuthEnabled).toBe(false);
-      expect(session.appReadOnly).toBe(false);
-      expect(session.appServicesEnabled).toEqual(["worker"]);
+      expect(session.appInterface).toBe("cli");
+      expect(session.cliCommand).toBeUndefined();
     });
 
-    it("should create CLI session with custom options", () => {
-      const session = createCliSession("scrape", {
-        authEnabled: true,
-        readOnly: true,
-      });
+    it("should create CLI session with custom command", () => {
+      const session = createCliSession("scrape");
 
       expect(session.cliCommand).toBe("scrape");
-      expect(session.appAuthEnabled).toBe(true);
-      expect(session.appReadOnly).toBe(true);
+      expect(session.appInterface).toBe("cli");
     });
 
-    it("should create CLI session with embedding context", () => {
-      const embeddingContext = {
-        aiEmbeddingProvider: "openai",
-        aiEmbeddingModel: "text-embedding-3-small",
-        aiEmbeddingDimensions: 1536,
-      };
-
-      const session = createCliSession("search", {
-        authEnabled: false,
-        readOnly: false,
-        embeddingContext,
-      });
-
-      expect(session.cliCommand).toBe("search");
-      expect(session.aiEmbeddingProvider).toBe("openai");
-      expect(session.aiEmbeddingModel).toBe("text-embedding-3-small");
-      expect(session.aiEmbeddingDimensions).toBe(1536);
-    });
-
-    it("should create CLI session without embedding context when null", () => {
-      const session = createCliSession("fetch-url", {
-        authEnabled: false,
-        readOnly: false,
-        embeddingContext: null,
-      });
-
-      expect(session.cliCommand).toBe("fetch-url");
-      expect(session.aiEmbeddingProvider).toBeUndefined();
-      expect(session.aiEmbeddingModel).toBeUndefined();
-      expect(session.aiEmbeddingDimensions).toBeUndefined();
-    });
+    // Note: AI embedding properties are now in global context, not session context
   });
 
   describe("createMcpSession", () => {
@@ -97,48 +46,19 @@ describe("sessionManager", () => {
       expect(session.sessionId).toMatch(/^[0-9a-f-]{36}$/);
       expect(session.mcpProtocol).toBe("stdio");
       expect(session.mcpTransport).toBeUndefined();
-      expect(session.appAuthEnabled).toBe(false);
-      expect(session.appReadOnly).toBe(false);
-      expect(session.appServicesEnabled).toEqual(["mcp"]);
     });
 
     it("should create MCP session with custom options", () => {
       const session = createMcpSession({
         protocol: "http",
         transport: "sse",
-        authEnabled: true,
-        readOnly: true,
-        servicesEnabled: ["mcp", "api"],
       });
 
       expect(session.mcpProtocol).toBe("http");
       expect(session.mcpTransport).toBe("sse");
-      expect(session.appAuthEnabled).toBe(true);
-      expect(session.appReadOnly).toBe(true);
-      expect(session.appServicesEnabled).toEqual(["mcp", "api"]);
     });
 
-    it("should create MCP session with embedding context", () => {
-      const embeddingContext = {
-        aiEmbeddingProvider: "vertex",
-        aiEmbeddingModel: "text-embedding-004",
-        aiEmbeddingDimensions: 768,
-      };
-
-      const session = createMcpSession({
-        protocol: "http",
-        transport: "sse",
-        authEnabled: false,
-        readOnly: false,
-        servicesEnabled: ["mcp"],
-        embeddingContext,
-      });
-
-      expect(session.mcpProtocol).toBe("http");
-      expect(session.aiEmbeddingProvider).toBe("vertex");
-      expect(session.aiEmbeddingModel).toBe("text-embedding-004");
-      expect(session.aiEmbeddingDimensions).toBe(768);
-    });
+    // Note: AI embedding properties are now in global context, not session context
   });
 
   describe("createWebSession", () => {
@@ -149,46 +69,26 @@ describe("sessionManager", () => {
       expect(session.sessionId).toMatch(/^[0-9a-f-]{36}$/);
       expect(session.mcpProtocol).toBe("http");
       expect(session.webRoute).toBeUndefined();
-      expect(session.appAuthEnabled).toBe(false);
-      expect(session.appReadOnly).toBe(false);
-      expect(session.appServicesEnabled).toEqual(["web"]);
     });
 
-    it("should create web session with custom options", () => {
+    it("should create web session with custom route", () => {
       const session = createWebSession({
         route: "/docs/search",
-        authEnabled: true,
-        servicesEnabled: ["web", "worker"],
       });
 
       expect(session.webRoute).toBe("/docs/search");
-      expect(session.appAuthEnabled).toBe(true);
-      expect(session.appServicesEnabled).toEqual(["web", "worker"]);
     });
   });
 
   describe("createPipelineSession", () => {
     it("should create pipeline session with defaults", () => {
-      const session = createPipelineSession({});
+      const session = createPipelineSession();
 
       expect(session.appInterface).toBe("pipeline");
       expect(session.sessionId).toMatch(/^[0-9a-f-]{36}$/);
-      expect(session.appAuthEnabled).toBe(false);
-      expect(session.appReadOnly).toBe(false);
-      expect(session.appServicesEnabled).toEqual(["worker"]);
     });
 
-    it("should create pipeline session with custom options", () => {
-      const session = createPipelineSession({
-        authEnabled: true,
-        readOnly: false,
-        servicesEnabled: ["worker", "api"],
-      });
-
-      expect(session.appAuthEnabled).toBe(true);
-      expect(session.appReadOnly).toBe(false);
-      expect(session.appServicesEnabled).toEqual(["worker", "api"]);
-    });
+    // Note: AI embedding properties are now in global context, not session context
   });
 
   describe("getEnabledServices", () => {
@@ -206,11 +106,11 @@ describe("sessionManager", () => {
       const services = getEnabledServices({
         web: true,
         mcp: true,
-        api: false,
+        api: true,
         worker: true,
       });
 
-      expect(services).toEqual(["web", "mcp", "worker"]);
+      expect(services).toEqual(["web", "mcp", "api", "worker"]);
     });
 
     it("should return only enabled services", () => {

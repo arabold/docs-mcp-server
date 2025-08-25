@@ -21,7 +21,7 @@ export class SessionTracker {
   /**
    * End current session and return duration
    */
-  endSession(): { duration: number; interface?: string } | null {
+  endSession(): { duration: number; appInterface?: string } | null {
     if (!this.sessionContext) return null;
 
     const duration = Date.now() - this.sessionContext.startTime.getTime();
@@ -30,7 +30,7 @@ export class SessionTracker {
     // Clear session context
     this.sessionContext = undefined;
 
-    return { duration, interface: sessionInterface };
+    return { duration, appInterface: sessionInterface };
   }
 
   /**
@@ -50,13 +50,15 @@ export class SessionTracker {
   }
 
   /**
-   * Get enriched properties with session context
+   * Get enriched properties with minimal session context
+   * Only includes sessionId and timestamp - other properties are handled explicitly per event
    */
   getEnrichedProperties(
     properties: Record<string, unknown> = {},
   ): Record<string, unknown> {
     return {
-      ...this.sessionContext,
+      // Only include sessionId for correlation
+      ...(this.sessionContext && { sessionId: this.sessionContext.sessionId }),
       ...properties,
       timestamp: new Date().toISOString(),
     };

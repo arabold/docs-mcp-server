@@ -65,6 +65,9 @@ export function createWorkerCommand(program: Command): Command {
           enableApiServer: true,
           enableWorker: true,
           port,
+          startupContext: {
+            cliCommand: "worker",
+          },
         });
 
         await startAppServer(docService, pipeline, config);

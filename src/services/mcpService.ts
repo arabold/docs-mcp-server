@@ -59,9 +59,6 @@ export async function registerMcpService(
           const session = createMcpSession({
             protocol: "http",
             transport: "sse",
-            authEnabled: !!authManager,
-            readOnly,
-            servicesEnabled: ["mcp"],
             // Embedding context will be resolved by the service that starts MCP
           });
           analytics.startSession(session);

@@ -32,4 +32,14 @@ export interface AppServerConfig {
 
   /** Enable telemetry tracking for usage analytics and performance monitoring */
   telemetry?: boolean;
+
+  /** Startup context for telemetry (optional) */
+  startupContext?: {
+    /** CLI command that started the server (if applicable) */
+    cliCommand?: string;
+    /** MCP protocol configuration (if MCP service enabled) */
+    mcpProtocol?: "stdio" | "http";
+    /** MCP transport configuration (if MCP service enabled) */
+    mcpTransport?: "sse" | "streamable";
+  };
 }

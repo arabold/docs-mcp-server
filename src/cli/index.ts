@@ -57,10 +57,7 @@ export function createCliProgram(): Command {
       const commandName = actionCommand.name();
 
       // Create session without embedding context - commands will provide this themselves
-      const session = createCliSession(commandName, {
-        authEnabled: false, // CLI doesn't use auth
-        readOnly: false,
-      });
+      const session = createCliSession(commandName);
       analytics.startSession(session);
     } else {
       TelemetryConfig.getInstance().disable();

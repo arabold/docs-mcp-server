@@ -130,6 +130,10 @@ export function createDefaultAction(program: Command): Command {
               port,
               readOnly: options.readOnly,
               auth: authConfig,
+              startupContext: {
+                cliCommand: "default",
+                mcpProtocol: "http",
+              },
             });
 
             await startAppServer(docService, pipeline, config);

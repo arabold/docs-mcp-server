@@ -189,6 +189,11 @@ export function createAppServerConfig(options: {
   externalWorkerUrl?: string;
   readOnly?: boolean;
   auth?: AuthConfig;
+  startupContext?: {
+    cliCommand?: string;
+    mcpProtocol?: "stdio" | "http";
+    mcpTransport?: "sse" | "streamable";
+  };
 }): AppServerConfig {
   return {
     enableWebInterface: options.enableWebInterface ?? false,
@@ -199,6 +204,7 @@ export function createAppServerConfig(options: {
     externalWorkerUrl: options.externalWorkerUrl,
     readOnly: options.readOnly ?? false,
     auth: options.auth,
+    startupContext: options.startupContext,
   };
 }
 
