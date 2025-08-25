@@ -32,7 +32,7 @@ export async function registerWorkerService(pipeline: IPipeline): Promise<void> 
         discoveryRatio: Math.round(
           (progress.totalDiscovered / progress.totalPages) * 100,
         ), // How much we discovered vs limited total
-        queue_efficiency:
+        queueEfficiency:
           progress.totalPages > 0
             ? Math.round((progress.pagesScraped / progress.totalPages) * 100)
             : 0,
@@ -52,13 +52,13 @@ export async function registerWorkerService(pipeline: IPipeline): Promise<void> 
         jobId: job.id, // Job IDs are already anonymous
         library: job.library,
         status: job.status,
-        duration_ms: duration,
-        queue_wait_time_ms: queueWaitTime,
-        pages_processed: job.progressPages || 0,
-        max_pages_configured: job.progressMaxPages || 0,
-        has_version: !!job.version,
-        has_error: !!job.error,
-        throughput_pages_per_second:
+        durationMs: duration,
+        queueWaitTimeMs: queueWaitTime,
+        pagesProcessed: job.progressPages || 0,
+        maxPagesConfigured: job.progressMaxPages || 0,
+        hasVersion: !!job.version,
+        hasError: !!job.error,
+        throughputPagesPerSecond:
           duration && job.progressPages
             ? Math.round((job.progressPages / duration) * 1000)
             : 0,

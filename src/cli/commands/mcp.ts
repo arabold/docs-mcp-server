@@ -145,6 +145,10 @@ export function createMcpCommand(program: Command): Command {
                 externalWorkerUrl: serverUrl,
                 readOnly: cmdOptions.readOnly,
                 auth: authConfig,
+                startupContext: {
+                  cliCommand: "mcp",
+                  mcpProtocol: "http",
+                },
               });
 
               await startAppServer(docService, pipeline, config);

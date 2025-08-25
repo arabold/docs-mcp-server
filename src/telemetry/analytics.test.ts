@@ -33,12 +33,11 @@ vi.mock("./postHogClient", () => ({
 vi.mock("./SessionTracker", () => ({
   SessionTracker: vi.fn().mockImplementation(() => ({
     startSession: vi.fn(),
-    endSession: vi.fn(() => ({ duration: 5000, interface: "cli" })),
+    endSession: vi.fn(() => ({ duration: 5000, appInterface: "cli" })),
     getSessionContext: vi.fn(),
     updateSessionContext: vi.fn(),
     getEnrichedProperties: vi.fn((props = {}) => ({
       sessionId: "test-session",
-      interface: "cli",
       ...props,
       timestamp: "2025-08-23T10:00:05.000Z",
     })),
@@ -47,13 +46,8 @@ vi.mock("./SessionTracker", () => ({
 
 const mockSessionContext: SessionContext = {
   sessionId: "test-session",
-  appInterface: "cli",
   startTime: new Date("2025-08-23T10:00:00Z"),
-  appVersion: "1.0.0",
-  appPlatform: "linux",
-  appAuthEnabled: false,
-  appReadOnly: false,
-  appServicesEnabled: [],
+  appInterface: "cli",
 };
 
 describe("Analytics", () => {
@@ -92,13 +86,8 @@ describe("Analytics", () => {
         TelemetryEvent.SESSION_STARTED,
         {
           sessionId: "test-session",
-          interface: "cli",
+          appInterface: "cli",
           timestamp: "2025-08-23T10:00:05.000Z",
-          version: "1.0.0",
-          platform: "linux",
-          authEnabled: false,
-          readOnly: false,
-          servicesCount: 0,
         },
       );
     });
@@ -112,7 +101,7 @@ describe("Analytics", () => {
         TelemetryEvent.SESSION_ENDED,
         {
           sessionId: "test-session",
-          interface: "cli",
+          appInterface: "cli",
           timestamp: "2025-08-23T10:00:05.000Z",
           durationMs: 5000,
         },
@@ -141,7 +130,6 @@ describe("Analytics", () => {
         TelemetryEvent.TOOL_USED,
         {
           sessionId: "test-session",
-          interface: "cli",
           timestamp: "2025-08-23T10:00:05.000Z",
           tool: "test",
         },
@@ -238,38 +226,6 @@ describe("trackTool", () => {
     analytics.startSession(sessionContext);
 
     // Verify that startSession was called on the SessionTracker
-    expect(analytics.isEnabled()).toBe(true);
-  });
-
-  it("should allow session context updates with embedding info", () => {
-    const analytics = new Analytics(true);
-    analytics.startSession(mockSessionContext);
-
-    // Test that updateSessionContext method exists and can be called
-    expect(() => {
-      analytics.updateSessionContext({
-        aiEmbeddingProvider: "google",
-        aiEmbeddingModel: "text-embedding-004",
-        aiEmbeddingDimensions: 768,
-      });
-    }).not.toThrow();
-  });
-  it("should include embedding context in enriched event properties", () => {
-    const analytics = new Analytics(true);
-    const sessionContext = {
-      ...mockSessionContext,
-      aiEmbeddingProvider: "google",
-      aiEmbeddingModel: "text-embedding-004",
-      aiEmbeddingDimensions: 768,
-    };
-
-    analytics.startSession(sessionContext);
-    analytics.track(TelemetryEvent.DOCUMENT_PROCESSED, {
-      mimeType: "text/html",
-      contentSizeBytes: 1024,
-    });
-
-    // The SessionTracker mock should include the embedding context in enriched properties
     expect(analytics.isEnabled()).toBe(true);
   });
 });

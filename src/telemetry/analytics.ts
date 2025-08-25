@@ -23,7 +23,6 @@ export enum TelemetryEvent {
   SESSION_ENDED = "session_ended",
   APP_STARTED = "app_started",
   APP_SHUTDOWN = "app_shutdown",
-  COMMAND_EXECUTED = "command_executed",
   TOOL_USED = "tool_used",
   HTTP_REQUEST_COMPLETED = "http_request_completed",
   PIPELINE_JOB_PROGRESS = "pipeline_job_progress",
@@ -39,6 +38,7 @@ export class Analytics {
   private sessionTracker: SessionTracker;
   private enabled: boolean = true;
   private distinctId: string;
+  private globalContext: Record<string, unknown> = {};
 
   constructor(enabled?: boolean) {
     this.enabled = enabled ?? TelemetryConfig.getInstance().isEnabled();
@@ -55,6 +55,20 @@ export class Analytics {
   }
 
   /**
+   * Set global application context that will be included in all events
+   */
+  setGlobalContext(context: Record<string, unknown>): void {
+    this.globalContext = { ...context };
+  }
+
+  /**
+   * Get current global context
+   */
+  getGlobalContext(): Record<string, unknown> {
+    return { ...this.globalContext };
+  }
+
+  /**
    * Initialize session context - call once per session
    */
   startSession(context: SessionContext): void {
@@ -62,12 +76,9 @@ export class Analytics {
 
     this.sessionTracker.startSession(context);
     this.track(TelemetryEvent.SESSION_STARTED, {
-      interface: context.appInterface,
-      version: context.appVersion,
-      platform: context.appPlatform,
-      authEnabled: context.appAuthEnabled,
-      readOnly: context.appReadOnly,
-      servicesCount: context.appServicesEnabled.length,
+      appInterface: context.appInterface,
+      // Include webRoute for web sessions
+      ...(context.webRoute && { webRoute: context.webRoute }),
     });
   }
 
@@ -93,8 +104,12 @@ export class Analytics {
   track(event: string, properties: Record<string, unknown> = {}): void {
     if (!this.enabled) return;
 
-    const eventProperties = this.sessionTracker.getEnrichedProperties(properties);
-    this.postHogClient.capture(this.distinctId, event, eventProperties);
+    // Merge global context, session context, and event properties
+    const enrichedProperties = this.sessionTracker.getEnrichedProperties({
+      ...this.globalContext,
+      ...properties,
+    });
+    this.postHogClient.capture(this.distinctId, event, enrichedProperties);
   }
 
   /**
@@ -103,8 +118,12 @@ export class Analytics {
   captureException(error: Error, properties: Record<string, unknown> = {}): void {
     if (!this.enabled) return;
 
-    const eventProperties = this.sessionTracker.getEnrichedProperties(properties);
-    this.postHogClient.captureException(this.distinctId, error, eventProperties);
+    // Merge global context, session context, and error properties
+    const enrichedProperties = this.sessionTracker.getEnrichedProperties({
+      ...this.globalContext,
+      ...properties,
+    });
+    this.postHogClient.captureException(this.distinctId, error, enrichedProperties);
   }
 
   /**
@@ -117,7 +136,7 @@ export class Analytics {
     if (sessionInfo) {
       this.track(TelemetryEvent.SESSION_ENDED, {
         durationMs: sessionInfo.duration,
-        interface: sessionInfo.interface,
+        appInterface: sessionInfo.appInterface,
       });
     }
   }

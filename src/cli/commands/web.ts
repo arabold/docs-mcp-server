@@ -83,6 +83,9 @@ export function createWebCommand(program: Command): Command {
             enableWorker: !serverUrl,
             port,
             externalWorkerUrl: serverUrl,
+            startupContext: {
+              cliCommand: "web",
+            },
           });
 
           logger.info(

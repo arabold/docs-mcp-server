@@ -3,25 +3,22 @@
  * This replaces the separate server implementations with a single, modular approach.
  */
 
-import crypto from "node:crypto";
 import path from "node:path";
 import formBody from "@fastify/formbody";
 import fastifyStatic from "@fastify/static";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import Fastify, { type FastifyInstance } from "fastify";
+import packageJson from "../../package.json";
 import { ProxyAuthManager } from "../auth";
+import { resolveEmbeddingContext } from "../cli/utils";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { cleanupMcpService, registerMcpService } from "../services/mcpService";
 import { registerTrpcService } from "../services/trpcService";
 import { registerWebService } from "../services/webService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import {
-  analytics,
-  shouldEnableTelemetry,
-  TelemetryEvent,
-  telemetryService,
-} from "../telemetry";
+import { analytics, TelemetryEvent } from "../telemetry";
+import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import type { AppServerConfig } from "./AppServerConfig";
@@ -85,18 +82,45 @@ export class AppServer {
     // Initialize telemetry if enabled
     if (this.config.telemetry !== false && shouldEnableTelemetry()) {
       try {
-        telemetryService.startSession({
-          sessionId: crypto.randomUUID(),
-          appInterface: "web",
-          startTime: new Date(),
-          appVersion: process.env.npm_package_version || "unknown",
-          appPlatform: process.platform,
-          appServicesEnabled: this.getActiveServicesList(),
-          appAuthEnabled: Boolean(this.config.auth),
-          appReadOnly: Boolean(this.config.readOnly),
-        });
+        // Set global application context that will be included in all events
+        if (analytics.isEnabled()) {
+          // Resolve embedding configuration for global context
+          const embeddingConfig = resolveEmbeddingContext();
+
+          analytics.setGlobalContext({
+            appVersion: packageJson.version,
+            appPlatform: process.platform,
+            appNodeVersion: process.version,
+            appServicesEnabled: this.getActiveServicesList(),
+            appAuthEnabled: Boolean(this.config.auth),
+            appReadOnly: Boolean(this.config.readOnly),
+            // Add embedding configuration to global context
+            ...(embeddingConfig && {
+              aiEmbeddingProvider: embeddingConfig.provider,
+              aiEmbeddingModel: embeddingConfig.model,
+              aiEmbeddingDimensions: embeddingConfig.dimensions,
+            }),
+          });
+
+          // Track application startup
+          analytics.track(TelemetryEvent.APP_STARTED, {
+            services: this.getActiveServicesList(),
+            port: this.config.port,
+            externalWorker: Boolean(this.config.externalWorkerUrl),
+            // Include startup context when available
+            ...(this.config.startupContext?.cliCommand && {
+              cliCommand: this.config.startupContext.cliCommand,
+            }),
+            ...(this.config.startupContext?.mcpProtocol && {
+              mcpProtocol: this.config.startupContext.mcpProtocol,
+            }),
+            ...(this.config.startupContext?.mcpTransport && {
+              mcpTransport: this.config.startupContext.mcpTransport,
+            }),
+          });
+        }
       } catch (error) {
-        logger.debug(`Failed to initialize telemetry: ${error}`);
+        logger.debug(`Failed to track application startup: ${error}`);
       }
     }
 
@@ -113,10 +137,10 @@ export class AppServer {
       const startupDuration = performance.now() - startupStartTime;
       if (analytics.isEnabled()) {
         analytics.track(TelemetryEvent.APP_STARTED, {
-          startup_success: true,
-          startup_duration_ms: Math.round(startupDuration),
-          listen_address: address,
-          active_services: this.getActiveServicesList(),
+          startupSuccess: true,
+          startupDurationMs: Math.round(startupDuration),
+          listenAddress: address,
+          activeServices: this.getActiveServicesList(),
         });
       }
 
@@ -126,9 +150,9 @@ export class AppServer {
       // Track failed startup
       if (analytics.isEnabled()) {
         analytics.track(TelemetryEvent.APP_STARTED, {
-          startup_success: false,
-          error_type: error instanceof Error ? error.constructor.name : "UnknownError",
-          error_message: error instanceof Error ? error.message : String(error),
+          startupSuccess: false,
+          errorType: error instanceof Error ? error.constructor.name : "UnknownError",
+          errorMessage: error instanceof Error ? error.message : String(error),
         });
       }
 
@@ -161,8 +185,7 @@ export class AppServer {
       }
 
       // Shutdown telemetry service
-      telemetryService.endSession();
-      await telemetryService.shutdown();
+      await analytics.shutdown();
 
       // Close Fastify server
       await this.server.close();
@@ -176,7 +199,7 @@ export class AppServer {
           graceful: false,
           error: error instanceof Error ? error.constructor.name : "UnknownError",
         });
-        await telemetryService.shutdown();
+        await analytics.shutdown();
       }
 
       throw error;
@@ -224,9 +247,9 @@ export class AppServer {
       this.server.setErrorHandler(async (error, request, reply) => {
         if (analytics.isEnabled()) {
           analytics.captureException(error, {
-            error_category: "http",
+            errorCategory: "http",
             component: "FastifyServer",
-            status_code: error.statusCode || 500,
+            statusCode: error.statusCode || 500,
             method: request.method,
             route: request.routeOptions?.url || request.url,
             context: "http_request_error",
