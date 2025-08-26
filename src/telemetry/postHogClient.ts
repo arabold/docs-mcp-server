@@ -153,7 +153,9 @@ export class PostHogClient {
         event,
         properties: snakeCaseProperties,
       });
-      logger.debug(`PostHog event captured: ${event}`);
+      logger.debug(
+        `📊 PostHog event captured: ${event} ${JSON.stringify(snakeCaseProperties)}`,
+      );
     } catch (error) {
       logger.debug(
         `PostHog capture error: ${error instanceof Error ? error.message : "Unknown error"}`,

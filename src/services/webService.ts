@@ -32,9 +32,9 @@ export async function registerWebService(
   docService: IDocumentManagement,
   pipeline: IPipeline,
 ): Promise<void> {
-  // TODO: Implement proper web session tracking
-  // Currently disabled due to excessive session creation per request
-  // Web tracking should use browser-based session management instead of per-request sessions
+  // Note: Web interface uses direct event tracking without session management
+  // This approach provides meaningful analytics without the complexity of per-request sessions
+  // Future enhancements could add browser-based session correlation if needed
 
   // Instantiate tools for web routes
   const listLibrariesTool = new ListLibrariesTool(docService);

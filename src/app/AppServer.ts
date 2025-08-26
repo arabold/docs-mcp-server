@@ -102,7 +102,7 @@ export class AppServer {
             }),
           });
 
-          // Track application startup
+          // Track app start at the very beginning
           analytics.track(TelemetryEvent.APP_STARTED, {
             services: this.getActiveServicesList(),
             port: this.config.port,
@@ -120,42 +120,21 @@ export class AppServer {
           });
         }
       } catch (error) {
-        logger.debug(`Failed to track application startup: ${error}`);
+        logger.debug(`Failed to initialize telemetry: ${error}`);
       }
     }
 
     await this.setupServer();
 
     try {
-      const startupStartTime = performance.now();
       const address = await this.server.listen({
         port: this.config.port,
         host: "0.0.0.0",
       });
 
-      // Track successful startup
-      const startupDuration = performance.now() - startupStartTime;
-      if (analytics.isEnabled()) {
-        analytics.track(TelemetryEvent.APP_STARTED, {
-          startupSuccess: true,
-          startupDurationMs: Math.round(startupDuration),
-          listenAddress: address,
-          activeServices: this.getActiveServicesList(),
-        });
-      }
-
       this.logStartupInfo(address);
       return this.server;
     } catch (error) {
-      // Track failed startup
-      if (analytics.isEnabled()) {
-        analytics.track(TelemetryEvent.APP_STARTED, {
-          startupSuccess: false,
-          errorType: error instanceof Error ? error.constructor.name : "UnknownError",
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-      }
-
       logger.error(`❌ Failed to start AppServer: ${error}`);
       await this.server.close();
       throw error;

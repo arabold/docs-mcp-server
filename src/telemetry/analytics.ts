@@ -1,26 +1,21 @@
 /**
  * Analytics wrapper for privacy-first telemetry using PostHog.
- * Provides session-based context and automatic data sanitization.
+ * Provides global context and automatic data sanitization.
  *
  * Architecture:
  * - PostHogClient: Handles PostHog SDK integration and event capture
- * - SessionTracker: Manages session context and properties enrichment
- * - Analytics: High-level coordinator providing public API
+ * - Analytics: High-level coordinator providing public API with global context
  */
 
 import { logger } from "../utils/logger";
 import type { TelemetryEventPropertiesMap } from "./eventTypes";
 import { PostHogClient } from "./postHogClient";
-import type { SessionContext } from "./SessionContext";
-import { SessionTracker } from "./SessionTracker";
 import { generateInstallationId, TelemetryConfig } from "./TelemetryConfig";
 
 /**
  * Telemetry event types for structured analytics
  */
 export enum TelemetryEvent {
-  SESSION_STARTED = "session_started",
-  SESSION_ENDED = "session_ended",
   APP_STARTED = "app_started",
   APP_SHUTDOWN = "app_shutdown",
   TOOL_USED = "tool_used",
@@ -35,7 +30,6 @@ export enum TelemetryEvent {
  */
 export class Analytics {
   private postHogClient: PostHogClient;
-  private sessionTracker: SessionTracker;
   private enabled: boolean = true;
   private distinctId: string;
   private globalContext: Record<string, unknown> = {};
@@ -45,7 +39,6 @@ export class Analytics {
     this.distinctId = generateInstallationId();
 
     this.postHogClient = new PostHogClient(this.enabled);
-    this.sessionTracker = new SessionTracker();
 
     if (this.enabled) {
       logger.debug("Analytics enabled");
@@ -69,30 +62,7 @@ export class Analytics {
   }
 
   /**
-   * Initialize session context - call once per session
-   */
-  startSession(context: SessionContext): void {
-    if (!this.enabled) return;
-
-    this.sessionTracker.startSession(context);
-    this.track(TelemetryEvent.SESSION_STARTED, {
-      appInterface: context.appInterface,
-      // Include webRoute for web sessions
-      ...(context.webRoute && { webRoute: context.webRoute }),
-    });
-  }
-
-  /**
-   * Update session context with additional fields (e.g., embedding model info)
-   */
-  updateSessionContext(updates: Partial<SessionContext>): void {
-    if (!this.enabled) return;
-
-    this.sessionTracker.updateSessionContext(updates);
-  }
-
-  /**
-   * Track an event with automatic session context inclusion
+   * Track an event with automatic global context inclusion
    *
    * Type-safe overloads for specific events:
    */
@@ -104,41 +74,28 @@ export class Analytics {
   track(event: string, properties: Record<string, unknown> = {}): void {
     if (!this.enabled) return;
 
-    // Merge global context, session context, and event properties
-    const enrichedProperties = this.sessionTracker.getEnrichedProperties({
+    // Merge global context and event properties with timestamp
+    const enrichedProperties = {
       ...this.globalContext,
       ...properties,
-    });
+      timestamp: new Date().toISOString(),
+    };
     this.postHogClient.capture(this.distinctId, event, enrichedProperties);
   }
 
   /**
-   * Capture exception using PostHog's native error tracking with session context
+   * Capture exception using PostHog's native error tracking with global context
    */
   captureException(error: Error, properties: Record<string, unknown> = {}): void {
     if (!this.enabled) return;
 
-    // Merge global context, session context, and error properties
-    const enrichedProperties = this.sessionTracker.getEnrichedProperties({
+    // Merge global context and error properties with timestamp
+    const enrichedProperties = {
       ...this.globalContext,
       ...properties,
-    });
+      timestamp: new Date().toISOString(),
+    };
     this.postHogClient.captureException(this.distinctId, error, enrichedProperties);
-  }
-
-  /**
-   * Track session end with duration
-   */
-  endSession(): void {
-    if (!this.enabled) return;
-
-    const sessionInfo = this.sessionTracker.endSession();
-    if (sessionInfo) {
-      this.track(TelemetryEvent.SESSION_ENDED, {
-        durationMs: sessionInfo.duration,
-        appInterface: sessionInfo.appInterface,
-      });
-    }
   }
 
   /**
@@ -153,13 +110,6 @@ export class Analytics {
    */
   isEnabled(): boolean {
     return this.enabled && this.postHogClient.isEnabled();
-  }
-
-  /**
-   * Get current session context
-   */
-  getSessionContext(): SessionContext | undefined {
-    return this.sessionTracker.getSessionContext();
   }
 
   /**

@@ -4,12 +4,7 @@
 
 import { Command, Option } from "commander";
 import packageJson from "../../package.json";
-import {
-  analytics,
-  createCliSession,
-  shouldEnableTelemetry,
-  TelemetryConfig,
-} from "../telemetry";
+import { analytics, shouldEnableTelemetry, TelemetryConfig } from "../telemetry";
 import { LogLevel, setLogLevel } from "../utils/logger";
 import { createDefaultAction } from "./commands/default";
 import { createFetchUrlCommand } from "./commands/fetchUrl";
@@ -45,7 +40,7 @@ export function createCliProgram(): Command {
     .showHelpAfterError(true);
 
   // Set up global options handling
-  program.hook("preAction", async (thisCommand, actionCommand) => {
+  program.hook("preAction", async (thisCommand, _actionCommand) => {
     const globalOptions: GlobalOptions = thisCommand.opts();
 
     // Setup logging
@@ -54,20 +49,15 @@ export function createCliProgram(): Command {
 
     // Initialize telemetry if enabled
     if (shouldEnableTelemetry()) {
-      const commandName = actionCommand.name();
-
-      // Create session without embedding context - commands will provide this themselves
-      const session = createCliSession(commandName);
-      analytics.startSession(session);
+      // Telemetry is enabled
     } else {
       TelemetryConfig.getInstance().disable();
     }
   });
 
   // Cleanup telemetry on command completion
-  program.hook("postAction", async () => {
+  program.hook("postAction", async (_actionCommand) => {
     if (analytics.isEnabled()) {
-      analytics.endSession();
       await analytics.shutdown();
     }
   });

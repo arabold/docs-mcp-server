@@ -12,21 +12,21 @@ describe("Type-safe event tracking", () => {
     analytics = new Analytics(false); // Disabled for testing
   });
 
-  it("should enforce correct properties for SESSION_STARTED event", () => {
+  it("should enforce correct properties for APP_STARTED event", () => {
     // This should compile without errors - all required properties provided
-    analytics.track(TelemetryEvent.SESSION_STARTED, {
-      interface: "mcp",
+    analytics.track(TelemetryEvent.APP_STARTED, {
       version: "1.0.0",
       platform: "darwin",
       authEnabled: false,
       readOnly: true,
       servicesCount: 2,
+      port: 8080,
     });
 
     // This would cause a TypeScript error if we uncommented it:
-    // analytics.track(TelemetryEvent.SESSION_STARTED, {
-    //   interface: "mcp",
-    //   // missing required properties like version, platform, etc.
+    // analytics.track(TelemetryEvent.APP_STARTED, {
+    //   version: "1.0.0",
+    //   // missing required properties like platform, etc.
     // });
   });
 

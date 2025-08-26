@@ -11,30 +11,15 @@ interface BaseTelemetryProperties {
   [key: string]: unknown;
 }
 
-// Session Events
-export interface SessionStartedProperties extends BaseTelemetryProperties {
-  appInterface: string;
-  sessionId: string;
-}
-
-export interface SessionEndedProperties extends BaseTelemetryProperties {
-  durationMs: number;
-  appInterface: string;
-}
-
 // Application Events
 export interface AppStartedProperties extends BaseTelemetryProperties {
   services: string[];
   port?: number;
   externalWorker?: boolean;
-  // Startup success tracking
-  startupSuccess?: boolean;
-  startupDurationMs?: number;
-  listenAddress?: string;
-  activeServices?: string[];
-  // Error tracking (failure cases)
-  errorType?: string;
-  errorMessage?: string;
+  // Context when available
+  cliCommand?: string;
+  mcpProtocol?: string;
+  mcpTransport?: string;
 }
 
 export interface AppShutdownProperties extends BaseTelemetryProperties {
@@ -116,8 +101,6 @@ export interface DocumentProcessedProperties extends BaseTelemetryProperties {
 
 // Type mapping for event to properties
 export interface TelemetryEventPropertiesMap {
-  [TelemetryEvent.SESSION_STARTED]: SessionStartedProperties;
-  [TelemetryEvent.SESSION_ENDED]: SessionEndedProperties;
   [TelemetryEvent.APP_STARTED]: AppStartedProperties;
   [TelemetryEvent.APP_SHUTDOWN]: AppShutdownProperties;
   [TelemetryEvent.TOOL_USED]: ToolUsedProperties;

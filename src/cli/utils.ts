@@ -25,7 +25,7 @@ import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
 
 /**
- * Embedding context that can be passed to session creation.
+ * Embedding context.
  * Simplified subset of EmbeddingModelConfig for telemetry purposes.
  */
 export interface EmbeddingContext {
