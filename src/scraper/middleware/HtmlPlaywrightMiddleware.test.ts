@@ -96,9 +96,13 @@ describe("HtmlPlaywrightMiddleware", () => {
       unroute: vi.fn().mockResolvedValue(undefined),
       goto: vi.fn().mockResolvedValue(undefined),
       waitForSelector: vi.fn().mockResolvedValue(undefined),
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
       isVisible: vi.fn().mockResolvedValue(false),
       content: vi.fn().mockResolvedValue(renderedHtml),
       close: vi.fn().mockResolvedValue(undefined),
+      $$: vi.fn().mockResolvedValue([]), // No iframes in this test
+      evaluate: vi.fn().mockResolvedValue(undefined),
+      url: vi.fn().mockReturnValue("https://example-f8b6e5ad.com/test"),
     } as unknown as MockedObject<Page>;
     const browserSpy = {
       newPage: vi.fn().mockResolvedValue(pageSpy),
@@ -189,9 +193,14 @@ describe("HtmlPlaywrightMiddleware", () => {
       route: vi.fn().mockResolvedValue(undefined),
       unroute: vi.fn().mockResolvedValue(undefined),
       goto: vi.fn().mockResolvedValue(undefined),
-      waitForSelector: vi.fn().mockResolvedValue(undefined), // <-- Add this line
+      waitForSelector: vi.fn().mockResolvedValue(undefined),
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      isVisible: vi.fn().mockResolvedValue(false),
       content: vi.fn().mockResolvedValue(initialHtml),
       close: vi.fn().mockResolvedValue(undefined),
+      $$: vi.fn().mockResolvedValue([]), // No iframes in this test
+      evaluate: vi.fn().mockResolvedValue(undefined),
+      url: vi.fn().mockReturnValue(urlWithCreds),
     } as unknown as MockedObject<Page>;
     const contextSpy = {
       newPage: vi.fn().mockResolvedValue(pageSpy),
@@ -230,8 +239,37 @@ describe("HtmlPlaywrightMiddleware", () => {
         </script>
       </body></html>
     `;
+    // Expected HTML after Playwright renders and executes the script
+    const renderedHtml = `
+      <html><body>
+        <div class="spinner" style="display: none;">Loading...</div>
+        <div id="content" style="">Loaded!</div>
+      </body></html>
+    `;
     const context = createPipelineTestContext(initialHtml, "https://example.com/spinner");
     const next = vi.fn();
+
+    // Mock Playwright
+    const pageSpy = {
+      route: vi.fn().mockResolvedValue(undefined),
+      unroute: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue(undefined),
+      waitForSelector: vi.fn().mockResolvedValue(undefined),
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      isVisible: vi.fn().mockResolvedValue(true), // Spinner is visible initially
+      content: vi.fn().mockResolvedValue(renderedHtml),
+      close: vi.fn().mockResolvedValue(undefined),
+      $$: vi.fn().mockResolvedValue([]), // No iframes in this test
+      evaluate: vi.fn().mockResolvedValue(undefined),
+      url: vi.fn().mockReturnValue("https://example.com/spinner"),
+    } as unknown as MockedObject<Page>;
+    const browserSpy = {
+      newPage: vi.fn().mockResolvedValue(pageSpy),
+      isConnected: vi.fn().mockReturnValue(true),
+      on: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MockedObject<Browser>;
+    const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
 
     await playwrightMiddleware.process(context, next);
 
@@ -248,6 +286,8 @@ describe("HtmlPlaywrightMiddleware", () => {
     expect(content.text()).toContain("Loaded!");
     expect(context.errors).toHaveLength(0);
     expect(next).toHaveBeenCalled();
+
+    launchSpy.mockRestore();
   });
 
   it("should not wait if loading indicators are present but hidden on page load", async () => {
@@ -264,6 +304,28 @@ describe("HtmlPlaywrightMiddleware", () => {
     );
     const next = vi.fn();
 
+    // Mock Playwright - spinner is already hidden so isVisible returns false
+    const pageSpy = {
+      route: vi.fn().mockResolvedValue(undefined),
+      unroute: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue(undefined),
+      waitForSelector: vi.fn().mockResolvedValue(undefined),
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      isVisible: vi.fn().mockResolvedValue(false), // Spinner is already hidden
+      content: vi.fn().mockResolvedValue(initialHtml), // Return original HTML since no changes needed
+      close: vi.fn().mockResolvedValue(undefined),
+      $$: vi.fn().mockResolvedValue([]), // No iframes in this test
+      evaluate: vi.fn().mockResolvedValue(undefined),
+      url: vi.fn().mockReturnValue("https://example.com/hidden-spinner"),
+    } as unknown as MockedObject<Page>;
+    const browserSpy = {
+      newPage: vi.fn().mockResolvedValue(pageSpy),
+      isConnected: vi.fn().mockReturnValue(true),
+      on: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+    } as unknown as MockedObject<Browser>;
+    const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
     await playwrightMiddleware.process(context, next);
 
     // Use Cheerio to parse the resulting HTML
@@ -278,6 +340,8 @@ describe("HtmlPlaywrightMiddleware", () => {
     expect(content.text()).toContain("Loaded immediately!");
     expect(context.errors).toHaveLength(0);
     expect(next).toHaveBeenCalled();
+
+    launchSpy.mockRestore();
   });
 });
 
