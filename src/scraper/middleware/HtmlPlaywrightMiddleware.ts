@@ -1,4 +1,11 @@
-import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type ElementHandle,
+  type Frame,
+  type Page,
+} from "playwright";
 import { DEFAULT_PAGE_TIMEOUT } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { ScrapeMode } from "../types";
@@ -118,80 +125,127 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       logger.debug(`Found ${iframes.length} iframe(s) on ${page.url()}`);
 
       // Wait for all iframes to load in parallel
-      const iframePromises = iframes.map(async (iframe, index) => {
-        try {
-          const src = await iframe.getAttribute("src");
-          if (
-            !src ||
-            src.startsWith("data:") ||
-            src.startsWith("javascript:") ||
-            src === "about:blank"
-          ) {
-            logger.debug(`Skipping iframe ${index + 1} - no valid src (${src})`);
-            return;
-          }
-
-          logger.debug(`Waiting for iframe ${index + 1} to load: ${src}`);
-
-          // Get the frame content
-          const frame = await iframe.contentFrame();
-          if (!frame) {
-            logger.debug(`Could not access content frame for iframe ${index + 1}`);
-            return;
-          }
-
-          // Wait for the iframe body to load
-          await frame.waitForSelector("body", { timeout: 10000 }).catch(() => {
-            logger.debug(`Timeout waiting for body in iframe ${index + 1}`);
-          });
-
-          // Wait for loading indicators in the iframe to complete
-          await this.waitForLoadingToComplete(frame);
-
-          // Extract iframe body content and replace the iframe element
-          try {
-            const frameBodyHtml = await frame.$eval("body", (el) => el.innerHTML);
-            if (frameBodyHtml && frameBodyHtml.trim().length > 0) {
-              // Replace the iframe element with its content in the main page
-              await page.evaluate(
-                (args: [number, string]) => {
-                  const [iframeIndex, bodyContent] = args;
-                  const iframe = document.querySelectorAll("iframe")[iframeIndex];
-                  if (iframe && bodyContent) {
-                    // Create a replacement div with the iframe content
-                    const replacement = document.createElement("div");
-                    replacement.innerHTML = bodyContent;
-
-                    // Replace the iframe with the extracted content
-                    iframe.parentNode?.replaceChild(replacement, iframe);
-                  }
-                },
-                [index, frameBodyHtml] as [number, string],
-              );
-
-              logger.debug(
-                `Successfully extracted and replaced content for iframe ${index + 1}: ${src}`,
-              );
-            } else {
-              logger.debug(`Iframe ${index + 1} body content is empty: ${src}`);
-            }
-          } catch (extractError) {
-            logger.debug(
-              `Error extracting content from iframe ${index + 1}: ${extractError}`,
-            );
-          }
-
-          logger.debug(`Successfully loaded iframe ${index + 1}: ${src}`);
-        } catch (error) {
-          logger.debug(`Error waiting for iframe ${index + 1}: ${error}`);
-        }
-      });
+      const iframePromises = iframes.map((iframe, index) =>
+        this.processIframe(page, iframe, index),
+      );
 
       await Promise.all(iframePromises);
       logger.debug(`Finished waiting for all iframes to load`);
     } catch (error) {
       logger.debug(`Error during iframe loading for ${page.url()}: ${error}`);
     }
+  }
+
+  /**
+   * Processes a single iframe: validates, extracts content, and replaces in main page.
+   *
+   * @param page The main page containing the iframe
+   * @param iframe The iframe element handle
+   * @param index The iframe index for logging/identification
+   */
+  private async processIframe(
+    page: Page,
+    iframe: ElementHandle,
+    index: number,
+  ): Promise<void> {
+    try {
+      const src = await iframe.getAttribute("src");
+      if (this.shouldSkipIframeSrc(src)) {
+        logger.debug(`Skipping iframe ${index + 1} - no valid src (${src})`);
+        return;
+      }
+
+      logger.debug(`Waiting for iframe ${index + 1} to load: ${src}`);
+
+      // Get the frame content
+      const frame = await iframe.contentFrame();
+      if (!frame) {
+        logger.debug(`Could not access content frame for iframe ${index + 1}`);
+        return;
+      }
+
+      // Wait for the iframe body to load
+      await frame.waitForSelector("body", { timeout: 10000 }).catch(() => {
+        logger.debug(`Timeout waiting for body in iframe ${index + 1}`);
+      });
+
+      // Wait for loading indicators in the iframe to complete
+      await this.waitForLoadingToComplete(frame);
+
+      // Extract and replace iframe content
+      const content = await this.extractIframeContent(frame);
+      if (content && content.trim().length > 0) {
+        await this.replaceIframeWithContent(page, index, content);
+        logger.debug(
+          `Successfully extracted and replaced content for iframe ${index + 1}: ${src}`,
+        );
+      } else {
+        logger.debug(`Iframe ${index + 1} body content is empty: ${src}`);
+      }
+
+      logger.debug(`Successfully loaded iframe ${index + 1}: ${src}`);
+    } catch (error) {
+      logger.debug(`Error waiting for iframe ${index + 1}: ${error}`);
+    }
+  }
+
+  /**
+   * Determines if an iframe src should be skipped during processing.
+   *
+   * @param src The iframe src attribute value
+   * @returns true if the iframe should be skipped
+   */
+  private shouldSkipIframeSrc(src: string | null): boolean {
+    return (
+      !src ||
+      src.startsWith("data:") ||
+      src.startsWith("javascript:") ||
+      src === "about:blank"
+    );
+  }
+
+  /**
+   * Extracts the body innerHTML from an iframe.
+   *
+   * @param frame The iframe's content frame
+   * @returns The extracted HTML content or null if extraction fails
+   */
+  private async extractIframeContent(frame: Frame): Promise<string | null> {
+    try {
+      return await frame.$eval("body", (el: HTMLElement) => el.innerHTML);
+    } catch (error) {
+      logger.debug(`Error extracting iframe content: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Replaces an iframe element with its extracted content in the main page.
+   *
+   * @param page The main page containing the iframe
+   * @param index The iframe index (0-based)
+   * @param content The extracted content to replace the iframe with
+   */
+  private async replaceIframeWithContent(
+    page: Page,
+    index: number,
+    content: string,
+  ): Promise<void> {
+    await page.evaluate(
+      (args: [number, string]) => {
+        const [iframeIndex, bodyContent] = args;
+        const iframe = document.querySelectorAll("iframe")[iframeIndex];
+        if (iframe && bodyContent) {
+          // Create a replacement div with the iframe content
+          const replacement = document.createElement("div");
+          replacement.innerHTML = bodyContent;
+
+          // Replace the iframe with the extracted content
+          iframe.parentNode?.replaceChild(replacement, iframe);
+        }
+      },
+      [index, content] as [number, string],
+    );
   }
 
   /**
