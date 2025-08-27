@@ -4,7 +4,12 @@
 
 import { Command, Option } from "commander";
 import packageJson from "../../package.json";
-import { analytics, shouldEnableTelemetry, TelemetryConfig } from "../telemetry";
+import {
+  analytics,
+  shouldEnableTelemetry,
+  TelemetryConfig,
+  TelemetryEvent,
+} from "../telemetry";
 import { LogLevel, setLogLevel } from "../utils/logger";
 import { createDefaultAction } from "./commands/default";
 import { createFetchUrlCommand } from "./commands/fetchUrl";
@@ -40,7 +45,7 @@ export function createCliProgram(): Command {
     .showHelpAfterError(true);
 
   // Set up global options handling
-  program.hook("preAction", async (thisCommand, _actionCommand) => {
+  program.hook("preAction", async (thisCommand, actionCommand) => {
     const globalOptions: GlobalOptions = thisCommand.opts();
 
     // Setup logging
@@ -49,7 +54,21 @@ export function createCliProgram(): Command {
 
     // Initialize telemetry if enabled
     if (shouldEnableTelemetry()) {
-      // Telemetry is enabled
+      // Set global context for CLI commands
+      if (analytics.isEnabled()) {
+        analytics.setGlobalContext({
+          appVersion: packageJson.version,
+          appPlatform: process.platform,
+          appNodeVersion: process.version,
+          appInterface: "cli",
+          appCommand: actionCommand.name(),
+        });
+
+        // Track app start now that globals are set
+        analytics.track(TelemetryEvent.APP_STARTED, {
+          cliCommand: actionCommand.name(),
+        });
+      }
     } else {
       TelemetryConfig.getInstance().disable();
     }
