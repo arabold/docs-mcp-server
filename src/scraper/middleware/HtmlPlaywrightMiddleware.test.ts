@@ -98,13 +98,24 @@ const createMockPlaywrightPage = (
     $$: vi.fn().mockResolvedValue(mockIframes), // Return mock iframes
     evaluate: vi.fn().mockResolvedValue(undefined),
     url: vi.fn().mockReturnValue(url),
+    context: vi.fn().mockReturnValue({
+      newPage: vi.fn().mockResolvedValue({
+        route: vi.fn().mockResolvedValue(undefined),
+        unroute: vi.fn().mockResolvedValue(undefined),
+        goto: vi.fn().mockResolvedValue(undefined),
+        waitForSelector: vi.fn().mockResolvedValue(undefined),
+        $eval: vi.fn().mockResolvedValue("<p>Frame content</p>"),
+        close: vi.fn().mockResolvedValue(undefined),
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    }),
   } as unknown as MockedObject<Page>;
 };
 
 // Shared mock factory for browser objects
 const createMockBrowser = (
   page: MockedObject<Page>,
-  useContext = false,
+  useContext = true, // Default to true since we always use contexts now
 ): MockedObject<Browser> => {
   if (useContext) {
     const contextSpy = {
@@ -246,33 +257,60 @@ describe("HtmlPlaywrightMiddleware", () => {
   });
 
   describe("Iframe processing", () => {
-    it("should extract content from valid iframes", async () => {
+    it("should detect and process iframes correctly", async () => {
       const initialHtml =
-        '<html><body><iframe src="https://example.com/iframe"></iframe></body></html>';
-      const iframeContent = "<p>Iframe content</p>";
-      const expectedHtml = `<html><body><div>${iframeContent}</div></body></html>`;
+        '<html><body><h1>Main Content</h1><iframe src="https://example.com/iframe"></iframe></body></html>';
 
       const context = createPipelineTestContext(initialHtml, "https://example.com/test");
       const next = vi.fn();
 
-      const pageSpy = createMockPlaywrightPage(expectedHtml, {
-        iframes: [{ src: "https://example.com/iframe", content: iframeContent }],
+      // Track iframe processing behavior
+      let iframeProcessingCalled = false;
+
+      const mockIframe = {
+        getAttribute: vi.fn().mockResolvedValue("https://example.com/iframe"),
+        contentFrame: vi.fn().mockResolvedValue({
+          waitForSelector: vi.fn().mockResolvedValue(undefined),
+          $eval: vi.fn().mockResolvedValue("<p>Iframe content</p>"),
+        }),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.$$ = vi.fn().mockImplementation((selector: string) => {
+        if (selector === "iframe") {
+          return Promise.resolve([mockIframe]);
+        }
+        if (selector === "frameset") {
+          return Promise.resolve([]); // No framesets
+        }
+        return Promise.resolve([]);
       });
+
+      pageSpy.evaluate = vi.fn().mockImplementation(() => {
+        iframeProcessingCalled = true;
+        return Promise.resolve(undefined);
+      });
+
       const browserSpy = createMockBrowser(pageSpy);
       const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
 
       await playwrightMiddleware.process(context, next);
 
+      // Verify iframe processing was triggered
+      expect(pageSpy.$$).toHaveBeenCalledWith("iframe");
+      expect(mockIframe.getAttribute).toHaveBeenCalledWith("src");
+      expect(mockIframe.contentFrame).toHaveBeenCalled();
+      expect(iframeProcessingCalled).toBe(true);
       expect(context.errors).toHaveLength(0);
-      expect(pageSpy.evaluate).toHaveBeenCalled(); // iframe replacement
       expect(next).toHaveBeenCalled();
 
       launchSpy.mockRestore();
     });
 
-    it("should skip invalid iframe sources", async () => {
+    it("should preserve content when no valid iframes are found", async () => {
       const initialHtml = `
         <html><body>
+          <h1>Main Content</h1>
           <iframe src="about:blank"></iframe>
           <iframe src="data:text/html,test"></iframe>
           <iframe src="javascript:void(0)"></iframe>
@@ -283,22 +321,38 @@ describe("HtmlPlaywrightMiddleware", () => {
       const context = createPipelineTestContext(initialHtml, "https://example.com/test");
       const next = vi.fn();
 
-      const pageSpy = createMockPlaywrightPage(initialHtml, {
-        iframes: [
-          { src: "about:blank" },
-          { src: "data:text/html,test" },
-          { src: "javascript:void(0)" },
-          { src: "" }, // Empty src
-        ],
+      // Mock invalid iframes that should be skipped
+      const invalidIframes = [
+        { getAttribute: vi.fn().mockResolvedValue("about:blank") },
+        { getAttribute: vi.fn().mockResolvedValue("data:text/html,test") },
+        { getAttribute: vi.fn().mockResolvedValue("javascript:void(0)") },
+        { getAttribute: vi.fn().mockResolvedValue("") },
+      ];
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.$$ = vi.fn().mockImplementation((selector: string) => {
+        if (selector === "iframe") {
+          return Promise.resolve(invalidIframes);
+        }
+        if (selector === "frameset") {
+          return Promise.resolve([]); // No framesets
+        }
+        return Promise.resolve([]);
       });
+
       const browserSpy = createMockBrowser(pageSpy);
       const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
 
       await playwrightMiddleware.process(context, next);
 
-      expect(context.errors).toHaveLength(0);
-      // evaluate should not be called since all iframes are skipped
+      // Verify iframes were checked but none processed (due to invalid URLs)
+      expect(pageSpy.$$).toHaveBeenCalledWith("iframe");
+      for (const iframe of invalidIframes) {
+        expect(iframe.getAttribute).toHaveBeenCalledWith("src");
+      }
+      // No evaluate calls should happen since all iframes are skipped
       expect(pageSpy.evaluate).not.toHaveBeenCalled();
+      expect(context.errors).toHaveLength(0);
       expect(next).toHaveBeenCalled();
 
       launchSpy.mockRestore();
@@ -306,7 +360,7 @@ describe("HtmlPlaywrightMiddleware", () => {
 
     it("should handle iframe access errors gracefully", async () => {
       const initialHtml =
-        '<html><body><iframe src="https://example.com/iframe"></iframe></body></html>';
+        '<html><body><h1>Main Content</h1><iframe src="https://example.com/iframe"></iframe></body></html>';
 
       const context = createPipelineTestContext(initialHtml, "https://example.com/test");
       const next = vi.fn();
@@ -318,23 +372,37 @@ describe("HtmlPlaywrightMiddleware", () => {
       };
 
       const pageSpy = createMockPlaywrightPage(initialHtml);
-      pageSpy.$$ = vi.fn().mockResolvedValue([failingIframe]);
+      pageSpy.$$ = vi.fn().mockImplementation((selector: string) => {
+        if (selector === "iframe") {
+          return Promise.resolve([failingIframe]);
+        }
+        if (selector === "frameset") {
+          return Promise.resolve([]); // No framesets
+        }
+        return Promise.resolve([]);
+      });
 
       const browserSpy = createMockBrowser(pageSpy);
       const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
 
       await playwrightMiddleware.process(context, next);
 
+      // Verify iframe was attempted but failed gracefully
+      expect(pageSpy.$$).toHaveBeenCalledWith("iframe");
+      expect(failingIframe.getAttribute).toHaveBeenCalledWith("src");
+      expect(failingIframe.contentFrame).toHaveBeenCalled();
       expect(context.errors).toHaveLength(0); // Errors in iframe processing are logged, not added to context
       expect(next).toHaveBeenCalled();
 
       launchSpy.mockRestore();
     });
 
-    it("should process multiple iframes correctly", async () => {
+    it("should process multiple iframes and validate behavior", async () => {
       const initialHtml = `
         <html><body>
+          <h1>Main Content</h1>
           <iframe src="https://example.com/iframe1"></iframe>
+          <p>Between iframes</p>
           <iframe src="https://example.com/iframe2"></iframe>
           <iframe src="about:blank"></iframe>
         </body></html>
@@ -343,21 +411,267 @@ describe("HtmlPlaywrightMiddleware", () => {
       const context = createPipelineTestContext(initialHtml, "https://example.com/test");
       const next = vi.fn();
 
-      const pageSpy = createMockPlaywrightPage(initialHtml, {
-        iframes: [
-          { src: "https://example.com/iframe1", content: "<p>Content 1</p>" },
-          { src: "https://example.com/iframe2", content: "<p>Content 2</p>" },
-          { src: "about:blank" }, // This should be skipped
-        ],
+      let evaluateCallCount = 0;
+
+      const validIframes = [
+        {
+          getAttribute: vi.fn().mockResolvedValue("https://example.com/iframe1"),
+          contentFrame: vi.fn().mockResolvedValue({
+            waitForSelector: vi.fn().mockResolvedValue(undefined),
+            $eval: vi.fn().mockResolvedValue("<p>Content 1</p>"),
+          }),
+        },
+        {
+          getAttribute: vi.fn().mockResolvedValue("https://example.com/iframe2"),
+          contentFrame: vi.fn().mockResolvedValue({
+            waitForSelector: vi.fn().mockResolvedValue(undefined),
+            $eval: vi.fn().mockResolvedValue("<p>Content 2</p>"),
+          }),
+        },
+        {
+          getAttribute: vi.fn().mockResolvedValue("about:blank"), // Should be skipped
+        },
+      ];
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.$$ = vi.fn().mockImplementation((selector: string) => {
+        if (selector === "iframe") {
+          return Promise.resolve(validIframes);
+        }
+        if (selector === "frameset") {
+          return Promise.resolve([]); // No framesets
+        }
+        return Promise.resolve([]);
       });
+
+      pageSpy.evaluate = vi.fn().mockImplementation(() => {
+        evaluateCallCount++;
+        return Promise.resolve(undefined);
+      });
+
       const browserSpy = createMockBrowser(pageSpy);
       const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
 
       await playwrightMiddleware.process(context, next);
 
+      // Verify correct number of iframes were processed
+      expect(pageSpy.$$).toHaveBeenCalledWith("iframe");
+      expect(validIframes[0].getAttribute).toHaveBeenCalledWith("src");
+      expect(validIframes[1].getAttribute).toHaveBeenCalledWith("src");
+      expect(validIframes[2].getAttribute).toHaveBeenCalledWith("src");
+
+      // Only valid iframes should have contentFrame called
+      expect(validIframes[0].contentFrame).toHaveBeenCalled();
+      expect(validIframes[1].contentFrame).toHaveBeenCalled();
+
+      // Should have 2 evaluate calls (one for each valid iframe replacement)
+      expect(evaluateCallCount).toBe(2);
       expect(context.errors).toHaveLength(0);
-      // evaluate should be called twice (once for each valid iframe)
-      expect(pageSpy.evaluate).toHaveBeenCalledTimes(2);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+  });
+
+  describe("Frameset processing", () => {
+    it("should extract frame URLs from frameset structure", async () => {
+      // Mock the extractFrameUrls method to return expected frame URLs
+      const mockPage = {
+        evaluate: vi.fn().mockResolvedValue([
+          { src: "nav.html", name: "navigation" },
+          { src: "list.html", name: "list" },
+          { src: "main.html", name: "content" },
+        ]),
+      } as unknown as Page;
+
+      // @ts-expect-error Accessing private method for testing
+      const frameUrls = await playwrightMiddleware.extractFrameUrls(mockPage);
+
+      expect(frameUrls).toEqual([
+        { src: "nav.html", name: "navigation" },
+        { src: "list.html", name: "list" },
+        { src: "main.html", name: "content" },
+      ]);
+    });
+
+    it("should merge frame contents sequentially", async () => {
+      const frameContents = [
+        { url: "nav.html", content: "<nav>Navigation</nav>", name: "navigation" },
+        { url: "list.html", content: "<ul><li>Item 1</li></ul>", name: "list" },
+        { url: "main.html", content: "<main>Main content</main>", name: "content" },
+      ];
+
+      const mockPage = {
+        evaluate: vi.fn().mockResolvedValue(undefined),
+      } as unknown as Page;
+
+      // @ts-expect-error Accessing private method for testing
+      await playwrightMiddleware.mergeFrameContents(mockPage, frameContents);
+
+      expect(mockPage.evaluate).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.stringContaining("<!-- Frame 1 (navigation): nav.html -->"),
+      );
+      expect(mockPage.evaluate).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.stringContaining("<nav>Navigation</nav>"),
+      );
+      expect(mockPage.evaluate).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.stringContaining("<!-- Frame 2 (list): list.html -->"),
+      );
+      expect(mockPage.evaluate).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.stringContaining("<!-- Frame 3 (content): main.html -->"),
+      );
+    });
+
+    it("should detect and process framesets correctly", async () => {
+      const javadocFrameset = `
+        <html>
+        <frameset cols="20%,80%">
+        <frame src="nav.html" name="navigation">
+        <frame src="main.html" name="content">
+        </frameset>
+        </html>
+      `;
+
+      const context = createPipelineTestContext(
+        javadocFrameset,
+        "https://example.com/docs/",
+      );
+      const next = vi.fn();
+
+      // We'll test by capturing what the implementation calls
+      let extractedFrameUrls: unknown[] = [];
+      let mergedContentCalled = false;
+
+      const pageSpy = createMockPlaywrightPage(javadocFrameset);
+
+      // Mock frameset detection
+      pageSpy.$$ = vi.fn().mockImplementation((selector: string) => {
+        if (selector === "frameset") {
+          return Promise.resolve([{}]); // Mock one frameset found
+        }
+        return Promise.resolve([]);
+      });
+
+      // Mock frame URL extraction
+      pageSpy.evaluate = vi
+        .fn()
+        .mockImplementation((fn: (...args: unknown[]) => unknown) => {
+          const fnString = fn.toString();
+          if (fnString.includes('querySelectorAll("frame")')) {
+            extractedFrameUrls = [
+              { src: "nav.html", name: "navigation" },
+              { src: "main.html", name: "content" },
+            ];
+            return Promise.resolve(extractedFrameUrls);
+          }
+          // Mock frame content merging
+          if (fnString.includes('querySelectorAll("frameset")')) {
+            mergedContentCalled = true;
+            return Promise.resolve(undefined);
+          }
+          return Promise.resolve(undefined);
+        });
+
+      // Mock frame page creation for content fetching
+      const framePageSpy = createMockPlaywrightPage("");
+      framePageSpy.$eval = vi.fn().mockResolvedValue("<p>Frame content</p>");
+
+      const contextSpy = {
+        newPage: vi.fn().mockResolvedValue(framePageSpy),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      pageSpy.context = vi.fn().mockReturnValue(contextSpy);
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Verify the frameset processing was triggered
+      expect(pageSpy.$$).toHaveBeenCalledWith("frameset");
+      expect(extractedFrameUrls).toEqual([
+        { src: "nav.html", name: "navigation" },
+        { src: "main.html", name: "content" },
+      ]);
+      expect(contextSpy.newPage).toHaveBeenCalledTimes(2); // One for each frame
+      expect(mergedContentCalled).toBe(true);
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should create body tag when replacing frameset", async () => {
+      const framesetHtml = `
+        <html>
+        <head><title>Test</title></head>
+        <frameset cols="20%,80%">
+        <frame src="nav.html" name="navigation">
+        <frame src="main.html" name="content">
+        </frameset>
+        </html>
+      `;
+
+      const context = createPipelineTestContext(
+        framesetHtml,
+        "https://example.com/docs/",
+      );
+      const next = vi.fn();
+
+      // Track that body element creation is called
+      let bodyElementCreated = false;
+
+      const pageSpy = createMockPlaywrightPage(framesetHtml);
+
+      // Mock frameset detection
+      pageSpy.$$ = vi.fn().mockImplementation((selector: string) => {
+        if (selector === "frameset") {
+          return Promise.resolve([{}]); // Mock one frameset found
+        }
+        return Promise.resolve([]);
+      });
+
+      // Mock frame URL extraction and body creation
+      pageSpy.evaluate = vi
+        .fn()
+        .mockImplementation((fn: (...args: unknown[]) => unknown) => {
+          const fnString = fn.toString();
+          if (fnString.includes('querySelectorAll("frame")')) {
+            return Promise.resolve([
+              { src: "nav.html", name: "navigation" },
+              { src: "main.html", name: "content" },
+            ]);
+          }
+          // Mock body creation in mergeFrameContents
+          if (fnString.includes('createElement("body")')) {
+            bodyElementCreated = true;
+            return Promise.resolve(undefined);
+          }
+          return Promise.resolve(undefined);
+        });
+
+      // Mock frame page creation for content fetching
+      const framePageSpy = createMockPlaywrightPage("");
+      framePageSpy.$eval = vi.fn().mockResolvedValue("<p>Frame content</p>");
+
+      const contextSpy = {
+        newPage: vi.fn().mockResolvedValue(framePageSpy),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      pageSpy.context = vi.fn().mockReturnValue(contextSpy);
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Verify that body element was created during frameset replacement
+      expect(bodyElementCreated).toBe(true);
+      expect(context.errors).toHaveLength(0);
       expect(next).toHaveBeenCalled();
 
       launchSpy.mockRestore();
