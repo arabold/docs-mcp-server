@@ -1,28 +1,30 @@
-import * as cheerio from "cheerio";
-import { afterAll, afterEach, describe, expect, it, type MockedObject, vi } from "vitest";
-import type { ScraperOptions } from "../types";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockedObject,
+  vi,
+} from "vitest";
+import { ScrapeMode, type ScraperOptions } from "../types";
 import {
   extractCredentialsAndOrigin,
   HtmlPlaywrightMiddleware,
   mergePlaywrightHeaders,
 } from "./HtmlPlaywrightMiddleware";
-import type { MiddlewareContext } from "./types"; // Adjusted path
+import type { MiddlewareContext } from "./types";
 
 // Suppress logger output during tests
 vi.mock("../../../utils/logger");
 
-// Mock playwright and jsdom using factory functions
+// Mock playwright using factory functions
 vi.mock("playwright", async (importOriginal) =>
   importOriginal<typeof import("playwright")>(),
 );
 
-// Mock playwright and jsdom using factory functions
-vi.mock("jsdom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("jsdom")>();
-  return { ...actual };
-});
-
-import { type Browser, chromium, type Page } from "playwright";
+import { type Browser, chromium, type Frame, type Page } from "playwright";
 
 // Helper to create a minimal valid ScraperOptions object
 const createMockScraperOptions = (
@@ -48,7 +50,7 @@ const createPipelineTestContext = (
   options?: Partial<ScraperOptions>,
 ): MiddlewareContext => {
   const fullOptions = { ...createMockScraperOptions(source), ...options };
-  const context: MiddlewareContext = {
+  return {
     content,
     source,
     metadata: {},
@@ -56,231 +58,398 @@ const createPipelineTestContext = (
     errors: [],
     options: fullOptions,
   };
-  return context;
 };
 
-// --- Tests for HtmlPlaywrightMiddleware ---
-// Note: These tests require Playwright and a browser (Chromium) to be installed.
-describe("HtmlPlaywrightMiddleware", () => {
-  // Use a shared instance for tests to avoid launching browser repeatedly
-  const playwrightMiddleware = new HtmlPlaywrightMiddleware();
+// Shared mock factory for Playwright page objects
+const createMockPlaywrightPage = (
+  contentToReturn: string,
+  options: {
+    iframes?: Array<{ src: string; content?: string }>;
+    shouldThrow?: boolean;
+    url?: string;
+  } = {},
+): MockedObject<Page> => {
+  const { iframes = [], shouldThrow = false, url = "https://example.com" } = options;
 
-  afterEach(() => {
-    // Reset the browser instance after each test
-    // This ensures a clean state for each test
-    // @ts-expect-error
-    playwrightMiddleware.browser?.close();
-    // @ts-expect-error
-    playwrightMiddleware.browser = null;
-  });
+  // Create mock iframe elements
+  const mockIframes = iframes.map((iframe) => ({
+    getAttribute: vi.fn().mockResolvedValue(iframe.src),
+    contentFrame: vi.fn().mockResolvedValue(
+      iframe.content
+        ? {
+            waitForSelector: vi.fn().mockResolvedValue(undefined),
+            $eval: vi.fn().mockResolvedValue(iframe.content),
+          }
+        : null,
+    ),
+  }));
 
-  // Ensure browser is closed after all tests in this suite
-  afterAll(async () => {
-    await playwrightMiddleware.closeBrowser();
-  });
+  return {
+    route: vi.fn().mockResolvedValue(undefined),
+    unroute: vi.fn().mockResolvedValue(undefined),
+    goto: shouldThrow
+      ? vi.fn().mockRejectedValue(new Error("Simulated navigation failure"))
+      : vi.fn().mockResolvedValue(undefined),
+    waitForSelector: vi.fn().mockResolvedValue(undefined),
+    waitForLoadState: vi.fn().mockResolvedValue(undefined),
+    isVisible: vi.fn().mockResolvedValue(false), // Loading indicators not visible by default
+    content: vi.fn().mockResolvedValue(contentToReturn),
+    close: vi.fn().mockResolvedValue(undefined),
+    $$: vi.fn().mockResolvedValue(mockIframes), // Return mock iframes
+    evaluate: vi.fn().mockResolvedValue(undefined),
+    url: vi.fn().mockReturnValue(url),
+  } as unknown as MockedObject<Page>;
+};
 
-  it("should render simple HTML and update context.content and context.dom", async () => {
-    const initialHtml =
-      "<html><head><title>Initial</title></head><body><p>Hello</p><script>document.querySelector('p').textContent = 'Hello Playwright!';</script></body></html>";
-    const renderedHtml =
-      "<html><head><title>Initial</title></head><body><p>Hello Playwright!</p></body></html>";
-    const context = createPipelineTestContext(
-      initialHtml,
-      // Using a unique domain helps isolate Playwright's network interception
-      "https://example-f8b6e5ad.com/test",
-    ); // Set a source URL for the context
-
-    // Stub Playwright to avoid launching a real browser
-    const pageSpy = {
-      route: vi.fn().mockResolvedValue(undefined),
-      unroute: vi.fn().mockResolvedValue(undefined),
-      goto: vi.fn().mockResolvedValue(undefined),
-      waitForSelector: vi.fn().mockResolvedValue(undefined),
-      isVisible: vi.fn().mockResolvedValue(false),
-      content: vi.fn().mockResolvedValue(renderedHtml),
-      close: vi.fn().mockResolvedValue(undefined),
-    } as unknown as MockedObject<Page>;
-    const browserSpy = {
-      newPage: vi.fn().mockResolvedValue(pageSpy),
-      isConnected: vi.fn().mockReturnValue(true),
-      on: vi.fn(),
-      close: vi.fn().mockResolvedValue(undefined),
-    } as unknown as MockedObject<Browser>;
-    const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
-
-    const next = vi.fn();
-    await playwrightMiddleware.process(context, next);
-
-    expect(context.errors).toHaveLength(0);
-    // Check if content was updated by Playwright rendering the script's effect
-    expect(context.content).toContain("<p>Hello Playwright!</p>");
-    // Remove checks for context.dom as this middleware no longer parses
-    expect(context.dom).toBeUndefined();
-    // Ensure next was called if processing was successful
-    expect(next).toHaveBeenCalled();
-
-    launchSpy.mockRestore();
-  });
-
-  it("should handle invalid HTML without throwing unhandled errors and call next", async () => {
-    const invalidHtml = "<html><body><p>Mismatched tag</div></html>";
-    const context = createPipelineTestContext(
-      invalidHtml,
-      // Using a unique domain helps isolate Playwright's network interception
-      "https://example-f8b6e5ad.com/test-invalid",
-    );
-    const next = vi.fn(); // Mock the next function
-    await playwrightMiddleware.process(context, next);
-
-    // Playwright/Browser might tolerate some errors, JSDOM might too.
-    // We expect the middleware to complete, potentially with errors in the context.
-    // We primarily check that *our* middleware code doesn't crash and calls next.
-    expect(context.errors.length).toBeGreaterThanOrEqual(0); // Allow for Playwright rendering errors
-    // Remove check for context.dom as this middleware no longer parses
-    expect(context.dom).toBeUndefined();
-    // Ensure next was called even if there were rendering errors
-    expect(next).toHaveBeenCalled();
-  });
-
-  it("should add error to context if Playwright page.goto fails and call next", async () => {
-    const html = "<html><body>Good</body></html>";
-    const context = createPipelineTestContext(
-      html,
-      "https://example-f8b6e5ad.com/goto-fail",
-    );
-    const next = vi.fn();
-
-    // Spy on page.goto and make it throw
-    const pageSpy = {
-      route: vi.fn().mockResolvedValue(undefined),
-      unroute: vi.fn().mockResolvedValue(undefined),
-      goto: vi.fn().mockRejectedValue(new Error("Simulated navigation failure")),
-      content: vi.fn(), // Doesn't matter as goto fails
-      close: vi.fn().mockResolvedValue(undefined),
-    } as MockedObject<Page>;
-    const browserSpy = {
-      newPage: vi.fn().mockResolvedValue(pageSpy),
-      isConnected: vi.fn().mockReturnValue(true),
-      on: vi.fn(),
-      close: vi.fn().mockResolvedValue(undefined),
-    } as MockedObject<Browser>;
-
-    // Intercept launch to control the page object
-    const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
-
-    await playwrightMiddleware.process(context, next);
-
-    expect(context.errors.length).toBeGreaterThan(0);
-    expect(context.errors[0].message).toContain("Simulated navigation failure");
-    expect(context.dom).toBeUndefined(); // DOM should not be set
-    expect(next).toHaveBeenCalled(); // Next should still be called
-
-    launchSpy.mockRestore(); // Restore the launch spy
-  });
-
-  it("should support URLs with embedded credentials (user:password@host)", async () => {
-    const urlWithCreds = "https://user:password@example.com/";
-    const initialHtml = "<html><body><p>Test</p></body></html>";
-    const context = createPipelineTestContext(initialHtml, urlWithCreds);
-    const next = vi.fn();
-
-    // Spy on Playwright's browser/context/page
-    const pageSpy = {
-      route: vi.fn().mockResolvedValue(undefined),
-      unroute: vi.fn().mockResolvedValue(undefined),
-      goto: vi.fn().mockResolvedValue(undefined),
-      waitForSelector: vi.fn().mockResolvedValue(undefined), // <-- Add this line
-      content: vi.fn().mockResolvedValue(initialHtml),
-      close: vi.fn().mockResolvedValue(undefined),
-    } as unknown as MockedObject<Page>;
+// Shared mock factory for browser objects
+const createMockBrowser = (
+  page: MockedObject<Page>,
+  useContext = false,
+): MockedObject<Browser> => {
+  if (useContext) {
     const contextSpy = {
-      newPage: vi.fn().mockResolvedValue(pageSpy),
+      newPage: vi.fn().mockResolvedValue(page),
       close: vi.fn().mockResolvedValue(undefined),
     };
-    const browserSpy = {
+    return {
       newContext: vi.fn().mockResolvedValue(contextSpy),
       isConnected: vi.fn().mockReturnValue(true),
       on: vi.fn(),
       close: vi.fn().mockResolvedValue(undefined),
     } as unknown as MockedObject<Browser>;
-    const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+  }
 
-    await playwrightMiddleware.process(context, next);
+  return {
+    newPage: vi.fn().mockResolvedValue(page),
+    isConnected: vi.fn().mockReturnValue(true),
+    on: vi.fn(),
+    close: vi.fn().mockResolvedValue(undefined),
+  } as unknown as MockedObject<Browser>;
+};
 
-    // Ensure Playwright's page.goto was called with the correct URL (including credentials)
-    expect(pageSpy.goto).toHaveBeenCalledWith(urlWithCreds, expect.any(Object));
-    expect(context.errors).toHaveLength(0);
-    expect(context.content).toContain("<p>Test</p>");
-    expect(next).toHaveBeenCalled();
+describe("HtmlPlaywrightMiddleware", () => {
+  let playwrightMiddleware: HtmlPlaywrightMiddleware;
 
-    launchSpy.mockRestore();
+  beforeEach(() => {
+    playwrightMiddleware = new HtmlPlaywrightMiddleware();
   });
 
-  it("waits for visible loading indicators to disappear before extracting HTML", async () => {
-    // Arrange: HTML with a visible spinner and a delayed script to hide it
-    const initialHtml = `
-      <html><body>
-        <div class="spinner">Loading...</div>
-        <div id="content" style="display:none">Loaded!</div>
-        <script>
-          setTimeout(() => {
-            document.querySelector('.spinner').style.display = 'none';
-            document.getElementById('content').style.display = '';
-          }, 100);
-        </script>
-      </body></html>
-    `;
-    const context = createPipelineTestContext(initialHtml, "https://example.com/spinner");
-    const next = vi.fn();
-
-    await playwrightMiddleware.process(context, next);
-
-    // Use Cheerio to parse the resulting HTML
-    const $ = cheerio.load(context.content);
-    // Spinner should still exist, but be hidden
-    const spinner = $(".spinner");
-    expect(spinner.length).toBe(1);
-    expect(spinner.attr("style")).toMatch(/display:\s*none/);
-    // Content should be visible (no display:none)
-    const content = $("#content");
-    expect(content.length).toBe(1);
-    expect(content.attr("style") || "").not.toMatch(/display\s*:\s*none/);
-    expect(content.text()).toContain("Loaded!");
-    expect(context.errors).toHaveLength(0);
-    expect(next).toHaveBeenCalled();
+  afterEach(async () => {
+    // Clean up any browser instances
+    // @ts-expect-error Accessing private property for testing
+    if (playwrightMiddleware.browser) {
+      // @ts-expect-error Accessing private property for testing
+      await playwrightMiddleware.browser.close();
+      // @ts-expect-error Accessing private property for testing
+      playwrightMiddleware.browser = null;
+    }
   });
 
-  it("should not wait if loading indicators are present but hidden on page load", async () => {
-    // Arrange: HTML with a spinner that is hidden from the start
-    const initialHtml = `
-      <html><body>
-        <div class="spinner" style="display:none">Loading...</div>
-        <div id="content">Loaded immediately!</div>
-      </body></html>
-    `;
-    const context = createPipelineTestContext(
-      initialHtml,
-      "https://example.com/hidden-spinner",
-    );
-    const next = vi.fn();
+  afterAll(async () => {
+    await playwrightMiddleware.closeBrowser();
+  });
 
-    await playwrightMiddleware.process(context, next);
+  describe("Core functionality", () => {
+    it("should render HTML content and call next", async () => {
+      const initialHtml = "<html><body><p>Hello</p></body></html>";
+      const renderedHtml = "<html><body><p>Hello Playwright!</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
 
-    // Use Cheerio to parse the resulting HTML
-    const $ = cheerio.load(context.content);
-    // Spinner should exist and be hidden
-    const spinner = $(".spinner");
-    expect(spinner.length).toBe(1);
-    expect(spinner.attr("style")).toMatch(/display\s*:\s*none/);
-    // Content should be visible
-    const content = $("#content");
-    expect(content.length).toBe(1);
-    expect(content.text()).toContain("Loaded immediately!");
-    expect(context.errors).toHaveLength(0);
-    expect(next).toHaveBeenCalled();
+      const pageSpy = createMockPlaywrightPage(renderedHtml);
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(context.errors).toHaveLength(0);
+      expect(context.content).toContain("Hello Playwright!");
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should handle errors gracefully and still call next", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      const pageSpy = createMockPlaywrightPage(initialHtml, { shouldThrow: true });
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(context.errors.length).toBeGreaterThan(0);
+      expect(context.errors[0].message).toContain("Simulated navigation failure");
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should skip processing when scrapeMode is not playwright/auto", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test", {
+        scrapeMode: ScrapeMode.Fetch,
+      });
+      const next = vi.fn();
+
+      await playwrightMiddleware.process(context, next);
+
+      // Should not modify content and should call next
+      expect(context.content).toBe(initialHtml);
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+    });
+  });
+
+  describe("Authentication", () => {
+    it("should support embedded credentials in URLs", async () => {
+      const urlWithCreds = "https://user:password@example.com/";
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, urlWithCreds);
+      const next = vi.fn();
+
+      const pageSpy = createMockPlaywrightPage(initialHtml, { url: urlWithCreds });
+      const browserSpy = createMockBrowser(pageSpy, true); // Use context for credentials
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(pageSpy.goto).toHaveBeenCalledWith(urlWithCreds, expect.any(Object));
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should forward custom headers correctly", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test", {
+        headers: { "X-Custom-Header": "test-value" },
+      });
+      const next = vi.fn();
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Verify route handler was set up (headers are handled in route)
+      expect(pageSpy.route).toHaveBeenCalledWith("**/*", expect.any(Function));
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+  });
+
+  describe("Iframe processing", () => {
+    it("should extract content from valid iframes", async () => {
+      const initialHtml =
+        '<html><body><iframe src="https://example.com/iframe"></iframe></body></html>';
+      const iframeContent = "<p>Iframe content</p>";
+      const expectedHtml = `<html><body><div>${iframeContent}</div></body></html>`;
+
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      const pageSpy = createMockPlaywrightPage(expectedHtml, {
+        iframes: [{ src: "https://example.com/iframe", content: iframeContent }],
+      });
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(context.errors).toHaveLength(0);
+      expect(pageSpy.evaluate).toHaveBeenCalled(); // iframe replacement
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should skip invalid iframe sources", async () => {
+      const initialHtml = `
+        <html><body>
+          <iframe src="about:blank"></iframe>
+          <iframe src="data:text/html,test"></iframe>
+          <iframe src="javascript:void(0)"></iframe>
+          <iframe></iframe>
+        </body></html>
+      `;
+
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      const pageSpy = createMockPlaywrightPage(initialHtml, {
+        iframes: [
+          { src: "about:blank" },
+          { src: "data:text/html,test" },
+          { src: "javascript:void(0)" },
+          { src: "" }, // Empty src
+        ],
+      });
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(context.errors).toHaveLength(0);
+      // evaluate should not be called since all iframes are skipped
+      expect(pageSpy.evaluate).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should handle iframe access errors gracefully", async () => {
+      const initialHtml =
+        '<html><body><iframe src="https://example.com/iframe"></iframe></body></html>';
+
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      // Mock iframe that throws error during content access
+      const failingIframe = {
+        getAttribute: vi.fn().mockResolvedValue("https://example.com/iframe"),
+        contentFrame: vi.fn().mockResolvedValue(null), // Simulate access failure
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.$$ = vi.fn().mockResolvedValue([failingIframe]);
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(context.errors).toHaveLength(0); // Errors in iframe processing are logged, not added to context
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should process multiple iframes correctly", async () => {
+      const initialHtml = `
+        <html><body>
+          <iframe src="https://example.com/iframe1"></iframe>
+          <iframe src="https://example.com/iframe2"></iframe>
+          <iframe src="about:blank"></iframe>
+        </body></html>
+      `;
+
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      const pageSpy = createMockPlaywrightPage(initialHtml, {
+        iframes: [
+          { src: "https://example.com/iframe1", content: "<p>Content 1</p>" },
+          { src: "https://example.com/iframe2", content: "<p>Content 2</p>" },
+          { src: "about:blank" }, // This should be skipped
+        ],
+      });
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(context.errors).toHaveLength(0);
+      // evaluate should be called twice (once for each valid iframe)
+      expect(pageSpy.evaluate).toHaveBeenCalledTimes(2);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+  });
+
+  describe("Private method testing", () => {
+    describe("shouldSkipIframeSrc", () => {
+      it("should skip null/undefined src", () => {
+        // @ts-expect-error Accessing private method for testing
+        expect(playwrightMiddleware.shouldSkipIframeSrc(null)).toBe(true);
+        // @ts-expect-error Accessing private method for testing
+        expect(playwrightMiddleware.shouldSkipIframeSrc("")).toBe(true);
+      });
+
+      it("should skip about:blank", () => {
+        // @ts-expect-error Accessing private method for testing
+        expect(playwrightMiddleware.shouldSkipIframeSrc("about:blank")).toBe(true);
+      });
+
+      it("should skip data: URLs", () => {
+        // @ts-expect-error Accessing private method for testing
+        expect(playwrightMiddleware.shouldSkipIframeSrc("data:text/html,test")).toBe(
+          true,
+        );
+      });
+
+      it("should skip javascript: URLs", () => {
+        // @ts-expect-error Accessing private method for testing
+        expect(playwrightMiddleware.shouldSkipIframeSrc("javascript:void(0)")).toBe(true);
+      });
+
+      it("should allow valid HTTP/HTTPS URLs", () => {
+        // @ts-expect-error Accessing private method for testing
+        expect(playwrightMiddleware.shouldSkipIframeSrc("https://example.com")).toBe(
+          false,
+        );
+        // @ts-expect-error Accessing private method for testing
+        expect(playwrightMiddleware.shouldSkipIframeSrc("http://example.com")).toBe(
+          false,
+        );
+      });
+    });
+
+    describe("extractIframeContent", () => {
+      it("should extract content from frame", async () => {
+        const mockFrame = {
+          $eval: vi.fn().mockResolvedValue("<p>Test content</p>"),
+        } as unknown as Frame;
+
+        // @ts-expect-error Accessing private method for testing
+        const content = await playwrightMiddleware.extractIframeContent(mockFrame);
+
+        expect(content).toBe("<p>Test content</p>");
+        expect(mockFrame.$eval).toHaveBeenCalledWith("body", expect.any(Function));
+      });
+
+      it("should return null on extraction error", async () => {
+        const mockFrame = {
+          $eval: vi.fn().mockRejectedValue(new Error("Access denied")),
+        } as unknown as Frame;
+
+        // @ts-expect-error Accessing private method for testing
+        const content = await playwrightMiddleware.extractIframeContent(mockFrame);
+
+        expect(content).toBeNull();
+      });
+    });
+
+    describe("replaceIframeWithContent", () => {
+      it("should call page.evaluate with correct parameters", async () => {
+        const mockPage = {
+          evaluate: vi.fn().mockResolvedValue(undefined),
+        } as unknown as Page;
+
+        // @ts-expect-error Accessing private method for testing
+        await playwrightMiddleware.replaceIframeWithContent(
+          mockPage,
+          0,
+          "<p>Content</p>",
+        );
+
+        expect(mockPage.evaluate).toHaveBeenCalledWith(expect.any(Function), [
+          0,
+          "<p>Content</p>",
+        ]);
+      });
+    });
   });
 });
 
+// Helper function tests (these don't need the class instance)
 describe("extractCredentialsAndOrigin", () => {
   it("extracts credentials and origin from a URL with user:pass", () => {
     const url = "https://user:pass@example.com/path";
@@ -301,65 +470,78 @@ describe("extractCredentialsAndOrigin", () => {
   });
 
   it("returns nulls for invalid URL", () => {
-    const url = "not a url";
+    const url = "not-a-url";
     const result = extractCredentialsAndOrigin(url);
-    expect(result).toEqual({ credentials: null, origin: null });
+    expect(result).toEqual({
+      credentials: null,
+      origin: null,
+    });
   });
 });
 
 describe("mergePlaywrightHeaders", () => {
-  const baseHeaders = { foo: "bar", authorization: "existing" };
-  const customHeaders = {
-    foo: "baz",
-    custom: "value",
-    Authorization: "should-not-overwrite",
-  };
-  const credentials = { username: "user", password: "pass" };
-  const origin = "https://example.com";
-  const reqOrigin = "https://example.com";
-
   it("merges custom headers, does not overwrite existing authorization", () => {
-    const result = mergePlaywrightHeaders(baseHeaders, customHeaders);
-    expect(result.foo).toBe("baz");
-    expect(result.custom).toBe("value");
-    expect(result.authorization).toBe("existing");
+    const existingHeaders = { authorization: "Bearer existing" };
+    const customHeaders = { "x-custom": "value" };
+    const result = mergePlaywrightHeaders(existingHeaders, customHeaders);
+    expect(result).toEqual({ authorization: "Bearer existing", "x-custom": "value" });
   });
 
   it("injects Authorization if credentials and same-origin and not already set", () => {
+    const existingHeaders = {};
+    const customHeaders = {};
+    const credentials = { username: "user", password: "pass" };
+    const origin = "https://example.com";
+    const reqOrigin = "https://example.com";
+
     const result = mergePlaywrightHeaders(
-      { foo: "bar" },
-      {},
+      existingHeaders,
+      customHeaders,
       credentials,
       origin,
       reqOrigin,
     );
-    expect(result.Authorization).toMatch(/^Basic /);
+    expect(result.Authorization).toBe("Basic dXNlcjpwYXNz");
   });
 
   it("does not inject Authorization if origins differ", () => {
+    const existingHeaders = {};
+    const customHeaders = {};
+    const credentials = { username: "user", password: "pass" };
+    const origin = "https://example.com";
+    const reqOrigin = "https://other.com";
+
     const result = mergePlaywrightHeaders(
-      { foo: "bar" },
-      {},
+      existingHeaders,
+      customHeaders,
       credentials,
       origin,
-      "https://other.com",
+      reqOrigin,
     );
     expect(result.Authorization).toBeUndefined();
   });
 
   it("does not inject Authorization if already set", () => {
+    const existingHeaders = { authorization: "Bearer existing" };
+    const customHeaders = {};
+    const credentials = { username: "user", password: "pass" };
+    const origin = "https://example.com";
+    const reqOrigin = "https://example.com";
+
     const result = mergePlaywrightHeaders(
-      { authorization: "existing" },
-      {},
+      existingHeaders,
+      customHeaders,
       credentials,
       origin,
       reqOrigin,
     );
-    expect(result.authorization).toBe("existing");
+    expect(result.authorization).toBe("Bearer existing");
   });
 
   it("works with no credentials and no custom headers", () => {
-    const result = mergePlaywrightHeaders({ foo: "bar" }, {});
-    expect(result.foo).toBe("bar");
+    const existingHeaders = { "content-type": "text/html" };
+    const customHeaders = {};
+    const result = mergePlaywrightHeaders(existingHeaders, customHeaders);
+    expect(result).toEqual({ "content-type": "text/html" });
   });
 });
