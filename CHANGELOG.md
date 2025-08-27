@@ -1,3 +1,10 @@
+## [1.22.1](https://github.com/arabold/docs-mcp-server/compare/v1.22.0...v1.22.1) (2025-08-27)
+
+
+### Bug Fixes
+
+* **scraper:** enhance loading handling for iframes and improve loading indicator checks ([4fc5d0c](https://github.com/arabold/docs-mcp-server/commit/4fc5d0cbbb7e498bad2bf4243543d05d7404f8fd)), closes [#194](https://github.com/arabold/docs-mcp-server/issues/194)
+
 # [1.22.0](https://github.com/arabold/docs-mcp-server/compare/v1.21.1...v1.22.0) (2025-08-24)
 
 
