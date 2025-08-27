@@ -48,7 +48,8 @@ const sigintHandler = async (): Promise<void> => {
 
     // Shutdown active services
     logger.debug("SIGINT: Shutting down active services...");
-    if (activePipelineManager) {
+    // Only shutdown pipeline if not managed by AppServer (e.g., in stdio mode)
+    if (activePipelineManager && !activeAppServer) {
       await activePipelineManager.stop();
       activePipelineManager = null;
       logger.debug("SIGINT: PipelineManager stopped.");
@@ -152,7 +153,7 @@ export async function runCli(): Promise<void> {
         );
       }
 
-      if (activePipelineManager) {
+      if (activePipelineManager && !activeAppServer) {
         shutdownPromises.push(
           activePipelineManager
             .stop()
@@ -212,7 +213,7 @@ if (import.meta.hot) {
         );
       }
 
-      if (activePipelineManager) {
+      if (activePipelineManager && !activeAppServer) {
         shutdownPromises.push(
           activePipelineManager.stop().then(() => {
             activePipelineManager = null;

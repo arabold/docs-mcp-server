@@ -165,28 +165,6 @@ describe("AppServer Behavior Tests", () => {
       expect(() => server.start()).not.toThrow();
     });
 
-    it("should warn when worker is enabled but API server is disabled", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: false,
-        enableWorker: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        config,
-      );
-
-      await server.start();
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("API server is disabled"),
-      );
-    });
-
     it("should accept all services enabled", () => {
       const config: AppServerConfig = {
         enableWebInterface: true,

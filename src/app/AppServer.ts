@@ -64,13 +64,6 @@ export class AppServer {
         );
       }
     }
-
-    // Pipeline RPC should be enabled if we have a worker
-    if (this.config.enableWorker && !this.config.enableApiServer) {
-      logger.warn(
-        "Warning: Worker is enabled but API server is disabled. Consider enabling the API for better observability.",
-      );
-    }
   }
 
   /**
