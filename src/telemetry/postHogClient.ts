@@ -107,31 +107,29 @@ export class PostHogClient {
   constructor(enabled: boolean) {
     this.enabled = enabled;
 
-    // Check if API key was injected at build time
+    if (!this.enabled) {
+      return; // Early return if analytics is disabled
+    }
+
     if (!__POSTHOG_API_KEY__) {
-      logger.debug("PostHog API key not provided - analytics disabled");
+      logger.debug("PostHog API key not provided");
       this.enabled = false;
       return;
     }
 
-    if (this.enabled) {
-      try {
-        this.client = new PostHog(__POSTHOG_API_KEY__, {
-          host: PostHogClient.CONFIG.host,
-          flushAt: PostHogClient.CONFIG.flushAt,
-          flushInterval: PostHogClient.CONFIG.flushInterval,
-          disableGeoip: PostHogClient.CONFIG.disableGeoip,
-        });
-        logger.debug("PostHog client initialized");
-      } catch (error) {
-        logger.debug(
-          `PostHog initialization failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-        );
-        this.enabled = false;
-      }
-    } else {
+    try {
+      this.client = new PostHog(__POSTHOG_API_KEY__, {
+        host: PostHogClient.CONFIG.host,
+        flushAt: PostHogClient.CONFIG.flushAt,
+        flushInterval: PostHogClient.CONFIG.flushInterval,
+        disableGeoip: PostHogClient.CONFIG.disableGeoip,
+      });
+      logger.debug("PostHog client initialized");
+    } catch (error) {
+      logger.debug(
+        `PostHog initialization failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
       this.enabled = false;
-      logger.debug("PostHog client disabled");
     }
   }
 

@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Analytics, TelemetryEvent } from "./analytics";
 
+// Mock the global __POSTHOG_API_KEY__
+global.__POSTHOG_API_KEY__ = "test-api-key";
+
 // Mock the config module
 vi.mock("./TelemetryConfig", () => ({
   TelemetryConfig: {
@@ -34,7 +37,7 @@ describe("Analytics", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    analytics = new Analytics();
+    analytics = Analytics.create();
 
     // Get the mocked instance that was created by the constructor
     mockPostHogClient = (analytics as any).postHogClient;

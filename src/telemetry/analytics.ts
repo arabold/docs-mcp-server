@@ -31,21 +31,40 @@ export enum TelemetryEvent {
  */
 export class Analytics {
   private postHogClient: PostHogClient;
-  private enabled: boolean = true;
+  private enabled: boolean;
   private distinctId: string;
   private globalContext: Record<string, unknown> = {};
 
-  constructor(enabled?: boolean) {
-    this.enabled = enabled ?? TelemetryConfig.getInstance().isEnabled();
-    this.distinctId = generateInstallationId();
+  /**
+   * Create a new Analytics instance with proper initialization
+   * This is the recommended way to create Analytics instances
+   */
+  static create(): Analytics {
+    const config = TelemetryConfig.getInstance();
 
-    this.postHogClient = new PostHogClient(this.enabled);
+    // Single determination point for enabled status
+    const shouldEnable = config.isEnabled() && !!__POSTHOG_API_KEY__;
 
-    if (this.enabled) {
+    const analytics = new Analytics(shouldEnable);
+
+    // Single log message after everything is initialized
+    if (analytics.isEnabled()) {
       logger.debug("Analytics enabled");
     } else {
       logger.debug("Analytics disabled");
     }
+
+    return analytics;
+  }
+
+  /**
+   * Private constructor - use Analytics.create() instead
+   * @deprecated Use Analytics.create() for proper initialization
+   */
+  constructor(enabled: boolean = true) {
+    this.enabled = enabled;
+    this.distinctId = generateInstallationId();
+    this.postHogClient = new PostHogClient(this.enabled);
   }
 
   /**
@@ -110,7 +129,7 @@ export class Analytics {
    * Check if analytics is enabled
    */
   isEnabled(): boolean {
-    return this.enabled && this.postHogClient.isEnabled();
+    return this.enabled;
   }
 
   /**
@@ -159,4 +178,4 @@ export class Analytics {
 /**
  * Global analytics instance
  */
-export const analytics = new Analytics();
+export const analytics = Analytics.create();
