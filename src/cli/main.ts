@@ -30,10 +30,6 @@ const sigintHandler = async (): Promise<void> => {
   isShuttingDown = true;
 
   logger.debug("Received SIGINT. Shutting down gracefully...");
-  console.log("activeAppServer", !!activeAppServer);
-  console.log("activeMcpStdioServer", !!activeMcpStdioServer);
-  console.log("activeDocService", !!activeDocService);
-  console.log("activePipelineManager", !!activePipelineManager);
 
   try {
     if (activeAppServer) {
@@ -70,8 +66,6 @@ const sigintHandler = async (): Promise<void> => {
       await analytics.shutdown();
       logger.debug("SIGINT: Analytics shut down.");
     }
-
-    await new Promise((resolve) => setTimeout(resolve, 100)); // Ensure logs flush
 
     logger.info("✅ Graceful shutdown completed");
     process.exit(0);
