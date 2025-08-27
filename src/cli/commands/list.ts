@@ -5,11 +5,9 @@
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
 import { ListLibrariesTool } from "../../tools";
-import { formatOutput, setupLogging } from "../utils";
+import { formatOutput } from "../utils";
 
-export async function listAction(options: { serverUrl?: string }, command: Command) {
-  const globalOptions = command.parent?.opts() || {};
-  setupLogging(globalOptions);
+export async function listAction(options: { serverUrl?: string }) {
   const { serverUrl } = options;
 
   // List command doesn't need embeddings - explicitly disable for local execution

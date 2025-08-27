@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { LogLevel, logger, setLogLevel } from "../utils/logger";
+import { logger } from "../utils/logger";
 import { createMcpServerInstance } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
@@ -14,8 +14,6 @@ export async function startStdioServer(
   tools: McpServerTools,
   readOnly = false,
 ): Promise<McpServer> {
-  setLogLevel(LogLevel.ERROR);
-
   // Create a server instance using the factory and shared tools
   const server = createMcpServerInstance(tools, readOnly);
 

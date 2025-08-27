@@ -9,7 +9,8 @@ import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
-import { logger } from "../../utils/logger";
+import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
@@ -62,25 +63,21 @@ export function createDefaultAction(program: Command): Command {
         "JWT audience claim (identifies this protected resource)",
       )
       .action(
-        async (
-          options: {
-            protocol: string;
-            port: string;
-            resume: boolean;
-            readOnly: boolean;
-            authEnabled?: boolean;
-            authIssuerUrl?: string;
-            authAudience?: string;
-          },
-          command,
-        ) => {
-          const globalOptions = command.opts();
-
+        async (options: {
+          protocol: string;
+          port: string;
+          resume: boolean;
+          readOnly: boolean;
+          authEnabled?: boolean;
+          authIssuerUrl?: string;
+          authAudience?: string;
+        }) => {
           // Resolve protocol and validate flags
           const resolvedProtocol = resolveProtocol(options.protocol);
+          if (resolvedProtocol === "stdio") {
+            setLogLevel(LogLevel.ERROR); // Force quiet logging in stdio mode
+          }
 
-          // Setup logging
-          setupLogging(globalOptions, resolvedProtocol);
           logger.debug("No subcommand specified, starting unified server by default...");
           const port = validatePort(options.port);
 
@@ -114,7 +111,14 @@ export function createDefaultAction(program: Command): Command {
 
             await pipeline.start(); // Start pipeline for stdio mode
             const mcpTools = await initializeTools(docService, pipeline);
-            await startStdioServer(mcpTools, options.readOnly);
+            const mcpServer = await startStdioServer(mcpTools, options.readOnly);
+
+            // Register for graceful shutdown (stdio mode)
+            registerGlobalServices({
+              mcpStdioServer: mcpServer,
+              docService,
+              pipeline,
+            });
 
             await new Promise(() => {}); // Keep running forever
           } else {
@@ -130,9 +134,20 @@ export function createDefaultAction(program: Command): Command {
               port,
               readOnly: options.readOnly,
               auth: authConfig,
+              startupContext: {
+                cliCommand: "default",
+                mcpProtocol: "http",
+              },
             });
 
-            await startAppServer(docService, pipeline, config);
+            const appServer = await startAppServer(docService, pipeline, config);
+
+            // Register for graceful shutdown (http mode)
+            registerGlobalServices({
+              appServer,
+              docService,
+              pipeline,
+            });
 
             await new Promise(() => {}); // Keep running forever
           }

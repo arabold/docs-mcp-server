@@ -1,29 +1,24 @@
 /**
  * Analytics wrapper for privacy-first telemetry using PostHog.
- * Provides session-based context and automatic data sanitization.
+ * Provides global context and automatic data sanitization.
  *
  * Architecture:
  * - PostHogClient: Handles PostHog SDK integration and event capture
- * - SessionTracker: Manages session context and properties enrichment
- * - Analytics: High-level coordinator providing public API
+ * - Analytics: High-level coordinator providing public API with global context
  */
 
 import { logger } from "../utils/logger";
 import type { TelemetryEventPropertiesMap } from "./eventTypes";
 import { PostHogClient } from "./postHogClient";
-import type { SessionContext } from "./SessionContext";
-import { SessionTracker } from "./SessionTracker";
 import { generateInstallationId, TelemetryConfig } from "./TelemetryConfig";
 
 /**
  * Telemetry event types for structured analytics
  */
 export enum TelemetryEvent {
-  SESSION_STARTED = "session_started",
-  SESSION_ENDED = "session_ended",
   APP_STARTED = "app_started",
   APP_SHUTDOWN = "app_shutdown",
-  COMMAND_EXECUTED = "command_executed",
+  CLI_COMMAND = "cli_command",
   TOOL_USED = "tool_used",
   HTTP_REQUEST_COMPLETED = "http_request_completed",
   PIPELINE_JOB_PROGRESS = "pipeline_job_progress",
@@ -36,16 +31,15 @@ export enum TelemetryEvent {
  */
 export class Analytics {
   private postHogClient: PostHogClient;
-  private sessionTracker: SessionTracker;
   private enabled: boolean = true;
   private distinctId: string;
+  private globalContext: Record<string, unknown> = {};
 
   constructor(enabled?: boolean) {
     this.enabled = enabled ?? TelemetryConfig.getInstance().isEnabled();
     this.distinctId = generateInstallationId();
 
     this.postHogClient = new PostHogClient(this.enabled);
-    this.sessionTracker = new SessionTracker();
 
     if (this.enabled) {
       logger.debug("Analytics enabled");
@@ -55,33 +49,21 @@ export class Analytics {
   }
 
   /**
-   * Initialize session context - call once per session
+   * Set global application context that will be included in all events
    */
-  startSession(context: SessionContext): void {
-    if (!this.enabled) return;
-
-    this.sessionTracker.startSession(context);
-    this.track(TelemetryEvent.SESSION_STARTED, {
-      interface: context.appInterface,
-      version: context.appVersion,
-      platform: context.appPlatform,
-      authEnabled: context.appAuthEnabled,
-      readOnly: context.appReadOnly,
-      servicesCount: context.appServicesEnabled.length,
-    });
+  setGlobalContext(context: Record<string, unknown>): void {
+    this.globalContext = { ...context };
   }
 
   /**
-   * Update session context with additional fields (e.g., embedding model info)
+   * Get current global context
    */
-  updateSessionContext(updates: Partial<SessionContext>): void {
-    if (!this.enabled) return;
-
-    this.sessionTracker.updateSessionContext(updates);
+  getGlobalContext(): Record<string, unknown> {
+    return { ...this.globalContext };
   }
 
   /**
-   * Track an event with automatic session context inclusion
+   * Track an event with automatic global context inclusion
    *
    * Type-safe overloads for specific events:
    */
@@ -93,33 +75,28 @@ export class Analytics {
   track(event: string, properties: Record<string, unknown> = {}): void {
     if (!this.enabled) return;
 
-    const eventProperties = this.sessionTracker.getEnrichedProperties(properties);
-    this.postHogClient.capture(this.distinctId, event, eventProperties);
+    // Merge global context and event properties with timestamp
+    const enrichedProperties = {
+      ...this.globalContext,
+      ...properties,
+      timestamp: new Date().toISOString(),
+    };
+    this.postHogClient.capture(this.distinctId, event, enrichedProperties);
   }
 
   /**
-   * Capture exception using PostHog's native error tracking with session context
+   * Capture exception using PostHog's native error tracking with global context
    */
   captureException(error: Error, properties: Record<string, unknown> = {}): void {
     if (!this.enabled) return;
 
-    const eventProperties = this.sessionTracker.getEnrichedProperties(properties);
-    this.postHogClient.captureException(this.distinctId, error, eventProperties);
-  }
-
-  /**
-   * Track session end with duration
-   */
-  endSession(): void {
-    if (!this.enabled) return;
-
-    const sessionInfo = this.sessionTracker.endSession();
-    if (sessionInfo) {
-      this.track(TelemetryEvent.SESSION_ENDED, {
-        durationMs: sessionInfo.duration,
-        interface: sessionInfo.interface,
-      });
-    }
+    // Merge global context and error properties with timestamp
+    const enrichedProperties = {
+      ...this.globalContext,
+      ...properties,
+      timestamp: new Date().toISOString(),
+    };
+    this.postHogClient.captureException(this.distinctId, error, enrichedProperties);
   }
 
   /**
@@ -134,13 +111,6 @@ export class Analytics {
    */
   isEnabled(): boolean {
     return this.enabled && this.postHogClient.isEnabled();
-  }
-
-  /**
-   * Get current session context
-   */
-  getSessionContext(): SessionContext | undefined {
-    return this.sessionTracker.getSessionContext();
   }
 
   /**

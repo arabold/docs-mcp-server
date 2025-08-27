@@ -13,7 +13,7 @@ import { createMcpServerInstance } from "../mcp/mcpServer";
 import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { analytics, createMcpSession } from "../telemetry";
+import { analytics } from "../telemetry";
 import { logger } from "../utils/logger";
 
 /**
@@ -54,25 +54,18 @@ export async function registerMcpService(
         const transport = new SSEServerTransport("/messages", reply.raw);
         sseTransports[transport.sessionId] = transport;
 
-        // Track MCP session for analytics
+        // Log client connection (simple connection tracking without sessions)
         if (analytics.isEnabled()) {
-          const session = createMcpSession({
-            protocol: "http",
-            transport: "sse",
-            authEnabled: !!authManager,
-            readOnly,
-            servicesEnabled: ["mcp"],
-            // Embedding context will be resolved by the service that starts MCP
-          });
-          analytics.startSession(session);
+          logger.info(`🔗 MCP client connected: ${transport.sessionId}`);
         }
 
         reply.raw.on("close", () => {
           delete sseTransports[transport.sessionId];
           transport.close();
-          // End telemetry session when connection closes
+
+          // Log client disconnection
           if (analytics.isEnabled()) {
-            analytics.endSession();
+            logger.info(`🔗 MCP client disconnected: ${transport.sessionId}`);
           }
         });
 
@@ -142,7 +135,9 @@ export async function registerMcpService(
 
   // Store reference to SSE transports on the server instance for cleanup
   (
-    mcpServer as unknown as { _sseTransports: Record<string, SSEServerTransport> }
+    mcpServer as unknown as {
+      _sseTransports: Record<string, SSEServerTransport>;
+    }
   )._sseTransports = sseTransports;
 
   return mcpServer;
@@ -155,7 +150,9 @@ export async function cleanupMcpService(mcpServer: McpServer): Promise<void> {
   try {
     // Close all SSE transports
     const sseTransports = (
-      mcpServer as unknown as { _sseTransports: Record<string, SSEServerTransport> }
+      mcpServer as unknown as {
+        _sseTransports: Record<string, SSEServerTransport>;
+      }
     )._sseTransports;
     if (sseTransports) {
       for (const transport of Object.values(sseTransports)) {

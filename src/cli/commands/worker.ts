@@ -8,13 +8,13 @@ import { startAppServer } from "../../app";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { logger } from "../../utils/logger";
+import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
   createPipelineWithCallbacks,
   ensurePlaywrightBrowsersInstalled,
   resolveEmbeddingContext,
-  setupLogging,
   validatePort,
 } from "../utils";
 
@@ -35,11 +35,8 @@ export function createWorkerCommand(program: Command): Command {
     )
     .option("--resume", "Resume interrupted jobs on startup", true)
     .option("--no-resume", "Do not resume jobs on startup")
-    .action(async (cmdOptions: { port: string; resume: boolean }, command) => {
-      const globalOptions = command.parent?.opts() || {};
+    .action(async (cmdOptions: { port: string; resume: boolean }) => {
       const port = validatePort(cmdOptions.port);
-
-      setupLogging(globalOptions);
 
       try {
         logger.info(`🚀 Starting external pipeline worker on port ${port}`);
@@ -65,9 +62,19 @@ export function createWorkerCommand(program: Command): Command {
           enableApiServer: true,
           enableWorker: true,
           port,
+          startupContext: {
+            cliCommand: "worker",
+          },
         });
 
-        await startAppServer(docService, pipeline, config);
+        const appServer = await startAppServer(docService, pipeline, config);
+
+        // Register for graceful shutdown
+        registerGlobalServices({
+          appServer,
+          docService,
+          pipeline,
+        });
 
         await new Promise(() => {}); // Keep running forever
       } catch (error) {

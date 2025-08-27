@@ -6,9 +6,9 @@ import { Command, Option } from "commander";
 import packageJson from "../../package.json";
 import {
   analytics,
-  createCliSession,
   shouldEnableTelemetry,
   TelemetryConfig,
+  TelemetryEvent,
 } from "../telemetry";
 import { LogLevel, setLogLevel } from "../utils/logger";
 import { createDefaultAction } from "./commands/default";
@@ -22,12 +22,16 @@ import { createSearchCommand } from "./commands/search";
 import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
 import type { GlobalOptions } from "./types";
+import { setupLogging } from "./utils";
 
 /**
  * Creates and configures the main CLI program with all commands.
  */
 export function createCliProgram(): Command {
   const program = new Command();
+
+  // Store command start times for duration tracking
+  const commandStartTimes = new Map<string, number>();
 
   // Configure main program
   program
@@ -49,28 +53,50 @@ export function createCliProgram(): Command {
     const globalOptions: GlobalOptions = thisCommand.opts();
 
     // Setup logging
-    if (globalOptions.silent) setLogLevel(LogLevel.ERROR);
-    else if (globalOptions.verbose) setLogLevel(LogLevel.DEBUG);
+    setupLogging(globalOptions);
 
     // Initialize telemetry if enabled
     if (shouldEnableTelemetry()) {
-      const commandName = actionCommand.name();
+      // Set global context for CLI commands
+      if (analytics.isEnabled()) {
+        analytics.setGlobalContext({
+          appVersion: packageJson.version,
+          appPlatform: process.platform,
+          appNodeVersion: process.version,
+          appInterface: "cli",
+          cliCommand: actionCommand.name(),
+        });
 
-      // Create session without embedding context - commands will provide this themselves
-      const session = createCliSession(commandName, {
-        authEnabled: false, // CLI doesn't use auth
-        readOnly: false,
-      });
-      analytics.startSession(session);
+        // Store command start time for duration tracking
+        const commandKey = `${actionCommand.name()}-${Date.now()}`;
+        commandStartTimes.set(commandKey, Date.now());
+        // Store the key for retrieval in postAction
+        (actionCommand as { _trackingKey?: string })._trackingKey = commandKey;
+      }
     } else {
       TelemetryConfig.getInstance().disable();
     }
   });
 
-  // Cleanup telemetry on command completion
-  program.hook("postAction", async () => {
+  // Track CLI command completion
+  program.hook("postAction", async (_thisCommand, actionCommand) => {
     if (analytics.isEnabled()) {
-      analytics.endSession();
+      // Track CLI_COMMAND event for all CLI commands (standalone and server)
+      const trackingKey = (actionCommand as { _trackingKey?: string })._trackingKey;
+      const startTime = trackingKey ? commandStartTimes.get(trackingKey) : Date.now();
+      const durationMs = startTime ? Date.now() - startTime : 0;
+
+      // Clean up the tracking data
+      if (trackingKey) {
+        commandStartTimes.delete(trackingKey);
+      }
+
+      analytics.track(TelemetryEvent.CLI_COMMAND, {
+        cliCommand: actionCommand.name(),
+        success: true, // If we reach postAction, command succeeded
+        durationMs,
+      });
+
       await analytics.shutdown();
     }
   });

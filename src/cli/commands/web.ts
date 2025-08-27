@@ -9,6 +9,7 @@ import type { PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { logger } from "../../utils/logger";
+import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
@@ -37,64 +38,63 @@ export function createWebCommand(program: Command): Command {
       "--server-url <url>",
       "URL of external pipeline worker RPC (e.g., http://localhost:6280/api)",
     )
-    .action(
-      async (
-        cmdOptions: {
-          port: string;
-          serverUrl?: string;
-        },
-        command,
-      ) => {
-        const globalOptions = command.parent?.opts() || {};
-        const port = validatePort(cmdOptions.port);
-        const serverUrl = cmdOptions.serverUrl;
+    .action(async (cmdOptions: { port: string; serverUrl?: string }) => {
+      const port = validatePort(cmdOptions.port);
+      const serverUrl = cmdOptions.serverUrl;
 
-        setupLogging(globalOptions);
-
-        try {
-          // Resolve embedding configuration for local execution
-          const embeddingConfig = resolveEmbeddingContext();
-          if (!serverUrl && !embeddingConfig) {
-            logger.error(
-              "❌ Embedding configuration is required for local mode. Configure an embedding provider with CLI options or environment variables.",
-            );
-            process.exit(1);
-          }
-
-          const docService: IDocumentManagement = await createDocumentManagement({
-            serverUrl,
-            embeddingConfig,
-          });
-          const pipelineOptions: PipelineOptions = {
-            recoverJobs: false, // Web command doesn't support job recovery
-            serverUrl,
-            concurrency: 3,
-          };
-          const pipeline = await createPipelineWithCallbacks(
-            serverUrl ? undefined : (docService as unknown as never),
-            pipelineOptions,
+      try {
+        // Resolve embedding configuration for local execution
+        const embeddingConfig = resolveEmbeddingContext();
+        if (!serverUrl && !embeddingConfig) {
+          logger.error(
+            "❌ Embedding configuration is required for local mode. Configure an embedding provider with CLI options or environment variables.",
           );
-
-          // Configure web-only server
-          const config = createAppServerConfig({
-            enableWebInterface: true,
-            enableMcpServer: false,
-            enableApiServer: false,
-            enableWorker: !serverUrl,
-            port,
-            externalWorkerUrl: serverUrl,
-          });
-
-          logger.info(
-            `🚀 Starting web interface${serverUrl ? ` connecting to worker at ${serverUrl}` : ""}`,
-          );
-          await startAppServer(docService, pipeline, config);
-
-          await new Promise(() => {}); // Keep running forever
-        } catch (error) {
-          logger.error(`❌ Failed to start web interface: ${error}`);
           process.exit(1);
         }
-      },
-    );
+
+        const docService: IDocumentManagement = await createDocumentManagement({
+          serverUrl,
+          embeddingConfig,
+        });
+        const pipelineOptions: PipelineOptions = {
+          recoverJobs: false, // Web command doesn't support job recovery
+          serverUrl,
+          concurrency: 3,
+        };
+        const pipeline = await createPipelineWithCallbacks(
+          serverUrl ? undefined : (docService as unknown as never),
+          pipelineOptions,
+        );
+
+        // Configure web-only server
+        const config = createAppServerConfig({
+          enableWebInterface: true,
+          enableMcpServer: false,
+          enableApiServer: false,
+          enableWorker: !serverUrl,
+          port,
+          externalWorkerUrl: serverUrl,
+          startupContext: {
+            cliCommand: "web",
+          },
+        });
+
+        logger.info(
+          `🚀 Starting web interface${serverUrl ? ` connecting to worker at ${serverUrl}` : ""}`,
+        );
+        const appServer = await startAppServer(docService, pipeline, config);
+
+        // Register for graceful shutdown
+        registerGlobalServices({
+          appServer,
+          docService,
+          pipeline,
+        });
+
+        await new Promise(() => {}); // Keep running forever
+      } catch (error) {
+        logger.error(`❌ Failed to start web interface: ${error}`);
+        process.exit(1);
+      }
+    });
 }

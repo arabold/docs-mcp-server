@@ -58,12 +58,12 @@ export class HttpFetcher implements ContentFetcher {
         success: true,
         hostname: extractHostname(source),
         protocol: extractProtocol(source),
-        duration_ms: Math.round(duration),
-        content_size_bytes: result.content.length,
-        mime_type: result.mimeType,
-        has_encoding: !!result.encoding,
-        follow_redirects: followRedirects,
-        had_redirects: result.source !== source,
+        durationMs: Math.round(duration),
+        contentSizeBytes: result.content.length,
+        mimeType: result.mimeType,
+        hasEncoding: !!result.encoding,
+        followRedirects: followRedirects,
+        hadRedirects: result.source !== source,
       });
 
       return result;
@@ -77,9 +77,9 @@ export class HttpFetcher implements ContentFetcher {
         success: false,
         hostname: extractHostname(source),
         protocol: extractProtocol(source),
-        duration_ms: Math.round(duration),
-        status_code: status,
-        error_type:
+        durationMs: Math.round(duration),
+        statusCode: status,
+        errorType:
           error instanceof CancellationError
             ? "cancellation"
             : error instanceof RedirectError
@@ -87,8 +87,8 @@ export class HttpFetcher implements ContentFetcher {
               : error instanceof ScraperError
                 ? "scraper"
                 : "unknown",
-        error_code: axiosError.code,
-        follow_redirects: followRedirects,
+        errorCode: axiosError.code,
+        followRedirects: followRedirects,
       });
 
       throw error;

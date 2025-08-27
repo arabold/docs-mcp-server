@@ -10,7 +10,8 @@ import { initializeTools } from "../../mcp/tools";
 import type { PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
-import { logger } from "../../utils/logger";
+import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
@@ -65,25 +66,22 @@ export function createMcpCommand(program: Command): Command {
         "JWT audience claim (identifies this protected resource)",
       )
       .action(
-        async (
-          cmdOptions: {
-            protocol: string;
-            port: string;
-            serverUrl?: string;
-            readOnly: boolean;
-            authEnabled?: boolean;
-            authIssuerUrl?: string;
-            authAudience?: string;
-          },
-          command,
-        ) => {
-          const globalOptions = command.parent?.opts() || {};
+        async (cmdOptions: {
+          protocol: string;
+          port: string;
+          serverUrl?: string;
+          readOnly: boolean;
+          authEnabled?: boolean;
+          authIssuerUrl?: string;
+          authAudience?: string;
+        }) => {
           const port = validatePort(cmdOptions.port);
           const serverUrl = cmdOptions.serverUrl;
-
           // Resolve protocol using same logic as default action
           const resolvedProtocol = resolveProtocol(cmdOptions.protocol);
-          setupLogging(globalOptions, resolvedProtocol);
+          if (resolvedProtocol === "stdio") {
+            setLogLevel(LogLevel.ERROR); // Force quiet logging in stdio mode
+          }
 
           // Parse and validate auth configuration
           const authConfig = parseAuthConfig({
@@ -127,7 +125,14 @@ export function createMcpCommand(program: Command): Command {
 
               await pipeline.start(); // Start pipeline for stdio mode
               const mcpTools = await initializeTools(docService, pipeline);
-              await startStdioServer(mcpTools, cmdOptions.readOnly);
+              const mcpServer = await startStdioServer(mcpTools, cmdOptions.readOnly);
+
+              // Register for graceful shutdown (stdio mode)
+              registerGlobalServices({
+                mcpStdioServer: mcpServer,
+                docService,
+                pipeline,
+              });
 
               await new Promise(() => {}); // Keep running forever
             } else {
@@ -145,9 +150,21 @@ export function createMcpCommand(program: Command): Command {
                 externalWorkerUrl: serverUrl,
                 readOnly: cmdOptions.readOnly,
                 auth: authConfig,
+                startupContext: {
+                  cliCommand: "mcp",
+                  mcpProtocol: "http",
+                },
               });
 
-              await startAppServer(docService, pipeline, config);
+              const appServer = await startAppServer(docService, pipeline, config);
+
+              // Register for graceful shutdown (http mode)
+              registerGlobalServices({
+                appServer,
+                docService,
+                pipeline,
+              });
+
               await new Promise(() => {}); // Keep running forever
             }
           } catch (error) {

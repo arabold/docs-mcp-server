@@ -21,21 +21,21 @@ The MCP Documentation Server implements privacy-first telemetry to understand us
 ### Simple Architecture
 
 - **Direct Analytics**: Direct PostHog integration with installation ID as distinct user
-- **Focused Data Collection**: Essential functions only, no over-engineering
-- **Easy Integration**: Simple service interface for application components
+- **Global Context**: Application-level properties automatically included in all events
+- **Easy Integration**: Simple analytics interface for application components
 
 ## System Architecture
 
 ### Core Components
 
-The telemetry system consists of four main components:
+The telemetry system consists of three main components:
 
 **Analytics Layer** (`src/telemetry/analytics.ts`)
 
 - PostHog integration with privacy-optimized configuration
-- Event tracking with automatic session context inclusion
+- Event tracking with automatic global context inclusion
 - Installation ID as the distinct user identifier
-- Session lifecycle management for different interface types
+- Simple, focused API without unnecessary complexity
 
 **PostHog Client** (`src/telemetry/postHogClient.ts`)
 
@@ -43,19 +43,19 @@ The telemetry system consists of four main components:
 - Privacy-optimized PostHog configuration
 - Error tracking with native PostHog exception capture
 
-**Configuration Management** (`src/telemetry/config.ts`)
+**Configuration Management** (`src/telemetry/TelemetryConfig.ts`)
 
 - Installation ID generation and persistence using UUID
 - Telemetry enable/disable controls via environment variables and CLI flags
 - Configuration validation and fallback handling
 
-**Service Layer** (`src/telemetry/service.ts`)
+**Service Layer** (`src/telemetry/TelemetryService.ts`)
 
 - Simple service factory providing session management
 - Unified interface for application components
 - Handles configuration and analytics integration
 
-**Data Sanitization** (`src/telemetry/dataSanitizer.ts`)
+**Data Sanitization** (`src/telemetry/sanitizer.ts`)
 
 - Essential privacy protection functions:
   - Domain extraction without exposing paths
@@ -66,91 +66,78 @@ The telemetry system consists of four main components:
 - User agent categorization for browser analytics
 - Content size categorization for processing insights
 
-### Session Management
+### Session Management (Future Feature)
 
-The session management system provides context for analytics events across different interfaces:
+> **Note**: Session management has been removed from the current implementation to simplify the telemetry system. The current system uses global context and event-specific properties for meaningful analytics without the complexity of session tracking.
 
-**Session Factory Functions** (`src/telemetry/sessionManager.ts`)
+**Future Session Concepts** (Not Currently Implemented):
 
-- `createCliSession()`: Creates context for command-line interface usage
-- `createMcpSession()`: Creates context for MCP protocol sessions
-- `createWebSession()`: Creates context for web interface requests
-- `createPipelineSession()`: Creates context for background processing jobs
+Session tracking could be added in the future to provide:
 
-**Session Context**
+- User journey mapping across tool usage
+- Connection duration tracking for MCP clients
+- CLI command workflow analysis
+- Per-session error correlation
 
-Each session includes:
+**Current Approach**: Instead of sessions, the system uses:
 
-- Session ID: UUID generated per session
-- Interface type and configuration
-- Platform information (OS, Node.js version)
-- Session start time and metadata
-- Application version and enabled services
+- **Installation ID**: Consistent user identification across application runs
+- **Global Context**: Application-level properties (version, platform, configuration)
+- **Event Properties**: Specific context per event (tool name, duration, success/failure)
+- **Correlation IDs**: For related events (e.g., pipeline job tracking)
 
-Properties use consistent naming conventions with domain-specific prefixes:
-
-- `app*` properties: Application-level context (appVersion, appInterface, appPlatform)
-- `mcp*` properties: MCP protocol-specific context (mcpProtocol, mcpTransport)
-- `web*` properties: Web interface context (webRoute)
-- `cli*` properties: Command-line interface context (cliCommand)
-- `ai*` properties: AI/embedding model context (aiEmbeddingProvider, aiEmbeddingModel)
+This provides 90% of the analytical value with 10% of the complexity.
 
 ### Installation ID System
 
 The system uses a persistent installation identifier for consistent analytics:
 
-**Installation ID Generation** (`src/telemetry/config.ts`)
+**Installation ID Generation** (`src/telemetry/TelemetryConfig.ts`)
 
 - Creates UUID-based installation identifier stored in `installation.id`
 - Uses `envPaths` standard for cross-platform directory location (`~/.local/share/docs-mcp-server/`)
 - Supports `DOCS_MCP_STORE_PATH` environment variable override for Docker deployments
-- Provides consistent identification across sessions without user tracking
+- Provides consistent identification across application runs without user tracking
 - Falls back to new UUID generation if file is corrupted or missing
 
 ## Integration Points
 
 ### Application Server Integration
 
-The AppServer integrates telemetry for application lifecycle tracking:
+The AppServer tracks application lifecycle events with global context:
 
-**Startup Tracking**
+**Application Lifecycle Tracking**
 
-- Application configuration and enabled services
-- Session initialization based on interface type
-- Installation ID verification and service availability
+- Application startup/shutdown events with service configuration
+- Service availability and enabled features
+- Application-level error tracking and performance metrics
 
-**Configuration Integration**
+**Integration Pattern**
 
-- Respects telemetry configuration settings
-- Integrates with environment variables (`DOCS_MCP_TELEMETRY=false`) and CLI flags (`--no-telemetry`)
-- Provides graceful fallback when telemetry is disabled
-
-**Service Integration**
-
-- Simple telemetry service initialization
-- Session context creation for analytics
-- Event tracking with sanitized data
+- AppServer emits application lifecycle events
+- Individual services create user interaction sessions when appropriate
+- Background services (worker, API) emit events within application context
+- No competing session creation between services
 
 ### Service-Level Integration
 
-Services integrate telemetry through the simplified service interface:
-
-**Web Service** (`src/services/webService.ts`)
-
-- Basic request tracking and performance metrics
-- Error tracking with sanitized error information
-- Session management for web interface users
+Services integrate telemetry through direct analytics usage:
 
 **Worker Service** (`src/services/workerService.ts`)
 
-- Pipeline job progress and completion tracking
-- Error tracking with sanitized job information
+- Pipeline job progress and completion events with global context
 - Performance metrics for background processing
+- Direct event tracking without session complexity
 
 **MCP Service** (`src/services/mcpService.ts`)
 
-- Protocol session lifecycle tracking
-- Basic usage analytics and error tracking
+- Simple connection logging for client tracking
+- No session management - just basic connection events
+
+**Web Service** (`src/services/webService.ts`)
+
+- Direct event tracking for web interface usage
+- No session management needed
 
 ## Data Collection Patterns
 
@@ -158,21 +145,134 @@ Services integrate telemetry through the simplified service interface:
 
 The system tracks essential event types for usage understanding:
 
-- `session_started` / `session_ended`: Session lifecycle tracking
+- `app_started` / `app_shutdown`: Application lifecycle tracking
 - `tool_used`: Individual tool execution and outcomes
-- `job_completed` / `job_failed`: Background processing results
+- `pipeline_job_progress` / `pipeline_job_completed`: Background processing results
+- `document_processed`: Document indexing metrics
+- `http_request_completed`: HTTP request performance
 - **Error Tracking**: PostHog's native exception tracking with full stack traces and context
 
-### Session Context
+### Global Context
 
-All events automatically include basic session context:
+All events automatically include global application context:
 
-- Interface type (CLI, MCP, Web, Pipeline)
 - Application version and platform information
-- Session ID and installation ID
-- Basic timing information
+- Installation ID for consistent user identification
+- AI/embedding configuration
+- Service configuration and enabled features
+- Automatic timestamp inclusion
 
 Property names follow PostHog's snake_case convention through automatic conversion from internal camelCase names.
+
+## Telemetry Properties Reference
+
+The following table details all telemetry properties, their usage patterns, and tracking scope:
+
+| Property                               | Type     | Scope  | Events                 | Description                                             |
+| -------------------------------------- | -------- | ------ | ---------------------- | ------------------------------------------------------- |
+| **Global Context (Application-level)** |          |        |                        |                                                         |
+| `appVersion`                           | string   | Global | All events             | Application version from package.json                   |
+| `appPlatform`                          | string   | Global | All events             | Node.js platform (darwin, linux, win32)                 |
+| `appNodeVersion`                       | string   | Global | All events             | Node.js version                                         |
+| `appServicesEnabled`                   | string[] | Global | All events             | List of enabled services                                |
+| `appAuthEnabled`                       | boolean  | Global | All events             | Whether authentication is configured                    |
+| `appReadOnly`                          | boolean  | Global | All events             | Whether app is in read-only mode                        |
+| `aiEmbeddingProvider`                  | string   | Global | All events             | Provider: "openai", "google", "aws", "microsoft"        |
+| `aiEmbeddingModel`                     | string   | Global | All events             | Model name: "text-embedding-3-small", etc.              |
+| `aiEmbeddingDimensions`                | number   | Global | All events             | Embedding dimensions used                               |
+| **Event Context**                      |          |        |                        |                                                         |
+| `timestamp`                            | ISO8601  | Event  | All events             | Event timestamp (automatically added)                   |
+| **Application Configuration**          |          |        |                        |                                                         |
+| `services`                             | string[] | Event  | APP_STARTED            | List of enabled services                                |
+| `port`                                 | number   | Event  | APP_STARTED            | Server port number                                      |
+| `externalWorker`                       | boolean  | Event  | APP_STARTED            | Whether external worker is configured                   |
+| `cliCommand`                           | string   | Event  | APP_STARTED            | CLI command name (when started via CLI)                 |
+| `mcpProtocol`                          | enum     | Event  | APP_STARTED            | MCP protocol: "stdio" or "http" (when MCP enabled)      |
+| `mcpTransport`                         | enum     | Event  | APP_STARTED            | MCP transport: "sse" or "streamable" (when MCP enabled) |
+| **Application Lifecycle**              |          |        |                        |                                                         |
+| `graceful`                             | boolean  | Event  | APP_SHUTDOWN           | Whether shutdown was graceful                           |
+| **Tool Usage**                         |          |        |                        |                                                         |
+| `tool`                                 | string   | Event  | TOOL_USED              | Tool name being executed                                |
+| `success`                              | boolean  | Event  | TOOL_USED              | Whether tool execution succeeded                        |
+| `durationMs`                           | number   | Event  | TOOL_USED              | Tool execution duration                                 |
+| **Pipeline Jobs**                      |          |        |                        |                                                         |
+| `jobId`                                | string   | Event  | PIPELINE*JOB*\*        | Anonymous job identifier for correlation                |
+| `library`                              | string   | Event  | PIPELINE*JOB*\*        | Library being processed                                 |
+| `status`                               | string   | Event  | PIPELINE_JOB_COMPLETED | Job final status                                        |
+| `durationMs`                           | number   | Event  | PIPELINE_JOB_COMPLETED | Job execution duration                                  |
+| `queueWaitTimeMs`                      | number   | Event  | PIPELINE_JOB_COMPLETED | Time job waited in queue                                |
+| `pagesProcessed`                       | number   | Event  | PIPELINE_JOB_COMPLETED | Total pages processed                                   |
+| `maxPagesConfigured`                   | number   | Event  | PIPELINE_JOB_COMPLETED | Maximum pages configured                                |
+| `hasVersion`                           | boolean  | Event  | PIPELINE_JOB_COMPLETED | Whether library version was specified                   |
+| `hasError`                             | boolean  | Event  | PIPELINE_JOB_COMPLETED | Whether job had errors                                  |
+| `throughputPagesPerSecond`             | number   | Event  | PIPELINE_JOB_COMPLETED | Processing throughput                                   |
+| `pagesScraped`                         | number   | Event  | PIPELINE_JOB_PROGRESS  | Number of pages processed so far                        |
+| `totalPages`                           | number   | Event  | PIPELINE_JOB_PROGRESS  | Total pages to process                                  |
+| `totalDiscovered`                      | number   | Event  | PIPELINE_JOB_PROGRESS  | Total pages discovered                                  |
+| `progressPercent`                      | number   | Event  | PIPELINE_JOB_PROGRESS  | Completion percentage                                   |
+| `currentDepth`                         | number   | Event  | PIPELINE_JOB_PROGRESS  | Current crawling depth                                  |
+| `maxDepth`                             | number   | Event  | PIPELINE_JOB_PROGRESS  | Maximum crawling depth                                  |
+| `discoveryRatio`                       | number   | Event  | PIPELINE_JOB_PROGRESS  | Discovery vs processing ratio                           |
+| `queueEfficiency`                      | number   | Event  | PIPELINE_JOB_PROGRESS  | Queue processing efficiency                             |
+| **Document Processing**                |          |        |                        |                                                         |
+| `mimeType`                             | string   | Event  | DOCUMENT_PROCESSED     | Document MIME type                                      |
+| `contentSizeBytes`                     | number   | Event  | DOCUMENT_PROCESSED     | Document content size                                   |
+| `processingTimeMs`                     | number   | Event  | DOCUMENT_PROCESSED     | Processing duration                                     |
+| `chunksCreated`                        | number   | Event  | DOCUMENT_PROCESSED     | Number of chunks created                                |
+| `hasTitle`                             | boolean  | Event  | DOCUMENT_PROCESSED     | Whether document has title                              |
+| `hasDescription`                       | boolean  | Event  | DOCUMENT_PROCESSED     | Whether document has description                        |
+| `urlDomain`                            | string   | Event  | DOCUMENT_PROCESSED     | Sanitized domain (privacy-safe)                         |
+| `depth`                                | number   | Event  | DOCUMENT_PROCESSED     | Crawl depth of document                                 |
+| `library`                              | string   | Event  | DOCUMENT_PROCESSED     | Library being processed                                 |
+| `libraryVersion`                       | string   | Event  | DOCUMENT_PROCESSED     | Library version                                         |
+| `avgChunkSizeBytes`                    | number   | Event  | DOCUMENT_PROCESSED     | Average chunk size                                      |
+| `processingSpeedKbPerSec`              | number   | Event  | DOCUMENT_PROCESSED     | Processing speed                                        |
+| **HTTP Request Processing**            |          |        |                        |                                                         |
+| `success`                              | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether request succeeded                               |
+| `hostname`                             | string   | Event  | HTTP_REQUEST_COMPLETED | Sanitized hostname (privacy-safe)                       |
+| `protocol`                             | string   | Event  | HTTP_REQUEST_COMPLETED | URL protocol (http/https/file)                          |
+| `durationMs`                           | number   | Event  | HTTP_REQUEST_COMPLETED | Request duration                                        |
+| `contentSizeBytes`                     | number   | Event  | HTTP_REQUEST_COMPLETED | Response content size                                   |
+| `mimeType`                             | string   | Event  | HTTP_REQUEST_COMPLETED | Response MIME type                                      |
+| `hasEncoding`                          | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether response had encoding                           |
+| `followRedirects`                      | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether redirects were followed                         |
+| `hadRedirects`                         | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether redirects occurred                              |
+| `statusCode`                           | number   | Event  | HTTP_REQUEST_COMPLETED | HTTP status code (failures only)                        |
+| `errorType`                            | string   | Event  | HTTP_REQUEST_COMPLETED | Error type (failures only)                              |
+| `errorCode`                            | string   | Event  | HTTP_REQUEST_COMPLETED | Error code (failures only)                              |
+
+### Property Scope Definitions
+
+- **Global**: Properties set once at application startup and included in all events automatically
+- **Session**: Properties tied to a user interaction session, managed by SessionTracker
+- **Event**: Properties specific to individual events, passed explicitly when tracking
+
+### Tracking Pattern Summary
+
+**Global Context (automatic inclusion):**
+
+- Application metadata: `appVersion`, `appPlatform`, `appAuthEnabled`, `appReadOnly`
+- AI/Embedding configuration: `aiEmbeddingProvider`, `aiEmbeddingModel`, `aiEmbeddingDimensions`
+
+**Session Context (minimal):**
+
+- Session correlation: `sessionId` (all events)
+- Interface identification: `appInterface` (session lifecycle events only)
+- Web navigation: `webRoute` (SESSION_STARTED for web sessions)
+
+**Application Configuration (APP_STARTED event):**
+
+- Service configuration: `services`, `port`, `externalWorker`
+- MCP configuration: `mcpProtocol`, `mcpTransport` (when MCP service enabled)
+- CLI context: `cliCommand` (when started via CLI)
+
+**Event-specific Properties:**
+
+- Passed explicitly when tracking specific events
+- Include performance metrics, outcomes, and event-specific context
+- `jobId` used for correlating related pipeline events
+
+This approach minimizes event payload size while ensuring all relevant context is available for analysis and debugging.
 
 ### Privacy-Safe Data Collection
 

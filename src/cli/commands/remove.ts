@@ -4,15 +4,11 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
-import { setupLogging } from "../utils";
 
 export async function removeAction(
   library: string,
   options: { version?: string; serverUrl?: string },
-  command: Command,
 ) {
-  const globalOptions = command.parent?.opts() || {};
-  setupLogging(globalOptions);
   const serverUrl = options.serverUrl;
 
   // Remove command doesn't need embeddings - explicitly disable for local execution

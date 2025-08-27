@@ -25,7 +25,7 @@ import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
 
 /**
- * Embedding context that can be passed to session creation.
+ * Embedding context.
  * Simplified subset of EmbeddingModelConfig for telemetry purposes.
  */
 export interface EmbeddingContext {
@@ -115,15 +115,13 @@ export const formatOutput = (data: unknown): string => JSON.stringify(data, null
  * Sets up logging based on global options
  */
 export function setupLogging(options: GlobalOptions, protocol?: "stdio" | "http"): void {
-  if (options.silent) {
-    setLogLevel(LogLevel.ERROR);
-  } else if (options.verbose) {
-    setLogLevel(LogLevel.DEBUG);
-  }
-
   // Suppress logging in stdio mode (before any logger calls)
   if (protocol === "stdio") {
     setLogLevel(LogLevel.ERROR);
+  } else if (options.silent) {
+    setLogLevel(LogLevel.ERROR);
+  } else if (options.verbose) {
+    setLogLevel(LogLevel.DEBUG);
   }
 }
 
@@ -189,6 +187,11 @@ export function createAppServerConfig(options: {
   externalWorkerUrl?: string;
   readOnly?: boolean;
   auth?: AuthConfig;
+  startupContext?: {
+    cliCommand?: string;
+    mcpProtocol?: "stdio" | "http";
+    mcpTransport?: "sse" | "streamable";
+  };
 }): AppServerConfig {
   return {
     enableWebInterface: options.enableWebInterface ?? false,
@@ -199,6 +202,7 @@ export function createAppServerConfig(options: {
     externalWorkerUrl: options.externalWorkerUrl,
     readOnly: options.readOnly ?? false,
     auth: options.auth,
+    startupContext: options.startupContext,
   };
 }
 
