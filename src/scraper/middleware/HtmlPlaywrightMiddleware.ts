@@ -165,7 +165,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       }
 
       // Wait for the iframe body to load
-      await frame.waitForSelector("body", { timeout: 10000 }).catch(() => {
+      await frame.waitForSelector("body", { timeout: DEFAULT_PAGE_TIMEOUT }).catch(() => {
         logger.debug(`Timeout waiting for body in iframe ${index + 1}`);
       });
 
@@ -542,9 +542,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Wait for network idle to let dynamic content initialize
       try {
-        await page.waitForLoadState("networkidle", { timeout: 5000 });
+        await page.waitForLoadState("networkidle", { timeout: DEFAULT_PAGE_TIMEOUT });
       } catch {
-        logger.debug("Network idle timeout (5s), proceeding anyway");
+        logger.debug("Network idle timeout, proceeding anyway");
       }
 
       await this.waitForLoadingToComplete(page);
