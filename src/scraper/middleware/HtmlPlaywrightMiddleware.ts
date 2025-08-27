@@ -249,6 +249,203 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   }
 
   /**
+   * Waits for and processes framesets on the page by extracting content from each frame
+   * and replacing the frameset with merged content.
+   *
+   * @param page The Playwright page instance to operate on.
+   */
+  private async waitForFramesetsToLoad(page: Page): Promise<void> {
+    try {
+      // Check if the page contains framesets
+      const framesets = await page.$$("frameset");
+      if (framesets.length === 0) {
+        return;
+      }
+
+      logger.debug(`Found ${framesets.length} frameset(s) on ${page.url()}`);
+
+      // Extract all frame URLs from the frameset structure
+      const frameUrls = await this.extractFrameUrls(page);
+      if (frameUrls.length === 0) {
+        logger.debug("No frame URLs found in framesets");
+        return;
+      }
+
+      logger.debug(`Found ${frameUrls.length} frame(s) to process`);
+
+      // Fetch content from each frame
+      const frameContents: Array<{ url: string; content: string; name?: string }> = [];
+      for (const frameInfo of frameUrls) {
+        try {
+          const content = await this.fetchFrameContent(page, frameInfo.src);
+          if (content && content.trim().length > 0) {
+            frameContents.push({
+              url: frameInfo.src,
+              content,
+              name: frameInfo.name,
+            });
+            logger.debug(`Successfully fetched content from frame: ${frameInfo.src}`);
+          } else {
+            logger.debug(`Frame content is empty: ${frameInfo.src}`);
+          }
+        } catch (error) {
+          logger.debug(`Error fetching frame content from ${frameInfo.src}: ${error}`);
+        }
+      }
+
+      // Merge frame contents and replace frameset
+      if (frameContents.length > 0) {
+        await this.mergeFrameContents(page, frameContents);
+        logger.debug(
+          `Successfully merged ${frameContents.length} frame(s) into main page`,
+        );
+      }
+
+      logger.debug(`Finished processing framesets`);
+    } catch (error) {
+      logger.debug(`Error during frameset processing for ${page.url()}: ${error}`);
+    }
+  }
+
+  /**
+   * Extracts frame URLs from all framesets on the page in document order.
+   *
+   * @param page The Playwright page instance to operate on.
+   * @returns Array of frame information objects with src and optional name.
+   */
+  private async extractFrameUrls(
+    page: Page,
+  ): Promise<Array<{ src: string; name?: string }>> {
+    try {
+      return await page.evaluate(() => {
+        const frames: Array<{ src: string; name?: string }> = [];
+        const frameElements = document.querySelectorAll("frame");
+
+        for (const frame of frameElements) {
+          const src = frame.getAttribute("src");
+          if (src?.trim() && !src.startsWith("javascript:") && src !== "about:blank") {
+            const name = frame.getAttribute("name") || undefined;
+            frames.push({ src: src.trim(), name });
+          }
+        }
+
+        return frames;
+      });
+    } catch (error) {
+      logger.debug(`Error extracting frame URLs: ${error}`);
+      return [];
+    }
+  }
+
+  /**
+   * Fetches content from a frame URL by navigating to it in a new page.
+   *
+   * @param parentPage The parent page (used to resolve relative URLs and share context)
+   * @param frameUrl The URL of the frame to fetch content from
+   * @returns The HTML content of the frame
+   */
+  private async fetchFrameContent(parentPage: Page, frameUrl: string): Promise<string> {
+    let framePage: Page | null = null;
+    try {
+      // Resolve relative URLs against the parent page URL
+      const resolvedUrl = new URL(frameUrl, parentPage.url()).href;
+
+      // Create a new page in the same browser context for consistency
+      framePage = await parentPage.context().newPage();
+
+      // Use the same route handling as the parent page for consistency
+      await framePage.route("**/*", async (route) => {
+        const resourceType = route.request().resourceType();
+
+        // Abort non-essential resources (but keep stylesheets for content rendering)
+        if (["image", "font", "media"].includes(resourceType)) {
+          return route.abort();
+        }
+
+        return route.continue();
+      });
+
+      logger.debug(`Fetching frame content from: ${resolvedUrl}`);
+
+      // Navigate to the frame URL
+      await framePage.goto(resolvedUrl, { waitUntil: "load", timeout: 15000 });
+      await framePage.waitForSelector("body", { timeout: 10000 });
+
+      // Wait for loading indicators to complete
+      await this.waitForLoadingToComplete(framePage);
+
+      // Extract the body content (not full HTML to avoid conflicts)
+      const bodyContent = await framePage.$eval(
+        "body",
+        (el: HTMLElement) => el.innerHTML,
+      );
+
+      logger.debug(`Successfully fetched frame content from: ${resolvedUrl}`);
+      return bodyContent || "";
+    } catch (error) {
+      logger.debug(`Error fetching frame content from ${frameUrl}: ${error}`);
+      return "";
+    } finally {
+      if (framePage) {
+        await framePage.unroute("**/*");
+        await framePage.close();
+      }
+    }
+  }
+
+  /**
+   * Merges frame contents and replaces the frameset structure with the merged content.
+   *
+   * @param page The main page containing the frameset
+   * @param frameContents Array of frame content objects with URL, content, and optional name
+   */
+  private async mergeFrameContents(
+    page: Page,
+    frameContents: Array<{ url: string; content: string; name?: string }>,
+  ): Promise<void> {
+    try {
+      // Build merged content sequentially, preserving frameset definition order
+      const mergedContent = frameContents
+        .map((frame, index) => {
+          const frameName = frame.name ? ` (${frame.name})` : "";
+          const frameHeader = `<!-- Frame ${index + 1}${frameName}: ${frame.url} -->`;
+          return `${frameHeader}\n<div data-frame-url="${frame.url}" data-frame-name="${frame.name || ""}">\n${frame.content}\n</div>`;
+        })
+        .join("\n\n");
+
+      // Replace the entire frameset structure with merged content
+      await page.evaluate((mergedHtml: string) => {
+        // Find all framesets and replace them with the merged content
+        const framesets = document.querySelectorAll("frameset");
+        if (framesets.length > 0) {
+          // Create a body element with the merged content
+          const body = document.createElement("body");
+          body.innerHTML = mergedHtml;
+
+          // Replace the first frameset with our body element
+          // (typically there's only one root frameset)
+          const firstFrameset = framesets[0];
+          if (firstFrameset.parentNode) {
+            firstFrameset.parentNode.replaceChild(body, firstFrameset);
+          }
+
+          // Remove any remaining framesets
+          for (let i = 1; i < framesets.length; i++) {
+            const frameset = framesets[i];
+            if (frameset.parentNode) {
+              frameset.parentNode.removeChild(frameset);
+            }
+          }
+        }
+      }, mergedContent);
+
+      logger.debug("Successfully replaced frameset with merged content");
+    } catch (error) {
+      logger.debug(`Error merging frame contents: ${error}`);
+    }
+  }
+
+  /**
    * Processes the context using Playwright, rendering dynamic content and propagating credentials for all same-origin requests.
    *
    * - Parses credentials from the URL (if present).
@@ -292,12 +489,15 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
     try {
       const browser = await this.ensureBrowser();
+
+      // Always create a browser context (with or without credentials)
       if (credentials) {
         browserContext = await browser.newContext({ httpCredentials: credentials });
-        page = await browserContext.newPage();
       } else {
-        page = await browser.newPage();
+        browserContext = await browser.newContext();
       }
+      page = await browserContext.newPage();
+
       logger.debug(`Playwright: Processing ${context.source}`);
 
       // Block unnecessary resources and inject credentials and custom headers for same-origin requests
@@ -336,7 +536,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Load initial HTML content
       await page.goto(context.source, { waitUntil: "load" });
-      await page.waitForSelector("body");
+
+      // Wait for either body (normal HTML) or frameset (frameset documents) to appear
+      await page.waitForSelector("body, frameset");
 
       // Wait for network idle to let dynamic content initialize
       try {
@@ -347,6 +549,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       await this.waitForLoadingToComplete(page);
       await this.waitForIframesToLoad(page);
+      await this.waitForFramesetsToLoad(page);
 
       renderedHtml = await page.content();
       logger.debug(`Playwright: Successfully rendered content for ${context.source}`);
