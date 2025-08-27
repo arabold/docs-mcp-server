@@ -26,6 +26,13 @@ export interface AppShutdownProperties extends BaseTelemetryProperties {
   graceful: boolean;
 }
 
+// CLI Events
+export interface CliCommandProperties extends BaseTelemetryProperties {
+  cliCommand: string;
+  success: boolean;
+  durationMs: number;
+}
+
 // Tool Events
 export interface ToolUsedProperties extends BaseTelemetryProperties {
   tool: string;
@@ -103,6 +110,7 @@ export interface DocumentProcessedProperties extends BaseTelemetryProperties {
 export interface TelemetryEventPropertiesMap {
   [TelemetryEvent.APP_STARTED]: AppStartedProperties;
   [TelemetryEvent.APP_SHUTDOWN]: AppShutdownProperties;
+  [TelemetryEvent.CLI_COMMAND]: CliCommandProperties;
   [TelemetryEvent.TOOL_USED]: ToolUsedProperties;
   [TelemetryEvent.HTTP_REQUEST_COMPLETED]: HttpRequestCompletedProperties;
   [TelemetryEvent.PIPELINE_JOB_PROGRESS]: PipelineJobProgressProperties;

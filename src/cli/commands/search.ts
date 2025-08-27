@@ -5,17 +5,13 @@
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
 import { SearchTool } from "../../tools";
-import { formatOutput, resolveEmbeddingContext, setupLogging } from "../utils";
+import { formatOutput, resolveEmbeddingContext } from "../utils";
 
 export async function searchAction(
   library: string,
   query: string,
   options: { version?: string; limit: string; exactMatch: boolean; serverUrl?: string },
-  command: Command,
 ) {
-  const globalOptions = command.parent?.opts() || {};
-  setupLogging(globalOptions);
-
   const serverUrl = options.serverUrl;
 
   // Resolve embedding configuration for local execution (search needs embeddings)

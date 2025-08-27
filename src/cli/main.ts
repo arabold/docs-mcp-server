@@ -4,6 +4,7 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { AppServer } from "../app";
 import type { IPipeline } from "../pipeline";
 import {
   ModelConfigurationError,
@@ -15,7 +16,7 @@ import { logger } from "../utils/logger";
 import { createCliProgram } from "./index";
 
 // Module-level variables for active services and shutdown state
-let activeAppServer: Promise<{ stop: () => Promise<void> }> | null = null;
+let activeAppServer: AppServer | null = null;
 let activeMcpStdioServer: McpServer | null = null;
 let activeDocService: IDocumentManagement | null = null;
 let activePipelineManager: IPipeline | null = null;
@@ -29,11 +30,15 @@ const sigintHandler = async (): Promise<void> => {
   isShuttingDown = true;
 
   logger.debug("Received SIGINT. Shutting down gracefully...");
+  console.log("activeAppServer", !!activeAppServer);
+  console.log("activeMcpStdioServer", !!activeMcpStdioServer);
+  console.log("activeDocService", !!activeDocService);
+  console.log("activePipelineManager", !!activePipelineManager);
+
   try {
     if (activeAppServer) {
       logger.debug("SIGINT: Stopping AppServer...");
-      const appServer = await activeAppServer;
-      await appServer.stop();
+      await activeAppServer.stop();
       activeAppServer = null;
       logger.debug("SIGINT: AppServer stopped.");
     }
@@ -59,11 +64,14 @@ const sigintHandler = async (): Promise<void> => {
       logger.debug("SIGINT: DocumentManagementService shut down.");
     }
 
-    // Shutdown analytics
-    if (analytics.isEnabled()) {
+    // Analytics shutdown is handled by AppServer.stop() above
+    // Only shutdown analytics if no AppServer was running
+    if (!activeAppServer && analytics.isEnabled()) {
       await analytics.shutdown();
       logger.debug("SIGINT: Analytics shut down.");
     }
+
+    await new Promise((resolve) => setTimeout(resolve, 100)); // Ensure logs flush
 
     logger.info("✅ Graceful shutdown completed");
     process.exit(0);
@@ -77,15 +85,15 @@ const sigintHandler = async (): Promise<void> => {
  * Registers global services for shutdown handling
  */
 export function registerGlobalServices(services: {
-  appServer?: Promise<{ stop: () => Promise<void> }>;
+  appServer?: AppServer;
   mcpStdioServer?: McpServer;
   docService?: IDocumentManagement;
-  pipelineManager?: IPipeline;
+  pipeline?: IPipeline;
 }): void {
   if (services.appServer) activeAppServer = services.appServer;
   if (services.mcpStdioServer) activeMcpStdioServer = services.mcpStdioServer;
   if (services.docService) activeDocService = services.docService;
-  if (services.pipelineManager) activePipelineManager = services.pipelineManager;
+  if (services.pipeline) activePipelineManager = services.pipeline;
 }
 
 /**
@@ -131,8 +139,8 @@ export async function runCli(): Promise<void> {
       if (activeAppServer) {
         shutdownPromises.push(
           activeAppServer
-            .then(async (appServer) => {
-              await appServer.stop();
+            .stop()
+            .then(() => {
               activeAppServer = null;
             })
             .catch((e) => logger.error(`❌ Error stopping AppServer: ${e}`)),
@@ -203,8 +211,8 @@ if (import.meta.hot) {
       if (activeAppServer) {
         logger.debug("Shutting down AppServer...");
         shutdownPromises.push(
-          activeAppServer.then(async (appServer) => {
-            await appServer.stop();
+          activeAppServer.stop().then(() => {
+            activeAppServer = null;
             logger.debug("AppServer shut down.");
           }),
         );

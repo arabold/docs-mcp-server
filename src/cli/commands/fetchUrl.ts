@@ -6,16 +6,12 @@ import type { Command } from "commander";
 import { FileFetcher, HttpFetcher } from "../../scraper/fetcher";
 import { ScrapeMode } from "../../scraper/types";
 import { FetchUrlTool } from "../../tools";
-import { parseHeaders, setupLogging } from "../utils";
+import { parseHeaders } from "../utils";
 
 export async function fetchUrlAction(
   url: string,
   options: { followRedirects: boolean; scrapeMode: ScrapeMode; header: string[] },
-  command: Command,
 ) {
-  const globalOptions = command.parent?.opts() || {};
-  setupLogging(globalOptions);
-
   const headers = parseHeaders(options.header);
   const fetchUrlTool = new FetchUrlTool(new HttpFetcher(), new FileFetcher());
 

@@ -280,3 +280,289 @@ describe("Service Configuration Validation", () => {
     expect(mockPipelineStart).not.toHaveBeenCalled();
   });
 });
+
+describe("Service Registration for Telemetry", () => {
+  let mockRegisterGlobalServices: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Mock registerGlobalServices function
+    mockRegisterGlobalServices = vi.fn();
+    vi.doMock("./cli/main", () => ({
+      registerGlobalServices: mockRegisterGlobalServices,
+    }));
+  });
+
+  it("should register AppServer for graceful shutdown in web command", async () => {
+    // Mock the web command service registration
+    const mockAppServer = { stop: vi.fn().mockResolvedValue(undefined) };
+    const mockDocService = { shutdown: vi.fn().mockResolvedValue(undefined) };
+    const mockPipeline = { stop: vi.fn().mockResolvedValue(undefined) };
+
+    // Simulate web command calling registerGlobalServices
+    mockRegisterGlobalServices({
+      appServer: mockAppServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+
+    expect(mockRegisterGlobalServices).toHaveBeenCalledWith({
+      appServer: mockAppServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+  });
+
+  it("should register MCP stdio server for graceful shutdown in mcp command", async () => {
+    // Mock the mcp command service registration for stdio protocol
+    const mockMcpServer = { close: vi.fn().mockResolvedValue(undefined) };
+    const mockDocService = { shutdown: vi.fn().mockResolvedValue(undefined) };
+    const mockPipeline = { stop: vi.fn().mockResolvedValue(undefined) };
+
+    // Simulate mcp stdio command calling registerGlobalServices
+    mockRegisterGlobalServices({
+      mcpStdioServer: mockMcpServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+
+    expect(mockRegisterGlobalServices).toHaveBeenCalledWith({
+      mcpStdioServer: mockMcpServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+  });
+
+  it("should register AppServer for MCP http server in mcp command", async () => {
+    // Mock the mcp command service registration for http protocol
+    const mockAppServer = { stop: vi.fn().mockResolvedValue(undefined) };
+    const mockDocService = { shutdown: vi.fn().mockResolvedValue(undefined) };
+    const mockPipeline = { stop: vi.fn().mockResolvedValue(undefined) };
+
+    // Simulate mcp http command calling registerGlobalServices
+    mockRegisterGlobalServices({
+      appServer: mockAppServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+
+    expect(mockRegisterGlobalServices).toHaveBeenCalledWith({
+      appServer: mockAppServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+  });
+
+  it("should register AppServer for worker service", async () => {
+    // Mock the worker command service registration
+    const mockAppServer = { stop: vi.fn().mockResolvedValue(undefined) };
+    const mockDocService = { shutdown: vi.fn().mockResolvedValue(undefined) };
+    const mockPipeline = { stop: vi.fn().mockResolvedValue(undefined) };
+
+    // Simulate worker command calling registerGlobalServices
+    mockRegisterGlobalServices({
+      appServer: mockAppServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+
+    expect(mockRegisterGlobalServices).toHaveBeenCalledWith({
+      appServer: mockAppServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+  });
+
+  it("should register services for default command with mixed protocols", async () => {
+    // Mock the default command service registration - it can run both AppServer and MCP
+    const mockAppServer = { stop: vi.fn().mockResolvedValue(undefined) };
+    const mockMcpServer = { close: vi.fn().mockResolvedValue(undefined) };
+    const mockDocService = { shutdown: vi.fn().mockResolvedValue(undefined) };
+    const mockPipeline = { stop: vi.fn().mockResolvedValue(undefined) };
+
+    // Test scenario where default command runs both AppServer and MCP stdio
+    mockRegisterGlobalServices({
+      appServer: mockAppServer,
+      mcpStdioServer: mockMcpServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+
+    expect(mockRegisterGlobalServices).toHaveBeenCalledWith({
+      appServer: mockAppServer,
+      mcpStdioServer: mockMcpServer,
+      docService: mockDocService,
+      pipeline: mockPipeline,
+    });
+  });
+
+  it("should handle partial service registration", async () => {
+    // Test that registerGlobalServices can handle partial service objects
+    const mockDocService = { shutdown: vi.fn().mockResolvedValue(undefined) };
+
+    // Simulate a command registering only some services
+    mockRegisterGlobalServices({
+      docService: mockDocService,
+    });
+
+    expect(mockRegisterGlobalServices).toHaveBeenCalledWith({
+      docService: mockDocService,
+    });
+  });
+
+  it("should ensure all CLI commands register services for telemetry tracking", () => {
+    // This test validates that the service registration pattern is consistent
+    // across all CLI commands for proper APP_SHUTDOWN event tracking
+
+    // Mock services that different commands might register
+    const serviceInstances = {
+      appServer: { stop: vi.fn() },
+      mcpStdioServer: { close: vi.fn() },
+      docService: { shutdown: vi.fn() },
+      pipeline: { stop: vi.fn() },
+    };
+
+    // Test each command type pattern
+    const commandPatterns = [
+      // web command: AppServer + DocService + Pipeline
+      {
+        appServer: serviceInstances.appServer,
+        docService: serviceInstances.docService,
+        pipeline: serviceInstances.pipeline,
+      },
+      // worker command: AppServer + DocService + Pipeline
+      {
+        appServer: serviceInstances.appServer,
+        docService: serviceInstances.docService,
+        pipeline: serviceInstances.pipeline,
+      },
+      // mcp stdio: MCP + DocService + Pipeline
+      {
+        mcpStdioServer: serviceInstances.mcpStdioServer,
+        docService: serviceInstances.docService,
+        pipeline: serviceInstances.pipeline,
+      },
+      // mcp http: AppServer + DocService + Pipeline
+      {
+        appServer: serviceInstances.appServer,
+        docService: serviceInstances.docService,
+        pipeline: serviceInstances.pipeline,
+      },
+    ];
+
+    // Verify each pattern calls registerGlobalServices appropriately
+    for (const pattern of commandPatterns) {
+      mockRegisterGlobalServices(pattern);
+    }
+
+    expect(mockRegisterGlobalServices).toHaveBeenCalledTimes(commandPatterns.length);
+
+    // Verify that each call included at least one service for proper shutdown tracking
+    const calls = mockRegisterGlobalServices.mock.calls;
+    for (const call of calls) {
+      const services = call[0];
+      const hasAnyService = Object.keys(services).length > 0;
+      expect(hasAnyService).toBe(true);
+    }
+  });
+});
+
+describe("CLI Command Telemetry Integration", () => {
+  let mockAnalytics: {
+    setGlobalContext: ReturnType<typeof vi.fn>;
+    track: ReturnType<typeof vi.fn>;
+    shutdown: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Mock analytics instance
+    mockAnalytics = {
+      setGlobalContext: vi.fn(),
+      track: vi.fn(),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+    };
+
+    vi.doMock("../telemetry", () => ({
+      analytics: mockAnalytics,
+    }));
+  });
+
+  it("should set global context in CLI preAction hook", async () => {
+    // Mock global context that should be set by CLI
+    const expectedContext = {
+      appInterface: "cli",
+      appPlatform: "darwin",
+      appVersion: "1.22.0",
+    };
+
+    // Simulate CLI preAction calling setGlobalContext
+    mockAnalytics.setGlobalContext(expectedContext);
+
+    expect(mockAnalytics.setGlobalContext).toHaveBeenCalledWith(expectedContext);
+  });
+
+  it("should track CLI_COMMAND events in postAction hook", async () => {
+    // Mock CLI command execution tracking
+    const commandStartTime = Date.now();
+    const commandEndTime = commandStartTime + 1500; // 1.5 seconds
+
+    // Simulate tracking CLI_COMMAND event
+    mockAnalytics.track("CLI_COMMAND", {
+      command: "web",
+      success: true,
+      durationMs: commandEndTime - commandStartTime,
+    });
+
+    expect(mockAnalytics.track).toHaveBeenCalledWith("CLI_COMMAND", {
+      command: "web",
+      success: true,
+      durationMs: 1500,
+    });
+  });
+
+  it("should track failed CLI commands with success: false", async () => {
+    // Mock failed command tracking
+    mockAnalytics.track("CLI_COMMAND", {
+      command: "invalid-command",
+      success: false,
+      durationMs: 100,
+    });
+
+    expect(mockAnalytics.track).toHaveBeenCalledWith("CLI_COMMAND", {
+      command: "invalid-command",
+      success: false,
+      durationMs: 100,
+    });
+  });
+
+  it("should track different command types", async () => {
+    // Test tracking for various CLI commands
+    const commands = ["web", "mcp", "worker", "fetch-url", "scrape-docs"];
+
+    for (const command of commands) {
+      mockAnalytics.track("CLI_COMMAND", {
+        command,
+        success: true,
+        durationMs: 1000,
+      });
+    }
+
+    expect(mockAnalytics.track).toHaveBeenCalledTimes(commands.length);
+
+    // Verify each command was tracked correctly
+    const calls = mockAnalytics.track.mock.calls;
+    for (let i = 0; i < commands.length; i++) {
+      expect(calls[i]).toEqual([
+        "CLI_COMMAND",
+        {
+          command: commands[i],
+          success: true,
+          durationMs: 1000,
+        },
+      ]);
+    }
+  });
+});

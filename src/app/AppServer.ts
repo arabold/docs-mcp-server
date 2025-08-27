@@ -146,13 +146,6 @@ export class AppServer {
    */
   async stop(): Promise<void> {
     try {
-      // Track app shutdown
-      if (analytics.isEnabled()) {
-        analytics.track(TelemetryEvent.APP_SHUTDOWN, {
-          graceful: true,
-        });
-      }
-
       // Stop worker service if enabled
       if (this.config.enableWorker) {
         await stopWorkerService(this.pipeline);
@@ -163,7 +156,14 @@ export class AppServer {
         await cleanupMcpService(this.mcpServer);
       }
 
-      // Shutdown telemetry service
+      // Track app shutdown
+      if (analytics.isEnabled()) {
+        analytics.track(TelemetryEvent.APP_SHUTDOWN, {
+          graceful: true,
+        });
+      }
+
+      // Shutdown telemetry service (this will flush remaining events)
       await analytics.shutdown();
 
       // Close Fastify server

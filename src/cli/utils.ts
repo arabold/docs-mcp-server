@@ -115,15 +115,13 @@ export const formatOutput = (data: unknown): string => JSON.stringify(data, null
  * Sets up logging based on global options
  */
 export function setupLogging(options: GlobalOptions, protocol?: "stdio" | "http"): void {
-  if (options.silent) {
-    setLogLevel(LogLevel.ERROR);
-  } else if (options.verbose) {
-    setLogLevel(LogLevel.DEBUG);
-  }
-
   // Suppress logging in stdio mode (before any logger calls)
   if (protocol === "stdio") {
     setLogLevel(LogLevel.ERROR);
+  } else if (options.silent) {
+    setLogLevel(LogLevel.ERROR);
+  } else if (options.verbose) {
+    setLogLevel(LogLevel.DEBUG);
   }
 }
 

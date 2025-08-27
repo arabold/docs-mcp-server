@@ -18,7 +18,6 @@ import {
   createPipelineWithCallbacks,
   parseHeaders,
   resolveEmbeddingContext,
-  setupLogging,
 } from "../utils";
 
 export async function scrapeAction(
@@ -38,11 +37,7 @@ export async function scrapeAction(
     header: string[];
     serverUrl?: string;
   },
-  command: Command,
 ) {
-  const globalOptions = command.parent?.opts() || {};
-  setupLogging(globalOptions);
-
   const serverUrl = options.serverUrl;
 
   // Resolve embedding configuration for local execution (scrape needs embeddings)

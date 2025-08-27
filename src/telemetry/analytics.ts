@@ -18,6 +18,7 @@ import { generateInstallationId, TelemetryConfig } from "./TelemetryConfig";
 export enum TelemetryEvent {
   APP_STARTED = "app_started",
   APP_SHUTDOWN = "app_shutdown",
+  CLI_COMMAND = "cli_command",
   TOOL_USED = "tool_used",
   HTTP_REQUEST_COMPLETED = "http_request_completed",
   PIPELINE_JOB_PROGRESS = "pipeline_job_progress",

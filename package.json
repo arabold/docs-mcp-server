@@ -26,7 +26,7 @@
     "cli": "node --enable-source-maps dist/index.js",
     "server": "node --enable-source-maps dist/index.ts",
     "web": "node --enable-source-maps dist/index.ts web",
-    "dev": "vite-node src/index.ts",
+    "dev": "vite-node --watch src/index.ts",
     "dev:server": "vite-node --watch src/index.ts",
     "dev:server:stdio": "vite-node --watch src/index.ts -- --protocol stdio",
     "dev:server:http": "vite-node --watch src/index.ts -- --protocol http",
