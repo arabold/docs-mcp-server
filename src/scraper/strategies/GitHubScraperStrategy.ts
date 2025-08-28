@@ -5,6 +5,7 @@ import type { RawContent } from "../fetcher/types";
 import { HtmlPipeline } from "../pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
 import type { ScraperOptions, ScraperProgress } from "../types";
+import { shouldIncludeUrl } from "../utils/patternMatcher";
 import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
 
 interface GitHubRepoInfo {
@@ -64,6 +65,21 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
   }
 
   /**
+   * Override shouldProcessUrl to handle github-file:// URLs specially.
+   * These URLs bypass scope checking since they're internal file references.
+   */
+  protected shouldProcessUrl(url: string, options: ScraperOptions): boolean {
+    // For github-file:// URLs, only apply include/exclude patterns, skip scope checking
+    if (url.startsWith("github-file://")) {
+      const filePath = url.replace("github-file://", "");
+      return shouldIncludeUrl(filePath, options.includePatterns, options.excludePatterns);
+    }
+
+    // For regular URLs, use the base implementation
+    return super.shouldProcessUrl(url, options);
+  }
+
+  /**
    * Parses a GitHub URL to extract repository information.
    */
   parseGitHubUrl(url: string): GitHubRepoInfo {
@@ -99,13 +115,17 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       try {
         // Get repository information to find the default branch
         const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
-        logger.debug(`🔍 Fetching repository info: ${repoUrl}`);
+        logger.debug(`Fetching repository info: ${repoUrl}`);
 
         const repoContent = await this.httpFetcher.fetch(repoUrl, { signal });
-        const repoData = JSON.parse(repoContent.content) as { default_branch: string };
+        const content =
+          typeof repoContent.content === "string"
+            ? repoContent.content
+            : repoContent.content.toString("utf-8");
+        const repoData = JSON.parse(content) as { default_branch: string };
         targetBranch = repoData.default_branch;
 
-        logger.debug(`📋 Using default branch: ${targetBranch}`);
+        logger.debug(`Using default branch: ${targetBranch}`);
       } catch (error) {
         logger.warn(`⚠️  Could not fetch default branch, using 'main': ${error}`);
         targetBranch = "main";
@@ -117,10 +137,14 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
 
     const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${targetBranch}?recursive=1`;
 
-    logger.debug(`🌳 Fetching repository tree: ${treeUrl}`);
+    logger.debug(`Fetching repository tree: ${treeUrl}`);
 
     const rawContent = await this.httpFetcher.fetch(treeUrl, { signal });
-    const treeData = JSON.parse(rawContent.content) as GitHubTreeResponse;
+    const content =
+      typeof rawContent.content === "string"
+        ? rawContent.content
+        : rawContent.content.toString("utf-8");
+    const treeData = JSON.parse(content) as GitHubTreeResponse;
 
     if (treeData.truncated) {
       logger.warn(
@@ -142,54 +166,161 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
 
     const path = item.path;
 
-    // Skip common binary and non-text files
-    const binaryExtensions = [
-      ".png",
-      ".jpg",
-      ".jpeg",
-      ".gif",
-      ".svg",
-      ".ico",
-      ".webp",
-      ".pdf",
-      ".zip",
-      ".tar",
-      ".gz",
-      ".bz2",
-      ".xz",
-      ".exe",
-      ".dll",
-      ".so",
-      ".dylib",
-      ".bin",
-      ".dat",
-      ".db",
-      ".sqlite",
-      ".woff",
-      ".woff2",
-      ".ttf",
-      ".eot",
-      ".mp3",
-      ".mp4",
-      ".avi",
-      ".mov",
-      ".wmv",
-      ".jar",
-      ".war",
-      ".ear",
-      ".class",
+    // Whitelist of text-based file extensions that we can process
+    const textExtensions = [
+      // Documentation
+      ".md",
+      ".mdx",
+      ".txt",
+      ".rst",
+      ".adoc",
+      ".asciidoc",
+
+      // Web technologies
+      ".html",
+      ".htm",
+      ".xml",
+      ".css",
+      ".scss",
+      ".sass",
+      ".less",
+
+      // Programming languages
+      ".js",
+      ".jsx",
+      ".ts",
+      ".tsx",
+      ".py",
+      ".java",
+      ".c",
+      ".cpp",
+      ".cc",
+      ".cxx",
+      ".h",
+      ".hpp",
+      ".cs",
+      ".go",
+      ".rs",
+      ".rb",
+      ".php",
+      ".swift",
+      ".kt",
+      ".scala",
+      ".clj",
+      ".cljs",
+      ".hs",
+      ".elm",
+      ".dart",
+      ".r",
+      ".m",
+      ".mm",
+      ".sh",
+      ".bash",
+      ".zsh",
+      ".fish",
+      ".ps1",
+      ".bat",
+      ".cmd",
+
+      // Configuration and data
+      ".json",
+      ".yaml",
+      ".yml",
+      ".toml",
+      ".ini",
+      ".cfg",
+      ".conf",
+      ".properties",
+      ".env",
+      ".gitignore",
+      ".dockerignore",
+      ".gitattributes",
+      ".editorconfig",
+
+      // Build and package management
+      ".gradle",
+      ".pom",
+      ".sbt",
+      ".maven",
+      ".cmake",
+      ".make",
+      ".dockerfile",
+      ".mod", // Go modules (go.mod)
+      ".sum", // Go checksums (go.sum)
+
+      // Other text formats
+      ".sql",
+      ".graphql",
+      ".gql",
+      ".proto",
+      ".thrift",
+      ".avro",
+      ".csv",
+      ".tsv",
+      ".log",
     ];
 
-    const hasKnownBinaryExtension = binaryExtensions.some((ext) =>
-      path.toLowerCase().endsWith(ext),
-    );
+    const pathLower = path.toLowerCase();
 
-    if (hasKnownBinaryExtension) {
+    // Check for known text extensions
+    const hasTextExtension = textExtensions.some((ext) => pathLower.endsWith(ext));
+
+    // Check for compound extensions and special cases
+    const hasCompoundExtension =
+      pathLower.includes(".env.") || // .env.example, .env.local, etc.
+      pathLower.endsWith(".env") ||
+      pathLower.includes(".config.") || // webpack.config.js, etc.
+      pathLower.includes(".lock"); // package-lock.json, etc.
+
+    // Also include files without extensions that are commonly text files
+    const fileName = path.split("/").pop() || "";
+    const fileNameLower = fileName.toLowerCase();
+    const commonTextFiles = [
+      // Documentation files without extensions
+      "readme",
+      "license",
+      "changelog",
+      "contributing",
+      "authors",
+      "maintainers",
+
+      // Build files without extensions
+      "dockerfile",
+      "makefile",
+      "rakefile",
+      "gemfile",
+      "podfile",
+      "cartfile",
+      "brewfile",
+      "procfile",
+      "vagrantfile",
+      "gulpfile",
+      "gruntfile",
+
+      // Configuration files (dotfiles)
+      ".prettierrc",
+      ".eslintrc",
+      ".babelrc",
+      ".nvmrc",
+      ".npmrc",
+    ];
+
+    const isCommonTextFile = commonTextFiles.some((name) => {
+      if (name.startsWith(".")) {
+        // For dotfiles, match exactly or with additional extension (e.g., .prettierrc.js)
+        return fileNameLower === name || fileNameLower.startsWith(`${name}.`);
+      }
+      // For regular files, match exactly or with extension
+      return fileNameLower === name || fileNameLower.startsWith(`${name}.`);
+    });
+
+    // Process file if it has a text extension, compound extension, or is a common text file
+    if (!hasTextExtension && !hasCompoundExtension && !isCommonTextFile) {
       return false;
     }
 
-    // Apply user-defined include/exclude patterns
-    return this.shouldProcessUrl(`file://${path}`, options);
+    // Apply user-defined include/exclude patterns (use the file path directly)
+    return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
   }
 
   /**
@@ -283,11 +414,9 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
                 : filePath.split("/").pop() || "Untitled",
             library: options.library,
             version: options.version,
-            filePath,
-            repository: `${repoInfo.owner}/${repoInfo.repo}`,
-            branch: this.resolvedBranch || repoInfo.branch || "main",
           },
         } satisfies Document,
+        links: [], // Always return empty links array for individual files
       };
     }
 

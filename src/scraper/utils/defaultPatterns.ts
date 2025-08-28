@@ -23,6 +23,34 @@ export const DEFAULT_FILE_EXCLUSIONS = [
   // CODE_OF_CONDUCT files (case variations)
   "**/CODE_OF_CONDUCT.md",
   "**/code_of_conduct.md",
+
+  // Test files
+  "**/*.test.*",
+  "**/*.spec.*",
+  "**/*_test.py",
+  "**/*_test.go",
+
+  // Package manager lock files
+  "**/*.lock",
+  "**/package-lock.json",
+  "**/yarn.lock",
+  "**/pnpm-lock.yaml",
+  "**/go.sum",
+
+  // Build artifacts
+  "**/*.min.js",
+  "**/*.min.css",
+  "**/*.map",
+  "**/*.d.ts",
+
+  // IDE/System files
+  "**/.DS_Store",
+  "**/Thumbs.db",
+  "**/*.swp",
+  "**/*.swo",
+
+  // Internal config files (using regex pattern)
+  "/.*\\.(ini|cfg|conf|log|pid)$/",
 ];
 
 /**
@@ -41,6 +69,24 @@ export const DEFAULT_FOLDER_EXCLUSIONS = [
 
   // Specific paths that don't follow the general pattern
   "docs/old/**",
+
+  // Test directories
+  "**/test/**",
+  "**/tests/**",
+  "**/__tests__/**",
+  "**/spec/**",
+
+  // Build output directories
+  "**/dist/**",
+  "**/build/**",
+  "**/out/**",
+  "**/target/**",
+  "**/.next/**",
+  "**/.nuxt/**",
+
+  // IDE directories
+  "**/.vscode/**",
+  "**/.idea/**",
 
   // Internationalization folders - non-English locales
   "**/i18n/ar*/**",
