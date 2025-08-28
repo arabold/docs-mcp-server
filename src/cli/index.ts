@@ -10,7 +10,6 @@ import {
   TelemetryConfig,
   TelemetryEvent,
 } from "../telemetry";
-import { LogLevel, setLogLevel } from "../utils/logger";
 import { createDefaultAction } from "./commands/default";
 import { createFetchUrlCommand } from "./commands/fetchUrl";
 import { createFindVersionCommand } from "./commands/findVersion";

@@ -59,9 +59,8 @@ export class Analytics {
 
   /**
    * Private constructor - use Analytics.create() instead
-   * @deprecated Use Analytics.create() for proper initialization
    */
-  constructor(enabled: boolean = true) {
+  private constructor(enabled: boolean = true) {
     this.enabled = enabled;
     this.distinctId = generateInstallationId();
     this.postHogClient = new PostHogClient(this.enabled);

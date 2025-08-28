@@ -15,7 +15,6 @@ import {
   createAppServerConfig,
   createPipelineWithCallbacks,
   resolveEmbeddingContext,
-  setupLogging,
   validatePort,
 } from "../utils";
 
@@ -85,10 +84,11 @@ export function createWebCommand(program: Command): Command {
         const appServer = await startAppServer(docService, pipeline, config);
 
         // Register for graceful shutdown
+        // Note: pipeline is managed by AppServer, so don't register it globally
         registerGlobalServices({
           appServer,
           docService,
-          pipeline,
+          // pipeline is owned by AppServer - don't register globally to avoid double shutdown
         });
 
         await new Promise(() => {}); // Keep running forever

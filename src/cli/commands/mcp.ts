@@ -19,7 +19,6 @@ import {
   parseAuthConfig,
   resolveEmbeddingContext,
   resolveProtocol,
-  setupLogging,
   validateAuthConfig,
   validatePort,
 } from "../utils";
@@ -159,10 +158,11 @@ export function createMcpCommand(program: Command): Command {
               const appServer = await startAppServer(docService, pipeline, config);
 
               // Register for graceful shutdown (http mode)
+              // Note: pipeline is managed by AppServer, so don't register it globally
               registerGlobalServices({
                 appServer,
                 docService,
-                pipeline,
+                // pipeline is owned by AppServer - don't register globally to avoid double shutdown
               });
 
               await new Promise(() => {}); // Keep running forever
