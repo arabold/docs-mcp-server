@@ -1,3 +1,10 @@
+# [1.23.0](https://github.com/arabold/docs-mcp-server/compare/v1.22.1...v1.23.0) (2025-08-28)
+
+
+### Features
+
+* **scraper:** added support for HTML frames and framesets ([80f184f](https://github.com/arabold/docs-mcp-server/commit/80f184f9a5aeffc32cbfcbee5b64375d7d2cd3e4))
+
 ## [1.22.1](https://github.com/arabold/docs-mcp-server/compare/v1.22.0...v1.22.1) (2025-08-27)
 
 
