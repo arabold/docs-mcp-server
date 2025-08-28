@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Analytics, TelemetryEvent } from "./analytics";
+import { TelemetryConfig } from "./TelemetryConfig";
 
 // Mock the global __POSTHOG_API_KEY__
 global.__POSTHOG_API_KEY__ = "test-api-key";
@@ -37,6 +38,13 @@ describe("Analytics", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+
+    // Reset TelemetryConfig mock to default enabled state
+    const mockConfig = {
+      isEnabled: vi.fn(() => true),
+    };
+    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
+
     analytics = Analytics.create();
 
     // Get the mocked instance that was created by the constructor
@@ -49,8 +57,14 @@ describe("Analytics", () => {
       expect(analytics.isEnabled()).toBe(true);
     });
 
-    it("should respect explicit enabled parameter", () => {
-      const disabledAnalytics = new Analytics(false);
+    it("should respect disabled config", () => {
+      // Mock config to return disabled
+      const mockConfig = {
+        isEnabled: vi.fn(() => false),
+      };
+      vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
+
+      const disabledAnalytics = Analytics.create();
       expect(disabledAnalytics.isEnabled()).toBe(false);
     });
   });
@@ -104,12 +118,33 @@ describe("Analytics", () => {
       );
     });
 
-    it("should not track when disabled", () => {
-      const disabledAnalytics = new Analytics(false);
+    describe("disabled analytics behavior", () => {
+      let mockConfig: any;
+      let disabledAnalytics: Analytics;
 
-      disabledAnalytics.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+      beforeEach(() => {
+        // Mock config to return disabled
+        mockConfig = {
+          isEnabled: vi.fn(() => false),
+        };
+        vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig);
+        disabledAnalytics = Analytics.create();
+      });
 
-      expect(mockPostHogClient.capture).not.toHaveBeenCalled();
+      it("should return false for isEnabled when disabled", () => {
+        expect(disabledAnalytics.isEnabled()).toBe(false);
+      });
+
+      it("should not track events when disabled", () => {
+        disabledAnalytics.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+        expect(mockPostHogClient.capture).not.toHaveBeenCalled();
+      });
+
+      it("should not capture exceptions when disabled", () => {
+        const error = new Error("Test error");
+        disabledAnalytics.captureException(error);
+        expect(mockPostHogClient.captureException).not.toHaveBeenCalled();
+      });
     });
   });
 
@@ -129,15 +164,6 @@ describe("Analytics", () => {
           timestamp: expect.any(String),
         },
       );
-    });
-
-    it("should not capture exceptions when disabled", () => {
-      const disabledAnalytics = new Analytics(false);
-      const error = new Error("Test error");
-
-      disabledAnalytics.captureException(error);
-
-      expect(mockPostHogClient.captureException).not.toHaveBeenCalled();
     });
   });
 
@@ -221,11 +247,6 @@ describe("Analytics", () => {
   describe("isEnabled", () => {
     it("should return enabled state", () => {
       expect(analytics.isEnabled()).toBe(true);
-    });
-
-    it("should return false when analytics is disabled", () => {
-      const disabledAnalytics = new Analytics(false);
-      expect(disabledAnalytics.isEnabled()).toBe(false);
     });
   });
 });
