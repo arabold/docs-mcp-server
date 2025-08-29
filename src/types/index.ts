@@ -4,6 +4,7 @@
 export interface Document {
   content: string;
   metadata: DocumentMetadata;
+  contentType?: string; // MIME type of the original content
 }
 
 /**

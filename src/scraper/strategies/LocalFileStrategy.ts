@@ -79,6 +79,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     return {
       document: {
         content: typeof processed.textContent === "string" ? processed.textContent : "",
+        contentType: rawContent.mimeType,
         metadata: {
           url: rawContent.source,
           title:

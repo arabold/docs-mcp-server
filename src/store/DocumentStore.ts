@@ -821,7 +821,7 @@ export class DocumentStore {
         if (currentBatchSize + textSize > maxBatchChars && currentBatch.length > 0) {
           batchCount++;
           logger.debug(
-            `🔄 Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
+            `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
           );
           const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
           rawEmbeddings.push(...batchEmbeddings);
@@ -837,7 +837,7 @@ export class DocumentStore {
         if (currentBatch.length >= EMBEDDING_BATCH_SIZE) {
           batchCount++;
           logger.debug(
-            `🔄 Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
+            `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
           );
           const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
           rawEmbeddings.push(...batchEmbeddings);
@@ -850,7 +850,7 @@ export class DocumentStore {
       if (currentBatch.length > 0) {
         batchCount++;
         logger.debug(
-          `🔄 Processing final embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
+          `Processing final embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
         );
         const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
         rawEmbeddings.push(...batchEmbeddings);

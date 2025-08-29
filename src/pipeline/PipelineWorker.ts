@@ -73,7 +73,10 @@ export class PipelineWorker {
             try {
               await this.store.addDocument(library, version, {
                 pageContent: progress.document.content,
-                metadata: progress.document.metadata,
+                metadata: {
+                  ...progress.document.metadata,
+                  mimeType: progress.document.contentType, // Pass contentType as mimeType in metadata
+                },
               });
               logger.debug(
                 `[${jobId}] Stored document: ${progress.document.metadata.url}`,

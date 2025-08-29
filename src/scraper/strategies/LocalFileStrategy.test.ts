@@ -48,6 +48,7 @@ describe("LocalFileStrategy", () => {
         totalPages: 1,
         document: {
           content: "# Test\n\nThis is a test file.",
+          contentType: "text/markdown",
           metadata: {
             url: "file:///test.md",
             title: "Test",
@@ -166,6 +167,142 @@ describe("LocalFileStrategy", () => {
             title: "Untitled",
             library: "test",
             version: "1.0",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("should detect source code file types with correct MIME types", async () => {
+    const strategy = new LocalFileStrategy();
+    const options: ScraperOptions = {
+      url: "file:///codebase",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 1,
+      maxConcurrency: 1,
+    };
+    const progressCallback = vi.fn();
+
+    vol.fromJSON(
+      {
+        "/codebase/app.ts": "interface User {\n  name: string;\n}",
+        "/codebase/component.tsx": "export const App = () => <div>Hello</div>;",
+        "/codebase/script.py": "def hello():\n    print('world')",
+        "/codebase/main.go": 'package main\n\nfunc main() {\n    fmt.Println("Hello")\n}',
+        "/codebase/lib.rs": 'fn main() {\n    println!("Hello, world!");\n}',
+        "/codebase/App.kt": 'fun main() {\n    println("Hello, world!")\n}',
+        "/codebase/script.rb": "puts 'Hello, world!'",
+        "/codebase/run.sh": "#!/bin/bash\necho 'Hello, world!'",
+      },
+      "/",
+    );
+
+    await strategy.scrape(options, progressCallback);
+
+    // Expect 8 files to be processed
+    expect(progressCallback).toHaveBeenCalledTimes(8);
+
+    // Check TypeScript file
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-typescript",
+          content: expect.stringContaining("interface User"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/app.ts",
+          }),
+        }),
+      }),
+    );
+
+    // Check TSX file
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-tsx",
+          content: expect.stringContaining("export const App"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/component.tsx",
+          }),
+        }),
+      }),
+    );
+
+    // Check Python file
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-python",
+          content: expect.stringContaining("def hello"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/script.py",
+          }),
+        }),
+      }),
+    );
+
+    // Check Go file
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-go",
+          content: expect.stringContaining("package main"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/main.go",
+          }),
+        }),
+      }),
+    );
+
+    // Check Rust file
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-rust",
+          content: expect.stringContaining("fn main"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/lib.rs",
+          }),
+        }),
+      }),
+    );
+
+    // Check Kotlin file
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-kotlin",
+          content: expect.stringContaining("fun main"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/App.kt",
+          }),
+        }),
+      }),
+    );
+
+    // Check Ruby file
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-ruby",
+          content: expect.stringContaining("puts"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/script.rb",
+          }),
+        }),
+      }),
+    );
+
+    // Check Shell script
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({
+          contentType: "text/x-shellscript",
+          content: expect.stringContaining("#!/bin/bash"),
+          metadata: expect.objectContaining({
+            url: "file:///codebase/run.sh",
           }),
         }),
       }),

@@ -654,7 +654,7 @@ export class PipelineManager implements IPipeline {
           };
           await this.store.storeScraperOptions(versionId, fullOptions);
           logger.debug(
-            `💾 Stored scraper options for ${job.library}@${job.version}: ${job.sourceUrl}`,
+            `Stored scraper options for ${job.library}@${job.version}: ${job.sourceUrl}`,
           );
         } catch (optionsError) {
           // Log warning but don't fail the job - options storage is not critical

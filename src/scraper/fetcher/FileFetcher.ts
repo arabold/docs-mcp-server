@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import * as mime from "mime-types";
 import { ScraperError } from "../../utils/errors";
+import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, FetchOptions, RawContent } from "./types";
 
 /**
@@ -14,7 +13,7 @@ export class FileFetcher implements ContentFetcher {
 
   /**
    * Fetches the content of a file given a file:// URL, decoding percent-encoded paths as needed.
-   * Only HTML and Markdown files are processed.
+   * Uses enhanced MIME type detection for better source code file recognition.
    */
   async fetch(source: string, _options?: FetchOptions): Promise<RawContent> {
     // Always decode the file path from file:// URL
@@ -23,8 +22,11 @@ export class FileFetcher implements ContentFetcher {
 
     try {
       const content = await fs.readFile(filePath);
-      const ext = path.extname(filePath).toLowerCase();
-      const mimeType = mime.lookup(ext) || "application/octet-stream";
+
+      // Use enhanced MIME type detection that properly handles source code files
+      const detectedMimeType = MimeTypeUtils.detectMimeTypeFromPath(filePath);
+      const mimeType = detectedMimeType || "application/octet-stream";
+
       return {
         content,
         mimeType,
