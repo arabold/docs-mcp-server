@@ -417,9 +417,11 @@ export class DocumentManagementService {
       throw new Error("Document content cannot be empty");
     }
 
+    const contentType = document.metadata.mimeType as string | undefined;
+
     try {
       // Split document into semantic chunks
-      const chunks = await this.splitter.splitText(document.pageContent);
+      const chunks = await this.splitter.splitText(document.pageContent, contentType);
 
       // Convert semantic chunks to documents
       const splitDocs = chunks.map((chunk: ContentChunk) => ({
@@ -439,7 +441,7 @@ export class DocumentManagementService {
       const processingTime = performance.now() - processingStart;
       analytics.track(TelemetryEvent.DOCUMENT_PROCESSED, {
         // Content characteristics (privacy-safe)
-        mimeType: document.metadata.mimeType,
+        mimeType: contentType || "unknown",
         contentSizeBytes: document.pageContent.length,
 
         // Processing metrics
@@ -468,7 +470,7 @@ export class DocumentManagementService {
 
       if (error instanceof Error) {
         analytics.captureException(error, {
-          mimeType: document.metadata.mimeType,
+          mimeType: contentType || "unknown",
           contentSizeBytes: document.pageContent.length,
           processingTimeMs: Math.round(processingTime),
           library,

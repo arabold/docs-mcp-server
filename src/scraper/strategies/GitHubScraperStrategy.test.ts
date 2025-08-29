@@ -505,6 +505,7 @@ describe("GitHubScraperStrategy", () => {
 
       expect(result.document).toEqual({
         content: "Documentation\n\nThis is important content.",
+        contentType: "text/markdown",
         metadata: {
           url: "https://github.com/owner/repo/blob/main/docs/guide.md",
           title: "Documentation",

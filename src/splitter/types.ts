@@ -19,5 +19,5 @@ export interface ContentChunk {
  * Interface for a splitter that processes markdown content into chunks
  */
 export interface DocumentSplitter {
-  splitText(markdown: string): Promise<ContentChunk[]>;
+  splitText(markdown: string, contentType?: string): Promise<ContentChunk[]>;
 }

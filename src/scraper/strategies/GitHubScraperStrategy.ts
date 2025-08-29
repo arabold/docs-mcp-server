@@ -1,5 +1,6 @@
 import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
+import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
 import { HtmlPipeline } from "../pipelines/HtmlPipeline";
@@ -336,7 +337,18 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     const branch = this.resolvedBranch || repoInfo.branch || "main";
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
 
-    return await this.httpFetcher.fetch(rawUrl, { signal });
+    const rawContent = await this.httpFetcher.fetch(rawUrl, { signal });
+
+    // Override GitHub's generic 'text/plain' MIME type with file extension-based detection
+    const detectedMimeType = MimeTypeUtils.detectMimeTypeFromPath(filePath);
+    if (detectedMimeType && rawContent.mimeType === "text/plain") {
+      return {
+        ...rawContent,
+        mimeType: detectedMimeType,
+      };
+    }
+
+    return rawContent;
   }
 
   protected async processItem(
@@ -415,6 +427,7 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
             library: options.library,
             version: options.version,
           },
+          contentType: rawContent.mimeType, // Preserve the detected MIME type
         } satisfies Document,
         links: [], // Always return empty links array for individual files
       };

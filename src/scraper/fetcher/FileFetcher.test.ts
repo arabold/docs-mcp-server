@@ -43,6 +43,75 @@ describe("FileFetcher", () => {
     expect(result.mimeType).toBe("text/html");
   });
 
+  it("should detect source code MIME types correctly", async () => {
+    const fetcher = new FileFetcher();
+    const files = {
+      "/code/app.ts": "interface User { name: string; }",
+      "/code/component.tsx": "export const App = () => <div>Hello</div>;",
+      "/code/script.py": "def hello(): print('world')",
+      "/code/main.go": "package main\nfunc main() {}",
+      "/code/lib.rs": 'fn main() { println!("Hello"); }',
+      "/code/App.kt": 'fun main() { println("Hello") }',
+      "/code/script.rb": "puts 'Hello world'",
+      "/code/index.js": "console.log('Hello');",
+      "/code/style.css": "body { margin: 0; }",
+      "/code/data.json": '{"name": "test"}',
+      "/code/config.xml": "<config></config>",
+      "/code/readme.md": "# Hello",
+      "/code/script.sh": "#!/bin/bash\necho hello",
+    };
+
+    vol.fromJSON(files);
+
+    // Test TypeScript files
+    const tsResult = await fetcher.fetch("file:///code/app.ts");
+    expect(tsResult.mimeType).toBe("text/x-typescript");
+
+    const tsxResult = await fetcher.fetch("file:///code/component.tsx");
+    expect(tsxResult.mimeType).toBe("text/x-tsx");
+
+    // Test Python files
+    const pyResult = await fetcher.fetch("file:///code/script.py");
+    expect(pyResult.mimeType).toBe("text/x-python");
+
+    // Test Go files
+    const goResult = await fetcher.fetch("file:///code/main.go");
+    expect(goResult.mimeType).toBe("text/x-go");
+
+    // Test Rust files
+    const rsResult = await fetcher.fetch("file:///code/lib.rs");
+    expect(rsResult.mimeType).toBe("text/x-rust");
+
+    // Test Kotlin files
+    const ktResult = await fetcher.fetch("file:///code/App.kt");
+    expect(ktResult.mimeType).toBe("text/x-kotlin");
+
+    // Test Ruby files
+    const rbResult = await fetcher.fetch("file:///code/script.rb");
+    expect(rbResult.mimeType).toBe("text/x-ruby");
+
+    // Test JavaScript files (fallback to mime package)
+    const jsResult = await fetcher.fetch("file:///code/index.js");
+    expect(jsResult.mimeType).toBe("text/javascript");
+
+    // Test shell scripts
+    const shResult = await fetcher.fetch("file:///code/script.sh");
+    expect(shResult.mimeType).toBe("text/x-shellscript");
+
+    // Test other file types (fallback to mime package)
+    const cssResult = await fetcher.fetch("file:///code/style.css");
+    expect(cssResult.mimeType).toBe("text/css");
+
+    const jsonResult = await fetcher.fetch("file:///code/data.json");
+    expect(jsonResult.mimeType).toBe("application/json");
+
+    const xmlResult = await fetcher.fetch("file:///code/config.xml");
+    expect(xmlResult.mimeType).toBe("application/xml");
+
+    const mdResult = await fetcher.fetch("file:///code/readme.md");
+    expect(mdResult.mimeType).toBe("text/markdown");
+  });
+
   it("should throw error if file does not exist", async () => {
     const fetcher = new FileFetcher();
 
