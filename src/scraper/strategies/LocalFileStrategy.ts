@@ -4,8 +4,8 @@ import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import { FileFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
-import { HtmlPipeline } from "../pipelines/HtmlPipeline";
-import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
+import { PipelineFactory } from "../pipelines/PipelineFactory";
+import type { ContentPipeline } from "../pipelines/types";
 import type { ScraperOptions, ScraperProgress } from "../types";
 import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
 
@@ -18,15 +18,11 @@ import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
  */
 export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly fileFetcher = new FileFetcher();
-  private readonly htmlPipeline: HtmlPipeline;
-  private readonly markdownPipeline: MarkdownPipeline;
-  private readonly pipelines: [HtmlPipeline, MarkdownPipeline];
+  private readonly pipelines: ContentPipeline[];
 
   constructor() {
     super();
-    this.htmlPipeline = new HtmlPipeline();
-    this.markdownPipeline = new MarkdownPipeline();
-    this.pipelines = [this.htmlPipeline, this.markdownPipeline];
+    this.pipelines = PipelineFactory.createStandardPipelines();
   }
 
   canHandle(url: string): boolean {
@@ -39,8 +35,15 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     _progressCallback?: ProgressCallback<ScraperProgress>,
     _signal?: AbortSignal,
   ): Promise<{ document?: Document; links?: string[] }> {
-    // Always decode the file path from file:// URL
-    const filePath = decodeURIComponent(item.url.replace(/^file:\/\//, ""));
+    // Parse the file URL properly to handle both file:// and file:/// formats
+    let filePath = item.url.replace(/^file:\/\/\/?/, "");
+    filePath = decodeURIComponent(filePath);
+
+    // Ensure absolute path on Unix-like systems (if not already absolute)
+    if (!filePath.startsWith("/") && process.platform !== "win32") {
+      filePath = `/${filePath}`;
+    }
+
     const stats = await fs.stat(filePath);
 
     if (stats.isDirectory()) {
@@ -56,7 +59,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     const rawContent: RawContent = await this.fileFetcher.fetch(item.url);
 
-    let processed: Awaited<ReturnType<HtmlPipeline["process"]>> | undefined;
+    let processed: Awaited<ReturnType<ContentPipeline["process"]>> | undefined;
 
     for (const pipeline of this.pipelines) {
       if (pipeline.canProcess(rawContent)) {
@@ -101,8 +104,14 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     try {
       await super.scrape(options, progressCallback, signal);
     } finally {
-      await this.htmlPipeline.close();
-      await this.markdownPipeline.close();
+      // Close all pipelines that support cleanup
+      await Promise.all(
+        this.pipelines.map(async (pipeline) => {
+          if ("close" in pipeline && typeof pipeline.close === "function") {
+            await pipeline.close();
+          }
+        }),
+      );
     }
   }
 }

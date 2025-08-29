@@ -126,4 +126,34 @@ describe("ScraperService", () => {
       "Strategy error",
     );
   });
+
+  it("should handle JSON content processing through registry", async () => {
+    // This test verifies that JSON content can be processed through the scraper service
+    // It simulates how a LocalFileStrategy would handle JSON files
+    const service = new ScraperService(mockRegistry as unknown as ScraperRegistry);
+    const options: ScraperOptions = {
+      url: "file://test-api.json",
+      library: "test-api",
+      version: "1.0.0",
+      maxPages: 1,
+      maxDepth: 1,
+    };
+    const progressCallback: ProgressCallback<ScraperProgress> = vi.fn();
+
+    // Mock a strategy that would handle JSON files
+    const jsonStrategy = {
+      scrape: vi.fn().mockResolvedValue(undefined),
+    };
+
+    mockRegistry.getStrategy.mockReturnValue(jsonStrategy);
+
+    await service.scrape(options, progressCallback);
+
+    expect(mockRegistry.getStrategy).toHaveBeenCalledWith(options.url);
+    expect(jsonStrategy.scrape).toHaveBeenCalledWith(
+      options,
+      progressCallback,
+      undefined,
+    );
+  });
 });

@@ -16,9 +16,16 @@ export class FileFetcher implements ContentFetcher {
    * Uses enhanced MIME type detection for better source code file recognition.
    */
   async fetch(source: string, _options?: FetchOptions): Promise<RawContent> {
-    // Always decode the file path from file:// URL
-    const rawPath = source.replace("file://", "");
-    const filePath = decodeURIComponent(rawPath);
+    // Remove the file:// protocol prefix and handle both file:// and file:/// formats
+    let filePath = source.replace(/^file:\/\/\/?/, "");
+
+    // Decode percent-encoded characters
+    filePath = decodeURIComponent(filePath);
+
+    // Ensure absolute path on Unix-like systems (if not already absolute)
+    if (!filePath.startsWith("/") && process.platform !== "win32") {
+      filePath = `/${filePath}`;
+    }
 
     try {
       const content = await fs.readFile(filePath);

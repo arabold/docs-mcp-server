@@ -59,6 +59,17 @@ export class MimeTypeUtils {
   }
 
   /**
+   * Checks if a MIME type represents JSON content.
+   */
+  public static isJson(mimeType: string): boolean {
+    return (
+      mimeType === "application/json" ||
+      mimeType === "text/json" ||
+      mimeType === "text/x-json"
+    );
+  }
+
+  /**
    * Checks if a MIME type represents source code that should be wrapped in code blocks.
    */
   public static isSourceCode(mimeType: string): boolean {

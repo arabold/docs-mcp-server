@@ -3,8 +3,8 @@ import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
-import { HtmlPipeline } from "../pipelines/HtmlPipeline";
-import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
+import { PipelineFactory } from "../pipelines/PipelineFactory";
+import type { ContentPipeline } from "../pipelines/types";
 import type { ScraperOptions, ScraperProgress } from "../types";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
 import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
@@ -48,16 +48,12 @@ interface GitHubTreeResponse {
  */
 export class GitHubScraperStrategy extends BaseScraperStrategy {
   private readonly httpFetcher = new HttpFetcher();
-  private readonly htmlPipeline: HtmlPipeline;
-  private readonly markdownPipeline: MarkdownPipeline;
-  private readonly pipelines: [HtmlPipeline, MarkdownPipeline];
+  private readonly pipelines: ContentPipeline[];
   private resolvedBranch?: string; // Cache the resolved default branch
 
   constructor() {
     super();
-    this.htmlPipeline = new HtmlPipeline();
-    this.markdownPipeline = new MarkdownPipeline();
-    this.pipelines = [this.htmlPipeline, this.markdownPipeline];
+    this.pipelines = PipelineFactory.createStandardPipelines();
   }
 
   canHandle(url: string): boolean {
@@ -392,7 +388,7 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       const rawContent = await this.fetchFileContent(repoInfo, filePath, signal);
 
       // Process content through appropriate pipeline
-      let processed: Awaited<ReturnType<HtmlPipeline["process"]>> | undefined;
+      let processed: Awaited<ReturnType<ContentPipeline["process"]>> | undefined;
 
       for (const pipeline of this.pipelines) {
         if (pipeline.canProcess(rawContent)) {
@@ -450,8 +446,14 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     try {
       await super.scrape(options, progressCallback, signal);
     } finally {
-      await this.htmlPipeline.close();
-      await this.markdownPipeline.close();
+      // Close all pipelines that support cleanup
+      await Promise.all(
+        this.pipelines.map(async (pipeline) => {
+          if ("close" in pipeline && typeof pipeline.close === "function") {
+            await pipeline.close();
+          }
+        }),
+      );
     }
   }
 }

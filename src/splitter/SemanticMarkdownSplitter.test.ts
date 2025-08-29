@@ -371,4 +371,67 @@ ${codeLines}
     // Each chunk should be under the max size
     expect(result.every((chunk) => chunk.content.length <= 20)).toBe(true);
   });
+
+  it("should handle valid JSON with structural chunking", async () => {
+    const validJson = JSON.stringify(
+      {
+        name: "test-library",
+        version: "1.0.0",
+        dependencies: {
+          react: "^18.0.0",
+          lodash: "^4.17.21",
+        },
+        scripts: {
+          build: "vite build",
+          test: "vitest",
+        },
+      },
+      null,
+      2,
+    );
+
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const chunks = await splitter.splitText(validJson, "application/json");
+
+    // Should have multiple chunks due to structural splitting
+    expect(chunks.length).toBeGreaterThan(1);
+
+    // First chunk should be opening bracket
+    expect(chunks[0].content).toBe("{");
+
+    // Last chunk should be closing bracket
+    expect(chunks[chunks.length - 1].content).toBe("}");
+
+    // All chunks should have consistent section path
+    expect(chunks[0].section.path).toEqual(["JSON Document - Part 1"]);
+  });
+
+  it("should handle invalid JSON with fallback to single chunk", async () => {
+    const invalidJson = `{
+      "name": "test-library",
+      "version": "1.0.0"
+      // This comment makes it invalid JSON
+      "invalid": true
+    }`;
+
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const chunks = await splitter.splitText(invalidJson, "application/json");
+
+    // Should have exactly one chunk for invalid JSON
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe(invalidJson);
+    expect(chunks[0].section.path).toEqual(["JSON Document - Part 1"]);
+  });
+
+  it("should preserve content for malformed JSON", async () => {
+    const malformedJson = `This is not JSON at all, just plain text content that should be preserved.`;
+
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const chunks = await splitter.splitText(malformedJson, "application/json");
+
+    // Should preserve the content as-is
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe(malformedJson);
+    expect(chunks[0].section.path).toEqual(["JSON Document - Part 1"]);
+  });
 });
