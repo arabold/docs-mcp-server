@@ -51,39 +51,21 @@ src/
 ├── scraper/                         # Content acquisition and processing
 │   ├── fetcher/                     # HTTP and file content fetching
 │   ├── middleware/                  # Content transformation pipeline
-│   ├── pipelines/                   # Content-type-specific processing (HTML, Markdown, JSON, Source Code)
+│   ├── pipelines/                   # Content-type-specific processing
 │   ├── strategies/                  # Source-specific scraping strategies
 │   └── utils/                       # Scraping utilities
 ├── services/                        # Service registration functions
-│   ├── mcpService.ts                # MCP service registration
-│   ├── webService.ts                # Web interface service
-│   ├── workerService.ts             # Worker service registration
-│   └── trpcService.ts               # tRPC service registration
 ├── splitter/                        # Document chunking and segmentation
-│   ├── GreedySplitter.ts            # Size-based splitting optimization
+│   ├── GreedySplitter.ts            # Universal size optimization
 │   ├── SemanticMarkdownSplitter.ts  # Structure-aware markdown splitting
-│   ├── JsonDocumentSplitter.ts      # Hierarchical JSON document splitting
-│   ├── TextDocumentSplitter.ts      # Line-based text/code splitting (temporary)
-│   └── splitters/                   # ContentSplitter implementations
+│   ├── JsonDocumentSplitter.ts      # Hierarchical JSON splitting
+│   ├── TextDocumentSplitter.ts      # Line-based text/code splitting
+│   └── splitters/                   # ContentSplitter implementations (deprecated)
 ├── store/                           # Data storage and retrieval
-│   ├── DocumentManagementService.ts # Document CRUD operations
-│   ├── DocumentRetrieverService.ts  # Search and context retrieval
-│   ├── DocumentStore.ts             # Low-level database operations
-│   └── embeddings/                  # Embedding generation and management
 ├── tools/                           # Business logic implementations
-│   ├── ScrapeTool.ts                # Documentation scraping
-│   ├── SearchTool.ts                # Document search
-│   ├── ListLibrariesTool.ts         # Library management
-│   └── ...                          # Job and document management tools
 ├── types/                           # Shared TypeScript interfaces
 ├── utils/                           # Common utilities
-│   ├── config.ts                    # Configuration constants
-│   ├── logger.ts                    # Centralized logging
-│   └── paths.ts                     # Path resolution utilities
 └── web/                             # Web interface implementation
-    ├── routes/                      # HTTP route handlers
-    ├── components/                  # JSX UI components
-    └── assets/                      # Static web assets
 ```
 
 ## System Architecture
@@ -182,15 +164,16 @@ Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED. 
 
 ### Content Processing
 
-Content processing follows a middleware pipeline pattern:
+Content processing follows a modular strategy-pipeline-splitter architecture:
 
-1. **Fetcher**: Retrieves raw content from HTTP, file://, or package registry URLs
-2. **Middleware Chain**: Transforms content through parsing, metadata extraction, link processing
-3. **Pipeline Selection**: Routes to appropriate pipeline (HtmlPipeline, MarkdownPipeline, JsonPipeline, SourceCodePipeline) based on content type
-4. **Splitter**: Segments processed content into semantic chunks preserving structure
-5. **Embedder**: Generates vector embeddings using configured provider
+1. **Scraper Strategies**: Handle different source types (web, local files, package registries)
+2. **Content Fetchers**: Retrieve raw content from various sources (HTTP, filesystem, APIs)
+3. **Processing Pipelines**: Transform content using middleware chains and content-type-specific logic
+4. **Document Splitters**: Segment content into semantic chunks preserving document structure
+5. **Size Optimization**: Apply universal chunk sizing for optimal embedding generation
+6. **Embedders**: Generate vector embeddings using configured provider
 
-The scraper system supports multiple content sources and maintains URL context for search result attribution.
+The system uses a two-phase splitting approach: semantic splitting preserves document structure, followed by size optimization for embedding quality. See `docs/content-processing.md` for detailed processing flows.
 
 ### Storage Architecture
 

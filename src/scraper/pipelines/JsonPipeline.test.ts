@@ -769,7 +769,7 @@ describe("JsonPipeline", () => {
         '{"tiny": "value"}', // Very small JSON
         "{}", // Empty object
         "[]", // Empty array
-        '{"single_large_property": "' + "x".repeat(2000) + '"}', // Single large property
+        `{"single_large_property": "${"x".repeat(2000)}"}`, // Single large property
       ];
 
       for (const testCase of edgeCases) {
