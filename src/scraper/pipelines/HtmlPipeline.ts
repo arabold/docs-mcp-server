@@ -1,6 +1,6 @@
 import { GreedySplitter, SemanticMarkdownSplitter } from "../../splitter";
-import type { ContentChunk } from "../../splitter/types";
 import {
+  SPLITTER_MAX_CHUNK_SIZE,
   SPLITTER_MIN_CHUNK_SIZE,
   SPLITTER_PREFERRED_CHUNK_SIZE,
 } from "../../utils/config";
@@ -29,7 +29,10 @@ export class HtmlPipeline extends BasePipeline {
   private readonly standardMiddleware: ContentProcessorMiddleware[];
   private readonly greedySplitter: GreedySplitter;
 
-  constructor(preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE, maxChunkSize = 2000) {
+  constructor(
+    preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE,
+    maxChunkSize = SPLITTER_MAX_CHUNK_SIZE,
+  ) {
     super();
     this.playwrightMiddleware = new HtmlPlaywrightMiddleware();
     this.standardMiddleware = [
@@ -89,7 +92,7 @@ export class HtmlPipeline extends BasePipeline {
     await this.executeMiddlewareStack(middleware, context);
 
     // Split the content using SemanticMarkdownSplitter (HTML is converted to markdown by middleware)
-    const chunks = await this.split(
+    const chunks = await this.greedySplitter.splitText(
       typeof context.content === "string" ? context.content : "",
     );
 
@@ -102,12 +105,5 @@ export class HtmlPipeline extends BasePipeline {
     };
   }
 
-  async split(content: string): Promise<ContentChunk[]> {
-    // Use GreedySplitter (which wraps SemanticMarkdownSplitter) for optimized chunking of HTML-converted-to-markdown content
-    return await this.greedySplitter.splitText(content);
-  }
-
-  async close(): Promise<void> {
-    await this.playwrightMiddleware.closeBrowser();
-  }
+  async close(): Promise<void> {}
 }

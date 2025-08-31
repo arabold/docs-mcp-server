@@ -53,9 +53,58 @@ export class MimeTypeUtils {
 
   /**
    * Checks if a MIME type represents plain text content.
+   * This includes basic text/* types but excludes structured formats like JSON, XML, etc.
    */
   public static isText(mimeType: string): boolean {
-    return mimeType.startsWith("text/");
+    if (!mimeType) {
+      return false;
+    }
+
+    const normalizedMimeType = mimeType.toLowerCase();
+
+    // Accept basic text/* types, but exclude structured formats that have specific pipelines
+    if (normalizedMimeType.startsWith("text/")) {
+      // Exclude structured text formats that should go to specific pipelines
+      if (
+        MimeTypeUtils.isJson(normalizedMimeType) ||
+        MimeTypeUtils.isMarkdown(normalizedMimeType)
+      ) {
+        return false;
+      }
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Checks if a MIME type represents content that is safe for text processing.
+   * This includes all text/* types and specific application types that are text-based.
+   * Used by TextPipeline as a fallback for content that other pipelines don't handle.
+   */
+  public static isSafeForTextProcessing(mimeType: string): boolean {
+    if (!mimeType) {
+      return false;
+    }
+
+    const normalizedMimeType = mimeType.toLowerCase();
+
+    // Accept all text/* types
+    if (normalizedMimeType.startsWith("text/")) {
+      return true;
+    }
+
+    // Accept JSON content (when not handled by JsonPipeline)
+    if (MimeTypeUtils.isJson(normalizedMimeType)) {
+      return true;
+    }
+
+    // Accept source code types (when not handled by SourceCodePipeline)
+    if (MimeTypeUtils.isSourceCode(normalizedMimeType)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -74,6 +123,21 @@ export class MimeTypeUtils {
    */
   public static isSourceCode(mimeType: string): boolean {
     return MimeTypeUtils.extractLanguageFromMimeType(mimeType) !== "";
+  }
+
+  /**
+   * Checks if content appears to be binary based on the presence of null bytes.
+   * This is a reliable heuristic since text files should not contain null bytes.
+   * @param content The content to check (string or Buffer)
+   * @returns true if the content appears to be binary
+   */
+  public static isBinary(content: string | Buffer): boolean {
+    if (typeof content === "string") {
+      return content.includes("\0");
+    }
+
+    // For Buffer, check for null bytes directly
+    return content.includes(0);
   }
 
   /**
@@ -142,6 +206,7 @@ export class MimeTypeUtils {
       "text/x-tsx": "tsx",
       "text/javascript": "javascript",
       "application/javascript": "javascript",
+      "application/x-javascript": "javascript",
       "text/x-jsx": "jsx",
       "text/x-python": "python",
       "text/x-java": "java",
@@ -161,6 +226,7 @@ export class MimeTypeUtils {
       "text/x-scala": "scala",
       "text/x-yaml": "yaml",
       "application/x-yaml": "yaml",
+      "application/yaml": "yaml",
       "text/x-json": "json",
       "application/json": "json",
       "text/x-xml": "xml",
@@ -169,6 +235,7 @@ export class MimeTypeUtils {
       "text/x-sql": "sql",
       "text/x-sh": "bash",
       "text/x-shellscript": "bash",
+      "application/x-sh": "bash",
       "text/x-powershell": "powershell",
       "text/x-graphql": "graphql",
       "text/x-proto": "protobuf",

@@ -1,6 +1,5 @@
 import { GreedySplitter } from "../../splitter";
 import { JsonDocumentSplitter } from "../../splitter/JsonDocumentSplitter";
-import type { ContentChunk } from "../../splitter/types";
 import {
   SPLITTER_MIN_CHUNK_SIZE,
   SPLITTER_PREFERRED_CHUNK_SIZE,
@@ -61,6 +60,8 @@ export class JsonPipeline extends BasePipeline {
 
     // For invalid JSON, return as-is for fallback text processing
     if (!isValidJson) {
+      // Still split invalid JSON content for consistency
+      const fallbackChunks = await this.greedySplitter.splitText(contentString);
       return {
         textContent: contentString,
         metadata: {
@@ -68,6 +69,7 @@ export class JsonPipeline extends BasePipeline {
         },
         links: [],
         errors: [],
+        chunks: fallbackChunks,
       };
     }
 
@@ -89,7 +91,7 @@ export class JsonPipeline extends BasePipeline {
     await this.executeMiddlewareStack(this.middleware, context);
 
     // Split the content using JsonContentSplitter
-    const chunks = await this.split(context.content);
+    const chunks = await this.greedySplitter.splitText(context.content);
 
     return {
       textContent: context.content,
@@ -98,11 +100,6 @@ export class JsonPipeline extends BasePipeline {
       errors: context.errors,
       chunks,
     };
-  }
-
-  async split(content: string): Promise<ContentChunk[]> {
-    // Use GreedySplitter (which wraps JsonDocumentSplitterAdapter) for optimized chunking
-    return await this.greedySplitter.splitText(content);
   }
 
   /**
@@ -190,4 +187,6 @@ export class JsonPipeline extends BasePipeline {
 
     return currentDepth;
   }
+
+  async close(): Promise<void> {}
 }

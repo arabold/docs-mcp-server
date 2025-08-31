@@ -13,27 +13,40 @@ import { BasePipeline } from "./BasePipeline";
 import type { ProcessedContent } from "./types";
 
 /**
- * Pipeline for processing source code content with semantic splitting and size optimization.
- * Handles programming language files by using TextDocumentSplitter for line-based splitting
- * with proper language detection, followed by GreedySplitter for universal size optimization.
+ * Fallback pipeline for processing text content with basic splitting and size optimization.
+ * Handles text-based content types by using TextDocumentSplitter for simple line-based splitting
+ * followed by GreedySplitter for universal size optimization. This pipeline uses MIME type filtering
+ * and binary detection to ensure it only processes appropriate text content.
  */
-export class SourceCodePipeline extends BasePipeline {
+export class TextPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
   private readonly splitter: GreedySplitter;
 
   constructor(chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
     super();
-    // Source code processing uses minimal middleware since we preserve raw structure
+    // Text processing uses minimal middleware for maximum compatibility
     this.middleware = [];
 
-    // Create the two-phase splitting: semantic + size optimization
+    // Create the two-phase splitting: basic text splitting + size optimization
     const textSplitter = new TextDocumentSplitter({ maxChunkSize: chunkSize });
     this.splitter = new GreedySplitter(textSplitter, SPLITTER_MIN_CHUNK_SIZE, chunkSize);
   }
 
   canProcess(rawContent: RawContent): boolean {
-    if (!rawContent.mimeType) return false;
-    return MimeTypeUtils.isSourceCode(rawContent.mimeType);
+    // This pipeline serves as a fallback for text content, but should not process binary files
+
+    // First check: MIME type filtering - use utility method for safe types
+    if (!MimeTypeUtils.isSafeForTextProcessing(rawContent.mimeType)) {
+      return false;
+    }
+
+    // Second check: binary detection via null bytes
+    if (MimeTypeUtils.isBinary(rawContent.content)) {
+      return false;
+    }
+
+    // If we get here, it's a safe MIME type and doesn't appear binary
+    return true;
   }
 
   async process(
@@ -47,21 +60,19 @@ export class SourceCodePipeline extends BasePipeline {
       content: contentString,
       source: rawContent.source,
       metadata: {
-        language: rawContent.mimeType
-          ? MimeTypeUtils.extractLanguageFromMimeType(rawContent.mimeType)
-          : "text",
-        isSourceCode: true,
+        contentType: rawContent.mimeType || "text/plain",
+        isGenericText: true,
       },
-      links: [], // Source code files typically don't contain web links
+      links: [], // Generic text content typically doesn't contain structured links
       errors: [],
       options,
       fetcher,
     };
 
-    // Execute the middleware stack (minimal for source code)
+    // Execute the middleware stack (minimal for generic text)
     await this.executeMiddlewareStack(this.middleware, context);
 
-    // Split the content using CodeContentSplitter
+    // Split the content using TextDocumentSplitter with size optimization
     const chunks = await this.splitter.splitText(context.content, rawContent.mimeType);
 
     return {

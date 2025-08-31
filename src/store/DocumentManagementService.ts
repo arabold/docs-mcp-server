@@ -4,14 +4,16 @@ import type { Document } from "@langchain/core/documents";
 import envPaths from "env-paths";
 import Fuse from "fuse.js";
 import semver from "semver";
-import { PipelineFactory } from "../scraper/pipelines/PipelineFactory";
+import {
+  type PipelineConfiguration,
+  PipelineFactory,
+} from "../scraper/pipelines/PipelineFactory";
 import type { ContentPipeline } from "../scraper/pipelines/types";
 import type { ScraperOptions } from "../scraper/types";
-import { GreedySplitter, PassThroughSplitter } from "../splitter";
+import { ScrapeMode } from "../scraper/types";
 import type { ContentChunk } from "../splitter/types";
 import { analytics, extractHostname, TelemetryEvent } from "../telemetry";
 import { LibraryNotFoundError, VersionNotFoundError } from "../tools";
-import { SPLITTER_MIN_CHUNK_SIZE, SPLITTER_PREFERRED_CHUNK_SIZE } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
@@ -36,7 +38,6 @@ import type {
 export class DocumentManagementService {
   private readonly store: DocumentStore;
   private readonly documentRetriever: DocumentRetrieverService;
-  private readonly greedySplitter: GreedySplitter;
   private readonly pipelines: ContentPipeline[];
 
   /**
@@ -47,7 +48,10 @@ export class DocumentManagementService {
     return (version ?? "").toLowerCase();
   }
 
-  constructor(embeddingConfig?: EmbeddingModelConfig | null) {
+  constructor(
+    embeddingConfig?: EmbeddingModelConfig | null,
+    pipelineConfig?: PipelineConfiguration,
+  ) {
     let dbPath: string;
     let dbDir: string;
 
@@ -89,15 +93,8 @@ export class DocumentManagementService {
     this.store = new DocumentStore(dbPath, embeddingConfig);
     this.documentRetriever = new DocumentRetrieverService(this.store);
 
-    // Initialize content pipelines for different content types
-    this.pipelines = PipelineFactory.createStandardPipelines();
-
-    // Create GreedySplitter for size optimization (still needed for post-processing)
-    this.greedySplitter = new GreedySplitter(
-      new PassThroughSplitter(), // Pass-through splitter since pipelines handle initial splitting
-      SPLITTER_MIN_CHUNK_SIZE,
-      SPLITTER_PREFERRED_CHUNK_SIZE,
-    );
+    // Initialize content pipelines for different content types including universal TextPipeline fallback
+    this.pipelines = PipelineFactory.createStandardPipelines(pipelineConfig);
   }
 
   /**
@@ -428,14 +425,25 @@ export class DocumentManagementService {
       // Find appropriate pipeline for content type
       const pipeline = this.pipelines.find((p) => p.canProcess(rawContent));
 
-      let chunks: ContentChunk[];
-      if (pipeline?.split) {
-        // Use content-type-specific pipeline with built-in GreedySplitter optimization
-        chunks = await pipeline.split(document.pageContent, contentType);
-      } else {
-        // Fallback to GreedySplitter for unknown content types
-        chunks = await this.greedySplitter.splitText(document.pageContent);
+      if (!pipeline) {
+        throw new Error(
+          "No pipeline found - this should never happen with TextPipeline as fallback",
+        );
       }
+
+      // Use content-type-specific pipeline for processing and splitting
+      // Create minimal scraper options for processing
+      const scraperOptions = {
+        url: url,
+        library: library,
+        version: normalizedVersion,
+        scrapeMode: ScrapeMode.Fetch,
+        ignoreErrors: false,
+        maxConcurrency: 1,
+      };
+
+      const processed = await pipeline.process(rawContent, scraperOptions);
+      const chunks = processed.chunks;
 
       // Convert semantic chunks to documents
       const splitDocs = chunks.map((chunk: ContentChunk) => ({

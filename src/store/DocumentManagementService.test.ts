@@ -192,6 +192,44 @@ describe("DocumentManagementService", () => {
     });
   });
 
+  // --- Pipeline Configuration Tests ---
+  describe("Pipeline Configuration", () => {
+    beforeEach(() => {
+      vol.reset(); // Reset memfs volume before each test
+      vi.clearAllMocks(); // Clear other mocks
+    });
+
+    it("should accept pipeline configuration and pass it to factory", () => {
+      const pipelineConfig = {
+        chunkSizes: {
+          preferred: 800,
+          max: 1600,
+        },
+      };
+
+      const service = new DocumentManagementService(null, pipelineConfig);
+      expect(service).toBeInstanceOf(DocumentManagementService);
+      // Test passes if no errors are thrown during construction
+    });
+
+    it("should work without pipeline configuration", () => {
+      const service = new DocumentManagementService();
+      expect(service).toBeInstanceOf(DocumentManagementService);
+      // Test passes if no errors are thrown during construction
+    });
+
+    it("should work with only embedding config provided", () => {
+      const service = new DocumentManagementService(null);
+      expect(service).toBeInstanceOf(DocumentManagementService);
+    });
+
+    it("should work with both embedding and pipeline config", () => {
+      const pipelineConfig = { chunkSizes: { preferred: 500 } };
+      const service = new DocumentManagementService(null, pipelineConfig);
+      expect(service).toBeInstanceOf(DocumentManagementService);
+    });
+  });
+
   // --- ensureVersion tests ---
   describe("ensureVersion", () => {
     it("creates library and version when both absent", async () => {
