@@ -4,16 +4,14 @@ import type { Document } from "@langchain/core/documents";
 import envPaths from "env-paths";
 import Fuse from "fuse.js";
 import semver from "semver";
+import { PipelineFactory } from "../scraper/pipelines/PipelineFactory";
+import type { ContentPipeline } from "../scraper/pipelines/types";
 import type { ScraperOptions } from "../scraper/types";
-import { GreedySplitter, SemanticMarkdownSplitter } from "../splitter";
-import type { ContentChunk, DocumentSplitter } from "../splitter/types";
+import { GreedySplitter, PassThroughSplitter } from "../splitter";
+import type { ContentChunk } from "../splitter/types";
 import { analytics, extractHostname, TelemetryEvent } from "../telemetry";
 import { LibraryNotFoundError, VersionNotFoundError } from "../tools";
-import {
-  SPLITTER_MAX_CHUNK_SIZE,
-  SPLITTER_MIN_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-} from "../utils/config";
+import { SPLITTER_MIN_CHUNK_SIZE, SPLITTER_PREFERRED_CHUNK_SIZE } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
@@ -33,11 +31,13 @@ import type {
 
 /**
  * Provides semantic search capabilities across different versions of library documentation.
+ * Uses content-type-specific pipelines for processing and splitting content.
  */
 export class DocumentManagementService {
   private readonly store: DocumentStore;
   private readonly documentRetriever: DocumentRetrieverService;
-  private readonly splitter: DocumentSplitter;
+  private readonly greedySplitter: GreedySplitter;
+  private readonly pipelines: ContentPipeline[];
 
   /**
    * Normalizes a version string, converting null or undefined to an empty string
@@ -89,17 +89,15 @@ export class DocumentManagementService {
     this.store = new DocumentStore(dbPath, embeddingConfig);
     this.documentRetriever = new DocumentRetrieverService(this.store);
 
-    const semanticSplitter = new SemanticMarkdownSplitter(
-      SPLITTER_PREFERRED_CHUNK_SIZE,
-      SPLITTER_MAX_CHUNK_SIZE,
-    );
-    const greedySplitter = new GreedySplitter(
-      semanticSplitter,
+    // Initialize content pipelines for different content types
+    this.pipelines = PipelineFactory.createStandardPipelines();
+
+    // Create GreedySplitter for size optimization (still needed for post-processing)
+    this.greedySplitter = new GreedySplitter(
+      new PassThroughSplitter(), // Pass-through splitter since pipelines handle initial splitting
       SPLITTER_MIN_CHUNK_SIZE,
       SPLITTER_PREFERRED_CHUNK_SIZE,
     );
-
-    this.splitter = greedySplitter;
   }
 
   /**
@@ -420,8 +418,24 @@ export class DocumentManagementService {
     const contentType = document.metadata.mimeType as string | undefined;
 
     try {
-      // Split document into semantic chunks
-      const chunks = await this.splitter.splitText(document.pageContent, contentType);
+      // Create a mock RawContent for pipeline selection
+      const rawContent = {
+        source: url,
+        content: document.pageContent,
+        mimeType: contentType || "text/plain",
+      };
+
+      // Find appropriate pipeline for content type
+      const pipeline = this.pipelines.find((p) => p.canProcess(rawContent));
+
+      let chunks: ContentChunk[];
+      if (pipeline?.split) {
+        // Use content-type-specific pipeline with built-in GreedySplitter optimization
+        chunks = await pipeline.split(document.pageContent, contentType);
+      } else {
+        // Fallback to GreedySplitter for unknown content types
+        chunks = await this.greedySplitter.splitText(document.pageContent);
+      }
 
       // Convert semantic chunks to documents
       const splitDocs = chunks.map((chunk: ContentChunk) => ({

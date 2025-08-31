@@ -6,11 +6,9 @@ import TurndownService from "turndown";
 import { unified } from "unified";
 import { createJSDOM } from "../utils/dom";
 import { logger } from "../utils/logger";
-import { MimeTypeUtils } from "../utils/mimeTypeUtils";
 import { fullTrim } from "../utils/string";
 import { ContentSplitterError, MinimumChunkSizeError } from "./errors";
 import { CodeContentSplitter } from "./splitters/CodeContentSplitter";
-import { JsonContentSplitter } from "./splitters/JsonContentSplitter";
 import { TableContentSplitter } from "./splitters/TableContentSplitter";
 import { TextContentSplitter } from "./splitters/TextContentSplitter";
 import type { ContentChunk, DocumentSplitter, SectionContentType } from "./types";
@@ -41,7 +39,6 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
   public textSplitter: TextContentSplitter;
   public codeSplitter: CodeContentSplitter;
   public tableSplitter: TableContentSplitter;
-  public jsonSplitter: JsonContentSplitter;
 
   constructor(
     private preferredChunkSize: number,
@@ -99,37 +96,14 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     this.tableSplitter = new TableContentSplitter({
       chunkSize: this.maxChunkSize,
     });
-    this.jsonSplitter = new JsonContentSplitter({
-      chunkSize: this.maxChunkSize,
-    });
   }
 
   /**
    * Main entry point for splitting markdown content
    */
-  async splitText(markdown: string, contentType?: string): Promise<ContentChunk[]> {
-    // If content type indicates JSON, process it directly with JsonContentSplitter
-    if (contentType && MimeTypeUtils.isJson(contentType)) {
-      const jsonChunks = await this.jsonSplitter.split(markdown);
-      return jsonChunks.map((chunk, index) => ({
-        types: ["text"],
-        content: chunk,
-        section: {
-          level: 1,
-          path: [`JSON Document - Part ${index + 1}`],
-        },
-      }));
-    }
-
-    // If content type indicates source code, wrap it in code blocks
-    if (contentType && MimeTypeUtils.isSourceCode(contentType)) {
-      const language = MimeTypeUtils.extractLanguageFromMimeType(contentType);
-      const wrappedContent = `\`\`\`${language}\n${markdown}\n\`\`\``;
-      const html = await this.markdownToHtml(wrappedContent);
-      const dom = await this.parseHtml(html);
-      const sections = await this.splitIntoSections(dom);
-      return this.splitSectionContent(sections);
-    }
+  async splitText(markdown: string, _contentType?: string): Promise<ContentChunk[]> {
+    // Note: JSON content is now handled by dedicated JsonDocumentSplitter in JsonPipeline
+    // This splitter focuses on markdown, HTML, and plain text content
 
     // For markdown, HTML, or plain text, process normally
     const html = await this.markdownToHtml(markdown);

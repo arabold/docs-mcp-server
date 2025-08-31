@@ -51,7 +51,7 @@ src/
 ├── scraper/                         # Content acquisition and processing
 │   ├── fetcher/                     # HTTP and file content fetching
 │   ├── middleware/                  # Content transformation pipeline
-│   ├── pipelines/                   # HTML and Markdown processing
+│   ├── pipelines/                   # Content-type-specific processing (HTML, Markdown, JSON, Source Code)
 │   ├── strategies/                  # Source-specific scraping strategies
 │   └── utils/                       # Scraping utilities
 ├── services/                        # Service registration functions
@@ -60,9 +60,11 @@ src/
 │   ├── workerService.ts             # Worker service registration
 │   └── trpcService.ts               # tRPC service registration
 ├── splitter/                        # Document chunking and segmentation
-│   ├── GreedySplitter.ts            # Size-based splitting
-│   ├── SemanticMarkdownSplitter.ts  # Structure-aware splitting
-│   └── splitters/                   # Additional splitting strategies
+│   ├── GreedySplitter.ts            # Size-based splitting optimization
+│   ├── SemanticMarkdownSplitter.ts  # Structure-aware markdown splitting
+│   ├── JsonDocumentSplitter.ts      # Hierarchical JSON document splitting
+│   ├── TextDocumentSplitter.ts      # Line-based text/code splitting (temporary)
+│   └── splitters/                   # ContentSplitter implementations
 ├── store/                           # Data storage and retrieval
 │   ├── DocumentManagementService.ts # Document CRUD operations
 │   ├── DocumentRetrieverService.ts  # Search and context retrieval
@@ -184,7 +186,7 @@ Content processing follows a middleware pipeline pattern:
 
 1. **Fetcher**: Retrieves raw content from HTTP, file://, or package registry URLs
 2. **Middleware Chain**: Transforms content through parsing, metadata extraction, link processing
-3. **Pipeline Selection**: Routes to HtmlPipeline or MarkdownPipeline based on content type
+3. **Pipeline Selection**: Routes to appropriate pipeline (HtmlPipeline, MarkdownPipeline, JsonPipeline, SourceCodePipeline) based on content type
 4. **Splitter**: Segments processed content into semantic chunks preserving structure
 5. **Embedder**: Generates vector embeddings using configured provider
 

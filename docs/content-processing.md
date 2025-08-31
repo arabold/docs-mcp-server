@@ -67,6 +67,7 @@ Content routes to appropriate pipeline based on MIME type:
 - Navigation removal and content isolation
 - Link context preservation
 - Metadata extraction from HTML tags
+- Uses SemanticMarkdownSplitter for section-aware splitting
 
 **MarkdownPipeline:**
 
@@ -74,6 +75,19 @@ Content routes to appropriate pipeline based on MIME type:
 - Code block preservation
 - Link and reference processing
 - Front matter extraction
+- Uses SemanticMarkdownSplitter for hierarchical splitting
+
+**JsonPipeline:**
+
+- JSON structure analysis and hierarchical parsing
+- Object and array relationship preservation
+- Uses JsonDocumentSplitter for hierarchical JSON splitting
+
+**SourceCodePipeline:**
+
+- Programming language file processing
+- Language detection from MIME types and content patterns
+- Uses TextDocumentSplitter for line-based splitting (temporary until TreeSitter integration)
 
 ## Content Transformation
 
@@ -116,25 +130,28 @@ graph LR
         A3[Package Registries]
     end
 
-    subgraph "Pipeline Processing"
+    subgraph "Content Processing"
         B[Content Fetcher]
         C[Middleware Chain]
         D[Pipeline Selection]
-        E[HTML Pipeline]
-        F[Markdown Pipeline]
     end
 
-    subgraph "Document Splitting"
-        G[SemanticMarkdownSplitter]
-        H[Structure Analysis]
-        I[GreedySplitter]
-        J[Size Optimization]
+    subgraph "Pipeline & Semantic Splitting"
+        E[HTML Pipeline] --> E1[SemanticMarkdownSplitter]
+        F[Markdown Pipeline] --> F1[SemanticMarkdownSplitter]
+        G[JSON Pipeline] --> G1[JsonDocumentSplitter]
+        H[SourceCode Pipeline] --> H1[TextDocumentSplitter]
+    end
+
+    subgraph "Size Optimization"
+        J[GreedySplitter]
+        K[Universal Size Optimization]
     end
 
     subgraph "Output"
-        K[ContentChunk Array]
-        L[Embedding Generation]
-        M[Database Storage]
+        L[ContentChunk Array]
+        M[Embedding Generation]
+        N[Database Storage]
     end
 
     A1 --> B
@@ -144,61 +161,192 @@ graph LR
     C --> D
     D --> E
     D --> F
-    E --> G
-    F --> G
-    G --> H
-    H --> I
-    I --> J
+    D --> G
+    D --> H
+
+    E1 --> J
+    F1 --> J
+    G1 --> J
+    H1 --> J
+
     J --> K
     K --> L
     L --> M
+    M --> N
 
     style A fill:#e1f5fe
-    style K fill:#f3e5f5
-    style M fill:#e8f5e8
+    style L fill:#f3e5f5
+    style N fill:#e8f5e8
 ```
 
-### Phase 1: Content Normalization
+### Phase 1: Content Processing & Semantic Splitting
 
-- **Input**: Raw HTML, Markdown, or other formats
-- **Processing**: Pipeline-specific transformation to clean Markdown
-- **Output**: Normalized Markdown with preserved structure
+- **Input**: Raw HTML, Markdown, JSON, or source code
+- **Processing**: Pipeline-specific processing with appropriate content splitter that understands the structure
+- **Output**: ContentChunk array with content-type-specific semantic boundaries
 
-### Phase 2: Semantic Structure Analysis
+### Phase 2: Size Optimization
 
-- **Input**: Clean Markdown content
-- **Processing**: SemanticMarkdownSplitter builds hierarchical structure
-- **Output**: ContentChunk array with path-based hierarchy
+- **Input**: Semantically-split chunks from specialized splitters
+- **Processing**: GreedySplitter merges small chunks and handles oversized content while preserving semantic boundaries
+- **Output**: Optimally-sized chunks ready for embedding generation
 
-### Phase 3: Size Optimization
+## Content-Type-Specific Processing
 
-- **Input**: Semantically-split chunks
-- **Processing**: GreedySplitter merges small chunks intelligently
-- **Output**: Optimally-sized chunks preserving semantic boundaries
+### Pipeline-Splitter Architecture
+
+Each content type uses a specialized pipeline with an appropriate splitter:
+
+#### Markdown Content → SemanticMarkdownSplitter
+
+**MarkdownPipeline** handles markdown documents:
+
+- **Heading Analysis**: Parses H1-H6 tags to build hierarchical paths
+- **Content Type Detection**: Identifies text, code blocks, tables within markdown
+- **Path Construction**: Creates hierarchical paths like `["Introduction", "Getting Started", "Installation"]`
+- **Structure Preservation**: Maintains parent-child relationships through path prefixes
+
+#### JSON Content → JsonDocumentSplitter
+
+**JsonPipeline** handles JSON files:
+
+- **Structure Analysis**: Parses JSON hierarchy and object relationships
+- **Concatenation-Friendly Splitting**: Creates property-level and array-element chunks that concatenate naturally
+- **Content Type**: Marks all JSON content with "code" content type
+- **Structural Context**: Parent chunks provide opening/closing braces, sibling chunks include proper comma separation
+- **Reassembly Design**: Chunks are designed as building blocks - siblings concatenate to form valid JSON with parent context
+
+#### Source Code → TextDocumentSplitter
+
+**SourceCodePipeline** handles programming language files:
+
+- **Language Detection**: Identifies programming language from MIME types and content patterns
+- **Line-based Splitting**: Simple line-based splitting with hierarchical path structure
+- **Content Type**: Marks all code content with "code" content type
+- **Temporary Implementation**: Uses TextDocumentSplitter until TreeSitter-based CodeDocumentSplitter implementation for syntax-aware splitting
+
+#### HTML Content → SemanticMarkdownSplitter
+
+**HtmlPipeline** converts HTML to markdown then processes:
+
+- **DOM Parsing**: Extracts meaningful content from HTML structure
+- **Content Cleaning**: Removes navigation, ads, and boilerplate
+- **Markdown Conversion**: Converts to clean markdown for consistent processing
+- **Structure Analysis**: Uses same hierarchical processing as markdown content
+
+## Splitting Architecture Paradigms
+
+The system uses two distinct splitting paradigms that serve different purposes. Understanding this distinction is critical for proper architecture decisions.
+
+### DocumentSplitter vs ContentSplitter
+
+**DocumentSplitter Interface:**
+
+- **Input**: Raw content string with optional content type
+- **Output**: `ContentChunk[]` with rich semantic metadata
+- **Purpose**: Preserves document structure and hierarchical relationships
+- **Use Case**: Primary splitters for content types (HTML, Markdown, JSON, Source Code)
+
+**ContentSplitter Interface:**
+
+- **Input**: Content string
+- **Output**: `string[]` with no semantic structure
+- **Purpose**: Simple string-based splitting within other splitters
+- **Use Case**: Helper splitters for specific content fragments (tables, text blocks)
+
+### When to Use Each Paradigm
+
+**Use DocumentSplitter when:**
+
+- Processing a complete content type (JSON files, Markdown documents, etc.)
+- Need hierarchical relationships for reconstruction
+- Require semantic metadata (content types, section paths)
+- Building primary content processors
+
+**Use ContentSplitter when:**
+
+- Processing fragments within a larger document
+- Need simple string splitting without metadata
+- Building helper utilities for other splitters
+
+### Output Structure Comparison
+
+**DocumentSplitter Output (Preserves Structure):**
+
+```typescript
+{
+  types: ["code"],
+  content: `{
+    "name": "my-package",
+    "version": "1.0.0"
+  }`,
+  section: {
+    level: 1,
+    path: ["package.json", "metadata"]
+  }
+}
+```
+
+**ContentSplitter Output (Loses Structure):**
+
+```typescript
+[
+  '// Path: package.json.metadata\n{\n  "name": "my-package",',
+  '// Path: package.json.metadata\n  "version": "1.0.0"\n}',
+];
+```
+
+### Architectural Principles
+
+**Avoid Adapter Anti-Pattern**: Converting `ContentSplitter` output back to `ContentChunk[]` through adapters loses semantic information and creates fragmented content. Always prefer implementing `DocumentSplitter` directly for content-type processors.
+
+**Design for Concatenation**: Chunks should be designed as "building blocks" that can be meaningfully concatenated for content reassembly. The search and context retrieval system relies on concatenating sibling chunks and parent context to provide coherent results. Each chunk should contribute naturally to reassembly rather than being complete and self-contained.
+
+**Sibling-Based Reassembly Strategy**: When returning search results, the system concatenates:
+
+- The matching chunk
+- Previous and following siblings (typically 1 previous + 2 following)
+- Parent chunks for structural context
+- This produces readable, coherent content across all content types (markdown, JSON, source code)
 
 ## Document Splitting
 
 ### Two-Phase Splitting Architecture
 
-The splitting system uses a two-phase approach to balance semantic coherence with optimal chunk sizing:
+The system implements a two-phase approach to content splitting:
 
-#### Phase 1: Semantic Structure Extraction
+**Phase 1: Content-Type-Specific Semantic Splitting**
 
-**SemanticMarkdownSplitter** analyzes document structure:
+- Each content type uses an appropriate splitter that understands its structure
+- Preserves semantic boundaries (headings, JSON objects, code functions)
+- Maintains hierarchical relationships and context
 
-- **Heading Analysis**: Parses H1-H6 tags to build hierarchical paths
-- **Content Type Detection**: Identifies text, code blocks, tables, and headings
-- **Path Construction**: Creates hierarchical paths like `["Introduction", "Getting Started", "Installation"]`
-- **Structure Preservation**: Maintains parent-child relationships through path prefixes
+**Phase 2: Universal Size Optimization**
 
-#### Phase 2: Intelligent Size Optimization
+- GreedySplitter applies consistent size optimization across all content types
+- Merges small chunks and handles oversized content while respecting semantic boundaries
+- Ensures optimal chunk sizes for embedding generation and search
 
-**GreedySplitter** optimizes chunk sizes while preserving structure:
+### Interface Architecture
+
+The system follows a clear interface hierarchy:
+
+**Primary Architecture**: Content-type pipelines use DocumentSplitters directly to preserve semantic structure and enable hierarchical reconstruction. This architectural principle eliminates the adapter anti-pattern and maintains semantic information throughout the processing pipeline.
+
+**DocumentSplitter Implementations:**
+
+- **JsonDocumentSplitter**: Direct hierarchical JSON processing without adapters
+- **TextDocumentSplitter**: Simple line-based source code splitting (temporary until TreeSitter integration)
+- **SemanticMarkdownSplitter**: Markdown and HTML structure-aware splitting
+
+### Size Optimization Phase
+
+**GreedySplitter** provides intelligent size optimization across all content types:
 
 - **Greedy Concatenation**: Merges small chunks until reaching minimum size thresholds
-- **Boundary Respect**: Preserves major section breaks (H1/H2 boundaries)
-- **Metadata Merging**: Intelligently combines section metadata using hierarchy rules
-- **Context Preservation**: Maintains hierarchical relationships during optimization
+- **Boundary Respect**: Preserves major section breaks and content-type boundaries
+- **Metadata Merging**: Intelligently combines chunk metadata using hierarchy rules
+- **Context Preservation**: Maintains relationships during optimization
 
 ### Hierarchical Path System
 
@@ -226,25 +374,34 @@ Each content chunk contains hierarchical metadata:
 
 ### Content Type Handling
 
-Different content types receive specialized processing:
+Different content types receive specialized processing through dedicated splitters:
 
-**Text Content:**
+**Text Content (via SemanticMarkdownSplitter):**
 
 - Hierarchical splitting: paragraphs → lines → words
 - Semantic boundary preservation
 - Context-aware merging
 
-**Code Blocks:**
+**Code Content (via CodeContentSplitter):**
 
 - Line-based splitting preserving syntax
 - Language detection and formatting
+- Function and class boundary respect
 - Complete code context maintenance
 
-**Tables:**
+**JSON Content (via JsonDocumentSplitter):**
 
-- Row-based splitting maintaining structure
-- Header preservation across chunks
-- Markdown format consistency
+- Object and array boundary preservation
+- Property-based hierarchical splitting
+- Structure-aware size optimization
+- Direct ContentChunk generation with hierarchical paths
+
+**Source Code (via TextDocumentSplitter):**
+
+- Line-based splitting with language detection
+- Simple hierarchical path structure
+- Content type preservation for code
+- Temporary implementation until TreeSitter integration for syntax-aware splitting
 
 ### Semantic Chunking
 
@@ -268,16 +425,29 @@ Content splits based on document structure rather than arbitrary size:
 
 **GreedySplitter:**
 
+- Universal size optimization layer applied to all content types
+- Intelligent merging respecting semantic boundaries from specialized splitters
 - Maximum chunk size with overflow handling
-- Simple implementation for basic content
-- Size-based splitting with structure hints
+- Preserves hierarchical relationships established by content-specific splitters
 
 **SemanticMarkdownSplitter:**
 
-- Markdown structure-aware chunking
-- Heading hierarchy preservation
-- Code block and table integrity
-- Context-rich chunk boundaries
+- Handles both Markdown and HTML content (HTML is converted to Markdown first)
+- Heading hierarchy preservation and structure-aware chunking
+- Code block and table integrity within markdown
+- Context-rich chunk boundaries based on document structure
+
+**JsonContentSplitter (via JsonDocumentSplitterAdapter):**
+
+- JSON structure-aware splitting with object and array boundary preservation
+- Property-based hierarchical chunking maintaining semantic relationships
+- Adapted to work with GreedySplitter through DocumentSplitter interface
+
+**CodeContentSplitter (via CodeDocumentSplitterAdapter):**
+
+- Programming language syntax awareness with function and class boundary respect
+- Line-based splitting with context preservation and comment documentation
+- Adapted to work with GreedySplitter through DocumentSplitter interface
 
 ## Context and Relationships
 
@@ -324,7 +494,7 @@ Each chunk preserves comprehensive metadata:
 
 ## Processing Examples
 
-### Example: Technical Documentation
+### Example: Technical Documentation (Markdown)
 
 **Input Document Structure:**
 
@@ -342,7 +512,7 @@ Server-side OAuth configuration...
 Returns list of users...
 ```
 
-**Generated Hierarchy:**
+**Generated Hierarchy (via SemanticMarkdownSplitter):**
 
 ```
 Chunk 1: {
@@ -364,11 +534,117 @@ Chunk 3: {
 }
 ```
 
+### Example: JSON Configuration File
+
+**Input JSON Structure:**
+
+```json
+{
+  "name": "my-package",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.0",
+    "lodash": "^4.17.21"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "jest"
+  }
+}
+```
+
+**Generated Chunks (via JsonDocumentSplitter - Concatenation-Friendly):**
+
+```
+Chunk 1 (parent context): {
+  path: ["package.json"],
+  level: 1,
+  content: "{"
+}
+
+Chunk 2 (property): {
+  path: ["package.json", "name"],
+  level: 2,
+  content: "  \"name\": \"my-package\","
+}
+
+Chunk 3 (property): {
+  path: ["package.json", "version"],
+  level: 2,
+  content: "  \"version\": \"1.0.0\","
+}
+
+Chunk 4 (property with nested object): {
+  path: ["package.json", "dependencies"],
+  level: 2,
+  content: "  \"dependencies\": {\n    \"express\": \"^4.18.0\",\n    \"lodash\": \"^4.17.21\"\n  },"
+}
+
+Chunk 5 (property with nested object): {
+  path: ["package.json", "scripts"],
+  level: 2,
+  content: "  \"scripts\": {\n    \"start\": \"node index.js\",\n    \"test\": \"jest\"\n  }"
+}
+
+Chunk 6 (parent closing): {
+  path: ["package.json"],
+  level: 1,
+  content: "}"
+}
+```
+
+**Reassembly Example**: If searching for "dependencies" and applying sibling strategy:
+
+- Found chunk: Chunk 4 (dependencies property)
+- Previous sibling: Chunk 3 (version property)
+- Following siblings: Chunk 5 (scripts property)
+- Parent context: Chunk 1 (opening brace) + Chunk 6 (closing brace)
+- **Result**: Valid, readable JSON showing dependencies in context
+
+### Example: Source Code File
+
+**Input TypeScript Code:**
+
+```typescript
+export class UserService {
+  constructor(private db: Database) {}
+
+  async getUser(id: string): Promise<User> {
+    return await this.db.users.findById(id);
+  }
+
+  async createUser(userData: CreateUserData): Promise<User> {
+    return await this.db.users.create(userData);
+  }
+}
+```
+
+**Generated Chunks (via CodeContentSplitter):**
+
+```
+Chunk 1: {
+  path: ["UserService", "Class Declaration"],
+  content: "export class UserService {\n  constructor(private db: Database) {}"
+}
+
+Chunk 2: {
+  path: ["UserService", "getUser"],
+  content: "async getUser(id: string): Promise<User> {\n    return await this.db.users.findById(id);\n  }"
+}
+
+Chunk 3: {
+  path: ["UserService", "createUser"],
+  content: "async createUser(userData: CreateUserData): Promise<User> {\n    return await this.db.users.create(userData);\n  }"
+}
+```
+
 **Relationship Resolution:**
 
 - Chunk 3's parent: Chunk with path `["API Reference", "Authentication", "OAuth Setup"]`
 - Chunk 3's siblings: Other chunks with 4-element paths sharing the same first 3 elements
 - Chunk 2's children: All chunks with paths starting with `["API Reference", "Authentication"]`
+
+All content types maintain hierarchical relationships through their path structures, enabling consistent context retrieval regardless of the original format.
 
 ## Content Filtering
 

@@ -380,7 +380,6 @@ describe("DocumentManagementService", () => {
 
         // Verify the documents were stored with semantic metadata
         expect(mockStore.addDocuments).toHaveBeenCalledWith(
-          // Fix: Use mockStoreInstance
           library,
           version,
           expect.arrayContaining([

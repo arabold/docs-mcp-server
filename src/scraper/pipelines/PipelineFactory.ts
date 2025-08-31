@@ -9,6 +9,7 @@
 import { HtmlPipeline } from "./HtmlPipeline";
 import { JsonPipeline } from "./JsonPipeline";
 import { MarkdownPipeline } from "./MarkdownPipeline";
+import { SourceCodePipeline } from "./SourceCodePipeline";
 import type { ContentPipeline } from "./types";
 
 /**
@@ -19,11 +20,17 @@ import type { ContentPipeline } from "./types";
 export class PipelineFactory {
   /**
    * Creates the standard set of content pipelines used by all scraper strategies.
-   * Includes HTML, Markdown, and JSON processing capabilities.
+   * Includes HTML, Markdown, JSON, and source code processing capabilities.
+   * Each pipeline now handles both preprocessing and content-specific splitting.
    *
    * @returns Array of content pipelines in processing order
    */
   public static createStandardPipelines(): ContentPipeline[] {
-    return [new HtmlPipeline(), new MarkdownPipeline(), new JsonPipeline()];
+    return [
+      new HtmlPipeline(),
+      new MarkdownPipeline(),
+      new JsonPipeline(),
+      new SourceCodePipeline(),
+    ];
   }
 }

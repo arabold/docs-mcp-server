@@ -1,3 +1,10 @@
+import { GreedySplitter } from "../../splitter";
+import { JsonDocumentSplitter } from "../../splitter/JsonDocumentSplitter";
+import type { ContentChunk } from "../../splitter/types";
+import {
+  SPLITTER_MIN_CHUNK_SIZE,
+  SPLITTER_PREFERRED_CHUNK_SIZE,
+} from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
@@ -7,17 +14,29 @@ import { BasePipeline } from "./BasePipeline";
 import type { ProcessedContent } from "./types";
 
 /**
- * Pipeline for processing JSON content.
- * Handles JSON files by validating structure and preserving formatting
- * for hierarchical splitting by JsonContentSplitter.
+ * Pipeline for processing JSON content with semantic splitting and size optimization.
+ * Handles JSON files by validating structure and using JsonDocumentSplitter for hierarchical splitting
+ * that creates proper ContentChunks with semantic paths, followed by GreedySplitter for universal size optimization.
  */
 export class JsonPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
+  private readonly greedySplitter: GreedySplitter;
 
-  constructor() {
+  constructor(chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
     super();
     // JSON processing doesn't need complex middleware since we preserve raw structure
     this.middleware = [];
+
+    // Create the two-phase splitting: semantic + size optimization
+    const jsonSplitter = new JsonDocumentSplitter({
+      maxChunkSize: chunkSize,
+      includePrimitives: true,
+    });
+    this.greedySplitter = new GreedySplitter(
+      jsonSplitter,
+      SPLITTER_MIN_CHUNK_SIZE,
+      chunkSize,
+    );
   }
 
   canProcess(rawContent: RawContent): boolean {
@@ -70,12 +89,21 @@ export class JsonPipeline extends BasePipeline {
     // Execute the middleware stack (minimal for JSON)
     await this.executeMiddlewareStack(this.middleware, context);
 
+    // Split the content using JsonContentSplitter
+    const chunks = await this.split(context.content);
+
     return {
       textContent: context.content,
       metadata: context.metadata,
       links: context.links,
       errors: context.errors,
+      chunks,
     };
+  }
+
+  async split(content: string): Promise<ContentChunk[]> {
+    // Use GreedySplitter (which wraps JsonDocumentSplitterAdapter) for optimized chunking
+    return await this.greedySplitter.splitText(content);
   }
 
   /**
