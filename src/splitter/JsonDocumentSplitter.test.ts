@@ -163,4 +163,72 @@ describe("JsonDocumentSplitter", () => {
       expect(hasIndentation).toBe(false);
     });
   });
+
+  describe("integration with GreedySplitter", () => {
+    it("should create chunks that work well with GreedySplitter optimization", async () => {
+      const { GreedySplitter } = await import("./GreedySplitter");
+
+      const jsonSplitter = new JsonDocumentSplitter();
+      const greedySplitter = new GreedySplitter(jsonSplitter, 500, 1500);
+
+      const complexJson = {
+        application: {
+          name: "Complex Application Configuration",
+          version: "2.1.0",
+          services: {
+            database: {
+              primary: {
+                host: "primary-db.example.com",
+                port: 5432,
+                ssl: true,
+                poolSize: 20,
+              },
+              replica: {
+                host: "replica-db.example.com",
+                port: 5432,
+                ssl: true,
+                poolSize: 10,
+              },
+            },
+            cache: {
+              redis: {
+                host: "cache.example.com",
+                port: 6379,
+                database: 0,
+              },
+            },
+          },
+          features: {
+            authentication: true,
+            authorization: true,
+            monitoring: true,
+            logging: {
+              level: "info",
+              format: "json",
+            },
+          },
+        },
+      };
+
+      const content = JSON.stringify(complexJson, null, 2);
+
+      // Test JsonDocumentSplitter alone
+      const jsonChunks = await jsonSplitter.splitText(content);
+      expect(jsonChunks.length).toBeGreaterThan(5); // Should create many small chunks
+
+      // Test GreedySplitter optimization
+      const optimizedChunks = await greedySplitter.splitText(content);
+      expect(optimizedChunks.length).toBeLessThanOrEqual(jsonChunks.length); // Should consolidate
+
+      // Verify concatenation still produces valid JSON
+      const concatenated = optimizedChunks.map((c) => c.content).join("\n");
+      const parsed = JSON.parse(concatenated);
+      expect(parsed).toEqual(complexJson);
+
+      // Verify chunks are reasonably sized
+      optimizedChunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeGreaterThan(0);
+      });
+    });
+  });
 });

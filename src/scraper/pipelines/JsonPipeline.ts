@@ -29,8 +29,7 @@ export class JsonPipeline extends BasePipeline {
 
     // Create the two-phase splitting: semantic + size optimization
     const jsonSplitter = new JsonDocumentSplitter({
-      maxChunkSize: chunkSize,
-      includePrimitives: true,
+      preserveFormatting: true,
     });
     this.greedySplitter = new GreedySplitter(
       jsonSplitter,
