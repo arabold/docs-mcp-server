@@ -239,4 +239,65 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       },
     ]);
   });
+
+  it("should extract mimeType from document metadata and include it in search result", async () => {
+    const library = "lib";
+    const version = "1.0.0";
+    const query = "test";
+    const mimeType = "text/html";
+
+    // Create a document with mimeType in metadata
+    const initialResult = new Document({
+      id: "doc1",
+      pageContent: "HTML content",
+      metadata: { url: "https://example.com", score: 0.9, mimeType },
+    });
+
+    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
+    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([initialResult]);
+
+    const results = await retrieverService.search(library, version, query);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({
+      url: "https://example.com",
+      content: "HTML content",
+      score: 0.9,
+      mimeType: "text/html",
+    });
+  });
+
+  it("should handle missing mimeType gracefully", async () => {
+    const library = "lib";
+    const version = "1.0.0";
+    const query = "test";
+
+    // Create a document without mimeType in metadata
+    const initialResult = new Document({
+      id: "doc1",
+      pageContent: "Plain content",
+      metadata: { url: "https://example.com", score: 0.9 },
+    });
+
+    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
+    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([initialResult]);
+
+    const results = await retrieverService.search(library, version, query);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toEqual({
+      url: "https://example.com",
+      content: "Plain content",
+      score: 0.9,
+      mimeType: undefined,
+    });
+  });
 });
