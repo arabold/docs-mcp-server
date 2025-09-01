@@ -636,12 +636,13 @@ export class SourceCodeDocumentSplitter implements DocumentSplitter {
   ): Promise<ContentChunk[]> {
     const chunks = await this.textSplitter.splitText(section.content);
 
-    // Update paths to include current context
-    return chunks.map((chunk, index) => ({
+    // All file-level content chunks use the same root path
+    // Multiple chunks with the same path are handled gracefully by the system
+    return chunks.map((chunk) => ({
       ...chunk,
       section: {
-        level: rootPath.length + 1,
-        path: [...rootPath, `content-${index}`],
+        level: rootPath.length,
+        path: rootPath,
       },
     }));
   }

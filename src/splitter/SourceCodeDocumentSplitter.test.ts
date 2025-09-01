@@ -49,7 +49,7 @@ class UserService {
 
       expect(result.length).toBe(3); // opening, method, closing
 
-      // Check opening chunk
+      // Check opening chunk - level and path verification
       expect(result[0]).toEqual({
         types: ["code"],
         content: "class UserService {",
@@ -58,16 +58,19 @@ class UserService {
           path: ["typescript-file", "UserService"],
         },
       });
+      expect(result[0].section.level).toBe(result[0].section.path.length);
 
-      // Check method chunk
+      // Check method chunk - level and path verification
       expect(result[1].content.trim()).toContain("getUser(id: string)");
       expect(result[1].section.path).toEqual([
         "typescript-file",
         "UserService",
         "getUser",
       ]);
+      expect(result[1].section.level).toBe(3);
+      expect(result[1].section.level).toBe(result[1].section.path.length);
 
-      // Check closing chunk
+      // Check closing chunk - level and path verification
       expect(result[2]).toEqual({
         types: ["code"],
         content: "}",
@@ -76,6 +79,7 @@ class UserService {
           path: ["typescript-file", "UserService"],
         },
       });
+      expect(result[2].section.level).toBe(result[2].section.path.length);
     });
 
     it("should handle exported classes", async () => {
@@ -89,6 +93,8 @@ export class ApiClient {
       expect(result.length).toBe(3);
       expect(result[0].content).toBe("export class ApiClient {");
       expect(result[0].section.path).toEqual(["typescript-file", "ApiClient"]);
+      expect(result[0].section.level).toBe(2);
+      expect(result[0].section.level).toBe(result[0].section.path.length);
     });
 
     it("should handle abstract classes", async () => {
@@ -119,6 +125,8 @@ function calculateSum(a: number, b: number): number {
         "function calculateSum(a: number, b: number): number {",
       );
       expect(result[0].section.path).toEqual(["typescript-file", "calculateSum"]);
+      expect(result[0].section.level).toBe(2);
+      expect(result[0].section.level).toBe(result[0].section.path.length);
     });
 
     it("should handle exported functions", async () => {
@@ -244,6 +252,17 @@ export function createUserService(): UserService {
       // Should have content section for imports/constants, then class, then function
       expect(result.length).toBeGreaterThan(5);
 
+      // Find the imports/constants chunk - should be at file level
+      const importsChunk = result.find(
+        (chunk) =>
+          chunk.content.includes("import { Database }") ||
+          chunk.content.includes("const logger"),
+      );
+      expect(importsChunk).toBeDefined();
+      expect(importsChunk!.section.path).toEqual(["typescript-file"]);
+      expect(importsChunk!.section.level).toBe(1);
+      expect(importsChunk!.section.level).toBe(importsChunk!.section.path.length);
+
       // Find the class chunks
       const classOpeningChunk = result.find(
         (chunk) =>
@@ -252,6 +271,11 @@ export function createUserService(): UserService {
       );
       expect(classOpeningChunk).toBeDefined();
       expect(classOpeningChunk?.content).toBe("export class UserService {");
+      expect(classOpeningChunk!.section.path).toEqual(["typescript-file", "UserService"]);
+      expect(classOpeningChunk!.section.level).toBe(2);
+      expect(classOpeningChunk!.section.level).toBe(
+        classOpeningChunk!.section.path.length,
+      );
 
       // Find the function chunks
       const functionOpeningChunk = result.find(
@@ -262,6 +286,14 @@ export function createUserService(): UserService {
       expect(functionOpeningChunk).toBeDefined();
       expect(functionOpeningChunk?.content).toBe(
         "export function createUserService(): UserService {",
+      );
+      expect(functionOpeningChunk!.section.path).toEqual([
+        "typescript-file",
+        "createUserService",
+      ]);
+      expect(functionOpeningChunk!.section.level).toBe(2);
+      expect(functionOpeningChunk!.section.level).toBe(
+        functionOpeningChunk!.section.path.length,
       );
     });
 
@@ -296,9 +328,15 @@ export class ApiClient {
 
       expect(result.length).toBe(6); // opening, constructor, get, post, properties, closing
 
+      // Verify all chunks follow level === path.length rule
+      result.forEach((chunk) => {
+        expect(chunk.section.level).toBe(chunk.section.path.length);
+      });
+
       const openingChunk = result[0];
       expect(openingChunk.content).toBe("export class ApiClient {");
       expect(openingChunk.section.path).toEqual(["typescript-file", "ApiClient"]);
+      expect(openingChunk.section.level).toBe(2);
 
       // Find constructor chunk
       const constructorChunk = result.find((chunk) =>
@@ -306,19 +344,51 @@ export class ApiClient {
       );
       expect(constructorChunk).toBeDefined();
       expect(constructorChunk!.content).toContain("constructor(baseUrl: string)");
+      expect(constructorChunk!.section.path).toEqual([
+        "typescript-file",
+        "ApiClient",
+        "constructor",
+      ]);
+      expect(constructorChunk!.section.level).toBe(3);
 
-      // Find method chunks
-      const getChunk = result.find((chunk) => chunk.section.path.includes("get"));
+      // Find get method chunk
+      const getChunk = result.find(
+        (chunk) =>
+          chunk.section.path.includes("get") &&
+          chunk.content.includes("async get(endpoint: string)"),
+      );
       expect(getChunk).toBeDefined();
-      expect(getChunk!.content).toContain("async get(endpoint: string)");
+      expect(getChunk!.section.path).toEqual(["typescript-file", "ApiClient", "get"]);
+      expect(getChunk!.section.level).toBe(3);
 
-      const postChunk = result.find((chunk) => chunk.section.path.includes("post"));
+      // Find post method chunk
+      const postChunk = result.find(
+        (chunk) =>
+          chunk.section.path.includes("post") &&
+          chunk.content.includes("async post(endpoint: string, data: any)"),
+      );
       expect(postChunk).toBeDefined();
-      expect(postChunk!.content).toContain("async post(endpoint: string, data: any)");
+      expect(postChunk!.section.path).toEqual(["typescript-file", "ApiClient", "post"]);
+      expect(postChunk!.section.level).toBe(3);
 
+      // Find properties chunk
+      const propertiesChunk = result.find((chunk) =>
+        chunk.section.path.includes("properties"),
+      );
+      expect(propertiesChunk).toBeDefined();
+      expect(propertiesChunk!.content).toContain("private baseUrl: string;");
+      expect(propertiesChunk!.section.path).toEqual([
+        "typescript-file",
+        "ApiClient",
+        "properties",
+      ]);
+      expect(propertiesChunk!.section.level).toBe(3);
+
+      // Find closing chunk
       const closingChunk = result[result.length - 1];
       expect(closingChunk.content).toBe("}");
       expect(closingChunk.section.path).toEqual(["typescript-file", "ApiClient"]);
+      expect(closingChunk.section.level).toBe(2);
     });
   });
 
@@ -340,20 +410,34 @@ class Calculator {
       expect(result.length).toBe(4); // opening, add method, subtract method, closing
       expect(result[0].content).toBe("class Calculator {");
       expect(result[0].section.path).toEqual(["javascript-file", "Calculator"]);
+      expect(result[0].section.level).toBe(2);
+      expect(result[0].section.level).toBe(result[0].section.path.length);
 
-      // Find method chunks
+      // Find method chunks with level verification
       const addChunk = result.find((chunk) => chunk.section.path.includes("add"));
       expect(addChunk).toBeDefined();
       expect(addChunk!.content).toContain("add(a, b)");
+      expect(addChunk!.section.path).toEqual(["javascript-file", "Calculator", "add"]);
+      expect(addChunk!.section.level).toBe(3);
+      expect(addChunk!.section.level).toBe(addChunk!.section.path.length);
 
       const subtractChunk = result.find((chunk) =>
         chunk.section.path.includes("subtract"),
       );
       expect(subtractChunk).toBeDefined();
       expect(subtractChunk!.content).toContain("subtract(a, b)");
+      expect(subtractChunk!.section.path).toEqual([
+        "javascript-file",
+        "Calculator",
+        "subtract",
+      ]);
+      expect(subtractChunk!.section.level).toBe(3);
+      expect(subtractChunk!.section.level).toBe(subtractChunk!.section.path.length);
 
       const closingChunk = result[result.length - 1];
       expect(closingChunk.content).toBe("}");
+      expect(closingChunk.section.level).toBe(2);
+      expect(closingChunk.section.level).toBe(closingChunk.section.path.length);
     });
 
     it("should handle JavaScript functions", async () => {
@@ -371,6 +455,56 @@ function greet(name) {
   });
 
   describe("edge cases and error handling", () => {
+    it("should handle file-level content with consistent paths", async () => {
+      const code = `
+// This is a utility file with loose functions and imports
+import { Helper } from './helper';
+
+const API_URL = 'https://api.example.com';
+let globalCounter = 0;
+
+// Some utility function not in a class
+function utilityFunction() {
+  return 'utility';
+}
+
+export { API_URL, globalCounter };
+`;
+
+      const result = await splitter.splitText(code, "text/typescript");
+
+      // Verify all chunks follow level === path.length rule
+      result.forEach((chunk) => {
+        expect(chunk.section.level).toBe(chunk.section.path.length);
+      });
+
+      // File-level content chunks should all have the same path
+      const fileContentChunks = result.filter(
+        (chunk) =>
+          chunk.section.path.length === 1 && chunk.section.path[0] === "typescript-file",
+      );
+
+      expect(fileContentChunks.length).toBeGreaterThan(0);
+
+      // All file-level content should have the same path - no artificial content-0, content-1
+      fileContentChunks.forEach((chunk) => {
+        expect(chunk.section.path).toEqual(["typescript-file"]);
+        expect(chunk.section.level).toBe(1);
+      });
+
+      // Check that utility function has its own structure
+      const utilityFunctionChunk = result.find((chunk) =>
+        chunk.section.path.includes("utilityFunction"),
+      );
+      if (utilityFunctionChunk) {
+        expect(utilityFunctionChunk.section.path).toEqual([
+          "typescript-file",
+          "utilityFunction",
+        ]);
+        expect(utilityFunctionChunk.section.level).toBe(2);
+      }
+    });
+
     it("should handle malformed code gracefully", async () => {
       const malformedCode = `
 class BrokenClass {
