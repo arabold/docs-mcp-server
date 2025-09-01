@@ -67,6 +67,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       let processed: ProcessedContent | undefined;
       for (const pipeline of this.pipelines) {
         if (pipeline.canProcess(rawContent)) {
+          logger.debug(
+            `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
+          );
           processed = await pipeline.process(rawContent, options, this.httpFetcher);
           break;
         }

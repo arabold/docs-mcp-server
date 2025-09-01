@@ -434,6 +434,27 @@ describe("DocumentManagementService", () => {
         const results = await docService.searchStore(library, version, "testing");
         expect(results).toEqual(["Mocked search result"]);
       });
+
+      it("should handle unsupported content types gracefully", async () => {
+        const library = "test-lib";
+        const version = "1.0.0";
+        const binaryDocument = new Document({
+          pageContent: "binary content with null bytes\0",
+          metadata: {
+            url: "http://example.com/image.png",
+            title: "Binary Image",
+            mimeType: "image/png",
+          },
+        });
+
+        // Should not throw an error, just log a warning and return early
+        await expect(
+          docService.addDocument(library, version, binaryDocument),
+        ).resolves.toBeUndefined();
+
+        // Verify that no documents were added to the store
+        expect(mockStore.addDocuments).not.toHaveBeenCalled();
+      });
     });
 
     it("should remove all documents for a specific library and version", async () => {

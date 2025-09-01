@@ -63,6 +63,9 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     for (const pipeline of this.pipelines) {
       if (pipeline.canProcess(rawContent)) {
+        logger.debug(
+          `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${filePath})`,
+        );
         processed = await pipeline.process(rawContent, options, this.fileFetcher);
         break;
       }

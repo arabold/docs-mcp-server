@@ -154,6 +154,10 @@ export class MimeTypeUtils {
     const customMimeTypes: Record<string, string> = {
       ts: "text/x-typescript",
       tsx: "text/x-tsx",
+      js: "text/javascript",
+      jsx: "text/x-jsx",
+      cjs: "text/javascript", // CommonJS modules
+      mjs: "text/javascript", // ES modules
       py: "text/x-python",
       pyw: "text/x-python",
       pyi: "text/x-python",
@@ -189,7 +193,30 @@ export class MimeTypeUtils {
     }
 
     // Fall back to the mime package for other types
-    return mime.getType(filePath);
+    const detectedType = mime.getType(filePath);
+
+    // Normalize problematic MIME types that the mime package gets wrong
+    return MimeTypeUtils.normalizeMimeType(detectedType);
+  }
+
+  /**
+   * Normalizes MIME types that are incorrectly detected by the mime package.
+   * This handles cases like 'application/node' for .cjs files.
+   *
+   * @param mimeType - The MIME type to normalize
+   * @returns The normalized MIME type
+   */
+  public static normalizeMimeType(mimeType: string | null): string | null {
+    if (!mimeType) {
+      return null;
+    }
+
+    // Map problematic MIME types to correct ones
+    const mimeTypeNormalization: Record<string, string> = {
+      "application/node": "text/javascript", // .cjs files are detected as this
+    };
+
+    return mimeTypeNormalization[mimeType] || mimeType;
   }
 
   /**

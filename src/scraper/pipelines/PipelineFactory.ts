@@ -49,10 +49,10 @@ export class PipelineFactory {
     const maxChunkSize = config?.chunkSizes?.max ?? 2000;
 
     return [
-      new HtmlPipeline(preferredChunkSize, maxChunkSize),
-      new MarkdownPipeline(preferredChunkSize, maxChunkSize),
       new JsonPipeline(preferredChunkSize),
       new SourceCodePipeline(preferredChunkSize),
+      new HtmlPipeline(preferredChunkSize, maxChunkSize),
+      new MarkdownPipeline(preferredChunkSize, maxChunkSize),
       new TextPipeline(preferredChunkSize), // Universal fallback - must be last
     ];
   }

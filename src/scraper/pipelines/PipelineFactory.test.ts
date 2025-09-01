@@ -13,10 +13,10 @@ describe("PipelineFactory", () => {
       const pipelines = PipelineFactory.createStandardPipelines();
 
       expect(pipelines).toHaveLength(5);
-      expect(pipelines[0]).toBeInstanceOf(HtmlPipeline);
-      expect(pipelines[1]).toBeInstanceOf(MarkdownPipeline);
-      expect(pipelines[2]).toBeInstanceOf(JsonPipeline);
-      expect(pipelines[3]).toBeInstanceOf(SourceCodePipeline);
+      expect(pipelines[0]).toBeInstanceOf(JsonPipeline);
+      expect(pipelines[1]).toBeInstanceOf(SourceCodePipeline);
+      expect(pipelines[2]).toBeInstanceOf(HtmlPipeline);
+      expect(pipelines[3]).toBeInstanceOf(MarkdownPipeline);
       expect(pipelines[4]).toBeInstanceOf(TextPipeline);
     });
 
@@ -49,10 +49,10 @@ describe("PipelineFactory", () => {
 
       const pipelines = PipelineFactory.createStandardPipelines(config);
       expect(pipelines).toHaveLength(5);
-      expect(pipelines[0]).toBeInstanceOf(HtmlPipeline);
-      expect(pipelines[1]).toBeInstanceOf(MarkdownPipeline);
-      expect(pipelines[2]).toBeInstanceOf(JsonPipeline);
-      expect(pipelines[3]).toBeInstanceOf(SourceCodePipeline);
+      expect(pipelines[0]).toBeInstanceOf(JsonPipeline);
+      expect(pipelines[1]).toBeInstanceOf(SourceCodePipeline);
+      expect(pipelines[2]).toBeInstanceOf(HtmlPipeline);
+      expect(pipelines[3]).toBeInstanceOf(MarkdownPipeline);
       expect(pipelines[4]).toBeInstanceOf(TextPipeline);
     });
 

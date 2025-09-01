@@ -426,10 +426,16 @@ export class DocumentManagementService {
       const pipeline = this.pipelines.find((p) => p.canProcess(rawContent));
 
       if (!pipeline) {
-        throw new Error(
-          "No pipeline found - this should never happen with TextPipeline as fallback",
+        logger.warn(
+          `⚠️  Unsupported content type "${rawContent.mimeType}" for document ${url}. Skipping processing.`,
         );
+        return;
       }
+
+      // Debug logging for pipeline selection
+      logger.debug(
+        `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
+      );
 
       // Use content-type-specific pipeline for processing and splitting
       // Create minimal scraper options for processing
