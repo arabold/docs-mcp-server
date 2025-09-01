@@ -192,6 +192,44 @@ describe("DocumentManagementService", () => {
     });
   });
 
+  // --- Pipeline Configuration Tests ---
+  describe("Pipeline Configuration", () => {
+    beforeEach(() => {
+      vol.reset(); // Reset memfs volume before each test
+      vi.clearAllMocks(); // Clear other mocks
+    });
+
+    it("should accept pipeline configuration and pass it to factory", () => {
+      const pipelineConfig = {
+        chunkSizes: {
+          preferred: 800,
+          max: 1600,
+        },
+      };
+
+      const service = new DocumentManagementService(null, pipelineConfig);
+      expect(service).toBeInstanceOf(DocumentManagementService);
+      // Test passes if no errors are thrown during construction
+    });
+
+    it("should work without pipeline configuration", () => {
+      const service = new DocumentManagementService();
+      expect(service).toBeInstanceOf(DocumentManagementService);
+      // Test passes if no errors are thrown during construction
+    });
+
+    it("should work with only embedding config provided", () => {
+      const service = new DocumentManagementService(null);
+      expect(service).toBeInstanceOf(DocumentManagementService);
+    });
+
+    it("should work with both embedding and pipeline config", () => {
+      const pipelineConfig = { chunkSizes: { preferred: 500 } };
+      const service = new DocumentManagementService(null, pipelineConfig);
+      expect(service).toBeInstanceOf(DocumentManagementService);
+    });
+  });
+
   // --- ensureVersion tests ---
   describe("ensureVersion", () => {
     it("creates library and version when both absent", async () => {
@@ -380,7 +418,6 @@ describe("DocumentManagementService", () => {
 
         // Verify the documents were stored with semantic metadata
         expect(mockStore.addDocuments).toHaveBeenCalledWith(
-          // Fix: Use mockStoreInstance
           library,
           version,
           expect.arrayContaining([
@@ -396,6 +433,27 @@ describe("DocumentManagementService", () => {
         // Verify search results preserve metadata
         const results = await docService.searchStore(library, version, "testing");
         expect(results).toEqual(["Mocked search result"]);
+      });
+
+      it("should handle unsupported content types gracefully", async () => {
+        const library = "test-lib";
+        const version = "1.0.0";
+        const binaryDocument = new Document({
+          pageContent: "binary content with null bytes\0",
+          metadata: {
+            url: "http://example.com/image.png",
+            title: "Binary Image",
+            mimeType: "image/png",
+          },
+        });
+
+        // Should not throw an error, just log a warning and return early
+        await expect(
+          docService.addDocument(library, version, binaryDocument),
+        ).resolves.toBeUndefined();
+
+        // Verify that no documents were added to the store
+        expect(mockStore.addDocuments).not.toHaveBeenCalled();
       });
     });
 

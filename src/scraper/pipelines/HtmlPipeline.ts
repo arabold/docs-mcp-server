@@ -1,3 +1,9 @@
+import { GreedySplitter, SemanticMarkdownSplitter } from "../../splitter";
+import {
+  SPLITTER_MAX_CHUNK_SIZE,
+  SPLITTER_MIN_CHUNK_SIZE,
+  SPLITTER_PREFERRED_CHUNK_SIZE,
+} from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import { HtmlSanitizerMiddleware } from "../middleware";
@@ -14,13 +20,19 @@ import { BasePipeline } from "./BasePipeline";
 import type { ProcessedContent } from "./types";
 
 /**
- * Pipeline for processing HTML content using middleware.
+ * Pipeline for processing HTML content using middleware and semantic splitting with size optimization.
+ * Converts HTML to clean markdown format then uses SemanticMarkdownSplitter for semantic chunking,
+ * followed by GreedySplitter for universal size optimization.
  */
 export class HtmlPipeline extends BasePipeline {
   private readonly playwrightMiddleware: HtmlPlaywrightMiddleware;
   private readonly standardMiddleware: ContentProcessorMiddleware[];
+  private readonly greedySplitter: GreedySplitter;
 
-  constructor() {
+  constructor(
+    preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE,
+    maxChunkSize = SPLITTER_MAX_CHUNK_SIZE,
+  ) {
     super();
     this.playwrightMiddleware = new HtmlPlaywrightMiddleware();
     this.standardMiddleware = [
@@ -30,6 +42,17 @@ export class HtmlPipeline extends BasePipeline {
       new HtmlSanitizerMiddleware(),
       new HtmlToMarkdownMiddleware(),
     ];
+
+    // Create the two-phase splitting: semantic + size optimization
+    const semanticSplitter = new SemanticMarkdownSplitter(
+      preferredChunkSize,
+      maxChunkSize,
+    );
+    this.greedySplitter = new GreedySplitter(
+      semanticSplitter,
+      SPLITTER_MIN_CHUNK_SIZE,
+      preferredChunkSize,
+    );
   }
 
   canProcess(rawContent: RawContent): boolean {
@@ -68,15 +91,19 @@ export class HtmlPipeline extends BasePipeline {
     // Execute the middleware stack using the base class method
     await this.executeMiddlewareStack(middleware, context);
 
+    // Split the content using SemanticMarkdownSplitter (HTML is converted to markdown by middleware)
+    const chunks = await this.greedySplitter.splitText(
+      typeof context.content === "string" ? context.content : "",
+    );
+
     return {
       textContent: typeof context.content === "string" ? context.content : "",
       metadata: context.metadata,
       links: context.links,
       errors: context.errors,
+      chunks,
     };
   }
 
-  async close(): Promise<void> {
-    await this.playwrightMiddleware.closeBrowser();
-  }
+  async close(): Promise<void> {}
 }

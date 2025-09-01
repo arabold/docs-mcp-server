@@ -44,7 +44,7 @@ const ProgressBar = ({ progress, showText = true }: ProgressBarProps) => {
       {showText && (
         <div class="flex justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
           <span>Progress</span>
-          <span>{getProgressText()}</span>
+          <span safe>{getProgressText()}</span>
         </div>
       )}
       <div class="w-full bg-gray-200 rounded-full h-2 dark:bg-gray-700">

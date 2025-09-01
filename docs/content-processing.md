@@ -2,518 +2,483 @@
 
 ## Overview
 
-The content processing system transforms raw content from various sources into searchable document chunks through a modular pipeline architecture.
+The content processing system transforms raw content from various sources into searchable document chunks through a modular strategy-pipeline-splitter architecture. The system handles web pages, local files, and package registries, processing different content types with specialized pipelines that preserve document structure while optimizing chunk sizes for embedding generation.
 
-## Content Sources
+## Architecture Components
 
-### Web Sources
+### Scraper Strategies
 
-- HTTP/HTTPS URLs with JavaScript rendering support
-- Playwright-based scraping for dynamic content
-- Configurable depth and page limits
-- Respect for robots.txt and rate limiting
+Handle different content sources and coordinate the overall scraping process:
 
-### Local Files
+- **WebScraperStrategy**: HTTP/HTTPS URLs with JavaScript rendering support
+- **LocalFileStrategy**: Local filesystem access with directory traversal
+- **NpmScraperStrategy**: npm registry package documentation
+- **PyPiScraperStrategy**: PyPI package documentation
+- **GitHubScraperStrategy**: GitHub repository documentation
 
-- `file://` protocol for local filesystem access
-- Recursive directory processing
-- MIME type detection for content routing
-- Support for HTML, Markdown, and text files
+Each strategy manages URL discovery, scope filtering, and progress tracking while delegating content processing to pipelines.
 
-### Package Registries
+### Content Fetchers
 
-- npm registry documentation extraction
-- PyPI package documentation
-- Version-specific documentation retrieval
-- Package metadata integration
+Abstract content retrieval across different sources:
 
-## Processing Pipeline
+- **HttpFetcher**: Web content with Playwright support, retry logic, and error handling
+- **FileFetcher**: Local filesystem access with MIME type detection and encoding resolution
 
-### Fetcher Layer
+### Processing Pipelines
 
-Abstracts content retrieval across sources:
+Transform raw content using middleware chains and content-type-specific logic:
 
-**HttpFetcher:**
+- **HtmlPipeline**: Converts HTML to clean markdown via middleware, then applies semantic splitting
+- **MarkdownPipeline**: Processes markdown with metadata extraction and semantic splitting
+- **JsonPipeline**: Validates JSON structure and applies hierarchical splitting
+- **SourceCodePipeline**: Handles programming languages with language detection and line-based splitting
+- **TextPipeline**: Fallback for generic text content with basic processing
 
-- Handles web content with Playwright
-- JavaScript execution and DOM rendering
-- Cookie and session management
-- Retry logic and error handling
+### Middleware System
 
-**FileFetcher:**
+Transform content through ordered middleware chains within pipelines:
 
-- Local filesystem access
-- MIME type detection
-- Directory traversal with filtering
-- File encoding detection
+**HTML Middleware Stack:**
 
-### Middleware Chain
+1. **HtmlPlaywrightMiddleware**: Dynamic content rendering (optional)
+2. **HtmlCheerioParserMiddleware**: DOM parsing and structure extraction
+3. **HtmlMetadataExtractorMiddleware**: Title, description, and metadata extraction
+4. **HtmlLinkExtractorMiddleware**: Link discovery and resolution
+5. **HtmlSanitizerMiddleware**: Remove navigation, ads, and boilerplate
+6. **HtmlToMarkdownMiddleware**: Convert to clean markdown format
 
-Content transforms through ordered middleware:
+**Markdown Middleware Stack:**
 
-1. **Content Parser**: HTML/Markdown parsing
-2. **Metadata Extractor**: Title, description, timestamps
-3. **Link Processor**: Internal link resolution
-4. **Content Cleaner**: Remove navigation, ads, boilerplate
-5. **Structure Normalizer**: Consistent heading hierarchy
+1. **MarkdownMetadataExtractorMiddleware**: Front matter and metadata extraction
+2. **MarkdownLinkExtractorMiddleware**: Link processing and resolution
 
-### Pipeline Selection
+**JSON and Source Code**: Minimal middleware for structure preservation
 
-Content routes to appropriate pipeline based on MIME type:
+### Document Splitters
 
-**HtmlPipeline:**
+Segment content into semantic chunks while preserving document structure:
 
-- DOM parsing and structure extraction
-- Navigation removal and content isolation
-- Link context preservation
-- Metadata extraction from HTML tags
+- **SemanticMarkdownSplitter**: Hierarchy-aware splitting based on heading structure
+- **JsonDocumentSplitter**: Property-based hierarchical splitting for JSON files
+- **TextDocumentSplitter**: Line-based splitting for source code and plain text
 
-**MarkdownPipeline:**
+### Size Optimization
 
-- Markdown parsing and structure analysis
-- Code block preservation
-- Link and reference processing
-- Front matter extraction
+**GreedySplitter** provides universal size optimization across all content types:
 
-## Content Transformation
-
-### HTML Processing
-
-1. Parse DOM structure using Playwright
-2. Remove navigation elements and ads
-3. Extract main content areas
-4. Preserve code blocks and tables
-5. Convert to clean Markdown format
-
-### Markdown Processing
-
-1. Parse Markdown AST
-2. Extract front matter metadata
-3. Process code blocks and tables
-4. Resolve relative links
-5. Normalize heading structure
-
-### Metadata Extraction
-
-Common metadata across content types:
-
-- Document title and description
-- Creation and modification timestamps
-- Author information
-- Version and library association
-- URL and source context
+- Merges small chunks until reaching minimum size thresholds
+- Respects semantic boundaries from content-specific splitters
+- Handles oversized content while preserving document structure
+- Ensures optimal chunk sizes for embedding generation
 
 ## Content Processing Flow
 
-Content follows a structured pipeline from raw input to searchable chunks:
-
 ```mermaid
-graph LR
-    subgraph "Input Sources"
-        A[Raw Content]
-        A1[HTTP/HTTPS URLs]
+graph TD
+    subgraph "Content Sources"
+        A1[Web URLs]
         A2[Local Files]
         A3[Package Registries]
     end
 
-    subgraph "Pipeline Processing"
-        B[Content Fetcher]
-        C[Middleware Chain]
-        D[Pipeline Selection]
-        E[HTML Pipeline]
-        F[Markdown Pipeline]
+    subgraph "Strategy Layer"
+        B1[WebScraperStrategy]
+        B2[LocalFileStrategy]
+        B3[Package Strategies]
     end
 
-    subgraph "Document Splitting"
-        G[SemanticMarkdownSplitter]
-        H[Structure Analysis]
-        I[GreedySplitter]
-        J[Size Optimization]
+    subgraph "Fetching Layer"
+        C1[HttpFetcher]
+        C2[FileFetcher]
+    end
+
+    subgraph "Pipeline Selection"
+        D[PipelineFactory]
+        E1[HtmlPipeline]
+        E2[MarkdownPipeline]
+        E3[JsonPipeline]
+        E4[SourceCodePipeline]
+        E5[TextPipeline]
+    end
+
+    subgraph "Two-Phase Splitting"
+        F1[Semantic Splitters]
+        F2[GreedySplitter]
     end
 
     subgraph "Output"
-        K[ContentChunk Array]
-        L[Embedding Generation]
-        M[Database Storage]
+        G[ContentChunk Array]
+        H[Embedding Generation]
+        I[Database Storage]
     end
 
-    A1 --> B
-    A2 --> B
-    A3 --> B
-    B --> C
-    C --> D
-    D --> E
-    D --> F
-    E --> G
-    F --> G
+    A1 --> B1
+    A2 --> B2
+    A3 --> B3
+
+    B1 --> C1
+    B2 --> C2
+    B3 --> C1
+
+    C1 --> D
+    C2 --> D
+
+    D --> E1
+    D --> E2
+    D --> E3
+    D --> E4
+    D --> E5
+
+    E1 --> F1
+    E2 --> F1
+    E3 --> F1
+    E4 --> F1
+    E5 --> F1
+
+    F1 --> F2
+    F2 --> G
     G --> H
     H --> I
-    I --> J
-    J --> K
-    K --> L
-    L --> M
 
-    style A fill:#e1f5fe
-    style K fill:#f3e5f5
-    style M fill:#e8f5e8
+    style A1 fill:#e1f5fe
+    style A2 fill:#e1f5fe
+    style A3 fill:#e1f5fe
+    style G fill:#f3e5f5
+    style I fill:#e8f5e8
 ```
 
-### Phase 1: Content Normalization
+## Content-Type-Specific Processing
 
-- **Input**: Raw HTML, Markdown, or other formats
-- **Processing**: Pipeline-specific transformation to clean Markdown
-- **Output**: Normalized Markdown with preserved structure
+### HTML Content Processing (Web Scraping)
 
-### Phase 2: Semantic Structure Analysis
+```mermaid
+graph LR
+    subgraph "HTML Processing Flow"
+        A[Raw HTML] --> B[Playwright Middleware]
+        B --> C[Cheerio Parser]
+        C --> D[Metadata Extractor]
+        D --> E[Link Extractor]
+        E --> F[HTML Sanitizer]
+        F --> G[HTML to Markdown]
+        G --> H[SemanticMarkdownSplitter]
+        H --> I[GreedySplitter]
+        I --> J[ContentChunk Array]
+    end
 
-- **Input**: Clean Markdown content
-- **Processing**: SemanticMarkdownSplitter builds hierarchical structure
-- **Output**: ContentChunk array with path-based hierarchy
+    style A fill:#ffebee
+    style J fill:#e8f5e8
+```
 
-### Phase 3: Size Optimization
+**Process:**
 
-- **Input**: Semantically-split chunks
-- **Processing**: GreedySplitter merges small chunks intelligently
-- **Output**: Optimally-sized chunks preserving semantic boundaries
+1. Optional Playwright rendering for dynamic content
+2. DOM parsing and structure extraction
+3. Metadata extraction from HTML tags
+4. Link discovery and scope filtering
+5. Content cleaning (remove navigation, ads)
+6. Conversion to clean markdown format
+7. Hierarchical splitting based on heading structure
+8. Size optimization while preserving semantic boundaries
 
-## Document Splitting
+### JSON File Processing (Local Files)
 
-### Two-Phase Splitting Architecture
+```mermaid
+graph LR
+    subgraph "JSON Processing Flow"
+        A[Raw JSON] --> B[Structure Validation]
+        B --> C[JsonDocumentSplitter]
+        C --> D[GreedySplitter]
+        D --> E[ContentChunk Array]
+    end
 
-The splitting system uses a two-phase approach to balance semantic coherence with optimal chunk sizing:
+    style A fill:#fff3e0
+    style E fill:#e8f5e8
+```
 
-#### Phase 1: Semantic Structure Extraction
+**Process:**
 
-**SemanticMarkdownSplitter** analyzes document structure:
+1. JSON structure validation and parsing
+2. Hierarchical splitting based on object/array structure
+3. Property-level chunk creation with proper paths
+4. Size optimization maintaining JSON hierarchy
 
-- **Heading Analysis**: Parses H1-H6 tags to build hierarchical paths
-- **Content Type Detection**: Identifies text, code blocks, tables, and headings
-- **Path Construction**: Creates hierarchical paths like `["Introduction", "Getting Started", "Installation"]`
-- **Structure Preservation**: Maintains parent-child relationships through path prefixes
+### Source Code Processing
 
-#### Phase 2: Intelligent Size Optimization
+```mermaid
+graph LR
+    subgraph "Source Code Processing Flow"
+        A[Raw Source Code] --> B[Language Detection]
+        B --> C[TextDocumentSplitter]
+        C --> D[GreedySplitter]
+        D --> E[ContentChunk Array]
+    end
 
-**GreedySplitter** optimizes chunk sizes while preserving structure:
+    style A fill:#f3e5f5
+    style E fill:#e8f5e8
+```
 
-- **Greedy Concatenation**: Merges small chunks until reaching minimum size thresholds
-- **Boundary Respect**: Preserves major section breaks (H1/H2 boundaries)
-- **Metadata Merging**: Intelligently combines section metadata using hierarchy rules
-- **Context Preservation**: Maintains hierarchical relationships during optimization
+**Process:**
 
-### Hierarchical Path System
+1. Programming language detection from MIME type
+2. Line-based splitting with hierarchical paths
+3. Size optimization preserving code structure
+4. Future: TreeSitter-based syntax-aware splitting
 
-Each content chunk contains hierarchical metadata:
+## Two-Phase Splitting Architecture
 
-**ContentChunk Structure:**
+### Phase 1: Semantic Splitting
+
+Content-type-specific splitters preserve document structure:
+
+**SemanticMarkdownSplitter** (HTML, Markdown):
+
+- Analyzes heading hierarchy (H1-H6)
+- Creates hierarchical paths like `["Guide", "Installation", "Setup"]`
+- Preserves code blocks, tables, and list structures
+- Maintains parent-child relationships
+
+**JsonDocumentSplitter** (JSON):
+
+- Object and property-level splitting
+- Hierarchical path construction
+- Concatenation-friendly chunk design
+- Structural context preservation
+
+**TextDocumentSplitter** (Source Code, Text):
+
+- Line-based splitting with context
+- Simple hierarchical structure
+- Language-aware processing
+- Temporary until syntax-aware implementation
+
+### Phase 2: Size Optimization
+
+**GreedySplitter** applies universal optimization:
+
+```typescript
+// Size optimization while preserving semantic boundaries
+const chunks = await greedySplitter.splitText(semanticChunks);
+```
+
+- **Greedy Concatenation**: Merges small chunks until minimum size
+- **Boundary Respect**: Preserves major section breaks (H1/H2 headings)
+- **Metadata Merging**: Combines chunk metadata intelligently
+- **Context Preservation**: Maintains hierarchical relationships
+
+## Chunk Structure and Relationships
+
+### ContentChunk Format
 
 ```typescript
 {
-  types: ["text", "code", "table", "heading"],
-  content: "...",
+  types: ["text", "code", "table"],  // Content types present
+  content: "...",                    // Actual content text
   section: {
-    level: 2,                    // Heading depth (1-6)
-    path: ["Guide", "Setup"]     // Hierarchical path
+    level: 2,                        // Heading depth (1-6)
+    path: ["Guide", "Setup"]         // Hierarchical path
   }
 }
 ```
 
-**Relationship Determination:**
+### Hierarchical Relationships
 
-- **Parent**: Path with one fewer element (`["Guide"]` is parent of `["Guide", "Setup"]`)
+- **Parent**: Path with one fewer element
 - **Children**: Paths extending current by one level
-- **Siblings**: Same path length with shared parent path
+- **Siblings**: Same path length with shared parent
 - **Context**: Related chunks automatically included in search results
 
-### Content Type Handling
+### Search Context Retrieval
 
-Different content types receive specialized processing:
-
-**Text Content:**
-
-- Hierarchical splitting: paragraphs → lines → words
-- Semantic boundary preservation
-- Context-aware merging
-
-**Code Blocks:**
-
-- Line-based splitting preserving syntax
-- Language detection and formatting
-- Complete code context maintenance
-
-**Tables:**
-
-- Row-based splitting maintaining structure
-- Header preservation across chunks
-- Markdown format consistency
-
-### Semantic Chunking
-
-Content splits based on document structure rather than arbitrary size:
-
-**Structure-Aware Splitting:**
-
-- Respect heading boundaries
-- Keep code blocks intact
-- Preserve table structure
-- Maintain list coherence
-
-**Context Preservation:**
-
-- Include parent heading context
-- Preserve sibling relationships
-- Maintain source URL attribution
-- Sequential ordering for navigation
-
-### Chunking Strategies
-
-**GreedySplitter:**
-
-- Maximum chunk size with overflow handling
-- Simple implementation for basic content
-- Size-based splitting with structure hints
-
-**SemanticMarkdownSplitter:**
-
-- Markdown structure-aware chunking
-- Heading hierarchy preservation
-- Code block and table integrity
-- Context-rich chunk boundaries
-
-## Context and Relationships
-
-### Hierarchical Context Retrieval
-
-The system maintains rich contextual relationships between chunks:
-
-**Automatic Context Inclusion:**
-
-- Parent chunks provide broader context
-- Child chunks offer detailed exploration
-- Sibling chunks enable lateral navigation
-- Sequential ordering preserves document flow
-
-**Search Enhancement:**
-When a chunk matches a search query, the system automatically includes:
+When returning search results, the system provides comprehensive context:
 
 - The matching chunk itself
-- Its parent chunk (for broader context)
-- Preceding and subsequent siblings (for navigation)
-- Direct child chunks (for deeper exploration)
+- Parent chunks for broader context
+- Previous and following siblings for navigation
+- Direct child chunks for deeper exploration
 
-### Metadata Preservation
+This approach ensures users receive coherent, contextual results regardless of content type.
 
-Each chunk preserves comprehensive metadata:
+## Content Examples
 
-**Document Context:**
+### Markdown Document Processing
 
-- Source URL and attribution
-- Library and version information
-- Processing timestamp and configuration
+**Input Structure:**
 
-**Structural Context:**
-
-- Hierarchical path and heading level
-- Content types present in chunk
-- Sequential position within document
-
-**Search Context:**
-
-- Relevance scores and ranking
-- Related chunk references
-- Cross-document relationships
-
-## Processing Examples
-
-### Example: Technical Documentation
-
-**Input Document Structure:**
-
-```
+```markdown
 # API Reference
+
 ## Authentication
+
 ### OAuth Setup
+
 #### Client Configuration
-Some OAuth client setup details...
+
+OAuth client setup details...
+
 #### Server Configuration
+
 Server-side OAuth configuration...
-## Endpoints
-### User Management
-#### GET /users
-Returns list of users...
 ```
 
-**Generated Hierarchy:**
+**Generated Chunks:**
 
+```typescript
+[
+  {
+    types: ["heading"],
+    content: "# API Reference",
+    section: { level: 1, path: ["API Reference"] },
+  },
+  {
+    types: ["heading", "text"],
+    content: "## Authentication\nAuthentication overview...",
+    section: { level: 2, path: ["API Reference", "Authentication"] },
+  },
+  {
+    types: ["heading", "text"],
+    content: "#### Client Configuration\nOAuth client setup details...",
+    section: {
+      level: 4,
+      path: [
+        "API Reference",
+        "Authentication",
+        "OAuth Setup",
+        "Client Configuration",
+      ],
+    },
+  },
+];
 ```
-Chunk 1: {
-  path: ["API Reference"],
-  level: 1,
-  content: "# API Reference\n[overview content]"
-}
 
-Chunk 2: {
-  path: ["API Reference", "Authentication"],
-  level: 2,
-  content: "## Authentication\n[auth overview]"
-}
+### JSON File Processing
 
-Chunk 3: {
-  path: ["API Reference", "Authentication", "OAuth Setup", "Client Configuration"],
-  level: 4,
-  content: "#### Client Configuration\nSome OAuth client setup details..."
+**Input JSON:**
+
+```json
+{
+  "name": "my-package",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.0",
+    "lodash": "^4.17.21"
+  }
 }
 ```
 
-**Relationship Resolution:**
+**Generated Chunks:**
 
-- Chunk 3's parent: Chunk with path `["API Reference", "Authentication", "OAuth Setup"]`
-- Chunk 3's siblings: Other chunks with 4-element paths sharing the same first 3 elements
-- Chunk 2's children: All chunks with paths starting with `["API Reference", "Authentication"]`
+```typescript
+[
+  {
+    types: ["code"],
+    content: "{",
+    section: { level: 1, path: ["package.json"] },
+  },
+  {
+    types: ["code"],
+    content: '  "name": "my-package",',
+    section: { level: 2, path: ["package.json", "name"] },
+  },
+  {
+    types: ["code"],
+    content:
+      '  "dependencies": {\n    "express": "^4.18.0",\n    "lodash": "^4.17.21"\n  },',
+    section: { level: 2, path: ["package.json", "dependencies"] },
+  },
+  {
+    types: ["code"],
+    content: "}",
+    section: { level: 1, path: ["package.json"] },
+  },
+];
+```
 
-## Content Filtering
+### Source Code Processing
 
-### Noise Removal
+**Input TypeScript:**
 
-Automatic filtering of common noise:
+```typescript
+export class UserService {
+  async getUser(id: string): Promise<User> {
+    return await this.db.users.findById(id);
+  }
+}
+```
+
+**Generated Chunks:**
+
+```typescript
+[
+  {
+    types: ["code"],
+    content: "export class UserService {",
+    section: { level: 1, path: ["UserService.ts", "UserService"] },
+  },
+  {
+    types: ["code"],
+    content:
+      "  async getUser(id: string): Promise<User> {\n    return await this.db.users.findById(id);\n  }",
+    section: { level: 2, path: ["UserService.ts", "UserService", "getUser"] },
+  },
+];
+```
+
+## Error Handling and Quality Control
+
+### Content Filtering
+
+Automatic filtering of low-quality content:
 
 - Navigation menus and sidebars
-- Advertisement content
-- Cookie notices and popups
-- Social media widgets
-- Comment sections
-
-### Content Quality
-
-Quality assessment and filtering:
-
-- Minimum content length thresholds
-- Language detection and filtering
+- Advertisement content and widgets
+- Boilerplate text and templates
 - Duplicate content detection
-- Boilerplate text removal
+- Minimum content length thresholds
 
-## URL Context Management
+### Error Recovery
 
-### Link Resolution
+Graceful handling of processing errors:
 
-Process and resolve various link types:
+- **Recoverable Errors**: Retry with backoff
+- **Content Errors**: Skip and continue processing
+- **Fatal Errors**: Stop with detailed error information
+- **Warning Conditions**: Log and continue
 
-- Absolute URLs preserved as-is
-- Relative URLs resolved against base URL
-- Fragment links handled appropriately
-- Invalid links logged and skipped
+### Progress Tracking
 
-### URL Normalization
-
-Consistent URL formatting:
-
-- Protocol normalization (http/https)
-- Path canonicalization
-- Query parameter ordering
-- Fragment handling
-
-### Scope Management
-
-Content scoping based on configuration:
-
-- Same-domain restrictions
-- Path prefix limitations
-- Maximum depth enforcement
-- URL pattern filtering
-
-## Progress Tracking
-
-### Processing Metrics
-
-Track processing progress:
-
-- Pages discovered vs processed
-- Processing rate (pages/minute)
-- Error count and types
-- Memory usage and performance
-
-### Real-time Updates
-
-Progress reporting through callbacks:
+Real-time processing feedback:
 
 - Page-level progress updates
-- Status change notifications
-- Error and warning reporting
-- Completion estimates
-
-## Error Handling
-
-### Graceful Degradation
-
-Handle various error conditions:
-
-- Network timeouts and failures
-- Invalid content format
-- Parsing errors
-- Memory limitations
-
-### Error Classification
-
-Different error handling strategies:
-
-- **Recoverable**: Retry with backoff
-- **Content**: Skip and continue
-- **Fatal**: Stop processing with error
-- **Warning**: Log and continue
-
-### Error Reporting
-
-Comprehensive error information:
-
-- Specific error messages
-- Processing context
-- URL and content details
-- Stack traces for debugging
-
-## Content Optimization
-
-### Memory Management
-
-Efficient memory usage:
-
-- Streaming content processing
-- Chunk-based processing
-- Memory-mapped files for large content
-- Garbage collection optimization
-
-### Performance Tuning
-
-Processing optimization:
-
-- Parallel content fetching
-- Cached DOM parsing
-- Efficient text processing
-- Database batch operations
-
-### Resource Limits
-
-Configurable resource constraints:
-
-- Maximum page size
-- Processing timeout limits
-- Memory usage caps
-- Concurrent request limits
+- Processing rate metrics
+- Error count and classification
+- Memory usage monitoring
 
 ## Integration Points
 
 ### Embedding Generation
 
-Content flows to embedding generation:
+Processed chunks flow to embedding generation:
 
-- Consistent chunk formatting
-- Metadata preservation
+- Consistent chunk formatting across content types
+- Metadata preservation for search enhancement
+- Provider-specific formatting (OpenAI, Google, Azure, AWS)
 - Vector dimension consistency
-- Provider-specific formatting
 
 ### Storage Layer
 
-Processed content storage:
+Database storage maintains relationships:
 
-- Normalized chunk structure
-- Metadata preservation
-- URL and context attribution
-- Sequential ordering maintenance
+- Hierarchical path indexing
+- Content type classification
+- URL and source attribution
+- Search optimization indexes
+
+### Search and Retrieval
+
+Context-aware search results:
+
+- Vector similarity matching
+- Hierarchical context inclusion
+- Cross-document relationship preservation
+- Relevance scoring and ranking

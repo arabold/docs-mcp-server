@@ -473,4 +473,123 @@ describe("LocalFileStrategy", () => {
     expect(calledUrls).toContain("file:///test%20dir/file%20with%20space.md");
     expect(calledUrls).toContain("file:///test%20dir/normal.md");
   });
+
+  it("should process JSON files through JsonPipeline", async () => {
+    const strategy = new LocalFileStrategy();
+    const options: ScraperOptions = {
+      url: "file:///api-docs.json",
+      library: "test-api",
+      version: "1.0.0",
+      maxPages: 1,
+      maxDepth: 0,
+    };
+    const progressCallback = vi.fn();
+
+    // Create a JSON file with API documentation structure
+    const jsonContent = JSON.stringify(
+      {
+        title: "Test API Documentation",
+        version: "1.0.0",
+        endpoints: {
+          users: {
+            get: {
+              description: "Get all users",
+              method: "GET",
+              path: "/users",
+            },
+            post: {
+              description: "Create a new user",
+              method: "POST",
+              path: "/users",
+              body: {
+                name: "string",
+                email: "string",
+              },
+            },
+          },
+        },
+        schemas: {
+          User: {
+            id: "integer",
+            name: "string",
+            email: "string",
+          },
+        },
+      },
+      null,
+      2,
+    );
+
+    vol.fromJSON(
+      {
+        "/api-docs.json": jsonContent,
+      },
+      "/",
+    );
+
+    await strategy.scrape(options, progressCallback);
+
+    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pagesScraped: 1,
+        currentUrl: "file:///api-docs.json",
+        depth: 0,
+        maxDepth: 0,
+        totalPages: 1,
+        totalDiscovered: 1,
+        document: expect.objectContaining({
+          content: jsonContent,
+          contentType: "application/json",
+          metadata: expect.objectContaining({
+            library: "test-api",
+            title: "Test API Documentation",
+            url: "file:///api-docs.json",
+            version: "1.0.0",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("should handle malformed file URLs with only two slashes", async () => {
+    const strategy = new LocalFileStrategy();
+    const options: ScraperOptions = {
+      url: "file://testdir/test.md", // Note: only two slashes (malformed)
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 0,
+      maxConcurrency: 1,
+    };
+    const progressCallback = vi.fn();
+    const testContent = "# Test Content\nThis is a test file.";
+
+    vol.fromJSON(
+      {
+        "/testdir/test.md": testContent,
+      },
+      "/",
+    );
+
+    await strategy.scrape(options, progressCallback);
+
+    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pagesScraped: 1,
+        currentUrl: "file://testdir/test.md", // Original malformed URL preserved
+        document: expect.objectContaining({
+          content: testContent,
+          contentType: "text/markdown",
+          metadata: expect.objectContaining({
+            title: "Test Content",
+            url: "file://testdir/test.md",
+            library: "test",
+            version: "1.0",
+          }),
+        }),
+      }),
+    );
+  });
 });

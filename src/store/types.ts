@@ -42,6 +42,7 @@ export interface StoreSearchResult {
   url: string;
   content: string;
   score: number | null;
+  mimeType?: string;
 }
 
 /**

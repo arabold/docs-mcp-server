@@ -118,11 +118,17 @@ export class DocumentRetrieverService {
     const docs = await this.documentStore.findChunksByIds(library, version, ids);
     // Already sorted by sort_order in findChunksByIds
     const content = docs.map((d) => d.pageContent).join("\n\n");
+
+    // Extract mimeType from the first document's metadata (all chunks from same URL should have same MIME type)
+    const mimeType =
+      docs.length > 0 ? (docs[0].metadata.mimeType as string | undefined) : undefined;
+
     // TODO: Apply code block merging here if/when implemented
     return {
       url,
       content,
       score: maxScore,
+      mimeType,
     };
   }
 

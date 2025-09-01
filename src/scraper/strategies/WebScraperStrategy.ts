@@ -3,8 +3,7 @@ import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
 import { HttpFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
-import { HtmlPipeline } from "../pipelines/HtmlPipeline";
-import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
+import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, ProcessedContent } from "../pipelines/types";
 import type { ScraperOptions, ScraperProgress } from "../types";
 import { isInScope } from "../utils/scope";
@@ -18,16 +17,12 @@ export interface WebScraperStrategyOptions {
 export class WebScraperStrategy extends BaseScraperStrategy {
   private readonly httpFetcher = new HttpFetcher();
   private readonly shouldFollowLinkFn?: (baseUrl: URL, targetUrl: URL) => boolean;
-  private readonly htmlPipeline: HtmlPipeline;
-  private readonly markdownPipeline: MarkdownPipeline;
   private readonly pipelines: ContentPipeline[];
 
   constructor(options: WebScraperStrategyOptions = {}) {
     super({ urlNormalizerOptions: options.urlNormalizerOptions });
     this.shouldFollowLinkFn = options.shouldFollowLink;
-    this.htmlPipeline = new HtmlPipeline();
-    this.markdownPipeline = new MarkdownPipeline();
-    this.pipelines = [this.htmlPipeline, this.markdownPipeline];
+    this.pipelines = PipelineFactory.createStandardPipelines();
   }
 
   canHandle(url: string): boolean {
@@ -72,6 +67,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       let processed: ProcessedContent | undefined;
       for (const pipeline of this.pipelines) {
         if (pipeline.canProcess(rawContent)) {
+          logger.debug(
+            `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
+          );
           processed = await pipeline.process(rawContent, options, this.httpFetcher);
           break;
         }
@@ -155,9 +153,14 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       // Call the base class scrape method
       await super.scrape(options, progressCallback, signal);
     } finally {
-      // Ensure the browser instance is closed
-      await this.htmlPipeline.close();
-      await this.markdownPipeline.close();
+      // Close all pipelines that support cleanup
+      await Promise.all(
+        this.pipelines.map(async (pipeline) => {
+          if ("close" in pipeline && typeof pipeline.close === "function") {
+            await pipeline.close();
+          }
+        }),
+      );
     }
   }
 }

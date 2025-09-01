@@ -371,4 +371,115 @@ ${codeLines}
     // Each chunk should be under the max size
     expect(result.every((chunk) => chunk.content.length <= 20)).toBe(true);
   });
+
+  it("should handle JSON code blocks in markdown properly", async () => {
+    const markdown = `
+# API Documentation
+
+Here's an example API response:
+
+\`\`\`json
+{
+  "name": "test-library",
+  "version": "1.0.0",
+  "dependencies": {
+    "react": "^18.0.0",
+    "lodash": "^4.17.21"
+  }
+}
+\`\`\`
+
+This JSON shows the package structure.
+`;
+
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const chunks = await splitter.splitText(markdown);
+
+    expect(chunks).toHaveLength(4);
+
+    // Should have heading chunk
+    expect(chunks[0]).toEqual({
+      types: ["heading"],
+      content: "# API Documentation",
+      section: {
+        level: 1,
+        path: ["API Documentation"],
+      },
+    });
+
+    // Should have text chunk
+    expect(chunks[1]).toEqual({
+      types: ["text"],
+      content: "Here's an example API response:",
+      section: {
+        level: 1,
+        path: ["API Documentation"],
+      },
+    });
+
+    // Should have JSON code block chunk with preserved formatting
+    expect(chunks[2].types).toEqual(["code"]);
+    expect(chunks[2].content).toMatch(/^```json\n/);
+    expect(chunks[2].content).toMatch(/\n```$/);
+    expect(chunks[2].content).toContain("test-library");
+    expect(chunks[2].content).toContain("react");
+    expect(chunks[2].section).toEqual({
+      level: 1,
+      path: ["API Documentation"],
+    });
+
+    // Should have final text chunk
+    expect(chunks[3]).toEqual({
+      types: ["text"],
+      content: "This JSON shows the package structure.",
+      section: {
+        level: 1,
+        path: ["API Documentation"],
+      },
+    });
+  });
+
+  it("should handle raw JSON as plain text in edge cases", async () => {
+    // This simulates the edge case where JSON content somehow gets processed as markdown
+    // In practice, this should be rare because JSON should be routed to JsonPipeline
+    const rawJson = `{"name": "test", "version": "1.0.0"}`;
+
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const chunks = await splitter.splitText(rawJson);
+
+    // Should treat as plain text content
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toContain("test");
+    expect(chunks[0].content).toContain("1.0.0");
+    expect(chunks[0].section.path).toEqual([]);
+    expect(chunks[0].types).toEqual(["text"]);
+  });
+
+  it("should handle invalid JSON as plain text", async () => {
+    const invalidJson = `{
+      "name": "test-library",
+      "version": "1.0.0"
+      // This comment makes it invalid JSON
+      "invalid": true
+    }`;
+
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const chunks = await splitter.splitText(invalidJson);
+
+    // Should treat as plain text content without structural splitting
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].section.path).toEqual([]);
+  });
+
+  it("should preserve content for non-JSON text", async () => {
+    const textContent = `This is not JSON at all, just plain text content that should be preserved.`;
+
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const chunks = await splitter.splitText(textContent);
+
+    // Should preserve the content as-is in a single chunk
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toContain(textContent);
+    expect(chunks[0].section.path).toEqual([]);
+  });
 });

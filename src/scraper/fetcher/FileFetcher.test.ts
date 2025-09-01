@@ -184,4 +184,20 @@ describe("FileFetcher", () => {
     // encoding should be undefined as files are not compressed
     expect(result.encoding).toBeUndefined();
   });
+
+  it("should handle malformed file URLs with only two slashes", async () => {
+    const fetcher = new FileFetcher();
+    const mockContent = "Hello, malformed URL!";
+
+    // Create a virtual file system
+    vol.fromJSON({
+      "/Users/testuser/foo/bar/file.txt": mockContent,
+    });
+
+    // Test with malformed URL (file:// instead of file:///)
+    const result = await fetcher.fetch("file://Users/testuser/foo/bar/file.txt");
+    expect(result.content.toString()).toBe(mockContent);
+    expect(result.mimeType).toBe("text/plain");
+    expect(result.source).toBe("file://Users/testuser/foo/bar/file.txt");
+  });
 });

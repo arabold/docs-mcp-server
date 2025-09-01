@@ -50,6 +50,7 @@
 - Use AlpineJS for frontend components and TailwindCSS for styling.
 - Use TSX with kitajs for AlpineJS components.
 - Use HTMX for server-side interactions.
+- Avoid `{foo && <Bar />}` in TSX; use ternary expressions instead.
 
 ## Logging
 
