@@ -52,16 +52,16 @@ const JobItem = ({ job }: JobItemProps) => {
           ) : null}
 
           {/* Error message display */}
-          {(job.errorMessage || job.error) && (
+          {job.errorMessage || job.error ? (
             <div class="mt-2 p-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded text-xs">
               <div class="font-medium text-red-800 dark:text-red-300 mb-1">
                 Error:
               </div>
-              <div class="text-red-700 dark:text-red-400">
+              <div safe class="text-red-700 dark:text-red-400">
                 {job.errorMessage || job.error}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         <div class="flex flex-col items-end gap-2 ml-4">
@@ -150,12 +150,12 @@ const JobItem = ({ job }: JobItemProps) => {
               </button>
             )}
           </div>
-          {job.error && (
+          {job.error ? (
             // Keep the error badge for clarity if an error occurred
             <span class="bg-red-100 text-red-800 text-xs font-medium px-1.5 py-0.5 rounded dark:bg-red-900 dark:text-red-300">
               Error
             </span>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
