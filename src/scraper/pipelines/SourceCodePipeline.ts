@@ -1,5 +1,5 @@
 import { GreedySplitter } from "../../splitter";
-import { TextDocumentSplitter } from "../../splitter/TextDocumentSplitter";
+import { SourceCodeDocumentSplitter } from "../../splitter/SourceCodeDocumentSplitter";
 import {
   SPLITTER_MIN_CHUNK_SIZE,
   SPLITTER_PREFERRED_CHUNK_SIZE,
@@ -14,8 +14,8 @@ import type { ProcessedContent } from "./types";
 
 /**
  * Pipeline for processing source code content with semantic splitting and size optimization.
- * Handles programming language files by using TextDocumentSplitter for line-based splitting
- * with proper language detection, followed by GreedySplitter for universal size optimization.
+ * Handles programming language files by using SourceCodeDocumentSplitter for structure-aware
+ * splitting with proper language detection, followed by GreedySplitter for universal size optimization.
  */
 export class SourceCodePipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
@@ -27,8 +27,14 @@ export class SourceCodePipeline extends BasePipeline {
     this.middleware = [];
 
     // Create the two-phase splitting: semantic + size optimization
-    const textSplitter = new TextDocumentSplitter({ maxChunkSize: chunkSize });
-    this.splitter = new GreedySplitter(textSplitter, SPLITTER_MIN_CHUNK_SIZE, chunkSize);
+    const sourceCodeSplitter = new SourceCodeDocumentSplitter({
+      maxChunkSize: chunkSize,
+    });
+    this.splitter = new GreedySplitter(
+      sourceCodeSplitter,
+      SPLITTER_MIN_CHUNK_SIZE,
+      chunkSize,
+    );
   }
 
   canProcess(rawContent: RawContent): boolean {
