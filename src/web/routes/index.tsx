@@ -41,15 +41,54 @@ export function registerIndexRoute(server: FastifyInstance) {
               </div>
             </div>
           </section>
-          {/* Add New Job Section */}
+          {/* Add Content Section - Tabbed Interface */}
           <section class="mb-8">
-            {/* Container for the add job form, loaded via HTMX */}
-            <div id="addJobForm" hx-get="/web/jobs/new" hx-trigger="load">
-              {/* Initial loading state (optional, could just be empty) */}
-              <div class="p-6 bg-white rounded-lg shadow dark:bg-gray-800 animate-pulse">
-                <div class="h-6 bg-gray-200 rounded-full dark:bg-gray-700 w-1/3 mb-4" />
-                <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-full mb-2.5" />
-                <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-full mb-2.5" />
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-300 dark:border-gray-600">
+              {/* Tab Navigation */}
+              <div class="border-b border-gray-200 dark:border-gray-600" x-data="{ activeTab: 'scrape' }">
+                <nav class="-mb-px flex">
+                  <button
+                    class="py-3 px-6 text-sm font-medium border-b-2 transition-colors duration-150"
+                    x-bind:class="activeTab === 'scrape' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
+                    x-on:click="activeTab = 'scrape'"
+                    type="button"
+                  >
+                    Scrape Documentation
+                  </button>
+                  <button
+                    class="py-3 px-6 text-sm font-medium border-b-2 transition-colors duration-150"
+                    x-bind:class="activeTab === 'plaintext' ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'"
+                    x-on:click="activeTab = 'plaintext'"
+                    type="button"
+                  >
+                    Add Plaintext Content
+                  </button>
+                </nav>
+
+                {/* Scrape Tab Content */}
+                <div x-show="activeTab === 'scrape'" x-transition>
+                  <div id="addJobForm" hx-get="/web/jobs/new" hx-trigger="load">
+                    {/* Initial loading state for scrape form */}
+                    <div class="p-6 animate-pulse">
+                      <div class="h-6 bg-gray-200 rounded-full dark:bg-gray-700 w-1/3 mb-4" />
+                      <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-full mb-2.5" />
+                      <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-full mb-2.5" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Plaintext Tab Content */}
+                <div x-show="activeTab === 'plaintext'" x-transition>
+                  <div id="addPlaintextForm" hx-get="/web/plaintext/new" hx-trigger="intersect once">
+                    {/* Initial loading state for plaintext form */}
+                    <div class="p-6 animate-pulse">
+                      <div class="h-6 bg-gray-200 rounded-full dark:bg-gray-700 w-1/3 mb-4" />
+                      <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-full mb-2.5" />
+                      <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-full mb-2.5" />
+                      <div class="h-20 bg-gray-200 rounded dark:bg-gray-700 mb-2.5" />
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </section>

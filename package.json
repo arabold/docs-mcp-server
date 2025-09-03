@@ -27,7 +27,7 @@
     "server": "node --enable-source-maps dist/index.ts",
     "web": "node --enable-source-maps dist/index.ts web",
     "dev": "vite-node --watch src/index.ts",
-    "dev:server": "vite-node --watch src/index.ts",
+    "dev:server": "vite-node --watch src/index.ts --verbose",
     "dev:server:stdio": "vite-node --watch src/index.ts -- --protocol stdio",
     "dev:server:http": "vite-node --watch src/index.ts -- --protocol http",
     "dev:web": "npm-run-all --parallel dev:web:assets dev:web:bin",

@@ -8,3 +8,6 @@ public/assets/
 !*.env.example
 *.code-workspace
 .tsbuildinfo
+.idea
+docs-mcp-data/**
+server.pid

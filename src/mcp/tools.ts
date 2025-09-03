@@ -8,6 +8,7 @@ import {
   GetJobInfoTool,
   ListJobsTool,
   ListLibrariesTool,
+  PlaintextTool,
   RemoveTool,
   ScrapeTool,
   SearchTool,
@@ -26,6 +27,7 @@ export interface McpServerTools {
   cancelJob: CancelJobTool;
   remove: RemoveTool;
   fetchUrl: FetchUrlTool;
+  addPlaintext: PlaintextTool;
 }
 
 /**
@@ -50,6 +52,7 @@ export async function initializeTools(
     // clearCompletedJobs: new ClearCompletedJobsTool(pipeline),
     remove: new RemoveTool(docService, pipeline),
     fetchUrl: new FetchUrlTool(new HttpFetcher(), new FileFetcher()),
+    addPlaintext: new PlaintextTool(docService),
   };
 
   return tools;

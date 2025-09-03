@@ -393,6 +393,65 @@ ${r.content}\n`,
         }
       },
     );
+
+    // Add plaintext tool
+    server.tool(
+      "add_plaintext",
+      "Add plaintext content directly to the document store. This bypasses scraping and allows adding custom documentation content.",
+      {
+        library: z.string().describe("Library name for the content."),
+        version: z
+          .string()
+          .optional()
+          .describe("Library version (optional, uses unversioned if omitted)."),
+        title: z.string().describe("Title for the document."),
+        content: z.string().describe("Plaintext content to add."),
+        url: z
+          .string()
+          .optional()
+          .describe("Optional custom URL (synthetic URL will be generated if omitted)."),
+        description: z
+          .string()
+          .optional()
+          .describe("Optional description for the content."),
+        tags: z
+          .array(z.string())
+          .optional()
+          .describe("Optional tags for categorization."),
+      },
+      {
+        title: "Add Plaintext Content",
+        destructiveHint: true, // modifies document store
+      },
+      async ({ library, version, title, content, url, description, tags }) => {
+        try {
+          const result = await tools.addPlaintext.execute({
+            library,
+            version,
+            title,
+            content,
+            url,
+            metadata: {
+              description,
+              tags,
+              contentType: "text/plain",
+            },
+          });
+
+          return createResponse(
+            `✅ Successfully added plaintext document: "${title}" to ${library}${version ? `@${version}` : ""}\n` +
+              `📄 Documents added: ${result.documentsAdded}\n` +
+              `🔗 URL: ${result.url}`,
+          );
+        } catch (error) {
+          return createError(
+            `Failed to add plaintext content: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      },
+    );
   }
 
   // Fetch URL tool
