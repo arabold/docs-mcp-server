@@ -2,6 +2,7 @@
  * Interface for document management operations exposed externally.
  * Implemented by the local DocumentManagementService and the remote tRPC client.
  */
+import type { Document } from "@langchain/core/documents";
 import type { ScraperOptions } from "../../scraper/types";
 import type {
   DbVersionWithLibrary,
@@ -31,6 +32,11 @@ export interface IDocumentManagement {
   ): Promise<StoreSearchResult[]>;
   removeAllDocuments(library: string, version?: string | null): Promise<void>;
   removeVersion(library: string, version?: string | null): Promise<void>;
+  addDocument(
+    library: string,
+    version: string | null | undefined,
+    document: Document,
+  ): Promise<void>;
 
   // Minimal set used indirectly by pipeline/UI where needed
   getVersionsByStatus(statuses: VersionStatus[]): Promise<DbVersionWithLibrary[]>;

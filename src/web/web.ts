@@ -9,6 +9,7 @@ import { CancelJobTool } from "../tools/CancelJobTool";
 import { ClearCompletedJobsTool } from "../tools/ClearCompletedJobsTool";
 import { ListJobsTool } from "../tools/ListJobsTool";
 import { ListLibrariesTool } from "../tools/ListLibrariesTool";
+import { PlaintextTool } from "../tools/PlaintextTool";
 import { RemoveTool } from "../tools/RemoveTool";
 import { ScrapeTool } from "../tools/ScrapeTool";
 import { logger } from "../utils/logger";
@@ -20,6 +21,7 @@ import { registerJobListRoutes } from "./routes/jobs/list";
 import { registerNewJobRoutes } from "./routes/jobs/new";
 import { registerLibraryDetailRoutes } from "./routes/libraries/detail";
 import { registerLibrariesRoutes } from "./routes/libraries/list";
+import { registerPlaintextRoutes } from "./routes/plaintext/add";
 
 /**
  * Initializes the Fastify web server instance.
@@ -49,6 +51,7 @@ export async function startWebServer(
   const searchTool = new SearchTool(docService);
   const cancelJobTool = new CancelJobTool(pipelineManager);
   const clearCompletedJobsTool = new ClearCompletedJobsTool(pipelineManager);
+  const plaintextTool = new PlaintextTool(docService);
 
   // Register static file serving
   await server.register(fastifyStatic, {
@@ -66,6 +69,7 @@ export async function startWebServer(
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
   registerLibrariesRoutes(server, listLibrariesTool, removeTool);
   registerLibraryDetailRoutes(server, listLibrariesTool, searchTool);
+  registerPlaintextRoutes(server, plaintextTool);
 
   // Graceful shutdown of services will be handled by the caller (src/index.ts)
 

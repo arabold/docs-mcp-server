@@ -2,6 +2,8 @@
  * tRPC client for the document management API.
  * Implements IDocumentManagement and delegates to /api data router.
  */
+
+import type { Document } from "@langchain/core/documents";
 import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
 import type { ScraperOptions } from "../scraper/types";
 import { logger } from "../utils/logger";
@@ -69,6 +71,16 @@ export class DocumentManagementClient implements IDocumentManagement {
 
   async removeAllDocuments(library: string, version?: string | null): Promise<void> {
     await this.client.removeAllDocuments.mutate({ library, version: version ?? null });
+  }
+
+  async addDocument(
+    library: string,
+    version: string | null | undefined,
+    document: Document,
+  ): Promise<void> {
+    throw new Error(
+      "addDocument is not supported for remote document management clients. Use the local DocumentManagementService instead.",
+    );
   }
 
   async getVersionsByStatus(statuses: VersionStatus[]): Promise<DbVersionWithLibrary[]> {

@@ -12,6 +12,7 @@ import { CancelJobTool } from "../tools/CancelJobTool";
 import { ClearCompletedJobsTool } from "../tools/ClearCompletedJobsTool";
 import { ListJobsTool } from "../tools/ListJobsTool";
 import { ListLibrariesTool } from "../tools/ListLibrariesTool";
+import { PlaintextTool } from "../tools/PlaintextTool";
 import { RemoveTool } from "../tools/RemoveTool";
 import { ScrapeTool } from "../tools/ScrapeTool";
 import { registerIndexRoute } from "../web/routes/index";
@@ -21,6 +22,7 @@ import { registerJobListRoutes } from "../web/routes/jobs/list";
 import { registerNewJobRoutes } from "../web/routes/jobs/new";
 import { registerLibraryDetailRoutes } from "../web/routes/libraries/detail";
 import { registerLibrariesRoutes } from "../web/routes/libraries/list";
+import { registerPlaintextRoutes } from "../web/routes/plaintext/add";
 
 /**
  * Register web interface routes on a Fastify server instance.
@@ -45,6 +47,9 @@ export async function registerWebService(
   const cancelJobTool = new CancelJobTool(pipeline);
   const clearCompletedJobsTool = new ClearCompletedJobsTool(pipeline);
 
+  // Instantiate plaintext tool and register plaintext routes
+  const plaintextTool = new PlaintextTool(docService);
+
   // Register all web routes
   registerIndexRoute(server);
   registerLibrariesRoutes(server, listLibrariesTool, removeTool);
@@ -53,4 +58,5 @@ export async function registerWebService(
   registerNewJobRoutes(server, scrapeTool);
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
+  registerPlaintextRoutes(server, plaintextTool);
 }
