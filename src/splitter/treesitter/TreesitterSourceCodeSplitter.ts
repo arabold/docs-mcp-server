@@ -1,23 +1,9 @@
 /**
- * TreesitterSourceCodeSplitter - M    // Initialize registry and text splitter
-    this.registry = new LanguageParserRegistry();
-    this.textContentSplitter = new TextContentSplitter({
-      chunkSize: this.options.maxChunkSize,
-    });plitter implementation using tree-sitter
+ * Tree-sitter based source code splitter.
  *
- * Replaces the regex-based SourceC      // Apply two-phase splitting - use TextContentSplitter on this segment
-      const segmentChunks = await this.splitContentIntoChunks(
-        segment.content,
-        path,
-        level,
-      );
-      chunks.push(...segmentChunks);
-    }
-
-    return chunks;Splitter with semantic parsing
- * using tree-sitter AST. Maintains compatibility with existing chunk patterns
- * and hierarchical structure while providing robust parsing for JavaScript,
- * TypeScript, JSX, and TSX files.
+ * Provides semantic parsing and chunking of source code using tree-sitter ASTs.
+ * Maintains compatibility with existing chunk patterns and hierarchical structure,
+ * while providing robust parsing for JavaScript, TypeScript, JSX, and TSX files.
  */
 
 import { SPLITTER_MAX_CHUNK_SIZE } from "../../utils";

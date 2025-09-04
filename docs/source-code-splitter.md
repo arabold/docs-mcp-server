@@ -2,60 +2,54 @@
 
 ## Overview
 
-The Source Code Splitter transforms source code files into hierarchical, concatenable chunks that preserve code structure while enabling effective semantic search. The system uses a boundary detection approach combined with content delegation to create minimal building-block chunks that can be reassembled through concatenation.
+The Source Code Splitter transforms source code files into hierarchical, concatenable chunks that preserve semantic structure while enabling effective code search. The system uses tree-sitter for precise syntax tree parsing to detect semantic boundaries, creating context-aware chunks that respect language structure.
 
 ## Design Philosophy
 
-### Boundary Detection + Content Delegation
+### Tree-sitter Semantic Boundaries
 
-Rather than attempting to parse entire source files with regex, the splitter focuses on detecting structural boundaries (classes, functions, methods) and delegates content processing to the existing `TextDocumentSplitter`. This approach provides:
+The splitter uses tree-sitter parsers to identify semantic boundaries in source code, providing:
 
-- **Simplicity**: Boundary detection is much simpler than full parsing
-- **Robustness**: Leverages proven TextSplitter logic for content handling
-- **Maintainability**: Clear separation of concerns between structure and content
-- **Extensibility**: Easy to add support for additional programming languages
+- **Precision**: Syntax tree analysis ensures accurate boundary detection
+- **Language Awareness**: Native support for JavaScript, TypeScript, JSX, and TSX
+- **Semantic Chunking**: One chunk per function/method/class with proper hierarchy
+- **Hierarchical Structure**: Chunks maintain proper nesting relationships
 
-### Concatenable Chunks
+### Documentation-Focused Chunking
 
-Following the pattern established by `JsonDocumentSplitter`, each chunk is designed as a building block:
+The chunking strategy prioritizes indexing public interfaces and maintaining comment-signature relationships:
 
-- Opening chunks: Class/function declarations
-- Content chunks: Method bodies, loose code, comments
-- Closing chunks: Closing braces with proper indentation
-- Hierarchical paths: Enable proper reassembly and context understanding
+- **Public Interface Emphasis**: Captures outward-facing class methods and top-level functions
+- **Comment Preservation**: Documentation comments stay with their associated code
+- **Hierarchical Paths**: Enable semantic search within code structure
+- **Concatenable Chunks**: Chunks can be reassembled to reconstruct original context
 
 ## Architecture Components
 
 ```mermaid
 graph TD
-    subgraph "Source Code Input"
-        A[TypeScript/JavaScript File]
+    subgraph "Tree-sitter Parsing"
+        A[Source Code File]
+        B[Language Detection]
+        C[Tree-sitter Parser]
+        D[Syntax Tree Generation]
     end
 
-    subgraph "Boundary Detection"
-        B[Line-by-Line Analysis]
-        C[Regex Pattern Matching]
-        D[Brace Matching Algorithm]
-        E[Boundary Identification]
-    end
-
-    subgraph "Content Sectioning"
-        F[Split at Boundaries]
-        G[Classify Sections]
-        H[Structural Sections]
-        I[Content Sections]
+    subgraph "Boundary Extraction"
+        E[Semantic Boundary Detection]
+        F[Hierarchical Path Construction]
+        G[Boundary Classification]
     end
 
     subgraph "Chunk Processing"
-        J[Create Hierarchy Chunks]
-        K[TextSplitter Delegation]
-        L[Path Context Management]
+        H[Content Extraction]
+        I[TextSplitter Delegation]
+        J[Hierarchical Chunk Creation]
     end
 
     subgraph "Output Generation"
-        M[Hierarchical ContentChunk Array]
-        N[Concatenable Structure]
-        O[GreedySplitter Optimization]
+        K[ContentChunk Array]
+        L[GreedySplitter Optimization]
     end
 
     A --> B
@@ -65,319 +59,239 @@ graph TD
     E --> F
     F --> G
     G --> H
-    G --> I
-    H --> J
-    I --> K
-    J --> L
+    H --> I
+    I --> J
+    J --> K
     K --> L
-    L --> M
-    M --> N
-    N --> O
 
     style A fill:#e1f5fe
-    style M fill:#f3e5f5
-    style O fill:#e8f5e8
+    style K fill:#f3e5f5
+    style L fill:#e8f5e8
 ```
 
 ## Core Components
 
-### 1. Boundary Detection Engine
+### 1. Tree-sitter Language Parsers
 
-The boundary detection engine identifies structural elements in source code using regex patterns optimized for TypeScript and JavaScript.
+The system supports multiple languages through dedicated tree-sitter parsers:
 
-#### Supported Constructs
+**Supported Languages:**
+
+- **JavaScript**: ES6+ classes, functions, arrow functions, JSX elements
+- **TypeScript**: Interfaces, types, enums, namespaces, decorators, generics, TSX
+- **JSX/TSX**: React component parsing with TypeScript integration
+
+**Language Registry:**
+The `LanguageParserRegistry` automatically selects the appropriate parser based on file extension and content analysis, falling back to `TextDocumentSplitter` for unsupported languages.
+
+### 2. Semantic Boundary Detection
+
+Tree-sitter parsers identify structural elements through syntax tree traversal:
 
 **Primary Boundaries:**
 
-- **Classes**: `class ClassName { ... }`
-- **Namespaces**: `namespace NamespaceName { ... }`
-- **Functions**: `function functionName() { ... }`
-- **Methods**: `methodName() { ... }` (within classes)
-- **Interfaces**: `interface InterfaceName { ... }`
-- **Type Definitions**: `type TypeName = { ... }`
+- **Classes**: Complete class definitions with all members
+- **Functions**: Top-level function declarations and expressions
+- **Methods**: Class and interface method definitions
+- **Interfaces**: TypeScript interface declarations
+- **Namespaces**: TypeScript namespace blocks
+- **Types**: Type alias definitions
 
-**Detection Patterns:**
+**Boundary Extraction:**
+Each boundary includes start/end positions, basic type classification, and optional name for context. The system focuses on structural boundaries rather than detailed metadata extraction.
 
-```typescript
-const BOUNDARY_PATTERNS = {
-  class: /^(\s*)(export\s+)?(abstract\s+)?class\s+(\w+)/,
-  namespace: /^(\s*)(export\s+)?namespace\s+(\w+)/,
-  function: /^(\s*)(export\s+)?(async\s+)?function\s+(\w+)/,
-  method: /^(\s*)(\w+)\s*\([^)]*\)\s*[:{]/,
-  interface: /^(\s*)(export\s+)?interface\s+(\w+)/,
-  type: /^(\s*)(export\s+)?type\s+(\w+)\s*=/,
-};
-```
+### 3. Hierarchical Chunking Strategy
 
-#### Boundary Structure
-
-```typescript
-interface Boundary {
-  type: "class" | "namespace" | "function" | "method" | "interface" | "type";
-  name: string;
-  startLine: number;
-  endLine: number;
-  indentLevel: number;
-  modifiers: string[]; // export, async, abstract, etc.
-}
-```
-
-### 2. Brace Matching Algorithm
-
-A stack-based algorithm tracks opening and closing braces to determine the exact boundaries of code blocks:
+The chunking approach creates semantic units that respect code structure:
 
 ```mermaid
 graph LR
-    subgraph "Brace Matching Process"
-        A[Detect Opening Brace] --> B[Push to Stack]
-        B --> C[Process Nested Content]
-        C --> D{Find Closing Brace?}
-        D -->|Yes| E[Pop from Stack]
-        D -->|No| F[Continue Scanning]
-        F --> C
-        E --> G{Stack Empty?}
-        G -->|Yes| H[Boundary Complete]
-        G -->|No| C
+    subgraph "Chunk Hierarchy"
+        A[File Level] --> B[Class Level]
+        B --> C[Method Level]
+        A --> D[Function Level]
+        B --> E[Property Level]
     end
 
-    style A fill:#fff3e0
+    subgraph "Path Structure"
+        F["['UserService.ts']"] --> G["['UserService.ts', 'UserService']"]
+        G --> H["['UserService.ts', 'UserService', 'getUser']"]
+        F --> I["['UserService.ts', 'calculateSum']"]
+    end
+
+    style A fill:#e1f5fe
+    style G fill:#f3e5f5
     style H fill:#e8f5e8
 ```
 
-**Features:**
+**Chunking Rules:**
 
-- Handles nested braces correctly
-- Ignores braces within string literals and comments
-- Tracks indentation levels for proper chunk formatting
-- Recovers gracefully from malformed code
+- **Level 1**: Top-level elements (classes, functions, interfaces, namespaces)
+- **Level 2**: Class members (methods, properties, constructor)
+- **Level 3**: Nested namespace elements
+- **Content Delegation**: Large method bodies delegated to `TextDocumentSplitter`
 
-### 3. Content Sectioning
+### 4. Content Processing Pipeline
 
-Once boundaries are identified, the source code is divided into sections:
+```mermaid
+sequenceDiagram
+    participant TSS as TreesitterSourceCodeSplitter
+    participant LP as LanguageParser
+    participant BE as BoundaryExtractor
+    participant TS as TextSplitter
 
-#### Section Types
+    TSS->>LP: Parse source code
+    LP->>BE: Extract semantic boundaries
+    BE->>TSS: Return boundary positions
 
-```typescript
-type Section = {
-  type: "structural" | "content";
-  content: string;
-  boundary?: Boundary;
-  startLine: number;
-  endLine: number;
-  indentLevel: number;
-};
+    loop For each boundary
+        TSS->>TSS: Extract boundary content
+        TSS->>TS: Delegate large content sections
+        TS->>TSS: Return subdivided chunks
+    end
+
+    TSS->>TSS: Assign hierarchical paths
+    TSS->>TSS: Create ContentChunk array
 ```
-
-**Structural Sections:**
-
-- Class/namespace/interface declarations
-- Function signatures
-- Opening and closing braces
-- Generate hierarchy chunks with proper paths
-
-**Content Sections:**
-
-- Method bodies
-- Loose code between structures
-- Comments and documentation
-- Delegated to TextDocumentSplitter for processing
-
-### 4. Hierarchical Path Management
-
-Each chunk receives a hierarchical path that enables proper reassembly and context understanding:
-
-```typescript
-// Path Examples:
-["UserService.ts"][("UserService.ts", "UserService")][ // File root // Class
-  ("UserService.ts", "UserService", "opening")
-][("UserService.ts", "UserService", "getUser")][ // Class opening brace // Method
-  ("UserService.ts", "UserService", "closing")
-][("UserService.ts", "Auth", "validateToken")]; // Class closing brace // Namespace function
-```
-
-**Path Construction Rules:**
-
-- Root level: filename
-- Each structural boundary adds a path segment
-- Opening/closing chunks add "opening"/"closing" suffix
-- Content chunks inherit the path of their containing structure
 
 ## Processing Flow
 
-### 1. Boundary Detection Phase
+### Semantic Chunking Process
 
 ```mermaid
-sequenceDiagram
-    participant SCS as SourceCodeSplitter
-    participant BD as BoundaryDetector
-    participant BM as BraceMatching
+flowchart TD
+    A[Source Code Input] --> B{Language Supported?}
+    B -->|Yes| C[Tree-sitter Parsing]
+    B -->|No| D[TextDocumentSplitter Fallback]
 
-    SCS->>BD: Analyze source code
-    BD->>BD: Apply regex patterns line-by-line
-    BD->>BM: Match braces for each boundary
-    BM->>BD: Return boundary positions
-    BD->>SCS: Complete boundary list
+    C --> E[Boundary Extraction]
+    E --> F[Content Sectioning]
+    F --> G[Hierarchical Path Assignment]
+    G --> H[Chunk Generation]
+
+    D --> I[Line-based Chunks]
+    H --> J[Merge Results]
+    I --> J
+    J --> K[GreedySplitter Optimization]
+
+    style A fill:#e1f5fe
+    style K fill:#e8f5e8
+    style D fill:#fff3e0
 ```
 
-### 2. Content Sectioning Phase
+### Chunk Generation Strategy
 
-```mermaid
-sequenceDiagram
-    participant SCS as SourceCodeSplitter
-    participant CS as ContentSectioning
-    participant TS as TextSplitter
+The system creates chunks that balance semantic meaning with search effectiveness:
 
-    SCS->>CS: Split at boundaries
-    CS->>CS: Classify sections (structural/content)
+**Chunk Types:**
 
-    alt Structural Section
-        CS->>SCS: Create hierarchy chunk
-    else Content Section
-        CS->>TS: Delegate to TextSplitter
-        TS->>CS: Return content chunks
-        CS->>SCS: Return chunks with path context
-    end
-```
+- **Structural Chunks**: Class/function/interface signatures with documentation
+- **Method Chunks**: Complete method implementations including comments
+- **Content Chunks**: Code sections between structural boundaries
+- **Delegated Chunks**: Large content sections processed by TextSplitter
 
-### 3. Chunk Generation
-
-The final phase creates `ContentChunk` objects following the established pattern:
-
-```typescript
-// Example output for: class UserService { getUser(id) { return db.find(id); } }
-
-[
-  {
-    types: ["code"],
-    content: "class UserService {",
-    section: {
-      level: 2,
-      path: ["UserService.ts", "UserService", "opening"],
-    },
-  },
-  {
-    types: ["code"],
-    content: "  getUser(id) {\n    return db.find(id);\n  }",
-    section: {
-      level: 3,
-      path: ["UserService.ts", "UserService", "getUser"],
-    },
-  },
-  {
-    types: ["code"],
-    content: "}",
-    section: {
-      level: 2,
-      path: ["UserService.ts", "UserService", "closing"],
-    },
-  },
-];
-```
-
-## Implementation Strategy
-
-### Phase 1: Core Infrastructure
-
-1. **Create `SourceCodeDocumentSplitter`** implementing `DocumentSplitter` interface
-2. **Implement boundary detection** with TypeScript/JavaScript regex patterns
-3. **Add brace matching algorithm** for accurate boundary determination
-4. **Create section classification logic** (structural vs content)
-
-### Phase 2: Content Processing
-
-1. **Implement hierarchical path management** system
-2. **Create TextSplitter integration** for content delegation
-3. **Add chunk generation logic** following concatenable pattern
-4. **Implement comment preservation** mechanisms
-
-### Phase 3: Integration & Testing
-
-1. **Update `SourceCodePipeline`** to use new splitter
-2. **Add comprehensive test suite** covering various TypeScript/JavaScript patterns
-3. **Test integration** with `GreedySplitter` optimization
-4. **Validate concatenability** of generated chunks
-
-### Phase 4: Language Extension
-
-1. **Design language-agnostic interfaces** for future extensibility
-2. **Create pattern registry system** for easy language addition
-3. **Document extension points** for additional programming languages
+**Path Inheritance:**
+Each chunk inherits the hierarchical path of its containing structure, enabling context-aware search and proper reassembly.
 
 ## Error Handling & Fallback Strategy
 
 ### Graceful Degradation
 
-The splitter handles various error conditions gracefully:
-
-1. **Malformed Code**: Falls back to `TextDocumentSplitter` for problematic sections
-2. **Unmatched Braces**: Uses heuristics to determine likely boundaries
-3. **Complex Nested Structures**: Limits recursion depth and delegates to TextSplitter
-4. **Unknown Patterns**: Treats unrecognized code as content sections
-
-### Recovery Mechanisms
+The splitter handles various scenarios through layered fallback mechanisms:
 
 ```mermaid
 graph TD
-    A[Parse Source Code] --> B{Boundary Detection Success?}
-    B -->|Yes| C[Process Boundaries]
-    B -->|No| D[Fall Back to TextSplitter]
-    C --> E{Brace Matching Success?}
-    E -->|Yes| F[Generate Chunks]
-    E -->|No| G[Use Heuristic Boundaries]
-    G --> F
-    D --> H[Line-Based Chunks]
-    F --> I[Combine Results]
+    A[Input Source Code] --> B{Language Supported?}
+    B -->|No| C[TextDocumentSplitter]
+    B -->|Yes| D{Tree-sitter Parse Success?}
+    D -->|No| C
+    D -->|Yes| E{Boundaries Extracted?}
+    E -->|No| C
+    E -->|Yes| F[Semantic Chunking]
+
+    F --> G[ContentChunk Array]
+    C --> H[Line-based Chunks]
+    G --> I[Output]
     H --> I
-    I --> J[Output ContentChunk Array]
 
     style A fill:#e1f5fe
-    style J fill:#e8f5e8
-    style D fill:#fff3e0
-    style G fill:#fff3e0
+    style I fill:#e8f5e8
+    style C fill:#fff3e0
 ```
+
+**Fallback Scenarios:**
+
+- **Unsupported Languages**: Automatic delegation to TextDocumentSplitter
+- **Parse Errors**: Graceful fallback for malformed syntax
+- **Boundary Detection Failures**: Line-based processing for complex edge cases
+
+### Error Recovery
+
+The system maintains robust operation through:
+
+- **Parse Error Isolation**: Errors in one section don't affect others
+- **Content Preservation**: All source content is retained in chunks
+- **Consistent Interface**: All fallback paths produce compatible ContentChunk arrays
 
 ## Language Extensibility
 
-### Current Support: TypeScript/JavaScript
+### Current Language Support
 
-The initial implementation focuses on TypeScript and JavaScript with these constructs:
+The tree-sitter implementation provides comprehensive support for web development languages:
 
-- ES6+ classes with methods and properties
+**JavaScript (ES6+):**
+
+- Classes with methods and properties
 - Functions (regular, async, arrow functions for top-level declarations)
+- JSX elements and React components
+- Import/export statements
+
+**TypeScript:**
+
+- All JavaScript features plus type system constructs
+- Interfaces and type alias definitions
 - Namespaces and modules
-- Interfaces and type definitions
-- Import/export statements (treated as content)
+- Enums and decorators
+- Generic type parameters
+- TSX (TypeScript + JSX)
 
-### Future Language Support
+### Architecture for Extension
 
-The architecture supports extension to other languages by:
+The modular design supports future language additions through:
 
-1. **Adding language-specific regex patterns** to the boundary detection engine
-2. **Implementing language-specific brace matching rules** (if different from C-style)
-3. **Extending the TextSplitter** for language-specific content handling
-4. **Adding language detection logic** to route files to appropriate processors
+**Parser Registry System:**
 
-**Planned Languages:**
+- Automatic language detection by file extension
+- Fallback mechanisms for unsupported languages
+- Consistent interface across all language parsers
 
-- Java (classes, methods, packages)
-- C# (classes, methods, namespaces, properties)
-- Python (classes, functions, indentation-based blocks)
-- Go (packages, functions, structs, methods)
+**Tree-sitter Integration:**
 
-## Integration with Existing System
+- Leverages existing tree-sitter grammar ecosystem
+- Language-specific parsers implement common boundary extraction interface
+- Shared infrastructure for syntax tree traversal and boundary detection
 
-### Pipeline Integration
+**Future Language Candidates:**
 
-The `SourceCodeDocumentSplitter` integrates seamlessly with the existing content processing pipeline:
+- Python (classes, functions, indentation-aware parsing)
+- Java (packages, classes, methods)
+- C# (namespaces, classes, properties, methods)
+- Go (packages, structs, methods, functions)
+
+## Integration with Pipeline System
+
+### Source Code Processing Pipeline
+
+The tree-sitter splitter integrates seamlessly with the existing content processing infrastructure:
 
 ```mermaid
 graph LR
-    subgraph "Source Code Processing Pipeline"
-        A[SourceCodePipeline] --> B[SourceCodeDocumentSplitter]
+    subgraph "Source Code Processing"
+        A[SourceCodePipeline] --> B[TreesitterSourceCodeSplitter]
         B --> C[GreedySplitter]
         C --> D[ContentChunk Array]
         D --> E[Embedding Generation]
-        E --> F[Database Storage]
+        E --> F[Vector Storage]
     end
 
     style A fill:#e1f5fe
@@ -385,34 +299,25 @@ graph LR
     style F fill:#e8f5e8
 ```
 
-### Backward Compatibility
+### System Benefits
 
-The splitter maintains compatibility with existing interfaces:
+**Enhanced Search Quality:**
 
-- Implements standard `DocumentSplitter` interface
-- Produces `ContentChunk` objects compatible with `GreedySplitter`
-- Maintains hierarchical path structure for search context
-- Preserves formatting and comments as required
+- Semantic chunks respect code structure boundaries
+- Hierarchical paths enable context-aware retrieval
+- Documentation comments stay associated with relevant code
+- Function and method retrieval maintains complete context
 
-## Benefits & Outcomes
+**Performance Characteristics:**
 
-### For Search Quality
+- Tree-sitter parsing provides linear time complexity
+- Memory efficient processing without large intermediate structures
+- Robust error handling prevents pipeline failures
+- Maintains compatibility with existing chunk optimization systems
 
-1. **Structural Context**: Chunks maintain awareness of their position in code hierarchy
-2. **Granular Retrieval**: Methods and functions can be retrieved individually
-3. **Context Preservation**: Related chunks (class and its methods) are linked through paths
-4. **Comment Association**: Documentation stays with relevant code sections
+**Developer Experience:**
 
-### For System Performance
-
-1. **Efficient Processing**: Boundary detection is faster than full AST parsing
-2. **Memory Efficient**: Processes code line-by-line without building large parse trees
-3. **Scalable**: Linear complexity with respect to file size
-4. **Robust**: Graceful degradation prevents processing failures
-
-### For Developer Experience
-
-1. **Accurate Results**: Search results respect code structure boundaries
-2. **Complete Context**: Retrieved chunks include necessary surrounding context
-3. **Maintainable**: Clear separation makes the system easy to extend and debug
-4. **Reliable**: Fallback mechanisms ensure consistent operation
+- Search results respect semantic boundaries
+- Retrieved chunks include necessary surrounding context
+- Hierarchical structure aids in understanding code relationships
+- Consistent interface with other document processing pipelines
