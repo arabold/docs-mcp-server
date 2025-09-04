@@ -1,5 +1,5 @@
 import { GreedySplitter } from "../../splitter";
-import { SourceCodeDocumentSplitter } from "../../splitter/SourceCodeDocumentSplitter";
+import { TreesitterSourceCodeSplitter } from "../../splitter/treesitter/TreesitterSourceCodeSplitter";
 import {
   SPLITTER_MIN_CHUNK_SIZE,
   SPLITTER_PREFERRED_CHUNK_SIZE,
@@ -14,7 +14,7 @@ import type { ProcessedContent } from "./types";
 
 /**
  * Pipeline for processing source code content with semantic splitting and size optimization.
- * Handles programming language files by using SourceCodeDocumentSplitter for structure-aware
+ * Handles programming language files by using TreesitterSourceCodeSplitter for structure-aware
  * splitting with proper language detection, followed by GreedySplitter for universal size optimization.
  */
 export class SourceCodePipeline extends BasePipeline {
@@ -27,7 +27,7 @@ export class SourceCodePipeline extends BasePipeline {
     this.middleware = [];
 
     // Create the two-phase splitting: semantic + size optimization
-    const sourceCodeSplitter = new SourceCodeDocumentSplitter({
+    const sourceCodeSplitter = new TreesitterSourceCodeSplitter({
       maxChunkSize: chunkSize,
     });
     this.splitter = new GreedySplitter(

@@ -20,7 +20,6 @@ describe("TreesitterSourceCodeSplitter", () => {
     it("should accept custom options", () => {
       const customSplitter = new TreesitterSourceCodeSplitter({
         maxChunkSize: 1000,
-        preserveFormatting: false,
         maxLinesBeforeDelegation: 25,
       });
       expect(customSplitter).toBeDefined();

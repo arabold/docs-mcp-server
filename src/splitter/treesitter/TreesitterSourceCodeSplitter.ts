@@ -1,13 +1,27 @@
 /**
- * TreesitterSourceCodeSplitter - Main splitter implementation using tree-sitter
+ * TreesitterSourceCodeSplitter - M    // Initialize registry and text splitter
+    this.registry = new LanguageParserRegistry();
+    this.textContentSplitter = new TextContentSplitter({
+      chunkSize: this.options.maxChunkSize,
+    });plitter implementation using tree-sitter
  *
- * Replaces the regex-based SourceCodeDocumentSplitter with semantic parsing
+ * Replaces the regex-based SourceC      // Apply two-phase splitting - use TextContentSplitter on this segment
+      const segmentChunks = await this.splitContentIntoChunks(
+        segment.content,
+        path,
+        level,
+      );
+      chunks.push(...segmentChunks);
+    }
+
+    return chunks;Splitter with semantic parsing
  * using tree-sitter AST. Maintains compatibility with existing chunk patterns
  * and hierarchical structure while providing robust parsing for JavaScript,
  * TypeScript, JSX, and TSX files.
  */
 
-import { TextDocumentSplitter } from "../TextDocumentSplitter";
+import { SPLITTER_MAX_CHUNK_SIZE } from "../../utils";
+import { TextContentSplitter } from "../splitters/TextContentSplitter";
 import type { ContentChunk, DocumentSplitter } from "../types";
 import { LanguageParserRegistry } from "./LanguageParserRegistry";
 import type { CodeBoundary, LanguageParser } from "./parsers/types";
@@ -18,10 +32,6 @@ import type { CodeBoundary, LanguageParser } from "./parsers/types";
 export interface TreesitterSourceCodeSplitterOptions {
   /** Maximum size for individual chunks before delegating to TextSplitter */
   maxChunkSize?: number;
-  /** Whether to preserve original formatting and indentation */
-  preserveFormatting?: boolean;
-  /** Maximum lines before delegating content to TextSplitter */
-  maxLinesBeforeDelegation?: number;
 }
 
 /**
@@ -29,23 +39,19 @@ export interface TreesitterSourceCodeSplitterOptions {
  * while maintaining compatibility with existing chunk patterns
  */
 export class TreesitterSourceCodeSplitter implements DocumentSplitter {
-  private readonly textSplitter: TextDocumentSplitter;
+  private readonly textContentSplitter: TextContentSplitter;
   private readonly registry: LanguageParserRegistry;
   private readonly options: Required<TreesitterSourceCodeSplitterOptions>;
 
   constructor(options: TreesitterSourceCodeSplitterOptions = {}) {
     this.options = {
-      maxChunkSize: options.maxChunkSize ?? 2000,
-      preserveFormatting: options.preserveFormatting ?? true,
-      maxLinesBeforeDelegation: options.maxLinesBeforeDelegation ?? 50,
+      maxChunkSize: options.maxChunkSize ?? SPLITTER_MAX_CHUNK_SIZE,
     };
 
-    // Initialize registry and text splitter
+    // Initialize registry and text content splitter
     this.registry = new LanguageParserRegistry();
-    this.textSplitter = new TextDocumentSplitter({
-      maxChunkSize: this.options.maxChunkSize,
-      minLinesPerChunk: 3,
-      detectLanguage: true,
+    this.textContentSplitter = new TextContentSplitter({
+      chunkSize: this.options.maxChunkSize,
     });
   }
 
@@ -57,8 +63,8 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     // Try to get a parser for this content type
     const parser = this.getParserForContent(contentType);
     if (!parser) {
-      // Fall back to TextDocumentSplitter for unsupported languages
-      return this.textSplitter.splitText(content, contentType);
+      // Fall back to TextContentSplitter for unsupported languages
+      return this.fallbackToTextSplitter(content);
     }
 
     try {
@@ -76,19 +82,34 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
 
       if (boundaries.length === 0) {
         // No semantic boundaries found, fall back to text splitter
-        return this.textSplitter.splitText(content, contentType);
+        return this.fallbackToTextSplitter(content);
       }
 
-      // Convert boundaries to content chunks
-      return this.boundariesToChunks(boundaries, content, contentType);
+      // Convert boundaries to content chunks using two-phase splitting
+      return await this.boundariesToChunks(boundaries, content, contentType);
     } catch (error) {
-      // Graceful fallback to TextDocumentSplitter on any parsing error
+      // Graceful fallback to TextContentSplitter on any parsing error
       console.warn(
-        "TreesitterSourceCodeSplitter failed, falling back to TextDocumentSplitter:",
+        "TreesitterSourceCodeSplitter failed, falling back to TextContentSplitter:",
         error,
       );
-      return this.textSplitter.splitText(content, contentType);
+      return this.fallbackToTextSplitter(content);
     }
+  }
+
+  /**
+   * Helper method to fall back to TextContentSplitter and convert results to ContentChunk[]
+   */
+  private async fallbackToTextSplitter(content: string): Promise<ContentChunk[]> {
+    const textChunks = await this.textContentSplitter.split(content);
+    return textChunks.map((chunk) => ({
+      types: ["code"],
+      content: chunk,
+      section: {
+        level: 1,
+        path: ["global"],
+      },
+    }));
   }
 
   /**
@@ -161,30 +182,67 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
   }
 
   /**
-   * Convert boundaries to chunks using boundary-point algorithm
-   * This creates segments between all boundary points, ensuring complete coverage and no duplication
+   * Helper method to split content using TextContentSplitter only if needed
+   * and create ContentChunks with the specified hierarchical path and level
+   */
+  private async splitContentIntoChunks(
+    content: string,
+    path: string[],
+    level: number,
+  ): Promise<ContentChunk[]> {
+    // Preserve whitespace-only content if it fits within chunk size (for perfect reconstruction)
+    // Only skip if content is completely empty
+    if (content.length === 0) {
+      return [];
+    }
+
+    // Only apply TextContentSplitter if content exceeds max chunk size
+    if (content.length <= this.options.maxChunkSize) {
+      // Content is small enough, return as single chunk preserving original formatting
+      return [
+        {
+          types: ["code"] as const,
+          content,
+          section: {
+            level,
+            path,
+          },
+        },
+      ];
+    }
+
+    // Content is too large, use TextContentSplitter to break it down
+    const textChunks = await this.textContentSplitter.split(content);
+
+    // Convert text chunks to ContentChunks with semantic context
+    return textChunks.map((textChunk) => ({
+      types: ["code"] as const,
+      content: textChunk,
+      section: {
+        level,
+        path,
+      },
+    }));
+  }
+
+  /**
+   * Convert boundaries to chunks using two-phase splitting approach
+   * Phase 1: Create semantic segments between boundary points
+   * Phase 2: Pass each segment through TextContentSplitter for size-based splitting
    * Ensures perfect reassembly - concatenating all chunks recreates original content
    */
-  private boundariesToChunks(
+  private async boundariesToChunks(
     boundaries: CodeBoundary[],
     content: string,
     _contentType?: string,
-  ): ContentChunk[] {
+  ): Promise<ContentChunk[]> {
     const lines = content.split("\n");
     const totalLines = lines.length;
 
     if (boundaries.length === 0) {
-      // No boundaries found, treat entire file as global code
-      return [
-        {
-          types: ["code"],
-          content,
-          section: {
-            level: 1,
-            path: ["global"],
-          },
-        },
-      ];
+      // No boundaries found, use TextContentSplitter on entire content
+      const subChunks = await this.splitContentIntoChunks(content, ["global"], 1);
+      return subChunks;
     }
 
     // Step 1: Collect all boundary points (start and end+1 for exclusive ranges)
@@ -200,8 +258,15 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     // Step 2: Sort points to create segments
     const sortedPoints = Array.from(boundaryPoints).sort((a, b) => a - b);
 
-    // Step 3: Create segments between consecutive points
-    const chunks: ContentChunk[] = [];
+    // Step 3: Create segments between consecutive points (collect first, don't process yet)
+    interface TextSegment {
+      startLine: number;
+      endLine: number;
+      content: string;
+      containingBoundary?: CodeBoundary;
+    }
+
+    const segments: TextSegment[] = [];
 
     for (let i = 0; i < sortedPoints.length - 1; i++) {
       const startLine = sortedPoints[i];
@@ -225,38 +290,97 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
         continue; // Skip empty segments
       }
 
-      // Step 4: Determine which boundary this segment belongs to (innermost containing boundary)
+      // Determine which boundary this segment belongs to (innermost containing boundary)
       const containingBoundary = this.findContainingBoundary(
         startLine,
         endLine,
         boundaries,
       );
 
-      // Step 5: Assign path and level based on containing boundary
+      segments.push({
+        startLine,
+        endLine,
+        content: segmentContent,
+        containingBoundary,
+      });
+    }
+
+    // Step 4: Merge whitespace-only segments with previous segments
+    const mergedSegments = this.mergeWhitespaceSegments(segments);
+
+    // Step 5: Convert merged segments to chunks
+    const chunks: ContentChunk[] = [];
+
+    for (const segment of mergedSegments) {
+      // Assign path and level based on containing boundary
       let path: string[];
       let level: number;
 
-      if (containingBoundary) {
+      if (segment.containingBoundary) {
         // Use the boundary's hierarchical path and level
-        path = containingBoundary.path || [containingBoundary.name || "unnamed"];
-        level = containingBoundary.level || path.length;
+        path = segment.containingBoundary.path || [
+          segment.containingBoundary.name || "unnamed",
+        ];
+        level = segment.containingBoundary.level || path.length;
       } else {
         // No containing boundary, this is global code
         path = ["global"];
         level = 1;
       }
 
-      chunks.push({
-        types: ["code"],
-        content: segmentContent,
-        section: {
-          level,
-          path,
-        },
-      });
+      // Apply two-phase splitting - use TextContentSplitter on this segment
+      const segmentChunks = await this.splitContentIntoChunks(
+        segment.content,
+        path,
+        level,
+      );
+      chunks.push(...segmentChunks);
     }
 
     return chunks;
+  }
+
+  /**
+   * Merges whitespace-only segments with the previous segment to preserve formatting
+   */
+  private mergeWhitespaceSegments(
+    segments: Array<{
+      startLine: number;
+      endLine: number;
+      content: string;
+      containingBoundary?: CodeBoundary;
+    }>,
+  ): Array<{
+    startLine: number;
+    endLine: number;
+    content: string;
+    containingBoundary?: CodeBoundary;
+  }> {
+    if (segments.length === 0) {
+      return segments;
+    }
+
+    const mergedSegments = [];
+
+    for (let i = 0; i < segments.length; i++) {
+      const currentSegment = segments[i];
+
+      // Check if this segment contains only whitespace
+      const isWhitespaceOnly = /^\s*$/.test(currentSegment.content);
+
+      if (isWhitespaceOnly && mergedSegments.length > 0) {
+        // Merge this whitespace segment with the previous segment
+        const previousSegment = mergedSegments[mergedSegments.length - 1];
+        previousSegment.content += currentSegment.content;
+        previousSegment.endLine = currentSegment.endLine;
+        // Keep the previous segment's containingBoundary
+      } else {
+        // Add as a new segment
+        mergedSegments.push({ ...currentSegment });
+      }
+    }
+
+    return mergedSegments;
   }
 
   /**
