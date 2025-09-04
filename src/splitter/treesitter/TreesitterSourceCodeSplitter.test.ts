@@ -20,7 +20,6 @@ describe("TreesitterSourceCodeSplitter", () => {
     it("should accept custom options", () => {
       const customSplitter = new TreesitterSourceCodeSplitter({
         maxChunkSize: 1000,
-        maxLinesBeforeDelegation: 25,
       });
       expect(customSplitter).toBeDefined();
     });
@@ -305,9 +304,9 @@ def hello():
 
       const chunks = await splitter.splitText(code, "text/javascript");
 
-      // Should have global code chunks
-      const globalChunks = chunks.filter((chunk) =>
-        chunk.section.path.includes("global"),
+      // Should have global code chunks (at root level)
+      const globalChunks = chunks.filter(
+        (chunk) => chunk.section.level === 0 && chunk.section.path.length === 0,
       );
       expect(globalChunks.length).toBeGreaterThan(0);
 
@@ -330,8 +329,9 @@ def hello():
       // Check that global code at end is captured
       const hasGlobalCode = chunks.some(
         (chunk) =>
-          chunk.content.includes("console.log") ||
-          chunk.content.includes("globalCounter++"),
+          chunk.section.level === 0 &&
+          (chunk.content.includes("console.log") ||
+            chunk.content.includes("globalCounter++")),
       );
       expect(hasGlobalCode).toBe(true);
 
@@ -418,12 +418,63 @@ export { processUserData };`;
         (chunk) =>
           chunk.section.level === 1 && chunk.section.path.includes("processUserData"),
       );
-      const hasGlobalCode = chunks.some((chunk) => chunk.section.path.includes("global"));
+      const hasGlobalCode = chunks.some(
+        (chunk) => chunk.section.level === 0 && chunk.section.path.length === 0,
+      );
 
       expect(hasClassLevel1).toBe(true);
       expect(hasMethodsLevel2).toBe(true);
       expect(hasGlobalFunction).toBe(true);
       expect(hasGlobalCode).toBe(true);
+    });
+
+    it("should handle leading whitespace and newlines correctly", async () => {
+      const codeWithLeadingWhitespace = `
+
+  
+  /** Leading whitespace and newlines above */
+  class TestClass {
+    method() {
+      return "test";
+    }
+  }`;
+
+      const chunks = await splitter.splitText(
+        codeWithLeadingWhitespace,
+        "text/javascript",
+      );
+
+      // Should not create a separate whitespace chunk at level 0
+      const whitespaceOnlyChunks = chunks.filter(
+        (chunk) =>
+          chunk.section.level === 0 &&
+          chunk.section.path.length === 0 &&
+          chunk.content.trim() === "",
+      );
+      expect(whitespaceOnlyChunks).toHaveLength(0);
+
+      // Class chunk should exist and be at proper level 1
+      const classChunk = chunks.find((chunk) => chunk.section.path.includes("TestClass"));
+      expect(classChunk).toBeDefined();
+      expect(classChunk!.section.level).toBe(1);
+      expect(classChunk!.section.path).toEqual(["TestClass"]);
+
+      // Method chunk should exist and be at level 2
+      const methodChunk = chunks.find(
+        (chunk) =>
+          chunk.section.path.length === 2 &&
+          chunk.section.path[0] === "TestClass" &&
+          chunk.section.path[1] === "method",
+      );
+      expect(methodChunk).toBeDefined();
+      expect(methodChunk!.section.level).toBe(2);
+
+      // Leading whitespace should be included in the first semantic chunk
+      expect(classChunk!.content).toMatch(/^\s*\/\*\*/);
+
+      // Minimum level should be 1 (not degraded to 0 by GreedySplitter)
+      const minLevel = Math.min(...chunks.map((c) => c.section.level));
+      expect(minLevel).toBe(1);
     });
   });
 

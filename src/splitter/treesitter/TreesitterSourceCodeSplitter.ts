@@ -106,8 +106,8 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
       types: ["code"],
       content: chunk,
       section: {
-        level: 1,
-        path: ["global"],
+        level: 0,
+        path: [],
       },
     }));
   }
@@ -241,8 +241,25 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
 
     if (boundaries.length === 0) {
       // No boundaries found, use TextContentSplitter on entire content
-      const subChunks = await this.splitContentIntoChunks(content, ["global"], 1);
+      const subChunks = await this.splitContentIntoChunks(content, [], 0);
       return subChunks;
+    }
+
+    // Adjust first boundary if there's only whitespace before it
+    if (boundaries.length > 0) {
+      const firstBoundary = boundaries[0];
+      const firstBoundaryLine = firstBoundary.startLine;
+
+      // Check if content before first boundary is only whitespace
+      if (firstBoundaryLine > 1) {
+        const linesBeforeFirstBoundary = lines.slice(0, firstBoundaryLine - 1);
+        const contentBeforeFirstBoundary = linesBeforeFirstBoundary.join("\n");
+
+        if (/^\s*$/.test(contentBeforeFirstBoundary)) {
+          // Only whitespace before first boundary, adjust it to start from line 1
+          firstBoundary.startLine = 1;
+        }
+      }
     }
 
     // Step 1: Collect all boundary points (start and end+1 for exclusive ranges)
@@ -324,8 +341,8 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
         level = segment.containingBoundary.level || path.length;
       } else {
         // No containing boundary, this is global code
-        path = ["global"];
-        level = 1;
+        path = [];
+        level = 0;
       }
 
       // Apply two-phase splitting - use TextContentSplitter on this segment
