@@ -6,10 +6,7 @@
  */
 
 import type { SyntaxNode } from "tree-sitter";
-// @ts-expect-error - tree-sitter-typescript doesn't have TypeScript declarations
-import TSX from "tree-sitter-typescript/tsx";
-// @ts-expect-error - tree-sitter-typescript doesn't have TypeScript declarations
-import TypeScript from "tree-sitter-typescript/typescript";
+import TypeScript from "tree-sitter-typescript";
 import { BaseLanguageParser } from "./BaseLanguageParser";
 import type { ParseResult } from "./types";
 import { StructuralNodeType } from "./types";
@@ -28,7 +25,7 @@ export class TypeScriptParser extends BaseLanguageParser {
 
   protected setupLanguage(): void {
     // Determine if we're parsing TSX based on file extension or content
-    this.parser.setLanguage(this.isTSX ? TSX : TypeScript);
+    this.parser.setLanguage(this.isTSX ? TypeScript.tsx : TypeScript.typescript);
   }
 
   /**
