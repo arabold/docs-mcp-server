@@ -18,3 +18,7 @@ dist
 README.md
 ARCHITECTURE.md
 CHANGELOG.md
+
+server.pid
+docs-mcp-data
+.idea

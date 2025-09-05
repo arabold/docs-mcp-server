@@ -441,14 +441,47 @@ export class DocumentStore {
   }
 
   /**
-   * Escapes a query string for use with SQLite FTS5 MATCH operator.
-   * Wraps the query in double quotes and escapes internal double quotes.
+   * Normalizes a user query string for use with SQLite FTS5 MATCH operator.
+   *
+   * Behavior:
+   * - If the user already uses FTS operators (AND/OR/NOT/NEAR), quotes, wildcards, or parentheses,
+   *   we pass the query through as-is (assume they know what they want).
+   * - Otherwise, we split on whitespace and join terms with OR so that multi-word queries
+   *   match documents containing any of the terms (instead of forcing a phrase/AND match).
    */
   private escapeFtsQuery(query: string): string {
-    // Escape internal double quotes by doubling them
-    const escapedQuotes = query.replace(/"/g, '""');
-    // Wrap the entire string in double quotes
-    return `"${escapedQuotes}"`;
+    const q = query.trim();
+    if (q.length === 0) return q;
+
+    // Respect explicit advanced FTS syntax as-is
+    const hasExplicitAdvanced = /["*]/.test(q) || /\b(AND|OR|NOT|NEAR)\b/i.test(q);
+    if (hasExplicitAdvanced) {
+      return q;
+    }
+
+    // If the query contains unsafe punctuation (e.g., parentheses, slashes, etc.)
+    // but no explicit advanced syntax, quote the whole query to avoid FTS syntax errors
+    const hasUnsafePunctuation = /[^\w\s-]/.test(q); // allow word chars, spaces, and hyphens
+    if (hasUnsafePunctuation) {
+      const escaped = q.replace(/"/g, '""');
+      return `"${escaped}"`;
+    }
+
+    // Otherwise, split to terms and join with OR
+    const terms = q.split(/\s+/).filter(Boolean);
+
+    if (terms.length <= 1) {
+      return terms[0] ?? q;
+    }
+    // Quote individual tokens that contain non-alphanumeric/underscore characters
+    const quoteIfNeeded = (t: string) => {
+      // Use Unicode properties when available to allow international letters/digits
+      const needsQuote = /[^\p{L}\p{N}_]/u.test(t);
+      if (!needsQuote) return t;
+      const escaped = t.replace(/"/g, '""');
+      return `"${escaped}"`;
+    };
+    return terms.map(quoteIfNeeded).join(" OR ");
   }
 
   /**
