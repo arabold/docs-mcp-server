@@ -82,6 +82,8 @@
     "remark-html": "^16.0.1",
     "semver": "^7.7.2",
     "sqlite-vec": "^0.1.7-alpha.2",
+    "tree-sitter": "^0.22.4",
+    "tree-sitter-python": "^0.23.6",
     "turndown": "^7.2.0",
     "zod": "^4.0.14"
   },

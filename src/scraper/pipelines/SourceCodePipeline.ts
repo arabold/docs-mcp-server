@@ -1,5 +1,6 @@
 import { GreedySplitter } from "../../splitter";
 import { TextDocumentSplitter } from "../../splitter/TextDocumentSplitter";
+import { TreeSitterDocumentSplitter } from "../../splitter/treesitter/TreeSitterDocumentSplitter";
 import {
   SPLITTER_MIN_CHUNK_SIZE,
   SPLITTER_PREFERRED_CHUNK_SIZE,
@@ -13,22 +14,32 @@ import { BasePipeline } from "./BasePipeline";
 import type { ProcessedContent } from "./types";
 
 /**
- * Pipeline for processing source code content with semantic splitting and size optimization.
- * Handles programming language files by using TextDocumentSplitter for line-based splitting
- * with proper language detection, followed by GreedySplitter for universal size optimization.
+ * Pipeline for processing source code content with syntax-aware and semantic splitting.
+ * Uses TreeSitter parsers for supported languages (Python, etc.) to provide syntax-aware
+ * hierarchical splitting. Falls back to TextDocumentSplitter for unsupported languages.
+ * All splitting is followed by GreedySplitter for universal size optimization.
  */
 export class SourceCodePipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
-  private readonly splitter: GreedySplitter;
+  private readonly treeSitterSplitter: TreeSitterDocumentSplitter;
+  private readonly fallbackSplitter: GreedySplitter;
 
   constructor(chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
     super();
     // Source code processing uses minimal middleware since we preserve raw structure
     this.middleware = [];
 
-    // Create the two-phase splitting: semantic + size optimization
+    // Create TreeSitter splitter for syntax-aware splitting
+    this.treeSitterSplitter = new TreeSitterDocumentSplitter({ 
+      maxChunkSize: chunkSize,
+      preserveStructure: true,
+      includeDocumentation: true,
+      includeModifiers: true,
+    });
+
+    // Create fallback splitter for unsupported languages: semantic + size optimization
     const textSplitter = new TextDocumentSplitter({ maxChunkSize: chunkSize });
-    this.splitter = new GreedySplitter(textSplitter, SPLITTER_MIN_CHUNK_SIZE, chunkSize);
+    this.fallbackSplitter = new GreedySplitter(textSplitter, SPLITTER_MIN_CHUNK_SIZE, chunkSize);
   }
 
   canProcess(rawContent: RawContent): boolean {
@@ -61,8 +72,15 @@ export class SourceCodePipeline extends BasePipeline {
     // Execute the middleware stack (minimal for source code)
     await this.executeMiddlewareStack(this.middleware, context);
 
-    // Split the content using CodeContentSplitter
-    const chunks = await this.splitter.splitText(context.content, rawContent.mimeType);
+    // Choose appropriate splitter based on TreeSitter support
+    let chunks;
+    if (rawContent.mimeType && this.treeSitterSplitter.canParseWithTreeSitter(rawContent.mimeType)) {
+      // Use TreeSitter for syntax-aware splitting
+      chunks = await this.treeSitterSplitter.splitText(context.content, rawContent.mimeType);
+    } else {
+      // Fall back to text-based splitting with size optimization
+      chunks = await this.fallbackSplitter.splitText(context.content, rawContent.mimeType);
+    }
 
     return {
       textContent: context.content,
