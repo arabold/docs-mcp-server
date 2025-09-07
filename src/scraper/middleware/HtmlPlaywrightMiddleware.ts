@@ -12,6 +12,21 @@ import { ScrapeMode } from "../types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 
 /**
+ * Shadow DOM mapping structure for non-invasive extraction
+ */
+interface ShadowMapping {
+  shadowContent: string;
+  hostTagName: string;
+  hostClasses: string;
+  hostId: string;
+  hostOuterHTML: string;
+  elementIndex: number;
+  parentTagName: string;
+  positionTop: number;
+  positionLeft: number;
+}
+
+/**
  * Middleware to process HTML content using Playwright for rendering dynamic content,
  * *if* the scrapeMode option requires it ('playwright' or 'auto').
  * It updates `context.content` with the rendered HTML if Playwright runs.
@@ -58,6 +73,122 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       logger.debug("Closing Playwright browser instance...");
       await this.browser.close();
       this.browser = null;
+    }
+  }
+
+  /**
+   * Injects the shadow DOM extractor script into the page.
+   * This script performs non-invasive extraction that preserves document structure.
+   * The extraction function is called just-in-time when content is actually needed, ensuring we capture
+   * the final state of all shadow DOMs after page loading is complete.
+   * Returns an array of shadow mappings directly (empty array = no shadow DOMs found).
+   */
+  private async injectShadowDOMExtractor(page: Page): Promise<void> {
+    await page.addInitScript(`
+      window.shadowExtractor = {
+        extract() {
+          // Extract shadow DOM mappings
+          const shadowMappings = [];
+          
+          function createShadowMapping(root, depth = 0) {
+            if (depth > 15) return;
+            
+            // Use TreeWalker to traverse in document order
+            const walker = document.createTreeWalker(
+              root,
+              NodeFilter.SHOW_ELEMENT,
+              null,
+              false
+            );
+            
+            let currentNode = walker.nextNode();
+            while (currentNode) {
+              const element = currentNode;
+              if (element.shadowRoot) {
+                try {
+                  // Extract shadow DOM content without modifying anything
+                  const shadowChildren = Array.from(element.shadowRoot.children);
+                  const shadowHTML = shadowChildren.map(child => child.outerHTML).join('\\n');
+                  
+                  if (shadowHTML.trim()) {
+                    // Get position info for precise insertion later
+                    const rect = element.getBoundingClientRect();
+                    const elementIndex = Array.from(element.parentNode?.children || []).indexOf(element);
+                    
+                    shadowMappings.push({
+                      shadowContent: shadowHTML,
+                      hostTagName: element.tagName,
+                      hostClasses: element.className || '',
+                      hostId: element.id || '',
+                      hostOuterHTML: element.outerHTML,
+                      elementIndex: elementIndex,
+                      parentTagName: element.parentNode?.tagName || '',
+                      positionTop: rect.top,
+                      positionLeft: rect.left
+                    });
+                  }
+                  
+                  // Recursively process nested shadow DOMs
+                  createShadowMapping(element.shadowRoot, depth + 1);
+                  
+                } catch (error) {
+                  console.debug('Shadow DOM access error:', error);
+                }
+              }
+              currentNode = walker.nextNode();
+            }
+          }
+          
+          createShadowMapping(document);
+          
+          return shadowMappings;
+        }
+      };
+      
+    `);
+  }
+
+  /**
+   * Extracts content using either shadow DOM non-invasive extraction or standard page.content() method.
+   * Returns the extracted content and the method used.
+   *
+   * Performs just-in-time shadow DOM extraction after all page loading is complete.
+   */
+  private async extractContentWithShadowDOMSupport(page: Page): Promise<{
+    content: string;
+    method: string;
+  }> {
+    // Force fresh extraction right now (when everything is loaded)
+    const [shadowMappings, originalPageContent] = await Promise.all([
+      page.evaluate(() => {
+        const extractor = (
+          window as unknown as {
+            shadowExtractor?: {
+              extract: () => ShadowMapping[];
+            };
+          }
+        ).shadowExtractor;
+
+        // Extract fresh data right now - just-in-time extraction
+        return extractor?.extract() || [];
+      }),
+      page.content(),
+    ]);
+
+    if (shadowMappings.length === 0) {
+      // No shadow DOMs - use standard page.content()
+      logger.debug("No shadow DOMs detected - using page.content()");
+      return { content: originalPageContent, method: "page.content()" };
+    } else {
+      // Shadow DOMs found - combine content outside the browser (non-invasive)
+      logger.debug(
+        `Shadow DOMs detected - found ${shadowMappings.length} shadow host(s)`,
+      );
+      logger.debug("Combining content outside browser (non-invasive)");
+
+      // Combine original content with shadow content outside the browser
+      const finalContent = this.combineContentSafely(originalPageContent, shadowMappings);
+      return { content: finalContent, method: "non-invasive shadow DOM extraction" };
     }
   }
 
@@ -368,8 +499,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       logger.debug(`Fetching frame content from: ${resolvedUrl}`);
 
       // Navigate to the frame URL
-      await framePage.goto(resolvedUrl, { waitUntil: "load", timeout: 15000 });
-      await framePage.waitForSelector("body", { timeout: 10000 });
+      await framePage.goto(resolvedUrl, {
+        waitUntil: "load",
+        timeout: DEFAULT_PAGE_TIMEOUT,
+      });
+      await framePage.waitForSelector("body", { timeout: DEFAULT_PAGE_TIMEOUT });
 
       // Wait for loading indicators to complete
       await this.waitForLoadingToComplete(framePage);
@@ -500,6 +634,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       logger.debug(`Playwright: Processing ${context.source}`);
 
+      // Inject shadow DOM extractor script early
+      await this.injectShadowDOMExtractor(page);
+
       // Block unnecessary resources and inject credentials and custom headers for same-origin requests
       await page.route("**/*", async (route) => {
         const reqUrl = route.request().url();
@@ -538,7 +675,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       await page.goto(context.source, { waitUntil: "load" });
 
       // Wait for either body (normal HTML) or frameset (frameset documents) to appear
-      await page.waitForSelector("body, frameset");
+      await page.waitForSelector("body, frameset", { timeout: DEFAULT_PAGE_TIMEOUT });
 
       // Wait for network idle to let dynamic content initialize
       try {
@@ -551,8 +688,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       await this.waitForIframesToLoad(page);
       await this.waitForFramesetsToLoad(page);
 
-      renderedHtml = await page.content();
-      logger.debug(`Playwright: Successfully rendered content for ${context.source}`);
+      // Extract content using shadow DOM-aware method
+      const { content, method } = await this.extractContentWithShadowDOMSupport(page);
+      renderedHtml = content;
+      logger.debug(
+        `Playwright: Successfully rendered content for ${context.source} using ${method}`,
+      );
     } catch (error) {
       logger.error(`❌ Playwright failed to render ${context.source}: ${error}`);
       context.errors.push(
@@ -583,6 +724,44 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     }
 
     await next();
+  }
+
+  /**
+   * Safely combines original page content with shadow DOM content outside the browser context.
+   * This avoids triggering any anti-scraping detection mechanisms.
+   */
+  private combineContentSafely(
+    originalContent: string,
+    shadowMappings: ShadowMapping[],
+  ): string {
+    let combinedContent = originalContent;
+
+    // Add shadow content at the end of the body to avoid breaking the document structure
+    const bodyCloseIndex = combinedContent.lastIndexOf("</body>");
+    if (bodyCloseIndex !== -1) {
+      let shadowContentHTML = "\n<!-- SHADOW DOM CONTENT EXTRACTED SAFELY -->\n";
+
+      // Sort by content length (largest first) to prioritize important content
+      const sortedMappings = shadowMappings.sort(
+        (a, b) => b.shadowContent.length - a.shadowContent.length,
+      );
+
+      sortedMappings.forEach((mapping) => {
+        shadowContentHTML += `\n<!-- SHADOW CONTENT: ${mapping.hostTagName} (${mapping.shadowContent.length} chars) -->\n`;
+        shadowContentHTML += mapping.shadowContent;
+        shadowContentHTML += `\n<!-- END SHADOW CONTENT: ${mapping.hostTagName} -->\n`;
+      });
+
+      shadowContentHTML += "\n<!-- END ALL SHADOW DOM CONTENT -->\n";
+
+      // Insert before closing body tag
+      combinedContent =
+        combinedContent.slice(0, bodyCloseIndex) +
+        shadowContentHTML +
+        combinedContent.slice(bodyCloseIndex);
+    }
+
+    return combinedContent;
   }
 }
 

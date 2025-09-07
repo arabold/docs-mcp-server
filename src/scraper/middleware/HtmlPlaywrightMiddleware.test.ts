@@ -96,7 +96,18 @@ const createMockPlaywrightPage = (
     content: vi.fn().mockResolvedValue(contentToReturn),
     close: vi.fn().mockResolvedValue(undefined),
     $$: vi.fn().mockResolvedValue(mockIframes), // Return mock iframes
-    evaluate: vi.fn().mockResolvedValue(undefined),
+    addInitScript: vi.fn().mockResolvedValue(undefined), // Added for shadow DOM support
+    waitForTimeout: vi.fn().mockResolvedValue(undefined), // Added for shadow DOM support
+    evaluate: vi.fn().mockImplementation((fn: any) => {
+      // Mock shadow DOM extraction result
+      if (
+        typeof fn === "function" ||
+        (typeof fn === "string" && fn.includes("shadowExtractor"))
+      ) {
+        return Promise.resolve({ method: "standard", content: contentToReturn });
+      }
+      return Promise.resolve(undefined);
+    }),
     url: vi.fn().mockReturnValue(url),
     context: vi.fn().mockReturnValue({
       newPage: vi.fn().mockResolvedValue({
@@ -106,6 +117,12 @@ const createMockPlaywrightPage = (
         waitForSelector: vi.fn().mockResolvedValue(undefined),
         $eval: vi.fn().mockResolvedValue("<p>Frame content</p>"),
         close: vi.fn().mockResolvedValue(undefined),
+        addInitScript: vi.fn().mockResolvedValue(undefined),
+        waitForTimeout: vi.fn().mockResolvedValue(undefined),
+        evaluate: vi
+          .fn()
+          .mockResolvedValue({ method: "standard", content: "<p>Frame content</p>" }),
+        content: vi.fn().mockResolvedValue("<p>Frame content</p>"),
       }),
       close: vi.fn().mockResolvedValue(undefined),
     }),
@@ -350,8 +367,8 @@ describe("HtmlPlaywrightMiddleware", () => {
       for (const iframe of invalidIframes) {
         expect(iframe.getAttribute).toHaveBeenCalledWith("src");
       }
-      // No evaluate calls should happen since all iframes are skipped
-      expect(pageSpy.evaluate).not.toHaveBeenCalled();
+      // Shadow DOM extraction will call evaluate once, but no iframe processing calls
+      expect(pageSpy.evaluate).toHaveBeenCalledTimes(1);
       expect(context.errors).toHaveLength(0);
       expect(next).toHaveBeenCalled();
 
@@ -464,8 +481,8 @@ describe("HtmlPlaywrightMiddleware", () => {
       expect(validIframes[0].contentFrame).toHaveBeenCalled();
       expect(validIframes[1].contentFrame).toHaveBeenCalled();
 
-      // Should have 2 evaluate calls (one for each valid iframe replacement)
-      expect(evaluateCallCount).toBe(2);
+      // Should have 3 evaluate calls (1 for shadow DOM extraction + 2 for iframe replacement)
+      expect(evaluateCallCount).toBe(3);
       expect(context.errors).toHaveLength(0);
       expect(next).toHaveBeenCalled();
 
