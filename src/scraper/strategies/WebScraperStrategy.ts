@@ -139,28 +139,4 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       throw error;
     }
   }
-
-  /**
-   * Overrides the base scrape method to ensure the Playwright browser is closed
-   * after the scraping process completes or errors out.
-   */
-  override async scrape(
-    options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    try {
-      // Call the base class scrape method
-      await super.scrape(options, progressCallback, signal);
-    } finally {
-      // Close all pipelines that support cleanup
-      await Promise.all(
-        this.pipelines.map(async (pipeline) => {
-          if ("close" in pipeline && typeof pipeline.close === "function") {
-            await pipeline.close();
-          }
-        }),
-      );
-    }
-  }
 }

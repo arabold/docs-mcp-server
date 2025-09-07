@@ -174,10 +174,4 @@ describe("TextPipeline", () => {
       expect(result.metadata.contentType).toBe("text/plain");
     });
   });
-
-  describe("close", () => {
-    it("should close without errors", async () => {
-      await expect(pipeline.close()).resolves.toBeUndefined();
-    });
-  });
 });

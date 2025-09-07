@@ -98,23 +98,4 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       } satisfies Document,
     };
   }
-
-  async scrape(
-    options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    try {
-      await super.scrape(options, progressCallback, signal);
-    } finally {
-      // Close all pipelines that support cleanup
-      await Promise.all(
-        this.pipelines.map(async (pipeline) => {
-          if ("close" in pipeline && typeof pipeline.close === "function") {
-            await pipeline.close();
-          }
-        }),
-      );
-    }
-  }
 }

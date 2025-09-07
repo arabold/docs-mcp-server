@@ -35,12 +35,10 @@ describe("GitHubScraperStrategy", () => {
     htmlPipelineInstance = {
       canProcess: vi.fn(),
       process: vi.fn(),
-      close: vi.fn(),
     };
     markdownPipelineInstance = {
       canProcess: vi.fn(),
       process: vi.fn(),
-      close: vi.fn(),
     };
     mockHtmlPipeline.mockImplementation(() => htmlPipelineInstance);
     mockMarkdownPipeline.mockImplementation(() => markdownPipelineInstance);
@@ -870,26 +868,6 @@ describe("GitHubScraperStrategy", () => {
       await expect(strategy.scrape(options, vi.fn())).rejects.toThrow(
         "URL must be a GitHub URL",
       );
-    });
-
-    it("should close pipelines after scraping", async () => {
-      const options: ScraperOptions = {
-        url: "https://github.com/owner/repo",
-        library: "test-lib",
-        version: "1.0.0",
-        maxPages: 1,
-      };
-
-      // Mock the base scrape method
-      vi.spyOn(
-        Object.getPrototypeOf(Object.getPrototypeOf(strategy)),
-        "scrape",
-      ).mockResolvedValue(undefined);
-
-      await strategy.scrape(options, vi.fn());
-
-      expect(htmlPipelineInstance.close).toHaveBeenCalled();
-      expect(markdownPipelineInstance.close).toHaveBeenCalled();
     });
   });
 });

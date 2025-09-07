@@ -446,17 +446,6 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       throw new Error("URL must be a GitHub URL");
     }
 
-    try {
-      await super.scrape(options, progressCallback, signal);
-    } finally {
-      // Close all pipelines that support cleanup
-      await Promise.all(
-        this.pipelines.map(async (pipeline) => {
-          if ("close" in pipeline && typeof pipeline.close === "function") {
-            await pipeline.close();
-          }
-        }),
-      );
-    }
+    return super.scrape(options, progressCallback, signal);
   }
 }

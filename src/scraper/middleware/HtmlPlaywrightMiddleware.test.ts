@@ -104,7 +104,7 @@ const createMockPlaywrightPage = (
         typeof fn === "function" ||
         (typeof fn === "string" && fn.includes("shadowExtractor"))
       ) {
-        return Promise.resolve({ method: "standard", content: contentToReturn });
+        return Promise.resolve([]);
       }
       return Promise.resolve(undefined);
     }),
@@ -303,7 +303,16 @@ describe("HtmlPlaywrightMiddleware", () => {
         return Promise.resolve([]);
       });
 
-      pageSpy.evaluate = vi.fn().mockImplementation(() => {
+      pageSpy.evaluate = vi.fn().mockImplementation((fn: any) => {
+        // Handle shadow DOM extraction call
+        if (typeof fn === "function") {
+          const fnStr = fn.toString();
+          if (fnStr.includes("shadowExtractor")) {
+            return Promise.resolve([]); // Return empty array for shadow DOM extraction
+          }
+        }
+
+        // Handle other evaluate calls (iframe processing)
         iframeProcessingCalled = true;
         return Promise.resolve(undefined);
       });
@@ -461,8 +470,18 @@ describe("HtmlPlaywrightMiddleware", () => {
         return Promise.resolve([]);
       });
 
-      pageSpy.evaluate = vi.fn().mockImplementation(() => {
-        evaluateCallCount++;
+      pageSpy.evaluate = vi.fn().mockImplementation((fn: any) => {
+        evaluateCallCount++; // Count all evaluate calls
+
+        // Handle shadow DOM extraction call
+        if (typeof fn === "function") {
+          const fnStr = fn.toString();
+          if (fnStr.includes("shadowExtractor")) {
+            return Promise.resolve([]); // Return empty array for shadow DOM extraction
+          }
+        }
+
+        // Handle other evaluate calls (iframe processing)
         return Promise.resolve(undefined);
       });
 
@@ -578,6 +597,12 @@ describe("HtmlPlaywrightMiddleware", () => {
         .fn()
         .mockImplementation((fn: (...args: unknown[]) => unknown) => {
           const fnString = fn.toString();
+
+          // Handle shadow DOM extraction call
+          if (fnString.includes("shadowExtractor")) {
+            return Promise.resolve([]); // Return empty array for shadow DOM extraction
+          }
+
           if (fnString.includes('querySelectorAll("frame")')) {
             extractedFrameUrls = [
               { src: "nav.html", name: "navigation" },
@@ -657,6 +682,12 @@ describe("HtmlPlaywrightMiddleware", () => {
         .fn()
         .mockImplementation((fn: (...args: unknown[]) => unknown) => {
           const fnString = fn.toString();
+
+          // Handle shadow DOM extraction call
+          if (fnString.includes("shadowExtractor")) {
+            return Promise.resolve([]); // Return empty array for shadow DOM extraction
+          }
+
           if (fnString.includes('querySelectorAll("frame")')) {
             return Promise.resolve([
               { src: "nav.html", name: "navigation" },

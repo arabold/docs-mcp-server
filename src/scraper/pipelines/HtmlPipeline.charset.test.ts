@@ -138,8 +138,4 @@ describe("HtmlPipeline charset integration", () => {
 
     expect(result.textContent).toContain("Simple ASCII content only");
   });
-
-  afterEach(async () => {
-    await pipeline.close();
-  });
 });
