@@ -92,6 +92,7 @@ export class FetchUrlTool {
         }
 
         const fetcher = this.fetchers[fetcherIndex];
+        logger.debug(`Using fetcher "${fetcher.constructor.name}" for URL: ${url}`);
 
         try {
           logger.info(`📡 Fetching ${url}...`);
@@ -169,6 +170,9 @@ export class FetchUrlTool {
             `Failed to fetch or process URL: ${error instanceof Error ? error.message : String(error)}`,
             this.constructor.name,
           );
+        } finally {
+          // Cleanup all pipelines to prevent resource leaks (e.g., browser instances)
+          await Promise.allSettled(this.pipelines.map((pipeline) => pipeline.close()));
         }
       },
       (result) => {

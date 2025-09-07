@@ -32,4 +32,12 @@ export class ScraperService {
     // Pass the signal down to the strategy
     await strategy.scrape(options, progressCallback, signal);
   }
+
+  /**
+   * Cleanup the scraper registry and all its strategies.
+   * Should be called when the service is no longer needed.
+   */
+  async cleanup(): Promise<void> {
+    await this.registry.cleanup();
+  }
 }

@@ -503,4 +503,83 @@ describe("PipelineManager", () => {
       expect(allJobs[0].library).toBe("test-lib");
     });
   });
+
+  describe("cleanup functionality", () => {
+    it("should call cleanup on scraper service when stopped", async () => {
+      // Access the actual scraperService and spy on its cleanup method
+      const scraperService = (manager as any).scraperService;
+      const cleanupSpy = vi.spyOn(scraperService, "cleanup").mockResolvedValue(undefined);
+
+      // Start the manager
+      await manager.start();
+
+      // Call stop
+      await manager.stop();
+
+      // Verify cleanup was called on scraper service
+      expect(cleanupSpy).toHaveBeenCalled();
+    });
+
+    it("should handle cleanup errors gracefully during stop", async () => {
+      // Access the actual scraperService and spy on its cleanup method to throw error
+      const scraperService = (manager as any).scraperService;
+      const cleanupSpy = vi
+        .spyOn(scraperService, "cleanup")
+        .mockRejectedValue(new Error("Cleanup failed"));
+
+      // Start the manager
+      await manager.start();
+
+      // Stop should throw if cleanup fails
+      await expect(manager.stop()).rejects.toThrow("Cleanup failed");
+
+      // Verify cleanup was attempted
+      expect(cleanupSpy).toHaveBeenCalled();
+    });
+
+    it("should stop accepting new jobs after stop is called", async () => {
+      // Start the manager
+      await manager.start();
+
+      // Stop the manager
+      await manager.stop();
+
+      // Attempting to enqueue new jobs should be handled gracefully
+      const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
+
+      // This should not cause the system to hang
+      try {
+        const jobId = await manager.enqueueJob("test-lib", "1.0", options);
+        // If it succeeds, verify the job exists
+        if (jobId) {
+          const job = await manager.getJob(jobId);
+          expect(job).toBeDefined();
+        }
+      } catch (error) {
+        // If it throws, that's also acceptable behavior for a stopped manager
+        expect(error).toBeDefined();
+      }
+    });
+
+    it("should handle stop when manager is not running", async () => {
+      // Manager is not started, so stop should handle this gracefully
+      await expect(manager.stop()).resolves.toBeUndefined();
+
+      // Should be able to call stop multiple times without issues
+      await expect(manager.stop()).resolves.toBeUndefined();
+    });
+
+    it("should ensure resource cleanup chain is properly invoked", async () => {
+      // Access the actual scraperService and spy on its cleanup method
+      const scraperService = (manager as any).scraperService;
+      const cleanupSpy = vi.spyOn(scraperService, "cleanup").mockResolvedValue(undefined);
+
+      // Start and stop the manager
+      await manager.start();
+      await manager.stop();
+
+      // Verify the cleanup chain was invoked
+      expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });

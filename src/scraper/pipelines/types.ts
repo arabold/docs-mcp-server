@@ -43,4 +43,10 @@ export interface ContentPipeline {
     options: ScraperOptions,
     fetcher?: ContentFetcher,
   ): Promise<ProcessedContent>;
+
+  /**
+   * Cleanup resources used by this pipeline (e.g., browser instances, database connections).
+   * Should be called when the pipeline is no longer needed.
+   */
+  close(): Promise<void>;
 }

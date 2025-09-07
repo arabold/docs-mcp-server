@@ -11,7 +11,7 @@ class TestPipeline extends BasePipeline {
   }
 
   async process(): Promise<ProcessedContent> {
-    return { textContent: "", metadata: {}, links: [], errors: [] };
+    return { textContent: "", metadata: {}, links: [], errors: [], chunks: [] };
   }
 
   // Expose the protected method for testing
@@ -157,5 +157,22 @@ describe("BasePipeline", () => {
     // Verify the error was caught and added to context
     expect(context.errors.length).toBe(1);
     expect(context.errors[0].message).toBe("next() called multiple times");
+  });
+
+  describe("cleanup", () => {
+    it("should have default close() method that does nothing", async () => {
+      const pipeline = new TestPipeline();
+
+      // Should not throw any errors
+      await expect(pipeline.close()).resolves.not.toThrow();
+    });
+
+    it("should be able to call close() multiple times", async () => {
+      const pipeline = new TestPipeline();
+
+      // Multiple calls should not throw
+      await expect(pipeline.close()).resolves.not.toThrow();
+      await expect(pipeline.close()).resolves.not.toThrow();
+    });
   });
 });

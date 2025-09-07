@@ -77,6 +77,24 @@ const sigintHandler = async (): Promise<void> => {
 };
 
 /**
+ * Performs cleanup for CLI commands that don't start long-running services.
+ * This ensures proper analytics shutdown and process exit to prevent hanging.
+ */
+export async function cleanupCliCommand(): Promise<void> {
+  if (!isShuttingDown) {
+    logger.debug("CLI command executed. Cleaning up...");
+
+    // Remove SIGINT handler since command completed successfully
+    process.removeListener("SIGINT", sigintHandler);
+
+    // Shutdown analytics for non-server CLI commands to ensure clean exit
+    if (analytics.isEnabled()) {
+      await analytics.shutdown();
+    }
+  }
+}
+
+/**
  * Registers global services for shutdown handling
  */
 export function registerGlobalServices(services: {
@@ -183,11 +201,7 @@ export async function runCli(): Promise<void> {
   // This block handles cleanup for CLI commands that completed successfully
   // and were not long-running servers.
   if (commandExecuted && !activeAppServer) {
-    if (!isShuttingDown) {
-      logger.debug(
-        "CLI command executed. No global services to shut down from this path.",
-      );
-    }
+    await cleanupCliCommand();
   }
 }
 

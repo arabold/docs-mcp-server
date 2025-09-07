@@ -271,4 +271,38 @@ describe("HtmlPipeline", () => {
     // Verify no errors occurred
     expect(result.errors).toHaveLength(0);
   });
+
+  describe("cleanup", () => {
+    it("should call closeBrowser on Playwright middleware when close() is called", async () => {
+      const pipeline = new HtmlPipeline();
+
+      // Spy on the closeBrowser method
+      const closeBrowserSpy = vi.spyOn(pipeline["playwrightMiddleware"], "closeBrowser");
+
+      await pipeline.close();
+
+      expect(closeBrowserSpy).toHaveBeenCalledOnce();
+    });
+
+    it("should be idempotent - multiple close() calls should not error", async () => {
+      const pipeline = new HtmlPipeline();
+
+      // Multiple calls should not throw
+      await expect(pipeline.close()).resolves.not.toThrow();
+      await expect(pipeline.close()).resolves.not.toThrow();
+      await expect(pipeline.close()).resolves.not.toThrow();
+    });
+
+    it("should call close() even if closeBrowser throws an error", async () => {
+      const pipeline = new HtmlPipeline();
+
+      // Mock closeBrowser to throw an error
+      vi.spyOn(pipeline["playwrightMiddleware"], "closeBrowser").mockRejectedValue(
+        new Error("Browser cleanup failed"),
+      );
+
+      // close() should still complete (error should be handled internally or thrown)
+      await expect(pipeline.close()).rejects.toThrow("Browser cleanup failed");
+    });
+  });
 });

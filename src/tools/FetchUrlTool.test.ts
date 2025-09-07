@@ -276,4 +276,76 @@ describe("FetchUrlTool", () => {
       });
     });
   });
+
+  describe("cleanup", () => {
+    it("should call close() on all pipelines in finally block on success", async () => {
+      const url = "https://example.com";
+      const options: FetchUrlToolOptions = { url, scrapeMode: ScrapeMode.Fetch };
+
+      // Set up successful mock responses
+      mockHttpFetcher.canFetch = vi.fn().mockReturnValue(true);
+      mockFileFetcher.canFetch = vi.fn().mockReturnValue(false);
+      mockHttpFetcher.fetch = vi.fn().mockResolvedValue({
+        content: "<h1>Test</h1>",
+        mimeType: "text/html",
+        source: url,
+      });
+
+      // Spy on pipeline close methods
+      const closeSpy1 = vi.spyOn(fetchUrlTool["pipelines"][0], "close");
+      const closeSpy2 = vi.spyOn(fetchUrlTool["pipelines"][1], "close");
+
+      await fetchUrlTool.execute(options);
+
+      // Verify close was called on all pipelines
+      expect(closeSpy1).toHaveBeenCalledOnce();
+      expect(closeSpy2).toHaveBeenCalledOnce();
+    });
+
+    it("should call close() on all pipelines even when processing throws error", async () => {
+      const url = "https://example.com";
+      const options: FetchUrlToolOptions = { url, scrapeMode: ScrapeMode.Fetch };
+
+      // Set up mock to throw error during processing
+      mockHttpFetcher.canFetch = vi.fn().mockReturnValue(true);
+      mockFileFetcher.canFetch = vi.fn().mockReturnValue(false);
+      mockHttpFetcher.fetch = vi
+        .fn()
+        .mockRejectedValue(new ScraperError("Fetch failed", true));
+
+      // Spy on pipeline close methods
+      const closeSpy1 = vi.spyOn(fetchUrlTool["pipelines"][0], "close");
+      const closeSpy2 = vi.spyOn(fetchUrlTool["pipelines"][1], "close");
+
+      // Expect error to be thrown
+      await expect(fetchUrlTool.execute(options)).rejects.toThrow(ToolError);
+
+      // Verify close was still called on all pipelines despite the error
+      expect(closeSpy1).toHaveBeenCalledOnce();
+      expect(closeSpy2).toHaveBeenCalledOnce();
+    });
+
+    it("should handle pipeline cleanup errors gracefully", async () => {
+      const url = "https://example.com";
+      const options: FetchUrlToolOptions = { url, scrapeMode: ScrapeMode.Fetch };
+
+      // Set up successful mock responses
+      mockHttpFetcher.canFetch = vi.fn().mockReturnValue(true);
+      mockFileFetcher.canFetch = vi.fn().mockReturnValue(false);
+      mockHttpFetcher.fetch = vi.fn().mockResolvedValue({
+        content: "<h1>Test</h1>",
+        mimeType: "text/html",
+        source: url,
+      });
+
+      // Mock one pipeline to throw error during cleanup
+      vi.spyOn(fetchUrlTool["pipelines"][0], "close").mockRejectedValue(
+        new Error("Pipeline cleanup failed"),
+      );
+
+      // Should still complete successfully (cleanup errors are handled by Promise.allSettled)
+      const result = await fetchUrlTool.execute(options);
+      expect(result).toBeTruthy();
+    });
+  });
 });

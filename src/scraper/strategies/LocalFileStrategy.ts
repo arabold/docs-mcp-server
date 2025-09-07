@@ -98,4 +98,11 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       } satisfies Document,
     };
   }
+
+  /**
+   * Cleanup resources used by this strategy, specifically the pipeline browser instances.
+   */
+  async cleanup(): Promise<void> {
+    await Promise.allSettled(this.pipelines.map((pipeline) => pipeline.close()));
+  }
 }

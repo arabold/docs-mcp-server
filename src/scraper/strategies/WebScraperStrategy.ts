@@ -139,4 +139,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       throw error;
     }
   }
+
+  /**
+   * Cleanup resources used by this strategy, specifically the pipeline browser instances.
+   */
+  async cleanup(): Promise<void> {
+    await Promise.allSettled(this.pipelines.map((pipeline) => pipeline.close()));
+  }
 }

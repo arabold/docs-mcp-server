@@ -161,16 +161,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     // Force fresh extraction right now (when everything is loaded)
     const [shadowMappings, originalPageContent] = await Promise.all([
       page.evaluate(() => {
-        const extractor = (
-          window as unknown as {
-            shadowExtractor?: {
-              extract: () => ShadowMapping[];
-            };
-          }
-        ).shadowExtractor;
-
         // Extract fresh data right now - just-in-time extraction
-        return extractor?.extract() || [];
+        // biome-ignore lint/suspicious/noExplicitAny: no type for injected script
+        return (window as any).shadowExtractor?.extract() || [];
       }),
       page.content(),
     ]);
@@ -600,6 +593,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       scrapeMode === ScrapeMode.Playwright || scrapeMode === ScrapeMode.Auto;
 
     if (!shouldRunPlaywright) {
+      // Handle gracefully although the middleware shouldn't even be in the pipeline
       logger.debug(
         `Skipping Playwright rendering for ${context.source} as scrapeMode is '${scrapeMode}'.`,
       );

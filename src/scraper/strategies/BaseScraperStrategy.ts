@@ -243,4 +243,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
       queue.push(...newUrls);
     }
   }
+
+  /**
+   * Cleanup resources used by this strategy.
+   * Default implementation does nothing - override in derived classes as needed.
+   */
+  async cleanup(): Promise<void> {
+    // No-op by default
+  }
 }
