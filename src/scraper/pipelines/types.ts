@@ -43,9 +43,4 @@ export interface ContentPipeline {
     options: ScraperOptions,
     fetcher?: ContentFetcher,
   ): Promise<ProcessedContent>;
-
-  /**
-   * Closes any resources or connections used by the pipeline.
-   */
-  close(): Promise<void>;
 }

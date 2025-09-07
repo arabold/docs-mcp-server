@@ -6,6 +6,7 @@ import type {
 } from "../scraper/fetcher";
 import { HtmlPipeline } from "../scraper/pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../scraper/pipelines/MarkdownPipeline";
+import type { ContentPipeline, ProcessedContent } from "../scraper/pipelines/types";
 import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
 import { resolveCharset } from "../scraper/utils/charset";
@@ -55,9 +56,18 @@ export class FetchUrlTool {
    * Collection of fetchers that will be tried in order for a given URL.
    */
   private readonly fetchers: ContentFetcher[];
+  /**
+   * Collection of pipelines that will be tried in order for processing content.
+   * The first pipeline that can process the content type will be used.
+   * Currently includes HtmlPipeline and MarkdownPipeline.
+   */
+  private readonly pipelines: ContentPipeline[];
 
   constructor(httpFetcher: HttpFetcher, fileFetcher: FileFetcher) {
     this.fetchers = [httpFetcher, fileFetcher];
+    const htmlPipeline = new HtmlPipeline();
+    const markdownPipeline = new MarkdownPipeline();
+    this.pipelines = [htmlPipeline, markdownPipeline];
   }
 
   /**
@@ -82,9 +92,6 @@ export class FetchUrlTool {
         }
 
         const fetcher = this.fetchers[fetcherIndex];
-        const htmlPipeline = new HtmlPipeline();
-        const markdownPipeline = new MarkdownPipeline();
-        const pipelines = [htmlPipeline, markdownPipeline];
 
         try {
           logger.info(`📡 Fetching ${url}...`);
@@ -96,10 +103,8 @@ export class FetchUrlTool {
 
           logger.info("🔄 Processing content...");
 
-          let processed:
-            | Awaited<ReturnType<(typeof htmlPipeline)["process"]>>
-            | undefined;
-          for (const pipeline of pipelines) {
+          let processed: Awaited<ProcessedContent> | undefined;
+          for (const pipeline of this.pipelines) {
             if (pipeline.canProcess(rawContent)) {
               processed = await pipeline.process(
                 rawContent,
@@ -164,9 +169,6 @@ export class FetchUrlTool {
             `Failed to fetch or process URL: ${error instanceof Error ? error.message : String(error)}`,
             this.constructor.name,
           );
-        } finally {
-          await htmlPipeline.close();
-          await markdownPipeline.close();
         }
       },
       (result) => {

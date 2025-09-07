@@ -83,6 +83,4 @@ export class TextPipeline extends BasePipeline {
       chunks,
     };
   }
-
-  async close(): Promise<void> {}
 }

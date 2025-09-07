@@ -104,6 +104,4 @@ export class HtmlPipeline extends BasePipeline {
       chunks,
     };
   }
-
-  async close(): Promise<void> {}
 }

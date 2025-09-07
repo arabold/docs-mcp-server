@@ -54,12 +54,4 @@ export class BasePipeline implements ContentPipeline {
       context.errors.push(error instanceof Error ? error : new Error(String(error)));
     }
   }
-
-  /**
-   * Cleans up resources when the pipeline is no longer needed.
-   * Default implementation does nothing.
-   */
-  public async close(): Promise<void> {
-    // Default implementation does nothing
-  }
 }
