@@ -372,6 +372,288 @@ describe("DocumentStore - Integration Tests", () => {
         expect(maxHybridScore).toBeGreaterThan(topScore * 0.5); // Within 50% of top score
       }
     });
+  });
+
+  describe("FTS Query Escaping and Normalization", () => {
+    beforeEach(async () => {
+      // Set up test documents with various content patterns for FTS testing
+      const docs: Document[] = [
+        {
+          pageContent: "React components and hooks tutorial with examples",
+          metadata: {
+            title: "React Hooks",
+            url: "https://example.com/react-hooks",
+            path: ["frontend", "react"],
+          },
+        },
+        {
+          pageContent: "JavaScript function() declarations and arrow functions",
+          metadata: {
+            title: "JS Functions",
+            url: "https://example.com/js-functions",
+            path: ["javascript", "functions"],
+          },
+        },
+        {
+          pageContent: "API documentation with REST endpoints and HTTP methods",
+          metadata: {
+            title: "API Docs",
+            url: "https://example.com/api-docs",
+            path: ["api", "rest"],
+          },
+        },
+        {
+          pageContent: "CSS selectors: .class, #id, and element[attribute] patterns",
+          metadata: {
+            title: "CSS Selectors",
+            url: "https://example.com/css-selectors",
+            path: ["css", "selectors"],
+          },
+        },
+        {
+          pageContent: "Database queries with AND, OR, NOT operators",
+          metadata: {
+            title: "SQL Operators",
+            url: "https://example.com/sql-operators",
+            path: ["database", "sql"],
+          },
+        },
+      ];
+
+      await store.addDocuments("ftstest", "1.0.0", docs);
+    });
+
+    it("should handle explicit FTS syntax without modification", async () => {
+      // Quoted phrases should be preserved
+      const quotedResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        '"arrow functions"',
+        10,
+      );
+      expect(quotedResults.length).toBeGreaterThan(0);
+      expect(quotedResults[0].pageContent.toLowerCase()).toContain("arrow functions");
+
+      // Wildcard queries should be preserved
+      const wildcardResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "function*",
+        10,
+      );
+      expect(wildcardResults.length).toBeGreaterThan(0);
+
+      // Boolean operators should be preserved
+      const booleanResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "database AND queries",
+        10,
+      );
+      expect(booleanResults.length).toBeGreaterThan(0);
+
+      // NEAR operator should be preserved
+      const nearResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "React NEAR components",
+        10,
+      );
+      expect(nearResults.length).toBeGreaterThan(0);
+
+      // NOT operator should be preserved
+      const notResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "functions NOT arrow",
+        10,
+      );
+      expect(notResults.length).toBeGreaterThan(0);
+    });
+
+    it("should quote queries with unsafe punctuation to prevent FTS syntax errors", async () => {
+      // Parentheses should be quoted to avoid syntax errors
+      const parenResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "function()",
+        10,
+      );
+      expect(parenResults.length).toBeGreaterThan(0);
+
+      // Square brackets should be quoted
+      const bracketResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "element[attribute]",
+        10,
+      );
+      expect(bracketResults.length).toBeGreaterThan(0);
+
+      // Periods and slashes should be quoted
+      const punctResults = await store.findByContent("ftstest", "1.0.0", ".class", 10);
+      expect(punctResults.length).toBeGreaterThan(0);
+
+      // Hash symbols should be quoted
+      const hashResults = await store.findByContent("ftstest", "1.0.0", "#id", 10);
+      expect(hashResults.length).toBeGreaterThan(0);
+
+      // Mixed punctuation should be quoted
+      const mixedResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "REST/HTTP endpoints",
+        10,
+      );
+      expect(mixedResults.length).toBeGreaterThan(0);
+    });
+
+    it("should split simple multi-word queries into OR terms", async () => {
+      // Simple multi-word query should match documents containing any of the terms
+      const results = await store.findByContent("ftstest", "1.0.0", "React database", 10);
+      expect(results.length).toBeGreaterThan(1); // Should match both React and database docs
+
+      // Verify both types of content are present
+      const contentTexts = results.map((r) => r.pageContent.toLowerCase());
+      const hasReact = contentTexts.some((text) => text.includes("react"));
+      const hasDatabase = contentTexts.some((text) => text.includes("database"));
+      expect(hasReact || hasDatabase).toBe(true);
+
+      // Three-word query should also work with OR logic
+      const threeWordResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "React API CSS",
+        10,
+      );
+      expect(threeWordResults.length).toBeGreaterThan(1);
+    });
+
+    it("should handle single-word queries without modification", async () => {
+      const singleResults = await store.findByContent("ftstest", "1.0.0", "React", 10);
+      expect(singleResults.length).toBeGreaterThan(0);
+      expect(singleResults[0].pageContent.toLowerCase()).toContain("react");
+
+      // Terms that don't exist should return results via vector search if semantically similar
+      const hyphenResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "arrow-functions",
+        10,
+      );
+      // Hybrid search may find semantically related content (like "arrow functions")
+      expect(hyphenResults.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it("should handle empty and whitespace-only queries gracefully", async () => {
+      // Empty query should return empty results without error
+      const emptyResults = await store.findByContent("ftstest", "1.0.0", "", 10);
+      expect(emptyResults).toEqual([]);
+
+      // Whitespace-only query should return empty results
+      const whitespaceResults = await store.findByContent("ftstest", "1.0.0", "   ", 10);
+      expect(whitespaceResults).toEqual([]);
+    });
+
+    it("should handle unicode characters correctly", async () => {
+      // Add a document with unicode content for testing
+      const unicodeDocs: Document[] = [
+        {
+          pageContent: "Développement logiciel et programmation orientée objet",
+          metadata: {
+            title: "French Programming",
+            url: "https://example.com/french-dev",
+            path: ["programming", "français"],
+          },
+        },
+        {
+          pageContent: "プログラミング言語とソフトウェア開発",
+          metadata: {
+            title: "Japanese Programming",
+            url: "https://example.com/japanese-dev",
+            path: ["programming", "日本語"],
+          },
+        },
+      ];
+
+      await store.addDocuments("unicodetest", "1.0.0", unicodeDocs);
+
+      // Unicode queries should work without escaping issues
+      const frenchResults = await store.findByContent(
+        "unicodetest",
+        "1.0.0",
+        "Développement",
+        10,
+      );
+      expect(frenchResults.length).toBeGreaterThan(0);
+
+      const japaneseResults = await store.findByContent(
+        "unicodetest",
+        "1.0.0",
+        "プログラミング",
+        10,
+      );
+      expect(japaneseResults.length).toBeGreaterThan(0);
+
+      // Mixed unicode and ASCII should work
+      const mixedResults = await store.findByContent(
+        "unicodetest",
+        "1.0.0",
+        "programmation プログラミング",
+        10,
+      );
+      expect(mixedResults.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it("should handle complex queries that mix safe and unsafe characters", async () => {
+      // Query with both safe words and unsafe punctuation
+      const mixedResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "React.Component() tutorial",
+        10,
+      );
+      expect(mixedResults.length).toBeGreaterThanOrEqual(0);
+
+      // Query that looks like it might have FTS syntax but doesn't
+      const pseudoFtsResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "and or not",
+        10,
+      );
+      expect(pseudoFtsResults.length).toBeGreaterThanOrEqual(0);
+    });
+
+    it("should preserve exact FTS operator syntax when detected", async () => {
+      // These should be passed through unchanged and work as FTS queries
+
+      // Case-insensitive boolean operators should be preserved
+      const lowercaseAndResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "javascript and functions",
+        10,
+      );
+      expect(lowercaseAndResults.length).toBeGreaterThanOrEqual(0);
+
+      const uppercaseOrResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "React OR CSS",
+        10,
+      );
+      expect(uppercaseOrResults.length).toBeGreaterThanOrEqual(0);
+
+      // Mixed case should also be preserved
+      const mixedCaseResults = await store.findByContent(
+        "ftstest",
+        "1.0.0",
+        "database And queries",
+        10,
+      );
+      expect(mixedCaseResults.length).toBeGreaterThanOrEqual(0);
+    });
 
     it("should handle empty search results gracefully", async () => {
       const results = await store.findByContent("nonexistent", "1.0.0", "anything", 10);

@@ -15,6 +15,7 @@ import {
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
 import { ConnectionError, DimensionError, StoreError } from "./errors";
+import { parseQuery } from "./FtsQueryParser";
 import type { StoredScraperOptions } from "./types";
 import {
   type DbDocument,
@@ -441,47 +442,23 @@ export class DocumentStore {
   }
 
   /**
-   * Normalizes a user query string for use with SQLite FTS5 MATCH operator.
+   * Securely normalizes a user query string for use with SQLite FTS5 MATCH operator.
    *
-   * Behavior:
-   * - If the user already uses FTS operators (AND/OR/NOT/NEAR), quotes, wildcards, or parentheses,
-   *   we pass the query through as-is (assume they know what they want).
-   * - Otherwise, we split on whitespace and join terms with OR so that multi-word queries
-   *   match documents containing any of the terms (instead of forcing a phrase/AND match).
+   * Uses a secure parser that:
+   * - Prevents FTS injection attacks by properly quoting dangerous terms
+   * - Validates and preserves legitimate FTS operators (AND/OR/NOT/NEAR) when used correctly
+   * - Handles edge cases (empty queries, unicode, malformed syntax) gracefully
+   * - Defaults to OR behavior for multi-word queries unless explicit operators are used
    */
   private escapeFtsQuery(query: string): string {
-    const q = query.trim();
-    if (q.length === 0) return q;
+    const normalized = parseQuery(query);
 
-    // Respect explicit advanced FTS syntax as-is
-    const hasExplicitAdvanced = /["*]/.test(q) || /\b(AND|OR|NOT|NEAR)\b/i.test(q);
-    if (hasExplicitAdvanced) {
-      return q;
+    // Handle empty queries by returning empty string - caller should handle appropriately
+    if (normalized.length === 0) {
+      return "";
     }
 
-    // If the query contains unsafe punctuation (e.g., parentheses, slashes, etc.)
-    // but no explicit advanced syntax, quote the whole query to avoid FTS syntax errors
-    const hasUnsafePunctuation = /[^\w\s-]/.test(q); // allow word chars, spaces, and hyphens
-    if (hasUnsafePunctuation) {
-      const escaped = q.replace(/"/g, '""');
-      return `"${escaped}"`;
-    }
-
-    // Otherwise, split to terms and join with OR
-    const terms = q.split(/\s+/).filter(Boolean);
-
-    if (terms.length <= 1) {
-      return terms[0] ?? q;
-    }
-    // Quote individual tokens that contain non-alphanumeric/underscore characters
-    const quoteIfNeeded = (t: string) => {
-      // Use Unicode properties when available to allow international letters/digits
-      const needsQuote = /[^\p{L}\p{N}_]/u.test(t);
-      if (!needsQuote) return t;
-      const escaped = t.replace(/"/g, '""');
-      return `"${escaped}"`;
-    };
-    return terms.map(quoteIfNeeded).join(" OR ");
+    return normalized;
   }
 
   /**
@@ -1073,9 +1050,15 @@ export class DocumentStore {
     limit: number,
   ): Promise<Document[]> {
     try {
+      const ftsQuery = this.escapeFtsQuery(query); // Escape the query for FTS
+
+      // Handle empty queries - return empty results
+      if (ftsQuery.length === 0) {
+        return [];
+      }
+
       const rawEmbedding = await this.embeddings.embedQuery(query);
       const embedding = this.padVector(rawEmbedding);
-      const ftsQuery = this.escapeFtsQuery(query); // Escape the query for FTS
       const normalizedVersion = version.toLowerCase();
 
       const stmt = this.db.prepare(`
