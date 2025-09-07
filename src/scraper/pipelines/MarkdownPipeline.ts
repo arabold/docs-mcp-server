@@ -87,6 +87,4 @@ export class MarkdownPipeline extends BasePipeline {
       chunks,
     };
   }
-
-  async close(): Promise<void> {}
 }

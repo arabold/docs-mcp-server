@@ -28,7 +28,7 @@ describe("executeJsInSandbox", () => {
               querySelectorAll: vi.fn(() => []), // Mock querySelectorAll
               // Add other necessary document/window mocks if tests rely on them
             },
-            close: vi.fn(), // Mock close method
+            close: vi.fn(),
             setTimeout: global.setTimeout, // Use global timers
             clearTimeout: global.clearTimeout,
             setInterval: global.setInterval,

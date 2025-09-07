@@ -29,4 +29,11 @@ export class PyPiScraperStrategy implements ScraperStrategy {
     // Use default strategy with our configuration, passing the signal
     await this.defaultStrategy.scrape(options, progressCallback, signal);
   }
+
+  /**
+   * Cleanup resources used by this strategy.
+   */
+  async cleanup(): Promise<void> {
+    await this.defaultStrategy.cleanup();
+  }
 }

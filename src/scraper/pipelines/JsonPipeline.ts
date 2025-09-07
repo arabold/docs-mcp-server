@@ -187,6 +187,4 @@ export class JsonPipeline extends BasePipeline {
 
     return currentDepth;
   }
-
-  async close(): Promise<void> {}
 }

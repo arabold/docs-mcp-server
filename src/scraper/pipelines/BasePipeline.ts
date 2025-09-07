@@ -29,6 +29,14 @@ export class BasePipeline implements ContentPipeline {
   }
 
   /**
+   * Cleanup resources used by this pipeline.
+   * Default implementation does nothing - override in derived classes as needed.
+   */
+  public async close(): Promise<void> {
+    // No-op by default
+  }
+
+  /**
    * Executes a middleware stack on the given context.
    * This is a utility method used by derived pipeline classes.
    *
@@ -53,13 +61,5 @@ export class BasePipeline implements ContentPipeline {
     } catch (error) {
       context.errors.push(error instanceof Error ? error : new Error(String(error)));
     }
-  }
-
-  /**
-   * Cleans up resources when the pipeline is no longer needed.
-   * Default implementation does nothing.
-   */
-  public async close(): Promise<void> {
-    // Default implementation does nothing
   }
 }

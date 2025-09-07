@@ -860,4 +860,42 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).toHaveBeenCalledWith(start, expect.anything());
     expect(mockFetchFn).not.toHaveBeenCalledWith(resolved, expect.anything());
   });
+
+  describe("cleanup", () => {
+    it("should call close() on all pipelines when cleanup() is called", async () => {
+      const strategy = new WebScraperStrategy();
+
+      // Spy on the close method of all pipelines
+      strategy["pipelines"].forEach((pipeline) => {
+        vi.spyOn(pipeline, "close");
+      });
+
+      await strategy.cleanup();
+
+      // Verify close was called on all pipelines
+      strategy["pipelines"].forEach((pipeline) => {
+        expect(pipeline.close).toHaveBeenCalledOnce();
+      });
+    });
+
+    it("should handle cleanup errors gracefully", async () => {
+      const strategy = new WebScraperStrategy();
+
+      // Mock one pipeline to throw an error during cleanup
+      vi.spyOn(strategy["pipelines"][0], "close").mockRejectedValue(
+        new Error("Pipeline cleanup failed"),
+      );
+
+      // cleanup() should still complete and not throw
+      await expect(strategy.cleanup()).resolves.not.toThrow();
+    });
+
+    it("should be idempotent - multiple cleanup() calls should not error", async () => {
+      const strategy = new WebScraperStrategy();
+
+      // Multiple calls should not throw
+      await expect(strategy.cleanup()).resolves.not.toThrow();
+      await expect(strategy.cleanup()).resolves.not.toThrow();
+    });
+  });
 });

@@ -1281,5 +1281,49 @@ describe("DocumentManagementService", () => {
         expect(byVer["1.2.0"].progress).toEqual({ pages: 0, maxPages: 10 });
       });
     });
+
+    describe("cleanup", () => {
+      it("should call close() on all pipelines during shutdown()", async () => {
+        const service = new DocumentManagementService({
+          provider: "openai",
+          model: "text-embedding-ada-002",
+          dimensions: 1536,
+          modelSpec: "openai:text-embedding-ada-002",
+        });
+
+        // Spy on pipeline close methods
+        const pipelines = service["pipelines"];
+        const closeSpies = pipelines.map((pipeline) =>
+          vi.spyOn(pipeline, "close").mockResolvedValue(),
+        );
+
+        await service.shutdown();
+
+        // Verify pipeline cleanup was called before store shutdown
+        closeSpies.forEach((spy) => {
+          expect(spy).toHaveBeenCalledOnce();
+        });
+        expect(mockStore.shutdown).toHaveBeenCalledOnce();
+      });
+
+      it("should handle pipeline cleanup errors gracefully during shutdown", async () => {
+        const service = new DocumentManagementService({
+          provider: "openai",
+          model: "text-embedding-ada-002",
+          dimensions: 1536,
+          modelSpec: "openai:text-embedding-ada-002",
+        });
+
+        // Mock one pipeline to throw error during cleanup
+        const pipelines = service["pipelines"];
+        vi.spyOn(pipelines[0], "close").mockRejectedValue(
+          new Error("Pipeline cleanup failed"),
+        );
+
+        // Should still complete shutdown
+        await expect(service.shutdown()).resolves.not.toThrow();
+        expect(mockStore.shutdown).toHaveBeenCalledOnce();
+      });
+    });
   }); // Closing brace for describe("Core Functionality", ...)
 }); // Closing brace for the main describe block

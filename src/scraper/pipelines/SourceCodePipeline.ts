@@ -72,6 +72,4 @@ export class SourceCodePipeline extends BasePipeline {
       chunks,
     };
   }
-
-  async close(): Promise<void> {}
 }

@@ -121,6 +121,8 @@ export class Analytics {
    * Graceful shutdown with event flushing
    */
   async shutdown(): Promise<void> {
+    if (!this.enabled) return;
+
     await this.postHogClient.shutdown();
   }
 

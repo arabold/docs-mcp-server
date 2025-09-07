@@ -105,5 +105,11 @@ export class HtmlPipeline extends BasePipeline {
     };
   }
 
-  async close(): Promise<void> {}
+  /**
+   * Cleanup resources used by this pipeline, specifically the Playwright browser instance.
+   */
+  public async close(): Promise<void> {
+    await super.close(); // Call base class close (no-op by default)
+    await this.playwrightMiddleware.closeBrowser();
+  }
 }

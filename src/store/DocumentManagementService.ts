@@ -105,11 +105,15 @@ export class DocumentManagementService {
   }
 
   /**
-   * Shuts down the underlying document store.
+   * Shuts down the underlying document store and cleans up pipeline resources.
    */
 
   async shutdown(): Promise<void> {
     logger.debug("Shutting down store manager");
+
+    // Cleanup all pipelines to prevent resource leaks (e.g., browser instances)
+    await Promise.allSettled(this.pipelines.map((pipeline) => pipeline.close()));
+
     await this.store.shutdown();
   }
 

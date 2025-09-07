@@ -19,6 +19,12 @@ export interface ScraperStrategy {
     progressCallback: ProgressCallback<ScraperProgress>,
     signal?: AbortSignal, // Add optional signal
   ): Promise<void>;
+
+  /**
+   * Cleanup resources used by this strategy (e.g., pipeline browser instances).
+   * Should be called when the strategy is no longer needed.
+   */
+  cleanup?(): Promise<void>;
 }
 
 /**
