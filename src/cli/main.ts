@@ -88,9 +88,10 @@ export async function cleanupCliCommand(): Promise<void> {
     process.removeListener("SIGINT", sigintHandler);
 
     // Shutdown analytics for non-server CLI commands to ensure clean exit
-    if (analytics.isEnabled()) {
-      await analytics.shutdown();
-    }
+    await analytics.shutdown();
+
+    // Avoid hanging processes by explicitly exiting
+    process.exit(0);
   }
 }
 
