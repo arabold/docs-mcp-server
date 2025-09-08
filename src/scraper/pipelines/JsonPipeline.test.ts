@@ -796,5 +796,211 @@ describe("JsonPipeline", () => {
         expect(parsed).toEqual(original);
       }
     });
+
+    // Hierarchy-focused tests for consistency with other pipelines
+    it("should preserve hierarchical structure through GreedySplitter integration", async () => {
+      const nestedJson = {
+        application: {
+          name: "My Application",
+          version: "1.0.0",
+          database: {
+            primary: {
+              host: "localhost",
+              port: 5432,
+              credentials: {
+                username: "admin",
+                password: "secret",
+              },
+            },
+            replica: {
+              host: "replica.example.com",
+              port: 5432,
+            },
+          },
+          services: {
+            auth: {
+              enabled: true,
+              provider: "oauth2",
+            },
+            logging: {
+              level: "info",
+              format: "json",
+            },
+          },
+        },
+      };
+
+      const jsonContent: RawContent = {
+        content: JSON.stringify(nestedJson, null, 2),
+        mimeType: "application/json",
+        charset: "utf-8",
+        source: "hierarchy-test.json",
+      };
+
+      const result = await pipeline.process(jsonContent, baseOptions);
+
+      // Verify we got chunks with proper hierarchy
+      expect(result.chunks).toBeDefined();
+      expect(result.chunks!.length).toBeGreaterThan(0);
+
+      // Check that all chunks have valid hierarchy metadata
+      result.chunks!.forEach((chunk) => {
+        expect(chunk.section).toBeDefined();
+        expect(typeof chunk.section.level).toBe("number");
+        expect(Array.isArray(chunk.section.path)).toBe(true);
+        expect(chunk.section.level).toBeGreaterThanOrEqual(1); // Should not degrade to 0
+      });
+
+      // Verify JSON chunks are marked as code type (that's how JsonDocumentSplitter works)
+      const hasCodeType = result.chunks!.some((chunk) => chunk.types.includes("code"));
+      expect(hasCodeType).toBe(true);
+
+      // GreedySplitter may merge content, but hierarchy structure should still be meaningful
+      // Check that paths contain meaningful JSON property names
+      const allPaths = result.chunks!.flatMap((chunk) => chunk.section.path);
+      const hasJsonProperties = allPaths.some((pathElement) =>
+        ["application", "database", "services"].includes(pathElement),
+      );
+      expect(hasJsonProperties).toBe(true);
+
+      // Verify JSON validity is preserved
+      const concatenated = result.chunks!.map((chunk) => chunk.content).join("\n");
+      let parsedResult: any;
+      expect(() => {
+        parsedResult = JSON.parse(concatenated);
+      }).not.toThrow();
+      expect(parsedResult).toEqual(nestedJson);
+    });
+
+    it("should handle leading whitespace without creating artificial level 0 chunks", async () => {
+      const jsonWithLeadingWhitespace = `
+
+  
+  {
+    "config": {
+      "database": {
+        "host": "localhost",
+        "port": 5432
+      }
+    },
+    "features": {
+      "auth": true,
+      "logging": true
+    }
+  }`;
+
+      const jsonContent: RawContent = {
+        content: jsonWithLeadingWhitespace,
+        mimeType: "application/json",
+        charset: "utf-8",
+        source: "whitespace-test.json",
+      };
+
+      const result = await pipeline.process(jsonContent, baseOptions);
+
+      // Should not create separate whitespace-only chunks at level 0
+      const whitespaceOnlyChunks = result.chunks!.filter(
+        (chunk) =>
+          chunk.section.level === 0 &&
+          chunk.section.path.length === 0 &&
+          chunk.content.trim() === "",
+      );
+      expect(whitespaceOnlyChunks).toHaveLength(0);
+
+      // Minimum level should be 1 (not degraded to 0 by GreedySplitter)
+      const minLevel = Math.min(...result.chunks!.map((c) => c.section.level));
+      expect(minLevel).toBe(1);
+
+      // Verify JSON validity is preserved
+      const concatenated = result.chunks!.map((chunk) => chunk.content).join("\n");
+      expect(() => JSON.parse(concatenated)).not.toThrow();
+    });
+
+    it("should maintain semantic JSON boundaries during optimization", async () => {
+      // Use much smaller chunk sizes to force GreedySplitter to work
+      const smallChunkPipeline = new JsonPipeline(30);
+
+      // Create JSON that will definitely exceed chunk size limits
+      const largeNestedJson = {
+        servers: Array.from({ length: 5 }, (_, i) => ({
+          id: i + 1,
+          name: `server-${i + 1}`,
+          host: `server-${i + 1}.example.com`,
+        })),
+      };
+
+      const jsonContent: RawContent = {
+        content: JSON.stringify(largeNestedJson, null, 2),
+        mimeType: "application/json",
+        charset: "utf-8",
+        source: "large-boundaries.json",
+      };
+
+      const result = await smallChunkPipeline.process(jsonContent, baseOptions);
+
+      // Should have multiple chunks due to size constraints
+      expect(result.chunks!.length).toBeGreaterThan(1);
+
+      // Should maintain hierarchy levels (not degrade to 0)
+      const minLevel = Math.min(...result.chunks!.map((c) => c.section.level));
+      expect(minLevel).toBeGreaterThanOrEqual(1);
+
+      // Verify JSON validity after processing
+      const concatenated = result.chunks!.map((chunk) => chunk.content).join("\n");
+      let parsedResult: any;
+      expect(() => {
+        parsedResult = JSON.parse(concatenated);
+      }).not.toThrow();
+      expect(parsedResult).toEqual(largeNestedJson);
+    });
+
+    it("should assign correct hierarchy levels to nested JSON structures", async () => {
+      const hierarchicalJson = {
+        root: {
+          level1: {
+            level2: {
+              deepProperty: "deep value",
+            },
+          },
+        },
+        topLevel: "top value",
+      };
+
+      const jsonContent: RawContent = {
+        content: JSON.stringify(hierarchicalJson, null, 2),
+        mimeType: "application/json",
+        charset: "utf-8",
+        source: "hierarchy-levels.json",
+      };
+
+      const result = await pipeline.process(jsonContent, baseOptions);
+
+      // Verify we have content
+      expect(result.chunks!.length).toBeGreaterThan(0);
+
+      // Verify all chunks have proper section metadata
+      result.chunks!.forEach((chunk) => {
+        expect(chunk.section).toBeDefined();
+        expect(typeof chunk.section.level).toBe("number");
+        expect(Array.isArray(chunk.section.path)).toBe(true);
+        expect(chunk.section.level).toBeGreaterThanOrEqual(1);
+        expect(chunk.types).toContain("code"); // JSON chunks are marked as 'code'
+      });
+
+      // Verify content is preserved
+      const concatenated = result.chunks!.map((chunk) => chunk.content).join("\n");
+      let parsedResult: any;
+      expect(() => {
+        parsedResult = JSON.parse(concatenated);
+      }).not.toThrow();
+      expect(parsedResult).toEqual(hierarchicalJson);
+
+      // Verify paths contain meaningful JSON structure
+      const allPaths = result.chunks!.flatMap((chunk) => chunk.section.path);
+      const hasJsonStructure = allPaths.some((pathElement) =>
+        ["root", "level1", "level2"].includes(pathElement),
+      );
+      expect(hasJsonStructure).toBe(true);
+    });
   });
 });

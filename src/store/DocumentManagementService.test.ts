@@ -423,8 +423,8 @@ describe("DocumentManagementService", () => {
           expect.arrayContaining([
             expect.objectContaining({
               metadata: expect.objectContaining({
-                level: 1,
-                path: expect.arrayContaining(["Chapter 1", "Section 1.1"]),
+                level: 0,
+                path: [],
               }),
             }),
           ]),

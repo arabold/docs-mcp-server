@@ -232,7 +232,8 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
           switch (content.type) {
             case "heading":
             case "text": {
-              splitContent = await this.textSplitter.split(content.text);
+              // Trim markdown content before splitting
+              splitContent = await this.textSplitter.split(fullTrim(content.text));
               break;
             }
             case "code": {

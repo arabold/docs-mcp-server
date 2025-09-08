@@ -1,5 +1,4 @@
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
-import { fullTrim } from "../../utils/string";
 import { MinimumChunkSizeError } from "../errors";
 import type { ContentSplitter, ContentSplitterOptions } from "./types";
 
@@ -15,17 +14,16 @@ export class TextContentSplitter implements ContentSplitter {
   /**
    * Splits text content into chunks while trying to preserve semantic boundaries.
    * Prefers paragraph breaks, then line breaks, finally falling back to word boundaries.
+   * Always preserves formatting - trimming should be done by higher-level splitters if needed.
    */
   async split(content: string): Promise<string[]> {
-    const trimmedContent = fullTrim(content);
-
-    if (trimmedContent.length <= this.options.chunkSize) {
-      return [trimmedContent];
+    if (content.length <= this.options.chunkSize) {
+      return [content];
     }
 
     // Check for unsplittable content (e.g., a single word longer than chunkSize)
-    const words = trimmedContent.split(/\s+/);
-    const longestWord = words.reduce((max, word) =>
+    const words = content.split(/\s+/);
+    const longestWord = words.reduce((max: string, word: string) =>
       word.length > max.length ? word : max,
     );
     if (longestWord.length > this.options.chunkSize) {
@@ -33,21 +31,21 @@ export class TextContentSplitter implements ContentSplitter {
     }
 
     // First try splitting by paragraphs (double newlines)
-    const paragraphChunks = this.splitByParagraphs(trimmedContent);
+    const paragraphChunks = this.splitByParagraphs(content);
     if (this.areChunksValid(paragraphChunks)) {
       // No merging for paragraph chunks; they are already semantically separated
       return paragraphChunks;
     }
 
     // If that doesn't work, try splitting by single newlines
-    const lineChunks = this.splitByLines(trimmedContent);
+    const lineChunks = this.splitByLines(content);
     if (this.areChunksValid(lineChunks)) {
-      return this.mergeChunks(lineChunks, "\n");
+      return this.mergeChunks(lineChunks, ""); // No separator needed - newlines are preserved in chunks
     }
 
     // Finally, fall back to word-based splitting using LangChain
-    const wordChunks = await this.splitByWords(trimmedContent);
-    return this.mergeChunks(wordChunks, " ");
+    const wordChunks = await this.splitByWords(content);
+    return this.mergeChunks(wordChunks, " "); // Word chunks still need space separator
   }
 
   /**
@@ -59,26 +57,62 @@ export class TextContentSplitter implements ContentSplitter {
 
   /**
    * Splits text into chunks by paragraph boundaries (double newlines)
+   * Preserves all formatting and whitespace including the paragraph separators
    */
   private splitByParagraphs(text: string): string[] {
-    const paragraphs = text
-      .split(/\n\s*\n/)
-      .map((p) => fullTrim(p))
-      .filter(Boolean);
+    const chunks: string[] = [];
+    let startPos = 0;
 
-    return paragraphs.filter((chunk) => chunk.length > 2);
+    // Find all paragraph boundaries
+    const paragraphRegex = /\n\s*\n/g;
+    let match = paragraphRegex.exec(text);
+
+    while (match !== null) {
+      // Include the paragraph separator in the current chunk
+      const endPos = match.index + match[0].length;
+      const chunk = text.slice(startPos, endPos);
+      if (chunk.length > 2) {
+        chunks.push(chunk);
+      }
+      startPos = endPos;
+      match = paragraphRegex.exec(text);
+    }
+
+    // Add the remaining text
+    if (startPos < text.length) {
+      const remainingChunk = text.slice(startPos);
+      if (remainingChunk.length > 2) {
+        chunks.push(remainingChunk);
+      }
+    }
+
+    return chunks.filter(Boolean);
   }
 
   /**
    * Splits text into chunks by line boundaries
+   * Preserves all formatting and whitespace, including newlines at the end of each line
    */
   private splitByLines(text: string): string[] {
-    const lines = text
-      .split(/\n/)
-      .map((line) => fullTrim(line))
-      .filter(Boolean);
+    const chunks: string[] = [];
+    let startPos = 0;
 
-    return lines.filter((chunk) => chunk.length > 1);
+    // Find all line boundaries
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === "\n") {
+        // Include the newline in the current chunk
+        const chunk = text.slice(startPos, i + 1);
+        chunks.push(chunk);
+        startPos = i + 1;
+      }
+    }
+
+    // Add the remaining text (if any) without a trailing newline
+    if (startPos < text.length) {
+      chunks.push(text.slice(startPos));
+    }
+
+    return chunks;
   }
 
   /**

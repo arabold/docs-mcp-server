@@ -56,6 +56,16 @@ describe("JsonDocumentSplitter", () => {
       expect(chunks.some((c) => c.content.includes('"config": '))).toBe(true);
       expect(chunks.some((c) => c.content.includes('  "debug": true'))).toBe(true);
       expect(chunks.some((c) => c.content.includes('  "port": 8080'))).toBe(true);
+
+      // Verify level/path relationship for nested chunks
+      const configChunk = chunks.find((c) => c.content.includes('"config":'));
+      expect(configChunk).toBeDefined();
+      expect(configChunk!.section.level).toBe(configChunk!.section.path.length);
+
+      const debugChunk = chunks.find((c) => c.content.includes('"debug": true'));
+      expect(debugChunk).toBeDefined();
+      expect(debugChunk!.section.level).toBe(debugChunk!.section.path.length);
+      expect(debugChunk!.section.level).toBeGreaterThan(configChunk!.section.level);
     });
 
     it("should handle nested arrays correctly", async () => {
@@ -76,6 +86,65 @@ describe("JsonDocumentSplitter", () => {
       expect(
         chunks.some((c) => c.content.trim() === "]" || c.content.trim() === "],"),
       ).toBe(true);
+
+      // Verify level/path relationships
+      chunks.forEach((chunk) => {
+        expect(chunk.section.level).toBe(chunk.section.path.length);
+      });
+
+      // Test specific path structures for array items
+      const itemsChunk = chunks.find((c) => c.content.includes('"items":'));
+      expect(itemsChunk).toBeDefined();
+      expect(itemsChunk!.section.path).toEqual(["root", "items"]);
+      expect(itemsChunk!.section.level).toBe(2);
+
+      // Find array item chunks by their content and verify exact paths
+      const firstItemChunk = chunks.find((c) => c.content.includes("1,"));
+      expect(firstItemChunk).toBeDefined();
+      expect(firstItemChunk!.section.path).toEqual(["root", "items", "[0]"]);
+      expect(firstItemChunk!.section.level).toBe(3);
+
+      const secondItemChunk = chunks.find((c) => c.content.includes("2,"));
+      expect(secondItemChunk).toBeDefined();
+      expect(secondItemChunk!.section.path).toEqual(["root", "items", "[1]"]);
+      expect(secondItemChunk!.section.level).toBe(3);
+
+      const thirdItemChunk = chunks.find(
+        (c) => c.content.includes("3") && !c.content.includes("3,"),
+      );
+      expect(thirdItemChunk).toBeDefined();
+      expect(thirdItemChunk!.section.path).toEqual(["root", "items", "[2]"]);
+      expect(thirdItemChunk!.section.level).toBe(3);
+    });
+
+    it("should handle complex arrays with nested objects correctly", async () => {
+      const content = '{"users": [{"name": "Alice", "age": 30}, {"name": "Bob"}]}';
+      const chunks = await splitter.splitText(content);
+
+      // Should concatenate to valid JSON
+      const concatenated = chunks.map((c) => c.content).join("\n");
+      expect(() => JSON.parse(concatenated)).not.toThrow();
+
+      // Verify all chunks follow level === path.length rule
+      chunks.forEach((chunk) => {
+        expect(chunk.section.level).toBe(chunk.section.path.length);
+      });
+
+      // Test specific array index paths
+      const aliceNameChunk = chunks.find((c) => c.content.includes('"name": "Alice"'));
+      expect(aliceNameChunk).toBeDefined();
+      expect(aliceNameChunk!.section.path).toEqual(["root", "users", "[0]", "name"]);
+      expect(aliceNameChunk!.section.level).toBe(4);
+
+      const aliceAgeChunk = chunks.find((c) => c.content.includes('"age": 30'));
+      expect(aliceAgeChunk).toBeDefined();
+      expect(aliceAgeChunk!.section.path).toEqual(["root", "users", "[0]", "age"]);
+      expect(aliceAgeChunk!.section.level).toBe(4);
+
+      const bobNameChunk = chunks.find((c) => c.content.includes('"name": "Bob"'));
+      expect(bobNameChunk).toBeDefined();
+      expect(bobNameChunk!.section.path).toEqual(["root", "users", "[1]", "name"]);
+      expect(bobNameChunk!.section.level).toBe(4);
     });
   });
 
@@ -88,6 +157,27 @@ describe("JsonDocumentSplitter", () => {
       expect(chunks.some((chunk) => chunk.section.path.includes("a"))).toBe(true);
       expect(chunks.some((chunk) => chunk.section.path.includes("b"))).toBe(true);
       expect(chunks.some((chunk) => chunk.section.path.includes("c"))).toBe(true);
+
+      // Verify level corresponds to path length
+      chunks.forEach((chunk) => {
+        expect(chunk.section.level).toBe(chunk.section.path.length);
+      });
+
+      // Find specific chunks and verify their levels
+      const aChunk = chunks.find(
+        (chunk) => chunk.section.path.includes("a") && chunk.content.includes('"a":'),
+      );
+      expect(aChunk).toBeDefined();
+      expect(aChunk!.section.path).toEqual(["root", "a"]);
+      expect(aChunk!.section.level).toBe(2);
+
+      const cChunk = chunks.find(
+        (chunk) =>
+          chunk.section.path.includes("c") && chunk.content.includes('"c": "value"'),
+      );
+      expect(cChunk).toBeDefined();
+      expect(cChunk!.section.path).toEqual(["root", "a", "b", "c"]);
+      expect(cChunk!.section.level).toBe(4);
     });
 
     it("should provide appropriate level numbers", async () => {
@@ -103,6 +193,11 @@ describe("JsonDocumentSplitter", () => {
 
       expect(level1Chunks.some((chunk) => chunk.section.level >= 2)).toBe(true);
       expect(level2Chunks.some((chunk) => chunk.section.level >= 3)).toBe(true);
+
+      // Verify that level equals path length for all chunks
+      [...level1Chunks, ...level2Chunks].forEach((chunk) => {
+        expect(chunk.section.level).toBe(chunk.section.path.length);
+      });
     });
   });
 

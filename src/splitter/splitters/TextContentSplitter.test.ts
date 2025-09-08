@@ -20,9 +20,13 @@ Third paragraph to complete the example.`;
     const chunks = await splitter.split(text);
 
     expect(chunks.length).toBe(3);
-    expect(chunks[0]).toBe("First paragraph with some content.");
-    expect(chunks[1]).toBe("Second paragraph that continues the text.");
+    // Chunks now preserve paragraph separators for perfect reconstruction
+    expect(chunks[0]).toBe("First paragraph with some content.\n\n");
+    expect(chunks[1]).toBe("Second paragraph that continues the text.\n\n");
     expect(chunks[2]).toBe("Third paragraph to complete the example.");
+
+    // Verify perfect reconstruction
+    expect(chunks.join("")).toBe(text);
   });
 
   it("should fall back to line breaks when paragraphs too large", async () => {
@@ -63,9 +67,44 @@ And line four finishes it.`;
     expect(emptyChunks.length).toBe(1);
     expect(emptyChunks[0]).toBe("");
 
+    // Whitespace should be preserved now
     const whitespaceChunks = await splitter.split("   \n  \n  ");
     expect(whitespaceChunks.length).toBe(1);
-    expect(whitespaceChunks[0]).toBe("");
+    expect(whitespaceChunks[0]).toBe("   \n  \n  ");
+  });
+
+  it("should preserve formatting and whitespace", async () => {
+    const textWithFormatting = `  function example() {
+    // This has indentation
+    const value = "test";
+    
+    return value;
+  }`;
+
+    const chunks = await splitter.split(textWithFormatting);
+
+    // Should preserve the exact content including indentation and blank lines
+    expect(chunks.join("")).toBe(textWithFormatting);
+
+    // Each chunk should maintain its formatting
+    for (const chunk of chunks) {
+      // Leading/trailing spaces should be preserved within chunks
+      expect(chunk).not.toBe(chunk.trim());
+    }
+  });
+
+  it("should preserve blank lines and spacing", async () => {
+    const textWithSpacing = `Line 1
+
+Line 3 with blank line above
+
+
+Line 6 with multiple blank lines above`;
+
+    const chunks = await splitter.split(textWithSpacing);
+
+    // Should be able to reconstruct exactly
+    expect(chunks.join("")).toBe(textWithSpacing);
   });
 
   it("should split words as last resort", async () => {

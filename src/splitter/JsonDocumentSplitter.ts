@@ -91,7 +91,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     chunks.push({
       types: ["code"],
       content: `${indent}[`,
-      section: { level, path: [...path, "opening"] },
+      section: { level, path: [...path] },
     });
 
     // Process each array element
@@ -105,7 +105,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     chunks.push({
       types: ["code"],
       content: `${indent}]${comma}`,
-      section: { level, path: [...path, "closing"] },
+      section: { level, path: [...path] },
     });
   }
 
@@ -125,7 +125,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     chunks.push({
       types: ["code"],
       content: `${indent}{`,
-      section: { level, path: [...path, "opening"] },
+      section: { level, path: [...path] },
     });
 
     // Process each property
@@ -147,7 +147,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     chunks.push({
       types: ["code"],
       content: `${indent}}${comma}`,
-      section: { level, path: [...path, "closing"] },
+      section: { level, path: [...path] },
     });
   }
 
@@ -167,7 +167,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
       chunks.push({
         types: ["code"],
         content: `${indent}"${key}": `,
-        section: { level, path: [...path, "key"] },
+        section: { level, path },
       });
 
       // Process the complex value (it handles its own comma)

@@ -263,4 +263,254 @@ More content here.
     // Verify no errors occurred
     expect(result.errors).toHaveLength(0);
   });
+
+  describe("GreedySplitter integration - hierarchical chunking behavior", () => {
+    it("should preserve hierarchical structure through GreedySplitter integration", async () => {
+      const pipeline = new MarkdownPipeline();
+      const markdown = `# Main Chapter
+
+This is content under the main chapter.
+
+## Section A
+
+Content in section A.
+
+### Subsection A.1
+
+Content in subsection A.1.
+
+## Section B
+
+Final content in section B.`;
+
+      const raw: RawContent = {
+        content: markdown,
+        mimeType: "text/markdown",
+        charset: "utf-8",
+        source: "http://test.example.com",
+      };
+
+      const result = await pipeline.process(raw, {
+        url: "http://example.com",
+        library: "example",
+        version: "",
+        scrapeMode: ScrapeMode.Fetch,
+      });
+
+      // Verify we got chunks with proper hierarchy
+      expect(result.chunks.length).toBeGreaterThan(0);
+
+      // GreedySplitter may merge small content into fewer chunks
+      // But the hierarchy structure should still be semantically meaningful
+      expect(result.chunks.length).toBeGreaterThanOrEqual(1);
+
+      // Check that all chunks have valid hierarchy metadata
+      result.chunks.forEach((chunk) => {
+        expect(chunk.section).toBeDefined();
+        expect(typeof chunk.section.level).toBe("number");
+        expect(Array.isArray(chunk.section.path)).toBe(true);
+        expect(chunk.section.level).toBeGreaterThanOrEqual(1); // Should not degrade to 0
+      });
+
+      // Verify that headings and text are properly identified
+      const hasHeadings = result.chunks.some((chunk) => chunk.types.includes("heading"));
+      const hasText = result.chunks.some((chunk) => chunk.types.includes("text"));
+      expect(hasHeadings || hasText).toBe(true); // Should have semantic content
+    });
+
+    it("should handle leading whitespace without creating artificial level 0 chunks", async () => {
+      const pipeline = new MarkdownPipeline();
+      const markdownWithLeadingWhitespace = `
+
+  
+  # First Heading
+
+Content under first heading.
+
+## Second Level
+
+Content under second level.`;
+
+      const raw: RawContent = {
+        content: markdownWithLeadingWhitespace,
+        mimeType: "text/markdown",
+        charset: "utf-8",
+        source: "http://test.example.com",
+      };
+
+      const result = await pipeline.process(raw, {
+        url: "http://example.com",
+        library: "example",
+        version: "",
+        scrapeMode: ScrapeMode.Fetch,
+      });
+
+      // Should not create separate whitespace-only chunks at level 0
+      const whitespaceOnlyChunks = result.chunks.filter(
+        (chunk) =>
+          chunk.section.level === 0 &&
+          chunk.section.path.length === 0 &&
+          chunk.content.trim() === "",
+      );
+      expect(whitespaceOnlyChunks).toHaveLength(0);
+
+      // First heading should be at level 1, not degraded by whitespace
+      const firstHeading = result.chunks.find(
+        (chunk) =>
+          chunk.types.includes("heading") && chunk.content.includes("First Heading"),
+      );
+      expect(firstHeading).toBeDefined();
+      expect(firstHeading!.section.level).toBe(1);
+
+      // Minimum level should be 1 (not degraded to 0 by GreedySplitter)
+      const minLevel = Math.min(...result.chunks.map((c) => c.section.level));
+      expect(minLevel).toBe(1);
+    });
+
+    it("should maintain semantic boundaries during chunk size optimization", async () => {
+      // Use much smaller chunk sizes to force GreedySplitter to split
+      const pipeline = new MarkdownPipeline(50, 100);
+
+      // Create content that will definitely exceed chunk size limits
+      const longContent = Array.from(
+        { length: 20 },
+        (_, i) =>
+          `This is a very long sentence ${i + 1} with lots of additional content to make it exceed the chunk size limits and force splitting.`,
+      ).join(" ");
+
+      const markdown = `# Large Section
+
+${longContent}
+
+## Subsection
+
+${longContent}
+
+# Another Chapter
+
+${longContent}`;
+
+      const raw: RawContent = {
+        content: markdown,
+        mimeType: "text/markdown",
+        charset: "utf-8",
+        source: "http://test.example.com",
+      };
+
+      const result = await pipeline.process(raw, {
+        url: "http://example.com",
+        library: "example",
+        version: "",
+        scrapeMode: ScrapeMode.Fetch,
+      });
+
+      // Should have multiple chunks due to size constraints
+      expect(result.chunks.length).toBeGreaterThan(1);
+
+      // All chunks should be within size limits
+      result.chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(100);
+      });
+
+      // Should maintain hierarchy levels (not degrade to 0)
+      const minLevel = Math.min(...result.chunks.map((c) => c.section.level));
+      expect(minLevel).toBeGreaterThanOrEqual(1);
+    });
+
+    it("should produce chunks with correct types and hierarchy metadata", async () => {
+      const pipeline = new MarkdownPipeline();
+      const markdown = `# Documentation
+
+This is introductory text.
+
+\`\`\`javascript
+console.log("Hello, world!");
+\`\`\`
+
+| Column 1 | Column 2 |
+|----------|----------|
+| Value 1  | Value 2  |
+
+## Implementation
+
+More details here.`;
+
+      const raw: RawContent = {
+        content: markdown,
+        mimeType: "text/markdown",
+        charset: "utf-8",
+        source: "http://test.example.com",
+      };
+
+      const result = await pipeline.process(raw, {
+        url: "http://example.com",
+        library: "example",
+        version: "",
+        scrapeMode: ScrapeMode.Fetch,
+      });
+
+      // Verify we have content with semantic types (GreedySplitter may merge them)
+      expect(result.chunks.length).toBeGreaterThan(0);
+
+      // Check that we have the expected content types somewhere in the chunks
+      const allTypes = new Set(result.chunks.flatMap((chunk) => chunk.types));
+      expect(allTypes.has("heading") || allTypes.has("text")).toBe(true);
+
+      // Verify all chunks have proper section metadata
+      result.chunks.forEach((chunk) => {
+        expect(chunk.section).toBeDefined();
+        expect(typeof chunk.section.level).toBe("number");
+        expect(Array.isArray(chunk.section.path)).toBe(true);
+        expect(chunk.section.level).toBeGreaterThanOrEqual(1);
+      });
+
+      // Verify content is preserved (at least the key parts)
+      const allContent = result.chunks.map((chunk) => chunk.content).join("");
+      expect(allContent).toContain("Documentation");
+      expect(allContent).toContain("Implementation");
+      expect(allContent).toContain("Hello, world!");
+    });
+
+    it("should preserve semantic content structure through pipeline", async () => {
+      const pipeline = new MarkdownPipeline();
+      const originalMarkdown = `# Title
+Paragraph with text.
+## Subtitle
+More content here.
+\`\`\`python
+print("code block")
+\`\`\`
+Final paragraph.`;
+
+      const raw: RawContent = {
+        content: originalMarkdown,
+        mimeType: "text/markdown",
+        charset: "utf-8",
+        source: "http://test.example.com",
+      };
+
+      const result = await pipeline.process(raw, {
+        url: "http://example.com",
+        library: "example",
+        version: "",
+        scrapeMode: ScrapeMode.Fetch,
+      });
+
+      // Verify semantic content is preserved (may not be perfect reconstruction due to whitespace normalization)
+      const allContent = result.chunks.map((chunk) => chunk.content).join("");
+      expect(allContent).toContain("# Title");
+      expect(allContent).toContain("## Subtitle");
+      expect(allContent).toContain("Paragraph with text");
+      expect(allContent).toContain("More content here");
+      expect(allContent).toContain('print("code block")');
+      expect(allContent).toContain("Final paragraph");
+
+      // Verify we have semantic chunks
+      expect(result.chunks.length).toBeGreaterThan(0);
+
+      // Verify hierarchical structure is preserved
+      const minLevel = Math.min(...result.chunks.map((chunk) => chunk.section.level));
+      expect(minLevel).toBeGreaterThanOrEqual(1); // Should not degrade to 0
+    });
+  });
 });

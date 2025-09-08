@@ -23,7 +23,7 @@ interface SearchResultItemProps {
 const SearchResultItem = async ({ result }: SearchResultItemProps) => {
   const isMarkdown = result.mimeType
     ? MimeTypeUtils.isMarkdown(result.mimeType)
-    : false;
+    : true; // Default to true if mimeType is undefined (backward compatibility)
 
   // Create JSDOM instance and initialize DOMPurify (used for both markdown and non-markdown content)
   const jsdom = createJSDOM("");
@@ -46,12 +46,11 @@ const SearchResultItem = async ({ result }: SearchResultItemProps) => {
     // For non-markdown content, sanitize and render as preformatted text
     const sanitizedContent = purifier.sanitize(result.content);
     contentElement = (
-      <pre
-        class="format dark:format-invert max-w-none whitespace-pre-wrap text-sm overflow-x-auto"
-        safe
-      >
-        {sanitizedContent}
-      </pre>
+      <div class="format dark:format-invert max-w-none">
+        <pre>
+          <code safe>{sanitizedContent}</code>
+        </pre>
+      </div>
     );
   }
 
