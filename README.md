@@ -249,7 +249,7 @@ See the tooltips in the Web UI and CLI help for more details.
 
 ## Advanced: Docker Compose (Scaling)
 
-For production deployments or when you need to scale processing, use Docker Compose to run separate services. The system selects a local in-process worker or a remote worker client based on configuration, keeping behavior consistent across modes.
+For production deployments or when you need to scale processing, use Docker Compose to run separate services. The system selects either a local in-process worker or a remote worker client based on the configuration, ensuring consistent behavior across modes.
 
 **Start the services:**
 
@@ -263,9 +263,6 @@ export OPENAI_API_KEY="your-key-here"
 
 # Start all services
 docker compose up -d
-
-# Scale workers if needed
-docker compose up -d --scale worker=3
 ```
 
 **Service architecture:**
