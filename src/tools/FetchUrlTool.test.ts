@@ -292,8 +292,8 @@ describe("FetchUrlTool", () => {
       });
 
       // Spy on pipeline close methods
-      const closeSpy1 = vi.spyOn(fetchUrlTool["pipelines"][0], "close");
-      const closeSpy2 = vi.spyOn(fetchUrlTool["pipelines"][1], "close");
+      const closeSpy1 = vi.spyOn(fetchUrlTool.pipelines[0], "close");
+      const closeSpy2 = vi.spyOn(fetchUrlTool.pipelines[1], "close");
 
       await fetchUrlTool.execute(options);
 
@@ -314,8 +314,8 @@ describe("FetchUrlTool", () => {
         .mockRejectedValue(new ScraperError("Fetch failed", true));
 
       // Spy on pipeline close methods
-      const closeSpy1 = vi.spyOn(fetchUrlTool["pipelines"][0], "close");
-      const closeSpy2 = vi.spyOn(fetchUrlTool["pipelines"][1], "close");
+      const closeSpy1 = vi.spyOn(fetchUrlTool.pipelines[0], "close");
+      const closeSpy2 = vi.spyOn(fetchUrlTool.pipelines[1], "close");
 
       // Expect error to be thrown
       await expect(fetchUrlTool.execute(options)).rejects.toThrow(ToolError);
@@ -339,7 +339,7 @@ describe("FetchUrlTool", () => {
       });
 
       // Mock one pipeline to throw error during cleanup
-      vi.spyOn(fetchUrlTool["pipelines"][0], "close").mockRejectedValue(
+      vi.spyOn(fetchUrlTool.pipelines[0], "close").mockRejectedValue(
         new Error("Pipeline cleanup failed"),
       );
 

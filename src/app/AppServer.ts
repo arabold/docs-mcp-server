@@ -122,7 +122,7 @@ export class AppServer {
     try {
       const address = await this.server.listen({
         port: this.config.port,
-        host: "0.0.0.0",
+        host: this.config.host,
       });
 
       this.logStartupInfo(address);

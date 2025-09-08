@@ -21,6 +21,9 @@ export interface AppServerConfig {
   /** Port to run the server on */
   port: number;
 
+  /** Host to bind the server to */
+  host: string;
+
   /** URL of external worker server (if using external worker instead of embedded) */
   externalWorkerUrl?: string;
 

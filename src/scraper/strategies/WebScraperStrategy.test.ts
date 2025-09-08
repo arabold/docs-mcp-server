@@ -866,14 +866,14 @@ describe("WebScraperStrategy", () => {
       const strategy = new WebScraperStrategy();
 
       // Spy on the close method of all pipelines
-      strategy["pipelines"].forEach((pipeline) => {
+      strategy.pipelines.forEach((pipeline) => {
         vi.spyOn(pipeline, "close");
       });
 
       await strategy.cleanup();
 
       // Verify close was called on all pipelines
-      strategy["pipelines"].forEach((pipeline) => {
+      strategy.pipelines.forEach((pipeline) => {
         expect(pipeline.close).toHaveBeenCalledOnce();
       });
     });
@@ -882,7 +882,7 @@ describe("WebScraperStrategy", () => {
       const strategy = new WebScraperStrategy();
 
       // Mock one pipeline to throw an error during cleanup
-      vi.spyOn(strategy["pipelines"][0], "close").mockRejectedValue(
+      vi.spyOn(strategy.pipelines[0], "close").mockRejectedValue(
         new Error("Pipeline cleanup failed"),
       );
 

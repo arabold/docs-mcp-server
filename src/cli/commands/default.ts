@@ -20,6 +20,7 @@ import {
   resolveEmbeddingContext,
   resolveProtocol,
   validateAuthConfig,
+  validateHost,
   validatePort,
   warnHttpUsage,
 } from "../utils";
@@ -43,6 +44,11 @@ export function createDefaultAction(program: Command): Command {
           })
           .default(CLI_DEFAULTS.HTTP_PORT.toString()),
       )
+      .addOption(
+        new Option("--host <host>", "Host to bind the server to")
+          .argParser(validateHost)
+          .default(CLI_DEFAULTS.HOST),
+      )
       .option("--resume", "Resume interrupted jobs on startup", false)
       .option("--no-resume", "Do not resume jobs on startup")
       .option(
@@ -65,6 +71,7 @@ export function createDefaultAction(program: Command): Command {
         async (options: {
           protocol: string;
           port: string;
+          host: string;
           resume: boolean;
           readOnly: boolean;
           authEnabled?: boolean;
@@ -79,6 +86,7 @@ export function createDefaultAction(program: Command): Command {
 
           logger.debug("No subcommand specified, starting unified server by default...");
           const port = validatePort(options.port);
+          const host = validateHost(options.host);
 
           // Parse and validate auth configuration
           const authConfig = parseAuthConfig({
@@ -131,6 +139,7 @@ export function createDefaultAction(program: Command): Command {
               enableApiServer: true, // Enable API (tRPC) in http mode
               enableWorker: true, // Always enable in-process worker for unified server
               port,
+              host,
               readOnly: options.readOnly,
               auth: authConfig,
               startupContext: {

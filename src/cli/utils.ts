@@ -15,6 +15,7 @@ import {
   type EmbeddingModelConfig,
 } from "../store/embeddings/EmbeddingConfig";
 import {
+  DEFAULT_HOST,
   DEFAULT_HTTP_PORT,
   DEFAULT_MAX_CONCURRENCY,
   DEFAULT_PROTOCOL,
@@ -137,6 +138,24 @@ export function validatePort(portString: string): number {
 }
 
 /**
+ * Validates host string for basic format checking
+ */
+export function validateHost(hostString: string): string {
+  // Basic validation - allow IPv4, IPv6, and hostnames
+  const trimmed = hostString.trim();
+  if (!trimmed) {
+    throw new Error("❌ Host cannot be empty");
+  }
+
+  // Very basic format check - reject obviously invalid values
+  if (trimmed.includes(" ") || trimmed.includes("\t") || trimmed.includes("\n")) {
+    throw new Error("❌ Host cannot contain whitespace");
+  }
+
+  return trimmed;
+}
+
+/**
  * Creates a pipeline (local or client) and attaches default CLI callbacks.
  * This makes the side-effects explicit and keeps creation consistent.
  */
@@ -184,6 +203,7 @@ export function createAppServerConfig(options: {
   enableApiServer?: boolean;
   enableWorker?: boolean;
   port: number;
+  host: string;
   externalWorkerUrl?: string;
   readOnly?: boolean;
   auth?: AuthConfig;
@@ -199,6 +219,7 @@ export function createAppServerConfig(options: {
     enableApiServer: options.enableApiServer ?? false,
     enableWorker: options.enableWorker ?? true,
     port: options.port,
+    host: options.host,
     externalWorkerUrl: options.externalWorkerUrl,
     readOnly: options.readOnly ?? false,
     auth: options.auth,
@@ -233,6 +254,7 @@ export const CLI_DEFAULTS = {
   PROTOCOL: DEFAULT_PROTOCOL,
   HTTP_PORT: DEFAULT_HTTP_PORT,
   WEB_PORT: DEFAULT_WEB_PORT,
+  HOST: DEFAULT_HOST,
   MAX_CONCURRENCY: DEFAULT_MAX_CONCURRENCY,
   TELEMETRY: true,
 } as const;

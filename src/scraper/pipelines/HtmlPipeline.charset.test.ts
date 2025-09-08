@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RawContent } from "../fetcher/types";
 import { ScrapeMode } from "../types";
 import { HtmlPipeline } from "./HtmlPipeline";

@@ -46,7 +46,7 @@ describe("ScraperRegistry", () => {
       const registry = new ScraperRegistry();
 
       // Spy on cleanup methods of all strategies
-      const strategies = registry["strategies"];
+      const strategies = registry.strategies;
       const cleanupSpies = strategies
         .map((strategy) => {
           if (strategy.cleanup) {
@@ -68,7 +68,7 @@ describe("ScraperRegistry", () => {
       const registry = new ScraperRegistry();
 
       // Mock one strategy to throw error during cleanup
-      const strategies = registry["strategies"];
+      const strategies = registry.strategies;
       const strategyWithCleanup = strategies.find((s) => s.cleanup);
       if (strategyWithCleanup?.cleanup) {
         vi.spyOn(strategyWithCleanup, "cleanup" as any).mockRejectedValue(
