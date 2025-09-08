@@ -15,6 +15,7 @@ import {
   createAppServerConfig,
   createPipelineWithCallbacks,
   resolveEmbeddingContext,
+  validateHost,
   validatePort,
 } from "../utils";
 
@@ -33,12 +34,18 @@ export function createWebCommand(program: Command): Command {
         })
         .default(CLI_DEFAULTS.WEB_PORT.toString()),
     )
+    .addOption(
+      new Option("--host <host>", "Host to bind the web interface to")
+        .argParser(validateHost)
+        .default(CLI_DEFAULTS.HOST),
+    )
     .option(
       "--server-url <url>",
       "URL of external pipeline worker RPC (e.g., http://localhost:6280/api)",
     )
-    .action(async (cmdOptions: { port: string; serverUrl?: string }) => {
+    .action(async (cmdOptions: { port: string; host: string; serverUrl?: string }) => {
       const port = validatePort(cmdOptions.port);
+      const host = validateHost(cmdOptions.host);
       const serverUrl = cmdOptions.serverUrl;
 
       try {
@@ -72,6 +79,7 @@ export function createWebCommand(program: Command): Command {
           enableApiServer: false,
           enableWorker: !serverUrl,
           port,
+          host,
           externalWorkerUrl: serverUrl,
           startupContext: {
             cliCommand: "web",

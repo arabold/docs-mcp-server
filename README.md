@@ -60,7 +60,7 @@ Run a standalone server that includes both MCP endpoints and web interface in a 
      -v docs-mcp-data:/data \
      -p 6280:6280 \
      ghcr.io/arabold/docs-mcp-server:latest \
-     --protocol http --port 6280
+     --protocol http --host 0.0.0.0 --port 6280
    ```
 
    Replace `your-openai-api-key` with your actual OpenAI API key.

@@ -277,7 +277,7 @@ describe("HtmlPipeline", () => {
       const pipeline = new HtmlPipeline();
 
       // Spy on the closeBrowser method
-      const closeBrowserSpy = vi.spyOn(pipeline["playwrightMiddleware"], "closeBrowser");
+      const closeBrowserSpy = vi.spyOn(pipeline.playwrightMiddleware, "closeBrowser");
 
       await pipeline.close();
 
@@ -297,7 +297,7 @@ describe("HtmlPipeline", () => {
       const pipeline = new HtmlPipeline();
 
       // Mock closeBrowser to throw an error
-      vi.spyOn(pipeline["playwrightMiddleware"], "closeBrowser").mockRejectedValue(
+      vi.spyOn(pipeline.playwrightMiddleware, "closeBrowser").mockRejectedValue(
         new Error("Browser cleanup failed"),
       );
 

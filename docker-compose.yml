@@ -12,7 +12,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["worker", "--port", "8080"]
+    command: ["worker", "--host", "0.0.0.0", "--port", "8080"]
     container_name: docs-mcp-worker
     restart: unless-stopped
     env_file:
@@ -43,6 +43,8 @@ services:
         "mcp",
         "--protocol",
         "http",
+        "--host",
+        "0.0.0.0",
         "--port",
         "6280",
         "--server-url",
@@ -70,7 +72,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["web", "--port", "6281", "--server-url", "http://worker:8080/api"]
+    command:
+      [
+        "web",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "6281",
+        "--server-url",
+        "http://worker:8080/api",
+      ]
     container_name: docs-mcp-web
     restart: unless-stopped
     ports:

@@ -20,6 +20,9 @@ export const DEFAULT_HTTP_PORT = 6280;
 /** Default port for the Web UI */
 export const DEFAULT_WEB_PORT = 6281;
 
+/** Default host for server binding */
+export const DEFAULT_HOST = "127.0.0.1";
+
 /**
  * Default timeout in milliseconds for page operations (e.g., Playwright waitForSelector).
  */

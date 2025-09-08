@@ -15,6 +15,7 @@ import {
   createPipelineWithCallbacks,
   ensurePlaywrightBrowsersInstalled,
   resolveEmbeddingContext,
+  validateHost,
   validatePort,
 } from "../utils";
 
@@ -33,10 +34,16 @@ export function createWorkerCommand(program: Command): Command {
         })
         .default("8080"),
     )
+    .addOption(
+      new Option("--host <host>", "Host to bind the worker API to")
+        .argParser(validateHost)
+        .default(CLI_DEFAULTS.HOST),
+    )
     .option("--resume", "Resume interrupted jobs on startup", true)
     .option("--no-resume", "Do not resume jobs on startup")
-    .action(async (cmdOptions: { port: string; resume: boolean }) => {
+    .action(async (cmdOptions: { port: string; host: string; resume: boolean }) => {
       const port = validatePort(cmdOptions.port);
+      const host = validateHost(cmdOptions.host);
 
       try {
         logger.info(`🚀 Starting external pipeline worker on port ${port}`);
@@ -62,6 +69,7 @@ export function createWorkerCommand(program: Command): Command {
           enableApiServer: true,
           enableWorker: true,
           port,
+          host,
           startupContext: {
             cliCommand: "worker",
           },

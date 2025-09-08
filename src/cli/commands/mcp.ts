@@ -20,6 +20,7 @@ import {
   resolveEmbeddingContext,
   resolveProtocol,
   validateAuthConfig,
+  validateHost,
   validatePort,
 } from "../utils";
 
@@ -43,6 +44,11 @@ export function createMcpCommand(program: Command): Command {
             return String(n);
           })
           .default(CLI_DEFAULTS.HTTP_PORT.toString()),
+      )
+      .addOption(
+        new Option("--host <host>", "Host to bind the MCP server to")
+          .argParser(validateHost)
+          .default(CLI_DEFAULTS.HOST),
       )
       .option(
         "--server-url <url>",
@@ -68,6 +74,7 @@ export function createMcpCommand(program: Command): Command {
         async (cmdOptions: {
           protocol: string;
           port: string;
+          host: string;
           serverUrl?: string;
           readOnly: boolean;
           authEnabled?: boolean;
@@ -75,6 +82,7 @@ export function createMcpCommand(program: Command): Command {
           authAudience?: string;
         }) => {
           const port = validatePort(cmdOptions.port);
+          const host = validateHost(cmdOptions.host);
           const serverUrl = cmdOptions.serverUrl;
           // Resolve protocol using same logic as default action
           const resolvedProtocol = resolveProtocol(cmdOptions.protocol);
@@ -146,6 +154,7 @@ export function createMcpCommand(program: Command): Command {
                 enableApiServer: false, // Never enable API in mcp command
                 enableWorker: !serverUrl,
                 port,
+                host,
                 externalWorkerUrl: serverUrl,
                 readOnly: cmdOptions.readOnly,
                 auth: authConfig,

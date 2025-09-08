@@ -1292,7 +1292,7 @@ describe("DocumentManagementService", () => {
         });
 
         // Spy on pipeline close methods
-        const pipelines = service["pipelines"];
+        const pipelines = service.pipelines;
         const closeSpies = pipelines.map((pipeline) =>
           vi.spyOn(pipeline, "close").mockResolvedValue(),
         );
@@ -1315,7 +1315,7 @@ describe("DocumentManagementService", () => {
         });
 
         // Mock one pipeline to throw error during cleanup
-        const pipelines = service["pipelines"];
+        const pipelines = service.pipelines;
         vi.spyOn(pipelines[0], "close").mockRejectedValue(
           new Error("Pipeline cleanup failed"),
         );
