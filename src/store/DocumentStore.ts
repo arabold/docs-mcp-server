@@ -15,6 +15,7 @@ import {
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
 import { ConnectionError, DimensionError, StoreError } from "./errors";
+import { parseQuery } from "./FtsQueryParser";
 import type { StoredScraperOptions } from "./types";
 import {
   type DbDocument,
@@ -441,14 +442,23 @@ export class DocumentStore {
   }
 
   /**
-   * Escapes a query string for use with SQLite FTS5 MATCH operator.
-   * Wraps the query in double quotes and escapes internal double quotes.
+   * Securely normalizes a user query string for use with SQLite FTS5 MATCH operator.
+   *
+   * Uses a secure parser that:
+   * - Prevents FTS injection attacks by properly quoting dangerous terms
+   * - Validates and preserves legitimate FTS operators (AND/OR/NOT/NEAR) when used correctly
+   * - Handles edge cases (empty queries, unicode, malformed syntax) gracefully
+   * - Defaults to OR behavior for multi-word queries unless explicit operators are used
    */
   private escapeFtsQuery(query: string): string {
-    // Escape internal double quotes by doubling them
-    const escapedQuotes = query.replace(/"/g, '""');
-    // Wrap the entire string in double quotes
-    return `"${escapedQuotes}"`;
+    const normalized = parseQuery(query);
+
+    // Handle empty queries by returning empty string - caller should handle appropriately
+    if (normalized.length === 0) {
+      return "";
+    }
+
+    return normalized;
   }
 
   /**
@@ -1040,9 +1050,15 @@ export class DocumentStore {
     limit: number,
   ): Promise<Document[]> {
     try {
+      const ftsQuery = this.escapeFtsQuery(query); // Escape the query for FTS
+
+      // Handle empty queries - return empty results
+      if (ftsQuery.length === 0) {
+        return [];
+      }
+
       const rawEmbedding = await this.embeddings.embedQuery(query);
       const embedding = this.padVector(rawEmbedding);
-      const ftsQuery = this.escapeFtsQuery(query); // Escape the query for FTS
       const normalizedVersion = version.toLowerCase();
 
       const stmt = this.db.prepare(`
