@@ -417,7 +417,7 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         library,
         version,
         "main1",
-        2,
+        1,
       );
       expect(mockDocumentStore.findSubsequentSiblingChunks).toHaveBeenCalledWith(
         library,
@@ -490,7 +490,7 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         library,
         version,
         "parent1",
-        5,
+        3,
       );
       expect(results).toEqual([
         {
@@ -643,6 +643,137 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
           mimeType: undefined,
         },
       ]);
+    });
+  });
+
+  describe("Content-Type-Aware Assembly Strategy", () => {
+    it("should use MarkdownAssemblyStrategy for markdown content", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const markdownChunk = new Document({
+        id: "md1",
+        pageContent: "# Heading\n\nSome content",
+        metadata: {
+          url: "https://example.com/doc.md",
+          score: 0.9,
+          mimeType: "text/markdown",
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([markdownChunk]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([markdownChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/doc.md",
+        content: "# Heading\n\nSome content", // Should use "\n\n" joining for markdown
+        score: 0.9,
+        mimeType: "text/markdown",
+      });
+    });
+
+    it("should use HierarchicalAssemblyStrategy for source code content", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const codeChunk = new Document({
+        id: "ts1",
+        pageContent: "function test() {\n  return 'hello';\n}",
+        metadata: {
+          url: "https://example.com/code.ts",
+          score: 0.9,
+          mimeType: "text/x-typescript",
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([codeChunk]);
+      // Mock the hierarchical strategy's fallback behavior since we don't have full hierarchy implementation
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([codeChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/code.ts",
+        content: "function test() {\n  return 'hello';\n}", // Should use simple concatenation for code
+        score: 0.9,
+        mimeType: "text/x-typescript",
+      });
+    });
+
+    it("should use HierarchicalAssemblyStrategy for JSON content", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const jsonChunk = new Document({
+        id: "json1",
+        pageContent: '{"key": "value"}',
+        metadata: {
+          url: "https://example.com/config.json",
+          score: 0.9,
+          mimeType: "application/json",
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([jsonChunk]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([jsonChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/config.json",
+        content: '{"key": "value"}', // Should use simple concatenation for JSON
+        score: 0.9,
+        mimeType: "application/json",
+      });
+    });
+
+    it("should handle missing MIME type with default MarkdownAssemblyStrategy", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const unknownChunk = new Document({
+        id: "unknown1",
+        pageContent: "Some content",
+        metadata: {
+          url: "https://example.com/unknown",
+          score: 0.9,
+          // No mimeType specified
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([unknownChunk]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([unknownChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/unknown",
+        content: "Some content", // Should default to markdown strategy
+        score: 0.9,
+        mimeType: undefined,
+      });
     });
   });
 });

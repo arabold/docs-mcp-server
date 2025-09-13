@@ -13,22 +13,13 @@ import {
 } from "./utils";
 
 // Mocks for execution tests will be defined below in dedicated describe block
+vi.mock("../utils/logger");
 
 // --- Additional mocks for createPipelineWithCallbacks behavior tests ---
 vi.mock("../pipeline/PipelineFactory", () => ({
   PipelineFactory: {
     createPipeline: vi.fn(),
   },
-}));
-vi.mock("../utils/logger", () => ({
-  logger: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-  setLogLevel: vi.fn(),
-  LogLevel: { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 },
 }));
 
 // --- Mocks & state for handler wiring regression (formerly commandHandlers.test.ts) ---
