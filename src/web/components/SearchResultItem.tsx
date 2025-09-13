@@ -6,6 +6,7 @@ import DOMPurify from "dompurify"; // Import DOMPurify
 import type { StoreSearchResult } from "../../store/types";
 import { createJSDOM } from "../../utils/dom"; // Import JSDOM helper
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
+import { escapeHtml } from "@kitajs/html";
 
 /**
  * Props for the SearchResultItem component.
@@ -44,11 +45,11 @@ const SearchResultItem = async ({ result }: SearchResultItemProps) => {
     );
   } else {
     // For non-markdown content, sanitize and render as preformatted text
-    const sanitizedContent = purifier.sanitize(result.content);
+    const safeContent = escapeHtml(result.content);
     contentElement = (
       <div class="format dark:format-invert max-w-none">
         <pre>
-          <code safe>{sanitizedContent}</code>
+          <code>{safeContent}</code>
         </pre>
       </div>
     );

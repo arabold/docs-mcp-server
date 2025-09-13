@@ -71,8 +71,11 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
         return this.fallbackToTextSplitter(content);
       }
 
+      // Build hierarchical relationships between boundaries
+      const hierarchicalBoundaries = this.buildBoundaryHierarchy(boundaries);
+
       // Convert boundaries to content chunks using two-phase splitting
-      return await this.boundariesToChunks(boundaries, content, contentType);
+      return await this.boundariesToChunks(hierarchicalBoundaries, content, contentType);
     } catch (error) {
       // Graceful fallback to TextContentSplitter on any parsing error
       console.warn(
@@ -384,6 +387,71 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     }
 
     return mergedSegments;
+  }
+
+  /**
+   * Build hierarchical relationships between boundaries based on containment
+   */
+  private buildBoundaryHierarchy(boundaries: CodeBoundary[]): CodeBoundary[] {
+    // Create a copy of boundaries to avoid mutating the original
+    const hierarchicalBoundaries = boundaries.map((b) => ({ ...b }));
+
+    // Build parent-child relationships
+    for (let i = 0; i < hierarchicalBoundaries.length; i++) {
+      const boundary = hierarchicalBoundaries[i];
+      let parent: CodeBoundary | undefined;
+      let smallestRange = Infinity;
+
+      // Find the smallest containing parent
+      for (let j = 0; j < hierarchicalBoundaries.length; j++) {
+        if (i === j) continue;
+        const candidate = hierarchicalBoundaries[j];
+
+        // Check if candidate contains boundary
+        if (
+          candidate.startLine <= boundary.startLine &&
+          candidate.endLine >= boundary.endLine &&
+          candidate.startByte <= boundary.startByte &&
+          candidate.endByte >= boundary.endByte
+        ) {
+          const range = candidate.endLine - candidate.startLine;
+
+          // Keep the smallest containing boundary (innermost parent)
+          if (range < smallestRange) {
+            smallestRange = range;
+            parent = candidate;
+          }
+        }
+      }
+
+      if (parent) {
+        boundary.parent = parent;
+      }
+
+      // Build hierarchical path
+      boundary.path = this.buildBoundaryPath(boundary);
+      boundary.level = boundary.path.length;
+    }
+
+    return hierarchicalBoundaries;
+  }
+
+  /**
+   * Build hierarchical path for a boundary by walking up the parent chain
+   */
+  private buildBoundaryPath(boundary: CodeBoundary): string[] {
+    const path: string[] = [];
+    let current: CodeBoundary | undefined = boundary;
+
+    // Walk up the parent chain
+    while (current) {
+      if (current.name) {
+        path.unshift(current.name); // Add to beginning to build path from root
+      }
+      current = current.parent;
+    }
+
+    return path;
   }
 
   /**

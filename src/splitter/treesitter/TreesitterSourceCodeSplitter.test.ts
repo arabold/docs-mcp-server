@@ -147,7 +147,7 @@ def hello():
           add(a, b) {
             return a + b;
           }
-          
+
           subtract(a, b) {
             return a - b;
           }
@@ -164,7 +164,24 @@ def hello():
         chunk.section.path.some((p) => p.includes("MathUtils")),
       );
       expect(classChunk).toBeDefined();
+
+      // With the new granular parser, we get separate chunks for class and methods
+      // The class chunk should contain the class declaration (but not necessarily the full body)
       expect(classChunk?.content).toContain("class MathUtils");
+
+      // Should have method chunks at level 2
+      const methodChunks = chunks.filter(
+        (chunk) =>
+          chunk.section.path.length === 2 &&
+          chunk.section.path[0] === "MathUtils" &&
+          (chunk.section.path[1] === "add" || chunk.section.path[1] === "subtract"),
+      );
+      expect(methodChunks.length).toBeGreaterThan(0);
+
+      // Each method should be in its own chunk
+      const addMethod = methodChunks.find((chunk) => chunk.section.path[1] === "add");
+      expect(addMethod).toBeDefined();
+      expect(addMethod?.content).toContain("add(a, b)");
     });
   });
 

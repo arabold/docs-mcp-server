@@ -256,7 +256,7 @@ export abstract class BaseLanguageParser implements LanguageParser {
     const structuralTypes = this.getStructuralNodeTypes();
     const nodes: StructuralNode[] = [];
 
-    this.traverseNode(tree.rootNode, sourceCode, structuralTypes, nodes, []);
+    this.traverseNode(tree.rootNode, sourceCode, structuralTypes, nodes, [], []);
 
     // Sort by line position and remove overlapping nodes
     return this.deduplicateNodes(nodes);
@@ -288,19 +288,32 @@ export abstract class BaseLanguageParser implements LanguageParser {
     structuralTypes: Set<string>,
     result: StructuralNode[],
     path: string[],
+    inheritedDocs: string[] = [],
   ): void {
     // Check if this node is a structural boundary
     if (structuralTypes.has(node.type)) {
       // Check if we should skip this node in favor of its children
       if (this.shouldSkipForChildren(node, structuralTypes)) {
-        // Skip this node and continue with children
+        // Extract any documentation attached to the wrapper node (e.g. export_statement)
+        const wrapperDocs = this.extractDocumentationComments(node, source);
+        const combinedInherited =
+          wrapperDocs.length > 0 ? [...inheritedDocs, ...wrapperDocs] : inheritedDocs;
+
+        // Skip this node and continue with children, propagating docs
         for (const child of node.children) {
-          this.traverseNode(child, source, structuralTypes, result, path);
+          this.traverseNode(
+            child,
+            source,
+            structuralTypes,
+            result,
+            path,
+            combinedInherited,
+          );
         }
         return;
       }
 
-      const structuralNode = this.createStructuralNode(node, source, path);
+      const structuralNode = this.createStructuralNode(node, source, path, inheritedDocs);
       if (structuralNode) {
         result.push(structuralNode);
 
@@ -317,7 +330,7 @@ export abstract class BaseLanguageParser implements LanguageParser {
 
     // Continue traversing children with same path
     for (const child of node.children) {
-      this.traverseNode(child, source, structuralTypes, result, path);
+      this.traverseNode(child, source, structuralTypes, result, path, inheritedDocs);
     }
   }
 
@@ -328,6 +341,7 @@ export abstract class BaseLanguageParser implements LanguageParser {
     node: SyntaxNode,
     source: string,
     _path: string[],
+    inheritedDocs: string[] = [],
   ): StructuralNode | null {
     const name = this.extractNodeName(node, source);
     if (!name) {
@@ -339,7 +353,19 @@ export abstract class BaseLanguageParser implements LanguageParser {
     const text = this.getNodeText(node, source);
     const indentLevel = this.calculateIndentLevel(text);
     const structuralType = this.classifyStructuralNode(node);
-    const documentation = this.extractDocumentationComments(node, source);
+    const ownDocumentation = this.extractDocumentationComments(node, source);
+
+    // Merge inherited documentation (from skipped wrapper like export_statement) with own docs
+    const mergedDocs: string[] = [];
+    const pushUnique = (arr: string[]) => {
+      for (const line of arr) {
+        if (!mergedDocs.includes(line)) {
+          mergedDocs.push(line);
+        }
+      }
+    };
+    if (inheritedDocs.length > 0) pushUnique(inheritedDocs);
+    if (ownDocumentation.length > 0) pushUnique(ownDocumentation);
 
     return {
       type: structuralType,
@@ -352,7 +378,7 @@ export abstract class BaseLanguageParser implements LanguageParser {
       text,
       indentLevel,
       modifiers,
-      documentation: documentation.length > 0 ? documentation : undefined,
+      documentation: mergedDocs.length > 0 ? mergedDocs : undefined,
     };
   }
 
@@ -416,273 +442,181 @@ export abstract class BaseLanguageParser implements LanguageParser {
   }
 
   /**
-   * NEW: Simplified boundary extraction for focused chunking with hierarchical paths
-   * Converts complex structural analysis to simple semantic boundaries with parent-child relationships
+   * Single-pass boundary extraction with stateful documentation tracking
+   * Creates boundaries directly during traversal, merging contiguous preceding documentation
    */
   extractBoundaries(tree: Tree, source: string): CodeBoundary[] {
-    // Extract structural nodes first
-    const structuralNodes = this.extractStructuralNodes(tree, source);
-
-    // Convert to boundaries with hierarchy, passing tree and source for comment resolution
-    const boundaries = this.buildHierarchicalBoundaries(structuralNodes, tree, source);
-
-    return boundaries;
-  }
-
-  /**
-   * Build hierarchical boundaries from structural nodes, preserving parent-child relationships
-   */
-  private buildHierarchicalBoundaries(
-    structuralNodes: StructuralNode[],
-    tree: Tree,
-    source: string,
-  ): CodeBoundary[] {
     const boundaries: CodeBoundary[] = [];
-    const nodeToParentMap = new Map<StructuralNode, StructuralNode>();
+    const structuralTypes = this.getStructuralNodeTypes();
 
-    // First pass: identify parent-child relationships based on position containment
-    for (let i = 0; i < structuralNodes.length; i++) {
-      const node = structuralNodes[i];
-      let parent: StructuralNode | undefined;
+    // State for tracking pending documentation during traversal
+    const traversalState = {
+      pendingDocs: [] as { startLine: number; startByte: number; lines: string[] }[],
+      path: [] as string[],
+      insideSkippedWrapper: false, // Track if we're inside a skipped wrapper node
+    };
 
-      // Find the smallest containing parent
-      for (let j = 0; j < structuralNodes.length; j++) {
-        if (i === j) continue;
-        const candidate = structuralNodes[j];
-
-        // Check if candidate contains node
-        if (
-          candidate.startLine <= node.startLine &&
-          candidate.endLine >= node.endLine &&
-          candidate.startByte <= node.startByte &&
-          candidate.endByte >= node.endByte
-        ) {
-          // If we don't have a parent yet, or this candidate is smaller than current parent
-          if (
-            !parent ||
-            (candidate.startLine >= parent.startLine &&
-              candidate.endLine <= parent.endLine)
-          ) {
-            parent = candidate;
-          }
-        }
-      }
-
-      if (parent) {
-        nodeToParentMap.set(node, parent);
-      }
-    }
-
-    // Second pass: create boundaries with hierarchical information
-    const nodeToBoundaryMap = new Map<StructuralNode, CodeBoundary>();
-
-    for (const node of structuralNodes) {
-      const boundary = this.convertToBoundary(node, tree, source);
-
-      // Find parent boundary if exists
-      const parentNode = nodeToParentMap.get(node);
-      if (parentNode) {
-        boundary.parent = nodeToBoundaryMap.get(parentNode);
-      }
-
-      // Build hierarchical path
-      boundary.path = this.buildBoundaryPath(boundary);
-      boundary.level = boundary.path.length;
-
-      nodeToBoundaryMap.set(node, boundary);
-      boundaries.push(boundary);
-    }
+    this.traverseForBoundaries(
+      tree.rootNode,
+      source,
+      structuralTypes,
+      boundaries,
+      traversalState,
+    );
 
     return boundaries;
   }
 
   /**
-   * Build hierarchical path for a boundary by walking up the parent chain
+   * Single-pass traversal that creates boundaries directly, tracking pending documentation
    */
-  private buildBoundaryPath(boundary: CodeBoundary): string[] {
-    const path: string[] = [];
-    let current: CodeBoundary | undefined = boundary;
-
-    // Walk up the parent chain
-    while (current) {
-      if (current.name) {
-        path.unshift(current.name); // Add to beginning to build path from root
+  private traverseForBoundaries(
+    node: SyntaxNode,
+    source: string,
+    structuralTypes: Set<string>,
+    boundaries: CodeBoundary[],
+    state: {
+      pendingDocs: { startLine: number; startByte: number; lines: string[] }[];
+      path: string[];
+      insideSkippedWrapper: boolean;
+    },
+  ): void {
+    // Handle comments - add to pending documentation
+    if (node.type === "comment" && this.isDocumentationComment(node, source)) {
+      const commentText = source.substring(node.startIndex, node.endIndex);
+      const cleanedLines = this.cleanCommentText(commentText);
+      if (cleanedLines.length > 0) {
+        state.pendingDocs.push({
+          startLine: node.startPosition.row + 1,
+          startByte: node.startIndex,
+          lines: cleanedLines,
+        });
       }
-      current = current.parent;
+    }
+    // Handle whitespace - allow it within documentation blocks
+    else if (this.isWhitespace(node, source)) {
+      // Whitespace is allowed within pending documentation blocks
+    }
+    // Handle structural nodes
+    else if (structuralTypes.has(node.type)) {
+      // Check if we should skip this node in favor of its children (e.g., export_statement)
+      if (this.shouldSkipForChildren(node, structuralTypes)) {
+        // Mark that we're entering a skipped wrapper
+        const wasInsideSkipped = state.insideSkippedWrapper;
+        state.insideSkippedWrapper = true;
+
+        // For wrapper nodes, continue traversal with same state (carrying pending docs)
+        for (const child of node.children) {
+          this.traverseForBoundaries(child, source, structuralTypes, boundaries, state);
+        }
+
+        // Restore the skipped wrapper flag
+        state.insideSkippedWrapper = wasInsideSkipped;
+        return;
+      }
+
+      // Create boundary for this structural node
+      const boundary = this.createBoundaryFromNode(node, source, state);
+      if (boundary) {
+        boundaries.push(boundary);
+        // Update path for children
+        state.path = [...state.path, boundary.name || "anonymous"];
+      }
+
+      // Process children with updated path
+      for (const child of node.children) {
+        this.traverseForBoundaries(child, source, structuralTypes, boundaries, state);
+      }
+
+      // Restore path after processing children
+      if (boundary?.name) {
+        state.path.pop();
+      }
+      return;
+    }
+    // Handle other nodes that break documentation continuity
+    else if (!this.isWhitespace(node, source) && !state.insideSkippedWrapper) {
+      // Non-whitespace, non-comment, non-structural node breaks documentation continuity
+      // But don't clear if we're inside a skipped wrapper (like export_statement)
+      state.pendingDocs = [];
     }
 
-    return path;
+    // Continue traversal for all children
+    for (const child of node.children) {
+      this.traverseForBoundaries(child, source, structuralTypes, boundaries, state);
+    }
   }
 
   /**
-   * Convert a complex StructuralNode to a simple CodeBoundary
+   * Create a CodeBoundary directly from a syntax node, using pending documentation
    */
-  private convertToBoundary(
-    node: StructuralNode,
-    tree: Tree,
+  private createBoundaryFromNode(
+    node: SyntaxNode,
     source: string,
-  ): CodeBoundary {
-    // Map complex StructuralNodeType to simple boundary types
-    let type: CodeBoundary["type"];
+    state: {
+      pendingDocs: { startLine: number; startByte: number; lines: string[] }[];
+      path: string[];
+    },
+  ): CodeBoundary | null {
+    const name = this.extractNodeName(node, source);
+    if (!name) {
+      return null;
+    }
 
-    switch (node.type) {
+    // Determine boundary type
+    let type: CodeBoundary["type"];
+    const structuralType = this.classifyStructuralNode(node);
+
+    switch (structuralType) {
       case StructuralNodeType.FUNCTION_DECLARATION:
       case StructuralNodeType.ARROW_FUNCTION:
       case StructuralNodeType.METHOD_DEFINITION:
       case StructuralNodeType.CONSTRUCTOR:
         type = "function";
         break;
-
       case StructuralNodeType.CLASS_DECLARATION:
         type = "class";
         break;
-
       case StructuralNodeType.INTERFACE_DECLARATION:
       case StructuralNodeType.TYPE_ALIAS_DECLARATION:
         type = "interface";
         break;
-
       case StructuralNodeType.ENUM_DECLARATION:
         type = "enum";
         break;
-
       case StructuralNodeType.NAMESPACE_DECLARATION:
       case StructuralNodeType.EXPORT_STATEMENT:
       case StructuralNodeType.IMPORT_STATEMENT:
         type = "module";
         break;
-
       default:
         type = "other";
         break;
     }
 
-    // For functions with documentation, adjust start position to include preceding comments
-    let adjustedStartLine = node.startLine;
-    let adjustedStartByte = node.startByte;
+    // Calculate boundary positions
+    let startLine = node.startPosition.row + 1;
+    let startByte = node.startIndex;
 
-    if (
-      (type === "function" || type === "class") &&
-      node.documentation &&
-      node.documentation.length > 0
-    ) {
-      // Find the start of the documentation in the source
-      const docStartPosition = this.findDocumentationStart(node, tree, source);
-      if (docStartPosition) {
-        adjustedStartLine = docStartPosition.startLine;
-        adjustedStartByte = docStartPosition.startByte;
-      }
+    // If we have pending documentation, use its start position
+    if (state.pendingDocs.length > 0) {
+      const earliestDoc = state.pendingDocs[0];
+      startLine = earliestDoc.startLine;
+      startByte = earliestDoc.startByte;
+      // Clear pending docs after using them
+      state.pendingDocs = [];
     }
 
     return {
       type,
-      name: node.name || undefined,
-      startLine: adjustedStartLine,
-      endLine: node.endLine,
-      startByte: adjustedStartByte,
-      endByte: node.endByte,
-      parent: undefined, // Will be set during hierarchy building
-      path: undefined, // Will be set during hierarchy building
-      level: undefined, // Will be set during hierarchy building
+      name,
+      startLine,
+      endLine: node.endPosition.row + 1,
+      startByte,
+      endByte: node.endIndex,
+      parent: undefined, // Will be set later if needed
+      path: [...state.path],
+      level: state.path.length,
     };
-  }
-
-  /**
-   * Find the start position of documentation comments for a structural node
-   * Uses the tree to locate the actual comment nodes that precede the function
-   */
-  private findDocumentationStart(
-    node: StructuralNode,
-    tree: Tree,
-    source: string,
-  ): { startLine: number; startByte: number } | null {
-    if (!node.documentation || node.documentation.length === 0) {
-      return null;
-    }
-
-    // Find the tree node that corresponds to this structural node
-    const treeNode = this.findTreeNode(tree.rootNode, node, source);
-    if (!treeNode || !treeNode.parent) {
-      return null;
-    }
-
-    // Look for preceding comment nodes in the parent
-    const siblings = treeNode.parent.children;
-    const nodeIndex = siblings.indexOf(treeNode);
-    if (nodeIndex <= 0) {
-      return null;
-    }
-
-    // Search backwards for the first JSDoc comment
-    for (let i = nodeIndex - 1; i >= 0; i--) {
-      const sibling = siblings[i];
-
-      if (sibling.type === "comment") {
-        const commentText = source.substring(sibling.startIndex, sibling.endIndex);
-        if (commentText.trim().startsWith("/**")) {
-          // Found the JSDoc comment start
-          return {
-            startLine: sibling.startPosition.row + 1, // Convert to 1-indexed
-            startByte: sibling.startIndex,
-          };
-        }
-      } else if (!this.isWhitespace(sibling, source)) {
-        // Hit a non-comment, non-whitespace node - stop looking
-        break;
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Find the tree node that corresponds to a structural node
-   */
-  private findTreeNode(
-    root: SyntaxNode,
-    structuralNode: StructuralNode,
-    source: string,
-  ): SyntaxNode | null {
-    // Simple approach: find a node that matches the structural node's position and type
-    const candidates: SyntaxNode[] = [];
-    this.collectNodesByPosition(
-      root,
-      structuralNode.startByte,
-      structuralNode.endByte,
-      candidates,
-    );
-
-    // Find the best match - prefer exact type matches
-    for (const candidate of candidates) {
-      const structuralType = this.classifyStructuralNode(candidate);
-      if (structuralType === structuralNode.type) {
-        const name = this.extractNodeName(candidate, source);
-        if (name === structuralNode.name) {
-          return candidate;
-        }
-      }
-    }
-
-    // Fallback to first candidate with matching position
-    return candidates[0] || null;
-  }
-
-  /**
-   * Collect tree nodes that match the given byte range
-   */
-  private collectNodesByPosition(
-    node: SyntaxNode,
-    startByte: number,
-    endByte: number,
-    candidates: SyntaxNode[],
-  ): void {
-    if (node.startIndex === startByte && node.endIndex === endByte) {
-      candidates.push(node);
-    }
-
-    // Also check children
-    for (const child of node.children) {
-      this.collectNodesByPosition(child, startByte, endByte, candidates);
-    }
   }
 }

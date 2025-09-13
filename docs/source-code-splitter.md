@@ -130,6 +130,7 @@ graph LR
 - **Level 2**: Class members (methods, properties, constructor)
 - **Level 3**: Nested namespace elements
 - **Content Delegation**: Large method bodies delegated to `TextDocumentSplitter`
+- **Documentation Start Alignment**: Boundary start line always includes contiguous preceding documentation/comments (even across transparent wrappers like `export`)
 
 ### 4. Content Processing Pipeline
 

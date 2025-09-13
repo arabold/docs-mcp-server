@@ -67,6 +67,9 @@ const add = (a: number, b: number): number => a + b;
         (n) => n.type === StructuralNodeType.VARIABLE_DECLARATION,
       );
       expect(varNode).toBeTruthy();
+      if (varNode) {
+        expect(varNode.text).toContain("=>");
+      }
     });
 
     it("should parse class with TypeScript features", () => {
@@ -101,6 +104,20 @@ export class Calculator {
       );
       expect(classNode).toBeTruthy();
       expect(classNode?.name).toBe("Calculator");
+      // Ensure constructor and method nodes are present with correct signatures
+      // Some TS tree-sitter versions represent constructors as METHOD_DEFINITION named 'constructor'
+      const constructorNode =
+        nodes.find((n) => n.type === StructuralNodeType.CONSTRUCTOR) ||
+        nodes.find(
+          (n) =>
+            n.type === StructuralNodeType.METHOD_DEFINITION && n.name === "constructor",
+        );
+      expect(constructorNode).toBeTruthy();
+      const addMethod = nodes.find((n) => n.name === "add");
+      expect(addMethod?.type).toBe(StructuralNodeType.METHOD_DEFINITION);
+      if (addMethod) {
+        expect(addMethod.text).toContain("(a: number, b: number): number");
+      }
     });
 
     it("should parse interface declaration", () => {
@@ -119,6 +136,8 @@ interface User {
       expect(nodes).toHaveLength(1);
       expect(nodes[0].type).toBe(StructuralNodeType.INTERFACE_DECLARATION);
       expect(nodes[0].name).toBe("User");
+      expect(nodes[0].text).toContain("id: number");
+      expect(nodes[0].text).toContain("email?: string");
     });
 
     it("should parse type alias", () => {
@@ -135,9 +154,16 @@ type UserID = string;
 
       const statusType = nodes.find((n) => n.name === "Status");
       expect(statusType?.type).toBe(StructuralNodeType.TYPE_ALIAS_DECLARATION);
+      if (statusType) {
+        expect(statusType.text).toContain("'pending'");
+        expect(statusType.text).toContain("| 'failed'");
+      }
 
       const userIdType = nodes.find((n) => n.name === "UserID");
       expect(userIdType?.type).toBe(StructuralNodeType.TYPE_ALIAS_DECLARATION);
+      if (userIdType) {
+        expect(userIdType.text).toContain("type UserID = string");
+      }
     });
 
     it("should parse enum declaration", () => {
@@ -156,6 +182,8 @@ enum Color {
       expect(nodes).toHaveLength(1);
       expect(nodes[0].type).toBe(StructuralNodeType.ENUM_DECLARATION);
       expect(nodes[0].name).toBe("Color");
+      expect(nodes[0].text).toContain('Red = "red"');
+      expect(nodes[0].text).toContain('Blue = "blue"');
     });
 
     it("should parse namespace declaration", () => {
@@ -266,9 +294,15 @@ function swap<T, U>(tuple: [T, U]): [U, T] {
 
       const identityNode = nodes.find((n) => n.name === "identity");
       expect(identityNode?.type).toBe(StructuralNodeType.FUNCTION_DECLARATION);
+      if (identityNode) {
+        expect(identityNode.text).toContain("function identity<T>");
+      }
 
       const swapNode = nodes.find((n) => n.name === "swap");
       expect(swapNode?.type).toBe(StructuralNodeType.FUNCTION_DECLARATION);
+      if (swapNode) {
+        expect(swapNode.text).toContain("function swap<T, U>");
+      }
     });
 
     it("should parse decorators", () => {
@@ -294,6 +328,10 @@ class UserComponent {
         (n) => n.type === StructuralNodeType.CLASS_DECLARATION,
       );
       expect(classNode?.name).toBe("UserComponent");
+      if (classNode) {
+        expect(classNode.text).toContain("@Component");
+        expect(classNode.text).toContain("@Input()");
+      }
     });
 
     it("should parse module imports and exports", () => {
@@ -414,5 +452,161 @@ export class PublicClass {
         expect(Array.isArray(node.modifiers)).toBe(true);
       }
     });
+  });
+
+  describe("documentation merging", () => {
+    it("should merge preceding documentation comments for all structural node types", () => {
+      const code = `
+/**
+ * Interface docs
+ * More details.
+ */
+interface User {
+  id: number;
+}
+
+/**
+ * Type alias docs
+ */
+type UserID = string;
+
+/**
+ * Enum docs
+ */
+enum Color {
+  Red,
+  Blue
+}
+
+/**
+ * Const docs
+ */
+const MAX = 10;
+
+/**
+ * Function docs
+ */
+function greet(): void {
+  // body
+}
+
+/**
+ * Class docs
+ */
+class Foo {
+  /**
+   * Method docs
+   */
+  bar() {}
+}
+      `.trim();
+
+      const result = parser.parse(code);
+      // Use boundaries to test merged start positions
+      const boundaries = parser.extractBoundaries(result.tree, code);
+
+      // Helper to find start line of the doc block for a given marker text
+      const lines = code.split("\n");
+      const docLineFor = (marker: string) => {
+        const idx = lines.findIndex((l) => l.includes(marker));
+        expect(idx).toBeGreaterThanOrEqual(0);
+        // Start line should be the opening '/**' (or '/*') of the documentation block
+        for (let i = idx; i >= 0; i--) {
+          if (lines[i].includes("/**") || lines[i].includes("/*")) {
+            return i + 1; // 1-indexed
+          }
+          // Allow blank lines inside comment preamble (rare) but stop if non-comment content encountered
+          if (
+            !lines[i].trim().startsWith("*") &&
+            !lines[i].includes("//") &&
+            !lines[i].includes("/*")
+          ) {
+            break;
+          }
+        }
+        // Fallback: return marker line if opening not found (should not happen)
+        return idx + 1;
+      };
+
+      const expectations: { name: string; marker: string }[] = [
+        { name: "User", marker: "Interface docs" },
+        { name: "UserID", marker: "Type alias docs" },
+        { name: "Color", marker: "Enum docs" },
+        { name: "MAX", marker: "Const docs" },
+        { name: "greet", marker: "Function docs" },
+        { name: "Foo", marker: "Class docs" },
+        { name: "bar", marker: "Method docs" },
+      ];
+
+      for (const { name, marker } of expectations) {
+        const boundary = boundaries.find((b) => b.name === name);
+        expect(boundary, `Expected boundary for ${name}`).toBeTruthy();
+        if (boundary) {
+          const expectedStart = docLineFor(marker);
+          // Boundary should start at the documentation line (merged)
+          expect(boundary.startLine).toBe(expectedStart);
+        }
+      }
+    });
+  });
+
+  it("should merge documentation comments for exported declarations", () => {
+    const code = `
+/** Exported interface docs */
+export interface ExportedInterface {
+  x: number;
+}
+
+/** Exported type alias docs */
+export type ExportedType = string | number;
+
+/** Exported class docs */
+export class ExportedClass {
+  /** Exported method docs */
+  method() {}
+}
+
+/** Exported function docs */
+export function exportedFn() {
+  return 1;
+}
+      `.trim();
+
+    const result = parser.parse(code);
+    const boundaries = parser.extractBoundaries(result.tree, code);
+
+    const lines = code.split("\n");
+    const findLine = (substr: string) => {
+      const idx = lines.findIndex((l) => l.includes(substr));
+      expect(idx).toBeGreaterThanOrEqual(0);
+      return idx + 1; // 1-indexed
+    };
+
+    const expectations: Array<{ name: string; docMarker: string }> = [
+      { name: "ExportedInterface", docMarker: "Exported interface docs" },
+      { name: "ExportedType", docMarker: "Exported type alias docs" },
+      { name: "ExportedClass", docMarker: "Exported class docs" },
+      { name: "method", docMarker: "Exported method docs" },
+      { name: "exportedFn", docMarker: "Exported function docs" },
+    ];
+
+    for (const { name, docMarker } of expectations) {
+      const boundary = boundaries.find((b) => b.name === name);
+      expect(boundary, `Expected boundary for ${name}`).toBeTruthy();
+      if (boundary) {
+        // Find doc opening '/**' line for this marker
+        const markerIdx = lines.findIndex((l) => l.includes(docMarker));
+        expect(markerIdx).toBeGreaterThanOrEqual(0);
+        let docStart = markerIdx;
+        for (let i = markerIdx; i >= 0; i--) {
+          if (lines[i].includes("/**") || lines[i].includes("/*")) {
+            docStart = i;
+            break;
+          }
+        }
+        const expectedStartLine = docStart + 1;
+        expect(boundary.startLine).toBe(expectedStartLine);
+      }
+    }
   });
 });
