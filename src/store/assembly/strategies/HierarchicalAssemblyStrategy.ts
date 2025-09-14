@@ -7,9 +7,10 @@ import type { ContentAssemblyStrategy } from "../types";
 /**
  * Assembly strategy for structured content (source code, JSON, config files).
  *
- * Uses a conservative approach: for each matched chunk, walks up the complete parent
- * hierarchy to the root. This provides hierarchical context for LLMs without attempting
- * complex reconstruction. Simple concatenation leverages splitter concatenation guarantees.
+ * Uses selective subtree reassembly: for single matches, walks up the complete parent
+ * hierarchy to the root. For multiple matches within the same document, finds the common
+ * ancestor and reconstructs only the relevant subtrees, avoiding inclusion of excessive
+ * unrelated content. Simple concatenation leverages splitter concatenation guarantees.
  */
 export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   /**
@@ -33,8 +34,9 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     return false;
   }
   /**
-   * Selects chunks by including each match plus its complete parent hierarchy.
-   * This provides hierarchical context without attempting complex reconstruction.
+   * Selects chunks using selective subtree reassembly for multiple matches within documents.
+   * For single matches: uses existing parent chain logic.
+   * For multiple matches in same document: finds common ancestor and reconstructs minimal subtree.
    */
   async selectChunks(
     library: string,
@@ -47,13 +49,42 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     }
 
     try {
+      // Group chunks by document URL
+      const chunksByDocument = new Map<string, Document[]>();
+      for (const chunk of initialChunks) {
+        const url = chunk.metadata.url as string;
+        if (!chunksByDocument.has(url)) {
+          chunksByDocument.set(url, []);
+        }
+        chunksByDocument.get(url)?.push(chunk);
+      }
+
       const allChunkIds = new Set<string>();
 
-      // For each matched chunk, collect itself + complete parent chain
-      for (const chunk of initialChunks) {
-        const parentChain = await this.walkToRoot(library, version, chunk, documentStore);
-        for (const id of parentChain) {
-          allChunkIds.add(id);
+      // Process each document group
+      for (const [_url, documentChunks] of Array.from(chunksByDocument.entries())) {
+        if (documentChunks.length === 1) {
+          // Single match: use existing parent chain logic
+          const parentChain = await this.walkToRoot(
+            library,
+            version,
+            documentChunks[0],
+            documentStore,
+          );
+          for (const id of parentChain) {
+            allChunkIds.add(id);
+          }
+        } else {
+          // Multiple matches: use selective subtree reassembly
+          const subtreeIds = await this.selectSubtreeChunks(
+            library,
+            version,
+            documentChunks,
+            documentStore,
+          );
+          for (const id of subtreeIds) {
+            allChunkIds.add(id);
+          }
         }
       }
 
@@ -126,6 +157,213 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     }
 
     return chainIds;
+  }
+
+  /**
+   * Selects chunks for selective subtree reassembly when multiple matches exist in the same document.
+   * Finds the common ancestor and reconstructs only the relevant subtrees.
+   */
+  private async selectSubtreeChunks(
+    library: string,
+    version: string,
+    documentChunks: Document[],
+    documentStore: DocumentStore,
+  ): Promise<string[]> {
+    const chunkIds = new Set<string>();
+
+    // Find common ancestor path
+    const commonAncestorPath = this.findCommonAncestorPath(documentChunks);
+
+    if (commonAncestorPath.length === 0) {
+      // No common ancestor found, fall back to individual parent chains
+      logger.warn(
+        "No common ancestor found for multiple matches, using individual parent chains",
+      );
+      for (const chunk of documentChunks) {
+        const parentChain = await this.walkToRoot(library, version, chunk, documentStore);
+        for (const id of parentChain) {
+          chunkIds.add(id);
+        }
+      }
+      return Array.from(chunkIds);
+    }
+
+    // Find container chunks (opening/closing) for the common ancestor
+    const containerIds = await this.findContainerChunks(
+      library,
+      version,
+      documentChunks[0], // Use first chunk to get document URL
+      commonAncestorPath,
+      documentStore,
+    );
+    for (const id of containerIds) {
+      chunkIds.add(id);
+    }
+
+    // For each matched chunk, include its full subtree
+    for (const chunk of documentChunks) {
+      const subtreeIds = await this.findSubtreeChunks(
+        library,
+        version,
+        chunk,
+        documentStore,
+      );
+      for (const id of subtreeIds) {
+        chunkIds.add(id);
+      }
+    }
+
+    return Array.from(chunkIds);
+  }
+
+  /**
+   * Finds the common ancestor path from a list of chunks by finding the longest common prefix.
+   */
+  private findCommonAncestorPath(chunks: Document[]): string[] {
+    if (chunks.length === 0) return [];
+    if (chunks.length === 1) return (chunks[0].metadata.path as string[]) ?? [];
+
+    const paths = chunks.map((chunk) => (chunk.metadata.path as string[]) ?? []);
+
+    if (paths.length === 0) return [];
+
+    // Find the longest common prefix
+    const minLength = Math.min(...paths.map((path) => path.length));
+    const commonPrefix: string[] = [];
+
+    for (let i = 0; i < minLength; i++) {
+      const currentElement = paths[0][i];
+      if (paths.every((path) => path[i] === currentElement)) {
+        commonPrefix.push(currentElement);
+      } else {
+        break;
+      }
+    }
+
+    return commonPrefix;
+  }
+
+  /**
+   * Finds the container chunks (opening/closing) for a given ancestor path.
+   */
+  private async findContainerChunks(
+    library: string,
+    version: string,
+    referenceChunk: Document,
+    ancestorPath: string[],
+    documentStore: DocumentStore,
+  ): Promise<string[]> {
+    const containerIds: string[] = [];
+
+    // Try to find the opening chunk for this ancestor path
+    try {
+      // Query for chunks with the exact ancestor path
+      const ancestorChunks = await this.findChunksByPath(
+        library,
+        version,
+        referenceChunk.metadata.url as string,
+        ancestorPath,
+        documentStore,
+      );
+
+      for (const chunk of ancestorChunks) {
+        containerIds.push(chunk.id as string);
+      }
+    } catch (error) {
+      logger.warn(
+        `Failed to find container chunks for path ${ancestorPath.join("/")}: ${error}`,
+      );
+    }
+
+    return containerIds;
+  }
+
+  /**
+   * Finds all chunks for a given path within a document.
+   * Uses existing DocumentStore methods to locate chunks by path.
+   */
+  private async findChunksByPath(
+    library: string,
+    version: string,
+    url: string,
+    path: string[],
+    documentStore: DocumentStore,
+  ): Promise<Document[]> {
+    const chunks: Document[] = [];
+
+    try {
+      // For root path, we need to find chunks with empty path or minimal path
+      if (path.length === 0) {
+        // This is tricky - we need to find root-level chunks
+        // For now, we'll return empty and let the caller handle it
+        logger.debug("Root path requested - no chunks found");
+        return chunks;
+      }
+
+      // Try to find chunks that have this exact path
+      // We'll use a different approach - search for chunks that could be at this path level
+      // This is a simplified implementation that works with the existing DocumentStore methods
+
+      // For container chunks, we typically want the "opening" chunk
+      // We'll try to find a chunk that has this path as its direct path
+      const allChunks = await documentStore.findByContent(library, version, "", 1000); // Get some chunks
+
+      for (const chunk of allChunks) {
+        const chunkPath = (chunk.metadata.path as string[]) ?? [];
+        if (
+          chunkPath.length === path.length &&
+          chunkPath.every((part, index) => part === path[index]) &&
+          chunk.metadata.url === url
+        ) {
+          chunks.push(chunk);
+        }
+      }
+
+      logger.debug(`Found ${chunks.length} chunks for path: ${path.join("/")}`);
+    } catch (error) {
+      logger.warn(`Error finding chunks for path ${path.join("/")}: ${error}`);
+    }
+
+    return chunks;
+  }
+
+  /**
+   * Finds all chunks in the subtree rooted at the given chunk.
+   */
+  private async findSubtreeChunks(
+    library: string,
+    version: string,
+    rootChunk: Document,
+    documentStore: DocumentStore,
+  ): Promise<string[]> {
+    const subtreeIds: string[] = [];
+    const visited = new Set<string>();
+    const queue: Document[] = [rootChunk];
+
+    while (queue.length > 0) {
+      // biome-ignore lint/style/noNonNullAssertion: this is safe due to the while condition
+      const currentChunk = queue.shift()!;
+      const currentId = currentChunk.id as string;
+
+      if (visited.has(currentId)) continue;
+      visited.add(currentId);
+      subtreeIds.push(currentId);
+
+      // Add all children to the queue
+      try {
+        const children = await documentStore.findChildChunks(
+          library,
+          version,
+          currentId,
+          1000,
+        ); // Large limit
+        queue.push(...children);
+      } catch (error) {
+        logger.warn(`Failed to find children for chunk ${currentId}: ${error}`);
+      }
+    }
+
+    return subtreeIds;
   }
 
   /**
