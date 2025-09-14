@@ -8,7 +8,7 @@ import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
 
 /**
- * Creates and configures an instance of the MCP server with registered tools, prompts, and resources.
+ * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param readOnly Whether to run in read-only mode (only expose read tools).
  * @returns A configured McpServer instance.
@@ -25,7 +25,6 @@ export function createMcpServerInstance(
     {
       capabilities: {
         tools: {},
-        prompts: {},
         resources: {},
       },
     },
