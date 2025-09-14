@@ -8,9 +8,16 @@
 import type { SyntaxNode } from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import { BaseLanguageParser } from "./BaseLanguageParser";
-import type { ParseResult } from "./types";
+import type { TreeSitterLanguage } from "./languageTypes";
 import { StructuralNodeType } from "./types";
 
+/**
+ * Parser lifecycle note:
+ * A fresh underlying tree-sitter Parser instance is created for every parse()
+ * invocation by BaseLanguageParser to avoid cross-file concurrency/state issues.
+ * This subclass only sets an isTSX flag prior to grammar selection; it does not
+ * retain or reuse parser instances.
+ */
 export class TypeScriptParser extends BaseLanguageParser {
   readonly name = "typescript";
   readonly fileExtensions = [".ts", ".tsx", ".mts", ".cts"];
@@ -23,19 +30,20 @@ export class TypeScriptParser extends BaseLanguageParser {
 
   private isTSX = false;
 
-  protected setupLanguage(): void {
-    // Determine if we're parsing TSX based on file extension or content
-    this.parser.setLanguage(this.isTSX ? TypeScript.tsx : TypeScript.typescript);
+  /**
+   * preParse hook: detect TSX so getLanguage() returns correct grammar.
+   */
+  protected preParse(source: string): void {
+    this.isTSX = this.isTSXContent(undefined, source);
   }
 
   /**
-   * Override parse to detect TSX content
+   * Return appropriate tree-sitter language object (typescript vs tsx).
    */
-  parse(content: string): ParseResult {
-    // Check if this is TSX content
-    this.isTSX = this.isTSXContent(undefined, content);
-    this.setupLanguage(); // Re-setup language with correct parser
-    return super.parse(content);
+  protected getLanguage(): TreeSitterLanguage {
+    return (this.isTSX
+      ? TypeScript.tsx
+      : TypeScript.typescript) as unknown as TreeSitterLanguage;
   }
 
   protected getStructuralNodeTypes(): Set<string> {

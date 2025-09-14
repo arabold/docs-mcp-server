@@ -8,8 +8,15 @@
 import type { SyntaxNode } from "tree-sitter";
 import JavaScript from "tree-sitter-javascript";
 import { BaseLanguageParser } from "./BaseLanguageParser";
+import type { TreeSitterLanguage } from "./languageTypes";
 import { StructuralNodeType } from "./types";
 
+/**
+ * Parser lifecycle note:
+ * BaseLanguageParser creates a fresh tree-sitter Parser per parse() call to avoid
+ * cross-file concurrency/state issues. This subclass is now declarative: it simply
+ * returns the JavaScript grammar via getLanguage() and performs no parser mutation.
+ */
 export class JavaScriptParser extends BaseLanguageParser {
   readonly name = "javascript";
   readonly fileExtensions = [".js", ".jsx", ".mjs", ".cjs"];
@@ -20,8 +27,11 @@ export class JavaScriptParser extends BaseLanguageParser {
     "application/jsx",
   ];
 
-  protected setupLanguage(): void {
-    this.parser.setLanguage(JavaScript);
+  /**
+   * Return tree-sitter language grammar.
+   */
+  protected getLanguage(): TreeSitterLanguage {
+    return JavaScript as unknown as TreeSitterLanguage;
   }
 
   protected getStructuralNodeTypes(): Set<string> {

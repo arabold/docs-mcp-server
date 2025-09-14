@@ -3,6 +3,7 @@
  */
 
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
+import type { TreeSitterLanguage } from "./languageTypes";
 import type {
   CodeBoundary,
   LanguageParser,
@@ -13,21 +14,40 @@ import type {
 import { StructuralNodeType } from "./types";
 
 export abstract class BaseLanguageParser implements LanguageParser {
-  protected parser: Parser;
-
-  constructor() {
-    this.parser = new Parser();
-    this.setupLanguage();
-  }
+  /**
+   * NOTE: Parser instances are created fresh per parse() invocation.
+   *
+   * Rationale:
+   * - tree-sitter Parser objects are stateful and not guaranteed to be safe for
+   *   concurrent reuse across overlapping async operations.
+   * - We parse many different files (not incremental re-parses of the same file),
+   *   so there is no performance benefit from retaining a previous syntax tree.
+   * - Instantiating a Parser is cheap; the expensive part (loading the grammar)
+   *   is handled once by Node's module cache when the grammar module is imported.
+   *
+   * Consequence:
+   * - Each call to parse() assigns a new Parser to this.parser, eliminating
+   *   cross-request state corruption that was causing intermittent
+   *   "Error: Invalid argument" failures deep inside tree-sitter.
+   */
+  protected parser: Parser | undefined;
 
   abstract readonly name: string;
   abstract readonly fileExtensions: string[];
   abstract readonly mimeTypes: string[];
 
   /**
-   * Setup the language grammar for this parser
+   * Optional pre-parse hook (e.g. to set mode flags based on content).
+   * Default: no-op.
    */
-  protected abstract setupLanguage(): void;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  protected preParse(_source: string): void {}
+
+  /**
+   * Return the tree-sitter language object to use for this parse.
+   * Subclasses must implement.
+   */
+  protected abstract getLanguage(): TreeSitterLanguage;
 
   /**
    * Get the structural node types that this parser should extract
@@ -130,56 +150,21 @@ export abstract class BaseLanguageParser implements LanguageParser {
    * Determines if a comment node is a documentation comment
    */
   protected isDocumentationComment(node: SyntaxNode, source: string): boolean {
-    if (node.type !== "comment") {
-      if (source.includes("function add")) {
-        console.log("    isDocumentationComment: not a comment node, returning false");
-      }
-      return false;
-    }
+    // Debug logging removed; method kept intentionally minimal for performance.
+    if (node.type !== "comment") return false;
 
     const text = source.substring(node.startIndex, node.endIndex);
 
-    if (source.includes("function add")) {
-      console.log("    isDocumentationComment: checking text:", JSON.stringify(text));
-    }
-
     // JSDoc/TSDoc comments
-    if (text.startsWith("/**") || text.startsWith("/*!")) {
-      if (source.includes("function add")) {
-        console.log(
-          "    isDocumentationComment: JSDoc/TSDoc comment found, returning true",
-        );
-      }
-      return true;
-    }
+    if (text.startsWith("/**") || text.startsWith("/*!")) return true;
 
-    // Multi-line comments that might be documentation
-    if (text.startsWith("/*") && text.includes("\n")) {
-      if (source.includes("function add")) {
-        console.log(
-          "    isDocumentationComment: multi-line comment found, returning true",
-        );
-      }
-      return true;
-    }
+    // Multi-line block comments (only treat as documentation if multi-line)
+    if (text.startsWith("/*") && text.includes("\n")) return true;
 
-    // Line comments - consider them documentation if they're substantial
+    // Line comments - treat as documentation if they have some substance
     if (text.startsWith("//")) {
       const content = text.substring(2).trim();
-      const result = content.length > 5; // Lower threshold for line comments
-      if (source.includes("function add")) {
-        console.log(
-          "    isDocumentationComment: line comment, content length:",
-          content.length,
-          "returning:",
-          result,
-        );
-      }
-      return result;
-    }
-
-    if (source.includes("function add")) {
-      console.log("    isDocumentationComment: no match, returning false");
+      return content.length > 5;
     }
 
     return false;
@@ -237,10 +222,24 @@ export abstract class BaseLanguageParser implements LanguageParser {
   /**
    * Parse source code and return parse result
    */
+  /**
+   * Create a new parser instance (fresh per parse).
+   * Subclasses may override if they need specialized construction.
+   */
+  protected createParser(): Parser {
+    return new Parser();
+  }
+
   parse(source: string): ParseResult {
+    // Allow subclass to inspect content and set mode flags (e.g. TSX detection)
+    this.preParse(source);
+    // Fresh parser per call to avoid concurrency/state issues
+    this.parser = this.createParser();
+    const lang = this.getLanguage();
+    // Pass language object directly; language packages already expose the correct native handle.
+    this.parser.setLanguage(lang as unknown);
     const tree = this.parser.parse(source);
     const errorNodes = this.findErrorNodes(tree.rootNode);
-
     return {
       tree,
       hasErrors: errorNodes.length > 0,
