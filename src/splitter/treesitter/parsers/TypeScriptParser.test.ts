@@ -576,7 +576,7 @@ export function exportedFn() {
     const boundaries = parser.extractBoundaries(result.tree, code);
 
     const lines = code.split("\n");
-    const findLine = (substr: string) => {
+    const _findLine = (substr: string) => {
       const idx = lines.findIndex((l) => l.includes(substr));
       expect(idx).toBeGreaterThanOrEqual(0);
       return idx + 1; // 1-indexed

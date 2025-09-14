@@ -1,9 +1,6 @@
-import { GreedySplitter } from "../../splitter";
 import { JsonDocumentSplitter } from "../../splitter/JsonDocumentSplitter";
-import {
-  SPLITTER_MIN_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-} from "../../utils/config";
+import type { DocumentSplitter } from "../../splitter/types";
+import { SPLITTER_PREFERRED_CHUNK_SIZE } from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
@@ -13,28 +10,22 @@ import { BasePipeline } from "./BasePipeline";
 import type { ProcessedContent } from "./types";
 
 /**
- * Pipeline for processing JSON content with semantic splitting and size optimization.
- * Handles JSON files by validating structure and using JsonDocumentSplitter for hierarchical splitting
- * that creates proper ContentChunks with semantic paths, followed by GreedySplitter for universal size optimization.
+ * Pipeline for processing JSON content with semantic, hierarchical splitting.
+ * Uses JsonDocumentSplitter to produce structurally faithful chunks (preserving {level, path})
+ * without greedy size-based merging. Greedy merging is intentionally omitted to avoid collapsing
+ * distinct structural nodes that are required for precise hierarchical reassembly.
  */
 export class JsonPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
-  private readonly greedySplitter: GreedySplitter;
+  private readonly splitter: DocumentSplitter;
 
-  constructor(chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
+  constructor(_chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
     super();
-    // JSON processing doesn't need complex middleware since we preserve raw structure
     this.middleware = [];
-
-    // Create the two-phase splitting: semantic + size optimization
-    const jsonSplitter = new JsonDocumentSplitter({
+    // Structure-preserving splitter only (no greedy size merging)
+    this.splitter = new JsonDocumentSplitter({
       preserveFormatting: true,
     });
-    this.greedySplitter = new GreedySplitter(
-      jsonSplitter,
-      SPLITTER_MIN_CHUNK_SIZE,
-      chunkSize,
-    );
   }
 
   canProcess(rawContent: RawContent): boolean {
@@ -61,7 +52,7 @@ export class JsonPipeline extends BasePipeline {
     // For invalid JSON, return as-is for fallback text processing
     if (!isValidJson) {
       // Still split invalid JSON content for consistency
-      const fallbackChunks = await this.greedySplitter.splitText(contentString);
+      const fallbackChunks = await this.splitter.splitText(contentString);
       return {
         textContent: contentString,
         metadata: {
@@ -91,7 +82,7 @@ export class JsonPipeline extends BasePipeline {
     await this.executeMiddlewareStack(this.middleware, context);
 
     // Split the content using JsonContentSplitter
-    const chunks = await this.greedySplitter.splitText(context.content);
+    const chunks = await this.splitter.splitText(context.content);
 
     return {
       textContent: context.content,

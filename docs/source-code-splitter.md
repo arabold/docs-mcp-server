@@ -49,7 +49,6 @@ graph TD
 
     subgraph "Output Generation"
         K[ContentChunk Array]
-        L[GreedySplitter Optimization]
     end
 
     A --> B
@@ -62,11 +61,9 @@ graph TD
     H --> I
     I --> J
     J --> K
-    K --> L
 
     style A fill:#e1f5fe
     style K fill:#f3e5f5
-    style L fill:#e8f5e8
 ```
 
 ## Core Components
@@ -171,12 +168,11 @@ flowchart TD
     G --> H[Chunk Generation]
 
     D --> I[Line-based Chunks]
-    H --> J[Merge Results]
+    H --> J[ContentChunk Array]
     I --> J
-    J --> K[GreedySplitter Optimization]
 
     style A fill:#e1f5fe
-    style K fill:#e8f5e8
+    style J fill:#e8f5e8
     style D fill:#fff3e0
 ```
 
@@ -289,16 +285,27 @@ The tree-sitter splitter integrates seamlessly with the existing content process
 graph LR
     subgraph "Source Code Processing"
         A[SourceCodePipeline] --> B[TreesitterSourceCodeSplitter]
-        B --> C[GreedySplitter]
-        C --> D[ContentChunk Array]
-        D --> E[Embedding Generation]
-        E --> F[Vector Storage]
+        B --> C[ContentChunk Array]
+        C --> D[Embedding Generation]
+        D --> E[Vector Storage]
     end
 
     style A fill:#e1f5fe
-    style D fill:#f3e5f5
-    style F fill:#e8f5e8
+    style C fill:#f3e5f5
+    style E fill:#e8f5e8
 ```
+
+### Rationale: Omission of Greedy Size-Based Merging
+
+The previous design showed an additional GreedySplitter phase for size normalization. This has been intentionally removed for source code because:
+
+- Structural Fidelity: Treesitter-derived chunks encode precise `{level, path}` hierarchies required for hierarchical reassembly and subtree reconstruction. Greedy merging collapses boundaries and degrades that signal.
+- Retrieval Quality: HierarchicalAssemblyStrategy relies on intact structural units (class, method, function). Artificially merged aggregates reduce precision and introduce unrelated code into a match context.
+- Reassembly Guarantees: The splitter already guarantees concatenability. Additional size-based merging provides negligible token efficiency gains compared to the semantic loss.
+- JSON / Structured Parity: The same reasoning applies to JSON and other strictly nested formats—each structural node is meaningful even if its textual size is small.
+- Simplicity & Predictability: A single semantic splitter reduces mental overhead, improves test determinism, and avoids edge cases where mixed-level metadata must be reconciled.
+
+If future optimization is needed, it should be: (a) post-retrieval context window packing, or (b) language-aware micro-chunk collapsing that preserves explicit structural node boundaries—never generic greedy adjacency merging.
 
 ### System Benefits
 
