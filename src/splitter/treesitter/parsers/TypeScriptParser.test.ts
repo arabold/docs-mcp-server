@@ -118,6 +118,18 @@ export class Calculator {
       if (addMethod) {
         expect(addMethod.text).toContain("(a: number, b: number): number");
       }
+
+      // Boundary type classification assertions
+      const boundaries = parser.extractBoundaries(result.tree, code);
+      const classBoundary = boundaries.find((b) => b.name === "Calculator");
+      expect(classBoundary?.boundaryType).toBe("structural");
+      const addBoundary = boundaries.find((b) => b.name === "add");
+      expect(addBoundary?.boundaryType).toBe("content");
+      const multiplyBoundary =
+        boundaries.find((b) => b.name === "static multiply") ||
+        boundaries.find((b) => b.name === "multiply");
+      expect(multiplyBoundary).toBeDefined();
+      expect(multiplyBoundary?.boundaryType).toBe("content");
     });
 
     it("should parse interface declaration", () => {
@@ -138,6 +150,11 @@ interface User {
       expect(nodes[0].name).toBe("User");
       expect(nodes[0].text).toContain("id: number");
       expect(nodes[0].text).toContain("email?: string");
+
+      // Boundary type classification for interface
+      const boundaries = parser.extractBoundaries(result.tree, code);
+      const iface = boundaries.find((b) => b.name === "User");
+      expect(iface?.boundaryType).toBe("structural");
     });
 
     it("should parse type alias", () => {
@@ -164,6 +181,13 @@ type UserID = string;
       if (userIdType) {
         expect(userIdType.text).toContain("type UserID = string");
       }
+
+      // Boundary type classification for type aliases
+      const boundaries = parser.extractBoundaries(result.tree, code);
+      const statusBoundary = boundaries.find((b) => b.name === "Status");
+      const userIdBoundary = boundaries.find((b) => b.name === "UserID");
+      expect(statusBoundary?.boundaryType).toBe("structural");
+      expect(userIdBoundary?.boundaryType).toBe("structural");
     });
 
     it("should parse enum declaration", () => {
@@ -184,6 +208,11 @@ enum Color {
       expect(nodes[0].name).toBe("Color");
       expect(nodes[0].text).toContain('Red = "red"');
       expect(nodes[0].text).toContain('Blue = "blue"');
+
+      // Boundary type classification for enum
+      const boundaries = parser.extractBoundaries(result.tree, code);
+      const enumBoundary = boundaries.find((b) => b.name === "Color");
+      expect(enumBoundary?.boundaryType).toBe("structural");
     });
 
     it("should parse namespace declaration", () => {
@@ -206,6 +235,13 @@ namespace Utils {
       );
       expect(namespaceNode).toBeTruthy();
       expect(namespaceNode?.name).toBe("Utils");
+
+      // Boundary type classification for namespace + contained function
+      const boundaries = parser.extractBoundaries(result.tree, code);
+      const nsBoundary = boundaries.find((b) => b.name === "Utils");
+      const formatDateBoundary = boundaries.find((b) => b.name === "formatDate");
+      expect(nsBoundary?.boundaryType).toBe("structural");
+      expect(formatDateBoundary?.boundaryType).toBe("content");
     });
   });
 

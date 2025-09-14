@@ -1082,7 +1082,11 @@ export class DocumentStore {
         FROM documents d
         LEFT JOIN vec_distances v ON d.id = v.id
         LEFT JOIN fts_scores f ON d.id = f.id
-        WHERE v.id IS NOT NULL OR f.id IS NOT NULL
+        WHERE (v.id IS NOT NULL OR f.id IS NOT NULL)
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
+            WHERE je.value = 'structural'
+          )
       `);
 
       const rawResults = stmt.all(

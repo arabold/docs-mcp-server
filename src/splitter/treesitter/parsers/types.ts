@@ -70,6 +70,8 @@ export interface LineRange {
 export interface CodeBoundary {
   /** Simple boundary type for context */
   type: "function" | "class" | "interface" | "enum" | "module" | "other";
+  /** Classification for downstream chunk typing */
+  boundaryType: "structural" | "content";
   /** Optional simple name for debugging/context */
   name?: string;
   /** Start position in the source (1-indexed line) */

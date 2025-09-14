@@ -245,6 +245,12 @@ const divide = (a, b) => {
       expect(arrowBoundary?.type).toBe("function");
       expect(arrowBoundary?.startLine).toBe(12);
       expect(arrowBoundary?.endLine).toBe(14);
+
+      // Boundary type assertions
+      expect(functionBoundary?.boundaryType).toBe("content");
+      expect(classBoundary?.boundaryType).toBe("structural");
+      expect(methodBoundary?.boundaryType).toBe("content");
+      expect(arrowBoundary?.boundaryType).toBe("content");
     });
 
     it("should handle empty code", () => {

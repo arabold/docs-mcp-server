@@ -334,12 +334,21 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
         level = 0;
       }
 
+      // Determine chunk type from boundary classification
+      const isStructural = segment.containingBoundary?.boundaryType === "structural";
+
       // Apply two-phase splitting - use TextContentSplitter on this segment
       const segmentChunks = await this.splitContentIntoChunks(
         segment.content,
         path,
         level,
       );
+
+      // Overwrite types based on structural vs content classification (always include "code" for backward compatibility)
+      for (const c of segmentChunks) {
+        c.types = isStructural ? ["code", "structural"] : ["code"];
+      }
+
       chunks.push(...segmentChunks);
     }
 

@@ -187,6 +187,29 @@ The system creates chunks that balance semantic meaning with search effectivenes
 - **Content Chunks**: Code sections between structural boundaries
 - **Delegated Chunks**: Large content sections processed by TextSplitter
 
+#### Dual Typing & Boundary Classification
+
+Each emitted `ContentChunk` for source code now uses a dual typing strategy:
+
+- `types` array always includes `code` (backward compatibility for existing retrieval / embedding logic).
+- A secondary semantic classification is derived from boundary analysis:
+  - `boundaryType: "structural"` for declarations that introduce _named, nestable scopes_ (classes, interfaces, enums, namespaces/modules, type aliases, import/export units).
+  - `boundaryType: "content"` for executable or implementation-level units (functions, methods, constructors, arrow functions, variable/lexical declarations that carry behavior, etc.).
+
+Design goals:
+
+1. Hierarchical Assembly: `structural` nodes act as stable anchors for subtree reconstruction (e.g. return an entire class when a method matches).
+2. Precision in Retrieval: `content` nodes map to the most specific executable region, improving ranking granularity.
+3. Non-Destructive Enrichment: Existing consumers relying only on `types.includes("code")` remain unaffected.
+4. Future Extensibility: Additional refinement layers (e.g. `interface-signature`, `public-api`, `test-code`) can be layered without breaking current contracts.
+
+Why not merge structural + content nodes pre-index?
+
+- Merging obscures which textual spans define navigational structure vs. executable implementation.
+- Preserving both classifications enables context-dependent expansion policies (e.g. include whole class vs. just matched method).
+
+Boundary integrity + dual typing replace the need for post-hoc greedy size normalization.
+
 **Path Inheritance:**
 Each chunk inherits the hierarchical path of its containing structure, enabling context-aware search and proper reassembly.
 

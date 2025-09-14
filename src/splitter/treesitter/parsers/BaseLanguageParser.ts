@@ -594,6 +594,19 @@ export abstract class BaseLanguageParser implements LanguageParser {
         break;
     }
 
+    // Classify boundary as structural or content
+    const boundaryType: "structural" | "content" = [
+      StructuralNodeType.CLASS_DECLARATION,
+      StructuralNodeType.INTERFACE_DECLARATION,
+      StructuralNodeType.TYPE_ALIAS_DECLARATION,
+      StructuralNodeType.ENUM_DECLARATION,
+      StructuralNodeType.NAMESPACE_DECLARATION,
+      StructuralNodeType.EXPORT_STATEMENT,
+      StructuralNodeType.IMPORT_STATEMENT,
+    ].includes(structuralType)
+      ? "structural"
+      : "content";
+
     // Calculate boundary positions
     let startLine = node.startPosition.row + 1;
     let startByte = node.startIndex;
@@ -609,6 +622,7 @@ export abstract class BaseLanguageParser implements LanguageParser {
 
     return {
       type,
+      boundaryType,
       name,
       startLine,
       endLine: node.endPosition.row + 1,
