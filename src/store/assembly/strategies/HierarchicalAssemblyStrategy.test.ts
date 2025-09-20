@@ -270,7 +270,7 @@ describe("HierarchicalAssemblyStrategy", () => {
         documentStore,
       );
 
-      const resultContent = result.map((doc) => doc.pageContent);
+      const _resultContent = result.map((doc) => doc.pageContent);
       const resultIds = result.map((doc) => doc.id);
 
       // Should promote to include the entire top-level function that contains the anonymous function
@@ -289,7 +289,7 @@ describe("HierarchicalAssemblyStrategy", () => {
       );
 
       // Class with multiple methods - only some will be matched
-      const classOpenResult = (documentStore as any).statements.insertDocument.run(
+      const _classOpenResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
         "UserService.ts",

@@ -66,3 +66,19 @@ export const MIGRATION_MAX_RETRIES = 5;
  * Delay in milliseconds between migration retry attempts.
  */
 export const MIGRATION_RETRY_DELAY_MS = 300;
+
+/**
+ * Factor to overfetch vector and FTS candidates before applying Reciprocal Rank Fusion.
+ * A factor of 2 means we fetch 2x the requested limit from each source before ranking.
+ */
+export const SEARCH_OVERFETCH_FACTOR = 2;
+
+/**
+ * Weight applied to vector search scores in hybrid search ranking.
+ */
+export const SEARCH_WEIGHT_VEC = 1.0;
+
+/**
+ * Weight applied to full-text search scores in hybrid search ranking.
+ */
+export const SEARCH_WEIGHT_FTS = 1.0;
