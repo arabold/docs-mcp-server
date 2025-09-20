@@ -185,7 +185,7 @@ SQLite database with normalized schema:
 
 The `versions` table serves as the job state hub, storing progress, errors, and scraper configuration for reproducible re-indexing.
 
-DocumentManagementService handles CRUD operations and version resolution. DocumentRetrieverService provides search with vector similarity and full-text search combination.
+DocumentManagementService handles CRUD operations and version resolution. DocumentRetrieverService provides hybrid search combining vector similarity and full-text search using Reciprocal Rank Fusion (RRF) with configurable weights. The search system implements dual-mode FTS query generation for improved recall (combining exact phrase and keyword matching) and uses an overfetch factor to retrieve more candidates before final ranking.
 
 ## Interface Implementations
 

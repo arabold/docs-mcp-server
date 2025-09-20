@@ -5,7 +5,14 @@ import semver from "semver";
 import * as sqliteVec from "sqlite-vec";
 import type { ScraperOptions } from "../scraper/types";
 import type { DocumentMetadata } from "../types";
-import { EMBEDDING_BATCH_CHARS, EMBEDDING_BATCH_SIZE } from "../utils/config";
+import {
+  EMBEDDING_BATCH_CHARS,
+  EMBEDDING_BATCH_SIZE,
+  SEARCH_OVERFETCH_FACTOR,
+  SEARCH_WEIGHT_FTS,
+  SEARCH_WEIGHT_VEC,
+  VECTOR_SEARCH_MULTIPLIER,
+} from "../utils/config";
 import { logger } from "../utils/logger";
 import { applyMigrations } from "./applyMigrations";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
@@ -96,15 +103,15 @@ export class DocumentStore {
   };
 
   /**
-   * Calculates Reciprocal Rank Fusion score for a result
+   * Calculates Reciprocal Rank Fusion score for a result with configurable weights
    */
   private calculateRRF(vecRank?: number, ftsRank?: number, k = 60): number {
     let rrf = 0;
     if (vecRank !== undefined) {
-      rrf += 1 / (k + vecRank);
+      rrf += SEARCH_WEIGHT_VEC / (k + vecRank);
     }
     if (ftsRank !== undefined) {
-      rrf += 1 / (k + ftsRank);
+      rrf += SEARCH_WEIGHT_FTS / (k + ftsRank);
     }
     return rrf;
   }
@@ -441,14 +448,39 @@ export class DocumentStore {
   }
 
   /**
-   * Escapes a query string for use with SQLite FTS5 MATCH operator.
-   * Wraps the query in double quotes and escapes internal double quotes.
+   * Generates a dual-mode FTS query that combines phrase and keyword matching.
+   * Creates a query like: "exact phrase" OR ("word1" OR "word2" OR "word3")
+   * This provides better recall by matching both exact phrases and individual terms,
+   * while safely handling special FTS keywords by quoting everything.
    */
   private escapeFtsQuery(query: string): string {
-    // Escape internal double quotes by doubling them
+    // If the query already contains quotes, respect them and return as-is (escaped)
+    if (query.includes('"')) {
+      return query.replace(/"/g, '""');
+    }
+
+    // Escape internal double quotes for the phrase part
     const escapedQuotes = query.replace(/"/g, '""');
-    // Wrap the entire string in double quotes
-    return `"${escapedQuotes}"`;
+    const phraseQuery = `"${escapedQuotes}"`;
+
+    // Split query into individual terms for keyword matching
+    const terms = query
+      .trim()
+      .split(/\s+/)
+      .filter((term) => term.length > 0);
+
+    // If only one term, just return the phrase query
+    if (terms.length <= 1) {
+      return phraseQuery;
+    }
+
+    // Create keyword query with each term safely quoted: ("term1" OR "term2" OR "term3")
+    const keywordQuery = terms
+      .map((term) => `"${term.replace(/"/g, '""')}"`)
+      .join(" OR ");
+
+    // Combine phrase and keyword queries
+    return `${phraseQuery} OR (${keywordQuery})`;
   }
 
   /**
@@ -1032,6 +1064,7 @@ export class DocumentStore {
   /**
    * Finds documents matching a text query using hybrid search.
    * Combines vector similarity search with full-text search using Reciprocal Rank Fusion.
+   * Uses configurable overfetch factor to improve recall before applying RRF ranking.
    */
   async findByContent(
     library: string,
@@ -1040,10 +1073,21 @@ export class DocumentStore {
     limit: number,
   ): Promise<Document[]> {
     try {
+      // Return empty array for empty or whitespace-only queries
+      if (!query || typeof query !== "string" || query.trim().length === 0) {
+        return [];
+      }
+
       const rawEmbedding = await this.embeddings.embedQuery(query);
       const embedding = this.padVector(rawEmbedding);
-      const ftsQuery = this.escapeFtsQuery(query); // Escape the query for FTS
+      const ftsQuery = this.escapeFtsQuery(query); // Use dual-mode FTS query
       const normalizedVersion = version.toLowerCase();
+
+      // Apply overfetch factor to both vector and FTS searches for better recall
+      const overfetchLimit = Math.max(1, limit * SEARCH_OVERFETCH_FACTOR);
+
+      // Use a multiplier to cast a wider net in vector search before final ranking
+      const vectorSearchK = overfetchLimit * VECTOR_SEARCH_MULTIPLIER;
 
       const stmt = this.db.prepare(`
         WITH vec_distances AS (
@@ -1093,17 +1137,17 @@ export class DocumentStore {
         library.toLowerCase(),
         normalizedVersion,
         JSON.stringify(embedding),
-        limit,
+        vectorSearchK,
         library.toLowerCase(),
         normalizedVersion,
-        ftsQuery, // Use the escaped query
-        limit,
+        ftsQuery, // Use the dual-mode FTS query
+        overfetchLimit, // Use overfetch limit for FTS
       ) as RawSearchResult[];
 
-      // Apply RRF ranking
+      // Apply RRF ranking with configurable weights
       const rankedResults = this.assignRanks(rawResults);
 
-      // Sort by RRF score and take top results
+      // Sort by RRF score and take top results (truncate to original limit)
       const topResults = rankedResults
         .sort((a, b) => b.rrf_score - a.rrf_score)
         .slice(0, limit);

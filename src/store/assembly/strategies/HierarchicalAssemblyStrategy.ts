@@ -235,14 +235,17 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
           currentChunk = await this.findAncestorWithGaps(
             library,
             version,
-            currentChunk.metadata as any,
+            currentChunk.metadata as { url: string; path?: string[] },
             documentStore,
           );
         }
       } catch (error) {
         // If standard lookup fails, try gap-aware ancestor search
         try {
-          const currentMetadata = currentChunk?.metadata as any;
+          const currentMetadata = currentChunk?.metadata as {
+            url: string;
+            path?: string[];
+          };
           if (currentMetadata) {
             currentChunk = await this.findAncestorWithGaps(
               library,
