@@ -5,56 +5,61 @@ import { VersionStatus } from "./types";
 
 // Mock only the embedding service to generate deterministic embeddings for testing
 // This allows us to test ranking logic while using real SQLite database
-vi.mock("./embeddings/EmbeddingFactory", () => ({
-  createEmbeddingModel: () => ({
-    embedQuery: vi.fn(async (text: string) => {
-      // Generate deterministic embeddings based on text content for consistent testing
-      const words = text.toLowerCase().split(/\s+/);
-      const embedding = new Array(1536).fill(0);
+vi.mock("./embeddings/EmbeddingFactory", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embeddings/EmbeddingFactory")>();
 
-      // Create meaningful semantic relationships for testing
-      words.forEach((word, wordIndex) => {
-        const wordHash = Array.from(word).reduce(
-          (acc, char) => acc + char.charCodeAt(0),
-          0,
-        );
-        const baseIndex = (wordHash % 100) * 15; // Distribute across embedding dimensions
-
-        for (let i = 0; i < 15; i++) {
-          const index = (baseIndex + i) % 1536;
-          embedding[index] += 1.0 / (wordIndex + 1); // Earlier words get higher weight
-        }
-      });
-
-      // Normalize the embedding
-      const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-      return magnitude > 0 ? embedding.map((val) => val / magnitude) : embedding;
-    }),
-    embedDocuments: vi.fn(async (texts: string[]) => {
-      // Generate embeddings for each text using the same logic as embedQuery
-      return texts.map((text) => {
+  return {
+    ...actual,
+    createEmbeddingModel: () => ({
+      embedQuery: vi.fn(async (text: string) => {
+        // Generate deterministic embeddings based on text content for consistent testing
         const words = text.toLowerCase().split(/\s+/);
         const embedding = new Array(1536).fill(0);
 
+        // Create meaningful semantic relationships for testing
         words.forEach((word, wordIndex) => {
           const wordHash = Array.from(word).reduce(
             (acc, char) => acc + char.charCodeAt(0),
             0,
           );
-          const baseIndex = (wordHash % 100) * 15;
+          const baseIndex = (wordHash % 100) * 15; // Distribute across embedding dimensions
 
           for (let i = 0; i < 15; i++) {
             const index = (baseIndex + i) % 1536;
-            embedding[index] += 1.0 / (wordIndex + 1);
+            embedding[index] += 1.0 / (wordIndex + 1); // Earlier words get higher weight
           }
         });
 
+        // Normalize the embedding
         const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
         return magnitude > 0 ? embedding.map((val) => val / magnitude) : embedding;
-      });
+      }),
+      embedDocuments: vi.fn(async (texts: string[]) => {
+        // Generate embeddings for each text using the same logic as embedQuery
+        return texts.map((text) => {
+          const words = text.toLowerCase().split(/\s+/);
+          const embedding = new Array(1536).fill(0);
+
+          words.forEach((word, wordIndex) => {
+            const wordHash = Array.from(word).reduce(
+              (acc, char) => acc + char.charCodeAt(0),
+              0,
+            );
+            const baseIndex = (wordHash % 100) * 15;
+
+            for (let i = 0; i < 15; i++) {
+              const index = (baseIndex + i) % 1536;
+              embedding[index] += 1.0 / (wordIndex + 1);
+            }
+          });
+
+          const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
+          return magnitude > 0 ? embedding.map((val) => val / magnitude) : embedding;
+        });
+      }),
     }),
-  }),
-}));
+  };
+});
 
 /**
  * Behavior-focused integration tests for DocumentStore
@@ -64,6 +69,9 @@ describe("DocumentStore - Integration Tests", () => {
   let store: DocumentStore;
 
   beforeEach(async () => {
+    // Ensure default tests have embedding credentials available
+    process.env.OPENAI_API_KEY = "test-key";
+
     // Create a fresh in-memory database for each test
     store = new DocumentStore(":memory:");
     await store.initialize();
@@ -1819,6 +1827,265 @@ describe("DocumentStore - Integration Tests", () => {
         const libraryVersions = await store.queryLibraryVersions();
         expect(libraryVersions.has("integrity-check")).toBe(true);
         expect(libraryVersions.has("security-test")).toBe(true);
+      });
+    });
+
+    describe("Optional Vectorization", () => {
+      let originalEnv: NodeJS.ProcessEnv;
+      let noEmbeddingStore: DocumentStore;
+
+      beforeEach(() => {
+        // Save original environment
+        originalEnv = { ...process.env };
+      });
+
+      afterEach(async () => {
+        // Restore original environment
+        process.env = originalEnv;
+
+        // Clean up store if created
+        if (noEmbeddingStore) {
+          await noEmbeddingStore.shutdown();
+        }
+      });
+
+      it("should initialize successfully without embedding credentials", async () => {
+        // Clear all embedding-related environment variables
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.GOOGLE_API_KEY;
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        delete process.env.AWS_ACCESS_KEY_ID;
+        delete process.env.AWS_SECRET_ACCESS_KEY;
+        delete process.env.AZURE_OPENAI_API_KEY;
+
+        noEmbeddingStore = new DocumentStore(":memory:");
+
+        // Should not throw an error
+        await expect(noEmbeddingStore.initialize()).resolves.not.toThrow();
+      });
+
+      it("should store documents without vectorization when credentials are missing", async () => {
+        // Clear all embedding-related environment variables
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.GOOGLE_API_KEY;
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        delete process.env.AWS_ACCESS_KEY_ID;
+        delete process.env.AWS_SECRET_ACCESS_KEY;
+        delete process.env.AZURE_OPENAI_API_KEY;
+
+        noEmbeddingStore = new DocumentStore(":memory:");
+        await noEmbeddingStore.initialize();
+
+        const testDocuments: Document[] = [
+          {
+            pageContent: "This is a test document about React hooks.",
+            metadata: {
+              url: "https://example.com/react-hooks",
+              title: "React Hooks Guide",
+              path: ["React", "Hooks"],
+            },
+          },
+          {
+            pageContent: "This document explains TypeScript generics.",
+            metadata: {
+              url: "https://example.com/typescript-generics",
+              title: "TypeScript Generics",
+              path: ["TypeScript", "Generics"],
+            },
+          },
+        ];
+
+        // Should successfully add documents without vectorization
+        await expect(
+          noEmbeddingStore.addDocuments("react", "18.0.0", testDocuments),
+        ).resolves.not.toThrow();
+
+        // Verify documents were stored
+        const exists = await noEmbeddingStore.checkDocumentExists("react", "18.0.0");
+        expect(exists).toBe(true);
+      });
+
+      it("should perform FTS-only search when vectorization is disabled", async () => {
+        // Clear all embedding-related environment variables
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.GOOGLE_API_KEY;
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        delete process.env.AWS_ACCESS_KEY_ID;
+        delete process.env.AWS_SECRET_ACCESS_KEY;
+        delete process.env.AZURE_OPENAI_API_KEY;
+
+        noEmbeddingStore = new DocumentStore(":memory:");
+        await noEmbeddingStore.initialize();
+
+        const testDocuments: Document[] = [
+          {
+            pageContent: "React hooks are a powerful feature for state management.",
+            metadata: {
+              url: "https://example.com/react-hooks",
+              title: "React Hooks Guide",
+              path: ["React", "Hooks"],
+            },
+          },
+          {
+            pageContent: "TypeScript provides excellent type safety for JavaScript.",
+            metadata: {
+              url: "https://example.com/typescript-intro",
+              title: "TypeScript Introduction",
+              path: ["TypeScript", "Intro"],
+            },
+          },
+        ];
+
+        await noEmbeddingStore.addDocuments("testlib", "1.0.0", testDocuments);
+
+        // Search should work using FTS only
+        const results = await noEmbeddingStore.findByContent(
+          "testlib",
+          "1.0.0",
+          "React hooks",
+          5,
+        );
+
+        expect(results.length).toBeGreaterThan(0);
+        expect(results[0].pageContent).toContain("React hooks");
+        expect(results[0].metadata).toHaveProperty("score");
+        expect(results[0].metadata).toHaveProperty("fts_rank");
+        // Should NOT have vector rank since vectorization is disabled
+        expect(results[0].metadata.vec_rank).toBeUndefined();
+      });
+
+      it("should handle search queries correctly in FTS-only mode", async () => {
+        // Clear all embedding-related environment variables
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.GOOGLE_API_KEY;
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        delete process.env.AWS_ACCESS_KEY_ID;
+        delete process.env.AWS_SECRET_ACCESS_KEY;
+        delete process.env.AZURE_OPENAI_API_KEY;
+
+        noEmbeddingStore = new DocumentStore(":memory:");
+        await noEmbeddingStore.initialize();
+
+        const testDocuments: Document[] = [
+          {
+            pageContent: "JavaScript is a versatile programming language",
+            metadata: {
+              url: "https://example.com/js-intro",
+              title: "JavaScript Introduction",
+              path: ["JavaScript", "Basics"],
+            },
+          },
+          {
+            pageContent: "Python is great for data science and machine learning",
+            metadata: {
+              url: "https://example.com/python-ml",
+              title: "Python for ML",
+              path: ["Python", "ML"],
+            },
+          },
+        ];
+
+        await noEmbeddingStore.addDocuments("programming", "1.0.0", testDocuments);
+
+        // Test various search queries
+        const jsResults = await noEmbeddingStore.findByContent(
+          "programming",
+          "1.0.0",
+          "JavaScript",
+          5,
+        );
+        expect(jsResults.length).toBeGreaterThan(0);
+        expect(jsResults[0].pageContent).toContain("JavaScript");
+
+        const pythonResults = await noEmbeddingStore.findByContent(
+          "programming",
+          "1.0.0",
+          "Python data",
+          5,
+        );
+        expect(pythonResults.length).toBeGreaterThan(0);
+        expect(pythonResults[0].pageContent).toContain("Python");
+
+        // Empty query should return empty results
+        const emptyResults = await noEmbeddingStore.findByContent(
+          "programming",
+          "1.0.0",
+          "",
+          5,
+        );
+        expect(emptyResults).toHaveLength(0);
+      });
+
+      it("should demonstrate graceful degradation from hybrid to FTS-only search", async () => {
+        // This test shows that the same queries work in both modes, just with different ranking
+
+        // First test with embeddings enabled (normal store from beforeEach)
+        const hybridDocs: Document[] = [
+          {
+            pageContent:
+              "Machine learning algorithms for data analysis and pattern recognition",
+            metadata: {
+              url: "https://example.com/ml-algorithms",
+              title: "ML Algorithms Guide",
+              path: ["AI", "ML"],
+            },
+          },
+          {
+            pageContent: "Statistical analysis methods for scientific research projects",
+            metadata: {
+              url: "https://example.com/statistics",
+              title: "Statistics Guide",
+              path: ["Math", "Stats"],
+            },
+          },
+        ];
+
+        await store.addDocuments("comparison", "1.0.0", hybridDocs);
+        const hybridResults = await store.findByContent(
+          "comparison",
+          "1.0.0",
+          "analysis algorithms",
+          5,
+        );
+
+        // Now test with FTS-only (no embeddings)
+        delete process.env.OPENAI_API_KEY;
+        delete process.env.GOOGLE_API_KEY;
+        delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        delete process.env.AWS_ACCESS_KEY_ID;
+        delete process.env.AWS_SECRET_ACCESS_KEY;
+        delete process.env.AZURE_OPENAI_API_KEY;
+
+        noEmbeddingStore = new DocumentStore(":memory:");
+        await noEmbeddingStore.initialize();
+
+        await noEmbeddingStore.addDocuments("comparison", "1.0.0", hybridDocs);
+        const ftsResults = await noEmbeddingStore.findByContent(
+          "comparison",
+          "1.0.0",
+          "analysis algorithms",
+          5,
+        );
+
+        // Both should return results
+        expect(hybridResults.length).toBeGreaterThan(0);
+        expect(ftsResults.length).toBeGreaterThan(0);
+
+        // Both should find relevant documents
+        expect(hybridResults.some((r) => r.pageContent.includes("analysis"))).toBe(true);
+        expect(ftsResults.some((r) => r.pageContent.includes("analysis"))).toBe(true);
+
+        // Hybrid results should have both vec_rank and fts_rank for some results
+        const hybridWithBoth = hybridResults.filter(
+          (r) => r.metadata.vec_rank !== undefined && r.metadata.fts_rank !== undefined,
+        );
+        expect(hybridWithBoth.length).toBeGreaterThan(0);
+
+        // FTS-only results should only have fts_rank
+        for (const result of ftsResults) {
+          expect(result.metadata.fts_rank).toBeDefined();
+          expect(result.metadata.vec_rank).toBeUndefined();
+        }
       });
     });
   });
