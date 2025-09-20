@@ -8,6 +8,7 @@ import {
   OpenAIEmbeddings,
   type OpenAIEmbeddingsParams,
 } from "@langchain/openai";
+import { MissingCredentialsError } from "../errors";
 import { VECTOR_DIMENSION } from "../types";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
@@ -15,7 +16,13 @@ import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
  * Supported embedding model providers. Each provider requires specific environment
  * variables to be set for API access.
  */
-export type EmbeddingProvider = "openai" | "vertex" | "gemini" | "aws" | "microsoft";
+export type EmbeddingProvider =
+  | "openai"
+  | "vertex"
+  | "gemini"
+  | "aws"
+  | "microsoft"
+  | "sagemaker";
 
 /**
  * Error thrown when an invalid or unsupported embedding provider is specified.
@@ -24,7 +31,7 @@ export class UnsupportedProviderError extends Error {
   constructor(provider: string) {
     super(
       `❌ Unsupported embedding provider: ${provider}\n` +
-        "   Supported providers: openai, vertex, gemini, aws, microsoft\n" +
+        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker\n" +
         "   See README.md for configuration options or run with --help for more details.",
     );
     this.name = "UnsupportedProviderError";
@@ -38,6 +45,56 @@ export class ModelConfigurationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ModelConfigurationError";
+  }
+}
+
+/**
+ * Checks if credentials are available for a specific embedding provider.
+ * Returns true if any credentials are found, false if no credentials are provided.
+ * Does not validate if the credentials are correct, only if they are present.
+ *
+ * @param provider The embedding provider to check
+ * @returns true if credentials are available, false if no credentials found
+ */
+export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
+  switch (provider) {
+    case "openai":
+      return !!process.env.OPENAI_API_KEY;
+
+    case "vertex":
+      return !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+    case "gemini":
+      return !!process.env.GOOGLE_API_KEY;
+
+    case "aws": {
+      const region = process.env.BEDROCK_AWS_REGION || process.env.AWS_REGION;
+      return (
+        !!region &&
+        (!!process.env.AWS_PROFILE ||
+          (!!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY))
+      );
+    }
+
+    case "microsoft":
+      return !!(
+        process.env.AZURE_OPENAI_API_KEY &&
+        process.env.AZURE_OPENAI_API_INSTANCE_NAME &&
+        process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME &&
+        process.env.AZURE_OPENAI_API_VERSION
+      );
+
+    case "sagemaker": {
+      const region = process.env.AWS_REGION;
+      return (
+        !!region &&
+        (!!process.env.AWS_PROFILE ||
+          (!!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY))
+      );
+    }
+
+    default:
+      return false;
   }
 }
 
@@ -73,11 +130,7 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
   switch (provider) {
     case "openai": {
       if (!process.env.OPENAI_API_KEY) {
-        throw new ModelConfigurationError(
-          "❌ Missing API key for embedding provider\n" +
-            "   Please set OPENAI_API_KEY or configure an alternative embedding model.\n" +
-            "   See README.md for configuration options or run with --help for more details.",
-        );
+        throw new MissingCredentialsError("openai", ["OPENAI_API_KEY"]);
       }
       const config: Partial<OpenAIEmbeddingsParams> & { configuration?: ClientOptions } =
         {
@@ -95,11 +148,7 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
 
     case "vertex": {
       if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-        throw new ModelConfigurationError(
-          "❌ Missing credentials for Google Cloud Vertex AI\n" +
-            "   Please set GOOGLE_APPLICATION_CREDENTIALS or configure an alternative embedding model.\n" +
-            "   See README.md for configuration options or run with --help for more details.",
-        );
+        throw new MissingCredentialsError("vertex", ["GOOGLE_APPLICATION_CREDENTIALS"]);
       }
       return new VertexAIEmbeddings({
         ...baseConfig,
@@ -109,11 +158,7 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
 
     case "gemini": {
       if (!process.env.GOOGLE_API_KEY) {
-        throw new ModelConfigurationError(
-          "❌ Missing API key for Google AI (Gemini)\n" +
-            "   Please set GOOGLE_API_KEY or configure an alternative embedding model.\n" +
-            "   See README.md for configuration options or run with --help for more details.",
-        );
+        throw new MissingCredentialsError("gemini", ["GOOGLE_API_KEY"]);
       }
       // Create base embeddings and wrap with FixedDimensionEmbeddings since Gemini
       // supports MRL (Matryoshka Representation Learning) for safe truncation
@@ -133,20 +178,25 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
     case "aws": {
       // For AWS, model should be the full Bedrock model ID
       const region = process.env.BEDROCK_AWS_REGION || process.env.AWS_REGION;
+      const missingCredentials: string[] = [];
+
       if (!region) {
-        throw new ModelConfigurationError(
-          "BEDROCK_AWS_REGION or AWS_REGION environment variable is required for AWS Bedrock",
-        );
+        missingCredentials.push("BEDROCK_AWS_REGION or AWS_REGION");
       }
+
       // Allow using AWS_PROFILE for credentials if set
       if (
         !process.env.AWS_PROFILE &&
         !process.env.AWS_ACCESS_KEY_ID &&
         !process.env.AWS_SECRET_ACCESS_KEY
       ) {
-        throw new ModelConfigurationError(
-          "Either AWS_PROFILE or both AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables are required for AWS Bedrock",
+        missingCredentials.push(
+          "AWS_PROFILE or (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY)",
         );
+      }
+
+      if (missingCredentials.length > 0) {
+        throw new MissingCredentialsError("aws", missingCredentials);
       }
 
       // Only pass explicit credentials if present, otherwise let SDK resolve via profile/other means
@@ -169,25 +219,23 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
 
     case "microsoft": {
       // For Azure, model name corresponds to the deployment name
+      const missingCredentials: string[] = [];
+
       if (!process.env.AZURE_OPENAI_API_KEY) {
-        throw new ModelConfigurationError(
-          "AZURE_OPENAI_API_KEY environment variable is required for Azure OpenAI",
-        );
+        missingCredentials.push("AZURE_OPENAI_API_KEY");
       }
       if (!process.env.AZURE_OPENAI_API_INSTANCE_NAME) {
-        throw new ModelConfigurationError(
-          "AZURE_OPENAI_API_INSTANCE_NAME environment variable is required for Azure OpenAI",
-        );
+        missingCredentials.push("AZURE_OPENAI_API_INSTANCE_NAME");
       }
       if (!process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME) {
-        throw new ModelConfigurationError(
-          "AZURE_OPENAI_API_DEPLOYMENT_NAME environment variable is required for Azure OpenAI",
-        );
+        missingCredentials.push("AZURE_OPENAI_API_DEPLOYMENT_NAME");
       }
       if (!process.env.AZURE_OPENAI_API_VERSION) {
-        throw new ModelConfigurationError(
-          "AZURE_OPENAI_API_VERSION environment variable is required for Azure OpenAI",
-        );
+        missingCredentials.push("AZURE_OPENAI_API_VERSION");
+      }
+
+      if (missingCredentials.length > 0) {
+        throw new MissingCredentialsError("microsoft", missingCredentials);
       }
 
       return new AzureOpenAIEmbeddings({

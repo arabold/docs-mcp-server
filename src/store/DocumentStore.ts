@@ -17,6 +17,7 @@ import { logger } from "../utils/logger";
 import { applyMigrations } from "./applyMigrations";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import {
+  areCredentialsAvailable,
   createEmbeddingModel,
   ModelConfigurationError,
   UnsupportedProviderError,
@@ -59,6 +60,7 @@ export class DocumentStore {
   private readonly dbDimension: number = VECTOR_DIMENSION;
   private modelDimension!: number;
   private readonly embeddingConfig?: EmbeddingModelConfig | null;
+  private isVectorSearchEnabled: boolean = false;
   private statements!: {
     getById: Database.Statement<[bigint]>;
     insertDocument: Database.Statement<
@@ -394,6 +396,17 @@ export class DocumentStore {
     // Use provided config or fall back to parsing environment
     const config = this.embeddingConfig || EmbeddingConfig.parseEmbeddingConfig();
 
+    // Check if credentials are available for the provider
+    if (!areCredentialsAvailable(config.provider)) {
+      logger.warn(
+        `⚠️ No credentials found for ${config.provider} embedding provider. Vector search is disabled.\n` +
+          `   Only full-text search will be available. To enable vector search, please configure the required\n` +
+          `   environment variables for ${config.provider} or choose a different provider.\n` +
+          `   See README.md for configuration options or run with --help for more details.`,
+      );
+      return; // Skip initialization, keep isVectorSearchEnabled = false
+    }
+
     // Create embedding model
     try {
       this.embeddings = createEmbeddingModel(config.modelSpec);
@@ -414,6 +427,8 @@ export class DocumentStore {
         throw new DimensionError(config.modelSpec, this.modelDimension, this.dbDimension);
       }
 
+      // If we reach here, embeddings are successfully initialized
+      this.isVectorSearchEnabled = true;
       logger.debug(
         `Embeddings initialized: ${config.provider}:${config.model} (${this.modelDimension}d)`,
       );
@@ -830,64 +845,68 @@ export class DocumentStore {
         urls.add(url);
       }
 
-      // Generate embeddings in batch
-      const texts = documents.map((doc) => {
-        const header = `<title>${doc.metadata.title}</title>\n<url>${doc.metadata.url}</url>\n<path>${doc.metadata.path.join(" / ")}</path>\n`;
-        return `${header}${doc.pageContent}`;
-      });
+      // Generate embeddings in batch only if vector search is enabled
+      let paddedEmbeddings: number[][] = [];
 
-      // Batch embedding creation to avoid token limit errors
-      // Use size-based batching to prevent 413 errors
-      const maxBatchChars =
-        Number(process.env.DOCS_MCP_EMBEDDING_BATCH_CHARS) || EMBEDDING_BATCH_CHARS;
-      const rawEmbeddings: number[][] = [];
+      if (this.isVectorSearchEnabled) {
+        const texts = documents.map((doc) => {
+          const header = `<title>${doc.metadata.title}</title>\n<url>${doc.metadata.url}</url>\n<path>${doc.metadata.path.join(" / ")}</path>\n`;
+          return `${header}${doc.pageContent}`;
+        });
 
-      let currentBatch: string[] = [];
-      let currentBatchSize = 0;
-      let batchCount = 0;
+        // Batch embedding creation to avoid token limit errors
+        // Use size-based batching to prevent 413 errors
+        const maxBatchChars =
+          Number(process.env.DOCS_MCP_EMBEDDING_BATCH_CHARS) || EMBEDDING_BATCH_CHARS;
+        const rawEmbeddings: number[][] = [];
 
-      for (const text of texts) {
-        const textSize = text.length;
+        let currentBatch: string[] = [];
+        let currentBatchSize = 0;
+        let batchCount = 0;
 
-        // If adding this text would exceed the limit, process the current batch first
-        if (currentBatchSize + textSize > maxBatchChars && currentBatch.length > 0) {
+        for (const text of texts) {
+          const textSize = text.length;
+
+          // If adding this text would exceed the limit, process the current batch first
+          if (currentBatchSize + textSize > maxBatchChars && currentBatch.length > 0) {
+            batchCount++;
+            logger.debug(
+              `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
+            );
+            const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
+            rawEmbeddings.push(...batchEmbeddings);
+            currentBatch = [];
+            currentBatchSize = 0;
+          }
+
+          // Add text to current batch
+          currentBatch.push(text);
+          currentBatchSize += textSize;
+
+          // Also respect the count-based limit for APIs that have per-request item limits
+          if (currentBatch.length >= EMBEDDING_BATCH_SIZE) {
+            batchCount++;
+            logger.debug(
+              `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
+            );
+            const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
+            rawEmbeddings.push(...batchEmbeddings);
+            currentBatch = [];
+            currentBatchSize = 0;
+          }
+        }
+
+        // Process any remaining texts in the final batch
+        if (currentBatch.length > 0) {
           batchCount++;
           logger.debug(
-            `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
+            `Processing final embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
           );
           const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
           rawEmbeddings.push(...batchEmbeddings);
-          currentBatch = [];
-          currentBatchSize = 0;
         }
-
-        // Add text to current batch
-        currentBatch.push(text);
-        currentBatchSize += textSize;
-
-        // Also respect the count-based limit for APIs that have per-request item limits
-        if (currentBatch.length >= EMBEDDING_BATCH_SIZE) {
-          batchCount++;
-          logger.debug(
-            `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
-          );
-          const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
-          rawEmbeddings.push(...batchEmbeddings);
-          currentBatch = [];
-          currentBatchSize = 0;
-        }
+        paddedEmbeddings = rawEmbeddings.map((vector) => this.padVector(vector));
       }
-
-      // Process any remaining texts in the final batch
-      if (currentBatch.length > 0) {
-        batchCount++;
-        logger.debug(
-          `Processing final embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
-        );
-        const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
-        rawEmbeddings.push(...batchEmbeddings);
-      }
-      const paddedEmbeddings = rawEmbeddings.map((vector) => this.padVector(vector));
 
       // Resolve library and version IDs (creates them if they don't exist)
       const { libraryId, versionId } = await this.resolveLibraryAndVersionIds(
@@ -922,13 +941,15 @@ export class DocumentStore {
           );
           const rowId = result.lastInsertRowid;
 
-          // Insert into vector table using foreign key IDs
-          this.statements.insertEmbedding.run(
-            BigInt(rowId),
-            BigInt(libraryId),
-            BigInt(versionId),
-            JSON.stringify(paddedEmbeddings[i]),
-          );
+          // Insert into vector table only if vector search is enabled
+          if (this.isVectorSearchEnabled && paddedEmbeddings.length > 0) {
+            this.statements.insertEmbedding.run(
+              BigInt(rowId),
+              BigInt(libraryId),
+              BigInt(versionId),
+              JSON.stringify(paddedEmbeddings[i]),
+            );
+          }
         }
       });
 
@@ -1062,9 +1083,9 @@ export class DocumentStore {
   }
 
   /**
-   * Finds documents matching a text query using hybrid search.
-   * Combines vector similarity search with full-text search using Reciprocal Rank Fusion.
-   * Uses configurable overfetch factor to improve recall before applying RRF ranking.
+   * Finds documents matching a text query using hybrid search when vector search is enabled,
+   * or falls back to full-text search only when vector search is disabled.
+   * Uses Reciprocal Rank Fusion for hybrid search or simple FTS ranking for fallback mode.
    */
   async findByContent(
     library: string,
@@ -1078,34 +1099,100 @@ export class DocumentStore {
         return [];
       }
 
-      const rawEmbedding = await this.embeddings.embedQuery(query);
-      const embedding = this.padVector(rawEmbedding);
-      const ftsQuery = this.escapeFtsQuery(query); // Use dual-mode FTS query
+      const ftsQuery = this.escapeFtsQuery(query);
       const normalizedVersion = version.toLowerCase();
 
-      // Apply overfetch factor to both vector and FTS searches for better recall
-      const overfetchLimit = Math.max(1, limit * SEARCH_OVERFETCH_FACTOR);
+      if (this.isVectorSearchEnabled) {
+        // Hybrid search: vector + full-text search with RRF ranking
+        const rawEmbedding = await this.embeddings.embedQuery(query);
+        const embedding = this.padVector(rawEmbedding);
 
-      // Use a multiplier to cast a wider net in vector search before final ranking
-      const vectorSearchK = overfetchLimit * VECTOR_SEARCH_MULTIPLIER;
+        // Apply overfetch factor to both vector and FTS searches for better recall
+        const overfetchLimit = Math.max(1, limit * SEARCH_OVERFETCH_FACTOR);
 
-      const stmt = this.db.prepare(`
-        WITH vec_distances AS (
+        // Use a multiplier to cast a wider net in vector search before final ranking
+        const vectorSearchK = overfetchLimit * VECTOR_SEARCH_MULTIPLIER;
+
+        const stmt = this.db.prepare(`
+          WITH vec_distances AS (
+            SELECT
+              dv.rowid as id,
+              dv.distance as vec_distance
+            FROM documents_vec dv
+            JOIN versions v ON dv.version_id = v.id
+            JOIN libraries l ON v.library_id = l.id
+            WHERE l.name = ?
+              AND COALESCE(v.name, '') = COALESCE(?, '')
+              AND dv.embedding MATCH ?
+              AND dv.k = ?
+            ORDER BY dv.distance
+          ),
+          fts_scores AS (
+            SELECT
+              f.rowid as id,
+              bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
+            FROM documents_fts f
+            JOIN documents d ON f.rowid = d.id
+            JOIN versions v ON d.version_id = v.id
+            JOIN libraries l ON v.library_id = l.id
+            WHERE l.name = ?
+              AND COALESCE(v.name, '') = COALESCE(?, '')
+              AND documents_fts MATCH ?
+            ORDER BY fts_score
+            LIMIT ?
+          )
           SELECT
-            dv.rowid as id,
-            dv.distance as vec_distance
-          FROM documents_vec dv
-          JOIN versions v ON dv.version_id = v.id
-          JOIN libraries l ON v.library_id = l.id
-          WHERE l.name = ?
-            AND COALESCE(v.name, '') = COALESCE(?, '')
-            AND dv.embedding MATCH ?
-            AND dv.k = ?
-          ORDER BY dv.distance
-        ),
-        fts_scores AS (
+            d.id,
+            d.content,
+            d.metadata,
+            COALESCE(1 / (1 + v.vec_distance), 0) as vec_score,
+            COALESCE(-MIN(f.fts_score, 0), 0) as fts_score
+          FROM documents d
+          LEFT JOIN vec_distances v ON d.id = v.id
+          LEFT JOIN fts_scores f ON d.id = f.id
+          WHERE (v.id IS NOT NULL OR f.id IS NOT NULL)
+            AND NOT EXISTS (
+              SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
+              WHERE je.value = 'structural'
+            )
+        `);
+
+        const rawResults = stmt.all(
+          library.toLowerCase(),
+          normalizedVersion,
+          JSON.stringify(embedding),
+          vectorSearchK,
+          library.toLowerCase(),
+          normalizedVersion,
+          ftsQuery,
+          overfetchLimit,
+        ) as RawSearchResult[];
+
+        // Apply RRF ranking with configurable weights
+        const rankedResults = this.assignRanks(rawResults);
+
+        // Sort by RRF score and take top results (truncate to original limit)
+        const topResults = rankedResults
+          .sort((a, b) => b.rrf_score - a.rrf_score)
+          .slice(0, limit);
+
+        return topResults.map((row) => ({
+          ...mapDbDocumentToDocument(row),
+          metadata: {
+            ...JSON.parse(row.metadata),
+            id: row.id,
+            score: row.rrf_score,
+            vec_rank: row.vec_rank,
+            fts_rank: row.fts_rank,
+          },
+        }));
+      } else {
+        // Fallback: full-text search only
+        const stmt = this.db.prepare(`
           SELECT
-            f.rowid as id,
+            d.id,
+            d.content,
+            d.metadata,
             bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
           FROM documents_fts f
           JOIN documents d ON f.rowid = d.id
@@ -1114,54 +1201,33 @@ export class DocumentStore {
           WHERE l.name = ?
             AND COALESCE(v.name, '') = COALESCE(?, '')
             AND documents_fts MATCH ?
+            AND NOT EXISTS (
+              SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
+              WHERE je.value = 'structural'
+            )
           ORDER BY fts_score
           LIMIT ?
-        )
-        SELECT
-          d.id,
-          d.content,
-          d.metadata,
-          COALESCE(1 / (1 + v.vec_distance), 0) as vec_score,
-          COALESCE(-MIN(f.fts_score, 0), 0) as fts_score
-        FROM documents d
-        LEFT JOIN vec_distances v ON d.id = v.id
-        LEFT JOIN fts_scores f ON d.id = f.id
-        WHERE (v.id IS NOT NULL OR f.id IS NOT NULL)
-          AND NOT EXISTS (
-            SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
-            WHERE je.value = 'structural'
-          )
-      `);
+        `);
 
-      const rawResults = stmt.all(
-        library.toLowerCase(),
-        normalizedVersion,
-        JSON.stringify(embedding),
-        vectorSearchK,
-        library.toLowerCase(),
-        normalizedVersion,
-        ftsQuery, // Use the dual-mode FTS query
-        overfetchLimit, // Use overfetch limit for FTS
-      ) as RawSearchResult[];
+        const rawResults = stmt.all(
+          library.toLowerCase(),
+          normalizedVersion,
+          ftsQuery,
+          limit,
+        ) as (RawSearchResult & { fts_score: number })[];
 
-      // Apply RRF ranking with configurable weights
-      const rankedResults = this.assignRanks(rawResults);
-
-      // Sort by RRF score and take top results (truncate to original limit)
-      const topResults = rankedResults
-        .sort((a, b) => b.rrf_score - a.rrf_score)
-        .slice(0, limit);
-
-      return topResults.map((row) => ({
-        ...mapDbDocumentToDocument(row),
-        metadata: {
-          ...JSON.parse(row.metadata),
-          id: row.id,
-          score: row.rrf_score,
-          vec_rank: row.vec_rank,
-          fts_rank: row.fts_rank,
-        },
-      }));
+        // Assign FTS ranks based on order (best score = rank 1)
+        return rawResults.map((row, index) => ({
+          ...mapDbDocumentToDocument(row),
+          metadata: {
+            ...JSON.parse(row.metadata),
+            id: row.id,
+            score: -row.fts_score, // Convert BM25 score to positive value for consistency
+            fts_rank: index + 1, // Assign rank based on order (1-based)
+            // Explicitly ensure vec_rank is not included in FTS-only mode
+          },
+        }));
+      }
     } catch (error) {
       throw new ConnectionError(
         `Failed to find documents by content with query "${query}"`,

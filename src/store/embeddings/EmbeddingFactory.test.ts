@@ -3,11 +3,8 @@ import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { VertexAIEmbeddings } from "@langchain/google-vertexai";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import {
-  createEmbeddingModel,
-  ModelConfigurationError,
-  UnsupportedProviderError,
-} from "./EmbeddingFactory";
+import { MissingCredentialsError } from "../errors";
+import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Suppress logger output during tests
@@ -55,7 +52,7 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should throw ModelConfigurationError for OpenAI without OPENAI_API_KEY", () => {
+  test("should throw MissingCredentialsError for OpenAI without OPENAI_API_KEY", () => {
     vi.stubGlobal("process", {
       env: {
         // Missing OPENAI_API_KEY
@@ -63,10 +60,10 @@ describe("createEmbeddingModel", () => {
     });
 
     expect(() => createEmbeddingModel("text-embedding-3-small")).toThrow(
-      ModelConfigurationError,
+      MissingCredentialsError,
     );
     expect(() => createEmbeddingModel("openai:text-embedding-3-small")).toThrow(
-      ModelConfigurationError,
+      MissingCredentialsError,
     );
   });
 
@@ -103,7 +100,7 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should throw ModelConfigurationError for Vertex AI without GOOGLE_APPLICATION_CREDENTIALS", () => {
+  test("should throw MissingCredentialsError for Vertex AI without GOOGLE_APPLICATION_CREDENTIALS", () => {
     vi.stubGlobal("process", {
       env: {
         // Missing GOOGLE_APPLICATION_CREDENTIALS
@@ -111,11 +108,11 @@ describe("createEmbeddingModel", () => {
     });
 
     expect(() => createEmbeddingModel("vertex:text-embedding-004")).toThrow(
-      ModelConfigurationError,
+      MissingCredentialsError,
     );
   });
 
-  test("should throw ModelConfigurationError for Gemini without GOOGLE_API_KEY", () => {
+  test("should throw MissingCredentialsError for Gemini without GOOGLE_API_KEY", () => {
     vi.stubGlobal("process", {
       env: {
         // Missing GOOGLE_API_KEY
@@ -123,7 +120,7 @@ describe("createEmbeddingModel", () => {
     });
 
     expect(() => createEmbeddingModel("gemini:gemini-embedding-exp-03-07")).toThrow(
-      ModelConfigurationError,
+      MissingCredentialsError,
     );
   });
 
@@ -139,7 +136,7 @@ describe("createEmbeddingModel", () => {
     expect(() => createEmbeddingModel("unknown:model")).toThrow(UnsupportedProviderError);
   });
 
-  test("should throw ModelConfigurationError for Azure OpenAI without required env vars", () => {
+  test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {
     // Override env to simulate missing Azure variables
     vi.stubGlobal("process", {
       env: {
@@ -151,11 +148,11 @@ describe("createEmbeddingModel", () => {
     });
 
     expect(() => createEmbeddingModel("microsoft:text-embedding-ada-002")).toThrow(
-      ModelConfigurationError,
+      MissingCredentialsError,
     );
   });
 
-  test("should throw ModelConfigurationError for AWS Bedrock without required env vars", () => {
+  test("should throw MissingCredentialsError for AWS Bedrock without required env vars", () => {
     // Override env to simulate missing AWS credentials
     vi.stubGlobal("process", {
       env: {
@@ -164,7 +161,7 @@ describe("createEmbeddingModel", () => {
     });
 
     expect(() => createEmbeddingModel("aws:amazon.titan-embed-text-v1")).toThrow(
-      ModelConfigurationError,
+      MissingCredentialsError,
     );
   });
 

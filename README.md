@@ -25,7 +25,7 @@ LLM-assisted coding promises speed and efficiency, but often falls short due to:
 - **Accurate & Version-Aware AI Responses:** Provides up-to-date, version-specific documentation to reduce AI hallucinations and improve code accuracy.
 - **Broad Source Compatibility:** Scrapes documentation from websites, GitHub repos, package manager sites (npm, PyPI), and local file directories.
 - **Advanced Search & Processing:** Intelligently chunks documentation semantically, generates embeddings, and combines vector similarity with full-text search.
-- **Flexible Embedding Models:** Supports various providers including OpenAI (and compatible APIs), Google Gemini/Vertex AI, Azure OpenAI, and AWS Bedrock.
+- **Flexible Embedding Models:** Supports various providers including OpenAI (and compatible APIs), Google Gemini/Vertex AI, Azure OpenAI, and AWS Bedrock. Vector search is optional.
 - **Enterprise Authentication:** Optional OAuth2/OIDC authentication with dynamic client registration for secure deployments.
 - **Web Interface:** Easy-to-use web interface for searching and managing documentation.
 - **Local & Private:** Runs entirely on your machine, ensuring data and queries remain private.
@@ -56,14 +56,13 @@ Run a standalone server that includes both MCP endpoints and web interface in a 
 
    ```bash
    docker run --rm \
-     -e OPENAI_API_KEY="your-openai-api-key" \
      -v docs-mcp-data:/data \
      -p 6280:6280 \
      ghcr.io/arabold/docs-mcp-server:latest \
      --protocol http --host 0.0.0.0 --port 6280
    ```
 
-   Replace `your-openai-api-key` with your actual OpenAI API key.
+   **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
 ### Option 2: npx
 
@@ -71,12 +70,12 @@ Run a standalone server that includes both MCP endpoints and web interface in a 
 2. **Start the server:**
 
    ```bash
-   OPENAI_API_KEY="your-openai-api-key" npx @arabold/docs-mcp-server@latest
+   npx @arabold/docs-mcp-server@latest
    ```
 
-   Replace `your-openai-api-key` with your actual OpenAI API key.
-
    This will run the server on port 6280 by default.
+
+   **Optional:** Prefix with `OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
 ### Configure Your MCP Client
 
@@ -161,6 +160,21 @@ Add this to your MCP settings (VS Code, Claude Desktop, etc.):
     "docs-mcp-server": {
       "command": "npx",
       "args": ["@arabold/docs-mcp-server@latest"],
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
+
+**Optional:** To enable vector search for improved results, add an `env` section with your API key:
+
+```json
+{
+  "mcpServers": {
+    "docs-mcp-server": {
+      "command": "npx",
+      "args": ["@arabold/docs-mcp-server@latest"],
       "env": {
         "OPENAI_API_KEY": "sk-proj-..." // Your OpenAI API key
       },
@@ -171,7 +185,7 @@ Add this to your MCP settings (VS Code, Claude Desktop, etc.):
 }
 ```
 
-Replace `sk-proj-...` with your OpenAI API key and restart your application.
+Restart your application after updating the config.
 
 ### Adding Library Documentation
 
@@ -306,7 +320,7 @@ This architecture allows independent scaling of processing (workers) and user in
 
 ## Configuration
 
-Commands that perform search or indexing operations require embedding configuration to be explicitly set via environment variables.
+The Docs MCP Server can run without any configuration and will use full-text search only. To enable vector search for improved results, configure an embedding provider via environment variables.
 
 The Docs MCP Server is configured via environment variables. Set these in your shell, Docker, or MCP client config.
 
