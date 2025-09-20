@@ -1082,7 +1082,11 @@ export class DocumentStore {
         FROM documents d
         LEFT JOIN vec_distances v ON d.id = v.id
         LEFT JOIN fts_scores f ON d.id = f.id
-        WHERE v.id IS NOT NULL OR f.id IS NOT NULL
+        WHERE (v.id IS NOT NULL OR f.id IS NOT NULL)
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
+            WHERE je.value = 'structural'
+          )
       `);
 
       const rawResults = stmt.all(
@@ -1301,6 +1305,37 @@ export class DocumentStore {
       return rows.map((row) => mapDbDocumentToDocument(row));
     } catch (error) {
       throw new ConnectionError("Failed to fetch documents by IDs", error);
+    }
+  }
+
+  /**
+   * Fetches all document chunks for a specific URL within a library and version.
+   * Returns documents sorted by their sort_order for proper reassembly.
+   */
+  async findChunksByUrl(
+    library: string,
+    version: string,
+    url: string,
+  ): Promise<Document[]> {
+    try {
+      const normalizedVersion = version.toLowerCase();
+      const stmt = this.db.prepare(
+        `SELECT d.* FROM documents d
+         JOIN libraries l ON d.library_id = l.id
+         JOIN versions v ON d.version_id = v.id
+         WHERE l.name = ? 
+           AND COALESCE(v.name, '') = COALESCE(?, '')
+           AND d.url = ?
+         ORDER BY d.sort_order`,
+      );
+      const rows = stmt.all(
+        library.toLowerCase(),
+        normalizedVersion,
+        url,
+      ) as DbDocument[];
+      return rows.map((row) => mapDbDocumentToDocument(row));
+    } catch (error) {
+      throw new ConnectionError(`Failed to fetch documents by URL ${url}`, error);
     }
   }
 }

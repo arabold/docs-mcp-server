@@ -1,9 +1,6 @@
-import { GreedySplitter } from "../../splitter";
-import { TextDocumentSplitter } from "../../splitter/TextDocumentSplitter";
-import {
-  SPLITTER_MIN_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-} from "../../utils/config";
+import { TreesitterSourceCodeSplitter } from "../../splitter/treesitter/TreesitterSourceCodeSplitter";
+import type { DocumentSplitter } from "../../splitter/types";
+import { SPLITTER_PREFERRED_CHUNK_SIZE } from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
@@ -13,22 +10,22 @@ import { BasePipeline } from "./BasePipeline";
 import type { ProcessedContent } from "./types";
 
 /**
- * Pipeline for processing source code content with semantic splitting and size optimization.
- * Handles programming language files by using TextDocumentSplitter for line-based splitting
- * with proper language detection, followed by GreedySplitter for universal size optimization.
+ * Pipeline for processing source code content with semantic, structure-aware splitting.
+ * Uses TreesitterSourceCodeSplitter for language-aware hierarchical chunking that preserves
+ * {level, path} integrity for reassembly. No greedy size-based merging is applied because it
+ * would blur structural boundaries and degrade hierarchical reconstruction quality.
  */
 export class SourceCodePipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
-  private readonly splitter: GreedySplitter;
+  private readonly splitter: DocumentSplitter;
 
   constructor(chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
     super();
     // Source code processing uses minimal middleware since we preserve raw structure
     this.middleware = [];
 
-    // Create the two-phase splitting: semantic + size optimization
-    const textSplitter = new TextDocumentSplitter({ maxChunkSize: chunkSize });
-    this.splitter = new GreedySplitter(textSplitter, SPLITTER_MIN_CHUNK_SIZE, chunkSize);
+    // Semantic, structure-preserving splitter only (no greedy size merging to keep hierarchy intact)
+    this.splitter = new TreesitterSourceCodeSplitter({ maxChunkSize: chunkSize });
   }
 
   canProcess(rawContent: RawContent): boolean {

@@ -408,6 +408,48 @@ describe("DocumentStore - Integration Tests", () => {
         }
       }
     });
+
+    it("filters out structural chunks from search results", async () => {
+      // Prepare two docs that both match the query text but one is structural
+      const docs: Document[] = [
+        {
+          pageContent: "Anchor content shared phrase inside structural container",
+          metadata: {
+            title: "StructuralContainer",
+            url: "https://example.com/struct",
+            path: ["struct"],
+            // Simulate splitter output marking this as structural
+            types: ["code", "structural"],
+          },
+        },
+        {
+          pageContent: "Anchor content shared phrase inside leaf content section",
+          metadata: {
+            title: "LeafContent",
+            url: "https://example.com/leaf",
+            path: ["leaf"],
+            types: ["code"],
+          },
+        },
+      ];
+
+      await store.addDocuments("structfilter", "1.0.0", docs);
+
+      // Query term appears in both documents' content, but structural one must be filtered
+      const results = await store.findByContent(
+        "structfilter",
+        "1.0.0",
+        "Anchor content shared phrase",
+        10,
+      );
+
+      expect(results.length).toBe(1);
+      expect(results[0].metadata.title).toBe("LeafContent");
+      const titles = results.map((r) => r.metadata.title);
+      expect(titles).not.toContain("StructuralContainer");
+      // Ensure metadata does not accidentally surface structural types
+      expect((results[0].metadata.types || []).includes("structural")).toBe(false);
+    });
   });
 
   describe("Version Isolation", () => {

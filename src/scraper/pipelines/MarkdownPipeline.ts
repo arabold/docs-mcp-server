@@ -47,10 +47,7 @@ export class MarkdownPipeline extends BasePipeline {
 
   canProcess(rawContent: RawContent): boolean {
     if (!rawContent.mimeType) return false;
-    return (
-      MimeTypeUtils.isMarkdown(rawContent.mimeType) ||
-      MimeTypeUtils.isText(rawContent.mimeType)
-    );
+    return MimeTypeUtils.isMarkdown(rawContent.mimeType);
   }
 
   async process(

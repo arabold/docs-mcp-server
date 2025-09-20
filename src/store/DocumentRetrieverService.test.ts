@@ -300,4 +300,480 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       mimeType: undefined,
     });
   });
+
+  describe("Context Retrieval and Hierarchical Reassembly", () => {
+    it("should find parent chunks based on path hierarchy", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Child chunk with path ["Chapter 1", "Section 1.1"]
+      const childResult = new Document({
+        id: "child1",
+        pageContent: "Child content",
+        metadata: {
+          url: "https://example.com",
+          score: 0.8,
+          path: ["Chapter 1", "Section 1.1"],
+          level: 2,
+        },
+      });
+
+      // Parent chunk with path ["Chapter 1"]
+      const parentChunk = new Document({
+        id: "parent1",
+        pageContent: "Parent content",
+        metadata: {
+          url: "https://example.com",
+          path: ["Chapter 1"],
+          level: 1,
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([childResult]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parentChunk);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
+        parentChunk,
+        childResult,
+      ]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(mockDocumentStore.findParentChunk).toHaveBeenCalledWith(
+        library,
+        version,
+        "child1",
+      );
+      expect(results).toEqual([
+        {
+          url: "https://example.com",
+          content: "Parent content\n\nChild content",
+          score: 0.8,
+          mimeType: undefined,
+        },
+      ]);
+    });
+
+    it("should find sibling chunks at the same hierarchical level", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Main result chunk
+      const mainResult = new Document({
+        id: "main1",
+        pageContent: "Main content",
+        metadata: {
+          url: "https://example.com",
+          score: 0.9,
+          path: ["Chapter 1", "Section 1.2"],
+          level: 2,
+        },
+      });
+
+      // Preceding sibling with same path level
+      const precedingSibling = new Document({
+        id: "preceding1",
+        pageContent: "Preceding content",
+        metadata: {
+          url: "https://example.com",
+          path: ["Chapter 1", "Section 1.1"],
+          level: 2,
+        },
+      });
+
+      // Subsequent sibling with same path level
+      const subsequentSibling = new Document({
+        id: "subsequent1",
+        pageContent: "Subsequent content",
+        metadata: {
+          url: "https://example.com",
+          path: ["Chapter 1", "Section 1.3"],
+          level: 2,
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([mainResult]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([
+        precedingSibling,
+      ]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([
+        subsequentSibling,
+      ]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
+        precedingSibling,
+        mainResult,
+        subsequentSibling,
+      ]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(mockDocumentStore.findPrecedingSiblingChunks).toHaveBeenCalledWith(
+        library,
+        version,
+        "main1",
+        1,
+      );
+      expect(mockDocumentStore.findSubsequentSiblingChunks).toHaveBeenCalledWith(
+        library,
+        version,
+        "main1",
+        2,
+      );
+      expect(results).toEqual([
+        {
+          url: "https://example.com",
+          content: "Preceding content\n\nMain content\n\nSubsequent content",
+          score: 0.9,
+          mimeType: undefined,
+        },
+      ]);
+    });
+
+    it("should find child chunks at deeper hierarchical levels", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Parent result chunk
+      const parentResult = new Document({
+        id: "parent1",
+        pageContent: "Parent section",
+        metadata: {
+          url: "https://example.com",
+          score: 0.7,
+          path: ["Chapter 1"],
+          level: 1,
+        },
+      });
+
+      // Child chunks at deeper level
+      const child1 = new Document({
+        id: "child1",
+        pageContent: "First subsection",
+        metadata: {
+          url: "https://example.com",
+          path: ["Chapter 1", "Section 1.1"],
+          level: 2,
+        },
+      });
+
+      const child2 = new Document({
+        id: "child2",
+        pageContent: "Second subsection",
+        metadata: {
+          url: "https://example.com",
+          path: ["Chapter 1", "Section 1.2"],
+          level: 2,
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([parentResult]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([child1, child2]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
+        parentResult,
+        child1,
+        child2,
+      ]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(mockDocumentStore.findChildChunks).toHaveBeenCalledWith(
+        library,
+        version,
+        "parent1",
+        3,
+      );
+      expect(results).toEqual([
+        {
+          url: "https://example.com",
+          content: "Parent section\n\nFirst subsection\n\nSecond subsection",
+          score: 0.7,
+          mimeType: undefined,
+        },
+      ]);
+    });
+
+    it("should demonstrate sort_order-based reassembly within same URL", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Multiple chunks from same document/URL, returned out of sort_order
+      const chunk3 = new Document({
+        id: "chunk3",
+        pageContent: "Third chunk",
+        metadata: {
+          url: "https://example.com",
+          score: 0.6,
+          path: ["Section C"],
+          level: 1,
+        },
+      });
+
+      const chunk1 = new Document({
+        id: "chunk1",
+        pageContent: "First chunk",
+        metadata: {
+          url: "https://example.com",
+          score: 0.8,
+          path: ["Section A"],
+          level: 1,
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([chunk3, chunk1]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+
+      // findChunksByIds returns chunks in sort_order (simulating database ORDER BY)
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([chunk1, chunk3]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      // Should be reassembled in sort_order, not in initial search result order
+      expect(results).toEqual([
+        {
+          url: "https://example.com",
+          content: "First chunk\n\nThird chunk",
+          score: 0.8, // Highest score from the chunks
+          mimeType: undefined,
+        },
+      ]);
+    });
+
+    it("should demonstrate complex hierarchical context expansion", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Main search result - a subsection
+      const mainResult = new Document({
+        id: "main1",
+        pageContent: "Key subsection content",
+        metadata: {
+          url: "https://example.com",
+          score: 0.9,
+          path: ["Guide", "Installation", "Setup"],
+          level: 3,
+        },
+      });
+
+      // Parent at level 2
+      const parent = new Document({
+        id: "parent1",
+        pageContent: "Installation overview",
+        metadata: {
+          url: "https://example.com",
+          path: ["Guide", "Installation"],
+          level: 2,
+        },
+      });
+
+      // Preceding sibling at same level
+      const precedingSibling = new Document({
+        id: "preceding1",
+        pageContent: "Prerequisites section",
+        metadata: {
+          url: "https://example.com",
+          path: ["Guide", "Installation", "Prerequisites"],
+          level: 3,
+        },
+      });
+
+      // Child at deeper level
+      const child = new Document({
+        id: "child1",
+        pageContent: "Detailed setup steps",
+        metadata: {
+          url: "https://example.com",
+          path: ["Guide", "Installation", "Setup", "Steps"],
+          level: 4,
+        },
+      });
+
+      // Subsequent sibling
+      const subsequentSibling = new Document({
+        id: "subsequent1",
+        pageContent: "Configuration section",
+        metadata: {
+          url: "https://example.com",
+          path: ["Guide", "Installation", "Configuration"],
+          level: 3,
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([mainResult]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parent);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([
+        precedingSibling,
+      ]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([
+        subsequentSibling,
+      ]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([child]);
+
+      // Database returns in sort_order
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
+        parent,
+        precedingSibling,
+        mainResult,
+        child,
+        subsequentSibling,
+      ]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toEqual([
+        {
+          url: "https://example.com",
+          content:
+            "Installation overview\n\nPrerequisites section\n\nKey subsection content\n\nDetailed setup steps\n\nConfiguration section",
+          score: 0.9,
+          mimeType: undefined,
+        },
+      ]);
+    });
+  });
+
+  describe("Content-Type-Aware Assembly Strategy", () => {
+    it("should use MarkdownAssemblyStrategy for markdown content", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const markdownChunk = new Document({
+        id: "md1",
+        pageContent: "# Heading\n\nSome content",
+        metadata: {
+          url: "https://example.com/doc.md",
+          score: 0.9,
+          mimeType: "text/markdown",
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([markdownChunk]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([markdownChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/doc.md",
+        content: "# Heading\n\nSome content", // Should use "\n\n" joining for markdown
+        score: 0.9,
+        mimeType: "text/markdown",
+      });
+    });
+
+    it("should use HierarchicalAssemblyStrategy for source code content", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const codeChunk = new Document({
+        id: "ts1",
+        pageContent: "function test() {\n  return 'hello';\n}",
+        metadata: {
+          url: "https://example.com/code.ts",
+          score: 0.9,
+          mimeType: "text/x-typescript",
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([codeChunk]);
+      // Mock the hierarchical strategy's fallback behavior since we don't have full hierarchy implementation
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([codeChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/code.ts",
+        content: "function test() {\n  return 'hello';\n}", // Should use simple concatenation for code
+        score: 0.9,
+        mimeType: "text/x-typescript",
+      });
+    });
+
+    it("should use HierarchicalAssemblyStrategy for JSON content", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const jsonChunk = new Document({
+        id: "json1",
+        pageContent: '{"key": "value"}',
+        metadata: {
+          url: "https://example.com/config.json",
+          score: 0.9,
+          mimeType: "application/json",
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([jsonChunk]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([jsonChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/config.json",
+        content: '{"key": "value"}', // Should use simple concatenation for JSON
+        score: 0.9,
+        mimeType: "application/json",
+      });
+    });
+
+    it("should handle missing MIME type with default MarkdownAssemblyStrategy", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      const unknownChunk = new Document({
+        id: "unknown1",
+        pageContent: "Some content",
+        metadata: {
+          url: "https://example.com/unknown",
+          score: 0.9,
+          // No mimeType specified
+        },
+      });
+
+      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([unknownChunk]);
+      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([unknownChunk]);
+
+      const results = await retrieverService.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual({
+        url: "https://example.com/unknown",
+        content: "Some content", // Should default to markdown strategy
+        score: 0.9,
+        mimeType: undefined,
+      });
+    });
+  });
 });

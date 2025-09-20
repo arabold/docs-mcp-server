@@ -56,7 +56,7 @@ export class GreedySplitter implements DocumentSplitter {
           currentChunk = this.cloneChunk(nextChunk);
           continue;
         }
-        currentChunk.content += `\n${nextChunk.content}`;
+        currentChunk.content += `${currentChunk.content.endsWith("\n") ? "" : "\n"}${nextChunk.content}`;
         currentChunk.section = this.mergeSectionInfo(currentChunk, nextChunk);
         currentChunk.types = this.mergeTypes(currentChunk.types, nextChunk.types);
       } else {
