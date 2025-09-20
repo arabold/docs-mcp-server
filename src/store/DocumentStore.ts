@@ -11,6 +11,7 @@ import {
   SEARCH_OVERFETCH_FACTOR,
   SEARCH_WEIGHT_FTS,
   SEARCH_WEIGHT_VEC,
+  VECTOR_SEARCH_MULTIPLIER,
 } from "../utils/config";
 import { logger } from "../utils/logger";
 import { applyMigrations } from "./applyMigrations";
@@ -1086,8 +1087,7 @@ export class DocumentStore {
       const overfetchLimit = Math.max(1, limit * SEARCH_OVERFETCH_FACTOR);
 
       // Use a multiplier to cast a wider net in vector search before final ranking
-      const vectorSearchMultiplier = 10;
-      const vectorSearchK = overfetchLimit * vectorSearchMultiplier;
+      const vectorSearchK = overfetchLimit * VECTOR_SEARCH_MULTIPLIER;
 
       const stmt = this.db.prepare(`
         WITH vec_distances AS (

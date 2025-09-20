@@ -82,3 +82,9 @@ export const SEARCH_WEIGHT_VEC = 1.0;
  * Weight applied to full-text search scores in hybrid search ranking.
  */
 export const SEARCH_WEIGHT_FTS = 1.0;
+
+/**
+ * Multiplier to cast a wider net in vector search before final ranking.
+ * Used to increase the number of vector search candidates retrieved.
+ */
+export const VECTOR_SEARCH_MULTIPLIER = 10;
