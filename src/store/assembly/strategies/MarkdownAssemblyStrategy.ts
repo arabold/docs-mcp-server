@@ -58,16 +58,15 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
   ): Promise<Document[]> {
     const allChunkIds = new Set<string>();
 
-    // Process each initial chunk to gather related chunk IDs
-    for (const doc of initialChunks) {
-      const relatedIds = await this.getRelatedChunkIds(
-        library,
-        version,
-        doc,
-        documentStore,
-      );
+    // Process all initial chunks in parallel to gather related chunk IDs
+    const relatedIdsPromises = initialChunks.map((doc) =>
+      this.getRelatedChunkIds(library, version, doc, documentStore),
+    );
 
-      // Add all related IDs to the set (automatically deduplicates)
+    const relatedIdsResults = await Promise.all(relatedIdsPromises);
+
+    // Add all related IDs to the set (automatically deduplicates)
+    for (const relatedIds of relatedIdsResults) {
       for (const id of relatedIds) {
         allChunkIds.add(id);
       }

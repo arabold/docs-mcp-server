@@ -341,7 +341,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
         }
       }
 
-      // Apply two-phase splitting - use TextContentSplitter on this segment
+      // If segment is too large, delegate to TextContentSplitter
       const segmentChunks = await this.splitContentIntoChunks(
         segment.content,
         path,

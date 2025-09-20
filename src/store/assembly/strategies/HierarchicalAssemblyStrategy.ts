@@ -17,14 +17,17 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
    * Determines if this strategy can handle the given content type.
    * Handles structured content like source code, JSON, configuration files.
    */
-  canHandle(contentType: string): boolean {
+  canHandle(mimeType?: string): boolean {
+    if (!mimeType) {
+      return false;
+    }
     // Source code content
-    if (MimeTypeUtils.isSourceCode(contentType)) {
+    if (MimeTypeUtils.isSourceCode(mimeType)) {
       return true;
     }
 
     // JSON content
-    if (MimeTypeUtils.isJson(contentType)) {
+    if (MimeTypeUtils.isJson(mimeType)) {
       return true;
     }
 
@@ -491,7 +494,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     // Try to find the opening chunk for this ancestor path
     try {
       // Query for chunks with the exact ancestor path
-      const ancestorChunks = await this.findChunksByPath(
+      const ancestorChunks = await this.findChunksByExactPath(
         library,
         version,
         referenceChunk.metadata.url as string,
@@ -512,52 +515,49 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   }
 
   /**
-   * Finds all chunks for a given path within a document.
-   * Uses existing DocumentStore methods to locate chunks by path.
+   * Finds all chunks with an exact path match within a specific document.
+   * More efficient than searching across all chunks by first filtering by URL.
    */
-  private async findChunksByPath(
+  private async findChunksByExactPath(
     library: string,
     version: string,
     url: string,
     path: string[],
     documentStore: DocumentStore,
   ): Promise<Document[]> {
-    const chunks: Document[] = [];
-
     try {
-      // For root path, we need to find chunks with empty path or minimal path
+      // For root path, return empty - no specific chunks to find
       if (path.length === 0) {
-        // This is tricky - we need to find root-level chunks
-        // For now, we'll return empty and let the caller handle it
         logger.debug("Root path requested - no chunks found");
-        return chunks;
+        return [];
       }
 
-      // Try to find chunks that have this exact path
-      // We'll use a different approach - search for chunks that could be at this path level
-      // This is a simplified implementation that works with the existing DocumentStore methods
+      // First, get all chunks from the specific document URL (much more efficient)
+      const allChunks = await documentStore.findChunksByUrl(library, version, url);
 
-      // For container chunks, we typically want the "opening" chunk
-      // We'll try to find a chunk that has this path as its direct path
-      const allChunks = await documentStore.findByContent(library, version, "", 1000); // Get some chunks
+      if (allChunks.length === 0) {
+        return [];
+      }
 
-      for (const chunk of allChunks) {
+      // Filter in memory for chunks with exact path match
+      const matchingChunks = allChunks.filter((chunk) => {
         const chunkPath = (chunk.metadata.path as string[]) ?? [];
-        if (
-          chunkPath.length === path.length &&
-          chunkPath.every((part, index) => part === path[index]) &&
-          chunk.metadata.url === url
-        ) {
-          chunks.push(chunk);
-        }
-      }
 
-      logger.debug(`Found ${chunks.length} chunks for path: ${path.join("/")}`);
+        // Path must match exactly
+        if (chunkPath.length !== path.length) return false;
+
+        // All path elements must match
+        return chunkPath.every((part, index) => part === path[index]);
+      });
+
+      logger.debug(
+        `Found ${matchingChunks.length} chunks for exact path: ${path.join("/")}`,
+      );
+      return matchingChunks;
     } catch (error) {
-      logger.warn(`Error finding chunks for path ${path.join("/")}: ${error}`);
+      logger.warn(`Error finding chunks for exact path ${path.join("/")}: ${error}`);
+      return [];
     }
-
-    return chunks;
   }
 
   /**

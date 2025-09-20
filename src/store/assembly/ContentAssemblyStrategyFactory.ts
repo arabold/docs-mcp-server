@@ -6,7 +6,6 @@ import type { ContentAssemblyStrategy } from "./types";
  * Creates the appropriate assembly strategy based on content MIME type.
  *
  * @param mimeType The MIME type of the content (optional)
- * @param options Configuration options for the strategy
  * @returns The appropriate strategy instance
  */
 export function createContentAssemblyStrategy(
