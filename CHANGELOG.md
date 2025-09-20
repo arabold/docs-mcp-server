@@ -1,3 +1,23 @@
+# [1.24.0](https://github.com/arabold/docs-mcp-server/compare/v1.23.0...v1.24.0) (2025-09-20)
+
+
+### Bug Fixes
+
+* ensure proper shutdown ([d20ea9e](https://github.com/arabold/docs-mcp-server/commit/d20ea9ef88527937686935786f3bc90d37398a3c))
+* remove prompts capability from MCP server ([615247a](https://github.com/arabold/docs-mcp-server/commit/615247ad8eab9aa0cd4a4cdccb3e755e5abe7311))
+
+
+### Features
+
+* add host configuration for server binding ([9500f65](https://github.com/arabold/docs-mcp-server/commit/9500f658b5f24786ac601dbe0d403ae3f52065e8))
+* enhance MIME type detection for source code files and update related tests ([ee966c1](https://github.com/arabold/docs-mcp-server/commit/ee966c1b0c464be8c318c6540ee8657f95eea060))
+* implement cleanup functionality across various components to prevent resource leaks ([a4132e4](https://github.com/arabold/docs-mcp-server/commit/a4132e46fc625a7d4fa5b70389c2e7074f0eea7c))
+* implement native GitHub repository crawling ([5344a49](https://github.com/arabold/docs-mcp-server/commit/5344a4952ec3aed3438bd6e7faeab6abe5f42390))
+* introduce JSON processing capabilities across scraper strategies ([a69da82](https://github.com/arabold/docs-mcp-server/commit/a69da827d8984eb545f49f693c9c0208bbaebdf6))
+* **middleware:** add shadow DOM extraction support ([d15bd42](https://github.com/arabold/docs-mcp-server/commit/d15bd42332c03a2b2a7acf3f1a51507c24df3e15))
+* **splitters:** introduce JsonDocumentSplitter and PassThroughSplitter ([3001178](https://github.com/arabold/docs-mcp-server/commit/3001178bafa8dc5c6df12fb0fd5f1906cf69d9fb))
+* **web:** improved rendering of non-HTML documents ([e14f0fe](https://github.com/arabold/docs-mcp-server/commit/e14f0fe5b9e45b384c21e40400bb968380de49d3))
+
 # [1.23.0](https://github.com/arabold/docs-mcp-server/compare/v1.22.1...v1.23.0) (2025-08-28)
 
 
