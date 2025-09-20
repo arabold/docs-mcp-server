@@ -493,6 +493,79 @@ export { processUserData };`;
       const minLevel = Math.min(...chunks.map((c) => c.section.level));
       expect(minLevel).toBe(1);
     });
+
+    it("does not over-fragment method bodies into micro-chunks (TypeScript)", async () => {
+      const tsCode = `
+        export class DocumentRetrieverService {
+          private documentStore: any;
+
+          constructor(documentStore: any) {
+            this.documentStore = documentStore;
+          }
+
+          private async getRelatedChunkIds(
+            library: string,
+            version: string,
+            doc: any,
+            siblingLimit = 2,
+            childLimit = 5,
+          ): Promise<{
+            url: string;
+            hitId: string;
+            relatedIds: Set<string>;
+            score: number;
+          }> {
+            const id = doc.id as string;
+            for (let i = 0; i < 3; i++) {
+              // loop body
+              if (i === 2) {
+                // inner branch
+              }
+            }
+            return { url: "", hitId: id, relatedIds: new Set(), score: 1 };
+          }
+
+          async search(
+            library: string,
+            version: string | null | undefined,
+            query: string,
+            limit?: number,
+          ): Promise<any[]> {
+            return [];
+          }
+        }
+      `;
+
+      const tsSplitter = new TreesitterSourceCodeSplitter();
+      const chunks = await tsSplitter.splitText(tsCode, "text/x-typescript");
+
+      const methodChunks = chunks.filter(
+        (c) => c.section.path.join("/") === "DocumentRetrieverService/getRelatedChunkIds",
+      );
+      expect(methodChunks.length).toBe(1);
+
+      const nestedUnderMethod = chunks.filter(
+        (c) =>
+          c.section.path.length > 2 &&
+          c.section.path[0] === "DocumentRetrieverService" &&
+          c.section.path[1] === "getRelatedChunkIds",
+      );
+      expect(nestedUnderMethod.length).toBe(0);
+
+      const classChunk2 = chunks.find(
+        (c) =>
+          c.section.path.length === 1 && c.section.path[0] === "DocumentRetrieverService",
+      );
+      expect(classChunk2).toBeDefined();
+      const constructorChunk = chunks.find(
+        (c) => c.section.path.join("/") === "DocumentRetrieverService/constructor",
+      );
+      expect(constructorChunk).toBeDefined();
+      const searchChunks = chunks.filter(
+        (c) => c.section.path.join("/") === "DocumentRetrieverService/search",
+      );
+      expect(searchChunks.length).toBeGreaterThanOrEqual(1);
+    });
   });
 
   describe("language support", () => {

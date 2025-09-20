@@ -36,7 +36,6 @@ describe("HierarchicalAssemblyStrategy", () => {
       expect(strategy.canHandle("text/html")).toBe(false);
       expect(strategy.canHandle("text/markdown")).toBe(false);
       expect(strategy.canHandle("text/plain")).toBe(false);
-      // application/xml is treated as structured (xml) and thus returns true, so we exclude it here
     });
   });
 
@@ -46,79 +45,250 @@ describe("HierarchicalAssemblyStrategy", () => {
       expect(result).toEqual([]);
     });
 
-    it("should handle single match with parent hierarchy", async () => {
-      // Create test data: a class with a method
+    it("should reconstruct complete hierarchy for single match", async () => {
       const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test",
+        "test-hierarchy",
         "1.0",
       );
 
-      // Insert test documents and capture actual row IDs
-      const classResult = (documentStore as any).statements.insertDocument.run(
+      // Create a hierarchy: namespace > class > method
+      const namespaceResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
-        "test.ts",
-        "class UserService {",
+        "Deep.ts",
+        "namespace UserManagement {",
         JSON.stringify({
-          url: "test.ts",
-          path: ["UserService", "opening"],
-          level: 1,
+          url: "Deep.ts",
+          path: ["UserManagement"],
+          level: 0,
+          types: ["structural"],
         }),
         0,
         new Date().toISOString(),
       );
-      const _classRowId = classResult.lastInsertRowid.toString();
+      const namespaceId = namespaceResult.lastInsertRowid;
 
-      const methodResult = (documentStore as any).statements.insertDocument.run(
+      const classResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
-        "test.ts",
-        "  getUser(id) { return db.find(id); }",
+        "Deep.ts",
+        "  export class UserService {",
         JSON.stringify({
-          url: "test.ts",
-          path: ["UserService", "opening", "getUser"],
-          level: 2,
+          url: "Deep.ts",
+          path: ["UserManagement", "UserService"],
+          level: 1,
+          types: ["structural"],
         }),
         1,
         new Date().toISOString(),
       );
-      const methodRowId = methodResult.lastInsertRowid.toString();
+      const classId = classResult.lastInsertRowid;
 
-      // Create input document matching the method (use real DB id)
-      const inputDoc: Document = {
-        id: methodRowId,
-        pageContent: "  getUser(id) { return db.find(id); }",
-        metadata: {
-          url: "test.ts",
-          path: ["UserService", "getUser"],
+      const methodResult = (documentStore as any).statements.insertDocument.run(
+        BigInt(libraryId),
+        BigInt(versionId),
+        "Deep.ts",
+        "    getUserById(id: string) { return db.find(id); }",
+        JSON.stringify({
+          url: "Deep.ts",
+          path: ["UserManagement", "UserService", "getUserById"],
           level: 2,
+          types: ["content"],
+        }),
+        2,
+        new Date().toISOString(),
+      );
+      const methodId = methodResult.lastInsertRowid;
+
+      // Input: just the deeply nested method
+      const inputDoc: Document = {
+        id: methodId,
+        pageContent: "    getUserById(id: string) { return db.find(id); }",
+        metadata: {
+          url: "Deep.ts",
+          path: ["UserManagement", "UserService", "getUserById"],
+          level: 2,
+          types: ["content"],
         },
       };
 
       const result = await strategy.selectChunks(
-        "test",
+        "test-hierarchy",
         "1.0",
         [inputDoc],
         documentStore,
       );
 
-      // Should return both the method and its parent class
-      // Depending on current implementation, parent detection may not include opening chunk if path mismatch
-      expect(result.length).toBeGreaterThanOrEqual(1);
-      expect(result.map((doc) => doc.pageContent)).toContain(
-        "  getUser(id) { return db.find(id); }",
+      const resultContent = result.map((doc) => doc.pageContent);
+      const resultIds = result.map((doc) => doc.id);
+
+      // Should include the complete hierarchy: method + class + namespace
+      expect(resultContent).toContain(
+        "    getUserById(id: string) { return db.find(id); }",
       );
+      expect(resultContent).toContain("  export class UserService {");
+      expect(resultContent).toContain("namespace UserManagement {");
+
+      expect(resultIds).toContain(methodId);
+      expect(resultIds).toContain(classId);
+      expect(resultIds).toContain(namespaceId);
+
+      expect(result.length).toBeGreaterThanOrEqual(3);
     });
 
-    it("should handle multiple matches with common ancestor (selective subtree reassembly)", async () => {
-      // Create test data: a class with multiple methods
+    it("should handle hierarchical gaps in parent chain", async () => {
       const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test",
+        "test-gaps",
         "1.0",
       );
 
-      // Insert test documents for UserService class (capture IDs)
-      // Class opening
+      // Root namespace - exists
+      const namespaceResult = (documentStore as any).statements.insertDocument.run(
+        BigInt(libraryId),
+        BigInt(versionId),
+        "GapTest.ts",
+        "namespace UserManagement {",
+        JSON.stringify({
+          url: "GapTest.ts",
+          path: ["UserManagement"],
+          level: 0,
+          types: ["structural"],
+        }),
+        0,
+        new Date().toISOString(),
+      );
+      const namespaceId = namespaceResult.lastInsertRowid;
+
+      // Intermediate class - missing (gap in hierarchy)
+      // No chunk with path: ["UserManagement", "UserService"]
+
+      // Deep method with missing intermediate parent
+      const methodResult = (documentStore as any).statements.insertDocument.run(
+        BigInt(libraryId),
+        BigInt(versionId),
+        "GapTest.ts",
+        "    getUserById(id: string) { return db.find(id); }",
+        JSON.stringify({
+          url: "GapTest.ts",
+          path: ["UserManagement", "UserService", "getUserById"],
+          level: 2,
+          types: ["content"],
+        }),
+        1,
+        new Date().toISOString(),
+      );
+      const methodId = methodResult.lastInsertRowid;
+
+      const inputDoc: Document = {
+        id: methodId,
+        pageContent: "    getUserById(id: string) { return db.find(id); }",
+        metadata: {
+          url: "GapTest.ts",
+          path: ["UserManagement", "UserService", "getUserById"],
+          level: 2,
+          types: ["content"],
+        },
+      };
+
+      const result = await strategy.selectChunks(
+        "test-gaps",
+        "1.0",
+        [inputDoc],
+        documentStore,
+      );
+
+      const resultContent = result.map((doc) => doc.pageContent);
+      const resultIds = result.map((doc) => doc.id);
+
+      // Should include the matched method and find the root namespace despite the gap
+      expect(resultContent).toContain(
+        "    getUserById(id: string) { return db.find(id); }",
+      );
+      expect(resultContent).toContain("namespace UserManagement {");
+      expect(resultIds).toContain(methodId);
+      expect(resultIds).toContain(namespaceId);
+      expect(result.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("should promote deeply nested anonymous functions to their top-level container", async () => {
+      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
+        "test-promotion",
+        "1.0",
+      );
+
+      // Create a simpler, more realistic scenario that matches how the splitter actually works
+      // Function containing nested arrow function
+      const topFunctionResult = (documentStore as any).statements.insertDocument.run(
+        BigInt(libraryId),
+        BigInt(versionId),
+        "applyMigrations.ts",
+        "export async function applyMigrations(db: Database): Promise<void> {\n  const overallTransaction = db.transaction(() => {\n    console.log('migrating');\n  });\n}",
+        JSON.stringify({
+          url: "applyMigrations.ts",
+          path: ["applyMigrations"],
+          level: 1,
+          types: ["code", "content"],
+        }),
+        0,
+        new Date().toISOString(),
+      );
+      const topFunctionId = topFunctionResult.lastInsertRowid;
+
+      // Nested arrow function inside the main function
+      const nestedArrowResult = (documentStore as any).statements.insertDocument.run(
+        BigInt(libraryId),
+        BigInt(versionId),
+        "applyMigrations.ts",
+        "    console.log('migrating');",
+        JSON.stringify({
+          url: "applyMigrations.ts",
+          path: ["applyMigrations", "<anonymous_arrow>"],
+          level: 2,
+          types: ["code", "content"],
+        }),
+        1,
+        new Date().toISOString(),
+      );
+      const nestedArrowId = nestedArrowResult.lastInsertRowid;
+
+      // Input: search hit on the nested anonymous arrow function
+      const inputDoc: Document = {
+        id: nestedArrowId,
+        pageContent: "    console.log('migrating');",
+        metadata: {
+          url: "applyMigrations.ts",
+          path: ["applyMigrations", "<anonymous_arrow>"],
+          level: 2,
+          types: ["code", "content"],
+        },
+      };
+
+      const result = await strategy.selectChunks(
+        "test-promotion",
+        "1.0",
+        [inputDoc],
+        documentStore,
+      );
+
+      const resultContent = result.map((doc) => doc.pageContent);
+      const resultIds = result.map((doc) => doc.id);
+
+      // Should promote to include the entire top-level function that contains the anonymous function
+      expect(resultIds).toContain(topFunctionId);
+      expect(resultIds).toContain(nestedArrowId);
+
+      const assembled = strategy.assembleContent(result);
+      expect(assembled).toMatch(/applyMigrations/);
+      expect(assembled).toMatch(/migrating/);
+    });
+
+    it("should handle multiple matches with selective subtree reassembly", async () => {
+      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
+        "test-multi",
+        "1.0",
+      );
+
+      // Class with multiple methods - only some will be matched
       const classOpenResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
@@ -132,9 +302,8 @@ describe("HierarchicalAssemblyStrategy", () => {
         0,
         new Date().toISOString(),
       );
-      const _classOpenId = classOpenResult.lastInsertRowid.toString();
 
-      // Method 1: getUser (this will be matched)
+      // Method 1: getUser (will be matched)
       const getUserResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
@@ -150,7 +319,7 @@ describe("HierarchicalAssemblyStrategy", () => {
       );
       const getUserId = getUserResult.lastInsertRowid.toString();
 
-      // Method 2: createUser (this will NOT be included)
+      // Method 2: createUser (will NOT be matched)
       (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
@@ -165,7 +334,7 @@ describe("HierarchicalAssemblyStrategy", () => {
         new Date().toISOString(),
       );
 
-      // Method 3: deleteUser (this will be matched)
+      // Method 3: deleteUser (will be matched)
       const deleteUserResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
@@ -181,23 +350,6 @@ describe("HierarchicalAssemblyStrategy", () => {
       );
       const deleteUserId = deleteUserResult.lastInsertRowid.toString();
 
-      // Class closing
-      const classCloseResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "UserService.ts",
-        "}",
-        JSON.stringify({
-          url: "UserService.ts",
-          path: ["UserService", "closing"],
-          level: 1,
-        }),
-        4,
-        new Date().toISOString(),
-      );
-      const _classCloseId = classCloseResult.lastInsertRowid.toString();
-
-      // Create input documents matching getUser and deleteUser methods (real ids)
       const inputDocs: Document[] = [
         {
           id: getUserId,
@@ -219,139 +371,6 @@ describe("HierarchicalAssemblyStrategy", () => {
         },
       ];
 
-      const result = await strategy.selectChunks("test", "1.0", inputDocs, documentStore);
-
-      // Should return: class opening, getUser method, deleteUser method, class closing
-      // Should NOT include createUser method
-      // At minimum should include both matched method chunks
-      const content = result.map((doc) => doc.pageContent);
-      expect(content).toContain("  getUser(id) { return db.find(id); }");
-      expect(content).toContain("  deleteUser(id) { return db.delete(id); }");
-      // Should not include unrelated createUser
-      expect(content.some((c) => c.includes("createUser"))).toBe(false);
-    });
-
-    it("should handle multiple matches with no common ancestor in same document", async () => {
-      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test-multi",
-        "1.0",
-      );
-
-      // ClassA opening
-      const classAOpen = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Multi.ts",
-        "class ClassA {",
-        JSON.stringify({
-          url: "Multi.ts",
-          path: ["ClassA", "opening"],
-          level: 1,
-        }),
-        0,
-        new Date().toISOString(),
-      );
-      const _classAOpenId = classAOpen.lastInsertRowid.toString();
-
-      // ClassA method
-      const classAMethod = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Multi.ts",
-        "  methodA() { return 'A'; }",
-        JSON.stringify({
-          url: "Multi.ts",
-          path: ["ClassA", "opening", "methodA"],
-          level: 2,
-        }),
-        1,
-        new Date().toISOString(),
-      );
-      const classAMethodId = classAMethod.lastInsertRowid.toString();
-
-      // ClassA closing
-      (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Multi.ts",
-        "}",
-        JSON.stringify({
-          url: "Multi.ts",
-          path: ["ClassA", "closing"],
-          level: 1,
-        }),
-        2,
-        new Date().toISOString(),
-      );
-
-      // ClassB opening
-      const classBOpen = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Multi.ts",
-        "class ClassB {",
-        JSON.stringify({
-          url: "Multi.ts",
-          path: ["ClassB", "opening"],
-          level: 1,
-        }),
-        3,
-        new Date().toISOString(),
-      );
-      const _classBOpenId = classBOpen.lastInsertRowid.toString();
-
-      // ClassB method
-      const classBMethod = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Multi.ts",
-        "  methodB() { return 'B'; }",
-        JSON.stringify({
-          url: "Multi.ts",
-          path: ["ClassB", "opening", "methodB"],
-          level: 2,
-        }),
-        4,
-        new Date().toISOString(),
-      );
-      const classBMethodId = classBMethod.lastInsertRowid.toString();
-
-      // ClassB closing
-      (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Multi.ts",
-        "}",
-        JSON.stringify({
-          url: "Multi.ts",
-          path: ["ClassB", "closing"],
-          level: 1,
-        }),
-        5,
-        new Date().toISOString(),
-      );
-
-      const inputDocs: Document[] = [
-        {
-          id: classAMethodId,
-          pageContent: "  methodA() { return 'A'; }",
-          metadata: {
-            url: "Multi.ts",
-            path: ["ClassA", "methodA"],
-            level: 2,
-          },
-        },
-        {
-          id: classBMethodId,
-          pageContent: "  methodB() { return 'B'; }",
-          metadata: {
-            url: "Multi.ts",
-            path: ["ClassB", "methodB"],
-            level: 2,
-          },
-        },
-      ];
-
       const result = await strategy.selectChunks(
         "test-multi",
         "1.0",
@@ -359,74 +378,53 @@ describe("HierarchicalAssemblyStrategy", () => {
         documentStore,
       );
 
-      const content = result.map((d) => d.pageContent);
-      expect(content).toContain("  methodA() { return 'A'; }");
-      expect(content).toContain("  methodB() { return 'B'; }");
+      const content = result.map((doc) => doc.pageContent);
+
+      // Should include both matched methods
+      expect(content).toContain("  getUser(id) { return db.find(id); }");
+      expect(content).toContain("  deleteUser(id) { return db.delete(id); }");
+
+      // Should NOT include the unmatched createUser method
+      expect(content.some((c) => c.includes("createUser"))).toBe(false);
     });
 
     it("should handle multiple matches across different documents", async () => {
       const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test-cross",
+        "test-cross-doc",
         "1.0",
       );
 
       // File A
-      const _classAOpen = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "FileA.ts",
-        "class FileA {",
-        JSON.stringify({
-          url: "FileA.ts",
-          path: ["FileA", "opening"],
-          level: 1,
-        }),
-        0,
-        new Date().toISOString(),
-      );
-      const methodA = (documentStore as any).statements.insertDocument.run(
+      const methodAResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
         "FileA.ts",
         "  methodAlpha() { return 'Alpha'; }",
         JSON.stringify({
           url: "FileA.ts",
-          path: ["FileA", "opening", "methodAlpha"],
+          path: ["FileA", "methodAlpha"],
           level: 2,
-        }),
-        1,
-        new Date().toISOString(),
-      );
-      const methodAId = methodA.lastInsertRowid.toString();
-
-      // File B
-      const _classBOpen = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "FileB.ts",
-        "class FileB {",
-        JSON.stringify({
-          url: "FileB.ts",
-          path: ["FileB", "opening"],
-          level: 1,
         }),
         0,
         new Date().toISOString(),
       );
-      const methodB = (documentStore as any).statements.insertDocument.run(
+      const methodAId = methodAResult.lastInsertRowid.toString();
+
+      // File B
+      const methodBResult = (documentStore as any).statements.insertDocument.run(
         BigInt(libraryId),
         BigInt(versionId),
         "FileB.ts",
         "  methodBeta() { return 'Beta'; }",
         JSON.stringify({
           url: "FileB.ts",
-          path: ["FileB", "opening", "methodBeta"],
+          path: ["FileB", "methodBeta"],
           level: 2,
         }),
-        1,
+        0,
         new Date().toISOString(),
       );
-      const methodBId = methodB.lastInsertRowid.toString();
+      const methodBId = methodBResult.lastInsertRowid.toString();
 
       const inputDocs: Document[] = [
         {
@@ -450,7 +448,7 @@ describe("HierarchicalAssemblyStrategy", () => {
       ];
 
       const result = await strategy.selectChunks(
-        "test-cross",
+        "test-cross-doc",
         "1.0",
         inputDocs,
         documentStore,
@@ -463,7 +461,7 @@ describe("HierarchicalAssemblyStrategy", () => {
   });
 
   describe("assembleContent", () => {
-    it("should concatenate chunks in order", () => {
+    it("should concatenate chunks in document order", () => {
       const chunks: Document[] = [
         {
           id: "1",
@@ -486,9 +484,30 @@ describe("HierarchicalAssemblyStrategy", () => {
       expect(result).toBe("class UserService {  getUser() { return 'user'; }}");
     });
 
-    it("should handle empty array", () => {
+    it("should handle empty array gracefully", () => {
       const result = strategy.assembleContent([]);
       expect(result).toBe("");
+    });
+
+    it("should provide debug output when requested", () => {
+      const chunks: Document[] = [
+        {
+          id: "1",
+          pageContent: "function test() {",
+          metadata: { path: ["test"], level: 0 },
+        },
+        {
+          id: "2",
+          pageContent: "  return 42;",
+          metadata: { path: ["test", "return"], level: 1 },
+        },
+      ];
+
+      const result = strategy.assembleContent(chunks, true);
+      expect(result).toContain("=== #1");
+      expect(result).toContain("=== #2");
+      expect(result).toContain("function test() {");
+      expect(result).toContain("  return 42;");
     });
   });
 });

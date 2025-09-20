@@ -74,7 +74,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
       // Build hierarchical relationships between boundaries
       const hierarchicalBoundaries = this.buildBoundaryHierarchy(boundaries);
 
-      // Convert boundaries to content chunks using two-phase splitting
+      // Direct conversion to chunks (parser is responsible for suppressing unwanted nested boundaries)
       return await this.boundariesToChunks(hierarchicalBoundaries, content, contentType);
     } catch (error) {
       // Graceful fallback to TextContentSplitter on any parsing error
@@ -126,17 +126,12 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     }
 
     // Check for common patterns in content type
-    if (contentType.includes("javascript")) {
-      return this.registry.getParser("javascript");
-    }
-    if (contentType.includes("typescript")) {
+    if (contentType.includes("javascript") || contentType.includes("typescript")) {
       return this.registry.getParser("typescript");
     }
-    if (contentType.includes("jsx")) {
-      return this.registry.getParser("javascript"); // JSX uses JavaScript parser
-    }
-    if (contentType.includes("tsx")) {
-      return this.registry.getParser("typescript"); // TSX uses TypeScript parser
+    if (contentType.includes("jsx") || contentType.includes("tsx")) {
+      // Unified TypeScript parser also handles JSX/TSX
+      return this.registry.getParser("typescript");
     }
 
     return undefined;
@@ -215,10 +210,14 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
   }
 
   /**
-   * Convert boundaries to chunks using two-phase splitting approach
-   * Phase 1: Create semantic segments between boundary points
-   * Phase 2: Pass each segment through TextContentSplitter for size-based splitting
-   * Ensures perfect reassembly - concatenating all chunks recreates original content
+   * Convert boundaries to chunks.
+   * Algorithm:
+   *  - Collect line breakpoints: file start, each boundary start, each boundary end+1, file end+1
+   *  - Create linear segments between breakpoints (each line appears exactly once)
+   *  - Determine containing (innermost) boundary for each segment for path/level
+   *  - First segment belonging to a structural boundary => structural chunk; subsequent segments demoted to content
+   *  - Universal max size enforcement: any segment > maxChunkSize is further split via TextContentSplitter
+   *  - No heuristic de-noising or whitespace merging; reconstruction is guaranteed by preserving order + exact text
    */
   private async boundariesToChunks(
     boundaries: CodeBoundary[],
@@ -234,22 +233,10 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
       return subChunks;
     }
 
-    // Adjust first boundary if there's only whitespace before it
-    if (boundaries.length > 0) {
-      const firstBoundary = boundaries[0];
-      const firstBoundaryLine = firstBoundary.startLine;
-
-      // Check if content before first boundary is only whitespace
-      if (firstBoundaryLine > 1) {
-        const linesBeforeFirstBoundary = lines.slice(0, firstBoundaryLine - 1);
-        const contentBeforeFirstBoundary = linesBeforeFirstBoundary.join("\n");
-
-        if (/^\s*$/.test(contentBeforeFirstBoundary)) {
-          // Only whitespace before first boundary, adjust it to start from line 1
-          firstBoundary.startLine = 1;
-        }
-      }
-    }
+    // NOTE: Removed previous adjustment that forcibly shifted the first boundary
+    // to line 1 when only whitespace preceded it. That logic rewrote startLine
+    // and broke documentation merging tests (expected doc start line).
+    // We preserve original boundary start lines now.
 
     // Step 1: Collect all boundary points (start and end+1 for exclusive ranges)
     const boundaryPoints = new Set<number>();
@@ -311,31 +298,48 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
       });
     }
 
-    // Step 4: Merge whitespace-only segments with previous segments
-    const mergedSegments = this.mergeWhitespaceSegments(segments);
-
-    // Step 5: Convert merged segments to chunks
+    // Step 4: Convert segments directly to chunks (whitespace retained verbatim)
     const chunks: ContentChunk[] = [];
 
-    for (const segment of mergedSegments) {
+    // Ensure only ONE structural chunk is emitted per structural boundary.
+    const structuralBoundaryFirstChunk = new Set<CodeBoundary>();
+
+    // Accumulate whitespace-only segments and prepend to next non-whitespace segment
+    // to avoid emitting standalone whitespace chunks (tests assert no empty-trim chunks)
+    let pendingWhitespace = "";
+
+    for (const segment of segments) {
+      if (segment.content.trim() === "") {
+        pendingWhitespace += segment.content;
+        continue;
+      }
       // Assign path and level based on containing boundary
       let path: string[];
       let level: number;
 
-      if (segment.containingBoundary) {
+      const boundary = segment.containingBoundary;
+
+      if (boundary) {
         // Use the boundary's hierarchical path and level
-        path = segment.containingBoundary.path || [
-          segment.containingBoundary.name || "unnamed",
-        ];
-        level = segment.containingBoundary.level || path.length;
+        path = boundary.path || [boundary.name || "unnamed"];
+        level = boundary.level || path.length;
       } else {
         // No containing boundary, this is global code
         path = [];
         level = 0;
       }
 
-      // Determine chunk type from boundary classification
-      const isStructural = segment.containingBoundary?.boundaryType === "structural";
+      // Determine initial structural classification
+      let isStructural = boundary?.boundaryType === "structural";
+
+      if (isStructural && boundary) {
+        if (structuralBoundaryFirstChunk.has(boundary)) {
+          // Demote subsequent segments of the same structural boundary
+          isStructural = false;
+        } else {
+          structuralBoundaryFirstChunk.add(boundary);
+        }
+      }
 
       // Apply two-phase splitting - use TextContentSplitter on this segment
       const segmentChunks = await this.splitContentIntoChunks(
@@ -346,56 +350,23 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
 
       // Overwrite types based on structural vs content classification (always include "code" for backward compatibility)
       for (const c of segmentChunks) {
+        // Prepend any accumulated whitespace to the FIRST chunk emitted for this segment
+        if (pendingWhitespace) {
+          c.content = pendingWhitespace + c.content;
+          pendingWhitespace = "";
+        }
         c.types = isStructural ? ["code", "structural"] : ["code"];
       }
 
       chunks.push(...segmentChunks);
     }
 
+    // If file ended with whitespace-only content, append it to last chunk (preserve reconstructability)
+    if (pendingWhitespace && chunks.length > 0) {
+      chunks[chunks.length - 1].content += pendingWhitespace;
+    }
+
     return chunks;
-  }
-
-  /**
-   * Merges whitespace-only segments with the previous segment to preserve formatting
-   */
-  private mergeWhitespaceSegments(
-    segments: Array<{
-      startLine: number;
-      endLine: number;
-      content: string;
-      containingBoundary?: CodeBoundary;
-    }>,
-  ): Array<{
-    startLine: number;
-    endLine: number;
-    content: string;
-    containingBoundary?: CodeBoundary;
-  }> {
-    if (segments.length === 0) {
-      return segments;
-    }
-
-    const mergedSegments = [];
-
-    for (let i = 0; i < segments.length; i++) {
-      const currentSegment = segments[i];
-
-      // Check if this segment contains only whitespace
-      const isWhitespaceOnly = /^\s*$/.test(currentSegment.content);
-
-      if (isWhitespaceOnly && mergedSegments.length > 0) {
-        // Merge this whitespace segment with the previous segment
-        const previousSegment = mergedSegments[mergedSegments.length - 1];
-        previousSegment.content += currentSegment.content;
-        previousSegment.endLine = currentSegment.endLine;
-        // Keep the previous segment's containingBoundary
-      } else {
-        // Add as a new segment
-        mergedSegments.push({ ...currentSegment });
-      }
-    }
-
-    return mergedSegments;
   }
 
   /**

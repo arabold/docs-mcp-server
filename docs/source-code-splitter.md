@@ -121,13 +121,121 @@ graph LR
     style H fill:#e8f5e8
 ```
 
-**Chunking Rules:**
+**Chunking Rules (Canonical Ruleset):**
 
-- **Level 1**: Top-level elements (classes, functions, interfaces, namespaces)
-- **Level 2**: Class members (methods, properties, constructor)
-- **Level 3**: Nested namespace elements
-- **Content Delegation**: Large method bodies delegated to `TextDocumentSplitter`
-- **Documentation Start Alignment**: Boundary start line always includes contiguous preceding documentation/comments (even across transparent wrappers like `export`)
+Core Principles:
+
+- **Semantic Fidelity**: Boundaries align with grammar-level constructs (namespace/module, class, interface, enum, type alias, function/method/constructor).
+- **Hierarchical Integrity**: Every chunk has a full path (e.g. `['File.ts', 'Namespace', 'ClassName', 'methodName']`).
+- **Perfect Reconstructability**: Concatenating chunks in emission order reproduces the exact original file bytes.
+- **Retrieval Granularity**: Prefer the smallest semantically meaningful unit (do not merge adjacent declarations).
+
+Boundary Emission:
+
+- Emit a primary chunk for each declaration that introduces a named scope or executable unit:
+  - Namespaces / modules
+  - Classes / interfaces / enums / type aliases
+  - Top-level functions (regular / async / arrow assigned via `const`)
+  - Methods / constructors (including `static` / `private` / accessor forms)
+- Do NOT emit chunks for internal control-flow (`if`, `for`, `switch`, etc.) or nested local helper functions inside another function/method body (these remain part of the parent body chunk).
+- Transparent wrappers (`export`, `declare`, modifiers) never suppress boundary emission; they are included in the declaration chunk content.
+
+Classification (Dual Typing):
+
+- `boundaryType: "structural"` for: namespace/module, class, interface, enum, type alias, import/export units.
+- `boundaryType: "content"` for: function, method, constructor, arrow function, variable declaration introducing executable code.
+- All chunks include `types: ['code']` for backward compatibility; semantic classification augments, not replaces, existing type labels.
+
+Documentation & Signature Association:
+
+- Preceding contiguous documentation comments (JSDoc / multi-line block / meaningful line comments) are merged into the declaration chunk.
+- Documentation scan crosses transparent wrappers (e.g. `export` before `class`).
+- Chunk `startLine` and `startByte` are adjusted to the first doc line when docs are present.
+
+Atomicity & Non-Merging:
+
+- Never merge two siblings (e.g. two methods, function + next function, class + first method).
+- Never merge a structural declaration with its first child declaration.
+- A method/function body is treated as a single atomic content region unless size splitting (see Size Management) is triggered.
+
+Size Management (Universal Max Size Enforcement):
+
+- No emitted chunk may exceed the configured maximum size (bytes or token estimate surrogate). This rule applies to:
+  - Declaration (structural) segments (e.g. large class/interface/enum declarations with decorators or long heritage clauses)
+  - Function/method/constructor bodies
+  - Interstitial / global content between declarations
+  - Any trailing or leading whitespace/comment regions
+- Oversized segments are **delegated** to the `TextSplitter` AFTER semantic boundary determination so structural intent is preserved.
+- Sub-chunks produced from delegation:
+  - Preserve strict original ordering
+  - Inherit the parent path (adding a deterministic ordinal suffix only if needed for uniqueness, e.g. `MyClass/doWork#1`, `MyClass/doWork#2`)
+  - Are all classified as `boundaryType: "content"` unless they correspond to the first structural declaration slice (which remains `structural` if it contains the signature/docs)
+  - Never duplicate signature or doc lines
+- Structural declaration chunk strategy:
+  - Signature + docs remain in the first chunk (always under max size due to early split trigger on large bodies/content)
+  - Body content beyond the first segment is delegated in slices as needed
+- Guarantees:
+  - Perfect reconstructability (concatenation of all chunks == original file)
+  - Deterministic chunk boundaries for identical inputs/config
+  - No late greedy merging stage; only size-driven subdivision
+
+Path & Hierarchy:
+
+- Each emitted chunk path is the full ancestry of structural declarations.
+- Sub-chunks produced by size delegation extend that path deterministically (ordinal suffix or segmented identifier) without inventing new semantic ancestors.
+
+Wrapper & Modifier Handling:
+
+- `export`, `default`, `abstract`, `async`, visibility (`public|private|protected`), and decorators remain within the declaration chunk.
+- Multiple stacked modifiers do not produce multiple chunks.
+
+Content Integrity:
+
+- No duplication: bytes belong to exactly one chunk except optional intentional signature/body split (if implemented).
+- No gaps: every byte of the original file is covered by exactly one chunk (structural + body subdivision collectively).
+
+Suppression Rules:
+
+- Suppress nested function-like declarations only when they are local (declared inside another function/method body) AND not part of the public structural surface (they remain embedded implementation details).
+- Do not suppress functions declared directly inside namespaces or classes (those emit boundaries).
+
+Fallback & Error Resilience:
+
+- On parser failure / zero boundaries: fall back to line-based splitter preserving reconstructability.
+- On partial parse (ERROR nodes): still emit any confidently parsed boundaries; malformed regions become part of surrounding content.
+
+Determinism:
+
+- Given identical source input and configuration, chunk boundaries (names, byte ranges, hierarchy) are deterministic.
+
+Extensibility:
+
+- New structural kinds (e.g. `trait`, `record`, future TS constructs) must specify:
+  - Classification (structural vs content)
+  - Inclusion in documentation merging rules
+  - Whether they introduce a hierarchical path segment.
+
+Implementation Notes:
+
+- Boundary traversal is single-pass with documentation accumulation.
+- Size threshold should be configurable (env / constructor option).
+- Delegated sub-chunks MUST NOT exceed the max size individually.
+- Token estimation (if used) should degrade gracefully to byte length.
+
+Testing Guidelines:
+
+- Assert reconstructability (join == original).
+- Assert presence + uniqueness of expected paths.
+- Assert doc block capture (start line alignment).
+- Assert large body subdivision ordering & naming.
+- Assert no emission for nested local helpers.
+- Assert classification correctness (`structural` vs `content`).
+
+Summary:
+
+- Structural nodes = skeleton for hierarchical reassembly.
+- Content nodes = precise retrieval targets.
+- Large bodies subdivided AFTER boundary identification without erasing the semantic anchor.
 
 ### 4. Content Processing Pipeline
 

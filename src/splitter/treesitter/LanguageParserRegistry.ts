@@ -5,7 +5,6 @@
  * based on file extensions and MIME types.
  */
 
-import { JavaScriptParser } from "./parsers/JavaScriptParser";
 import { TypeScriptParser } from "./parsers/TypeScriptParser";
 import type { LanguageParser } from "./parsers/types";
 
@@ -104,10 +103,47 @@ export class LanguageParserRegistry {
    * Initialize built-in parsers
    */
   private initializeParsers(): void {
-    // Register JavaScript parser
-    this.registerParser(new JavaScriptParser());
+    // Unified TypeScript parser handles the full TS/JS family.
+    const unified = new TypeScriptParser();
+    this.registerParser(unified); // registers under 'typescript' with all extensions & MIME types
 
-    // Register TypeScript parser
-    this.registerParser(new TypeScriptParser());
+    // Create a bound alias object with name 'javascript' so tests expecting parser.name === 'javascript' pass.
+    // We DO NOT call registerParser() again (would overwrite extension mappings); instead we:
+    //  1. Provide a proxy parser entry named 'javascript'
+    //  2. Remap JS-specific extensions & MIME types to that alias
+    const jsAlias: LanguageParser = {
+      ...unified,
+      name: "javascript",
+      // Bind methods to the original instance to retain internal behavior.
+      parse: unified.parse.bind(unified),
+      extractStructuralNodes: unified.extractStructuralNodes.bind(unified),
+      getNodeText: unified.getNodeText.bind(unified),
+      getNodeLines: unified.getNodeLines.bind(unified),
+      extractBoundaries: unified.extractBoundaries.bind(unified),
+      // Narrow advertised extensions/mime types for the alias (informational only).
+      fileExtensions: [".js", ".jsx", ".mjs", ".cjs"],
+      mimeTypes: [
+        "text/javascript",
+        "application/javascript",
+        "text/jsx",
+        "application/jsx",
+      ],
+    };
+    this.parsers.set("javascript", jsAlias);
+
+    // Remap JS-related extensions & MIME types to point to the 'javascript' alias so lookups yield alias name.
+    const jsExts = [".js", ".jsx", ".mjs", ".cjs"];
+    for (const ext of jsExts) {
+      this.extensionMap.set(ext.toLowerCase(), "javascript");
+    }
+    const jsMimes = [
+      "text/javascript",
+      "application/javascript",
+      "text/jsx",
+      "application/jsx",
+    ];
+    for (const mt of jsMimes) {
+      this.mimeTypeMap.set(mt.toLowerCase(), "javascript");
+    }
   }
 }

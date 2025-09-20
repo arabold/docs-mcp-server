@@ -64,18 +64,80 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       // Process each document group
       for (const [_url, documentChunks] of Array.from(chunksByDocument.entries())) {
         if (documentChunks.length === 1) {
-          // Single match: use existing parent chain logic
-          const parentChain = await this.walkToRoot(
+          // Single match: reconstruct complete structural subtree containing the match
+          const matched = documentChunks[0];
+
+          // Find nearest structural ancestor (class / interface / enum / namespace, etc.)
+          const structuralAncestor =
+            (await this.findStructuralAncestor(
+              library,
+              version,
+              matched,
+              documentStore,
+            )) ?? matched;
+
+          // If no structural ancestor was found (e.g. we matched a deeply nested anonymous or inner function),
+          // attempt to promote to the top-level container represented by the first path element.
+          // Example: path ['applyMigrations','overallTransaction','overallTransaction','<anonymous_arrow>']
+          // We want to reconstruct the whole top-level function 'applyMigrations', not just the arrow body.
+          let promotedAncestor = structuralAncestor;
+          try {
+            const path = (matched.metadata.path as string[]) || [];
+            if (promotedAncestor === matched && path.length > 0) {
+              const topLevelPath = [path[0]];
+              const containerIds = await this.findContainerChunks(
+                library,
+                version,
+                matched,
+                topLevelPath,
+                documentStore,
+              );
+              if (containerIds.length > 0) {
+                const topChunks = await documentStore.findChunksByIds(library, version, [
+                  containerIds[0],
+                ]);
+                if (topChunks.length > 0) {
+                  promotedAncestor = topChunks[0];
+                }
+              }
+            }
+          } catch (e) {
+            logger.warn(
+              `Top-level function promotion failed for chunk ${matched.id}: ${e}`,
+            );
+          }
+
+          // IMPORTANT: Always include the original matched chunk first
+          allChunkIds.add(matched.id as string);
+
+          // Use promoted ancestor (may still be the original matched chunk if promotion not applicable)
+          const ancestorParentChain = await this.walkToRoot(
             library,
             version,
-            documentChunks[0],
+            promotedAncestor,
             documentStore,
           );
-          for (const id of parentChain) {
+          for (const id of ancestorParentChain) {
+            allChunkIds.add(id);
+          }
+
+          // Add full subtree of the structural ancestor (ensures full class / container reconstruction)
+          const subtreeIds = await this.findSubtreeChunks(
+            library,
+            version,
+            promotedAncestor,
+            documentStore,
+          );
+          for (const id of subtreeIds) {
             allChunkIds.add(id);
           }
         } else {
           // Multiple matches: use selective subtree reassembly
+          // IMPORTANT: Always include all original matched chunks first
+          for (const matched of documentChunks) {
+            allChunkIds.add(matched.id as string);
+          }
+
           const subtreeIds = await this.selectSubtreeChunks(
             library,
             version,
@@ -106,7 +168,17 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
    * Assembles chunks using simple concatenation.
    * Relies on splitter concatenation guarantees - chunks are designed to join seamlessly.
    */
-  assembleContent(chunks: Document[]): string {
+  assembleContent(chunks: Document[], debug = false): string {
+    if (debug) {
+      return chunks
+        .map(
+          (chunk) =>
+            `=== #${chunk.id} ${chunk.metadata.path?.join("/")} [${chunk.metadata.level}] ===\n` +
+            chunk.pageContent,
+        )
+        .join("");
+    }
+    // Production/default: simple concatenation leveraging splitter guarantees.
     return chunks.map((chunk) => chunk.pageContent).join("");
   }
 
@@ -114,6 +186,10 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
    * Walks up the parent hierarchy from a chunk to collect the complete parent chain.
    * Includes the chunk itself and every parent until reaching the root.
    * Protected against circular references and infinite loops.
+   *
+   * Handles hierarchical gaps by attempting to find ancestors at progressively shorter
+   * path lengths when direct parent lookup fails (e.g., when intermediate chunks
+   * have been merged or are missing).
    */
   private async walkToRoot(
     library: string,
@@ -142,11 +218,44 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       depth++;
 
       try {
-        currentChunk = await documentStore.findParentChunk(library, version, currentId);
+        // Try normal parent lookup first
+        const parentChunk = await documentStore.findParentChunk(
+          library,
+          version,
+          currentId,
+        );
+
+        if (parentChunk) {
+          currentChunk = parentChunk;
+        } else {
+          // If normal parent lookup fails, try to find ancestors with gaps
+          currentChunk = await this.findAncestorWithGaps(
+            library,
+            version,
+            currentChunk.metadata as any,
+            documentStore,
+          );
+        }
       } catch (error) {
-        // If we can't find parent, stop the chain walk
-        logger.warn(`Failed to find parent for chunk ${currentId}: ${error}`);
-        break;
+        // If standard lookup fails, try gap-aware ancestor search
+        try {
+          const currentMetadata = currentChunk?.metadata as any;
+          if (currentMetadata) {
+            currentChunk = await this.findAncestorWithGaps(
+              library,
+              version,
+              currentMetadata,
+              documentStore,
+            );
+          } else {
+            currentChunk = null;
+          }
+        } catch (gapError) {
+          logger.warn(
+            `Parent lookup failed for chunk ${currentId}: ${error}. Gap search also failed: ${gapError}`,
+          );
+          break;
+        }
       }
     }
 
@@ -157,6 +266,130 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     }
 
     return chainIds;
+  }
+
+  /**
+   * Attempts to find ancestors when there are gaps in the hierarchy.
+   * Tries progressively shorter path prefixes to find existing ancestor chunks.
+   */
+  private async findAncestorWithGaps(
+    library: string,
+    version: string,
+    metadata: { url: string; path?: string[] },
+    documentStore: DocumentStore,
+  ): Promise<Document | null> {
+    const path = metadata.path || [];
+    const url = metadata.url;
+
+    if (path.length <= 1) {
+      return null; // Already at or near root
+    }
+
+    // Try progressively shorter path prefixes to find existing ancestors
+    // Start from immediate parent and work backwards to root
+    for (let pathLength = path.length - 1; pathLength > 0; pathLength--) {
+      const ancestorPath = path.slice(0, pathLength);
+
+      try {
+        // Search for chunks that have this exact path in the same document
+        const potentialAncestors = await this.findChunksByPathPrefix(
+          library,
+          version,
+          url,
+          ancestorPath,
+          documentStore,
+        );
+
+        if (potentialAncestors.length > 0) {
+          // Return the first matching ancestor found
+          return potentialAncestors[0];
+        }
+      } catch (error) {
+        logger.debug(
+          `Failed to find ancestor with path ${ancestorPath.join("/")}: ${error}`,
+        );
+        // Continue trying shorter paths
+      }
+    }
+
+    return null; // No ancestors found
+  }
+
+  /**
+   * Finds chunks that have an exact path match or are prefixes of the given path.
+   * This is a more flexible version of findChunksByPath that can handle gaps.
+   */
+  private async findChunksByPathPrefix(
+    library: string,
+    version: string,
+    url: string,
+    targetPath: string[],
+    documentStore: DocumentStore,
+  ): Promise<Document[]> {
+    try {
+      // Get all chunks from the same document URL
+      const allChunks = await documentStore.findChunksByUrl(library, version, url);
+
+      if (allChunks.length === 0) {
+        return [];
+      }
+
+      const matchingChunks = allChunks.filter((chunk) => {
+        const chunkPath = (chunk.metadata.path as string[]) || [];
+        const chunkUrl = chunk.metadata.url as string;
+
+        // Must be in the same document
+        if (chunkUrl !== url) return false;
+
+        // Path must match exactly
+        if (chunkPath.length !== targetPath.length) return false;
+
+        // All path elements must match
+        return chunkPath.every((part, index) => part === targetPath[index]);
+      });
+
+      return matchingChunks;
+    } catch (error) {
+      logger.warn(`Error in findChunksByPathPrefix: ${error}`);
+      return [];
+    }
+  }
+
+  /**
+   * Finds the nearest structural ancestor (types includes "structural") for a chunk.
+   * If none exists (e.g. the matched chunk itself is structural or at top), returns null.
+   */
+  private async findStructuralAncestor(
+    library: string,
+    version: string,
+    chunk: Document,
+    documentStore: DocumentStore,
+  ): Promise<Document | null> {
+    let current: Document | null = chunk;
+
+    // If current is structural already, return it
+    const isStructural = (c: Document | null) =>
+      !!c && Array.isArray(c.metadata?.types) && c.metadata.types.includes("structural");
+
+    if (isStructural(current)) {
+      return current;
+    }
+
+    // Walk up until we find a structural ancestor
+    while (true) {
+      const parent = await documentStore.findParentChunk(
+        library,
+        version,
+        current.id as string,
+      );
+      if (!parent) {
+        return null;
+      }
+      if (isStructural(parent)) {
+        return parent;
+      }
+      current = parent;
+    }
   }
 
   /**
