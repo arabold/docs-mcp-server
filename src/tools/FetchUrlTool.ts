@@ -6,6 +6,7 @@ import type {
 } from "../scraper/fetcher";
 import { HtmlPipeline } from "../scraper/pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../scraper/pipelines/MarkdownPipeline";
+import { TextPipeline } from "../scraper/pipelines/TextPipeline";
 import type { ContentPipeline, ProcessedContent } from "../scraper/pipelines/types";
 import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
@@ -59,7 +60,7 @@ export class FetchUrlTool {
   /**
    * Collection of pipelines that will be tried in order for processing content.
    * The first pipeline that can process the content type will be used.
-   * Currently includes HtmlPipeline and MarkdownPipeline.
+   * Currently includes HtmlPipeline, MarkdownPipeline, and TextPipeline (as fallback).
    */
   private readonly pipelines: ContentPipeline[];
 
@@ -67,7 +68,9 @@ export class FetchUrlTool {
     this.fetchers = [httpFetcher, fileFetcher];
     const htmlPipeline = new HtmlPipeline();
     const markdownPipeline = new MarkdownPipeline();
-    this.pipelines = [htmlPipeline, markdownPipeline];
+    const textPipeline = new TextPipeline();
+    // Order matters: more specific pipelines first, fallback (text) pipeline last
+    this.pipelines = [htmlPipeline, markdownPipeline, textPipeline];
   }
 
   /**

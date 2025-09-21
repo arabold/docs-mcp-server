@@ -8,6 +8,7 @@ import {
 } from "playwright";
 import { DEFAULT_PAGE_TIMEOUT } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { ScrapeMode } from "../types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 
@@ -585,7 +586,24 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    * @param next The next middleware function in the pipeline.
    */
   async process(context: MiddlewareContext, next: () => Promise<void>): Promise<void> {
-    // Always process, content type is handled by pipeline selection
+    // Check if we have a MIME type from the raw content and if it's suitable for HTML processing
+    const contentType =
+      context.options?.headers?.["content-type"] ||
+      context.metadata?.contentType ||
+      context.metadata?.mimeType;
+
+    // Safety check: If we detect this is definitely not HTML content, skip Playwright
+    if (
+      contentType &&
+      typeof contentType === "string" &&
+      !MimeTypeUtils.isHtml(contentType)
+    ) {
+      logger.debug(
+        `Skipping Playwright rendering for ${context.source} - content type '${contentType}' is not HTML`,
+      );
+      await next();
+      return;
+    }
 
     // Determine if Playwright should run based on scrapeMode
     const scrapeMode = context.options?.scrapeMode ?? ScrapeMode.Auto;

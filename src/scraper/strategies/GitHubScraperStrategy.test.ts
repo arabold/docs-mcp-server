@@ -3,7 +3,7 @@ import { HttpFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
 import { HtmlPipeline } from "../pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
-import type { ScraperOptions } from "../types";
+import { ScrapeMode, type ScraperOptions } from "../types";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
 
 // Mock the fetcher and pipelines
@@ -867,6 +867,55 @@ describe("GitHubScraperStrategy", () => {
 
       await expect(strategy.scrape(options, vi.fn())).rejects.toThrow(
         "URL must be a GitHub URL",
+      );
+    });
+  });
+
+  describe("fetch mode override", () => {
+    it("should force ScrapeMode.Fetch to prevent Playwright hanging on raw content", async () => {
+      const rawContent: RawContent = {
+        content:
+          "<!DOCTYPE html><html><head><title>Test</title></head><body><h1>Hello</h1></body></html>",
+        mimeType: "text/html", // HTML file detected from extension
+        source: "https://raw.githubusercontent.com/owner/repo/main/index.html",
+        charset: "utf-8",
+      };
+
+      const processedContent = {
+        textContent: "Test\n\nHello",
+        metadata: { title: "Test" },
+        errors: [],
+        links: [],
+      };
+
+      // Mock file content fetch
+      vi.spyOn(strategy as any, "fetchFileContent").mockResolvedValue(rawContent);
+
+      // Mock HTML pipeline processing - verify it receives ScrapeMode.Fetch
+      htmlPipelineInstance.canProcess.mockReturnValue(true);
+      htmlPipelineInstance.process.mockImplementation(
+        async (_content: any, options: any) => {
+          // Verify that scrapeMode was overridden to 'fetch'
+          expect(options.scrapeMode).toBe("fetch");
+          return processedContent;
+        },
+      );
+
+      const options: ScraperOptions = {
+        url: "https://github.com/owner/repo",
+        library: "test-lib",
+        version: "1.0.0",
+        scrapeMode: ScrapeMode.Playwright, // This should be overridden
+      };
+
+      const item = { url: "github-file://index.html", depth: 1 };
+      const result = await (strategy as any).processItem(item, options);
+
+      expect(result.document).toBeDefined();
+      expect(htmlPipelineInstance.process).toHaveBeenCalledWith(
+        rawContent,
+        expect.objectContaining({ scrapeMode: "fetch" }),
+        expect.any(Object),
       );
     });
   });
