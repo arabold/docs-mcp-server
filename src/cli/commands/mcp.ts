@@ -15,6 +15,7 @@ import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
+  createOptionWithEnv,
   createPipelineWithCallbacks,
   parseAuthConfig,
   resolveEmbeddingContext,
@@ -30,25 +31,41 @@ export function createMcpCommand(program: Command): Command {
       .command("mcp")
       .description("Start MCP server only")
       .addOption(
-        new Option("--protocol <protocol>", "Protocol for MCP server")
-          .choices(["auto", "stdio", "http"])
-          .default(CLI_DEFAULTS.PROTOCOL),
+        createOptionWithEnv(
+          "--protocol <protocol>",
+          "Protocol for MCP server",
+          ["DOCS_MCP_PROTOCOL"],
+          CLI_DEFAULTS.PROTOCOL,
+        ).choices(["auto", "stdio", "http"]),
       )
       .addOption(
-        new Option("--port <number>", "Port for the MCP server")
-          .argParser((v) => {
-            const n = Number(v);
-            if (!Number.isInteger(n) || n < 1 || n > 65535) {
-              throw new Error("Port must be an integer between 1 and 65535");
-            }
-            return String(n);
-          })
-          .default(CLI_DEFAULTS.HTTP_PORT.toString()),
+        createOptionWithEnv(
+          "--port <number>",
+          "Port for the MCP server",
+          ["DOCS_MCP_PORT", "PORT"],
+          CLI_DEFAULTS.HTTP_PORT.toString(),
+        ).argParser((v) => {
+          const n = Number(v);
+          if (!Number.isInteger(n) || n < 1 || n > 65535) {
+            throw new Error("Port must be an integer between 1 and 65535");
+          }
+          return String(n);
+        }),
       )
       .addOption(
-        new Option("--host <host>", "Host to bind the MCP server to")
-          .argParser(validateHost)
-          .default(CLI_DEFAULTS.HOST),
+        createOptionWithEnv(
+          "--host <host>",
+          "Host to bind the MCP server to",
+          ["DOCS_MCP_HOST", "HOST"],
+          CLI_DEFAULTS.HOST,
+        ).argParser(validateHost),
+      )
+      .addOption(
+        createOptionWithEnv(
+          "--embedding-model <model>",
+          "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+          ["DOCS_MCP_EMBEDDING_MODEL"],
+        ),
       )
       .option(
         "--server-url <url>",
@@ -60,21 +77,41 @@ export function createMcpCommand(program: Command): Command {
         false,
       )
       // Auth options
-      .option(
-        "--auth-enabled",
-        "Enable OAuth2/OIDC authentication for MCP endpoints",
-        false,
+      .addOption(
+        new Option(
+          "--auth-enabled",
+          "Enable OAuth2/OIDC authentication for MCP endpoints",
+        )
+          .env("DOCS_MCP_AUTH_ENABLED")
+          .argParser((value) => {
+            if (typeof value === "string") {
+              const normalized = value.toLowerCase();
+              return normalized === "true" || normalized === "1";
+            }
+            return Boolean(value);
+          }),
       )
-      .option("--auth-issuer-url <url>", "Issuer/discovery URL for OAuth2/OIDC provider")
-      .option(
-        "--auth-audience <id>",
-        "JWT audience claim (identifies this protected resource)",
+      .addOption(new Option("--no-auth-enabled", "Disable OAuth2/OIDC authentication"))
+      .addOption(
+        createOptionWithEnv(
+          "--auth-issuer-url <url>",
+          "Issuer/discovery URL for OAuth2/OIDC provider",
+          ["DOCS_MCP_AUTH_ISSUER_URL"],
+        ),
+      )
+      .addOption(
+        createOptionWithEnv(
+          "--auth-audience <id>",
+          "JWT audience claim (identifies this protected resource)",
+          ["DOCS_MCP_AUTH_AUDIENCE"],
+        ),
       )
       .action(
         async (cmdOptions: {
           protocol: string;
           port: string;
           host: string;
+          embeddingModel?: string;
           serverUrl?: string;
           readOnly: boolean;
           authEnabled?: boolean;
@@ -103,7 +140,7 @@ export function createMcpCommand(program: Command): Command {
 
           try {
             // Resolve embedding configuration for local execution
-            const embeddingConfig = resolveEmbeddingContext();
+            const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
             if (!serverUrl && !embeddingConfig) {
               logger.error(
                 "❌ Embedding configuration is required for local mode. Configure an embedding provider with CLI options or environment variables.",

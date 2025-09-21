@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_PAGES,
 } from "../../utils/config";
 import {
+  createOptionWithEnv,
   createPipelineWithCallbacks,
   parseHeaders,
   resolveEmbeddingContext,
@@ -35,13 +36,14 @@ export async function scrapeAction(
     includePattern: string[];
     excludePattern: string[];
     header: string[];
+    embeddingModel?: string;
     serverUrl?: string;
   },
 ) {
   const serverUrl = options.serverUrl;
 
   // Resolve embedding configuration for local execution (scrape needs embeddings)
-  const embeddingConfig = resolveEmbeddingContext();
+  const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
   if (!serverUrl && !embeddingConfig) {
     throw new Error(
       "Embedding configuration is required for local scraping. " +
@@ -185,6 +187,13 @@ export function createScrapeCommand(program: Command): Command {
       "Custom HTTP header to send with each request (can be specified multiple times)",
       (val: string, prev: string[] = []) => prev.concat([val]),
       [] as string[],
+    )
+    .addOption(
+      createOptionWithEnv(
+        "--embedding-model <model>",
+        "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+        ["DOCS_MCP_EMBEDDING_MODEL"],
+      ),
     )
     .option(
       "--server-url <url>",

@@ -270,7 +270,7 @@ export class EmbeddingConfig {
   }
 
   /**
-   * Parse embedding model configuration from environment variables.
+   * Parse embedding model configuration from a provided model specification.
    * This is a synchronous operation that extracts provider, model, and known dimensions.
    *
    * Supports various providers:
@@ -281,12 +281,11 @@ export class EmbeddingConfig {
    * - microsoft: Azure OpenAI
    * - sagemaker: AWS SageMaker hosted models
    *
-   * @param modelSpec Optional model specification, defaults to DOCS_MCP_EMBEDDING_MODEL env var
+   * @param modelSpec Model specification (e.g., "openai:text-embedding-3-small"), defaults to "text-embedding-3-small"
    * @returns Parsed embedding model configuration
    */
   parse(modelSpec?: string): EmbeddingModelConfig {
-    const spec =
-      modelSpec || process.env.DOCS_MCP_EMBEDDING_MODEL || "text-embedding-3-small";
+    const spec = modelSpec || "text-embedding-3-small";
 
     // Parse provider and model from string (e.g., "gemini:embedding-001" or just "text-embedding-3-small")
     // Handle models that contain colons in their names (e.g., "aws:amazon.titan-embed-text-v2:0")

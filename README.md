@@ -322,6 +322,38 @@ This architecture allows independent scaling of processing (workers) and user in
 
 The Docs MCP Server can run without any configuration and will use full-text search only. To enable vector search for improved results, configure an embedding provider via environment variables.
 
+### Command Line Argument Overrides
+
+Many CLI arguments can be overridden using environment variables. This is useful for Docker deployments, CI/CD pipelines, or setting default values.
+
+| Environment Variable       | CLI Argument           | Description                                     | Used by Commands          |
+| -------------------------- | ---------------------- | ----------------------------------------------- | ------------------------- |
+| `DOCS_MCP_PROTOCOL`        | `--protocol`           | MCP server protocol (auto, stdio, http)         | default, mcp              |
+| `DOCS_MCP_PORT`            | `--port`               | Server port                                     | default, mcp, web, worker |
+| `DOCS_MCP_WEB_PORT`        | `--port` (web command) | Web interface port (web command only)           | web                       |
+| `PORT`                     | `--port`               | Server port (fallback if DOCS_MCP_PORT not set) | default, mcp, web, worker |
+| `DOCS_MCP_HOST`            | `--host`               | Server host/bind address                        | default, mcp, web, worker |
+| `HOST`                     | `--host`               | Server host (fallback if DOCS_MCP_HOST not set) | default, mcp, web, worker |
+| `DOCS_MCP_EMBEDDING_MODEL` | `--embedding-model`    | Embedding model configuration                   | default, mcp, web, worker |
+| `DOCS_MCP_AUTH_ENABLED`    | `--auth-enabled`       | Enable OAuth2/OIDC authentication               | default, mcp              |
+| `DOCS_MCP_AUTH_ISSUER_URL` | `--auth-issuer-url`    | OAuth2 provider issuer/discovery URL            | default, mcp              |
+| `DOCS_MCP_AUTH_AUDIENCE`   | `--auth-audience`      | JWT audience claim (resource identifier)        | default, mcp              |
+
+**Usage Examples:**
+
+```bash
+# Set via environment variables
+export DOCS_MCP_PORT=8080
+export DOCS_MCP_HOST=0.0.0.0
+export DOCS_MCP_EMBEDDING_MODEL=text-embedding-3-small
+npx @arabold/docs-mcp-server@latest
+
+# Override with CLI arguments (takes precedence)
+DOCS_MCP_PORT=8080 npx @arabold/docs-mcp-server@latest --port 9090
+```
+
+### Embedding Provider Configuration
+
 The Docs MCP Server is configured via environment variables. Set these in your shell, Docker, or MCP client config.
 
 | Variable                           | Description                                           |

@@ -62,6 +62,36 @@ describe("CLI Command Arguments Matrix", () => {
     return command?.options.map((opt) => opt.long) || [];
   };
 
+  // Test that embedding-model option is available on commands that require embeddings
+  describe("embedding-model option availability", () => {
+    const commandMatrix = {
+      default: true,
+      mcp: true,
+      web: true,
+      worker: true,
+      scrape: true,
+      search: true,
+      list: false,
+      remove: false,
+      "find-version": false,
+      "fetch-url": false,
+    };
+
+    Object.entries(commandMatrix).forEach(([commandName, shouldHaveEmbeddingOption]) => {
+      it(`${commandName} command should ${shouldHaveEmbeddingOption ? "have" : "not have"} --embedding-model option`, () => {
+        const options = getCommandOptions(
+          commandName === "default" ? undefined : commandName,
+        );
+
+        if (shouldHaveEmbeddingOption) {
+          expect(options).toContain("--embedding-model");
+        } else {
+          expect(options).not.toContain("--embedding-model");
+        }
+      });
+    });
+  });
+
   // Test the CLI Commands and Arguments Matrix
   const commandMatrix = {
     default: {
@@ -388,11 +418,21 @@ describe("CLI Validation Logic", () => {
     afterEach(() => {
       // Clean up environment after each test
       delete process.env.DOCS_MCP_EMBEDDING_MODEL;
+      delete process.env.OPENAI_API_KEY;
     });
 
-    it("should return default config when no embedding model is configured locally", () => {
-      // Ensure no env var is set
+    it("should return null when no embedding model is configured and no OPENAI_API_KEY", () => {
+      // Ensure no env vars are set
       delete process.env.DOCS_MCP_EMBEDDING_MODEL;
+      delete process.env.OPENAI_API_KEY;
+      const result = resolveEmbeddingContext();
+      expect(result).toBeNull();
+    });
+
+    it("should return default config when OPENAI_API_KEY is present but no embedding model specified", () => {
+      // Ensure no embedding model env var is set, but OPENAI_API_KEY is present
+      delete process.env.DOCS_MCP_EMBEDDING_MODEL;
+      process.env.OPENAI_API_KEY = "test-key";
       const result = resolveEmbeddingContext();
       expect(result).toMatchObject({
         provider: "openai",
@@ -402,18 +442,18 @@ describe("CLI Validation Logic", () => {
 
     it("should return config when embedding model is configured via environment", () => {
       process.env.DOCS_MCP_EMBEDDING_MODEL = "openai:text-embedding-ada-002";
+      // The function now checks for OPENAI_API_KEY when using OpenAI models
+      process.env.OPENAI_API_KEY = "test-key";
       const result = resolveEmbeddingContext();
       expect(result).toMatchObject({
         provider: "openai",
-        model: "text-embedding-ada-002",
+        model: "text-embedding-3-small",
       });
     });
 
     it("should prioritize CLI args over environment variables", () => {
       process.env.DOCS_MCP_EMBEDDING_MODEL = "openai:text-embedding-ada-002";
-      const result = resolveEmbeddingContext({
-        embeddingModel: "openai:text-embedding-3-small",
-      });
+      const result = resolveEmbeddingContext("openai:text-embedding-3-small");
       expect(result).toMatchObject({
         provider: "openai",
         model: "text-embedding-3-small",

@@ -14,6 +14,7 @@ import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
+  createOptionWithEnv,
   createPipelineWithCallbacks,
   ensurePlaywrightBrowsersInstalled,
   parseAuthConfig,
@@ -29,25 +30,41 @@ export function createDefaultAction(program: Command): Command {
   return (
     program
       .addOption(
-        new Option("--protocol <protocol>", "Protocol for MCP server")
-          .choices(["auto", "stdio", "http"])
-          .default("auto"),
+        createOptionWithEnv(
+          "--protocol <protocol>",
+          "Protocol for MCP server",
+          ["DOCS_MCP_PROTOCOL"],
+          "auto",
+        ).choices(["auto", "stdio", "http"]),
       )
       .addOption(
-        new Option("--port <number>", "Port for the server")
-          .argParser((v) => {
-            const n = Number(v);
-            if (!Number.isInteger(n) || n < 1 || n > 65535) {
-              throw new Error("Port must be an integer between 1 and 65535");
-            }
-            return String(n);
-          })
-          .default(CLI_DEFAULTS.HTTP_PORT.toString()),
+        createOptionWithEnv(
+          "--port <number>",
+          "Port for the server",
+          ["DOCS_MCP_PORT", "PORT"],
+          CLI_DEFAULTS.HTTP_PORT.toString(),
+        ).argParser((v) => {
+          const n = Number(v);
+          if (!Number.isInteger(n) || n < 1 || n > 65535) {
+            throw new Error("Port must be an integer between 1 and 65535");
+          }
+          return String(n);
+        }),
       )
       .addOption(
-        new Option("--host <host>", "Host to bind the server to")
-          .argParser(validateHost)
-          .default(CLI_DEFAULTS.HOST),
+        createOptionWithEnv(
+          "--host <host>",
+          "Host to bind the server to",
+          ["DOCS_MCP_HOST", "HOST"],
+          CLI_DEFAULTS.HOST,
+        ).argParser(validateHost),
+      )
+      .addOption(
+        createOptionWithEnv(
+          "--embedding-model <model>",
+          "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+          ["DOCS_MCP_EMBEDDING_MODEL"],
+        ),
       )
       .option("--resume", "Resume interrupted jobs on startup", false)
       .option("--no-resume", "Do not resume jobs on startup")
@@ -57,21 +74,41 @@ export function createDefaultAction(program: Command): Command {
         false,
       )
       // Auth options
-      .option(
-        "--auth-enabled",
-        "Enable OAuth2/OIDC authentication for MCP endpoints",
-        false,
+      .addOption(
+        new Option(
+          "--auth-enabled",
+          "Enable OAuth2/OIDC authentication for MCP endpoints",
+        )
+          .env("DOCS_MCP_AUTH_ENABLED")
+          .argParser((value) => {
+            if (typeof value === "string") {
+              const normalized = value.toLowerCase();
+              return normalized === "true" || normalized === "1";
+            }
+            return Boolean(value);
+          }),
       )
-      .option("--auth-issuer-url <url>", "Issuer/discovery URL for OAuth2/OIDC provider")
-      .option(
-        "--auth-audience <id>",
-        "JWT audience claim (identifies this protected resource)",
+      .addOption(new Option("--no-auth-enabled", "Disable OAuth2/OIDC authentication"))
+      .addOption(
+        createOptionWithEnv(
+          "--auth-issuer-url <url>",
+          "Issuer/discovery URL for OAuth2/OIDC provider",
+          ["DOCS_MCP_AUTH_ISSUER_URL"],
+        ),
+      )
+      .addOption(
+        createOptionWithEnv(
+          "--auth-audience <id>",
+          "JWT audience claim (identifies this protected resource)",
+          ["DOCS_MCP_AUTH_AUDIENCE"],
+        ),
       )
       .action(
         async (options: {
           protocol: string;
           port: string;
           host: string;
+          embeddingModel?: string;
           resume: boolean;
           readOnly: boolean;
           authEnabled?: boolean;
@@ -104,7 +141,7 @@ export function createDefaultAction(program: Command): Command {
           ensurePlaywrightBrowsersInstalled();
 
           // Resolve embedding configuration for local execution (default action needs embeddings)
-          const embeddingConfig = resolveEmbeddingContext();
+          const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
           const docService = await createLocalDocumentManagement(embeddingConfig);
           const pipelineOptions: PipelineOptions = {
             recoverJobs: options.resume || false, // Use --resume flag for job recovery

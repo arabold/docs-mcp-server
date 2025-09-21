@@ -4,6 +4,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { Option } from "commander";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
@@ -105,6 +106,44 @@ export function validateResumeFlag(resume: boolean, serverUrl?: string): void {
         "External workers handle their own job recovery.",
     );
   }
+}
+
+/**
+ * Creates a commander Option that automatically checks for environment variables.
+ *
+ * @param flags - Option flags (e.g., "--port <number>")
+ * @param description - Option description
+ * @param envVars - Array of environment variable names to check (in order of precedence)
+ * @param defaultValue - Fallback default value if no env vars are found
+ * @returns Configured commander Option instance
+ */
+export function createOptionWithEnv(
+  flags: string,
+  description: string,
+  envVars: string[],
+  defaultValue?: string,
+): Option {
+  // Find the first available environment variable
+  let envValue: string | undefined;
+  for (const envVar of envVars) {
+    envValue = process.env[envVar];
+    if (envValue !== undefined) {
+      logger.debug(
+        `Using environment variable ${envVar}=${envValue} for option ${flags}`,
+      );
+      break;
+    }
+  }
+
+  // Use env value if found, otherwise use provided default
+  const finalDefault = envValue ?? defaultValue;
+
+  const option = new Option(flags, description);
+  if (finalDefault !== undefined) {
+    option.default(finalDefault);
+  }
+
+  return option;
 }
 
 /**
@@ -260,31 +299,24 @@ export const CLI_DEFAULTS = {
 } as const;
 
 /**
- * Parses auth configuration from CLI options and environment variables.
- * Precedence: CLI flags > env vars > defaults
+ * Parses auth configuration from CLI options.
+ * Environment variables are handled by createOptionWithEnv in command definitions.
+ * Precedence: CLI flags > env vars (handled by commander) > defaults
  */
 export function parseAuthConfig(options: {
   authEnabled?: boolean;
   authIssuerUrl?: string;
   authAudience?: string;
 }): AuthConfig | undefined {
-  // Check CLI flags first, then env vars, then defaults
-  const enabled =
-    options.authEnabled ||
-    process.env.DOCS_MCP_AUTH_ENABLED?.toLowerCase() === "true";
-
-  if (!enabled) {
+  // Check if auth is enabled via CLI flag (environment variables handled by commander)
+  if (!options.authEnabled) {
     return undefined;
   }
 
-  const issuerUrl = options.authIssuerUrl ?? process.env.DOCS_MCP_AUTH_ISSUER_URL;
-
-  const audience = options.authAudience ?? process.env.DOCS_MCP_AUTH_AUDIENCE;
-
   return {
-    enabled,
-    issuerUrl,
-    audience,
+    enabled: true,
+    issuerUrl: options.authIssuerUrl,
+    audience: options.authAudience,
     scopes: ["openid", "profile"], // Default scopes for OAuth2/OIDC
   };
 }
@@ -378,22 +410,41 @@ export function warnHttpUsage(authConfig: AuthConfig | undefined, port: number):
 }
 
 /**
- * Resolves embedding configuration from environment variables and CLI args.
- * This function always attempts to resolve embedding configuration regardless of deployment mode.
- * @param cliArgs Future: CLI arguments that might override environment
- * @returns Embedding configuration or null if config is unavailable
+ * Resolves embedding configuration from the provided model specification.
+ * This function centralizes the logic for determining the embedding model.
+ *
+ * Precedence:
+ * 1. Explicitly passed `embeddingModel` parameter.
+ * 2. `OPENAI_API_KEY` environment variable (defaults to OpenAI model).
+ * 3. No configuration (embeddings disabled).
+ *
+ * @param embeddingModel The embedding model specification string.
+ * @returns Embedding configuration or null if config is unavailable.
  */
-export function resolveEmbeddingContext(cliArgs?: {
-  embeddingModel?: string;
-}): EmbeddingModelConfig | null {
+export function resolveEmbeddingContext(
+  embeddingModel?: string,
+): EmbeddingModelConfig | null {
   try {
-    // Future: CLI args take precedence over environment
-    const modelSpec = cliArgs?.embeddingModel || process.env.DOCS_MCP_EMBEDDING_MODEL;
+    let modelSpec = embeddingModel;
 
-    logger.debug("Resolving embedding configuration");
-    const config = EmbeddingConfig.parseEmbeddingConfig(modelSpec);
+    // If no model is specified, check for OPENAI_API_KEY
+    // to enable OpenAI embeddings by default.
+    if (!modelSpec && process.env.OPENAI_API_KEY) {
+      modelSpec = "text-embedding-3-small"; // Default OpenAI model
+      logger.debug(
+        "Using default OpenAI embedding model due to OPENAI_API_KEY presence.",
+      );
+    }
 
-    return config;
+    if (!modelSpec) {
+      logger.debug(
+        "No embedding model specified and OPENAI_API_KEY not found. Embeddings are disabled.",
+      );
+      return null;
+    }
+
+    logger.debug(`Resolving embedding configuration for model: ${modelSpec}`);
+    return EmbeddingConfig.parseEmbeddingConfig(modelSpec);
   } catch (error) {
     logger.debug(`Failed to resolve embedding configuration: ${error}`);
     return null;
