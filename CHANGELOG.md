@@ -1,3 +1,26 @@
+# [1.25.0](https://github.com/arabold/docs-mcp-server/compare/v1.24.0...v1.25.0) (2025-09-21)
+
+
+### Bug Fixes
+
+* enhance handling of non-HTML content and update scrape modes in GitHub scraper ([6579242](https://github.com/arabold/docs-mcp-server/commit/6579242ef7efb9872d156b1ba1fcf5b0ff811a30)), closes [#232](https://github.com/arabold/docs-mcp-server/issues/232)
+* **parser:** correct TypeScript and TSX imports in TypeScriptParser ([7b6f772](https://github.com/arabold/docs-mcp-server/commit/7b6f772912b08620a19c540ce0008fb7247953ef))
+* **web:** correct default markdown handling and improve non-markdown rendering ([afa80ad](https://github.com/arabold/docs-mcp-server/commit/afa80ad4c0439384ec0ffff85f1b2e2fc813551c))
+
+
+### Features
+
+* implement HierarchicalAssemblyStrategy for structured content assembly ([209e474](https://github.com/arabold/docs-mcp-server/commit/209e474a1b398ea9aaf53694fb0d57704f9eda16))
+* implement JavaScript and TypeScript parsers based on TreeSitter ([d01ef90](https://github.com/arabold/docs-mcp-server/commit/d01ef90bb7dcb88c25f500db43fc42b082ca2e3d))
+* implement SourceCodeDocumentSplitter for hierarchical source code splitting ([5b08c7d](https://github.com/arabold/docs-mcp-server/commit/5b08c7d71a5c93a94a65d35031ecc2a4c7df7493))
+* **parser:** add Python support ([25a4cf2](https://github.com/arabold/docs-mcp-server/commit/25a4cf2801476f822586f1ae10e2e0a53a3539c8)), closes [#214](https://github.com/arabold/docs-mcp-server/issues/214)
+* **parser:** enhance boundary extraction with hierarchical documentation merging ([ab50160](https://github.com/arabold/docs-mcp-server/commit/ab50160c92c222410e3a949b32f5ca213c9d2f40))
+* **search:** implement hybrid search with configurable weights and overfetch factor ([04eee7c](https://github.com/arabold/docs-mcp-server/commit/04eee7cec92326c120a430661281c699fb65fe1b)), closes [#171](https://github.com/arabold/docs-mcp-server/issues/171)
+* **splitter:** implement chunk fetching and hierarchical assembly improvements ([5c6f227](https://github.com/arabold/docs-mcp-server/commit/5c6f227ee7e740c585ff231dd0cc68565701539f))
+* **splitter:** implement structural boundary classification for content chunks ([53c2014](https://github.com/arabold/docs-mcp-server/commit/53c20140d01c21a3d9265a193e1d5c21650634a4))
+* **strategy:** implement selective subtree reassembly ([a0daf55](https://github.com/arabold/docs-mcp-server/commit/a0daf55f3abd7edb1716197751e88a86c7470b04))
+* vector search and embeddings are optional now ([83bc1ac](https://github.com/arabold/docs-mcp-server/commit/83bc1aca4c40d1091641fc43718caa127b5f71ca))
+
 # [1.24.0](https://github.com/arabold/docs-mcp-server/compare/v1.23.0...v1.24.0) (2025-09-20)
 
 
