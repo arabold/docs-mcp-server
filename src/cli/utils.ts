@@ -270,8 +270,8 @@ export function parseAuthConfig(options: {
 }): AuthConfig | undefined {
   // Check CLI flags first, then env vars, then defaults
   const enabled =
-    options.authEnabled ??
-    (process.env.DOCS_MCP_AUTH_ENABLED?.toLowerCase() === "true" || false);
+    options.authEnabled ||
+    process.env.DOCS_MCP_AUTH_ENABLED?.toLowerCase() === "true";
 
   if (!enabled) {
     return undefined;
