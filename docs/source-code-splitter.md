@@ -352,6 +352,7 @@ graph TD
 - **Unsupported Languages**: Automatic delegation to TextDocumentSplitter
 - **Parse Errors**: Graceful fallback for malformed syntax
 - **Boundary Detection Failures**: Line-based processing for complex edge cases
+- **Large File Handling**: For files exceeding a universal 32KB limit in the underlying parser, the system provides graceful degradation. It performs a full semantic parse on the initial ~32KB and falls back to `TextDocumentSplitter` for the remainder of the file, ensuring that no content is lost
 
 ### Error Recovery
 
@@ -383,6 +384,12 @@ The tree-sitter implementation provides comprehensive support for web developmen
 - Generic type parameters
 - TSX (TypeScript + JSX)
 
+**Python:**
+
+- Classes, functions, and methods
+- `import` and `from...import` statements
+- Decorators and `async` functions
+
 ### Architecture for Extension
 
 The modular design supports future language additions through:
@@ -401,10 +408,10 @@ The modular design supports future language additions through:
 
 **Future Language Candidates:**
 
-- Python (classes, functions, indentation-aware parsing)
 - Java (packages, classes, methods)
 - C# (namespaces, classes, properties, methods)
 - Go (packages, structs, methods, functions)
+- Rust (modules, structs, impl blocks, functions)
 
 ## Integration with Pipeline System
 

@@ -5,6 +5,7 @@
  * based on file extensions and MIME types.
  */
 
+import { PythonParser } from "./parsers/PythonParser";
 import { TypeScriptParser } from "./parsers/TypeScriptParser";
 import type { LanguageParser } from "./parsers/types";
 
@@ -145,5 +146,9 @@ export class LanguageParserRegistry {
     for (const mt of jsMimes) {
       this.mimeTypeMap.set(mt.toLowerCase(), "javascript");
     }
+
+    // Register Python parser
+    const pythonParser = new PythonParser();
+    this.registerParser(pythonParser);
   }
 }

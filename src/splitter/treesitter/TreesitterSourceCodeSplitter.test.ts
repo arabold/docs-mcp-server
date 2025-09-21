@@ -36,8 +36,15 @@ describe("TreesitterSourceCodeSplitter", () => {
       expect(splitter.isSupportedContentType("application/jsx")).toBe(true);
     });
 
+    it("should support Python MIME types", () => {
+      expect(splitter.isSupportedContentType("text/python")).toBe(true);
+      expect(splitter.isSupportedContentType("text/x-python")).toBe(true);
+      expect(splitter.isSupportedContentType("application/python")).toBe(true);
+      expect(splitter.isSupportedContentType("application/x-python")).toBe(true);
+    });
+
     it("should not support unsupported types", () => {
-      expect(splitter.isSupportedContentType("text/python")).toBe(false);
+      expect(splitter.isSupportedContentType("text/ruby")).toBe(false);
       expect(splitter.isSupportedContentType("text/plain")).toBe(false);
     });
 
@@ -46,6 +53,7 @@ describe("TreesitterSourceCodeSplitter", () => {
       // Currently only supports exact MIME types, not file extensions in content type
       expect(splitter.isSupportedContentType("text/javascript")).toBe(true);
       expect(splitter.isSupportedContentType("application/jsx")).toBe(true);
+      expect(splitter.isSupportedContentType("text/python")).toBe(true);
     });
   });
 
@@ -76,13 +84,34 @@ describe("TreesitterSourceCodeSplitter", () => {
       expect(chunks[0].types).toContain("code");
     });
 
-    it("should fall back to TextSplitter for unsupported content", async () => {
+    it("should split Python code", async () => {
       const pythonCode = `
 def hello():
     return "world"
+
+class Calculator:
+    def add(self, a, b):
+        return a + b
       `;
 
       const chunks = await splitter.splitText(pythonCode, "text/python");
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks[0].types).toContain("code");
+
+      // Should have semantic boundaries for function and class
+      const pathStrings = chunks.map((chunk) => chunk.section.path.join(" > "));
+      expect(pathStrings.some((path) => path.includes("hello"))).toBe(true);
+      expect(pathStrings.some((path) => path.includes("Calculator"))).toBe(true);
+    });
+
+    it("should fall back to TextSplitter for unsupported content", async () => {
+      const rubyCode = `
+def hello
+  return "world"
+end
+      `;
+
+      const chunks = await splitter.splitText(rubyCode, "text/ruby");
       expect(chunks.length).toBeGreaterThan(0);
       expect(chunks[0].types).toContain("code");
     });
@@ -565,6 +594,138 @@ export { processUserData };`;
         (c) => c.section.path.join("/") === "DocumentRetrieverService/search",
       );
       expect(searchChunks.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("should handle Python code with proper hierarchical structure", async () => {
+      const pythonCode = `import os
+import sys
+from typing import List, Dict
+
+# Global configuration
+DEBUG = True
+CONFIG_FILE = "settings.json"
+
+# Helper comment before function
+def load_config(filename: str) -> Dict:
+    """
+    Load configuration from a JSON file.
+    
+    Args:
+        filename: Path to the config file
+        
+    Returns:
+        Configuration dictionary
+    """
+    with open(filename, 'r') as f:
+        return json.load(f)
+
+class DataProcessor:
+    """A class for processing data with various methods."""
+    
+    def __init__(self, config_path: str):
+        """Initialize the processor with configuration."""
+        self.config = load_config(config_path)
+        self.processed_count = 0
+    
+    def process_item(self, item: Dict) -> Dict:
+        """Process a single data item."""
+        def local_helper():
+            # This should be suppressed
+            return "helper"
+        
+        # Process the item
+        result = {
+            'id': item.get('id'),
+            'processed': True,
+            'timestamp': time.now()
+        }
+        self.processed_count += 1
+        return result
+    
+    async def process_batch(self, items: List[Dict]) -> List[Dict]:
+        """Process a batch of items asynchronously."""
+        results = []
+        for item in items:
+            result = self.process_item(item)
+            results.append(result)
+        return results
+
+# Global instance
+processor = DataProcessor(CONFIG_FILE)`;
+
+      const chunks = await splitter.splitText(pythonCode, "text/python");
+
+      // CRITICAL: Perfect reconstruction test
+      const reconstructed = chunks.map((chunk) => chunk.content).join("");
+      expect(reconstructed).toBe(pythonCode);
+
+      // Should have multiple chunks for different semantic boundaries
+      expect(chunks.length).toBeGreaterThan(5);
+
+      // Check import statements
+      const importChunks = chunks.filter((c) =>
+        c.section.path.some((p) => p.includes("import")),
+      );
+      expect(importChunks.length).toBeGreaterThan(0);
+
+      // Check function boundary
+      const loadConfigChunks = chunks.filter((c) =>
+        c.section.path.includes("load_config"),
+      );
+      expect(loadConfigChunks.length).toBe(1);
+      expect(loadConfigChunks[0].section.level).toBe(1);
+      expect(loadConfigChunks[0].content).toContain("# Helper comment before function");
+      expect(loadConfigChunks[0].content).toContain('"""');
+      expect(loadConfigChunks[0].content).toContain(
+        "Load configuration from a JSON file",
+      );
+
+      // Check class boundary
+      const classChunks = chunks.filter((c) => c.section.path.includes("DataProcessor"));
+      expect(classChunks.length).toBeGreaterThan(0);
+      const mainClassChunk = classChunks.find((c) => c.section.path.length === 1);
+      expect(mainClassChunk).toBeDefined();
+      expect(mainClassChunk!.section.level).toBe(1);
+      expect(mainClassChunk!.types).toContain("structural");
+
+      // Check method boundaries
+      const methodChunks = chunks.filter(
+        (c) => c.section.path.length === 2 && c.section.path[0] === "DataProcessor",
+      );
+      expect(methodChunks.length).toBeGreaterThanOrEqual(3); // __init__, process_item, process_batch
+
+      const initMethod = methodChunks.find((c) => c.section.path[1] === "__init__");
+      expect(initMethod).toBeDefined();
+      expect(initMethod!.section.level).toBe(2);
+      expect(initMethod!.types).toContain("code");
+
+      const processMethod = methodChunks.find(
+        (c) => c.section.path[1] === "process_item",
+      );
+      expect(processMethod).toBeDefined();
+      expect(processMethod!.section.level).toBe(2);
+      // Should NOT have local_helper as separate chunk (suppressed)
+      const localHelperChunks = chunks.filter((c) =>
+        c.section.path.some((p) => p.includes("local_helper")),
+      );
+      expect(localHelperChunks.length).toBe(0);
+
+      const asyncMethod = methodChunks.find((c) => c.section.path[1] === "process_batch");
+      expect(asyncMethod).toBeDefined();
+      expect(asyncMethod!.section.level).toBe(2);
+      expect(asyncMethod!.content).toContain("async def process_batch");
+
+      // Check global code chunks
+      const globalChunks = chunks.filter(
+        (c) => c.section.level === 0 && c.section.path.length === 0,
+      );
+      expect(globalChunks.length).toBeGreaterThan(0);
+
+      // Verify we have both structural and content boundaries
+      const structuralChunks = chunks.filter((c) => c.types.includes("structural"));
+      const codeChunks = chunks.filter((c) => c.types.includes("code"));
+      expect(structuralChunks.length).toBeGreaterThan(0); // imports + class
+      expect(codeChunks.length).toBeGreaterThan(0); // functions + methods
     });
   });
 

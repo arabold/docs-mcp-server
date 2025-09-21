@@ -4,6 +4,12 @@
 
 import type { SyntaxNode, Tree } from "tree-sitter";
 
+/**
+ * Universal tree-sitter parser size limit.
+ * Set to 30,000 characters to be safely under the observed 32,767 limit.
+ */
+export const TREE_SITTER_SIZE_LIMIT = 30000;
+
 export enum StructuralNodeType {
   // Function declarations
   FUNCTION_DECLARATION = "function_declaration",
