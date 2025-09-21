@@ -39,13 +39,15 @@ Transform raw content using middleware chains and content-type-specific logic:
 
 Transform content through ordered middleware chains within pipelines:
 
-**HTML Processing** uses the most extensive middleware pipeline:
+**HTML Processing** uses the most extensive middleware pipeline, executed in a specific order to ensure correctness and efficiency:
 
-- Dynamic content rendering with Playwright (when needed)
-- DOM parsing and metadata extraction
-- Content sanitization (removes navigation, ads, boilerplate)
-- Link discovery and resolution
-- Conversion to clean markdown format
+- **Dynamic Content Rendering**: (Optional) Uses Playwright to render JavaScript-heavy pages when needed
+- **DOM Parsing**: Converts the raw HTML string into a manipulable DOM object using Cheerio
+- **Metadata Extraction**: Extracts the document title from `<title>` or `<h1>` tags in the full DOM
+- **Link Discovery**: Gathers all links from the complete page for the crawler to potentially follow
+- **Content Sanitization**: Removes large, irrelevant sections like navigation, footers, ads, and boilerplate
+- **URL Normalization**: Cleans the _remaining_ content by converting relative image/link URLs to absolute ones and removing non-functional links (anchors, `javascript:`, etc.) while preserving their text content
+- **Markdown Conversion**: Converts the final, cleaned, and normalized HTML into Markdown format
 
 **Markdown Processing** applies lighter middleware:
 
@@ -157,9 +159,11 @@ graph TD
     subgraph "HTML Processing"
         A1[Raw HTML] --> B1[Playwright Rendering]
         B1 --> C1[DOM Parsing]
-        C1 --> D1[Content Cleaning]
-        D1 --> E1[HTML to Markdown]
-        E1 --> F1[SemanticMarkdownSplitter]
+        C1 --> D1[Metadata & Link Extraction]
+        D1 --> E1[Content Sanitization]
+        E1 --> F1[URL Normalization]
+        F1 --> G1[HTML to Markdown]
+        G1 --> H1[SemanticMarkdownSplitter]
     end
 
     subgraph "JSON Processing"
@@ -177,7 +181,7 @@ graph TD
         B4 --> C4[SemanticMarkdownSplitter]
     end
 
-    F1 --> G[GreedySplitter]
+    H1 --> G[GreedySplitter]
     C2 --> G
     C3 --> G
     C4 --> G
