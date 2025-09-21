@@ -161,37 +161,29 @@ describe("DocumentManagementService", () => {
       expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(true);
     });
 
-    it("should use the path from DOCS_MCP_STORE_PATH environment variable if set", () => {
-      const mockEnvStorePath = "/mock/env/store/path";
-      const expectedEnvDbPath = path.join(mockEnvStorePath, "documents.db");
-      const originalEnvValue = process.env.DOCS_MCP_STORE_PATH; // Store original value
-      process.env.DOCS_MCP_STORE_PATH = mockEnvStorePath; // Set env var
+    it("should use custom store path when provided via constructor", () => {
+      const customStorePath = "/mock/env/store/path";
+      const expectedCustomDbPath = path.join(customStorePath, "documents.db");
 
-      try {
-        // Ensure neither old nor standard paths exist initially for isolation
-        // (vol.reset() in beforeEach should handle this)
+      // Instantiate LOCALLY for this specific test with custom store path
+      const _localDocService = new DocumentManagementService(
+        undefined,
+        undefined,
+        customStorePath,
+      );
 
-        // Instantiate LOCALLY for this specific test
-        const _localDocService = new DocumentManagementService();
-
-        // Verify DocumentStore was called with the env var path
-        expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
-          expectedEnvDbPath,
-          undefined,
-        );
-        // Verify the env var directory was created in memfs
-        expect(vol.existsSync(mockEnvStorePath)).toBe(true);
-        // Verify other paths were NOT created (optional but good check)
-        expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(false);
-        expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(false);
-        // Verify envPaths was NOT called
-        expect(mockEnvPathsFn).not.toHaveBeenCalled();
-        // Verify fs.existsSync was NOT called for the old path check
-        // (We need to spy on fs.existsSync for this) - Let's skip this assertion for now as it requires more mock setup
-      } finally {
-        // Restore original env var value
-        process.env.DOCS_MCP_STORE_PATH = originalEnvValue;
-      }
+      // Verify DocumentStore was called with the custom path
+      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
+        expectedCustomDbPath,
+        undefined,
+      );
+      // Verify the custom directory was created in memfs
+      expect(vol.existsSync(customStorePath)).toBe(true);
+      // Verify other paths were NOT created (optional but good check)
+      expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(false);
+      expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(false);
+      // Verify envPaths was NOT called
+      expect(mockEnvPathsFn).not.toHaveBeenCalled();
     });
   });
 

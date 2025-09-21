@@ -857,8 +857,7 @@ export class DocumentStore {
 
         // Batch embedding creation to avoid token limit errors
         // Use size-based batching to prevent 413 errors
-        const maxBatchChars =
-          Number(process.env.DOCS_MCP_EMBEDDING_BATCH_CHARS) || EMBEDDING_BATCH_CHARS;
+        const maxBatchChars = EMBEDDING_BATCH_CHARS;
         const rawEmbeddings: number[][] = [];
 
         let currentBatch: string[] = [];

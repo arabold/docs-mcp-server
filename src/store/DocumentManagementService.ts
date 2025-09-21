@@ -51,16 +51,16 @@ export class DocumentManagementService {
   constructor(
     embeddingConfig?: EmbeddingModelConfig | null,
     pipelineConfig?: PipelineConfiguration,
+    storePath?: string,
   ) {
     let dbPath: string;
     let dbDir: string;
 
-    // 1. Check Environment Variable
-    const envStorePath = process.env.DOCS_MCP_STORE_PATH;
-    if (envStorePath) {
-      dbDir = envStorePath;
+    // 1. Check storePath parameter
+    if (storePath) {
+      dbDir = storePath;
       dbPath = path.join(dbDir, "documents.db");
-      logger.debug(`Using database directory from DOCS_MCP_STORE_PATH: ${dbDir}`);
+      logger.debug(`Using database directory from storePath parameter: ${dbDir}`);
     } else {
       // 2. Check Old Local Path
       const projectRoot = getProjectRoot();

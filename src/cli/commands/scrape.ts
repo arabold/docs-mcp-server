@@ -39,8 +39,12 @@ export async function scrapeAction(
     embeddingModel?: string;
     serverUrl?: string;
   },
+  command?: Command,
 ) {
   const serverUrl = options.serverUrl;
+
+  // Get global options from parent command
+  const globalOptions = command?.parent?.opts() || {};
 
   // Resolve embedding configuration for local execution (scrape needs embeddings)
   const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
@@ -54,6 +58,7 @@ export async function scrapeAction(
   const docService: IDocumentManagement = await createDocumentManagement({
     serverUrl,
     embeddingConfig,
+    storePath: globalOptions.storePath,
   });
   let pipeline: IPipeline | null = null;
 

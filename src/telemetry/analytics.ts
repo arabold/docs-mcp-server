@@ -47,9 +47,13 @@ export class Analytics {
 
     const analytics = new Analytics(shouldEnable);
 
-    // Single log message after everything is initialized
+    // Single log message after everything is initialized with better context
     if (analytics.isEnabled()) {
       logger.debug("Analytics enabled");
+    } else if (!config.isEnabled()) {
+      logger.debug("Analytics disabled (user preference)");
+    } else if (!__POSTHOG_API_KEY__) {
+      logger.debug("Analytics disabled (no API key configured)");
     } else {
       logger.debug("Analytics disabled");
     }
@@ -177,6 +181,50 @@ export class Analytics {
 }
 
 /**
- * Global analytics instance
+ * Global analytics instance - initialized lazily
  */
-export const analytics = Analytics.create();
+let analyticsInstance: Analytics | null = null;
+
+/**
+ * Get the global analytics instance, initializing it if needed
+ */
+export function getAnalytics(): Analytics {
+  if (!analyticsInstance) {
+    // Create a basic analytics instance if not yet initialized
+    analyticsInstance = Analytics.create();
+  }
+  return analyticsInstance;
+}
+
+/**
+ * Initialize telemetry system with proper configuration.
+ * This should be called once at application startup.
+ */
+export function initTelemetry(options: { enabled: boolean; storePath?: string }): void {
+  // Configure telemetry enabled state
+  TelemetryConfig.getInstance().setEnabled(options.enabled);
+
+  // Generate/retrieve installation ID with correct storePath
+  generateInstallationId(options.storePath);
+
+  // Create the analytics instance with proper configuration (only once)
+  analyticsInstance = Analytics.create();
+}
+
+// Export a proxy object that forwards calls to the lazy instance
+export const analytics = {
+  isEnabled: () => getAnalytics().isEnabled(),
+  track: (event: string, properties?: Record<string, unknown>) =>
+    getAnalytics().track(event, properties),
+  captureException: (error: Error, properties?: Record<string, unknown>) =>
+    getAnalytics().captureException(error, properties),
+  setGlobalContext: (context: Record<string, unknown>) =>
+    getAnalytics().setGlobalContext(context),
+  getGlobalContext: () => getAnalytics().getGlobalContext(),
+  shutdown: () => getAnalytics().shutdown(),
+  trackTool: <T>(
+    toolName: string,
+    operation: () => Promise<T>,
+    getProperties?: (result: T) => Record<string, unknown>,
+  ) => getAnalytics().trackTool(toolName, operation, getProperties),
+};

@@ -6,8 +6,8 @@ import { Command, Option } from "commander";
 import packageJson from "../../package.json";
 import {
   analytics,
+  initTelemetry,
   shouldEnableTelemetry,
-  TelemetryConfig,
   TelemetryEvent,
 } from "../telemetry";
 import { createDefaultAction } from "./commands/default";
@@ -21,7 +21,7 @@ import { createSearchCommand } from "./commands/search";
 import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
 import type { GlobalOptions } from "./types";
-import { setupLogging } from "./utils";
+import { createOptionWithEnv, setupLogging } from "./utils";
 
 /**
  * Creates and configures the main CLI program with all commands.
@@ -43,6 +43,13 @@ export function createCliProgram(): Command {
     )
     .addOption(new Option("--silent", "Disable all logging except errors"))
     .addOption(new Option("--no-telemetry", "Disable telemetry collection"))
+    .addOption(
+      createOptionWithEnv(
+        "--store-path <path>",
+        "Custom path for data storage directory",
+        ["DOCS_MCP_STORE_PATH"],
+      ),
+    )
     .enablePositionalOptions()
     .allowExcessArguments(false)
     .showHelpAfterError(true);
@@ -53,6 +60,36 @@ export function createCliProgram(): Command {
 
     // Setup logging
     setupLogging(globalOptions);
+
+    // Handle DOCS_MCP_TELEMETRY environment variable
+    // CLI flag takes precedence over environment variable
+    let telemetryDisabled = globalOptions.noTelemetry || false;
+
+    if (!globalOptions.noTelemetry && process.env.DOCS_MCP_TELEMETRY !== undefined) {
+      const envValue = process.env.DOCS_MCP_TELEMETRY;
+      // "false" or "0" means disable telemetry
+      telemetryDisabled = envValue === "false" || envValue === "0";
+
+      if (process.env.LOG_LEVEL === "DEBUG") {
+        console.log(
+          `Using environment variable DOCS_MCP_TELEMETRY=${envValue} for option --no-telemetry`,
+        );
+      }
+    }
+
+    // Debug: Log the final telemetry decision
+    if (process.env.LOG_LEVEL === "DEBUG") {
+      console.log(`DEBUG: CLI noTelemetry flag = ${globalOptions.noTelemetry}`);
+      console.log(`DEBUG: Final telemetry disabled = ${telemetryDisabled}`);
+      console.log(`DEBUG: Will enable telemetry = ${!telemetryDisabled}`);
+    }
+
+    // Initialize telemetry system with proper configuration
+    // Telemetry is enabled by default, disabled if --no-telemetry is set or DOCS_MCP_TELEMETRY=false
+    initTelemetry({
+      enabled: !telemetryDisabled,
+      storePath: globalOptions.storePath,
+    });
 
     // Initialize telemetry if enabled
     if (shouldEnableTelemetry()) {
@@ -72,8 +109,6 @@ export function createCliProgram(): Command {
         // Store the key for retrieval in postAction
         (actionCommand as { _trackingKey?: string })._trackingKey = commandKey;
       }
-    } else {
-      TelemetryConfig.getInstance().disable();
     }
   });
 

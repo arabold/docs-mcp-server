@@ -78,15 +78,7 @@ export function createDefaultAction(program: Command): Command {
         new Option(
           "--auth-enabled",
           "Enable OAuth2/OIDC authentication for MCP endpoints",
-        )
-          .env("DOCS_MCP_AUTH_ENABLED")
-          .argParser((value) => {
-            if (typeof value === "string") {
-              const normalized = value.toLowerCase();
-              return normalized === "true" || normalized === "1";
-            }
-            return Boolean(value);
-          }),
+        ),
       )
       .addOption(new Option("--no-auth-enabled", "Disable OAuth2/OIDC authentication"))
       .addOption(
@@ -103,6 +95,26 @@ export function createDefaultAction(program: Command): Command {
           ["DOCS_MCP_AUTH_AUDIENCE"],
         ),
       )
+      .hook("preAction", (_thisCommand, actionCommand) => {
+        const options = actionCommand.opts();
+
+        // Handle DOCS_MCP_AUTH_ENABLED environment variable
+        // Only apply if neither --auth-enabled nor --no-auth-enabled was used
+        if (
+          options.authEnabled === undefined &&
+          process.env.DOCS_MCP_AUTH_ENABLED !== undefined
+        ) {
+          const envValue = process.env.DOCS_MCP_AUTH_ENABLED;
+          // "true" or "1" means enable auth
+          options.authEnabled = envValue === "true" || envValue === "1";
+
+          if (process.env.LOG_LEVEL === "DEBUG") {
+            console.log(
+              `Using environment variable DOCS_MCP_AUTH_ENABLED=${envValue} for option --auth-enabled`,
+            );
+          }
+        }
+      })
       .action(
         async (options: {
           protocol: string;
@@ -137,12 +149,18 @@ export function createDefaultAction(program: Command): Command {
             warnHttpUsage(authConfig, port);
           }
 
+          // Get global options from parent command
+          const globalOptions = program.parent?.opts() || {};
+
           // Ensure browsers are installed
           ensurePlaywrightBrowsersInstalled();
 
           // Resolve embedding configuration for local execution (default action needs embeddings)
           const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
-          const docService = await createLocalDocumentManagement(embeddingConfig);
+          const docService = await createLocalDocumentManagement(
+            embeddingConfig,
+            globalOptions.storePath,
+          );
           const pipelineOptions: PipelineOptions = {
             recoverJobs: options.resume || false, // Use --resume flag for job recovery
             concurrency: 3,

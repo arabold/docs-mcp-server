@@ -13,6 +13,7 @@ export interface GlobalOptions {
   verbose?: boolean;
   silent?: boolean;
   noTelemetry?: boolean;
+  storePath?: string;
 }
 
 /**

@@ -328,6 +328,8 @@ Many CLI arguments can be overridden using environment variables. This is useful
 
 | Environment Variable       | CLI Argument           | Description                                     | Used by Commands          |
 | -------------------------- | ---------------------- | ----------------------------------------------- | ------------------------- |
+| `DOCS_MCP_STORE_PATH`      | `--store-path`         | Custom path for data storage directory          | all                       |
+| `DOCS_MCP_TELEMETRY`       | `--no-telemetry`       | Disable telemetry (`false` to disable)          | all                       |
 | `DOCS_MCP_PROTOCOL`        | `--protocol`           | MCP server protocol (auto, stdio, http)         | default, mcp              |
 | `DOCS_MCP_PORT`            | `--port`               | Server port                                     | default, mcp, web, worker |
 | `DOCS_MCP_WEB_PORT`        | `--port` (web command) | Web interface port (web command only)           | web                       |

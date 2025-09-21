@@ -11,14 +11,22 @@ export * from "./trpc/interfaces";
 
 /** Factory to create a document management implementation */
 export async function createDocumentManagement(
-  options: { serverUrl?: string; embeddingConfig?: EmbeddingModelConfig | null } = {},
+  options: {
+    serverUrl?: string;
+    embeddingConfig?: EmbeddingModelConfig | null;
+    storePath?: string;
+  } = {},
 ) {
   if (options.serverUrl) {
     const client = new DocumentManagementClient(options.serverUrl);
     await client.initialize();
     return client as IDocumentManagement;
   }
-  const service = new DocumentManagementService(options.embeddingConfig);
+  const service = new DocumentManagementService(
+    options.embeddingConfig,
+    undefined,
+    options.storePath,
+  );
   await service.initialize();
   return service as IDocumentManagement;
 }
@@ -29,8 +37,9 @@ export async function createDocumentManagement(
  */
 export async function createLocalDocumentManagement(
   embeddingConfig?: EmbeddingModelConfig | null,
+  storePath?: string,
 ) {
-  const service = new DocumentManagementService(embeddingConfig);
+  const service = new DocumentManagementService(embeddingConfig, undefined, storePath);
   await service.initialize();
   return service;
 }
