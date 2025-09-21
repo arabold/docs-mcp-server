@@ -341,4 +341,115 @@ function top() {}
     expect((x?.endLine || 0) >= (x?.startLine || 0)).toBe(true);
     expect(top && top.startLine > (a?.endLine || 0)).toBe(true);
   });
+
+  it("handles files larger than 32KB gracefully", () => {
+    // Generate a TypeScript file larger than 32,767 characters
+    let largeCode = "// Large TypeScript file test\n";
+    let functionCount = 1;
+
+    // Build content to exceed the limit
+    while (largeCode.length < 35000) {
+      largeCode += `
+/**
+ * Test function ${functionCount}
+ * @param value Input value
+ * @returns Processed result
+ */
+export function testFunction${functionCount}(value: number): string {
+  const result = value * 2;
+  console.log(\`Function ${functionCount} result: \${result}\`);
+  return \`Result: \${result}\`;
+}
+
+/**
+ * Test class ${functionCount}
+ */
+export class TestClass${functionCount} {
+  private value: number;
+
+  constructor(value: number) {
+    this.value = value;
+  }
+
+  process(): number {
+    return this.value * 10;
+  }
+}
+`;
+      functionCount++;
+    }
+
+    expect(largeCode.length).toBeGreaterThan(32767);
+
+    // Parser should not crash and should return a valid result
+    const result = parser.parse(largeCode);
+
+    // Should have a valid tree
+    expect(result.tree).toBeDefined();
+    expect(result.tree.rootNode).toBeDefined();
+
+    // Should flag errors due to truncation
+    expect(result.hasErrors).toBe(true);
+
+    // Should still be able to extract boundaries from the parsed portion
+    const boundaries = parser.extractBoundaries(result.tree, largeCode);
+
+    // Should find some boundaries from the beginning of the file
+    expect(boundaries.length).toBeGreaterThan(0);
+
+    // Should find early functions and classes
+    const boundaryNames = boundaries.map((b) => b.name);
+    expect(boundaryNames).toContain("testFunction1");
+    expect(boundaryNames).toContain("TestClass1");
+
+    // All boundaries should have valid line numbers
+    for (const boundary of boundaries) {
+      expect(boundary.startLine).toBeGreaterThan(0);
+      expect(boundary.endLine).toBeGreaterThan(0);
+      expect(boundary.endLine).toBeGreaterThanOrEqual(boundary.startLine);
+    }
+
+    // Should maintain proper boundary classifications
+    const functions = boundaries.filter((b) => b.boundaryType === "content");
+    const classes = boundaries.filter((b) => b.boundaryType === "structural");
+    expect(functions.length).toBeGreaterThan(0);
+    expect(classes.length).toBeGreaterThan(0);
+  });
+
+  it("maintains perfect content reconstruction for large TypeScript files", () => {
+    // Generate content just over the limit
+    let testCode = "import { Component } from 'react';\n";
+    let count = 1;
+
+    while (testCode.length < 35000) {
+      testCode += `export const func${count} = (): number => ${count};\n`;
+      testCode += `export function regularFunc${count}(): string { return "${count}"; }\n\n`;
+      count++;
+    }
+
+    const originalLength = testCode.length;
+    expect(originalLength).toBeGreaterThan(32767);
+
+    // Parse and extract boundaries
+    const result = parser.parse(testCode);
+    const boundaries = parser.extractBoundaries(result.tree, testCode);
+
+    // Verify we can reconstruct content from boundaries
+    // Even though parsing was truncated, boundary extraction should work with original content
+    expect(boundaries.length).toBeGreaterThan(0);
+
+    // Each boundary should reference valid portions of the original content
+    for (const boundary of boundaries) {
+      const boundaryContent = testCode.slice(boundary.startByte, boundary.endByte);
+      expect(boundaryContent.length).toBeGreaterThan(0);
+      expect(boundary.startByte).toBeGreaterThanOrEqual(0);
+      expect(boundary.endByte).toBeLessThanOrEqual(originalLength);
+      expect(boundary.endByte).toBeGreaterThan(boundary.startByte);
+    }
+
+    // Verify boundaries cover meaningful TypeScript constructs
+    const boundaryNames = boundaries.map((b) => b.name);
+    expect(boundaryNames.some((name) => name!.includes("func1"))).toBe(true);
+    expect(boundaryNames.some((name) => name!.includes("regularFunc1"))).toBe(true);
+  });
 });

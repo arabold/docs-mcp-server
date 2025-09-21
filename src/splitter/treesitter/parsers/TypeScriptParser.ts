@@ -13,7 +13,7 @@
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import type { CodeBoundary, LanguageParser, ParseResult, StructuralNode } from "./types";
-import { StructuralNodeType } from "./types";
+import { StructuralNodeType, TREE_SITTER_SIZE_LIMIT } from "./types";
 
 /**
  * Helper: language selection (TS vs TSX).
@@ -362,15 +362,52 @@ export class TypeScriptParser implements LanguageParser {
   }
 
   parse(source: string): ParseResult {
-    const parser = this.createParser(source);
-    const tree = parser.parse(source);
-    const errorNodes: SyntaxNode[] = [];
-    this.collectErrorNodes(tree.rootNode, errorNodes);
-    return {
-      tree,
-      hasErrors: errorNodes.length > 0,
-      errorNodes,
-    };
+    // Handle tree-sitter size limit
+    if (source.length > TREE_SITTER_SIZE_LIMIT) {
+      // For files exceeding the limit, we truncate at a reasonable boundary and return a limited parse
+      // Try to find a good truncation point (end of line)
+      let truncatedSource = source.slice(0, TREE_SITTER_SIZE_LIMIT);
+      const lastNewline = truncatedSource.lastIndexOf("\n");
+      if (lastNewline > TREE_SITTER_SIZE_LIMIT * 0.9) {
+        // If we can find a newline in the last 10% of the limit, use that
+        truncatedSource = source.slice(0, lastNewline + 1);
+      }
+
+      try {
+        const parser = this.createParser(truncatedSource);
+        const tree = parser.parse(truncatedSource);
+        const errorNodes: SyntaxNode[] = [];
+        this.collectErrorNodes(tree.rootNode, errorNodes);
+
+        return {
+          tree,
+          hasErrors: true, // Mark as having errors due to truncation
+          errorNodes,
+        };
+      } catch (error) {
+        throw new Error(
+          `Failed to parse truncated TypeScript file (${truncatedSource.length} chars): ${(error as Error).message}`,
+        );
+      }
+    }
+
+    // Normal parsing for files within the size limit
+    try {
+      const parser = this.createParser(source);
+      const tree = parser.parse(source);
+      const errorNodes: SyntaxNode[] = [];
+      this.collectErrorNodes(tree.rootNode, errorNodes);
+
+      return {
+        tree,
+        hasErrors: errorNodes.length > 0,
+        errorNodes,
+      };
+    } catch (error) {
+      throw new Error(
+        `Failed to parse TypeScript file (${source.length} chars): ${(error as Error).message}`,
+      );
+    }
   }
 
   private collectErrorNodes(node: SyntaxNode, acc: SyntaxNode[]): void {

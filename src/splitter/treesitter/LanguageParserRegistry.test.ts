@@ -17,6 +17,10 @@ describe("LanguageParserRegistry", () => {
       expect(registry.getSupportedLanguages()).toContain("javascript");
     });
 
+    it("should initialize with Python parser", () => {
+      expect(registry.getSupportedLanguages()).toContain("python");
+    });
+
     it("should register JavaScript file extensions", () => {
       expect(registry.isExtensionSupported(".js")).toBe(true);
       expect(registry.isExtensionSupported(".jsx")).toBe(true);
@@ -24,11 +28,24 @@ describe("LanguageParserRegistry", () => {
       expect(registry.isExtensionSupported(".cjs")).toBe(true);
     });
 
+    it("should register Python file extensions", () => {
+      expect(registry.isExtensionSupported(".py")).toBe(true);
+      expect(registry.isExtensionSupported(".pyi")).toBe(true);
+      expect(registry.isExtensionSupported(".pyw")).toBe(true);
+    });
+
     it("should register JavaScript MIME types", () => {
       expect(registry.isMimeTypeSupported("text/javascript")).toBe(true);
       expect(registry.isMimeTypeSupported("application/javascript")).toBe(true);
       expect(registry.isMimeTypeSupported("text/jsx")).toBe(true);
       expect(registry.isMimeTypeSupported("application/jsx")).toBe(true);
+    });
+
+    it("should register Python MIME types", () => {
+      expect(registry.isMimeTypeSupported("text/python")).toBe(true);
+      expect(registry.isMimeTypeSupported("text/x-python")).toBe(true);
+      expect(registry.isMimeTypeSupported("application/python")).toBe(true);
+      expect(registry.isMimeTypeSupported("application/x-python")).toBe(true);
     });
   });
 
@@ -39,10 +56,22 @@ describe("LanguageParserRegistry", () => {
       expect(parser?.name).toBe("javascript");
     });
 
+    it("should find Python parser by language name", () => {
+      const parser = registry.getParser("python");
+      expect(parser).toBeDefined();
+      expect(parser?.name).toBe("python");
+    });
+
     it("should find parser by file extension", () => {
       const parser = registry.getParserByExtension(".js");
       expect(parser).toBeDefined();
       expect(parser?.name).toBe("javascript");
+    });
+
+    it("should find Python parser by file extension", () => {
+      const parser = registry.getParserByExtension(".py");
+      expect(parser).toBeDefined();
+      expect(parser?.name).toBe("python");
     });
 
     it("should find parser by MIME type", () => {
@@ -51,32 +80,43 @@ describe("LanguageParserRegistry", () => {
       expect(parser?.name).toBe("javascript");
     });
 
+    it("should find Python parser by MIME type", () => {
+      const parser = registry.getParserByMimeType("text/python");
+      expect(parser).toBeDefined();
+      expect(parser?.name).toBe("python");
+    });
+
     it("should handle case insensitive lookups", () => {
       expect(registry.getParserByExtension(".JS")).toBeDefined();
       expect(registry.getParserByMimeType("TEXT/JAVASCRIPT")).toBeDefined();
+      expect(registry.getParserByExtension(".PY")).toBeDefined();
+      expect(registry.getParserByMimeType("TEXT/PYTHON")).toBeDefined();
     });
 
     it("should return undefined for unsupported languages", () => {
-      expect(registry.getParser("python")).toBeUndefined();
-      expect(registry.getParserByExtension(".py")).toBeUndefined();
-      expect(registry.getParserByMimeType("text/python")).toBeUndefined();
+      expect(registry.getParser("ruby")).toBeUndefined();
+      expect(registry.getParserByExtension(".rb")).toBeUndefined();
+      expect(registry.getParserByMimeType("text/ruby")).toBeUndefined();
     });
   });
 
   describe("supported checks", () => {
     it("should correctly identify supported languages", () => {
       expect(registry.isLanguageSupported("javascript")).toBe(true);
-      expect(registry.isLanguageSupported("python")).toBe(false);
+      expect(registry.isLanguageSupported("python")).toBe(true);
+      expect(registry.isLanguageSupported("ruby")).toBe(false);
     });
 
     it("should correctly identify supported extensions", () => {
       expect(registry.isExtensionSupported(".js")).toBe(true);
-      expect(registry.isExtensionSupported(".py")).toBe(false);
+      expect(registry.isExtensionSupported(".py")).toBe(true);
+      expect(registry.isExtensionSupported(".rb")).toBe(false);
     });
 
     it("should correctly identify supported MIME types", () => {
       expect(registry.isMimeTypeSupported("text/javascript")).toBe(true);
-      expect(registry.isMimeTypeSupported("text/python")).toBe(false);
+      expect(registry.isMimeTypeSupported("text/python")).toBe(true);
+      expect(registry.isMimeTypeSupported("text/ruby")).toBe(false);
     });
   });
 
