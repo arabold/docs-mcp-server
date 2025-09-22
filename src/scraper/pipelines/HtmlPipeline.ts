@@ -10,6 +10,7 @@ import { HtmlSanitizerMiddleware } from "../middleware";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
 import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
 import { HtmlMetadataExtractorMiddleware } from "../middleware/HtmlMetadataExtractorMiddleware";
+import { HtmlNormalizationMiddleware } from "../middleware/HtmlNormalizationMiddleware";
 import { HtmlPlaywrightMiddleware } from "../middleware/HtmlPlaywrightMiddleware";
 import { HtmlToMarkdownMiddleware } from "../middleware/HtmlToMarkdownMiddleware";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
@@ -40,6 +41,7 @@ export class HtmlPipeline extends BasePipeline {
       new HtmlMetadataExtractorMiddleware(),
       new HtmlLinkExtractorMiddleware(),
       new HtmlSanitizerMiddleware(),
+      new HtmlNormalizationMiddleware(),
       new HtmlToMarkdownMiddleware(),
     ];
 
