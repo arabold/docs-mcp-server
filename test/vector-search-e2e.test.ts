@@ -13,7 +13,7 @@ import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
-import type { EmbeddingModelConfig } from "../src/store/embeddings/EmbeddingConfig";
+import { EmbeddingConfig, type EmbeddingModelConfig } from "../src/store/embeddings/EmbeddingConfig";
 
 // Load environment variables from .env file
 config();
@@ -36,11 +36,18 @@ describe("Vector Search End-to-End Tests", () => {
     const testDbPath = `/tmp/test-${Date.now()}.db`;
     process.env.DOCS_MCP_STORE_PATH = path.dirname(testDbPath);
     
-    // Use default embedding config from environment
-    // This will use OPENAI_API_KEY or other configured providers
-    const embeddingConfig = undefined; // Let DocumentManagementService use environment
+    // Create explicit embedding configuration
+    let embeddingConfig: EmbeddingModelConfig;
+    if (process.env.OPENAI_API_KEY) {
+      embeddingConfig = EmbeddingConfig.parseEmbeddingConfig("openai:text-embedding-3-small");
+    } else if (process.env.GOOGLE_API_KEY) {
+      embeddingConfig = EmbeddingConfig.parseEmbeddingConfig("gemini:embedding-001");
+    } else {
+      // Fallback (shouldn't reach here due to check above)
+      embeddingConfig = EmbeddingConfig.parseEmbeddingConfig("text-embedding-3-small");
+    }
 
-    // Initialize DocumentManagementService
+    // Initialize DocumentManagementService with explicit config
     docService = new DocumentManagementService(embeddingConfig);
     await docService.initialize();
 

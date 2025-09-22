@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
-import type { ScraperOptions } from "../scraper/types";
 import { CancelJobTool } from "./CancelJobTool";
 
 // Mock dependencies
@@ -25,7 +24,6 @@ describe("CancelJobTool", () => {
     version: "1.0.0",
     status,
     createdAt: new Date("2023-01-01T10:00:00Z"),
-    options: { library: "lib-a", version: "1.0.0", url: "url1" } as ScraperOptions,
     progress: null,
     error: status === PipelineJobStatus.FAILED ? new Error("Job failed") : null,
     startedAt:
@@ -36,10 +34,6 @@ describe("CancelJobTool", () => {
       status === PipelineJobStatus.CANCELLED
         ? new Date("2023-01-01T10:15:00Z")
         : null,
-    abortController: new AbortController(),
-    completionPromise: Promise.resolve(),
-    resolveCompletion: () => {},
-    rejectCompletion: () => {},
     sourceUrl: "url1",
     scraperOptions: null,
   });

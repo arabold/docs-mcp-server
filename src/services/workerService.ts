@@ -18,25 +18,6 @@ export async function registerWorkerService(pipeline: IPipeline): Promise<void> 
       logger.debug(
         `Job ${job.id} progress: ${progress.pagesScraped}/${progress.totalPages} pages`,
       );
-
-      // Track job progress for analytics with enhanced metrics
-      analytics.track(TelemetryEvent.PIPELINE_JOB_PROGRESS, {
-        jobId: job.id, // Job IDs are already anonymous
-        library: job.library,
-        pagesScraped: progress.pagesScraped,
-        totalPages: progress.totalPages,
-        totalDiscovered: progress.totalDiscovered,
-        progressPercent: Math.round((progress.pagesScraped / progress.totalPages) * 100),
-        currentDepth: progress.depth,
-        maxDepth: progress.maxDepth,
-        discoveryRatio: Math.round(
-          (progress.totalDiscovered / progress.totalPages) * 100,
-        ), // How much we discovered vs limited total
-        queueEfficiency:
-          progress.totalPages > 0
-            ? Math.round((progress.pagesScraped / progress.totalPages) * 100)
-            : 0,
-      });
     },
     onJobStatusChange: async (job) => {
       logger.debug(`Job ${job.id} status changed to: ${job.status}`);

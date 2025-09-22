@@ -6,6 +6,18 @@ The Docs MCP Server supports optional OAuth2 authentication for HTTP endpoints, 
 
 **Important**: The Docs MCP Server is an **OAuth2 protected resource**, not an OAuth2 authorization server. It relies on external OAuth2 providers (such as Auth0, Clerk, Keycloak, or Azure AD) for authentication and authorization. The server validates JWT tokens issued by these providers but does not issue tokens itself.
 
+## Security Scope
+
+OAuth2 authentication **only protects MCP endpoints** (`/mcp`, `/sse`). The tRPC API endpoints (`/api`) used for internal pipeline communication are **not protected** by OAuth2 authentication.
+
+**Important Security Notice**: When deploying workers in distributed environments, ensure that tRPC API endpoints are secured at the network level (e.g., within a private VPC, Kubernetes cluster network, or through Docker Compose internal networking). These endpoints should never be exposed to the public internet without additional security measures.
+
+**Deployment Security**:
+
+- **MCP endpoints** - Protected by OAuth2 when `--auth-enabled` is used
+- **tRPC API endpoints** - Must be secured through network-level controls
+- **Web interface** - Can be protected by OAuth2 when enabled on the default command
+
 ## Architecture
 
 The authentication system uses a **binary authentication model** with OAuth2 proxy support, providing secure access control while maintaining compatibility with any RFC 6749 compliant OAuth2 provider.

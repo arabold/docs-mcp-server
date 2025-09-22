@@ -6,8 +6,8 @@ import { Command, Option } from "commander";
 import packageJson from "../../package.json";
 import {
   analytics,
+  initTelemetry,
   shouldEnableTelemetry,
-  TelemetryConfig,
   TelemetryEvent,
 } from "../telemetry";
 import { createDefaultAction } from "./commands/default";
@@ -42,7 +42,26 @@ export function createCliProgram(): Command {
       new Option("--verbose", "Enable verbose (debug) logging").conflicts("silent"),
     )
     .addOption(new Option("--silent", "Disable all logging except errors"))
+    .addOption(
+      new Option("--telemetry", "Enable telemetry collection")
+        .env("DOCS_MCP_TELEMETRY")
+        .argParser((value) => {
+          if (value === undefined) {
+            return (
+              process.env.DOCS_MCP_TELEMETRY !== "false" &&
+              process.env.DOCS_MCP_TELEMETRY !== "0"
+            );
+          }
+          return value;
+        })
+        .default(true),
+    )
     .addOption(new Option("--no-telemetry", "Disable telemetry collection"))
+    .addOption(
+      new Option("--store-path <path>", "Custom path for data storage directory").env(
+        "DOCS_MCP_STORE_PATH",
+      ),
+    )
     .enablePositionalOptions()
     .allowExcessArguments(false)
     .showHelpAfterError(true);
@@ -53,6 +72,12 @@ export function createCliProgram(): Command {
 
     // Setup logging
     setupLogging(globalOptions);
+
+    // Initialize telemetry system with proper configuration
+    initTelemetry({
+      enabled: globalOptions.telemetry ?? true,
+      storePath: globalOptions.storePath,
+    });
 
     // Initialize telemetry if enabled
     if (shouldEnableTelemetry()) {
@@ -72,8 +97,6 @@ export function createCliProgram(): Command {
         // Store the key for retrieval in postAction
         (actionCommand as { _trackingKey?: string })._trackingKey = commandKey;
       }
-    } else {
-      TelemetryConfig.getInstance().disable();
     }
   });
 

@@ -10,42 +10,18 @@ import envPaths from "env-paths";
 
 export class TelemetryConfig {
   private static instance?: TelemetryConfig;
-  private enabled: boolean;
+  private enabled: boolean = true; // Default to enabled
 
-  constructor() {
-    this.enabled = this.determineEnabledState();
-  }
-
-  /**
-   * Determines if telemetry should be enabled based on CLI flags and environment variables.
-   * Priority: CLI flags > environment variables > default (true)
-   */
-  private determineEnabledState(): boolean {
-    // Environment variable takes precedence
-    if (process.env.DOCS_MCP_TELEMETRY === "false") {
-      return false;
-    }
-
-    // Check for CLI flag (passed during initialization)
-    const args = process.argv;
-    if (args.includes("--no-telemetry")) {
-      return false;
-    }
-
-    // Default to enabled for optional analytics
-    return true;
+  private constructor() {
+    // Private constructor for singleton pattern
   }
 
   isEnabled(): boolean {
     return this.enabled;
   }
 
-  disable(): void {
-    this.enabled = false;
-  }
-
-  enable(): void {
-    this.enabled = true;
+  setEnabled(enabled: boolean): void {
+    this.enabled = enabled;
   }
 
   static getInstance(): TelemetryConfig {
@@ -59,14 +35,13 @@ export class TelemetryConfig {
 /**
  * Generate or retrieve a persistent installation identifier.
  * Creates a UUID and stores it in a file in the user data directory.
- * Supports DOCS_MCP_STORE_PATH environment variable override for Docker deployments.
+ * Supports custom store path override for Docker deployments.
  * This ensures truly unique identification that persists across runs.
  */
-export function generateInstallationId(): string {
+export function generateInstallationId(storePath?: string): string {
   try {
-    // Use DOCS_MCP_STORE_PATH if set (for Docker/custom deployments), otherwise use standard paths
-    const envStorePath = process.env.DOCS_MCP_STORE_PATH;
-    const dataDir = envStorePath || envPaths("docs-mcp-server", { suffix: "" }).data;
+    // Use storePath if provided, otherwise use standard paths
+    const dataDir = storePath || envPaths("docs-mcp-server", { suffix: "" }).data;
     const installationIdPath = path.join(dataDir, "installation.id");
 
     // Try to read existing installation ID

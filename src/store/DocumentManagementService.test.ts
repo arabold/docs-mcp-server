@@ -104,6 +104,9 @@ describe("DocumentManagementService", () => {
     // Ensure envPaths mock is reset/set for general tests
     mockEnvPathsFn.mockReturnValue(mockEnvPaths);
 
+    // Set OPENAI_API_KEY for tests to enable default embedding behavior
+    process.env.OPENAI_API_KEY = "test-api-key";
+
     // Initialize the main service instance used by most tests
     // This will now use memfs for its internal fs calls
     docService = new DocumentManagementService();
@@ -158,37 +161,29 @@ describe("DocumentManagementService", () => {
       expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(true);
     });
 
-    it("should use the path from DOCS_MCP_STORE_PATH environment variable if set", () => {
-      const mockEnvStorePath = "/mock/env/store/path";
-      const expectedEnvDbPath = path.join(mockEnvStorePath, "documents.db");
-      const originalEnvValue = process.env.DOCS_MCP_STORE_PATH; // Store original value
-      process.env.DOCS_MCP_STORE_PATH = mockEnvStorePath; // Set env var
+    it("should use custom store path when provided via constructor", () => {
+      const customStorePath = "/mock/env/store/path";
+      const expectedCustomDbPath = path.join(customStorePath, "documents.db");
 
-      try {
-        // Ensure neither old nor standard paths exist initially for isolation
-        // (vol.reset() in beforeEach should handle this)
+      // Instantiate LOCALLY for this specific test with custom store path
+      const _localDocService = new DocumentManagementService(
+        undefined,
+        undefined,
+        customStorePath,
+      );
 
-        // Instantiate LOCALLY for this specific test
-        const _localDocService = new DocumentManagementService();
-
-        // Verify DocumentStore was called with the env var path
-        expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
-          expectedEnvDbPath,
-          undefined,
-        );
-        // Verify the env var directory was created in memfs
-        expect(vol.existsSync(mockEnvStorePath)).toBe(true);
-        // Verify other paths were NOT created (optional but good check)
-        expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(false);
-        expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(false);
-        // Verify envPaths was NOT called
-        expect(mockEnvPathsFn).not.toHaveBeenCalled();
-        // Verify fs.existsSync was NOT called for the old path check
-        // (We need to spy on fs.existsSync for this) - Let's skip this assertion for now as it requires more mock setup
-      } finally {
-        // Restore original env var value
-        process.env.DOCS_MCP_STORE_PATH = originalEnvValue;
-      }
+      // Verify DocumentStore was called with the custom path
+      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
+        expectedCustomDbPath,
+        undefined,
+      );
+      // Verify the custom directory was created in memfs
+      expect(vol.existsSync(customStorePath)).toBe(true);
+      // Verify other paths were NOT created (optional but good check)
+      expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(false);
+      expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(false);
+      // Verify envPaths was NOT called
+      expect(mockEnvPathsFn).not.toHaveBeenCalled();
     });
   });
 
@@ -1283,7 +1278,7 @@ describe("DocumentManagementService", () => {
     });
 
     describe("cleanup", () => {
-      it("should call close() on all pipelines during shutdown()", async () => {
+      it("should shutdown without errors", async () => {
         const service = new DocumentManagementService({
           provider: "openai",
           model: "text-embedding-ada-002",
@@ -1291,36 +1286,7 @@ describe("DocumentManagementService", () => {
           modelSpec: "openai:text-embedding-ada-002",
         });
 
-        // Spy on pipeline close methods
-        const pipelines = service.pipelines;
-        const closeSpies = pipelines.map((pipeline) =>
-          vi.spyOn(pipeline, "close").mockResolvedValue(),
-        );
-
-        await service.shutdown();
-
-        // Verify pipeline cleanup was called before store shutdown
-        closeSpies.forEach((spy) => {
-          expect(spy).toHaveBeenCalledOnce();
-        });
-        expect(mockStore.shutdown).toHaveBeenCalledOnce();
-      });
-
-      it("should handle pipeline cleanup errors gracefully during shutdown", async () => {
-        const service = new DocumentManagementService({
-          provider: "openai",
-          model: "text-embedding-ada-002",
-          dimensions: 1536,
-          modelSpec: "openai:text-embedding-ada-002",
-        });
-
-        // Mock one pipeline to throw error during cleanup
-        const pipelines = service.pipelines;
-        vi.spyOn(pipelines[0], "close").mockRejectedValue(
-          new Error("Pipeline cleanup failed"),
-        );
-
-        // Should still complete shutdown
+        // Should complete shutdown without errors
         await expect(service.shutdown()).resolves.not.toThrow();
         expect(mockStore.shutdown).toHaveBeenCalledOnce();
       });

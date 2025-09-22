@@ -292,7 +292,9 @@ describe("FetchUrlTool", () => {
       });
 
       // Spy on pipeline close methods
+      // @ts-expect-error Accessing private property for testing
       const closeSpy1 = vi.spyOn(fetchUrlTool.pipelines[0], "close");
+      // @ts-expect-error Accessing private property for testing
       const closeSpy2 = vi.spyOn(fetchUrlTool.pipelines[1], "close");
 
       await fetchUrlTool.execute(options);
@@ -314,7 +316,9 @@ describe("FetchUrlTool", () => {
         .mockRejectedValue(new ScraperError("Fetch failed", true));
 
       // Spy on pipeline close methods
+      // @ts-expect-error Accessing private property for testing
       const closeSpy1 = vi.spyOn(fetchUrlTool.pipelines[0], "close");
+      // @ts-expect-error Accessing private property for testing
       const closeSpy2 = vi.spyOn(fetchUrlTool.pipelines[1], "close");
 
       // Expect error to be thrown
@@ -339,6 +343,7 @@ describe("FetchUrlTool", () => {
       });
 
       // Mock one pipeline to throw error during cleanup
+      // @ts-expect-error Accessing private property for testing
       vi.spyOn(fetchUrlTool.pipelines[0], "close").mockRejectedValue(
         new Error("Pipeline cleanup failed"),
       );

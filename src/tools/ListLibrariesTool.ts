@@ -1,6 +1,5 @@
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import type { VersionStatus, VersionSummary } from "../store/types";
-import { analytics } from "../telemetry";
 
 // Define the structure for the tool's output, using the detailed version info
 export interface LibraryInfo {
@@ -32,36 +31,24 @@ export class ListLibrariesTool {
   }
 
   async execute(_options?: Record<string, never>): Promise<ListLibrariesResult> {
-    return analytics.trackTool(
-      "list_libraries",
-      async () => {
-        // docService.listLibraries() now returns the detailed structure directly
-        const rawLibraries = await this.docService.listLibraries();
+    // docService.listLibraries() now returns the detailed structure directly
+    const rawLibraries = await this.docService.listLibraries();
 
-        // The structure returned by listLibraries already matches LibraryInfo[]
-        // No complex mapping is needed here anymore, just ensure the names match
-        const libraries: LibraryInfo[] = rawLibraries.map(({ library, versions }) => ({
-          name: library,
-          versions: versions.map((v: VersionSummary) => ({
-            version: v.ref.version,
-            documentCount: v.counts.documents,
-            uniqueUrlCount: v.counts.uniqueUrls,
-            indexedAt: v.indexedAt,
-            status: v.status,
-            ...(v.progress ? { progress: v.progress } : undefined),
-            sourceUrl: v.sourceUrl,
-          })),
-        }));
+    // The structure returned by listLibraries already matches LibraryInfo[]
+    // No complex mapping is needed here anymore, just ensure the names match
+    const libraries: LibraryInfo[] = rawLibraries.map(({ library, versions }) => ({
+      name: library,
+      versions: versions.map((v: VersionSummary) => ({
+        version: v.ref.version,
+        documentCount: v.counts.documents,
+        uniqueUrlCount: v.counts.uniqueUrls,
+        indexedAt: v.indexedAt,
+        status: v.status,
+        ...(v.progress ? { progress: v.progress } : undefined),
+        sourceUrl: v.sourceUrl,
+      })),
+    }));
 
-        return { libraries };
-      },
-      (result) => ({
-        libraryCount: result.libraries.length,
-        totalVersions: result.libraries.reduce(
-          (sum, lib) => sum + lib.versions.length,
-          0,
-        ),
-      }),
-    );
+    return { libraries };
   }
 }

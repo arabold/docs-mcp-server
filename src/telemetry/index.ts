@@ -9,7 +9,7 @@
  */
 
 // Core analytics and tracking
-export { analytics, TelemetryEvent } from "./analytics";
+export { analytics, initTelemetry, TelemetryEvent } from "./analytics";
 export type * from "./eventTypes";
 export * from "./sanitizer";
 // Configuration and privacy

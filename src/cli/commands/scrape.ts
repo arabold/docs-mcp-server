@@ -3,11 +3,13 @@
  */
 
 import type { Command } from "commander";
+import { Option } from "commander";
 import type { PipelineOptions } from "../../pipeline";
 import type { IPipeline } from "../../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../../scraper/types";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import {
   DEFAULT_MAX_CONCURRENCY,
@@ -35,13 +37,35 @@ export async function scrapeAction(
     includePattern: string[];
     excludePattern: string[];
     header: string[];
+    embeddingModel?: string;
     serverUrl?: string;
   },
+  command?: Command,
 ) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "scrape",
+    library,
+    version: options.version,
+    url,
+    maxPages: Number.parseInt(options.maxPages, 10),
+    maxDepth: Number.parseInt(options.maxDepth, 10),
+    maxConcurrency: Number.parseInt(options.maxConcurrency, 10),
+    scope: options.scope,
+    scrapeMode: options.scrapeMode,
+    followRedirects: options.followRedirects,
+    hasHeaders: options.header.length > 0,
+    hasIncludePatterns: options.includePattern.length > 0,
+    hasExcludePatterns: options.excludePattern.length > 0,
+    useServerUrl: !!options.serverUrl,
+  });
+
   const serverUrl = options.serverUrl;
 
+  // Get global options from parent command
+  const globalOptions = command?.parent?.opts() || {};
+
   // Resolve embedding configuration for local execution (scrape needs embeddings)
-  const embeddingConfig = resolveEmbeddingContext();
+  const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
   if (!serverUrl && !embeddingConfig) {
     throw new Error(
       "Embedding configuration is required for local scraping. " +
@@ -52,6 +76,7 @@ export async function scrapeAction(
   const docService: IDocumentManagement = await createDocumentManagement({
     serverUrl,
     embeddingConfig,
+    storePath: globalOptions.storePath,
   });
   let pipeline: IPipeline | null = null;
 
@@ -185,6 +210,12 @@ export function createScrapeCommand(program: Command): Command {
       "Custom HTTP header to send with each request (can be specified multiple times)",
       (val: string, prev: string[] = []) => prev.concat([val]),
       [] as string[],
+    )
+    .addOption(
+      new Option(
+        "--embedding-model <model>",
+        "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+      ).env("DOCS_MCP_EMBEDDING_MODEL"),
     )
     .option(
       "--server-url <url>",

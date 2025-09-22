@@ -20,10 +20,10 @@ export enum TelemetryEvent {
   APP_SHUTDOWN = "app_shutdown",
   CLI_COMMAND = "cli_command",
   TOOL_USED = "tool_used",
-  HTTP_REQUEST_COMPLETED = "http_request_completed",
-  PIPELINE_JOB_PROGRESS = "pipeline_job_progress",
   PIPELINE_JOB_COMPLETED = "pipeline_job_completed",
   DOCUMENT_PROCESSED = "document_processed",
+  WEB_SEARCH_PERFORMED = "web_search_performed",
+  WEB_SCRAPE_STARTED = "web_scrape_started",
 }
 
 /**
@@ -47,9 +47,13 @@ export class Analytics {
 
     const analytics = new Analytics(shouldEnable);
 
-    // Single log message after everything is initialized
+    // Single log message after everything is initialized with better context
     if (analytics.isEnabled()) {
       logger.debug("Analytics enabled");
+    } else if (!config.isEnabled()) {
+      logger.debug("Analytics disabled (user preference)");
+    } else if (!__POSTHOG_API_KEY__) {
+      logger.debug("Analytics disabled (no API key configured)");
     } else {
       logger.debug("Analytics disabled");
     }
@@ -132,51 +136,51 @@ export class Analytics {
   isEnabled(): boolean {
     return this.enabled;
   }
-
-  /**
-   * Track tool usage with error handling and automatic timing
-   */
-  async trackTool<T>(
-    toolName: string,
-    operation: () => Promise<T>,
-    getProperties?: (result: T) => Record<string, unknown>,
-  ): Promise<T> {
-    const startTime = Date.now();
-
-    try {
-      const result = await operation();
-
-      this.track(TelemetryEvent.TOOL_USED, {
-        tool: toolName,
-        success: true,
-        durationMs: Date.now() - startTime,
-        ...(getProperties ? getProperties(result) : {}),
-      });
-
-      return result;
-    } catch (error) {
-      // Track the tool usage failure
-      this.track(TelemetryEvent.TOOL_USED, {
-        tool: toolName,
-        success: false,
-        durationMs: Date.now() - startTime,
-      });
-
-      // Capture the exception with full error tracking
-      if (error instanceof Error) {
-        this.captureException(error, {
-          tool: toolName,
-          context: "tool_execution",
-          durationMs: Date.now() - startTime,
-        });
-      }
-
-      throw error;
-    }
-  }
 }
 
 /**
- * Global analytics instance
+ * Global analytics instance - initialized lazily
  */
-export const analytics = Analytics.create();
+let analyticsInstance: Analytics | null = null;
+
+/**
+ * Get the global analytics instance, initializing it if needed
+ */
+export function getAnalytics(): Analytics {
+  if (!analyticsInstance) {
+    // Create a basic analytics instance if not yet initialized
+    analyticsInstance = Analytics.create();
+  }
+  return analyticsInstance;
+}
+
+/**
+ * Initialize telemetry system with proper configuration.
+ * This should be called once at application startup.
+ */
+export function initTelemetry(options: { enabled: boolean; storePath?: string }): void {
+  // Configure telemetry enabled state
+  TelemetryConfig.getInstance().setEnabled(options.enabled);
+
+  // Generate/retrieve installation ID with correct storePath
+  generateInstallationId(options.storePath);
+
+  // Create the analytics instance with proper configuration (only once)
+  analyticsInstance = Analytics.create();
+}
+
+// Export a proxy object that caches the analytics instance after first access
+export const analytics = new Proxy({} as Analytics, {
+  get(target, prop) {
+    // Cache the analytics instance on first property access
+    if (!target.isEnabled) {
+      const instance = getAnalytics();
+      // Copy all methods and properties to the target for future direct access
+      Object.setPrototypeOf(target, Object.getPrototypeOf(instance));
+      Object.assign(target, instance);
+    }
+
+    // Forward the property access to the cached instance
+    return target[prop as keyof Analytics];
+  },
+});

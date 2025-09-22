@@ -29,35 +29,17 @@ describe("TelemetryConfig", () => {
   });
 
   it("should be enabled by default", () => {
-    delete process.env.DOCS_MCP_TELEMETRY;
-    process.argv = ["node", "script.js"];
-
-    const config = new TelemetryConfig();
+    const config = TelemetryConfig.getInstance();
+    config.setEnabled(true); // Reset to default
     expect(config.isEnabled()).toBe(true);
   });
 
-  it("should disable when environment variable is false", () => {
-    process.env.DOCS_MCP_TELEMETRY = "false";
-    process.argv = ["node", "script.js"];
-
-    const config = new TelemetryConfig();
-    expect(config.isEnabled()).toBe(false);
-  });
-
-  it("should disable when --no-telemetry flag is present", () => {
-    delete process.env.DOCS_MCP_TELEMETRY;
-    process.argv = ["node", "script.js", "--no-telemetry"];
-
-    const config = new TelemetryConfig();
-    expect(config.isEnabled()).toBe(false);
-  });
-
   it("should allow runtime enable/disable", () => {
-    const config = new TelemetryConfig();
-    config.disable();
+    const config = TelemetryConfig.getInstance();
+    config.setEnabled(false);
     expect(config.isEnabled()).toBe(false);
 
-    config.enable();
+    config.setEnabled(true);
     expect(config.isEnabled()).toBe(true);
   });
 });
@@ -99,16 +81,14 @@ describe("generateInstallationId", () => {
     );
   });
 
-  it("should use DOCS_MCP_STORE_PATH environment variable when set", () => {
+  it("should use custom store path when provided", () => {
     const customPath = "/custom/store/path";
-    const originalEnv = process.env.DOCS_MCP_STORE_PATH;
-    process.env.DOCS_MCP_STORE_PATH = customPath;
 
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.writeFileSync).mockImplementation(() => {});
     vi.mocked(fs.mkdirSync).mockImplementation(() => "");
 
-    const id = generateInstallationId();
+    const id = generateInstallationId(customPath);
 
     expect(id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
@@ -119,13 +99,6 @@ describe("generateInstallationId", () => {
       id,
       "utf8",
     );
-
-    // Cleanup
-    if (originalEnv !== undefined) {
-      process.env.DOCS_MCP_STORE_PATH = originalEnv;
-    } else {
-      delete process.env.DOCS_MCP_STORE_PATH;
-    }
   });
 });
 

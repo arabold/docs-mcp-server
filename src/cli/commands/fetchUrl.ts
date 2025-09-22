@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 import { FileFetcher, HttpFetcher } from "../../scraper/fetcher";
 import { ScrapeMode } from "../../scraper/types";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
 import { parseHeaders } from "../utils";
 
@@ -12,10 +13,17 @@ export async function fetchUrlAction(
   url: string,
   options: { followRedirects: boolean; scrapeMode: ScrapeMode; header: string[] },
 ) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "fetch-url",
+    url,
+    scrapeMode: options.scrapeMode,
+    followRedirects: options.followRedirects,
+    hasHeaders: options.header.length > 0,
+  });
+
   const headers = parseHeaders(options.header);
   const fetchUrlTool = new FetchUrlTool(new HttpFetcher(), new FileFetcher());
 
-  // Call the tool directly - tracking is now handled inside the tool
   const content = await fetchUrlTool.execute({
     url,
     followRedirects: options.followRedirects,

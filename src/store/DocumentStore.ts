@@ -375,9 +375,9 @@ export class DocumentStore {
   }
 
   /**
-   * Initialize the embeddings client using either provided config or environment variables.
-   * If no embedding config is provided (null), embeddings will not be initialized.
-   * This allows DocumentStore to be used without embeddings for operations that don't need them.
+   * Initialize the embeddings client using the provided config.
+   * If no embedding config is provided (null or undefined), embeddings will not be initialized.
+   * This allows DocumentStore to be used without embeddings for FTS-only operations.
    *
    * Environment variables per provider:
    * - openai: OPENAI_API_KEY (and optionally OPENAI_API_BASE, OPENAI_ORG_ID)
@@ -387,14 +387,15 @@ export class DocumentStore {
    * - microsoft: Azure OpenAI credentials (AZURE_OPENAI_API_*)
    */
   private async initializeEmbeddings(): Promise<void> {
-    // If embedding config is explicitly null, skip embedding initialization
-    if (this.embeddingConfig === null) {
-      logger.debug("Embedding initialization skipped (explicitly disabled)");
+    // If embedding config is explicitly null or undefined, skip embedding initialization
+    if (this.embeddingConfig === null || this.embeddingConfig === undefined) {
+      logger.debug(
+        "Embedding initialization skipped (no config provided - FTS-only mode)",
+      );
       return;
     }
 
-    // Use provided config or fall back to parsing environment
-    const config = this.embeddingConfig || EmbeddingConfig.parseEmbeddingConfig();
+    const config = this.embeddingConfig;
 
     // Check if credentials are available for the provider
     if (!areCredentialsAvailable(config.provider)) {
@@ -856,8 +857,7 @@ export class DocumentStore {
 
         // Batch embedding creation to avoid token limit errors
         // Use size-based batching to prevent 413 errors
-        const maxBatchChars =
-          Number(process.env.DOCS_MCP_EMBEDDING_BATCH_CHARS) || EMBEDDING_BATCH_CHARS;
+        const maxBatchChars = EMBEDDING_BATCH_CHARS;
         const rawEmbeddings: number[][] = [];
 
         let currentBatch: string[] = [];

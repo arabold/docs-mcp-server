@@ -3,19 +3,37 @@
  */
 
 import type { Command } from "commander";
+import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import { formatOutput, resolveEmbeddingContext } from "../utils";
 
 export async function searchAction(
   library: string,
   query: string,
-  options: { version?: string; limit: string; exactMatch: boolean; serverUrl?: string },
+  options: {
+    version?: string;
+    limit: string;
+    exactMatch: boolean;
+    embeddingModel?: string;
+    serverUrl?: string;
+  },
 ) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "search",
+    library,
+    version: options.version,
+    query,
+    limit: Number.parseInt(options.limit, 10),
+    exactMatch: options.exactMatch,
+    useServerUrl: !!options.serverUrl,
+  });
+
   const serverUrl = options.serverUrl;
 
   // Resolve embedding configuration for local execution (search needs embeddings)
-  const embeddingConfig = resolveEmbeddingContext();
+  const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
   if (!serverUrl && !embeddingConfig) {
     throw new Error(
       "Embedding configuration is required for local search. " +
@@ -62,6 +80,12 @@ export function createSearchCommand(program: Command): Command {
     )
     .option("-l, --limit <number>", "Maximum number of results", "5")
     .option("-e, --exact-match", "Only use exact version match (default: false)", false)
+    .addOption(
+      new Option(
+        "--embedding-model <model>",
+        "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+      ).env("DOCS_MCP_EMBEDDING_MODEL"),
+    )
     .option(
       "--server-url <url>",
       "URL of external pipeline worker RPC (e.g., http://localhost:6280/api)",

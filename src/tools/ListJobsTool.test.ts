@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
-import type { ScraperOptions, ScraperProgress } from "../scraper/types";
+import type { ScraperProgress } from "../scraper/types";
 import { VersionStatus } from "../store/types";
 import { ListJobsTool } from "./ListJobsTool";
 
@@ -22,15 +22,10 @@ describe("ListJobsTool", () => {
       version: "1.0.0",
       status: PipelineJobStatus.QUEUED,
       createdAt: new Date("2023-01-01T10:00:00Z"),
-      options: { library: "lib-a", version: "1.0.0", url: "url1" } as ScraperOptions,
       progress: null,
       error: null,
       startedAt: null,
       finishedAt: null,
-      abortController: new AbortController(),
-      completionPromise: Promise.resolve(),
-      resolveCompletion: () => {},
-      rejectCompletion: () => {},
       // Database fields
       versionId: 1,
       versionStatus: VersionStatus.QUEUED,
@@ -48,7 +43,6 @@ describe("ListJobsTool", () => {
       status: PipelineJobStatus.RUNNING,
       createdAt: new Date("2023-01-01T11:00:00Z"),
       startedAt: new Date("2023-01-01T11:05:00Z"),
-      options: { library: "lib-b", version: "2.0.0", url: "url2" } as ScraperOptions,
       progress: {
         pagesScraped: 5,
         totalPages: 100,
@@ -58,10 +52,6 @@ describe("ListJobsTool", () => {
       } as ScraperProgress,
       error: null,
       finishedAt: null,
-      abortController: new AbortController(),
-      completionPromise: Promise.resolve(),
-      resolveCompletion: () => {},
-      rejectCompletion: () => {},
       // Database fields
       versionId: 2,
       versionStatus: VersionStatus.RUNNING,
@@ -80,7 +70,6 @@ describe("ListJobsTool", () => {
       createdAt: new Date("2023-01-01T12:00:00Z"),
       startedAt: new Date("2023-01-01T12:05:00Z"),
       finishedAt: new Date("2023-01-01T12:15:00Z"),
-      options: { library: "lib-a", version: "1.1.0", url: "url3" } as ScraperOptions,
       progress: {
         pagesScraped: 10,
         totalPages: 10,
@@ -89,10 +78,6 @@ describe("ListJobsTool", () => {
         maxDepth: 2,
       } as ScraperProgress,
       error: null,
-      abortController: new AbortController(),
-      completionPromise: Promise.resolve(),
-      resolveCompletion: () => {},
-      rejectCompletion: () => {},
       // Database fields
       versionId: 3,
       versionStatus: VersionStatus.COMPLETED,

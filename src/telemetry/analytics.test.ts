@@ -3,6 +3,11 @@ import { Analytics, TelemetryEvent } from "./analytics";
 import { TelemetryConfig } from "./TelemetryConfig";
 
 // Mock the global __POSTHOG_API_KEY__
+declare global {
+  // eslint-disable-next-line no-var
+  var __POSTHOG_API_KEY__: string;
+}
+
 global.__POSTHOG_API_KEY__ = "test-api-key";
 
 // Mock the config module
@@ -163,75 +168,6 @@ describe("Analytics", () => {
           context: "test",
           timestamp: expect.any(String),
         },
-      );
-    });
-  });
-
-  describe("trackTool", () => {
-    it("should track successful tool execution", async () => {
-      const mockOperation = vi.fn().mockResolvedValue("success");
-
-      const result = await analytics.trackTool("test_tool", mockOperation);
-
-      expect(result).toBe("success");
-      expect(mockPostHogClient.capture).toHaveBeenCalledWith(
-        "test-installation-id",
-        TelemetryEvent.TOOL_USED,
-        expect.objectContaining({
-          tool: "test_tool",
-          success: true,
-          durationMs: expect.any(Number),
-          timestamp: expect.any(String),
-        }),
-      );
-    });
-
-    it("should track failed tool execution", async () => {
-      const mockOperation = vi.fn().mockRejectedValue(new Error("Tool failed"));
-
-      await expect(analytics.trackTool("test_tool", mockOperation)).rejects.toThrow(
-        "Tool failed",
-      );
-
-      expect(mockPostHogClient.capture).toHaveBeenCalledWith(
-        "test-installation-id",
-        TelemetryEvent.TOOL_USED,
-        expect.objectContaining({
-          tool: "test_tool",
-          success: false,
-          durationMs: expect.any(Number),
-          timestamp: expect.any(String),
-        }),
-      );
-
-      expect(mockPostHogClient.captureException).toHaveBeenCalledWith(
-        "test-installation-id",
-        expect.any(Error),
-        expect.objectContaining({
-          tool: "test_tool",
-          context: "tool_execution",
-          durationMs: expect.any(Number),
-          timestamp: expect.any(String),
-        }),
-      );
-    });
-
-    it("should include custom properties from getProperties function", async () => {
-      const mockOperation = vi.fn().mockResolvedValue({ count: 5 });
-      const getProperties = (result: any) => ({ itemCount: result.count });
-
-      await analytics.trackTool("test_tool", mockOperation, getProperties);
-
-      expect(mockPostHogClient.capture).toHaveBeenCalledWith(
-        "test-installation-id",
-        TelemetryEvent.TOOL_USED,
-        expect.objectContaining({
-          tool: "test_tool",
-          success: true,
-          itemCount: 5,
-          durationMs: expect.any(Number),
-          timestamp: expect.any(String),
-        }),
       );
     });
   });

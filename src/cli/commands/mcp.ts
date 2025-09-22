@@ -10,6 +10,7 @@ import { initializeTools } from "../../mcp/tools";
 import type { PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -31,24 +32,35 @@ export function createMcpCommand(program: Command): Command {
       .description("Start MCP server only")
       .addOption(
         new Option("--protocol <protocol>", "Protocol for MCP server")
-          .choices(["auto", "stdio", "http"])
-          .default(CLI_DEFAULTS.PROTOCOL),
+          .env("DOCS_MCP_PROTOCOL")
+          .default(CLI_DEFAULTS.PROTOCOL)
+          .choices(["auto", "stdio", "http"]),
       )
       .addOption(
         new Option("--port <number>", "Port for the MCP server")
-          .argParser((v) => {
+          .env("DOCS_MCP_PORT")
+          .env("PORT")
+          .default(CLI_DEFAULTS.HTTP_PORT.toString())
+          .argParser((v: string) => {
             const n = Number(v);
             if (!Number.isInteger(n) || n < 1 || n > 65535) {
               throw new Error("Port must be an integer between 1 and 65535");
             }
             return String(n);
-          })
-          .default(CLI_DEFAULTS.HTTP_PORT.toString()),
+          }),
       )
       .addOption(
         new Option("--host <host>", "Host to bind the MCP server to")
-          .argParser(validateHost)
-          .default(CLI_DEFAULTS.HOST),
+          .env("DOCS_MCP_HOST")
+          .env("HOST")
+          .default(CLI_DEFAULTS.HOST)
+          .argParser(validateHost),
+      )
+      .addOption(
+        new Option(
+          "--embedding-model <model>",
+          "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+        ).env("DOCS_MCP_EMBEDDING_MODEL"),
       )
       .option(
         "--server-url <url>",
@@ -60,27 +72,57 @@ export function createMcpCommand(program: Command): Command {
         false,
       )
       // Auth options
-      .option(
-        "--auth-enabled",
-        "Enable OAuth2/OIDC authentication for MCP endpoints",
-        false,
+      .addOption(
+        new Option(
+          "--auth-enabled",
+          "Enable OAuth2/OIDC authentication for MCP endpoints",
+        )
+          .env("DOCS_MCP_AUTH_ENABLED")
+          .argParser((value) => {
+            if (value === undefined) {
+              return (
+                process.env.DOCS_MCP_AUTH_ENABLED === "true" ||
+                process.env.DOCS_MCP_AUTH_ENABLED === "1"
+              );
+            }
+            return value;
+          })
+          .default(false),
       )
-      .option("--auth-issuer-url <url>", "Issuer/discovery URL for OAuth2/OIDC provider")
-      .option(
-        "--auth-audience <id>",
-        "JWT audience claim (identifies this protected resource)",
+      .addOption(
+        new Option(
+          "--auth-issuer-url <url>",
+          "Issuer/discovery URL for OAuth2/OIDC provider",
+        ).env("DOCS_MCP_AUTH_ISSUER_URL"),
+      )
+      .addOption(
+        new Option(
+          "--auth-audience <id>",
+          "JWT audience claim (identifies this protected resource)",
+        ).env("DOCS_MCP_AUTH_AUDIENCE"),
       )
       .action(
         async (cmdOptions: {
           protocol: string;
           port: string;
           host: string;
+          embeddingModel?: string;
           serverUrl?: string;
           readOnly: boolean;
           authEnabled?: boolean;
           authIssuerUrl?: string;
           authAudience?: string;
         }) => {
+          await analytics.track(TelemetryEvent.CLI_COMMAND, {
+            command: "mcp",
+            protocol: cmdOptions.protocol,
+            port: cmdOptions.port,
+            host: cmdOptions.host,
+            useServerUrl: !!cmdOptions.serverUrl,
+            readOnly: cmdOptions.readOnly,
+            authEnabled: !!cmdOptions.authEnabled,
+          });
+
           const port = validatePort(cmdOptions.port);
           const host = validateHost(cmdOptions.host);
           const serverUrl = cmdOptions.serverUrl;
@@ -101,9 +143,12 @@ export function createMcpCommand(program: Command): Command {
             validateAuthConfig(authConfig);
           }
 
+          // Get global options from parent command
+          const globalOptions = program.parent?.opts() || {};
+
           try {
             // Resolve embedding configuration for local execution
-            const embeddingConfig = resolveEmbeddingContext();
+            const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
             if (!serverUrl && !embeddingConfig) {
               logger.error(
                 "❌ Embedding configuration is required for local mode. Configure an embedding provider with CLI options or environment variables.",
@@ -114,6 +159,7 @@ export function createMcpCommand(program: Command): Command {
             const docService: IDocumentManagement = await createDocumentManagement({
               serverUrl,
               embeddingConfig,
+              storePath: globalOptions.storePath,
             });
             const pipelineOptions: PipelineOptions = {
               recoverJobs: false, // MCP command doesn't support job recovery
