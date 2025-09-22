@@ -20,10 +20,10 @@ export enum TelemetryEvent {
   APP_SHUTDOWN = "app_shutdown",
   CLI_COMMAND = "cli_command",
   TOOL_USED = "tool_used",
-  HTTP_REQUEST_COMPLETED = "http_request_completed",
-  PIPELINE_JOB_PROGRESS = "pipeline_job_progress",
   PIPELINE_JOB_COMPLETED = "pipeline_job_completed",
   DOCUMENT_PROCESSED = "document_processed",
+  WEB_SEARCH_PERFORMED = "web_search_performed",
+  WEB_SCRAPE_STARTED = "web_scrape_started",
 }
 
 /**
@@ -136,48 +136,6 @@ export class Analytics {
   isEnabled(): boolean {
     return this.enabled;
   }
-
-  /**
-   * Track tool usage with error handling and automatic timing
-   */
-  async trackTool<T>(
-    toolName: string,
-    operation: () => Promise<T>,
-    getProperties?: (result: T) => Record<string, unknown>,
-  ): Promise<T> {
-    const startTime = Date.now();
-
-    try {
-      const result = await operation();
-
-      this.track(TelemetryEvent.TOOL_USED, {
-        tool: toolName,
-        success: true,
-        durationMs: Date.now() - startTime,
-        ...(getProperties ? getProperties(result) : {}),
-      });
-
-      return result;
-    } catch (error) {
-      // Track the tool usage failure
-      this.track(TelemetryEvent.TOOL_USED, {
-        tool: toolName,
-        success: false,
-        durationMs: Date.now() - startTime,
-      });
-
-      // Capture the exception with full error tracking
-      if (error instanceof Error) {
-        this.captureException(error, {
-          tool: toolName,
-          context: "tool_execution",
-          durationMs: Date.now() - startTime,
-        });
-      }
-
-      throw error;
-    }
-  }
 }
 
 /**
@@ -211,20 +169,18 @@ export function initTelemetry(options: { enabled: boolean; storePath?: string })
   analyticsInstance = Analytics.create();
 }
 
-// Export a proxy object that forwards calls to the lazy instance
-export const analytics = {
-  isEnabled: () => getAnalytics().isEnabled(),
-  track: (event: string, properties?: Record<string, unknown>) =>
-    getAnalytics().track(event, properties),
-  captureException: (error: Error, properties?: Record<string, unknown>) =>
-    getAnalytics().captureException(error, properties),
-  setGlobalContext: (context: Record<string, unknown>) =>
-    getAnalytics().setGlobalContext(context),
-  getGlobalContext: () => getAnalytics().getGlobalContext(),
-  shutdown: () => getAnalytics().shutdown(),
-  trackTool: <T>(
-    toolName: string,
-    operation: () => Promise<T>,
-    getProperties?: (result: T) => Record<string, unknown>,
-  ) => getAnalytics().trackTool(toolName, operation, getProperties),
-};
+// Export a proxy object that caches the analytics instance after first access
+export const analytics = new Proxy({} as Analytics, {
+  get(target, prop) {
+    // Cache the analytics instance on first property access
+    if (!target.isEnabled) {
+      const instance = getAnalytics();
+      // Copy all methods and properties to the target for future direct access
+      Object.setPrototypeOf(target, Object.getPrototypeOf(instance));
+      Object.assign(target, instance);
+    }
+
+    // Forward the property access to the cached instance
+    return target[prop as keyof Analytics];
+  },
+});

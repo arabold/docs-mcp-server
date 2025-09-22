@@ -1,6 +1,5 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { PipelineJobStatus } from "../pipeline/types";
-import { analytics } from "../telemetry";
 import { logger } from "../utils/logger";
 
 /**
@@ -41,67 +40,54 @@ export class CancelJobTool {
    * @returns A promise that resolves with the outcome message.
    */
   async execute(input: CancelJobInput): Promise<CancelJobResult> {
-    return analytics.trackTool(
-      "cancel_job",
-      async () => {
-        try {
-          // Retrieve the job first to check its status before attempting cancellation
-          const job = await this.pipeline.getJob(input.jobId);
+    try {
+      // Retrieve the job first to check its status before attempting cancellation
+      const job = await this.pipeline.getJob(input.jobId);
 
-          if (!job) {
-            logger.warn(`❓ [CancelJobTool] Job not found: ${input.jobId}`);
-            return {
-              message: `Job with ID ${input.jobId} not found.`,
-              success: false,
-            };
-          }
-
-          // Check if the job is already in a final state
-          if (
-            job.status === PipelineJobStatus.COMPLETED || // Use enum member
-            job.status === PipelineJobStatus.FAILED || // Use enum member
-            job.status === PipelineJobStatus.CANCELLED // Use enum member
-          ) {
-            logger.debug(
-              `Job ${input.jobId} is already in a final state: ${job.status}.`,
-            );
-            return {
-              message: `Job ${input.jobId} is already ${job.status}. No action taken.`,
-              success: true, // Considered success as no cancellation needed
-            };
-          }
-
-          // Attempt cancellation
-          await this.pipeline.cancelJob(input.jobId);
-
-          // Re-fetch the job to confirm status change (or check status directly if cancelJob returned it)
-          // PipelineManager.cancelJob doesn't return status, so re-fetch is needed for confirmation.
-          const updatedJob = await this.pipeline.getJob(input.jobId);
-          const finalStatus = updatedJob?.status ?? "UNKNOWN (job disappeared?)";
-
-          logger.debug(
-            `Cancellation requested for job ${input.jobId}. Current status: ${finalStatus}`,
-          );
-          return {
-            message: `Cancellation requested for job ${input.jobId}. Current status: ${finalStatus}.`,
-            success: true,
-          };
-        } catch (error) {
-          logger.error(`❌ Error cancelling job ${input.jobId}: ${error}`);
-          return {
-            message: `Failed to cancel job ${input.jobId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            success: false,
-          };
-        }
-      },
-      (result) => {
+      if (!job) {
+        logger.warn(`❓ [CancelJobTool] Job not found: ${input.jobId}`);
         return {
-          success: result.success,
-          // Note: success flag already indicates if cancellation was successful
+          message: `Job with ID ${input.jobId} not found.`,
+          success: false,
         };
-      },
-    );
+      }
+
+      // Check if the job is already in a final state
+      if (
+        job.status === PipelineJobStatus.COMPLETED || // Use enum member
+        job.status === PipelineJobStatus.FAILED || // Use enum member
+        job.status === PipelineJobStatus.CANCELLED // Use enum member
+      ) {
+        logger.debug(`Job ${input.jobId} is already in a final state: ${job.status}.`);
+        return {
+          message: `Job ${input.jobId} is already ${job.status}. No action taken.`,
+          success: true, // Considered success as no cancellation needed
+        };
+      }
+
+      // Attempt cancellation
+      await this.pipeline.cancelJob(input.jobId);
+
+      // Re-fetch the job to confirm status change (or check status directly if cancelJob returned it)
+      // PipelineManager.cancelJob doesn't return status, so re-fetch is needed for confirmation.
+      const updatedJob = await this.pipeline.getJob(input.jobId);
+      const finalStatus = updatedJob?.status ?? "UNKNOWN (job disappeared?)";
+
+      logger.debug(
+        `Cancellation requested for job ${input.jobId}. Current status: ${finalStatus}`,
+      );
+      return {
+        message: `Cancellation requested for job ${input.jobId}. Current status: ${finalStatus}.`,
+        success: true,
+      };
+    } catch (error) {
+      logger.error(`❌ Error cancelling job ${input.jobId}: ${error}`);
+      return {
+        message: `Failed to cancel job ${input.jobId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        success: false,
+      };
+    }
   }
 }

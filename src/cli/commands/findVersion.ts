@@ -4,12 +4,20 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
 
 export async function findVersionAction(
   library: string,
   options: { version?: string; serverUrl?: string },
 ) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "find-version",
+    library,
+    version: options.version,
+    useServerUrl: !!options.serverUrl,
+  });
+
   const serverUrl = options.serverUrl;
 
   // Find version command doesn't need embeddings - explicitly disable for local execution

@@ -1,6 +1,5 @@
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import type { StoreSearchResult, VersionSummary } from "../store/types";
-import { analytics } from "../telemetry";
 import { logger } from "../utils/logger";
 import { VersionNotFoundError } from "./errors";
 
@@ -41,80 +40,68 @@ export class SearchTool {
 
   async execute(options: SearchToolOptions): Promise<SearchToolResult> {
     const { library, version, query, limit = 5, exactMatch = false } = options;
-    return analytics.trackTool(
-      "search_docs",
-      async () => {
-        // When exactMatch is true, version must be specified and not 'latest'
-        if (exactMatch && (!version || version === "latest")) {
-          // Get available *detailed* versions for error message
-          await this.docService.validateLibraryExists(library);
-          // Fetch detailed versions using listLibraries and find the specific library
-          const allLibraries = await this.docService.listLibraries();
-          const libraryInfo = allLibraries.find((lib) => lib.library === library);
-          const detailedVersions = libraryInfo
-            ? (libraryInfo.versions as VersionSummary[]).map((v) => ({
-                version: v.ref.version,
-                documentCount: v.counts.documents,
-                uniqueUrlCount: v.counts.uniqueUrls,
-                indexedAt: v.indexedAt,
-              }))
-            : [];
-          throw new VersionNotFoundError(library, version ?? "latest", detailedVersions);
-        }
 
-        // Default to 'latest' only when exactMatch is false
-        const resolvedVersion = version || "latest";
+    // When exactMatch is true, version must be specified and not 'latest'
+    if (exactMatch && (!version || version === "latest")) {
+      // Get available *detailed* versions for error message
+      await this.docService.validateLibraryExists(library);
+      // Fetch detailed versions using listLibraries and find the specific library
+      const allLibraries = await this.docService.listLibraries();
+      const libraryInfo = allLibraries.find((lib) => lib.library === library);
+      const detailedVersions = libraryInfo
+        ? (libraryInfo.versions as VersionSummary[]).map((v) => ({
+            version: v.ref.version,
+            documentCount: v.counts.documents,
+            uniqueUrlCount: v.counts.uniqueUrls,
+            indexedAt: v.indexedAt,
+          }))
+        : [];
+      throw new VersionNotFoundError(library, version ?? "latest", detailedVersions);
+    }
 
-        logger.info(
-          `🔍 Searching ${library}@${resolvedVersion} for: ${query}${exactMatch ? " (exact match)" : ""}`,
-        );
+    // Default to 'latest' only when exactMatch is false
+    const resolvedVersion = version || "latest";
 
-        try {
-          // 1. Validate library exists first
-          await this.docService.validateLibraryExists(library);
+    logger.info(
+      `🔍 Searching ${library}@${resolvedVersion} for: ${query}${exactMatch ? " (exact match)" : ""}`,
+    );
 
-          // 2. Proceed with version finding and searching
-          let versionToSearch: string | null | undefined = resolvedVersion;
+    try {
+      // 1. Validate library exists first
+      await this.docService.validateLibraryExists(library);
 
-          if (!exactMatch) {
-            // If not exact match, find the best version (which might be null)
-            const versionResult = await this.docService.findBestVersion(library, version);
-            // Use the bestMatch from the result, which could be null
-            versionToSearch = versionResult.bestMatch;
+      // 2. Proceed with version finding and searching
+      let versionToSearch: string | null | undefined = resolvedVersion;
 
-            // If findBestVersion returned null (no matching semver) AND unversioned docs exist,
-            // should we search unversioned? The current logic passes null to searchStore,
-            // which gets normalized to "" (unversioned). This seems reasonable.
-            // If findBestVersion threw VersionNotFoundError, it's caught below.
-          }
-          // If exactMatch is true, versionToSearch remains the originally provided version.
+      if (!exactMatch) {
+        // If not exact match, find the best version (which might be null)
+        const versionResult = await this.docService.findBestVersion(library, version);
+        // Use the bestMatch from the result, which could be null
+        versionToSearch = versionResult.bestMatch;
 
-          // Note: versionToSearch can be string | null | undefined here.
-          // searchStore handles null/undefined by normalizing to "".
-          const results = await this.docService.searchStore(
-            library,
-            versionToSearch,
-            query,
-            limit,
-          );
-          logger.info(`✅ Found ${results.length} matching results`);
+        // If findBestVersion returned null (no matching semver) AND unversioned docs exist,
+        // should we search unversioned? The current logic passes null to searchStore,
+        // which gets normalized to "" (unversioned). This seems reasonable.
+        // If findBestVersion threw VersionNotFoundError, it's caught below.
+      }
+      // If exactMatch is true, versionToSearch remains the originally provided version.
 
-          return { results };
-        } catch (error) {
-          logger.error(
-            `❌ Search failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-          );
-          throw error;
-        }
-      },
-      (result) => ({
+      // Note: versionToSearch can be string | null | undefined here.
+      // searchStore handles null/undefined by normalizing to "".
+      const results = await this.docService.searchStore(
         library,
-        version,
+        versionToSearch,
         query,
         limit,
-        exactMatch,
-        resultCount: result.results.length,
-      }),
-    );
+      );
+      logger.info(`✅ Found ${results.length} matching results`);
+
+      return { results };
+    } catch (error) {
+      logger.error(
+        `❌ Search failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+      );
+      throw error;
+    }
   }
 }

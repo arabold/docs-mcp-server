@@ -1,7 +1,6 @@
 import * as semver from "semver";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../scraper/types";
-import { analytics } from "../telemetry";
 import {
   DEFAULT_MAX_CONCURRENCY,
   DEFAULT_MAX_DEPTH,
@@ -87,100 +86,86 @@ export class ScrapeTool {
       options: scraperOptions,
       waitForCompletion = true,
     } = options;
-    return analytics.trackTool(
-      "scrape_docs",
-      async () => {
-        // Store initialization and manager start should happen externally
 
-        let internalVersion: string;
-        const partialVersionRegex = /^\d+(\.\d+)?$/; // Matches '1' or '1.2'
+    // Store initialization and manager start should happen externally
 
-        if (version === null || version === undefined) {
-          internalVersion = "";
+    let internalVersion: string;
+    const partialVersionRegex = /^\d+(\.\d+)?$/; // Matches '1' or '1.2'
+
+    if (version === null || version === undefined) {
+      internalVersion = "";
+    } else {
+      const validFullVersion = semver.valid(version);
+      if (validFullVersion) {
+        internalVersion = validFullVersion;
+      } else if (partialVersionRegex.test(version)) {
+        const coercedVersion = semver.coerce(version);
+        if (coercedVersion) {
+          internalVersion = coercedVersion.version;
         } else {
-          const validFullVersion = semver.valid(version);
-          if (validFullVersion) {
-            internalVersion = validFullVersion;
-          } else if (partialVersionRegex.test(version)) {
-            const coercedVersion = semver.coerce(version);
-            if (coercedVersion) {
-              internalVersion = coercedVersion.version;
-            } else {
-              throw new Error(
-                `Invalid version format for scraping: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
-              );
-            }
-          } else {
-            throw new Error(
-              `Invalid version format for scraping: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
-            );
-          }
+          throw new Error(
+            `Invalid version format for scraping: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
+          );
         }
+      } else {
+        throw new Error(
+          `Invalid version format for scraping: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
+        );
+      }
+    }
 
-        internalVersion = internalVersion.toLowerCase();
+    internalVersion = internalVersion.toLowerCase();
 
-        // Use the injected pipeline instance
-        const pipeline = this.pipeline;
+    // Use the injected pipeline instance
+    const pipeline = this.pipeline;
 
-        // Remove internal progress tracking and callbacks
-        // let pagesScraped = 0;
-        // let lastReportedPages = 0;
-        // const reportProgress = ...
-        // pipeline.setCallbacks(...)
+    // Remove internal progress tracking and callbacks
+    // let pagesScraped = 0;
+    // let lastReportedPages = 0;
+    // const reportProgress = ...
+    // pipeline.setCallbacks(...)
 
-        // Normalize pipeline version argument: use null for unversioned to be explicit cross-platform
-        const enqueueVersion: string | null =
-          internalVersion === "" ? null : internalVersion;
+    // Normalize pipeline version argument: use null for unversioned to be explicit cross-platform
+    const enqueueVersion: string | null = internalVersion === "" ? null : internalVersion;
 
-        // Enqueue the job using the injected pipeline
-        const jobId = await pipeline.enqueueJob(library, enqueueVersion, {
-          url: url,
-          library: library,
-          version: internalVersion,
-          scope: scraperOptions?.scope ?? "subpages",
-          followRedirects: scraperOptions?.followRedirects ?? true,
-          maxPages: scraperOptions?.maxPages ?? DEFAULT_MAX_PAGES,
-          maxDepth: scraperOptions?.maxDepth ?? DEFAULT_MAX_DEPTH,
-          maxConcurrency: scraperOptions?.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
-          ignoreErrors: scraperOptions?.ignoreErrors ?? true,
-          scrapeMode: scraperOptions?.scrapeMode ?? ScrapeMode.Auto, // Pass scrapeMode enum
-          includePatterns: scraperOptions?.includePatterns,
-          excludePatterns: scraperOptions?.excludePatterns,
-          headers: scraperOptions?.headers, // <-- propagate headers
-        });
+    // Enqueue the job using the injected pipeline
+    const jobId = await pipeline.enqueueJob(library, enqueueVersion, {
+      url: url,
+      library: library,
+      version: internalVersion,
+      scope: scraperOptions?.scope ?? "subpages",
+      followRedirects: scraperOptions?.followRedirects ?? true,
+      maxPages: scraperOptions?.maxPages ?? DEFAULT_MAX_PAGES,
+      maxDepth: scraperOptions?.maxDepth ?? DEFAULT_MAX_DEPTH,
+      maxConcurrency: scraperOptions?.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY,
+      ignoreErrors: scraperOptions?.ignoreErrors ?? true,
+      scrapeMode: scraperOptions?.scrapeMode ?? ScrapeMode.Auto, // Pass scrapeMode enum
+      includePatterns: scraperOptions?.includePatterns,
+      excludePatterns: scraperOptions?.excludePatterns,
+      headers: scraperOptions?.headers, // <-- propagate headers
+    });
 
-        // Conditionally wait for completion
-        if (waitForCompletion) {
-          try {
-            await pipeline.waitForJobCompletion(jobId);
-            // Fetch final job state to get status and potentially final page count
-            const finalJob = await pipeline.getJob(jobId);
-            const finalPagesScraped = finalJob?.progress?.pagesScraped ?? 0; // Get count from final job state
-            logger.debug(
-              `Job ${jobId} finished with status ${finalJob?.status}. Pages scraped: ${finalPagesScraped}`,
-            );
-            return {
-              pagesScraped: finalPagesScraped,
-            };
-          } catch (error) {
-            logger.error(`❌ Job ${jobId} failed or was cancelled: ${error}`);
-            throw error; // Re-throw so the caller knows it failed
-          }
-          // No finally block needed to stop pipeline, as it's managed externally
-        }
+    // Conditionally wait for completion
+    if (waitForCompletion) {
+      try {
+        await pipeline.waitForJobCompletion(jobId);
+        // Fetch final job state to get status and potentially final page count
+        const finalJob = await pipeline.getJob(jobId);
+        const finalPagesScraped = finalJob?.progress?.pagesScraped ?? 0; // Get count from final job state
+        logger.debug(
+          `Job ${jobId} finished with status ${finalJob?.status}. Pages scraped: ${finalPagesScraped}`,
+        );
+        return {
+          pagesScraped: finalPagesScraped,
+        };
+      } catch (error) {
+        logger.error(`❌ Job ${jobId} failed or was cancelled: ${error}`);
+        throw error; // Re-throw so the caller knows it failed
+      }
+      // No finally block needed to stop pipeline, as it's managed externally
+    }
 
-        // If not waiting, return the job ID immediately
-        return { jobId };
-      },
-      (result) => ({
-        library,
-        version,
-        url,
-        waitForCompletion,
-        ...scraperOptions,
-        isBackgroundJob: "jobId" in result,
-        pagesScraped: "pagesScraped" in result ? result.pagesScraped : undefined,
-      }),
-    );
+    // If not waiting, return the job ID immediately
+    return { jobId };
   }
 }

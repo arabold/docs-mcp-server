@@ -41,37 +41,7 @@ export interface ToolUsedProperties extends BaseTelemetryProperties {
   [key: string]: unknown; // Allow additional tool-specific properties
 }
 
-// HTTP Events
-export interface HttpRequestCompletedProperties extends BaseTelemetryProperties {
-  success: boolean;
-  hostname: string;
-  protocol: string;
-  durationMs: number;
-  // Success case properties
-  contentSizeBytes?: number;
-  mimeType?: string;
-  hasEncoding?: boolean;
-  followRedirects?: boolean;
-  hadRedirects?: boolean;
-  // Failure case properties
-  statusCode?: number;
-  errorType?: string;
-  errorCode?: string;
-}
-
 // Pipeline Events
-export interface PipelineJobProgressProperties extends BaseTelemetryProperties {
-  jobId: string;
-  library: string;
-  pagesScraped: number;
-  totalPages: number;
-  totalDiscovered: number;
-  progressPercent: number;
-  currentDepth: number;
-  maxDepth: number;
-  discoveryRatio: number;
-  queueEfficiency: number;
-}
 
 export interface PipelineJobCompletedProperties extends BaseTelemetryProperties {
   jobId: string;
@@ -106,14 +76,37 @@ export interface DocumentProcessedProperties extends BaseTelemetryProperties {
   processingSpeedKbPerSec: number;
 }
 
+// Web UI Events
+export interface WebSearchPerformedProperties extends BaseTelemetryProperties {
+  library: string;
+  version?: string;
+  queryLength: number;
+  resultCount: number;
+  limit: number;
+  exactMatch?: boolean;
+}
+
+export interface WebScrapeStartedProperties extends BaseTelemetryProperties {
+  library: string;
+  version?: string;
+  url: string;
+  scope: string;
+  maxDepth: number;
+  maxPages: number;
+  maxConcurrency?: number;
+  ignoreErrors?: boolean;
+  scrapeMode?: string;
+  hasCustomHeaders?: boolean;
+}
+
 // Type mapping for event to properties
 export interface TelemetryEventPropertiesMap {
   [TelemetryEvent.APP_STARTED]: AppStartedProperties;
   [TelemetryEvent.APP_SHUTDOWN]: AppShutdownProperties;
   [TelemetryEvent.CLI_COMMAND]: CliCommandProperties;
   [TelemetryEvent.TOOL_USED]: ToolUsedProperties;
-  [TelemetryEvent.HTTP_REQUEST_COMPLETED]: HttpRequestCompletedProperties;
-  [TelemetryEvent.PIPELINE_JOB_PROGRESS]: PipelineJobProgressProperties;
   [TelemetryEvent.PIPELINE_JOB_COMPLETED]: PipelineJobCompletedProperties;
   [TelemetryEvent.DOCUMENT_PROCESSED]: DocumentProcessedProperties;
+  [TelemetryEvent.WEB_SEARCH_PERFORMED]: WebSearchPerformedProperties;
+  [TelemetryEvent.WEB_SCRAPE_STARTED]: WebScrapeStartedProperties;
 }

@@ -1,5 +1,4 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
-import { analytics } from "../telemetry";
 import { logger } from "../utils/logger";
 
 /**
@@ -43,42 +42,33 @@ export class ClearCompletedJobsTool {
    * @returns A promise that resolves with the outcome of the clear operation.
    */
   async execute(_input: ClearCompletedJobsInput): Promise<ClearCompletedJobsResult> {
-    return analytics.trackTool(
-      "clear_completed_jobs",
-      async () => {
-        try {
-          const clearedCount = await this.pipeline.clearCompletedJobs();
+    try {
+      const clearedCount = await this.pipeline.clearCompletedJobs();
 
-          const message =
-            clearedCount > 0
-              ? `Successfully cleared ${clearedCount} completed job${clearedCount === 1 ? "" : "s"} from the queue.`
-              : "No completed jobs to clear.";
+      const message =
+        clearedCount > 0
+          ? `Successfully cleared ${clearedCount} completed job${clearedCount === 1 ? "" : "s"} from the queue.`
+          : "No completed jobs to clear.";
 
-          logger.debug(message);
+      logger.debug(message);
 
-          return {
-            message,
-            success: true,
-            clearedCount,
-          };
-        } catch (error) {
-          const errorMessage = `Failed to clear completed jobs: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
+      return {
+        message,
+        success: true,
+        clearedCount,
+      };
+    } catch (error) {
+      const errorMessage = `Failed to clear completed jobs: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
 
-          logger.error(`❌ ${errorMessage}`);
+      logger.error(`❌ ${errorMessage}`);
 
-          return {
-            message: errorMessage,
-            success: false,
-            clearedCount: 0,
-          };
-        }
-      },
-      (result) => ({
-        success: result.success,
-        clearedCount: result.clearedCount,
-      }),
-    );
+      return {
+        message: errorMessage,
+        success: false,
+        clearedCount: 0,
+      };
+    }
   }
 }

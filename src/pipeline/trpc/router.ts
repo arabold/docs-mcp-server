@@ -9,6 +9,7 @@
 import { initTRPC } from "@trpc/server";
 import { z } from "zod";
 import type { ScraperOptions } from "../../scraper/types";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { PipelineJobStatus } from "../types";
 import type { IPipeline } from "./interfaces";
 
@@ -61,6 +62,23 @@ export function createPipelineRouter(trpc: unknown) {
             input.version ?? null,
             input.options,
           );
+
+          // Track Web UI scrape start
+          analytics.track(TelemetryEvent.WEB_SCRAPE_STARTED, {
+            library: input.library,
+            version: input.version || undefined,
+            url: input.options.url,
+            scope: input.options.scope || "subpages",
+            maxDepth: input.options.maxDepth || 3,
+            maxPages: input.options.maxPages || 1000,
+            maxConcurrency: input.options.maxConcurrency,
+            ignoreErrors: input.options.ignoreErrors,
+            scrapeMode: input.options.scrapeMode,
+            hasCustomHeaders: !!(
+              input.options.headers && Object.keys(input.options.headers).length > 0
+            ),
+          });
+
           return { jobId };
         },
       ),

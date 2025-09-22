@@ -8,6 +8,7 @@ import { startAppServer } from "../../app";
 import type { PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -61,6 +62,13 @@ export function createWebCommand(program: Command): Command {
         embeddingModel?: string;
         serverUrl?: string;
       }) => {
+        await analytics.track(TelemetryEvent.CLI_COMMAND, {
+          command: "web",
+          port: cmdOptions.port,
+          host: cmdOptions.host,
+          useServerUrl: !!cmdOptions.serverUrl,
+        });
+
         const port = validatePort(cmdOptions.port);
         const host = validateHost(cmdOptions.host);
         const serverUrl = cmdOptions.serverUrl;

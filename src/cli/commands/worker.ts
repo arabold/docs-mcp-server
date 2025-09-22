@@ -7,6 +7,7 @@ import { Option } from "commander";
 import { startAppServer } from "../../app";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -58,6 +59,13 @@ export function createWorkerCommand(program: Command): Command {
         embeddingModel?: string;
         resume: boolean;
       }) => {
+        await analytics.track(TelemetryEvent.CLI_COMMAND, {
+          command: "worker",
+          port: cmdOptions.port,
+          host: cmdOptions.host,
+          resume: cmdOptions.resume,
+        });
+
         const port = validatePort(cmdOptions.port);
         const host = validateHost(cmdOptions.host);
 

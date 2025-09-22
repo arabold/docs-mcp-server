@@ -9,6 +9,7 @@ import type { IPipeline } from "../../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../../scraper/types";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import {
   DEFAULT_MAX_CONCURRENCY,
@@ -41,6 +42,23 @@ export async function scrapeAction(
   },
   command?: Command,
 ) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "scrape",
+    library,
+    version: options.version,
+    url,
+    maxPages: Number.parseInt(options.maxPages, 10),
+    maxDepth: Number.parseInt(options.maxDepth, 10),
+    maxConcurrency: Number.parseInt(options.maxConcurrency, 10),
+    scope: options.scope,
+    scrapeMode: options.scrapeMode,
+    followRedirects: options.followRedirects,
+    hasHeaders: options.header.length > 0,
+    hasIncludePatterns: options.includePattern.length > 0,
+    hasExcludePatterns: options.excludePattern.length > 0,
+    useServerUrl: !!options.serverUrl,
+  });
+
   const serverUrl = options.serverUrl;
 
   // Get global options from parent command

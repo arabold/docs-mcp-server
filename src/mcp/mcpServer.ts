@@ -1,6 +1,7 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v3";
 import { PipelineJobStatus } from "../pipeline/types";
+import { analytics, TelemetryEvent } from "../telemetry";
 import { type JobInfo, LibraryNotFoundError, VersionNotFoundError } from "../tools";
 import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_PAGES } from "../utils/config";
 import { logger } from "../utils/logger";
@@ -70,6 +71,18 @@ export function createMcpServerInstance(
         openWorldHint: true, // requires internet access
       },
       async ({ url, library, version, maxPages, maxDepth, scope, followRedirects }) => {
+        // Track MCP tool usage
+        analytics.track(TelemetryEvent.TOOL_USED, {
+          tool: "scrape_docs",
+          context: "mcp_server",
+          library,
+          version,
+          url: new URL(url).hostname, // Privacy-safe URL tracking
+          maxPages,
+          maxDepth,
+          scope,
+        });
+
         try {
           // Execute scrape tool without waiting and without progress callback
           const result = await tools.scrape.execute({
@@ -130,6 +143,16 @@ export function createMcpServerInstance(
       destructiveHint: false,
     },
     async ({ library, version, query, limit }) => {
+      // Track MCP tool usage
+      analytics.track(TelemetryEvent.TOOL_USED, {
+        tool: "search_docs",
+        context: "mcp_server",
+        library,
+        version,
+        query: query.substring(0, 100), // Truncate query for privacy
+        limit,
+      });
+
       try {
         const result = await tools.search.execute({
           library,
@@ -197,6 +220,12 @@ ${r.content}\n`,
       destructiveHint: false,
     },
     async () => {
+      // Track MCP tool usage
+      analytics.track(TelemetryEvent.TOOL_USED, {
+        tool: "list_libraries",
+        context: "mcp_server",
+      });
+
       try {
         const result = await tools.listLibraries.execute();
         if (result.libraries.length === 0) {
@@ -233,6 +262,14 @@ ${r.content}\n`,
       destructiveHint: false,
     },
     async ({ library, targetVersion }) => {
+      // Track MCP tool usage
+      analytics.track(TelemetryEvent.TOOL_USED, {
+        tool: "find_version",
+        context: "mcp_server",
+        library,
+        targetVersion,
+      });
+
       try {
         const message = await tools.findVersion.execute({
           library,
@@ -273,6 +310,13 @@ ${r.content}\n`,
         destructiveHint: false,
       },
       async ({ status }) => {
+        // Track MCP tool usage
+        analytics.track(TelemetryEvent.TOOL_USED, {
+          tool: "list_jobs",
+          context: "mcp_server",
+          status,
+        });
+
         try {
           const result = await tools.listJobs.execute({
             status: status as PipelineJobStatus | undefined,
@@ -312,6 +356,13 @@ ${r.content}\n`,
         destructiveHint: false,
       },
       async ({ jobId }) => {
+        // Track MCP tool usage
+        analytics.track(TelemetryEvent.TOOL_USED, {
+          tool: "get_job_info",
+          context: "mcp_server",
+          jobId,
+        });
+
         try {
           const result = await tools.getJobInfo.execute({ jobId });
           if (!result.job) {
@@ -342,6 +393,13 @@ ${r.content}\n`,
         destructiveHint: true,
       },
       async ({ jobId }) => {
+        // Track MCP tool usage
+        analytics.track(TelemetryEvent.TOOL_USED, {
+          tool: "cancel_job",
+          context: "mcp_server",
+          jobId,
+        });
+
         try {
           const result = await tools.cancelJob.execute({ jobId });
           // Use the message and success status from the tool's result
@@ -377,6 +435,14 @@ ${r.content}\n`,
         destructiveHint: true,
       },
       async ({ library, version }) => {
+        // Track MCP tool usage
+        analytics.track(TelemetryEvent.TOOL_USED, {
+          tool: "remove_docs",
+          context: "mcp_server",
+          library,
+          version,
+        });
+
         try {
           // Execute the remove tool logic
           const result = await tools.remove.execute({ library, version });
@@ -413,6 +479,14 @@ ${r.content}\n`,
       openWorldHint: true, // requires internet access
     },
     async ({ url, followRedirects }) => {
+      // Track MCP tool usage
+      analytics.track(TelemetryEvent.TOOL_USED, {
+        tool: "fetch_url",
+        context: "mcp_server",
+        url: new URL(url).hostname, // Privacy-safe URL tracking
+        followRedirects,
+      });
+
       try {
         const result = await tools.fetchUrl.execute({ url, followRedirects });
         return createResponse(result);

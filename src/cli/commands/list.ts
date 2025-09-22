@@ -4,10 +4,16 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
 import { formatOutput } from "../utils";
 
 export async function listAction(options: { serverUrl?: string }) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "list",
+    useServerUrl: !!options.serverUrl,
+  });
+
   const { serverUrl } = options;
 
   // List command doesn't need embeddings - explicitly disable for local execution

@@ -1,7 +1,6 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { PipelineJobStatus } from "../pipeline/types";
 import type { VersionStatus } from "../store/types";
-import { analytics } from "../telemetry";
 
 /**
  * Input parameters for the GetJobInfoTool.
@@ -62,48 +61,36 @@ export class GetJobInfoTool {
    * @returns A promise that resolves with the simplified job info or null if not found.
    */
   async execute(input: GetJobInfoInput): Promise<GetJobInfoToolResponse> {
-    return analytics.trackTool(
-      "get_job_info",
-      async () => {
-        const job = await this.pipeline.getJob(input.jobId);
+    const job = await this.pipeline.getJob(input.jobId);
 
-        if (!job) {
-          // Return null in the result if job not found
-          return { job: null };
-        }
+    if (!job) {
+      // Return null in the result if job not found
+      return { job: null };
+    }
 
-        // Transform the job into a simplified object using enhanced PipelineJob interface
-        const jobInfo: JobInfo = {
-          id: job.id,
-          library: job.library,
-          version: job.version,
-          status: job.status,
-          dbStatus: job.versionStatus,
-          createdAt: job.createdAt.toISOString(),
-          startedAt: job.startedAt?.toISOString() ?? null,
-          finishedAt: job.finishedAt?.toISOString() ?? null,
-          error: job.error?.message ?? null,
-          progress:
-            job.progressMaxPages && job.progressMaxPages > 0
-              ? {
-                  pages: job.progressPages || 0,
-                  totalPages: job.progressMaxPages,
-                  totalDiscovered: job.progress?.totalDiscovered || job.progressMaxPages,
-                }
-              : undefined,
-          updatedAt: job.updatedAt?.toISOString(),
-          errorMessage: job.errorMessage ?? undefined,
-        };
+    // Transform the job into a simplified object using enhanced PipelineJob interface
+    const jobInfo: JobInfo = {
+      id: job.id,
+      library: job.library,
+      version: job.version,
+      status: job.status,
+      dbStatus: job.versionStatus,
+      createdAt: job.createdAt.toISOString(),
+      startedAt: job.startedAt?.toISOString() ?? null,
+      finishedAt: job.finishedAt?.toISOString() ?? null,
+      error: job.error?.message ?? null,
+      progress:
+        job.progressMaxPages && job.progressMaxPages > 0
+          ? {
+              pages: job.progressPages || 0,
+              totalPages: job.progressMaxPages,
+              totalDiscovered: job.progress?.totalDiscovered || job.progressMaxPages,
+            }
+          : undefined,
+      updatedAt: job.updatedAt?.toISOString(),
+      errorMessage: job.errorMessage ?? undefined,
+    };
 
-        return { job: jobInfo };
-      },
-      (result) => {
-        return {
-          found: result.job !== null,
-          library: result.job?.library,
-          version: result.job?.version,
-        };
-      },
-    );
+    return { job: jobInfo };
   }
 }

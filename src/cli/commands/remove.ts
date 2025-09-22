@@ -4,11 +4,19 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
+import { analytics, TelemetryEvent } from "../../telemetry";
 
 export async function removeAction(
   library: string,
   options: { version?: string; serverUrl?: string },
 ) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "remove",
+    library,
+    version: options.version,
+    useServerUrl: !!options.serverUrl,
+  });
+
   const serverUrl = options.serverUrl;
 
   // Remove command doesn't need embeddings - explicitly disable for local execution

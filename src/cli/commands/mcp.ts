@@ -10,6 +10,7 @@ import { initializeTools } from "../../mcp/tools";
 import type { PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -112,6 +113,16 @@ export function createMcpCommand(program: Command): Command {
           authIssuerUrl?: string;
           authAudience?: string;
         }) => {
+          await analytics.track(TelemetryEvent.CLI_COMMAND, {
+            command: "mcp",
+            protocol: cmdOptions.protocol,
+            port: cmdOptions.port,
+            host: cmdOptions.host,
+            useServerUrl: !!cmdOptions.serverUrl,
+            readOnly: cmdOptions.readOnly,
+            authEnabled: !!cmdOptions.authEnabled,
+          });
+
           const port = validatePort(cmdOptions.port);
           const host = validateHost(cmdOptions.host);
           const serverUrl = cmdOptions.serverUrl;

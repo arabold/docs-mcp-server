@@ -9,6 +9,7 @@ import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -109,6 +110,16 @@ export function createDefaultAction(program: Command): Command {
           authIssuerUrl?: string;
           authAudience?: string;
         }) => {
+          await analytics.track(TelemetryEvent.CLI_COMMAND, {
+            command: "default",
+            protocol: options.protocol,
+            port: options.port,
+            host: options.host,
+            resume: options.resume,
+            readOnly: options.readOnly,
+            authEnabled: !!options.authEnabled,
+          });
+
           // Resolve protocol and validate flags
           const resolvedProtocol = resolveProtocol(options.protocol);
           if (resolvedProtocol === "stdio") {

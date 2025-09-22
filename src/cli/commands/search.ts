@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
+import { analytics, TelemetryEvent } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import { formatOutput, resolveEmbeddingContext } from "../utils";
 
@@ -19,6 +20,16 @@ export async function searchAction(
     serverUrl?: string;
   },
 ) {
+  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+    command: "search",
+    library,
+    version: options.version,
+    query,
+    limit: Number.parseInt(options.limit, 10),
+    exactMatch: options.exactMatch,
+    useServerUrl: !!options.serverUrl,
+  });
+
   const serverUrl = options.serverUrl;
 
   // Resolve embedding configuration for local execution (search needs embeddings)
