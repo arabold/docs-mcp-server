@@ -3,6 +3,7 @@
  */
 
 import type { Command } from "commander";
+import { Option } from "commander";
 import { startAppServer } from "../../app";
 import type { PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
@@ -12,7 +13,6 @@ import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
-  createOptionWithEnv,
   createPipelineWithCallbacks,
   resolveEmbeddingContext,
   validateHost,
@@ -24,33 +24,31 @@ export function createWebCommand(program: Command): Command {
     .command("web")
     .description("Start web interface only")
     .addOption(
-      createOptionWithEnv(
-        "--port <number>",
-        "Port for the web interface",
-        ["DOCS_MCP_WEB_PORT", "DOCS_MCP_PORT", "PORT"],
-        CLI_DEFAULTS.WEB_PORT.toString(),
-      ).argParser((v) => {
-        const n = Number(v);
-        if (!Number.isInteger(n) || n < 1 || n > 65535) {
-          throw new Error("Port must be an integer between 1 and 65535");
-        }
-        return String(n);
-      }),
+      new Option("--port <number>", "Port for the web interface")
+        .env("DOCS_MCP_WEB_PORT")
+        .env("DOCS_MCP_PORT")
+        .env("PORT")
+        .default(CLI_DEFAULTS.WEB_PORT.toString())
+        .argParser((v: string) => {
+          const n = Number(v);
+          if (!Number.isInteger(n) || n < 1 || n > 65535) {
+            throw new Error("Port must be an integer between 1 and 65535");
+          }
+          return String(n);
+        }),
     )
     .addOption(
-      createOptionWithEnv(
-        "--host <host>",
-        "Host to bind the web interface to",
-        ["DOCS_MCP_HOST", "HOST"],
-        CLI_DEFAULTS.HOST,
-      ).argParser(validateHost),
+      new Option("--host <host>", "Host to bind the web interface to")
+        .env("DOCS_MCP_HOST")
+        .env("HOST")
+        .default(CLI_DEFAULTS.HOST)
+        .argParser(validateHost),
     )
     .addOption(
-      createOptionWithEnv(
+      new Option(
         "--embedding-model <model>",
         "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
-        ["DOCS_MCP_EMBEDDING_MODEL"],
-      ),
+      ).env("DOCS_MCP_EMBEDDING_MODEL"),
     )
     .option(
       "--server-url <url>",

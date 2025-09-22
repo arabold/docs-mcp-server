@@ -4,7 +4,6 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { Option } from "commander";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
@@ -106,44 +105,6 @@ export function validateResumeFlag(resume: boolean, serverUrl?: string): void {
         "External workers handle their own job recovery.",
     );
   }
-}
-
-/**
- * Creates a commander Option that automatically checks for environment variables.
- *
- * @param flags - Option flags (e.g., "--port <number>")
- * @param description - Option description
- * @param envVars - Array of environment variable names to check (in order of precedence)
- * @param defaultValue - Fallback default value if no env vars are found
- * @returns Configured commander Option instance
- */
-export function createOptionWithEnv(
-  flags: string,
-  description: string,
-  envVars: string[],
-  defaultValue?: string,
-): Option {
-  // Find the first available environment variable
-  let envValue: string | undefined;
-  for (const envVar of envVars) {
-    envValue = process.env[envVar];
-    if (envValue !== undefined) {
-      logger.debug(
-        `Using environment variable ${envVar}=${envValue} for option ${flags}`,
-      );
-      break;
-    }
-  }
-
-  // Use env value if found, otherwise use provided default
-  const finalDefault = envValue ?? defaultValue;
-
-  const option = new Option(flags, description);
-  if (finalDefault !== undefined) {
-    option.default(finalDefault);
-  }
-
-  return option;
 }
 
 /**

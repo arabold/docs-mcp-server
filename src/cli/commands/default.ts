@@ -14,7 +14,6 @@ import { registerGlobalServices } from "../main";
 import {
   CLI_DEFAULTS,
   createAppServerConfig,
-  createOptionWithEnv,
   createPipelineWithCallbacks,
   ensurePlaywrightBrowsersInstalled,
   parseAuthConfig,
@@ -30,41 +29,36 @@ export function createDefaultAction(program: Command): Command {
   return (
     program
       .addOption(
-        createOptionWithEnv(
-          "--protocol <protocol>",
-          "Protocol for MCP server",
-          ["DOCS_MCP_PROTOCOL"],
-          "auto",
-        ).choices(["auto", "stdio", "http"]),
+        new Option("--protocol <protocol>", "Protocol for MCP server")
+          .env("DOCS_MCP_PROTOCOL")
+          .default("auto")
+          .choices(["auto", "stdio", "http"]),
       )
       .addOption(
-        createOptionWithEnv(
-          "--port <number>",
-          "Port for the server",
-          ["DOCS_MCP_PORT", "PORT"],
-          CLI_DEFAULTS.HTTP_PORT.toString(),
-        ).argParser((v) => {
-          const n = Number(v);
-          if (!Number.isInteger(n) || n < 1 || n > 65535) {
-            throw new Error("Port must be an integer between 1 and 65535");
-          }
-          return String(n);
-        }),
+        new Option("--port <number>", "Port for the server")
+          .env("DOCS_MCP_PORT")
+          .env("PORT")
+          .default(CLI_DEFAULTS.HTTP_PORT.toString())
+          .argParser((v: string) => {
+            const n = Number(v);
+            if (!Number.isInteger(n) || n < 1 || n > 65535) {
+              throw new Error("Port must be an integer between 1 and 65535");
+            }
+            return String(n);
+          }),
       )
       .addOption(
-        createOptionWithEnv(
-          "--host <host>",
-          "Host to bind the server to",
-          ["DOCS_MCP_HOST", "HOST"],
-          CLI_DEFAULTS.HOST,
-        ).argParser(validateHost),
+        new Option("--host <host>", "Host to bind the server to")
+          .env("DOCS_MCP_HOST")
+          .env("HOST")
+          .default(CLI_DEFAULTS.HOST)
+          .argParser(validateHost),
       )
       .addOption(
-        createOptionWithEnv(
+        new Option(
           "--embedding-model <model>",
           "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
-          ["DOCS_MCP_EMBEDDING_MODEL"],
-        ),
+        ).env("DOCS_MCP_EMBEDDING_MODEL"),
       )
       .option("--resume", "Resume interrupted jobs on startup", false)
       .option("--no-resume", "Do not resume jobs on startup")
@@ -78,43 +72,31 @@ export function createDefaultAction(program: Command): Command {
         new Option(
           "--auth-enabled",
           "Enable OAuth2/OIDC authentication for MCP endpoints",
-        ),
+        )
+          .env("DOCS_MCP_AUTH_ENABLED")
+          .argParser((value) => {
+            if (value === undefined) {
+              return (
+                process.env.DOCS_MCP_AUTH_ENABLED === "true" ||
+                process.env.DOCS_MCP_AUTH_ENABLED === "1"
+              );
+            }
+            return value;
+          })
+          .default(false),
       )
-      .addOption(new Option("--no-auth-enabled", "Disable OAuth2/OIDC authentication"))
       .addOption(
-        createOptionWithEnv(
+        new Option(
           "--auth-issuer-url <url>",
           "Issuer/discovery URL for OAuth2/OIDC provider",
-          ["DOCS_MCP_AUTH_ISSUER_URL"],
-        ),
+        ).env("DOCS_MCP_AUTH_ISSUER_URL"),
       )
       .addOption(
-        createOptionWithEnv(
+        new Option(
           "--auth-audience <id>",
           "JWT audience claim (identifies this protected resource)",
-          ["DOCS_MCP_AUTH_AUDIENCE"],
-        ),
+        ).env("DOCS_MCP_AUTH_AUDIENCE"),
       )
-      .hook("preAction", (_thisCommand, actionCommand) => {
-        const options = actionCommand.opts();
-
-        // Handle DOCS_MCP_AUTH_ENABLED environment variable
-        // Only apply if neither --auth-enabled nor --no-auth-enabled was used
-        if (
-          options.authEnabled === undefined &&
-          process.env.DOCS_MCP_AUTH_ENABLED !== undefined
-        ) {
-          const envValue = process.env.DOCS_MCP_AUTH_ENABLED;
-          // "true" or "1" means enable auth
-          options.authEnabled = envValue === "true" || envValue === "1";
-
-          if (process.env.LOG_LEVEL === "DEBUG") {
-            console.log(
-              `Using environment variable DOCS_MCP_AUTH_ENABLED=${envValue} for option --auth-enabled`,
-            );
-          }
-        }
-      })
       .action(
         async (options: {
           protocol: string;

@@ -3,6 +3,7 @@
  */
 
 import type { Command } from "commander";
+import { Option } from "commander";
 import type { PipelineOptions } from "../../pipeline";
 import type { IPipeline } from "../../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../../scraper/types";
@@ -15,7 +16,6 @@ import {
   DEFAULT_MAX_PAGES,
 } from "../../utils/config";
 import {
-  createOptionWithEnv,
   createPipelineWithCallbacks,
   parseHeaders,
   resolveEmbeddingContext,
@@ -194,11 +194,10 @@ export function createScrapeCommand(program: Command): Command {
       [] as string[],
     )
     .addOption(
-      createOptionWithEnv(
+      new Option(
         "--embedding-model <model>",
         "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
-        ["DOCS_MCP_EMBEDDING_MODEL"],
-      ),
+      ).env("DOCS_MCP_EMBEDDING_MODEL"),
     )
     .option(
       "--server-url <url>",

@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
-import type { ScraperOptions } from "../scraper/types";
 import { GetJobInfoTool } from "./GetJobInfoTool"; // Updated import
 
 // Mock dependencies
@@ -23,14 +22,9 @@ describe("GetJobInfoTool", () => {
     status: PipelineJobStatus.RUNNING,
     createdAt: new Date("2023-01-01T10:00:00Z"),
     startedAt: new Date("2023-01-01T10:05:00Z"),
-    options: { library: "lib-a", version: "1.0.0", url: "url1" } as ScraperOptions,
     progress: null,
     error: null,
     finishedAt: null,
-    abortController: new AbortController(),
-    completionPromise: Promise.resolve(),
-    resolveCompletion: () => {},
-    rejectCompletion: () => {},
     sourceUrl: "url1",
     scraperOptions: null,
   };

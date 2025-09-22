@@ -3,6 +3,10 @@ import { Analytics, TelemetryEvent } from "./analytics";
 import { TelemetryConfig } from "./TelemetryConfig";
 
 // Mock the global __POSTHOG_API_KEY__
+declare global {
+  var __POSTHOG_API_KEY__: string;
+}
+
 global.__POSTHOG_API_KEY__ = "test-api-key";
 
 // Mock the config module

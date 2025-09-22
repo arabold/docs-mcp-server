@@ -3,9 +3,10 @@
  */
 
 import type { Command } from "commander";
+import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
 import { SearchTool } from "../../tools";
-import { createOptionWithEnv, formatOutput, resolveEmbeddingContext } from "../utils";
+import { formatOutput, resolveEmbeddingContext } from "../utils";
 
 export async function searchAction(
   library: string,
@@ -69,11 +70,10 @@ export function createSearchCommand(program: Command): Command {
     .option("-l, --limit <number>", "Maximum number of results", "5")
     .option("-e, --exact-match", "Only use exact version match (default: false)", false)
     .addOption(
-      createOptionWithEnv(
+      new Option(
         "--embedding-model <model>",
         "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
-        ["DOCS_MCP_EMBEDDING_MODEL"],
-      ),
+      ).env("DOCS_MCP_EMBEDDING_MODEL"),
     )
     .option(
       "--server-url <url>",
