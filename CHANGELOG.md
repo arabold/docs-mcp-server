@@ -1,3 +1,10 @@
+## [1.25.2](https://github.com/arabold/docs-mcp-server/compare/v1.25.1...v1.25.2) (2025-09-22)
+
+
+### Bug Fixes
+
+* **middleware:** add HtmlNormalizationMiddleware for URL and link normalization ([30211db](https://github.com/arabold/docs-mcp-server/commit/30211db72c0c12edfdd5a28f0548d60d95af8381))
+
 ## [1.25.1](https://github.com/arabold/docs-mcp-server/compare/v1.25.0...v1.25.1) (2025-09-22)
 
 
