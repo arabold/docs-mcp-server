@@ -18,23 +18,17 @@ vi.mock("../utils/logger");
 // --- Additional mocks for createPipelineWithCallbacks behavior tests ---
 vi.mock("../pipeline/PipelineFactory", () => ({
   PipelineFactory: {
-    createPipeline: vi.fn(),
+    createPipeline: vi.fn().mockResolvedValue({
+      setCallbacks: vi.fn(),
+      shutdown: vi.fn(),
+      start: vi.fn(),
+    }),
   },
 }));
 
 // --- Mocks & state for handler wiring regression (formerly commandHandlers.test.ts) ---
 let capturedCreateArgs: any[] = [];
 let listToolExecuteCalled = false;
-vi.mock("../store", async () => {
-  const actual = await vi.importActual<any>("../store");
-  return {
-    ...actual,
-    createDocumentManagement: vi.fn(async (opts: any) => {
-      capturedCreateArgs.push(opts);
-      return { shutdown: vi.fn() } as any;
-    }),
-  };
-});
 vi.mock("../tools", async () => {
   const actual = await vi.importActual<any>("../tools");
   return {
@@ -320,7 +314,7 @@ describe("createPipelineWithCallbacks behavior", () => {
   });
 });
 
-describe("CLI command handler parameters (regression)", () => {
+describe("CLI command handler parameters", () => {
   beforeEach(() => {
     capturedCreateArgs = [];
     listToolExecuteCalled = false;
@@ -338,6 +332,127 @@ describe("CLI command handler parameters (regression)", () => {
     expect(capturedCreateArgs).toContainEqual({ serverUrl });
     expect(listToolExecuteCalled).toBe(true);
   });
+});
+
+// Global mocks for the propagation tests - declared at module level
+vi.mock("../utils/paths", () => ({
+  resolveStorePath: vi.fn().mockReturnValue("/mocked/resolved/path"),
+  getProjectRoot: vi.fn().mockReturnValue("/mocked/project/root"),
+}));
+
+vi.mock("../store", async () => {
+  const actual = await vi.importActual<any>("../store");
+  return {
+    ...actual,
+    createDocumentManagement: vi.fn(async (opts: any) => {
+      capturedCreateArgs.push(opts);
+      return { shutdown: vi.fn() } as any;
+    }),
+    createLocalDocumentManagement: vi.fn().mockResolvedValue({
+      initialize: vi.fn(),
+      shutdown: vi.fn(),
+    }),
+  };
+});
+
+vi.mock("../app", () => ({
+  startAppServer: vi.fn().mockResolvedValue({
+    shutdown: vi.fn(),
+  }),
+}));
+
+vi.mock("../mcp/tools", () => ({
+  initializeTools: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock("../mcp/startStdioServer", () => ({
+  startStdioServer: vi.fn().mockResolvedValue({ shutdown: vi.fn() }),
+}));
+
+describe("Global option propagation", () => {
+  let mockResolveStorePath: any;
+  let mockCreateLocalDocumentManagement: any;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+
+    // Get references to the mocked functions
+    const { resolveStorePath } = await import("../utils/paths");
+    const { createLocalDocumentManagement } = await import("../store");
+
+    mockResolveStorePath = vi.mocked(resolveStorePath);
+    mockCreateLocalDocumentManagement = vi.mocked(createLocalDocumentManagement);
+  });
+
+  it("should pass --store-path through preAction hook to default command", async () => {
+    const customStorePath = "/custom/data/path";
+    const resolvedStorePath = "/resolved/custom/path";
+
+    // Mock the path resolution to return a resolved path
+    mockResolveStorePath.mockReturnValue(resolvedStorePath);
+
+    const { createCliProgram } = await import("./index");
+    const program = createCliProgram();
+
+    // Simulate running the default command with --store-path
+    // Use --protocol http to get a random available port
+    const _parsePromise = program.parseAsync([
+      "node",
+      "test",
+      "--store-path",
+      customStorePath,
+      "--protocol",
+      "http",
+    ]);
+
+    // Give it a moment to start and then verify the mocks were called
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Verify that resolveStorePath was called with the CLI option
+    expect(mockResolveStorePath).toHaveBeenCalledWith(customStorePath);
+
+    // Verify that createLocalDocumentManagement was called with the resolved path
+    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+      expect.any(Object), // embeddingConfig
+      resolvedStorePath, // resolved storePath
+    );
+
+    // The parseAsync promise will hang since it starts a server, but we've verified our assertions
+    // No need to wait for it to complete
+  }, 10000);
+
+  it("should handle DOCS_MCP_STORE_PATH environment variable through preAction hook", async () => {
+    const envStorePath = "/env/data/path";
+    const resolvedStorePath = "/resolved/env/path";
+
+    // Set environment variable
+    process.env.DOCS_MCP_STORE_PATH = envStorePath;
+
+    // Mock the path resolution
+    mockResolveStorePath.mockReturnValue(resolvedStorePath);
+
+    const { createCliProgram } = await import("./index");
+    const program = createCliProgram();
+
+    // Run default command without explicit --store-path
+    // Use --protocol http to get a random available port
+    const _parsePromise = program.parseAsync(["node", "test", "--protocol", "http"]);
+
+    // Give it a moment to start and then verify the mocks were called
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // Verify that resolveStorePath was called with the env var value
+    expect(mockResolveStorePath).toHaveBeenCalledWith(envStorePath);
+
+    // Verify that createLocalDocumentManagement was called with the resolved path
+    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+      expect.any(Object),
+      resolvedStorePath,
+    );
+
+    // Clean up
+    delete process.env.DOCS_MCP_STORE_PATH;
+  }, 10000);
 });
 
 describe("CLI Validation Logic", () => {

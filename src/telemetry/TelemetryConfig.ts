@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import envPaths from "env-paths";
+import { resolveStorePath } from "../utils/paths";
 
 export class TelemetryConfig {
   private static instance?: TelemetryConfig;
@@ -40,8 +40,8 @@ export class TelemetryConfig {
  */
 export function generateInstallationId(storePath?: string): string {
   try {
-    // Use storePath if provided, otherwise use standard paths
-    const dataDir = storePath || envPaths("docs-mcp-server", { suffix: "" }).data;
+    // Use centralized path resolution logic
+    const dataDir = resolveStorePath(storePath);
     const installationIdPath = path.join(dataDir, "installation.id");
 
     // Try to read existing installation ID

@@ -57,7 +57,6 @@ vi.mock("./DocumentStore", () => {
 import { getProjectRoot } from "../utils/paths";
 // Import the mocked constructor AFTER vi.mock
 import { DocumentManagementService } from "./DocumentManagementService";
-import { DocumentStore } from "./DocumentStore";
 
 // Mock DocumentRetrieverService (keep existing structure)
 const mockRetriever = {
@@ -87,8 +86,8 @@ describe("DocumentManagementService", () => {
   // Define expected paths consistently using the calculated actual root
   // Note: getProjectRoot() called here will now run *after* fs is mocked,
   // so it needs the dummy package.json created in beforeEach.
-  const expectedOldDbPath = path.join(projectRoot, ".store", "documents.db");
-  const expectedStandardDbPath = path.join(mockEnvPaths.data, "documents.db");
+  const _expectedOldDbPath = path.join(projectRoot, ".store", "documents.db");
+  const _expectedStandardDbPath = path.join(mockEnvPaths.data, "documents.db");
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -115,76 +114,6 @@ describe("DocumentManagementService", () => {
   afterEach(async () => {
     // Shutdown the main service instance
     await docService?.shutdown();
-  });
-
-  // --- Constructor Path Logic Tests ---
-  describe("Constructor Database Path Selection", () => {
-    // Add beforeEach specific to this suite for memfs reset
-    beforeEach(() => {
-      vol.reset(); // Reset memfs volume before each test
-      vi.clearAllMocks(); // Clear other mocks like DocumentStore constructor
-      // Re-apply default envPaths mock for this suite
-      mockEnvPathsFn.mockReturnValue(mockEnvPaths);
-    });
-
-    it("should use the old local path if it exists", () => {
-      // Simulate the old path existing in memfs
-      vol.mkdirSync(path.dirname(expectedOldDbPath), { recursive: true });
-      vol.writeFileSync(expectedOldDbPath, ""); // Create the file
-
-      // Instantiate LOCALLY for this specific test
-      const localDocService = new DocumentManagementService();
-      expect(localDocService).toBeInstanceOf(DocumentManagementService);
-
-      // Verify DocumentStore was called with the old path
-      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(expectedOldDbPath, undefined);
-      // Verify the directory still exists (mkdirSync shouldn't error)
-      expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(true);
-    });
-
-    it("should use the standard env path if the old local path does not exist", () => {
-      // Ensure old path doesn't exist (handled by vol.reset() in beforeEach)
-      // Ensure envPaths mock returns the expected value
-      mockEnvPathsFn.mockReturnValue(mockEnvPaths);
-
-      // Instantiate LOCALLY for this specific test
-      const _localDocService = new DocumentManagementService();
-
-      // Verify DocumentStore was called with the standard path
-      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
-        expectedStandardDbPath,
-        undefined,
-      );
-      // Verify envPaths was called
-      expect(mockEnvPathsFn).toHaveBeenCalledWith("docs-mcp-server", { suffix: "" });
-      // Verify the standard directory was created in memfs
-      expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(true);
-    });
-
-    it("should use custom store path when provided via constructor", () => {
-      const customStorePath = "/mock/env/store/path";
-      const expectedCustomDbPath = path.join(customStorePath, "documents.db");
-
-      // Instantiate LOCALLY for this specific test with custom store path
-      const _localDocService = new DocumentManagementService(
-        undefined,
-        undefined,
-        customStorePath,
-      );
-
-      // Verify DocumentStore was called with the custom path
-      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
-        expectedCustomDbPath,
-        undefined,
-      );
-      // Verify the custom directory was created in memfs
-      expect(vol.existsSync(customStorePath)).toBe(true);
-      // Verify other paths were NOT created (optional but good check)
-      expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(false);
-      expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(false);
-      // Verify envPaths was NOT called
-      expect(mockEnvPathsFn).not.toHaveBeenCalled();
-    });
   });
 
   // --- Pipeline Configuration Tests ---

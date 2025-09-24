@@ -142,8 +142,8 @@ export function createDefaultAction(program: Command): Command {
             warnHttpUsage(authConfig, port);
           }
 
-          // Get global options from parent command
-          const globalOptions = program.parent?.opts() || {};
+          // Get global options from the command itself (default action runs on root command)
+          const globalOptions = program.opts();
 
           // Ensure browsers are installed
           ensurePlaywrightBrowsersInstalled();

@@ -10,6 +10,7 @@ import {
   shouldEnableTelemetry,
   TelemetryEvent,
 } from "../telemetry";
+import { resolveStorePath } from "../utils/paths";
 import { createDefaultAction } from "./commands/default";
 import { createFetchUrlCommand } from "./commands/fetchUrl";
 import { createFindVersionCommand } from "./commands/findVersion";
@@ -20,7 +21,6 @@ import { createScrapeCommand } from "./commands/scrape";
 import { createSearchCommand } from "./commands/search";
 import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
-import type { GlobalOptions } from "./types";
 import { setupLogging } from "./utils";
 
 /**
@@ -68,7 +68,11 @@ export function createCliProgram(): Command {
 
   // Set up global options handling
   program.hook("preAction", async (thisCommand, actionCommand) => {
-    const globalOptions: GlobalOptions = thisCommand.opts();
+    const globalOptions = thisCommand.opts();
+
+    // Resolve store path centrally using the new centralized logic
+    const resolvedStorePath = resolveStorePath(globalOptions.storePath);
+    globalOptions.storePath = resolvedStorePath;
 
     // Setup logging
     setupLogging(globalOptions);
@@ -76,7 +80,7 @@ export function createCliProgram(): Command {
     // Initialize telemetry system with proper configuration
     initTelemetry({
       enabled: globalOptions.telemetry ?? true,
-      storePath: globalOptions.storePath,
+      storePath: resolvedStorePath,
     });
 
     // Initialize telemetry if enabled
