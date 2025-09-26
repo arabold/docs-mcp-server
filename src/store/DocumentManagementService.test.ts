@@ -108,7 +108,7 @@ describe("DocumentManagementService", () => {
 
     // Initialize the main service instance used by most tests
     // This will now use memfs for its internal fs calls
-    docService = new DocumentManagementService();
+    docService = new DocumentManagementService("/test/store/path");
   });
 
   afterEach(async () => {
@@ -131,25 +131,25 @@ describe("DocumentManagementService", () => {
         },
       };
 
-      const service = new DocumentManagementService(null, pipelineConfig);
+      const service = new DocumentManagementService("/test/path", null, pipelineConfig);
       expect(service).toBeInstanceOf(DocumentManagementService);
       // Test passes if no errors are thrown during construction
     });
 
     it("should work without pipeline configuration", () => {
-      const service = new DocumentManagementService();
+      const service = new DocumentManagementService("/test/path");
       expect(service).toBeInstanceOf(DocumentManagementService);
       // Test passes if no errors are thrown during construction
     });
 
     it("should work with only embedding config provided", () => {
-      const service = new DocumentManagementService(null);
+      const service = new DocumentManagementService("/test/path", null);
       expect(service).toBeInstanceOf(DocumentManagementService);
     });
 
     it("should work with both embedding and pipeline config", () => {
       const pipelineConfig = { chunkSizes: { preferred: 500 } };
-      const service = new DocumentManagementService(null, pipelineConfig);
+      const service = new DocumentManagementService("/test/path", null, pipelineConfig);
       expect(service).toBeInstanceOf(DocumentManagementService);
     });
   });
@@ -219,7 +219,7 @@ describe("DocumentManagementService", () => {
       const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
       const { createDocumentManagement } = await import("./index");
 
-      const dm = await createDocumentManagement();
+      const dm = await createDocumentManagement({ storePath: "/test/path" });
 
       expect(initSpy).toHaveBeenCalledTimes(1);
       expect(dm).toBeInstanceOf(DocumentManagementService);
@@ -243,7 +243,7 @@ describe("DocumentManagementService", () => {
       const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
       const { createLocalDocumentManagement } = await import("./index");
 
-      const dm = await createLocalDocumentManagement();
+      const dm = await createLocalDocumentManagement("/test/path");
 
       expect(initSpy).toHaveBeenCalledTimes(1);
       expect(dm).toBeInstanceOf(DocumentManagementService);
@@ -1208,7 +1208,7 @@ describe("DocumentManagementService", () => {
 
     describe("cleanup", () => {
       it("should shutdown without errors", async () => {
-        const service = new DocumentManagementService({
+        const service = new DocumentManagementService("/test/path", {
           provider: "openai",
           model: "text-embedding-ada-002",
           dimensions: 1536,

@@ -21,12 +21,12 @@ export function _resetProjectRootCache(): void {
  * @throws {Error} If package.json cannot be found.
  */
 export function getProjectRoot(): string {
-  // Return cached result if available and no custom startPath is provided
+  // Return cached result if available
   if (projectRoot) {
     return projectRoot;
   }
 
-  // Start from the provided path or the directory of the current module
+  // Start from the directory of the current module
   const currentFilePath = fileURLToPath(import.meta.url);
   let currentDir = path.dirname(currentFilePath);
 
@@ -34,7 +34,7 @@ export function getProjectRoot(): string {
   while (true) {
     const packageJsonPath = path.join(currentDir, "package.json");
     if (fs.existsSync(packageJsonPath)) {
-      // Only cache if we're not using a custom startPath
+      // Cache the found project root directory
       projectRoot = currentDir;
       return currentDir;
     }

@@ -413,8 +413,8 @@ describe("Global option propagation", () => {
 
     // Verify that createLocalDocumentManagement was called with the resolved path
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+      resolvedStorePath,
       expect.any(Object), // embeddingConfig
-      resolvedStorePath, // resolved storePath
     );
 
     // The parseAsync promise will hang since it starts a server, but we've verified our assertions
@@ -446,8 +446,8 @@ describe("Global option propagation", () => {
 
     // Verify that createLocalDocumentManagement was called with the resolved path
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
-      expect.any(Object),
       resolvedStorePath,
+      expect.any(Object), // embeddingConfig
     );
 
     // Clean up

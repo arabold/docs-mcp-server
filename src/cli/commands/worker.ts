@@ -78,8 +78,14 @@ export function createWorkerCommand(program: Command): Command {
           // Resolve embedding configuration for worker (worker needs embeddings for indexing)
           const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
 
+          // Get global options from parent command
+          const globalOptions = program.parent?.opts() || {};
+
           // Initialize services
-          const docService = await createLocalDocumentManagement(embeddingConfig);
+          const docService = await createLocalDocumentManagement(
+            globalOptions.storePath,
+            embeddingConfig,
+          );
           const pipelineOptions: PipelineOptions = {
             recoverJobs: cmdOptions.resume, // Use the resume option
             concurrency: CLI_DEFAULTS.MAX_CONCURRENCY,

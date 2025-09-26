@@ -262,7 +262,7 @@ describe("Service Configuration Validation", () => {
     );
 
     // Simulate the service initialization sequence
-    const docService = new DocumentManagementService();
+    const docService = new DocumentManagementService("/test/path");
     await docService.initialize();
 
     const pipeline = await PipelineFactory.createPipeline(docService, {});
