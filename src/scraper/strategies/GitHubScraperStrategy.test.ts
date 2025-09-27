@@ -80,6 +80,19 @@ describe("GitHubScraperStrategy", () => {
         owner: "owner",
         repo: "repo",
         branch: "feature-branch",
+        subPath: undefined,
+      });
+    });
+
+    it("should parse URL with branch and subpath", () => {
+      const result = (strategy as any).parseGitHubUrl(
+        "https://github.com/owner/repo/tree/main/docs/reference",
+      );
+      expect(result).toEqual({
+        owner: "owner",
+        repo: "repo",
+        branch: "main",
+        subPath: "docs/reference",
       });
     });
 
@@ -437,6 +450,44 @@ describe("GitHubScraperStrategy", () => {
         "github-file://docs/api.json",
       ]);
       expect(result.links).not.toContain("github-file://src/main.js");
+    });
+
+    it("should limit discovery to repository subpath from URL", async () => {
+      const optionsWithSubPath: ScraperOptions = {
+        ...options,
+        url: "https://github.com/owner/repo/tree/main/docs/guides",
+      };
+
+      const mockTreeResponse = {
+        sha: "abc123",
+        url: "test-url",
+        tree: [
+          { path: "README.md", type: "blob", sha: "1", url: "test-url" },
+          { path: "docs/guides/setup.md", type: "blob", sha: "2", url: "test-url" },
+          { path: "docs/guides/advanced.md", type: "blob", sha: "3", url: "test-url" },
+          { path: "docs/api/reference.md", type: "blob", sha: "4", url: "test-url" },
+          { path: "examples/demo.md", type: "blob", sha: "5", url: "test-url" },
+        ],
+        truncated: false,
+      };
+
+      httpFetcherInstance.fetch.mockResolvedValueOnce({
+        content: JSON.stringify(mockTreeResponse),
+        mimeType: "application/json",
+      });
+
+      const result = await (strategy as any).processItem(
+        { url: optionsWithSubPath.url, depth: 0 },
+        optionsWithSubPath,
+      );
+
+      expect(result.links).toEqual([
+        "github-file://docs/guides/setup.md",
+        "github-file://docs/guides/advanced.md",
+      ]);
+      expect(result.links).not.toContain("github-file://README.md");
+      expect(result.links).not.toContain("github-file://docs/api/reference.md");
+      expect(result.links).not.toContain("github-file://examples/demo.md");
     });
 
     it("should handle exclude patterns in repository discovery", async () => {

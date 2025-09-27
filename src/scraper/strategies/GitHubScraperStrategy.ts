@@ -13,6 +13,7 @@ interface GitHubRepoInfo {
   owner: string;
   repo: string;
   branch?: string;
+  subPath?: string;
 }
 
 interface GitHubTreeItem {
@@ -41,6 +42,7 @@ interface GitHubTreeResponse {
  * - Processes all text files (source code, markdown, documentation, etc.)
  * - Supports branch-specific crawling (defaults to main/default branch)
  * - Automatically detects repository default branch when no branch specified
+ * - Respects repository subpath URLs (e.g., /tree/<branch>/docs) by limiting indexed files
  * - Filters out binary files and processes only text-based content
  *
  * Note: Wiki pages are not currently supported in this native mode. For wiki access,
@@ -89,11 +91,22 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
 
     const [, owner, repo] = match;
 
-    // Extract branch from URL if present (e.g., /tree/branch-name/)
-    const branchMatch = parsedUrl.pathname.match(/\/tree\/([^/]+)/);
-    const branch = branchMatch?.[1];
+    // Extract branch and optional subpath from URLs like /tree/<branch>/<subPath>
+    const segments = parsedUrl.pathname.split("/").filter(Boolean);
 
-    return { owner, repo, branch };
+    if (segments.length >= 3 && segments[2] !== "tree") {
+      // Unsupported format (e.g., /blob/) for repository indexing
+      return { owner, repo };
+    }
+
+    if (segments.length < 4 || segments[2] !== "tree") {
+      return { owner, repo };
+    }
+
+    const branch = segments[3];
+    const subPath = segments.length > 4 ? segments.slice(4).join("/") : undefined;
+
+    return { owner, repo, branch, subPath };
   }
 
   /**
@@ -363,9 +376,9 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       );
 
       const { tree, resolvedBranch } = await this.fetchRepositoryTree(repoInfo, signal);
-      const fileItems = tree.tree.filter((treeItem) =>
-        this.shouldProcessFile(treeItem, options),
-      );
+      const fileItems = tree.tree
+        .filter((treeItem) => this.isWithinSubPath(treeItem.path, repoInfo.subPath))
+        .filter((treeItem) => this.shouldProcessFile(treeItem, options));
 
       logger.info(
         `📁 Found ${fileItems.length} processable files in repository (branch: ${resolvedBranch})`,
@@ -440,6 +453,24 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     }
 
     return { document: undefined, links: [] };
+  }
+
+  private isWithinSubPath(path: string, subPath?: string): boolean {
+    if (!subPath) {
+      return true;
+    }
+
+    const trimmedSubPath = subPath.replace(/^\/+/, "").replace(/\/+$/, "");
+    if (trimmedSubPath.length === 0) {
+      return true;
+    }
+
+    const normalizedPath = path.replace(/^\/+/, "");
+    if (normalizedPath === trimmedSubPath) {
+      return true;
+    }
+
+    return normalizedPath.startsWith(`${trimmedSubPath}/`);
   }
 
   async scrape(
