@@ -1,7 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
 import type { Document } from "@langchain/core/documents";
-import envPaths from "env-paths";
 import Fuse from "fuse.js";
 import semver from "semver";
 import {
@@ -15,7 +13,6 @@ import type { ContentChunk } from "../splitter/types";
 import { analytics, extractHostname, TelemetryEvent } from "../telemetry";
 import { LibraryNotFoundError, VersionNotFoundError } from "../tools";
 import { logger } from "../utils/logger";
-import { getProjectRoot } from "../utils/paths";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
@@ -49,46 +46,16 @@ export class DocumentManagementService {
   }
 
   constructor(
+    storePath: string,
     embeddingConfig?: EmbeddingModelConfig | null,
     pipelineConfig?: PipelineConfiguration,
-    storePath?: string,
   ) {
-    let dbPath: string;
-    let dbDir: string;
+    const dbDir = storePath;
+    const dbPath = path.join(dbDir, "documents.db");
 
-    // 1. Check storePath parameter
-    if (storePath) {
-      dbDir = storePath;
-      dbPath = path.join(dbDir, "documents.db");
-      logger.debug(`Using database directory from storePath parameter: ${dbDir}`);
-    } else {
-      // 2. Check Old Local Path
-      const projectRoot = getProjectRoot();
-      const oldDbDir = path.join(projectRoot, ".store");
-      const oldDbPath = path.join(oldDbDir, "documents.db");
-      const oldDbExists = fs.existsSync(oldDbPath); // Check file existence specifically
+    logger.debug(`Using database directory: ${dbDir}`);
 
-      if (oldDbExists) {
-        dbPath = oldDbPath;
-        dbDir = oldDbDir;
-        logger.debug(`Using legacy database path: ${dbPath}`);
-      } else {
-        // 3. Use Standard Path
-        const standardPaths = envPaths("docs-mcp-server", { suffix: "" });
-        dbDir = standardPaths.data;
-        dbPath = path.join(dbDir, "documents.db");
-        logger.debug(`Using standard database directory: ${dbDir}`);
-      }
-    }
-
-    // Ensure the chosen directory exists
-    try {
-      fs.mkdirSync(dbDir, { recursive: true });
-    } catch (error) {
-      // Log potential error during directory creation but proceed
-      // The DocumentStore constructor might handle DB file creation errors
-      logger.error(`⚠️  Failed to create database directory ${dbDir}: ${error}`);
-    }
+    // Directory creation is handled by the centralized path resolution
 
     this.store = new DocumentStore(dbPath, embeddingConfig);
     this.documentRetriever = new DocumentRetrieverService(this.store);

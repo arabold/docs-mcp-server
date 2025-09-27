@@ -57,7 +57,6 @@ vi.mock("./DocumentStore", () => {
 import { getProjectRoot } from "../utils/paths";
 // Import the mocked constructor AFTER vi.mock
 import { DocumentManagementService } from "./DocumentManagementService";
-import { DocumentStore } from "./DocumentStore";
 
 // Mock DocumentRetrieverService (keep existing structure)
 const mockRetriever = {
@@ -87,8 +86,8 @@ describe("DocumentManagementService", () => {
   // Define expected paths consistently using the calculated actual root
   // Note: getProjectRoot() called here will now run *after* fs is mocked,
   // so it needs the dummy package.json created in beforeEach.
-  const expectedOldDbPath = path.join(projectRoot, ".store", "documents.db");
-  const expectedStandardDbPath = path.join(mockEnvPaths.data, "documents.db");
+  const _expectedOldDbPath = path.join(projectRoot, ".store", "documents.db");
+  const _expectedStandardDbPath = path.join(mockEnvPaths.data, "documents.db");
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -109,82 +108,12 @@ describe("DocumentManagementService", () => {
 
     // Initialize the main service instance used by most tests
     // This will now use memfs for its internal fs calls
-    docService = new DocumentManagementService();
+    docService = new DocumentManagementService("/test/store/path");
   });
 
   afterEach(async () => {
     // Shutdown the main service instance
     await docService?.shutdown();
-  });
-
-  // --- Constructor Path Logic Tests ---
-  describe("Constructor Database Path Selection", () => {
-    // Add beforeEach specific to this suite for memfs reset
-    beforeEach(() => {
-      vol.reset(); // Reset memfs volume before each test
-      vi.clearAllMocks(); // Clear other mocks like DocumentStore constructor
-      // Re-apply default envPaths mock for this suite
-      mockEnvPathsFn.mockReturnValue(mockEnvPaths);
-    });
-
-    it("should use the old local path if it exists", () => {
-      // Simulate the old path existing in memfs
-      vol.mkdirSync(path.dirname(expectedOldDbPath), { recursive: true });
-      vol.writeFileSync(expectedOldDbPath, ""); // Create the file
-
-      // Instantiate LOCALLY for this specific test
-      const localDocService = new DocumentManagementService();
-      expect(localDocService).toBeInstanceOf(DocumentManagementService);
-
-      // Verify DocumentStore was called with the old path
-      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(expectedOldDbPath, undefined);
-      // Verify the directory still exists (mkdirSync shouldn't error)
-      expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(true);
-    });
-
-    it("should use the standard env path if the old local path does not exist", () => {
-      // Ensure old path doesn't exist (handled by vol.reset() in beforeEach)
-      // Ensure envPaths mock returns the expected value
-      mockEnvPathsFn.mockReturnValue(mockEnvPaths);
-
-      // Instantiate LOCALLY for this specific test
-      const _localDocService = new DocumentManagementService();
-
-      // Verify DocumentStore was called with the standard path
-      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
-        expectedStandardDbPath,
-        undefined,
-      );
-      // Verify envPaths was called
-      expect(mockEnvPathsFn).toHaveBeenCalledWith("docs-mcp-server", { suffix: "" });
-      // Verify the standard directory was created in memfs
-      expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(true);
-    });
-
-    it("should use custom store path when provided via constructor", () => {
-      const customStorePath = "/mock/env/store/path";
-      const expectedCustomDbPath = path.join(customStorePath, "documents.db");
-
-      // Instantiate LOCALLY for this specific test with custom store path
-      const _localDocService = new DocumentManagementService(
-        undefined,
-        undefined,
-        customStorePath,
-      );
-
-      // Verify DocumentStore was called with the custom path
-      expect(vi.mocked(DocumentStore)).toHaveBeenCalledWith(
-        expectedCustomDbPath,
-        undefined,
-      );
-      // Verify the custom directory was created in memfs
-      expect(vol.existsSync(customStorePath)).toBe(true);
-      // Verify other paths were NOT created (optional but good check)
-      expect(vol.existsSync(path.dirname(expectedOldDbPath))).toBe(false);
-      expect(vol.existsSync(path.dirname(expectedStandardDbPath))).toBe(false);
-      // Verify envPaths was NOT called
-      expect(mockEnvPathsFn).not.toHaveBeenCalled();
-    });
   });
 
   // --- Pipeline Configuration Tests ---
@@ -202,25 +131,25 @@ describe("DocumentManagementService", () => {
         },
       };
 
-      const service = new DocumentManagementService(null, pipelineConfig);
+      const service = new DocumentManagementService("/test/path", null, pipelineConfig);
       expect(service).toBeInstanceOf(DocumentManagementService);
       // Test passes if no errors are thrown during construction
     });
 
     it("should work without pipeline configuration", () => {
-      const service = new DocumentManagementService();
+      const service = new DocumentManagementService("/test/path");
       expect(service).toBeInstanceOf(DocumentManagementService);
       // Test passes if no errors are thrown during construction
     });
 
     it("should work with only embedding config provided", () => {
-      const service = new DocumentManagementService(null);
+      const service = new DocumentManagementService("/test/path", null);
       expect(service).toBeInstanceOf(DocumentManagementService);
     });
 
     it("should work with both embedding and pipeline config", () => {
       const pipelineConfig = { chunkSizes: { preferred: 500 } };
-      const service = new DocumentManagementService(null, pipelineConfig);
+      const service = new DocumentManagementService("/test/path", null, pipelineConfig);
       expect(service).toBeInstanceOf(DocumentManagementService);
     });
   });
@@ -290,7 +219,7 @@ describe("DocumentManagementService", () => {
       const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
       const { createDocumentManagement } = await import("./index");
 
-      const dm = await createDocumentManagement();
+      const dm = await createDocumentManagement({ storePath: "/test/path" });
 
       expect(initSpy).toHaveBeenCalledTimes(1);
       expect(dm).toBeInstanceOf(DocumentManagementService);
@@ -314,7 +243,7 @@ describe("DocumentManagementService", () => {
       const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
       const { createLocalDocumentManagement } = await import("./index");
 
-      const dm = await createLocalDocumentManagement();
+      const dm = await createLocalDocumentManagement("/test/path");
 
       expect(initSpy).toHaveBeenCalledTimes(1);
       expect(dm).toBeInstanceOf(DocumentManagementService);
@@ -1279,7 +1208,7 @@ describe("DocumentManagementService", () => {
 
     describe("cleanup", () => {
       it("should shutdown without errors", async () => {
-        const service = new DocumentManagementService({
+        const service = new DocumentManagementService("/test/path", {
           provider: "openai",
           model: "text-embedding-ada-002",
           dimensions: 1536,

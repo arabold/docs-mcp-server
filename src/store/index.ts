@@ -22,10 +22,13 @@ export async function createDocumentManagement(
     await client.initialize();
     return client as IDocumentManagement;
   }
+  if (!options.storePath) {
+    throw new Error("storePath is required when not using a remote server");
+  }
   const service = new DocumentManagementService(
+    options.storePath,
     options.embeddingConfig,
     undefined,
-    options.storePath,
   );
   await service.initialize();
   return service as IDocumentManagement;
@@ -36,10 +39,10 @@ export async function createDocumentManagement(
  * Use this only when constructing an in-process PipelineManager (worker path).
  */
 export async function createLocalDocumentManagement(
+  storePath: string,
   embeddingConfig?: EmbeddingModelConfig | null,
-  storePath?: string,
 ) {
-  const service = new DocumentManagementService(embeddingConfig, undefined, storePath);
+  const service = new DocumentManagementService(storePath, embeddingConfig, undefined);
   await service.initialize();
   return service;
 }

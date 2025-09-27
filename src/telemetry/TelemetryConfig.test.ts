@@ -7,10 +7,10 @@ import {
   TelemetryConfig,
 } from "./TelemetryConfig";
 
-// Mock fs and envPaths
+// Mock fs and path utilities
 vi.mock("node:fs");
-vi.mock("env-paths", () => ({
-  default: () => ({ data: "/mock/data/path" }),
+vi.mock("../utils/paths", () => ({
+  resolveStorePath: vi.fn(() => "/mock/data/path"),
 }));
 
 describe("TelemetryConfig", () => {
@@ -81,8 +81,12 @@ describe("generateInstallationId", () => {
     );
   });
 
-  it("should use custom store path when provided", () => {
+  it("should use custom store path when provided", async () => {
     const customPath = "/custom/store/path";
+
+    // Mock resolveStorePath to return the custom path
+    const { resolveStorePath } = await import("../utils/paths");
+    vi.mocked(resolveStorePath).mockReturnValueOnce(customPath);
 
     vi.mocked(fs.existsSync).mockReturnValue(false);
     vi.mocked(fs.writeFileSync).mockImplementation(() => {});
