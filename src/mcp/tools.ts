@@ -1,5 +1,5 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
-import { FileFetcher, HttpFetcher } from "../scraper/fetcher";
+import { AutoDetectFetcher } from "../scraper/fetcher";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import {
   CancelJobTool,
@@ -49,7 +49,7 @@ export async function initializeTools(
     cancelJob: new CancelJobTool(pipeline),
     // clearCompletedJobs: new ClearCompletedJobsTool(pipeline),
     remove: new RemoveTool(docService, pipeline),
-    fetchUrl: new FetchUrlTool(new HttpFetcher(), new FileFetcher()),
+    fetchUrl: new FetchUrlTool(new AutoDetectFetcher()),
   };
 
   return tools;

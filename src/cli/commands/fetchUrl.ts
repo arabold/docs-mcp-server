@@ -3,7 +3,7 @@
  */
 
 import type { Command } from "commander";
-import { FileFetcher, HttpFetcher } from "../../scraper/fetcher";
+import { AutoDetectFetcher } from "../../scraper/fetcher";
 import { ScrapeMode } from "../../scraper/types";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
@@ -22,7 +22,7 @@ export async function fetchUrlAction(
   });
 
   const headers = parseHeaders(options.header);
-  const fetchUrlTool = new FetchUrlTool(new HttpFetcher(), new FileFetcher());
+  const fetchUrlTool = new FetchUrlTool(new AutoDetectFetcher());
 
   const content = await fetchUrlTool.execute({
     url,

@@ -1,9 +1,4 @@
-import type {
-  ContentFetcher,
-  FileFetcher,
-  HttpFetcher,
-  RawContent,
-} from "../scraper/fetcher";
+import type { AutoDetectFetcher, RawContent } from "../scraper/fetcher";
 import { HtmlPipeline } from "../scraper/pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../scraper/pipelines/MarkdownPipeline";
 import { TextPipeline } from "../scraper/pipelines/TextPipeline";
@@ -53,9 +48,9 @@ export interface FetchUrlToolOptions {
  */
 export class FetchUrlTool {
   /**
-   * Collection of fetchers that will be tried in order for a given URL.
+   * AutoDetectFetcher handles all URL types and fallback logic automatically.
    */
-  private readonly fetchers: ContentFetcher[];
+  private readonly fetcher: AutoDetectFetcher;
   /**
    * Collection of pipelines that will be tried in order for processing content.
    * The first pipeline that can process the content type will be used.
@@ -63,8 +58,8 @@ export class FetchUrlTool {
    */
   private readonly pipelines: ContentPipeline[];
 
-  constructor(httpFetcher: HttpFetcher, fileFetcher: FileFetcher) {
-    this.fetchers = [httpFetcher, fileFetcher];
+  constructor(fetcher: AutoDetectFetcher) {
+    this.fetcher = fetcher;
     const htmlPipeline = new HtmlPipeline();
     const markdownPipeline = new MarkdownPipeline();
     const textPipeline = new TextPipeline();
@@ -81,25 +76,24 @@ export class FetchUrlTool {
   async execute(options: FetchUrlToolOptions): Promise<string> {
     const { url, scrapeMode = ScrapeMode.Auto, headers } = options;
 
-    const canFetchResults = this.fetchers.map((f) => f.canFetch(url));
-    const fetcherIndex = canFetchResults.indexOf(true);
-    if (fetcherIndex === -1) {
+    if (!this.fetcher.canFetch(url)) {
       throw new ToolError(
         `Invalid URL: ${url}. Must be an HTTP/HTTPS URL or a file:// URL.`,
         this.constructor.name,
       );
     }
 
-    const fetcher = this.fetchers[fetcherIndex];
-    logger.debug(`Using fetcher "${fetcher.constructor.name}" for URL: ${url}`);
-
     try {
       logger.info(`📡 Fetching ${url}...`);
-      const rawContent: RawContent = await fetcher.fetch(url, {
+
+      const fetchOptions = {
         followRedirects: options.followRedirects ?? true,
         maxRetries: 3,
         headers, // propagate custom headers
-      });
+      };
+
+      // AutoDetectFetcher handles all fallback logic automatically
+      const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
 
       logger.info("🔄 Processing content...");
 
@@ -122,7 +116,7 @@ export class FetchUrlTool {
               scrapeMode,
               headers, // propagate custom headers
             },
-            fetcher,
+            this.fetcher,
           );
           break;
         }
@@ -167,8 +161,11 @@ export class FetchUrlTool {
         this.constructor.name,
       );
     } finally {
-      // Cleanup all pipelines to prevent resource leaks (e.g., browser instances)
-      await Promise.allSettled(this.pipelines.map((pipeline) => pipeline.close()));
+      // Cleanup all pipelines and fetcher to prevent resource leaks (e.g., browser instances)
+      await Promise.allSettled([
+        ...this.pipelines.map((pipeline) => pipeline.close()),
+        this.fetcher.close(),
+      ]);
     }
   }
 }

@@ -56,6 +56,19 @@ class RedirectError extends ScraperError {
   }
 }
 
+class ChallengeError extends ScraperError {
+  constructor(
+    public readonly url: string,
+    public readonly statusCode: number,
+    public readonly challengeType: string,
+  ) {
+    super(
+      `Challenge detected for ${url} (status: ${statusCode}, type: ${challengeType})`,
+      false,
+    );
+  }
+}
+
 export {
   ScraperError,
   NetworkError,
@@ -63,4 +76,5 @@ export {
   InvalidUrlError,
   ParsingError,
   RedirectError,
+  ChallengeError,
 };

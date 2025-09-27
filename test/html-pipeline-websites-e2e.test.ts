@@ -12,18 +12,16 @@
 
 import { beforeAll, describe, expect, it } from "vitest";
 import { FetchUrlTool } from "../src/tools/FetchUrlTool";
-import { HttpFetcher } from "../src/scraper/fetcher/HttpFetcher";
-import { FileFetcher } from "../src/scraper/fetcher/FileFetcher";
+import { AutoDetectFetcher } from "../src/scraper/fetcher/AutoDetectFetcher";
 import { ScrapeMode } from "../src/scraper/types";
 
 describe("HTML Pipeline Website Tests", () => {
   let fetchUrlTool: FetchUrlTool;
 
   beforeAll(() => {
-    // Initialize the FetchUrlTool with real fetchers
-    const httpFetcher = new HttpFetcher();
-    const fileFetcher = new FileFetcher();
-    fetchUrlTool = new FetchUrlTool(httpFetcher, fileFetcher);
+    // Initialize the FetchUrlTool with AutoDetectFetcher
+    const autoDetectFetcher = new AutoDetectFetcher();
+    fetchUrlTool = new FetchUrlTool(autoDetectFetcher);
   });
 
   describe("Salesforce Documentation", () => {
