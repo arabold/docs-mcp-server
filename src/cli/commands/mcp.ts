@@ -11,10 +11,10 @@ import type { PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { analytics, TelemetryEvent } from "../../telemetry";
+import { DEFAULT_HOST, DEFAULT_HTTP_PORT, DEFAULT_PROTOCOL } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
-  CLI_DEFAULTS,
   createAppServerConfig,
   createPipelineWithCallbacks,
   parseAuthConfig,
@@ -33,14 +33,14 @@ export function createMcpCommand(program: Command): Command {
       .addOption(
         new Option("--protocol <protocol>", "Protocol for MCP server")
           .env("DOCS_MCP_PROTOCOL")
-          .default(CLI_DEFAULTS.PROTOCOL)
+          .default(DEFAULT_PROTOCOL)
           .choices(["auto", "stdio", "http"]),
       )
       .addOption(
         new Option("--port <number>", "Port for the MCP server")
           .env("DOCS_MCP_PORT")
           .env("PORT")
-          .default(CLI_DEFAULTS.HTTP_PORT.toString())
+          .default(DEFAULT_HTTP_PORT.toString())
           .argParser((v: string) => {
             const n = Number(v);
             if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -53,7 +53,7 @@ export function createMcpCommand(program: Command): Command {
         new Option("--host <host>", "Host to bind the MCP server to")
           .env("DOCS_MCP_HOST")
           .env("HOST")
-          .default(CLI_DEFAULTS.HOST)
+          .default(DEFAULT_HOST)
           .argParser(validateHost),
       )
       .addOption(

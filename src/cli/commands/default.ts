@@ -10,10 +10,10 @@ import { initializeTools } from "../../mcp/tools";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
+import { DEFAULT_HOST, DEFAULT_HTTP_PORT } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
-  CLI_DEFAULTS,
   createAppServerConfig,
   createPipelineWithCallbacks,
   ensurePlaywrightBrowsersInstalled,
@@ -39,7 +39,7 @@ export function createDefaultAction(program: Command): Command {
         new Option("--port <number>", "Port for the server")
           .env("DOCS_MCP_PORT")
           .env("PORT")
-          .default(CLI_DEFAULTS.HTTP_PORT.toString())
+          .default(DEFAULT_HTTP_PORT.toString())
           .argParser((v: string) => {
             const n = Number(v);
             if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -52,7 +52,7 @@ export function createDefaultAction(program: Command): Command {
         new Option("--host <host>", "Host to bind the server to")
           .env("DOCS_MCP_HOST")
           .env("HOST")
-          .default(CLI_DEFAULTS.HOST)
+          .default(DEFAULT_HOST)
           .argParser(validateHost),
       )
       .addOption(

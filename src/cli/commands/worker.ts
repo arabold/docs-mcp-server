@@ -8,10 +8,10 @@ import { startAppServer } from "../../app";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
+import { DEFAULT_HOST, DEFAULT_MAX_CONCURRENCY } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
-  CLI_DEFAULTS,
   createAppServerConfig,
   createPipelineWithCallbacks,
   ensurePlaywrightBrowsersInstalled,
@@ -41,7 +41,7 @@ export function createWorkerCommand(program: Command): Command {
       new Option("--host <host>", "Host to bind the worker API to")
         .env("DOCS_MCP_HOST")
         .env("HOST")
-        .default(CLI_DEFAULTS.HOST)
+        .default(DEFAULT_HOST)
         .argParser(validateHost),
     )
     .addOption(
@@ -88,7 +88,7 @@ export function createWorkerCommand(program: Command): Command {
           );
           const pipelineOptions: PipelineOptions = {
             recoverJobs: cmdOptions.resume, // Use the resume option
-            concurrency: CLI_DEFAULTS.MAX_CONCURRENCY,
+            concurrency: DEFAULT_MAX_CONCURRENCY,
           };
           const pipeline = await createPipelineWithCallbacks(docService, pipelineOptions);
 

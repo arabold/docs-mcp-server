@@ -254,6 +254,7 @@ You can index documentation from your local filesystem by using a `file://` URL 
       -e OPENAI_API_KEY="your-key" \
       -v /absolute/path/to/docs:/docs:ro \
       -v docs-mcp-data:/data \
+      -p 6280:6280 \
       ghcr.io/arabold/docs-mcp-server:latest \
       scrape mylib file:///docs/my-library
     ```
@@ -498,7 +499,11 @@ DOCS_MCP_TELEMETRY=false npx @arabold/docs-mcp-server@latest
 **Option 3: Docker**
 
 ```bash
-docker run -e DOCS_MCP_TELEMETRY=false ghcr.io/arabold/docs-mcp-server:latest
+docker run \
+  -e DOCS_MCP_TELEMETRY=false \
+  -v docs-mcp-data:/data \
+  -p 6280:6280 \
+  ghcr.io/arabold/docs-mcp-server:latest
 ```
 
 For more details about our telemetry practices, see the [Telemetry Guide](docs/telemetry.md).
