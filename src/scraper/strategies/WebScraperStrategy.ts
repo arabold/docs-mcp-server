@@ -1,7 +1,7 @@
 import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
-import { HttpFetcher } from "../fetcher";
+import { AutoDetectFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, ProcessedContent } from "../pipelines/types";
@@ -15,7 +15,7 @@ export interface WebScraperStrategyOptions {
 }
 
 export class WebScraperStrategy extends BaseScraperStrategy {
-  private readonly httpFetcher = new HttpFetcher();
+  private readonly fetcher = new AutoDetectFetcher();
   private readonly shouldFollowLinkFn?: (baseUrl: URL, targetUrl: URL) => boolean;
   private readonly pipelines: ContentPipeline[];
 
@@ -60,8 +60,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         headers: options.headers, // Forward custom headers
       };
 
-      // Pass options to fetcher
-      const rawContent: RawContent = await this.httpFetcher.fetch(url, fetchOptions);
+      // Use AutoDetectFetcher which handles fallbacks automatically
+      const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
 
       // --- Start Pipeline Processing ---
       let processed: ProcessedContent | undefined;
@@ -70,7 +70,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           logger.debug(
             `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
           );
-          processed = await pipeline.process(rawContent, options, this.httpFetcher);
+          processed = await pipeline.process(rawContent, options, this.fetcher);
           break;
         }
       }
@@ -141,9 +141,12 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   }
 
   /**
-   * Cleanup resources used by this strategy, specifically the pipeline browser instances.
+   * Cleanup resources used by this strategy, specifically the pipeline browser instances and fetcher.
    */
   async cleanup(): Promise<void> {
-    await Promise.allSettled(this.pipelines.map((pipeline) => pipeline.close()));
+    await Promise.allSettled([
+      ...this.pipelines.map((pipeline) => pipeline.close()),
+      this.fetcher.close(),
+    ]);
   }
 }

@@ -7,6 +7,9 @@
 
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import { config } from "dotenv";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { startAppServer } from "../src/app";
 import { createLocalDocumentManagement } from "../src/store";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
@@ -22,6 +25,7 @@ describe("Authentication End-to-End Tests", () => {
   let pipeline: any;
   let serverPort: number;
   let baseUrl: string;
+  let tempDir: string;
 
   beforeAll(async () => {
     // Skip tests if authentication environment variables are not set
@@ -33,12 +37,15 @@ describe("Authentication End-to-End Tests", () => {
     // Set quiet logging for tests
     setLogLevel(LogLevel.ERROR);
 
+    // Create temporary directory for test database
+    tempDir = mkdtempSync(join(tmpdir(), "auth-e2e-test-"));
+
     // Find an available port for the test server
     serverPort = 9876; // Use a specific port for testing
     baseUrl = `http://localhost:${serverPort}`;
 
-    // Initialize services
-    docService = await createLocalDocumentManagement(null); // No embeddings needed for auth tests
+    // Initialize services with temporary directory
+    docService = await createLocalDocumentManagement(tempDir); // Use temp dir for test database
     pipeline = await PipelineFactory.createPipeline(docService);
 
     // Configure server with authentication enabled
@@ -77,6 +84,14 @@ describe("Authentication End-to-End Tests", () => {
     }
     if (docService) {
       await docService.shutdown();
+    }
+    // Clean up temporary directory
+    if (tempDir) {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        // Ignore cleanup errors
+      }
     }
   });
 
