@@ -1,3 +1,13 @@
+# [1.26.0](https://github.com/arabold/docs-mcp-server/compare/v1.25.3...v1.26.0) (2025-09-27)
+
+
+### Features
+
+* add GitHub Wiki scraping as well as blob URL support ([3b48706](https://github.com/arabold/docs-mcp-server/commit/3b487069eff65cc4f80f13cdca65c44c55906f3d))
+* add web app icons, manifest, and version update notifications ([ffd50b4](https://github.com/arabold/docs-mcp-server/commit/ffd50b4ac849f1955e72a444290496b87cac7d17))
+* better handling of Cloudflare challenges, for example for npmjs.com ([6e10590](https://github.com/arabold/docs-mcp-server/commit/6e10590ee620aa8f98b92e0ff93665891d622313))
+* **github:** add support for subpath in GitHub URLs and update parsing logic ([9d3b9ef](https://github.com/arabold/docs-mcp-server/commit/9d3b9ef393147c8ee697de30725ba22079b0350c)), closes [#238](https://github.com/arabold/docs-mcp-server/issues/238)
+
 ## [1.25.3](https://github.com/arabold/docs-mcp-server/compare/v1.25.2...v1.25.3) (2025-09-27)
 
 
