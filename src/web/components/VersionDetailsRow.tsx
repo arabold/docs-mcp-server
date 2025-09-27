@@ -144,6 +144,7 @@ const VersionDetailsRow = ({
           {/* Confirming State: Text */}
           <span
             x-show={`$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}' && !$store.confirmingAction.isDeleting`}
+            class="mx-1"
           >
             Confirm?<span class="sr-only">Confirm delete</span>
           </span>
