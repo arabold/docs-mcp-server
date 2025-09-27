@@ -1,3 +1,10 @@
+## [1.25.3](https://github.com/arabold/docs-mcp-server/compare/v1.25.2...v1.25.3) (2025-09-27)
+
+
+### Bug Fixes
+
+* **cli:** update global options handling and centralize store path resolution ([a16e0ec](https://github.com/arabold/docs-mcp-server/commit/a16e0ec165daba80682cb21d55378819dafbef58))
+
 ## [1.25.2](https://github.com/arabold/docs-mcp-server/compare/v1.25.1...v1.25.2) (2025-09-22)
 
 
