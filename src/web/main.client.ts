@@ -1,9 +1,93 @@
-// Import the main CSS file which includes Tailwind and Flowbite styles
+/**
+ * Bootstraps the client-side experience for the Docs MCP Server web UI.
+ * Initializes Alpine stores, HTMX helpers, Flowbite components, and the
+ * release checker that surfaces update notifications in the header.
+ */
 import "./styles/main.css";
 
 import Alpine from "alpinejs";
 import { initFlowbite } from "flowbite";
 import htmx from "htmx.org";
+import { fallbackReleaseLabel, isVersionNewer } from "./utils/versionCheck";
+
+const LATEST_RELEASE_ENDPOINT =
+  "https://api.github.com/repos/arabold/docs-mcp-server/releases/latest";
+const LATEST_RELEASE_FALLBACK_URL =
+  "https://github.com/arabold/docs-mcp-server/releases/latest";
+
+interface VersionUpdateConfig {
+  currentVersion: string | null;
+}
+
+interface GithubReleaseResponse {
+  tag_name?: unknown;
+  html_url?: unknown;
+}
+
+document.addEventListener("alpine:init", () => {
+  Alpine.data("versionUpdate", (config: VersionUpdateConfig) => ({
+    currentVersion:
+      typeof config?.currentVersion === "string" ? config.currentVersion : null,
+    hasUpdate: false,
+    latestVersionLabel: "",
+    latestReleaseUrl: LATEST_RELEASE_FALLBACK_URL,
+    hasChecked: false,
+    queueCheck() {
+      window.setTimeout(() => {
+        void this.checkForUpdate();
+      }, 0);
+    },
+    async checkForUpdate() {
+      if (this.hasChecked) {
+        return;
+      }
+      this.hasChecked = true;
+
+      if (!this.currentVersion) {
+        return;
+      }
+
+      try {
+        const response = await fetch(LATEST_RELEASE_ENDPOINT, {
+          headers: {
+            Accept: "application/vnd.github+json",
+            "User-Agent": "docs-mcp-server-ui",
+          },
+        });
+
+        if (!response.ok) {
+          console.debug("Release check request failed", response.status);
+          return;
+        }
+
+        const payload = (await response.json()) as GithubReleaseResponse;
+        const tagName = payload.tag_name;
+
+        if (!isVersionNewer(tagName, this.currentVersion)) {
+          return;
+        }
+
+        const releaseLabel =
+          (typeof tagName === "string" && tagName.trim().length > 0
+            ? tagName.trim()
+            : null) ?? fallbackReleaseLabel(tagName);
+
+        if (!releaseLabel) {
+          return;
+        }
+
+        this.latestVersionLabel = releaseLabel;
+        this.latestReleaseUrl =
+          typeof payload.html_url === "string" && payload.html_url.trim().length
+            ? payload.html_url
+            : LATEST_RELEASE_FALLBACK_URL;
+        this.hasUpdate = true;
+      } catch (error) {
+        console.debug("Release check request threw", error);
+      }
+    },
+  }));
+});
 
 // Ensure Alpine global store for confirmation actions is initialized before Alpine components render
 Alpine.store("confirmingAction", {
@@ -26,7 +110,10 @@ document.addEventListener("job-list-refresh", () => {
 
 // Auto-refresh job list every 3 seconds for real-time progress updates
 function autoRefreshJobList() {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
+  // Only refresh if the job queue element exists on the current page
+  if (document.querySelector("#job-queue")) {
+    htmx.ajax("get", "/web/jobs", "#job-queue");
+  }
 }
 
 // Global variable to track the current interval
