@@ -8,10 +8,12 @@
 
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
 import path from "path";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { config } from "dotenv";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
-import { DocumentManagementService } from "../src/store/DocumentManagementService";
+import { createLocalDocumentManagement } from "../src/store";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "../src/store/embeddings/EmbeddingConfig";
 
@@ -19,10 +21,11 @@ import { EmbeddingConfig, type EmbeddingModelConfig } from "../src/store/embeddi
 config();
 
 describe("Vector Search End-to-End Tests", () => {
-  let docService: DocumentManagementService;
+  let docService: any;
   let scrapeTool: ScrapeTool;
   let searchTool: SearchTool;
   let pipeline: any;
+  let tempDir: string;
 
   beforeAll(async () => {
     // Skip this test suite if no embedding configuration is available
@@ -31,10 +34,8 @@ describe("Vector Search End-to-End Tests", () => {
       return;
     }
 
-    // Set up in-memory database with a temporary path
-    // SQLite :memory: doesn't work well with the DocumentStore constructor
-    const testDbPath = `/tmp/test-${Date.now()}.db`;
-    process.env.DOCS_MCP_STORE_PATH = path.dirname(testDbPath);
+    // Create temporary directory for test database
+    tempDir = mkdtempSync(path.join(tmpdir(), "vector-search-e2e-test-"));
     
     // Create explicit embedding configuration
     let embeddingConfig: EmbeddingModelConfig;
@@ -47,9 +48,8 @@ describe("Vector Search End-to-End Tests", () => {
       embeddingConfig = EmbeddingConfig.parseEmbeddingConfig("text-embedding-3-small");
     }
 
-    // Initialize DocumentManagementService with explicit config
-    docService = new DocumentManagementService(embeddingConfig);
-    await docService.initialize();
+    // Initialize DocumentManagementService with temporary directory and embedding config
+    docService = await createLocalDocumentManagement(tempDir, embeddingConfig);
 
     // Create pipeline for ScrapeTool
     pipeline = await PipelineFactory.createPipeline(docService);
@@ -66,6 +66,14 @@ describe("Vector Search End-to-End Tests", () => {
     }
     if (docService) {
       await docService.shutdown();
+    }
+    // Clean up temporary directory
+    if (tempDir) {
+      try {
+        rmSync(tempDir, { recursive: true, force: true });
+      } catch (error) {
+        // Ignore cleanup errors
+      }
     }
   });
 

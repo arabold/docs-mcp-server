@@ -2,7 +2,7 @@ import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import { CancellationError } from "../../pipeline/errors";
 import { analytics, extractHostname, extractProtocol } from "../../telemetry";
 import { FETCHER_BASE_DELAY, FETCHER_MAX_RETRIES } from "../../utils/config";
-import { RedirectError, ScraperError } from "../../utils/errors";
+import { ChallengeError, RedirectError, ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
@@ -177,6 +177,40 @@ export class HttpFetcher implements ContentFetcher {
           const location = axiosError.response?.headers?.location;
           if (location) {
             throw new RedirectError(source, location, status);
+          }
+        }
+
+        // Detect Cloudflare challenges
+        if (status === 403) {
+          const cfMitigated = axiosError.response?.headers?.["cf-mitigated"];
+          const server = axiosError.response?.headers?.server;
+          let responseBody = "";
+
+          // Safely convert response data to string
+          if (axiosError.response?.data) {
+            try {
+              if (typeof axiosError.response.data === "string") {
+                responseBody = axiosError.response.data;
+              } else if (Buffer.isBuffer(axiosError.response.data)) {
+                responseBody = axiosError.response.data.toString("utf-8");
+              } else if (axiosError.response.data instanceof ArrayBuffer) {
+                responseBody = Buffer.from(axiosError.response.data).toString("utf-8");
+              }
+            } catch {
+              // Ignore conversion errors
+            }
+          }
+
+          // Check for various Cloudflare challenge indicators
+          const isCloudflareChallenge =
+            cfMitigated === "challenge" ||
+            server === "cloudflare" ||
+            responseBody.includes("Enable JavaScript and cookies to continue") ||
+            responseBody.includes("Just a moment...") ||
+            responseBody.includes("cf_chl_opt");
+
+          if (isCloudflareChallenge) {
+            throw new ChallengeError(source, status, "cloudflare");
           }
         }
 
