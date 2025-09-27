@@ -2,6 +2,7 @@ import { logger } from "../utils";
 import { ScraperError } from "../utils/errors";
 import { validateUrl } from "../utils/url";
 import { GitHubScraperStrategy } from "./strategies/GitHubScraperStrategy";
+import { GitHubWikiScraperStrategy } from "./strategies/GitHubWikiScraperStrategy";
 import { LocalFileStrategy } from "./strategies/LocalFileStrategy";
 import { NpmScraperStrategy } from "./strategies/NpmScraperStrategy";
 import { PyPiScraperStrategy } from "./strategies/PyPiScraperStrategy";
@@ -15,6 +16,7 @@ export class ScraperRegistry {
     this.strategies = [
       new NpmScraperStrategy(),
       new PyPiScraperStrategy(),
+      new GitHubWikiScraperStrategy(),
       new GitHubScraperStrategy(),
       new WebScraperStrategy(),
       new LocalFileStrategy(),
