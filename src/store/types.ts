@@ -5,18 +5,42 @@ import type { DocumentMetadata } from "../types";
 export const VECTOR_DIMENSION = 1536;
 
 /**
+ * Database page record type matching the pages table schema
+ */
+export interface DbPage {
+  id: number;
+  version_id: number;
+  url: string;
+  title: string | null;
+  etag: string | null;
+  last_modified: string | null;
+  content_type: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
  * Database document record type matching the documents table schema
  */
 export interface DbDocument {
   id: string;
-  library_id: number;
-  version_id: number; // Changed from version: string to use foreign key
-  url: string;
+  page_id: number; // Foreign key to pages table
   content: string;
-  metadata: string; // JSON string of DocumentMetadata
-  embedding: string | null; // JSON string of number[]
+  metadata: string; // JSON string of chunk-specific metadata (level, path, etc.)
   sort_order: number;
-  score: number | null;
+  embedding: Buffer | null; // Binary blob for embeddings
+  created_at: string;
+  score: number | null; // Added during search queries
+}
+
+/**
+ * Represents the result of a JOIN between the documents and pages tables.
+ * It includes all fields from a document chunk plus the relevant page-level metadata.
+ */
+export interface DbJoinedDocument extends DbDocument {
+  url: string;
+  title: string | null;
+  content_type: string | null;
 }
 
 /**
@@ -25,13 +49,22 @@ export interface DbDocument {
 export type DbQueryResult<T> = T | undefined;
 
 /**
- * Maps raw database document to the Document type used by the application
+ * Maps raw database document with joined page data to the Document type used by the application.
+ * Now uses the explicit DbJoinedDocument type for improved type safety.
  */
-export function mapDbDocumentToDocument(doc: DbDocument) {
+export function mapDbDocumentToDocument(doc: DbJoinedDocument) {
+  const chunkMetadata = JSON.parse(doc.metadata) as DocumentMetadata;
+
   return {
     id: doc.id,
     pageContent: doc.content,
-    metadata: JSON.parse(doc.metadata) as DocumentMetadata,
+    metadata: {
+      ...chunkMetadata,
+      // Page-level fields are always available from joined queries
+      url: doc.url,
+      title: doc.title || "", // Convert null to empty string for consistency
+      ...(doc.content_type && { contentType: doc.content_type }),
+    } as DocumentMetadata,
   };
 }
 

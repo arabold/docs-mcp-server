@@ -46,16 +46,24 @@ describe("HierarchicalAssemblyStrategy", () => {
     });
 
     it("should reconstruct complete hierarchy for single match", async () => {
-      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test-hierarchy",
-        "1.0",
+      const versionId = await documentStore.resolveVersionId("test-hierarchy", "1.0");
+
+      expect(versionId).toBeGreaterThan(0);
+
+      // Create a page first
+      const pageResult = (documentStore as any).statements.insertPage.run(
+        versionId,
+        "Deep.ts",
+        "Deep TypeScript File",
+        null,
+        null,
+        "text/typescript",
       );
+      const pageId = pageResult.lastInsertRowid;
 
       // Create a hierarchy: namespace > class > method
       const namespaceResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Deep.ts",
+        pageId,
         "namespace UserManagement {",
         JSON.stringify({
           url: "Deep.ts",
@@ -64,14 +72,11 @@ describe("HierarchicalAssemblyStrategy", () => {
           types: ["structural"],
         }),
         0,
-        new Date().toISOString(),
       );
       const namespaceId = namespaceResult.lastInsertRowid;
 
       const classResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Deep.ts",
+        pageId,
         "  export class UserService {",
         JSON.stringify({
           url: "Deep.ts",
@@ -80,14 +85,11 @@ describe("HierarchicalAssemblyStrategy", () => {
           types: ["structural"],
         }),
         1,
-        new Date().toISOString(),
       );
       const classId = classResult.lastInsertRowid;
 
       const methodResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "Deep.ts",
+        pageId,
         "    getUserById(id: string) { return db.find(id); }",
         JSON.stringify({
           url: "Deep.ts",
@@ -96,7 +98,6 @@ describe("HierarchicalAssemblyStrategy", () => {
           types: ["content"],
         }),
         2,
-        new Date().toISOString(),
       );
       const methodId = methodResult.lastInsertRowid;
 
@@ -137,16 +138,24 @@ describe("HierarchicalAssemblyStrategy", () => {
     });
 
     it("should handle hierarchical gaps in parent chain", async () => {
-      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test-gaps",
-        "1.0",
+      const versionId = await documentStore.resolveVersionId("test-gaps", "1.0");
+
+      expect(versionId).toBeGreaterThan(0);
+
+      // Create a page first
+      const pageResult = (documentStore as any).statements.insertPage.run(
+        versionId,
+        "GapTest.ts",
+        "Gap Test TypeScript File",
+        null,
+        null,
+        "text/typescript",
       );
+      const pageId = pageResult.lastInsertRowid;
 
       // Root namespace - exists
       const namespaceResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "GapTest.ts",
+        pageId,
         "namespace UserManagement {",
         JSON.stringify({
           url: "GapTest.ts",
@@ -155,7 +164,6 @@ describe("HierarchicalAssemblyStrategy", () => {
           types: ["structural"],
         }),
         0,
-        new Date().toISOString(),
       );
       const namespaceId = namespaceResult.lastInsertRowid;
 
@@ -164,9 +172,7 @@ describe("HierarchicalAssemblyStrategy", () => {
 
       // Deep method with missing intermediate parent
       const methodResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "GapTest.ts",
+        pageId,
         "    getUserById(id: string) { return db.find(id); }",
         JSON.stringify({
           url: "GapTest.ts",
@@ -175,7 +181,6 @@ describe("HierarchicalAssemblyStrategy", () => {
           types: ["content"],
         }),
         1,
-        new Date().toISOString(),
       );
       const methodId = methodResult.lastInsertRowid;
 
@@ -211,17 +216,25 @@ describe("HierarchicalAssemblyStrategy", () => {
     });
 
     it("should promote deeply nested anonymous functions to their top-level container", async () => {
-      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test-promotion",
-        "1.0",
+      const versionId = await documentStore.resolveVersionId("test-promotion", "1.0");
+
+      expect(versionId).toBeGreaterThan(0);
+
+      // Create a page first
+      const pageResult = (documentStore as any).statements.insertPage.run(
+        versionId,
+        "applyMigrations.ts",
+        "Apply Migrations TypeScript File",
+        null,
+        null,
+        "text/typescript",
       );
+      const pageId = pageResult.lastInsertRowid;
 
       // Create a simpler, more realistic scenario that matches how the splitter actually works
       // Function containing nested arrow function
       const topFunctionResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "applyMigrations.ts",
+        pageId,
         "export async function applyMigrations(db: Database): Promise<void> {\n  const overallTransaction = db.transaction(() => {\n    console.log('migrating');\n  });\n}",
         JSON.stringify({
           url: "applyMigrations.ts",
@@ -230,15 +243,12 @@ describe("HierarchicalAssemblyStrategy", () => {
           types: ["code", "content"],
         }),
         0,
-        new Date().toISOString(),
       );
       const topFunctionId = topFunctionResult.lastInsertRowid;
 
       // Nested arrow function inside the main function
       const nestedArrowResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "applyMigrations.ts",
+        pageId,
         "    console.log('migrating');",
         JSON.stringify({
           url: "applyMigrations.ts",
@@ -247,7 +257,6 @@ describe("HierarchicalAssemblyStrategy", () => {
           types: ["code", "content"],
         }),
         1,
-        new Date().toISOString(),
       );
       const nestedArrowId = nestedArrowResult.lastInsertRowid;
 
@@ -283,16 +292,24 @@ describe("HierarchicalAssemblyStrategy", () => {
     });
 
     it("should handle multiple matches with selective subtree reassembly", async () => {
-      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test-multi",
-        "1.0",
+      const versionId = await documentStore.resolveVersionId("test-multi", "1.0");
+
+      expect(versionId).toBeGreaterThan(0);
+
+      // Create a page first
+      const pageResult = (documentStore as any).statements.insertPage.run(
+        versionId,
+        "UserService.ts",
+        "User Service TypeScript File",
+        null,
+        null,
+        "text/typescript",
       );
+      const pageId = pageResult.lastInsertRowid;
 
       // Class with multiple methods - only some will be matched
       const _classOpenResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "UserService.ts",
+        pageId,
         "class UserService {",
         JSON.stringify({
           url: "UserService.ts",
@@ -300,14 +317,11 @@ describe("HierarchicalAssemblyStrategy", () => {
           level: 1,
         }),
         0,
-        new Date().toISOString(),
       );
 
       // Method 1: getUser (will be matched)
       const getUserResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "UserService.ts",
+        pageId,
         "  getUser(id) { return db.find(id); }",
         JSON.stringify({
           url: "UserService.ts",
@@ -315,15 +329,12 @@ describe("HierarchicalAssemblyStrategy", () => {
           level: 2,
         }),
         1,
-        new Date().toISOString(),
       );
       const getUserId = getUserResult.lastInsertRowid.toString();
 
       // Method 2: createUser (will NOT be matched)
       (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "UserService.ts",
+        pageId,
         "  createUser(data) { return db.create(data); }",
         JSON.stringify({
           url: "UserService.ts",
@@ -331,14 +342,11 @@ describe("HierarchicalAssemblyStrategy", () => {
           level: 2,
         }),
         2,
-        new Date().toISOString(),
       );
 
       // Method 3: deleteUser (will be matched)
       const deleteUserResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "UserService.ts",
+        pageId,
         "  deleteUser(id) { return db.delete(id); }",
         JSON.stringify({
           url: "UserService.ts",
@@ -346,7 +354,6 @@ describe("HierarchicalAssemblyStrategy", () => {
           level: 2,
         }),
         3,
-        new Date().toISOString(),
       );
       const deleteUserId = deleteUserResult.lastInsertRowid.toString();
 
@@ -389,16 +396,34 @@ describe("HierarchicalAssemblyStrategy", () => {
     });
 
     it("should handle multiple matches across different documents", async () => {
-      const { libraryId, versionId } = await documentStore.resolveLibraryAndVersionIds(
-        "test-cross-doc",
-        "1.0",
+      const versionId = await documentStore.resolveVersionId("test-cross-doc", "1.0");
+
+      expect(versionId).toBeGreaterThan(0);
+
+      // Create pages first
+      const pageAResult = (documentStore as any).statements.insertPage.run(
+        versionId,
+        "FileA.ts",
+        "File A TypeScript File",
+        null,
+        null,
+        "text/typescript",
       );
+      const pageAId = pageAResult.lastInsertRowid;
+
+      const pageBResult = (documentStore as any).statements.insertPage.run(
+        versionId,
+        "FileB.ts",
+        "File B TypeScript File",
+        null,
+        null,
+        "text/typescript",
+      );
+      const pageBId = pageBResult.lastInsertRowid;
 
       // File A
       const methodAResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "FileA.ts",
+        pageAId,
         "  methodAlpha() { return 'Alpha'; }",
         JSON.stringify({
           url: "FileA.ts",
@@ -406,15 +431,12 @@ describe("HierarchicalAssemblyStrategy", () => {
           level: 2,
         }),
         0,
-        new Date().toISOString(),
       );
       const methodAId = methodAResult.lastInsertRowid.toString();
 
       // File B
       const methodBResult = (documentStore as any).statements.insertDocument.run(
-        BigInt(libraryId),
-        BigInt(versionId),
-        "FileB.ts",
+        pageBId,
         "  methodBeta() { return 'Beta'; }",
         JSON.stringify({
           url: "FileB.ts",
@@ -422,7 +444,6 @@ describe("HierarchicalAssemblyStrategy", () => {
           level: 2,
         }),
         0,
-        new Date().toISOString(),
       );
       const methodBId = methodBResult.lastInsertRowid.toString();
 

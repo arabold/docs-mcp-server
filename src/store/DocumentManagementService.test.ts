@@ -44,7 +44,7 @@ const mockStore = {
   storeScraperOptions: vi.fn(),
   getScraperOptions: vi.fn(),
   findVersionsBySourceUrl: vi.fn(),
-  resolveLibraryAndVersionIds: vi.fn(),
+  resolveVersionId: vi.fn(),
 };
 
 // Mock the DocumentStore module
@@ -157,55 +157,43 @@ describe("DocumentManagementService", () => {
   // --- ensureVersion tests ---
   describe("ensureVersion", () => {
     it("creates library and version when both absent", async () => {
-      mockStore.resolveLibraryAndVersionIds.mockResolvedValue({
-        libraryId: 1,
-        versionId: 10,
-      });
+      mockStore.resolveVersionId.mockResolvedValue(10);
       const id = await docService.ensureVersion({ library: "React", version: "18.2.0" });
       expect(id).toBe(10);
       // ensure normalize to lowercase
-      expect(mockStore.resolveLibraryAndVersionIds).toHaveBeenCalledWith(
-        "react",
-        "18.2.0",
-      );
+      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("react", "18.2.0");
     });
 
     it("handles unversioned refs (empty version string)", async () => {
-      mockStore.resolveLibraryAndVersionIds.mockResolvedValue({
-        libraryId: 2,
-        versionId: 20,
-      });
+      mockStore.resolveVersionId.mockResolvedValue(20);
       const id = await docService.ensureVersion({ library: "Lodash", version: "" });
       expect(id).toBe(20);
-      expect(mockStore.resolveLibraryAndVersionIds).toHaveBeenCalledWith("lodash", "");
+      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("lodash", "");
     });
 
     it("trims whitespace and normalizes version", async () => {
-      mockStore.resolveLibraryAndVersionIds.mockResolvedValue({
-        libraryId: 3,
-        versionId: 30,
-      });
+      mockStore.resolveVersionId.mockResolvedValue(30);
       const id = await docService.ensureVersion({
         library: "  Express  ",
         version: "  ",
       });
       expect(id).toBe(30);
-      expect(mockStore.resolveLibraryAndVersionIds).toHaveBeenCalledWith("express", "");
+      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("express", "");
     });
 
     it("reuses single unversioned version across multiple ensureVersion calls (regression)", async () => {
       // simulate same returned id each time
-      mockStore.resolveLibraryAndVersionIds
-        .mockResolvedValueOnce({ libraryId: 1, versionId: 10 })
-        .mockResolvedValueOnce({ libraryId: 1, versionId: 10 })
-        .mockResolvedValueOnce({ libraryId: 1, versionId: 10 });
+      mockStore.resolveVersionId
+        .mockResolvedValueOnce(10)
+        .mockResolvedValueOnce(10)
+        .mockResolvedValueOnce(10);
       const a = await docService.ensureVersion({ library: "TestLib", version: "" });
       const b = await docService.ensureVersion({ library: "TestLib", version: "" });
       const c = await docService.ensureVersion({ library: "TestLib", version: "" });
       expect(a).toBe(10);
       expect(b).toBe(10);
       expect(c).toBe(10);
-      expect(mockStore.resolveLibraryAndVersionIds).toHaveBeenCalledTimes(3);
+      expect(mockStore.resolveVersionId).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -1016,18 +1004,12 @@ describe("DocumentManagementService", () => {
         const expectedVersionId = 789;
 
         // Mock the store method
-        mockStore.resolveLibraryAndVersionIds.mockResolvedValue({
-          libraryId: 123,
-          versionId: expectedVersionId,
-        });
+        mockStore.resolveVersionId.mockResolvedValue(expectedVersionId);
 
         const result = await docService.ensureLibraryAndVersion(library, version);
 
         // Should normalize library name to lowercase and version
-        expect(mockStore.resolveLibraryAndVersionIds).toHaveBeenCalledWith(
-          "newlib",
-          "2.0.0",
-        );
+        expect(mockStore.resolveVersionId).toHaveBeenCalledWith("newlib", "2.0.0");
         expect(result).toBe(expectedVersionId);
       });
 

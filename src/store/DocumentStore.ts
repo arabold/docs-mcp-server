@@ -26,6 +26,7 @@ import { ConnectionError, DimensionError, StoreError } from "./errors";
 import type { StoredScraperOptions } from "./types";
 import {
   type DbDocument,
+  type DbJoinedDocument,
   type DbQueryResult,
   type DbVersion,
   type DbVersionWithLibrary,
@@ -38,6 +39,11 @@ import {
 } from "./types";
 
 interface RawSearchResult extends DbDocument {
+  // Page fields joined from pages table
+  url?: string;
+  title?: string;
+  content_type?: string;
+  // Search scoring fields
   vec_score?: number;
   fts_score?: number;
 }
@@ -63,12 +69,17 @@ export class DocumentStore {
   private isVectorSearchEnabled: boolean = false;
   private statements!: {
     getById: Database.Statement<[bigint]>;
-    insertDocument: Database.Statement<
-      [bigint, bigint, string, string, string, number, string]
+    // Updated for new schema - documents table now uses page_id
+    insertDocument: Database.Statement<[number, string, string, number]>;
+    // Updated for new schema - embeddings stored directly in documents table
+    insertEmbedding: Database.Statement<[bigint, string]>;
+    // New statement for pages table
+    insertPage: Database.Statement<
+      [number, string, string, string | null, string | null, string | null]
     >;
-    insertEmbedding: Database.Statement<[bigint, bigint, bigint, string]>;
-    deleteDocuments: Database.Statement<[string, string, string]>;
-    deleteDocumentsByUrl: Database.Statement<[string, string, string, string]>;
+    getPageId: Database.Statement<[number, string]>;
+    deleteDocuments: Database.Statement<[string, string]>;
+    deleteDocumentsByUrl: Database.Statement<[string, string, string]>;
     queryVersions: Database.Statement<[string]>;
     checkExists: Database.Statement<[string, string]>;
     queryLibraryVersions: Database.Statement<[]>;
@@ -171,14 +182,26 @@ export class DocumentStore {
    */
   private prepareStatements(): void {
     const statements = {
-      getById: this.db.prepare<[bigint]>("SELECT * FROM documents WHERE id = ?"),
-      insertDocument: this.db.prepare<
-        [bigint, bigint, string, string, string, number, string]
-      >(
-        "INSERT INTO documents (library_id, version_id, url, content, metadata, sort_order, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      getById: this.db.prepare<[bigint]>(
+        `SELECT d.*, p.url, p.title, p.content_type 
+         FROM documents d
+         JOIN pages p ON d.page_id = p.id
+         WHERE d.id = ?`,
       ),
-      insertEmbedding: this.db.prepare<[bigint, bigint, bigint, string]>(
-        "INSERT INTO documents_vec (rowid, library_id, version_id, embedding) VALUES (?, ?, ?, ?)",
+      // Updated for new schema
+      insertDocument: this.db.prepare<[number, string, string, number]>(
+        "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, ?, ?, ?)",
+      ),
+      insertEmbedding: this.db.prepare<[bigint, string]>(
+        "UPDATE documents SET embedding = ? WHERE id = ?",
+      ),
+      insertPage: this.db.prepare<
+        [number, string, string, string | null, string | null, string | null]
+      >(
+        "INSERT INTO pages (version_id, url, title, etag, last_modified, content_type) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, content_type = excluded.content_type",
+      ),
+      getPageId: this.db.prepare<[number, string]>(
+        "SELECT id FROM pages WHERE version_id = ? AND url = ?",
       ),
       insertLibrary: this.db.prepare<[string]>(
         "INSERT INTO libraries (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
@@ -197,38 +220,29 @@ export class DocumentStore {
       queryVersionsByLibraryId: this.db.prepare<[number]>(
         "SELECT * FROM versions WHERE library_id = ? ORDER BY name",
       ),
-      deleteLibraryDocuments: this.db.prepare<[string, string, string]>(
-        `DELETE FROM documents
-         WHERE library_id = (SELECT id FROM libraries WHERE name = ?)
-         AND version_id = (
-           SELECT v.id FROM versions v 
-           WHERE v.library_id = (SELECT id FROM libraries WHERE name = ?)
-           AND COALESCE(v.name, '') = COALESCE(?, '')
+      deleteDocuments: this.db.prepare<[string, string]>(
+        `DELETE FROM documents 
+         WHERE page_id IN (
+           SELECT p.id FROM pages p
+           JOIN versions v ON p.version_id = v.id
+           JOIN libraries l ON v.library_id = l.id
+           WHERE l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
          )`,
       ),
-      deleteDocuments: this.db.prepare<[string, string, string]>(
-        `DELETE FROM documents
-         WHERE library_id = (SELECT id FROM libraries WHERE name = ?)
-         AND version_id = (
-           SELECT v.id FROM versions v 
-           WHERE v.library_id = (SELECT id FROM libraries WHERE name = ?)
-           AND COALESCE(v.name, '') = COALESCE(?, '')
-         )`,
-      ),
-      deleteDocumentsByUrl: this.db.prepare<[string, string, string, string]>(
-        `DELETE FROM documents
-         WHERE url = ?
-         AND library_id = (SELECT id FROM libraries WHERE name = ?)
-         AND version_id = (
-           SELECT v.id FROM versions v 
-           WHERE v.library_id = (SELECT id FROM libraries WHERE name = ?)
-           AND COALESCE(v.name, '') = COALESCE(?, '')
+      deleteDocumentsByUrl: this.db.prepare<[string, string, string]>(
+        `DELETE FROM documents 
+         WHERE page_id IN (
+           SELECT p.id FROM pages p
+           JOIN versions v ON p.version_id = v.id
+           JOIN libraries l ON v.library_id = l.id
+           WHERE p.url = ? AND l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
          )`,
       ),
       getDocumentBySort: this.db.prepare<[string, string]>(
         `SELECT d.id
          FROM documents d
-         JOIN versions v ON d.version_id = v.id
+         JOIN pages p ON d.page_id = p.id
+         JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id
          WHERE l.name = ?
          AND COALESCE(v.name, '') = COALESCE(?, '')
@@ -243,7 +257,8 @@ export class DocumentStore {
       ),
       checkExists: this.db.prepare<[string, string]>(
         `SELECT d.id FROM documents d
-         JOIN versions v ON d.version_id = v.id
+         JOIN pages p ON d.page_id = p.id
+         JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id
          WHERE l.name = ?
          AND COALESCE(v.name, '') = COALESCE(?, '')
@@ -259,24 +274,26 @@ export class DocumentStore {
           v.progress_pages as progressPages,
           v.progress_max_pages as progressMaxPages,
           v.source_url as sourceUrl,
-          MIN(d.indexed_at) as indexedAt,
+          MIN(p.created_at) as indexedAt,
           COUNT(d.id) as documentCount,
-          COUNT(DISTINCT d.url) as uniqueUrlCount
+          COUNT(DISTINCT p.url) as uniqueUrlCount
         FROM versions v
         JOIN libraries l ON v.library_id = l.id
-        LEFT JOIN documents d ON d.version_id = v.id
+        LEFT JOIN pages p ON p.version_id = v.id
+        LEFT JOIN documents d ON d.page_id = p.id
         GROUP BY v.id
         ORDER BY l.name, version`,
       ),
       getChildChunks: this.db.prepare<
         [string, string, string, number, string, bigint, number]
       >(`
-        SELECT d.* FROM documents d
-        JOIN versions v ON d.version_id = v.id
+        SELECT d.*, p.url, p.title, p.content_type FROM documents d
+        JOIN pages p ON d.page_id = p.id
+        JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
         WHERE l.name = ?
         AND COALESCE(v.name, '') = COALESCE(?, '')
-        AND d.url = ?
+        AND p.url = ?
         AND json_array_length(json_extract(d.metadata, '$.path')) = ?
         AND json_extract(d.metadata, '$.path') LIKE ? || '%'
         AND d.sort_order > (SELECT sort_order FROM documents WHERE id = ?)
@@ -286,12 +303,13 @@ export class DocumentStore {
       getPrecedingSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.* FROM documents d
-        JOIN versions v ON d.version_id = v.id
+        SELECT d.*, p.url, p.title, p.content_type FROM documents d
+        JOIN pages p ON d.page_id = p.id
+        JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
         WHERE l.name = ?
         AND COALESCE(v.name, '') = COALESCE(?, '')
-        AND d.url = ?
+        AND p.url = ?
         AND d.sort_order < (SELECT sort_order FROM documents WHERE id = ?)
         AND json_extract(d.metadata, '$.path') = ?
         ORDER BY d.sort_order DESC
@@ -300,24 +318,26 @@ export class DocumentStore {
       getSubsequentSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.* FROM documents d
-        JOIN versions v ON d.version_id = v.id
+        SELECT d.*, p.url, p.title, p.content_type FROM documents d
+        JOIN pages p ON d.page_id = p.id
+        JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
         WHERE l.name = ?
         AND COALESCE(v.name, '') = COALESCE(?, '')
-        AND d.url = ?
+        AND p.url = ?
         AND d.sort_order > (SELECT sort_order FROM documents WHERE id = ?)
         AND json_extract(d.metadata, '$.path') = ?
         ORDER BY d.sort_order
         LIMIT ?
       `),
       getParentChunk: this.db.prepare<[string, string, string, string, bigint]>(`
-        SELECT d.* FROM documents d
-        JOIN versions v ON d.version_id = v.id
+        SELECT d.*, p.url, p.title, p.content_type FROM documents d
+        JOIN pages p ON d.page_id = p.id
+        JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
         WHERE l.name = ?
         AND COALESCE(v.name, '') = COALESCE(?, '')
-        AND d.url = ?
+        AND p.url = ?
         AND json_extract(d.metadata, '$.path') = ?
         AND d.sort_order < (SELECT sort_order FROM documents WHERE id = ?)
         ORDER BY d.sort_order DESC
@@ -536,13 +556,10 @@ export class DocumentStore {
   }
 
   /**
-   * Resolves a library name and version string to library_id and version_id.
+   * Resolves a library name and version string to version_id.
    * Creates library and version records if they don't exist.
    */
-  async resolveLibraryAndVersionIds(
-    library: string,
-    version: string,
-  ): Promise<{ libraryId: number; versionId: number }> {
+  async resolveVersionId(library: string, version: string): Promise<number> {
     const normalizedLibrary = library.toLowerCase();
     const normalizedVersion = denormalizeVersionName(version.toLowerCase());
 
@@ -569,7 +586,7 @@ export class DocumentStore {
       );
     }
 
-    return { libraryId, versionId: versionIdRow.id };
+    return versionIdRow.id;
   }
 
   /**
@@ -823,8 +840,8 @@ export class DocumentStore {
 
   /**
    * Stores documents with library and version metadata, generating embeddings
-   * for vector similarity search. Automatically removes any existing documents
-   * for the same URLs before adding new ones to prevent UNIQUE constraint violations.
+   * for vector similarity search. Uses the new pages table to normalize page-level
+   * metadata and avoid duplication across document chunks.
    */
   async addDocuments(
     library: string,
@@ -836,14 +853,18 @@ export class DocumentStore {
         return;
       }
 
-      // Extract unique URLs from the documents being added
-      const urls = new Set<string>();
+      // Group documents by URL to create pages
+      const documentsByUrl = new Map<string, Document[]>();
       for (const doc of documents) {
         const url = doc.metadata.url as string;
         if (!url || typeof url !== "string" || !url.trim()) {
           throw new StoreError("Document metadata must include a valid URL");
         }
-        urls.add(url);
+
+        if (!documentsByUrl.has(url)) {
+          documentsByUrl.set(url, []);
+        }
+        documentsByUrl.get(url)?.push(doc);
       }
 
       // Generate embeddings in batch only if vector search is enabled
@@ -851,12 +872,11 @@ export class DocumentStore {
 
       if (this.isVectorSearchEnabled) {
         const texts = documents.map((doc) => {
-          const header = `<title>${doc.metadata.title}</title>\n<url>${doc.metadata.url}</url>\n<path>${doc.metadata.path.join(" / ")}</path>\n`;
+          const header = `<title>${doc.metadata.title}</title>\n<url>${doc.metadata.url}</url>\n<path>${(doc.metadata.path || []).join(" / ")}</path>\n`;
           return `${header}${doc.pageContent}`;
         });
 
         // Batch embedding creation to avoid token limit errors
-        // Use size-based batching to prevent 413 errors
         const maxBatchChars = EMBEDDING_BATCH_CHARS;
         const rawEmbeddings: number[][] = [];
 
@@ -909,14 +929,10 @@ export class DocumentStore {
       }
 
       // Resolve library and version IDs (creates them if they don't exist)
-      const { libraryId, versionId } = await this.resolveLibraryAndVersionIds(
-        library,
-        version,
-      );
+      const versionId = await this.resolveVersionId(library, version);
 
-      // Delete existing documents for these URLs to prevent UNIQUE constraint violations
-      // This must happen AFTER resolveLibraryAndVersionIds to ensure the library/version exist
-      for (const url of urls) {
+      // Delete existing documents for these URLs to prevent conflicts
+      for (const url of documentsByUrl.keys()) {
         const deletedCount = await this.deleteDocumentsByUrl(library, version, url);
         if (deletedCount > 0) {
           logger.debug(`Deleted ${deletedCount} existing documents for URL: ${url}`);
@@ -924,36 +940,81 @@ export class DocumentStore {
       }
 
       // Insert documents in a transaction
-      const transaction = this.db.transaction((docs: typeof documents) => {
-        for (let i = 0; i < docs.length; i++) {
-          const doc = docs[i];
-          const url = doc.metadata.url as string;
+      const transaction = this.db.transaction((docsByUrl: Map<string, Document[]>) => {
+        // First, create or update pages for each unique URL
+        const pageIds = new Map<string, number>();
 
-          // Insert into main documents table using foreign key IDs
-          const result = this.statements.insertDocument.run(
-            BigInt(libraryId),
-            BigInt(versionId),
+        for (const [url, urlDocs] of docsByUrl) {
+          // Use the first document's metadata for page-level data
+          const firstDoc = urlDocs[0];
+          const title = firstDoc.metadata.title || "";
+          // Extract content type from metadata if available
+          const contentType = firstDoc.metadata.contentType || null;
+
+          // Insert or update page record
+          this.statements.insertPage.run(
+            versionId,
             url,
-            doc.pageContent,
-            JSON.stringify(doc.metadata),
-            i,
-            new Date().toISOString(), // Pass current timestamp for indexed_at
+            title,
+            null, // etag - will be populated during scraping
+            null, // last_modified - will be populated during scraping
+            contentType,
           );
-          const rowId = result.lastInsertRowid;
 
-          // Insert into vector table only if vector search is enabled
-          if (this.isVectorSearchEnabled && paddedEmbeddings.length > 0) {
-            this.statements.insertEmbedding.run(
-              BigInt(rowId),
-              BigInt(libraryId),
-              BigInt(versionId),
-              JSON.stringify(paddedEmbeddings[i]),
+          // Query for the page ID since we can't use RETURNING
+          const existingPage = this.statements.getPageId.get(versionId, url) as
+            | { id: number }
+            | undefined;
+          if (!existingPage) {
+            throw new StoreError(`Failed to get page ID for URL: ${url}`);
+          }
+          const pageId = existingPage.id;
+          pageIds.set(url, pageId);
+        }
+
+        // Then insert document chunks linked to their pages
+        let docIndex = 0;
+        for (const [url, urlDocs] of docsByUrl) {
+          const pageId = pageIds.get(url);
+          if (!pageId) {
+            throw new StoreError(`Failed to get page ID for URL: ${url}`);
+          }
+
+          for (let i = 0; i < urlDocs.length; i++) {
+            const doc = urlDocs[i];
+
+            // Create chunk-specific metadata (remove page-level fields)
+            const {
+              url: _,
+              title: __,
+              library: ___,
+              version: ____,
+              ...chunkMetadata
+            } = doc.metadata;
+
+            // Insert document chunk
+            const result = this.statements.insertDocument.run(
+              pageId,
+              doc.pageContent,
+              JSON.stringify(chunkMetadata),
+              i, // sort_order within this page
             );
+            const rowId = result.lastInsertRowid;
+
+            // Insert into vector table only if vector search is enabled
+            if (this.isVectorSearchEnabled && paddedEmbeddings.length > 0) {
+              this.statements.insertEmbedding.run(
+                BigInt(rowId),
+                JSON.stringify(paddedEmbeddings[docIndex]),
+              );
+            }
+
+            docIndex++;
           }
         }
       });
 
-      transaction(documents);
+      transaction(documentsByUrl);
     } catch (error) {
       throw new ConnectionError("Failed to add documents to store", error);
     }
@@ -968,7 +1029,6 @@ export class DocumentStore {
       const normalizedVersion = version.toLowerCase();
       const result = this.statements.deleteDocuments.run(
         library.toLowerCase(),
-        library.toLowerCase(), // library name appears twice in the query
         normalizedVersion,
       );
       return result.changes;
@@ -991,7 +1051,6 @@ export class DocumentStore {
       const result = this.statements.deleteDocumentsByUrl.run(
         url,
         library.toLowerCase(),
-        library.toLowerCase(), // library name appears twice in the query
         normalizedVersion,
       );
       return result.changes;
@@ -1071,7 +1130,9 @@ export class DocumentStore {
    */
   async getById(id: string): Promise<Document | null> {
     try {
-      const row = this.statements.getById.get(BigInt(id)) as DbQueryResult<DbDocument>;
+      const row = this.statements.getById.get(
+        BigInt(id),
+      ) as DbQueryResult<DbJoinedDocument>;
       if (!row) {
         return null;
       }
@@ -1119,7 +1180,9 @@ export class DocumentStore {
               dv.rowid as id,
               dv.distance as vec_distance
             FROM documents_vec dv
-            JOIN versions v ON dv.version_id = v.id
+            JOIN documents d ON dv.rowid = d.id
+            JOIN pages p ON d.page_id = p.id
+            JOIN versions v ON p.version_id = v.id
             JOIN libraries l ON v.library_id = l.id
             WHERE l.name = ?
               AND COALESCE(v.name, '') = COALESCE(?, '')
@@ -1133,7 +1196,8 @@ export class DocumentStore {
               bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
             FROM documents_fts f
             JOIN documents d ON f.rowid = d.id
-            JOIN versions v ON d.version_id = v.id
+            JOIN pages p ON d.page_id = p.id
+            JOIN versions v ON p.version_id = v.id
             JOIN libraries l ON v.library_id = l.id
             WHERE l.name = ?
               AND COALESCE(v.name, '') = COALESCE(?, '')
@@ -1145,9 +1209,13 @@ export class DocumentStore {
             d.id,
             d.content,
             d.metadata,
+            p.url as url,
+            p.title as title,
+            p.content_type as content_type,
             COALESCE(1 / (1 + v.vec_distance), 0) as vec_score,
             COALESCE(-MIN(f.fts_score, 0), 0) as fts_score
           FROM documents d
+          JOIN pages p ON d.page_id = p.id
           LEFT JOIN vec_distances v ON d.id = v.id
           LEFT JOIN fts_scores f ON d.id = f.id
           WHERE (v.id IS NOT NULL OR f.id IS NOT NULL)
@@ -1177,13 +1245,22 @@ export class DocumentStore {
           .slice(0, limit);
 
         return topResults.map((row) => ({
-          ...mapDbDocumentToDocument(row),
+          ...mapDbDocumentToDocument({
+            ...row,
+            url: row.url || "", // Ensure url is never undefined
+            title: row.title,
+            content_type: row.content_type,
+          } as DbJoinedDocument),
           metadata: {
             ...JSON.parse(row.metadata),
             id: row.id,
             score: row.rrf_score,
             vec_rank: row.vec_rank,
             fts_rank: row.fts_rank,
+            // Explicitly add page fields if they exist
+            url: row.url || "",
+            title: row.title || "",
+            ...(row.content_type && { contentType: row.content_type }),
           },
         }));
       } else {
@@ -1193,10 +1270,14 @@ export class DocumentStore {
             d.id,
             d.content,
             d.metadata,
+            p.url as url,
+            p.title as title,
+            p.content_type as content_type,
             bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
           FROM documents_fts f
           JOIN documents d ON f.rowid = d.id
-          JOIN versions v ON d.version_id = v.id
+          JOIN pages p ON d.page_id = p.id
+          JOIN versions v ON p.version_id = v.id
           JOIN libraries l ON v.library_id = l.id
           WHERE l.name = ?
             AND COALESCE(v.name, '') = COALESCE(?, '')
@@ -1218,13 +1299,22 @@ export class DocumentStore {
 
         // Assign FTS ranks based on order (best score = rank 1)
         return rawResults.map((row, index) => ({
-          ...mapDbDocumentToDocument(row),
+          ...mapDbDocumentToDocument({
+            ...row,
+            url: row.url || "", // Ensure url is never undefined
+            title: row.title,
+            content_type: row.content_type,
+          } as DbJoinedDocument),
           metadata: {
             ...JSON.parse(row.metadata),
             id: row.id,
             score: -row.fts_score, // Convert BM25 score to positive value for consistency
             fts_rank: index + 1, // Assign rank based on order (1-based)
             // Explicitly ensure vec_rank is not included in FTS-only mode
+            // Explicitly add page fields
+            url: row.url || "",
+            title: row.title || "",
+            ...(row.content_type && { contentType: row.content_type }),
           },
         }));
       }
@@ -1263,7 +1353,7 @@ export class DocumentStore {
         JSON.stringify(parentPath),
         BigInt(id),
         limit,
-      ) as Array<DbDocument>;
+      ) as Array<DbJoinedDocument>;
 
       return result.map((row) => mapDbDocumentToDocument(row));
     } catch (error) {
@@ -1296,7 +1386,7 @@ export class DocumentStore {
         BigInt(id),
         JSON.stringify(refMetadata.path),
         limit,
-      ) as Array<DbDocument>;
+      ) as Array<DbJoinedDocument>;
 
       return result.reverse().map((row) => mapDbDocumentToDocument(row));
     } catch (error) {
@@ -1332,7 +1422,7 @@ export class DocumentStore {
         BigInt(id),
         JSON.stringify(refMetadata.path),
         limit,
-      ) as Array<DbDocument>;
+      ) as Array<DbJoinedDocument>;
 
       return result.map((row) => mapDbDocumentToDocument(row));
     } catch (error) {
@@ -1372,7 +1462,7 @@ export class DocumentStore {
         childMetadata.url,
         JSON.stringify(parentPath),
         BigInt(id),
-      ) as DbQueryResult<DbDocument>;
+      ) as DbQueryResult<DbJoinedDocument>;
 
       if (!result) {
         return null;
@@ -1399,9 +1489,10 @@ export class DocumentStore {
       // Use parameterized query for variable number of IDs
       const placeholders = ids.map(() => "?").join(",");
       const stmt = this.db.prepare(
-        `SELECT d.* FROM documents d
-         JOIN libraries l ON d.library_id = l.id
-         JOIN versions v ON d.version_id = v.id
+        `SELECT d.*, p.url, p.title, p.content_type FROM documents d
+         JOIN pages p ON d.page_id = p.id
+         JOIN versions v ON p.version_id = v.id
+         JOIN libraries l ON v.library_id = l.id
          WHERE l.name = ? 
            AND COALESCE(v.name, '') = COALESCE(?, '')
            AND d.id IN (${placeholders}) 
@@ -1411,7 +1502,7 @@ export class DocumentStore {
         library.toLowerCase(),
         normalizedVersion,
         ...ids,
-      ) as DbDocument[];
+      ) as DbJoinedDocument[];
       return rows.map((row) => mapDbDocumentToDocument(row));
     } catch (error) {
       throw new ConnectionError("Failed to fetch documents by IDs", error);
@@ -1430,19 +1521,20 @@ export class DocumentStore {
     try {
       const normalizedVersion = version.toLowerCase();
       const stmt = this.db.prepare(
-        `SELECT d.* FROM documents d
-         JOIN libraries l ON d.library_id = l.id
-         JOIN versions v ON d.version_id = v.id
+        `SELECT d.*, p.url, p.title, p.content_type FROM documents d
+         JOIN pages p ON d.page_id = p.id
+         JOIN versions v ON p.version_id = v.id
+         JOIN libraries l ON v.library_id = l.id
          WHERE l.name = ? 
            AND COALESCE(v.name, '') = COALESCE(?, '')
-           AND d.url = ?
+           AND p.url = ?
          ORDER BY d.sort_order`,
       );
       const rows = stmt.all(
         library.toLowerCase(),
         normalizedVersion,
         url,
-      ) as DbDocument[];
+      ) as DbJoinedDocument[];
       return rows.map((row) => mapDbDocumentToDocument(row));
     } catch (error) {
       throw new ConnectionError(`Failed to fetch documents by URL ${url}`, error);

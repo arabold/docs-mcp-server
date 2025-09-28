@@ -510,7 +510,7 @@ export class DocumentManagementService {
     const normalizedVersion = this.normalizeVersion(version);
 
     // This will create the library and version if they don't exist
-    const { versionId } = await this.store.resolveLibraryAndVersionIds(
+    const versionId = await this.store.resolveVersionId(
       normalizedLibrary,
       normalizedVersion,
     );

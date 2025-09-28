@@ -128,9 +128,9 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("treats library names case-insensitively and reuses same library id", async () => {
-      const { libraryId: a } = await store.resolveLibraryAndVersionIds("React", "");
-      const { libraryId: b } = await store.resolveLibraryAndVersionIds("react", "");
-      const { libraryId: c } = await store.resolveLibraryAndVersionIds("REACT", "");
+      const a = await store.resolveVersionId("React", "");
+      const b = await store.resolveVersionId("react", "");
+      const c = await store.resolveVersionId("REACT", "");
       expect(a).toBe(b);
       expect(b).toBe(c);
     });
@@ -381,7 +381,7 @@ describe("DocumentStore - With Embeddings", () => {
       ];
 
       await store.addDocuments("statuslib", "1.0.0", docs);
-      const { versionId } = await store.resolveLibraryAndVersionIds("statuslib", "1.0.0");
+      const versionId = await store.resolveVersionId("statuslib", "1.0.0");
 
       await store.updateVersionStatus(versionId, VersionStatus.QUEUED);
 
@@ -393,10 +393,7 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should store and retrieve scraper options", async () => {
-      const { versionId } = await store.resolveLibraryAndVersionIds(
-        "optionslib",
-        "1.0.0",
-      );
+      const versionId = await store.resolveVersionId("optionslib", "1.0.0");
 
       const scraperOptions = {
         url: "https://example.com/docs",
@@ -566,26 +563,17 @@ describe("DocumentStore - Common Functionality", () => {
 
   describe("Case Sensitivity", () => {
     it("treats version names case-insensitively within a library", async () => {
-      const { versionId: v1 } = await store.resolveLibraryAndVersionIds("cslib", "1.0.0");
-      const { versionId: v2 } = await store.resolveLibraryAndVersionIds("cslib", "1.0.0");
-      const { versionId: v3 } = await store.resolveLibraryAndVersionIds("cslib", "1.0.0");
+      const v1 = await store.resolveVersionId("cslib", "1.0.0");
+      const v2 = await store.resolveVersionId("cslib", "1.0.0");
+      const v3 = await store.resolveVersionId("cslib", "1.0.0");
       expect(v1).toBe(v2);
       expect(v2).toBe(v3);
     });
 
     it("collapses mixed-case version names to a single version id", async () => {
-      const { versionId: v1 } = await store.resolveLibraryAndVersionIds(
-        "mixcase",
-        "Alpha",
-      );
-      const { versionId: v2 } = await store.resolveLibraryAndVersionIds(
-        "mixcase",
-        "alpha",
-      );
-      const { versionId: v3 } = await store.resolveLibraryAndVersionIds(
-        "mixcase",
-        "ALPHA",
-      );
+      const v1 = await store.resolveVersionId("mixcase", "Alpha");
+      const v2 = await store.resolveVersionId("mixcase", "alpha");
+      const v3 = await store.resolveVersionId("mixcase", "ALPHA");
       expect(v1).toBe(v2);
       expect(v2).toBe(v3);
     });
@@ -663,14 +651,15 @@ describe("DocumentStore - Common Functionality", () => {
         let query = `
           SELECT COUNT(*) as count
           FROM documents d
-          JOIN versions v ON d.version_id = v.id  
+          JOIN pages p ON d.page_id = p.id
+          JOIN versions v ON p.version_id = v.id  
           JOIN libraries l ON v.library_id = l.id
           WHERE l.name = ? AND COALESCE(v.name, '') = ?
         `;
         const params: any[] = [library.toLowerCase(), version.toLowerCase()];
 
         if (targetUrl) {
-          query += " AND d.url = ?";
+          query += " AND p.url = ?";
           params.push(targetUrl);
         }
 
