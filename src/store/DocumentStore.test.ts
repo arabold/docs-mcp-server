@@ -264,6 +264,55 @@ describe("DocumentStore - With Embeddings", () => {
       expect(versions).toContain("1.0.0");
       expect(versions).toContain("2.0.0");
     });
+
+    it("should store and retrieve etag and lastModified metadata", async () => {
+      const testEtag = '"abc123-def456"';
+      const testLastModified = "2023-12-01T10:30:00Z";
+
+      const docs: Document[] = [
+        {
+          pageContent: "Test document with etag and lastModified",
+          metadata: {
+            title: "ETag Test Doc",
+            url: "https://example.com/etag-test",
+            path: ["test"],
+            etag: testEtag,
+            lastModified: testLastModified,
+          },
+        },
+      ];
+
+      await store.addDocuments("etagtest", "1.0.0", docs);
+
+      // Query the database directly to verify the etag and last_modified are stored
+      // @ts-expect-error Accessing private property for testing
+      const db = store.db;
+      const pageResult = db
+        .prepare(`
+        SELECT p.etag, p.last_modified
+        FROM pages p
+        JOIN versions v ON p.version_id = v.id
+        JOIN libraries l ON v.library_id = l.id
+        WHERE l.name = ? AND COALESCE(v.name, '') = ? AND p.url = ?
+      `)
+        .get("etagtest", "1.0.0", "https://example.com/etag-test") as
+        | {
+            etag: string | null;
+            last_modified: string | null;
+          }
+        | undefined;
+
+      expect(pageResult).toBeDefined();
+      expect(pageResult?.etag).toBe(testEtag);
+      expect(pageResult?.last_modified).toBe(testLastModified);
+
+      // Also verify we can retrieve the document and it contains the metadata
+      const results = await store.findByContent("etagtest", "1.0.0", "etag", 10);
+      expect(results.length).toBeGreaterThan(0);
+
+      const doc = results[0];
+      expect(doc.metadata.url).toBe("https://example.com/etag-test");
+    });
   });
 
   describe("Hybrid Search with Embeddings", () => {

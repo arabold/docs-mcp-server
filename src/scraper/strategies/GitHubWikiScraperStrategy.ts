@@ -157,6 +157,8 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
               : pageTitle,
           library: options.library,
           version: options.version,
+          etag: rawContent.etag,
+          lastModified: rawContent.lastModified,
         },
         contentType: rawContent.mimeType,
       };

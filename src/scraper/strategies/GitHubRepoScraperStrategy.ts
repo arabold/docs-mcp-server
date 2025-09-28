@@ -471,6 +471,8 @@ export class GitHubRepoScraperStrategy extends BaseScraperStrategy {
             title: hasValidTitle ? processedTitle : fallbackTitle,
             library: options.library,
             version: options.version,
+            etag: rawContent.etag,
+            lastModified: rawContent.lastModified,
           },
           contentType: rawContent.mimeType, // Preserve the detected MIME type
         } satisfies Document,

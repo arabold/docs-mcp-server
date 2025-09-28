@@ -20,6 +20,18 @@ export interface RawContent {
   encoding?: string;
   /** Original source location */
   source: string;
+  /**
+   * ETag value for caching purposes.
+   * For HTTP sources, this comes from the ETag header.
+   * For local files, this is a hash of the last modified date.
+   */
+  etag?: string;
+  /**
+   * Last modified timestamp in ISO8601 format.
+   * For HTTP sources, this comes from the Last-Modified header.
+   * For local files, this is the file modification time.
+   */
+  lastModified?: string;
 }
 
 /**

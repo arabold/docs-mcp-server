@@ -72,12 +72,16 @@ export class BrowserFetcher implements ContentFetcher {
       const contentType = response.headers()["content-type"] || "text/html";
       const { mimeType, charset } = MimeTypeUtils.parseContentType(contentType);
 
+      // Extract ETag header for caching
+      const etag = response.headers().etag;
+
       return {
         content: contentBuffer,
         mimeType,
         charset,
         encoding: undefined, // Browser handles encoding automatically
         source: finalUrl,
+        etag,
       } satisfies RawContent;
     } catch (error) {
       if (options?.signal?.aborted) {

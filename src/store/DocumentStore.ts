@@ -960,13 +960,19 @@ export class DocumentStore {
           // Extract content type from metadata if available
           const contentType = firstDoc.metadata.contentType || null;
 
+          // Extract etag from document metadata if available
+          const etag = firstDoc.metadata.etag || null;
+
+          // Extract lastModified from document metadata if available
+          const lastModified = firstDoc.metadata.lastModified || null;
+
           // Insert or update page record
           this.statements.insertPage.run(
             versionId,
             url,
             title,
-            null, // etag - will be populated during scraping
-            null, // last_modified - will be populated during scraping
+            etag,
+            lastModified,
             contentType,
           );
 

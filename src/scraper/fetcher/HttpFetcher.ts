@@ -165,12 +165,23 @@ export class HttpFetcher implements ContentFetcher {
           response.config?.url ||
           source;
 
+        // Extract ETag header for caching
+        const etag = response.headers.etag || response.headers.ETag;
+
+        // Extract Last-Modified header for caching
+        const lastModified = response.headers["last-modified"];
+        const lastModifiedISO = lastModified
+          ? new Date(lastModified).toISOString()
+          : undefined;
+
         return {
           content,
           mimeType,
           charset,
           encoding: contentEncoding,
           source: finalUrl,
+          etag,
+          lastModified: lastModifiedISO,
         } satisfies RawContent;
       } catch (error: unknown) {
         const axiosError = error as AxiosError;
