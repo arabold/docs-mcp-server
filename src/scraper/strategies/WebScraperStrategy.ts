@@ -127,6 +127,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
                 : "Untitled",
             library: options.library,
             version: options.version,
+            etag: rawContent.etag,
+            lastModified: rawContent.lastModified,
             ...processed.metadata,
           },
         } satisfies Document,

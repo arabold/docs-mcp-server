@@ -49,12 +49,14 @@ describe("LocalFileStrategy", () => {
         document: {
           content: "# Test\n\nThis is a test file.",
           contentType: "text/markdown",
-          metadata: {
+          metadata: expect.objectContaining({
             url: "file:///test.md",
             title: "Test",
             library: "test",
             version: "1.0",
-          },
+            etag: expect.any(String),
+            lastModified: expect.any(String),
+          }),
         },
       }),
     );
