@@ -2,7 +2,7 @@
  * Base error class for all store-related errors.
  * Provides consistent error handling with optional cause tracking.
  */
-class StoreError extends Error {
+export class StoreError extends Error {
   constructor(
     message: string,
     public readonly cause?: unknown,
@@ -19,10 +19,46 @@ class StoreError extends Error {
 }
 
 /**
+ * Error thrown when a requested library cannot be found in the store.
+ * Includes suggestions for similar library names if available.
+ */
+export class LibraryNotFoundInStoreError extends StoreError {
+  constructor(
+    public readonly library: string,
+    public readonly similarLibraries: string[] = [],
+  ) {
+    let text = `Library ${library} not found in store.`;
+    if (similarLibraries.length > 0) {
+      text += ` Did you mean: ${similarLibraries.join(", ")}?`;
+    }
+    super(text);
+  }
+}
+
+/**
+ * Error thrown when a specific version of a library cannot be found in the store.
+ * Includes the list of available versions for better context.
+ */
+export class VersionNotFoundInStoreError extends StoreError {
+  constructor(
+    public readonly library: string,
+    public readonly version: string,
+    public readonly availableVersions: string[],
+  ) {
+    const versionText = version ? `Version ${version}` : "Version";
+    let text = `${versionText} for library ${library} not found in store.`;
+    if (availableVersions.length > 0) {
+      text += ` Available versions: ${availableVersions.join(", ")}`;
+    }
+    super(text);
+  }
+}
+
+/**
  * Error thrown when an embedding model's vector dimension exceeds the database's fixed dimension.
  * This occurs when trying to use a model that produces vectors larger than the database can store.
  */
-class DimensionError extends StoreError {
+export class DimensionError extends StoreError {
   constructor(
     public readonly modelName: string,
     public readonly modelDimension: number,
@@ -39,12 +75,12 @@ class DimensionError extends StoreError {
 /**
  * Error thrown when there's a problem with database connectivity or operations.
  */
-class ConnectionError extends StoreError {}
+export class ConnectionError extends StoreError {}
 
 /**
  * Error thrown when attempting to retrieve a document that doesn't exist.
  */
-class DocumentNotFoundError extends StoreError {
+export class DocumentNotFoundError extends StoreError {
   constructor(public readonly id: string) {
     super(`Document ${id} not found`);
   }
@@ -54,7 +90,7 @@ class DocumentNotFoundError extends StoreError {
  * Error thrown when required credentials for an embedding provider are missing.
  * This allows the system to gracefully degrade to FTS-only search when vectorization is unavailable.
  */
-class MissingCredentialsError extends StoreError {
+export class MissingCredentialsError extends StoreError {
   constructor(
     public readonly provider: string,
     missingCredentials: string[],
@@ -65,11 +101,3 @@ class MissingCredentialsError extends StoreError {
     );
   }
 }
-
-export {
-  StoreError,
-  ConnectionError,
-  DocumentNotFoundError,
-  DimensionError,
-  MissingCredentialsError,
-};

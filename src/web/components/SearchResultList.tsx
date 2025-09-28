@@ -1,5 +1,5 @@
 import type { StoreSearchResult } from "../../store/types";
-import SearchResultItem from "./SearchResultItem"; // Adjusted import path
+import SearchResultItem from "./SearchResultItem";
 
 /**
  * Props for the SearchResultList component.

@@ -12,6 +12,7 @@ vi.mock("../utils/logger");
 // Create a properly typed mock using MockedObject
 const mockDocService = {
   removeVersion: vi.fn(),
+  findBestVersion: vi.fn(),
   // Add other methods used by DocumentManagementService if needed, mocking them with vi.fn()
 } as MockedObject<DocumentManagementService>;
 
@@ -34,11 +35,16 @@ describe("RemoveTool", () => {
   it("should call removeVersion with library and version", async () => {
     const args: RemoveToolArgs = { library: "react", version: "18.2.0" };
     // Setup mocks
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: "18.2.0",
+      hasUnversioned: false,
+    });
     mockDocService.removeVersion.mockResolvedValue(undefined);
     (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     const result = await removeTool.execute(args);
 
+    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("react", "18.2.0");
     expect(mockDocService.removeVersion).toHaveBeenCalledTimes(1);
     expect(mockDocService.removeVersion).toHaveBeenCalledWith("react", "18.2.0");
     expect(result).toEqual({
@@ -46,14 +52,19 @@ describe("RemoveTool", () => {
     });
   });
 
-  it("should call removeVersion with library and undefined version for unversioned", async () => {
+  it("should call removeVersion with library and undefined version for unversioned when docs exist", async () => {
     const args: RemoveToolArgs = { library: "lodash" };
-    // Setup mocks
+    // Setup mocks to return that unversioned docs exist
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: null,
+      hasUnversioned: true,
+    });
     mockDocService.removeVersion.mockResolvedValue(undefined);
     (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     const result = await removeTool.execute(args);
 
+    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("lodash", undefined);
     expect(mockDocService.removeVersion).toHaveBeenCalledTimes(1);
     expect(mockDocService.removeVersion).toHaveBeenCalledWith("lodash", undefined);
     expect(result).toEqual({
@@ -64,11 +75,16 @@ describe("RemoveTool", () => {
   it("should handle empty string version as unversioned", async () => {
     const args: RemoveToolArgs = { library: "moment", version: "" };
     // Setup mocks
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: null,
+      hasUnversioned: true,
+    });
     mockDocService.removeVersion.mockResolvedValue(undefined);
     (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     const result = await removeTool.execute(args);
 
+    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("moment", "");
     expect(mockDocService.removeVersion).toHaveBeenCalledTimes(1);
     expect(mockDocService.removeVersion).toHaveBeenCalledWith("moment", "");
     expect(result).toEqual({
@@ -80,6 +96,10 @@ describe("RemoveTool", () => {
     const args: RemoveToolArgs = { library: "vue", version: "3.0.0" };
     const testError = new Error("Database connection failed");
     // Setup mocks
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: "3.0.0",
+      hasUnversioned: false,
+    });
     mockDocService.removeVersion.mockRejectedValue(testError);
     (mockPipeline.getJobs as any).mockResolvedValue([]);
 
@@ -96,10 +116,14 @@ describe("RemoveTool", () => {
     expect(mockDocService.removeVersion).toHaveBeenCalledWith("vue", "3.0.0");
   });
 
-  it("should throw ToolError with correct message for unversioned failure", async () => {
+  it("should throw ToolError if removeVersion fails after validation passes", async () => {
     const args: RemoveToolArgs = { library: "angular" };
     const testError = new Error("Filesystem error");
-    // Setup mocks
+    // Setup mocks - validation passes but removeVersion fails
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: null,
+      hasUnversioned: true,
+    });
     mockDocService.removeVersion.mockRejectedValue(testError);
     (mockPipeline.getJobs as any).mockResolvedValue([]);
 
@@ -129,6 +153,10 @@ describe("RemoveTool", () => {
     } as unknown as IPipeline;
 
     const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: "1.0.0",
+      hasUnversioned: false,
+    });
     mockDocService.removeVersion.mockResolvedValue(undefined);
 
     const args: RemoveToolArgs = { library: "libX", version: "1.0.0" };
@@ -153,6 +181,10 @@ describe("RemoveTool", () => {
     } as unknown as IPipeline;
 
     const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: "2.0.0",
+      hasUnversioned: false,
+    });
     mockDocService.removeVersion.mockResolvedValue(undefined);
 
     const args: RemoveToolArgs = { library: "libY", version: "2.0.0" };
@@ -176,6 +208,10 @@ describe("RemoveTool", () => {
     } as unknown as IPipeline;
 
     const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: null,
+      hasUnversioned: true,
+    });
     mockDocService.removeVersion.mockResolvedValue(undefined);
 
     const args: RemoveToolArgs = { library: "libZ", version: "" };
@@ -188,5 +224,41 @@ describe("RemoveTool", () => {
     expect(mockLocalPipeline.waitForJobCompletion).toHaveBeenCalledWith("job-4");
     expect(mockDocService.removeVersion).toHaveBeenCalledWith("libZ", "");
     expect(result.message).toContain("Successfully removed libZ");
+  });
+
+  it("should throw ToolError when trying to remove non-existent version", async () => {
+    const args: RemoveToolArgs = { library: "react", version: "99.0.0" };
+    // Mock findBestVersion to return no match for the requested version
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: "18.2.0",
+      hasUnversioned: false,
+    });
+    (mockPipeline.getJobs as any).mockResolvedValue([]);
+
+    await expect(removeTool.execute(args)).rejects.toThrow(ToolError);
+    await expect(removeTool.execute(args)).rejects.toThrow(
+      "Version 99.0.0 not found for library react",
+    );
+
+    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("react", "99.0.0");
+    expect(mockDocService.removeVersion).not.toHaveBeenCalled();
+  });
+
+  it("should throw ToolError when trying to remove non-existent unversioned docs", async () => {
+    const args: RemoveToolArgs = { library: "nonexistent" };
+    // Mock findBestVersion to return no unversioned docs
+    mockDocService.findBestVersion.mockResolvedValue({
+      bestMatch: "1.0.0",
+      hasUnversioned: false,
+    });
+    (mockPipeline.getJobs as any).mockResolvedValue([]);
+
+    await expect(removeTool.execute(args)).rejects.toThrow(ToolError);
+    await expect(removeTool.execute(args)).rejects.toThrow(
+      "Version not found for library nonexistent",
+    );
+
+    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("nonexistent", undefined);
+    expect(mockDocService.removeVersion).not.toHaveBeenCalled();
   });
 });

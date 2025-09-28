@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoDetectFetcher } from "../scraper/fetcher";
 import { ScrapeMode } from "../scraper/types";
 import { ScraperError } from "../utils/errors";
-import { ToolError } from "./errors";
+import { ToolError, ValidationError } from "./errors";
 import { FetchUrlTool, type FetchUrlToolOptions } from "./FetchUrlTool";
 
 // Mock dependencies
@@ -119,14 +119,14 @@ describe("FetchUrlTool", () => {
     expect(typeof result).toBe("string");
   });
 
-  it("should throw ToolError for invalid URLs", async () => {
+  it("should throw ValidationError for invalid URLs", async () => {
     const invalidUrl = "invalid://example.com";
     const options: FetchUrlToolOptions = { url: invalidUrl };
 
     mockAutoDetectFetcher.canFetch = vi.fn().mockReturnValue(false);
 
     // Test behavior: invalid URLs should throw appropriate error
-    await expect(fetchUrlTool.execute(options)).rejects.toThrow(ToolError);
+    await expect(fetchUrlTool.execute(options)).rejects.toThrow(ValidationError);
     await expect(fetchUrlTool.execute(options)).rejects.toThrow("Invalid URL");
   });
 
@@ -142,7 +142,28 @@ describe("FetchUrlTool", () => {
     // Test behavior: fetch failures should result in ToolError
     await expect(fetchUrlTool.execute(options)).rejects.toThrow(ToolError);
     await expect(fetchUrlTool.execute(options)).rejects.toThrow(
-      "Failed to fetch or process URL",
+      "Unable to fetch or process the URL",
+    );
+  });
+
+  it("should provide user-friendly error messages for malformed URLs that pass initial validation", async () => {
+    const url = "https://invalid-domain-that-does-not-exist.com";
+    const options: FetchUrlToolOptions = { url };
+
+    mockAutoDetectFetcher.canFetch = vi.fn().mockReturnValue(true);
+    mockAutoDetectFetcher.fetch = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("getaddrinfo ENOTFOUND invalid-domain-that-does-not-exist.com"),
+      );
+
+    // Test behavior: URL resolution failures should result in user-friendly ToolError
+    await expect(fetchUrlTool.execute(options)).rejects.toThrow(ToolError);
+    await expect(fetchUrlTool.execute(options)).rejects.toThrow(
+      "Unable to fetch or process the URL",
+    );
+    await expect(fetchUrlTool.execute(options)).rejects.toThrow(
+      "Please verify the URL is correct and accessible",
     );
   });
 

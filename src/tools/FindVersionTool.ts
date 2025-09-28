@@ -1,10 +1,15 @@
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { logger } from "../utils/logger";
-import { VersionNotFoundError } from "./errors";
+import { ValidationError } from "./errors";
 
 export interface FindVersionToolOptions {
   library: string;
   targetVersion?: string;
+}
+
+export interface FindVersionToolResult {
+  bestMatch: string | null;
+  hasUnversioned: boolean;
+  message: string;
 }
 
 /**
@@ -20,49 +25,47 @@ export class FindVersionTool {
 
   /**
    * Executes the tool to find the best matching version and checks for unversioned docs.
-   * @returns A descriptive string indicating the best match and unversioned status, or an error message.
+   * @returns A structured object with the best match, unversioned status, and descriptive message.
+   * @throws {ValidationError} If the library parameter is invalid.
+   * @throws {VersionNotFoundInStoreError} If no matching versions or unversioned docs are found.
    */
-  async execute(options: FindVersionToolOptions): Promise<string> {
+  async execute(options: FindVersionToolOptions): Promise<FindVersionToolResult> {
     const { library, targetVersion } = options;
+
+    // Validate input
+    if (!library || typeof library !== "string" || library.trim() === "") {
+      throw new ValidationError(
+        "Library name is required and must be a non-empty string.",
+        this.constructor.name,
+      );
+    }
+
     const libraryAndVersion = `${library}${targetVersion ? `@${targetVersion}` : ""}`;
 
-    try {
-      const { bestMatch, hasUnversioned } = await this.docService.findBestVersion(
-        library,
-        targetVersion,
-      );
+    // Let VersionNotFoundInStoreError bubble up instead of catching it
+    const { bestMatch, hasUnversioned } = await this.docService.findBestVersion(
+      library,
+      targetVersion,
+    );
 
-      let message = "";
-      if (bestMatch) {
-        message = `Best match: ${bestMatch}.`;
-        if (hasUnversioned) {
-          message += " Unversioned docs also available.";
-        }
-      } else if (hasUnversioned) {
-        message = `No matching version found for ${libraryAndVersion}, but unversioned docs exist.`;
-      } else {
-        // This case should ideally be caught by VersionNotFoundError below,
-        // but added for completeness.
-        message = `No matching version or unversioned documents found for ${libraryAndVersion}.`;
+    let message = "";
+    if (bestMatch) {
+      message = `Best match: ${bestMatch}.`;
+      if (hasUnversioned) {
+        message += " Unversioned docs also available.";
       }
-
-      return message;
-    } catch (error) {
-      if (error instanceof VersionNotFoundError) {
-        // This error is thrown when no semver versions AND no unversioned docs exist.
-        logger.info(`ℹ️ Version not found: ${error.message}`);
-        const message = `No matching version or unversioned documents found for ${libraryAndVersion}. Available: ${
-          error.availableVersions.length > 0
-            ? error.availableVersions.map((v) => v.version).join(", ")
-            : "None"
-        }.`;
-        return message;
-      }
-      // Re-throw unexpected errors
-      logger.error(
-        `❌ Error finding version for ${libraryAndVersion}: ${error instanceof Error ? error.message : error}`,
-      );
-      throw error;
+    } else if (hasUnversioned) {
+      message = `No matching version found for ${libraryAndVersion}, but unversioned docs exist.`;
+    } else {
+      // This case should ideally be caught by VersionNotFoundInStoreError,
+      // but added for completeness.
+      message = `No matching version or unversioned documents found for ${libraryAndVersion}.`;
     }
+
+    return {
+      bestMatch,
+      hasUnversioned,
+      message,
+    };
   }
 }

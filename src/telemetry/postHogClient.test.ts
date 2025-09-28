@@ -16,8 +16,8 @@ vi.mock("posthog-node", () => ({
   PostHog: vi.fn(() => mockPostHogInstance),
 }));
 
-// Mock the global __POSTHOG_API_KEY__
-global.__POSTHOG_API_KEY__ = "test-api-key";
+// Set the global __POSTHOG_API_KEY__ for testing
+(global as any).__POSTHOG_API_KEY__ = "test-api-key";
 
 describe("PostHogClient property conversion", () => {
   let client: PostHogClient;

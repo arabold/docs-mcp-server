@@ -2,13 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Analytics, TelemetryEvent } from "./analytics";
 import { TelemetryConfig } from "./TelemetryConfig";
 
-// Mock the global __POSTHOG_API_KEY__
-declare global {
-  // eslint-disable-next-line no-var
-  var __POSTHOG_API_KEY__: string;
-}
-
-global.__POSTHOG_API_KEY__ = "test-api-key";
+// Set the global __POSTHOG_API_KEY__ for testing
+(global as any).__POSTHOG_API_KEY__ = "test-api-key";
 
 // Mock the config module
 vi.mock("./TelemetryConfig", () => ({

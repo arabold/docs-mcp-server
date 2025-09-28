@@ -1,5 +1,5 @@
 import type { LibraryInfo } from "../../tools/ListLibrariesTool";
-import LibraryItem from "./LibraryItem"; // Adjusted import path
+import LibraryItem from "./LibraryItem";
 
 /**
  * Props for the LibraryList component.

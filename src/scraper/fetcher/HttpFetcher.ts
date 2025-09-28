@@ -22,6 +22,17 @@ export class HttpFetcher implements ContentFetcher {
     525, // SSL Handshake Failed (Cloudflare specific)
   ];
 
+  private readonly nonRetryableErrorCodes = [
+    "ENOTFOUND", // DNS resolution failed - domain doesn't exist
+    "ECONNREFUSED", // Connection refused - service not running
+    "ENOENT", // No such file or directory
+    "EACCES", // Permission denied
+    "EINVAL", // Invalid argument
+    "EMFILE", // Too many open files
+    "ENFILE", // File table overflow
+    "EPERM", // Operation not permitted
+  ];
+
   private fingerprintGenerator: FingerprintGenerator;
 
   constructor() {
@@ -216,7 +227,8 @@ export class HttpFetcher implements ContentFetcher {
 
         if (
           attempt < maxRetries &&
-          (status === undefined || this.retryableStatusCodes.includes(status))
+          (status === undefined || this.retryableStatusCodes.includes(status)) &&
+          !this.nonRetryableErrorCodes.includes(code ?? "")
         ) {
           const delay = baseDelay * 2 ** attempt;
           logger.warn(
