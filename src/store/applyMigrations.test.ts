@@ -32,6 +32,7 @@ describe("Database Migrations", () => {
     expect(tableNames).toContain("documents_fts");
     expect(tableNames).toContain("documents_vec");
     expect(tableNames).toContain("libraries");
+    expect(tableNames).toContain("pages");
 
     // Check columns for 'documents'
     const documentsColumns = db.prepare("PRAGMA table_info(documents);").all();
@@ -44,18 +45,36 @@ describe("Database Migrations", () => {
     expect(documentsColumnNames).toEqual(
       expect.arrayContaining([
         "id",
-        "library_id",
-        "version_id",
-        "url",
+        "page_id",
         "content",
         "metadata",
         "sort_order",
+        "embedding",
       ]),
     );
 
     // Ensure the old library and version columns are removed after complete normalization
     expect(documentsColumnNames).not.toContain("library");
     expect(documentsColumnNames).not.toContain("version");
+    expect(documentsColumnNames).not.toContain("library_id");
+    expect(documentsColumnNames).not.toContain("version_id");
+    expect(documentsColumnNames).not.toContain("url");
+
+    // Check columns for 'pages'
+    const pagesColumns = db.prepare("PRAGMA table_info(pages);").all();
+    const pagesColumnNames = (pagesColumns as ColumnInfo[]).map((col) => col.name);
+    expect(pagesColumnNames).toEqual(
+      expect.arrayContaining([
+        "id",
+        "version_id",
+        "url",
+        "title",
+        "etag",
+        "last_modified",
+        "content_type",
+        "created_at",
+      ]),
+    );
 
     // Check columns for 'libraries'
     const librariesColumns = db.prepare("PRAGMA table_info(libraries);").all();
@@ -166,34 +185,61 @@ describe("Database Migrations", () => {
     expect(versionResult).toBeDefined();
     const versionId = versionResult!.id;
 
-    // Insert test documents
-    const insertDoc = db.prepare(`
-      INSERT INTO documents (library_id, version_id, url, content, metadata, sort_order)
+    // Insert test pages first
+    const insertPage = db.prepare(`
+      INSERT INTO pages (version_id, url, title, etag, last_modified, content_type)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    const doc1Id = insertDoc.run(
-      libraryId,
+    const page1Id = insertPage.run(
       versionId,
       "https://example.com/doc1",
+      "AI Basics",
+      null,
+      null,
+      "text/html",
+    ).lastInsertRowid as number;
+
+    const page2Id = insertPage.run(
+      versionId,
+      "https://example.com/doc2",
+      "Neural Networks",
+      null,
+      null,
+      "text/html",
+    ).lastInsertRowid as number;
+
+    const page3Id = insertPage.run(
+      versionId,
+      "https://example.com/doc3",
+      "Cooking Guide",
+      null,
+      null,
+      "text/html",
+    ).lastInsertRowid as number;
+
+    // Insert test documents
+    const insertDoc = db.prepare(`
+      INSERT INTO documents (page_id, content, metadata, sort_order)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const doc1Id = insertDoc.run(
+      page1Id,
       "This is about machine learning and artificial intelligence",
       JSON.stringify({ title: "AI Basics", path: "/ai-basics" }),
       1,
     ).lastInsertRowid as number;
 
     const doc2Id = insertDoc.run(
-      libraryId,
-      versionId,
-      "https://example.com/doc2",
+      page2Id,
       "This document discusses neural networks and deep learning",
       JSON.stringify({ title: "Neural Networks", path: "/neural-networks" }),
       2,
     ).lastInsertRowid as number;
 
     const doc3Id = insertDoc.run(
-      libraryId,
-      versionId,
-      "https://example.com/doc3",
+      page3Id,
       "Cooking recipes and food preparation techniques",
       JSON.stringify({ title: "Cooking Guide", path: "/cooking" }),
       3,
@@ -344,16 +390,56 @@ describe("Database Migrations", () => {
     expect(versionResult).toBeDefined();
     const versionId = versionResult!.id;
 
-    // Insert test documents with diverse content
-    const insertDoc = db.prepare(`
-      INSERT INTO documents (library_id, version_id, url, content, metadata, sort_order)
+    // Insert test pages first
+    const insertPage = db.prepare(`
+      INSERT INTO pages (version_id, url, title, etag, last_modified, content_type)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    insertDoc.run(
-      libraryId,
+    const reactPageId = insertPage.run(
       versionId,
       "https://example.com/react-hooks",
+      "React Hooks Guide",
+      null,
+      null,
+      "text/html",
+    ).lastInsertRowid as number;
+
+    const vuePageId = insertPage.run(
+      versionId,
+      "https://example.com/vue-composition",
+      "Vue Composition API",
+      null,
+      null,
+      "text/html",
+    ).lastInsertRowid as number;
+
+    const angularPageId = insertPage.run(
+      versionId,
+      "https://example.com/angular-services",
+      "Angular Services",
+      null,
+      null,
+      "text/html",
+    ).lastInsertRowid as number;
+
+    const dbPageId = insertPage.run(
+      versionId,
+      "https://example.com/database-design",
+      "Database Design",
+      null,
+      null,
+      "text/html",
+    ).lastInsertRowid as number;
+
+    // Insert test documents with diverse content
+    const insertDoc = db.prepare(`
+      INSERT INTO documents (page_id, content, metadata, sort_order)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    insertDoc.run(
+      reactPageId,
       "React hooks are a powerful feature that allows you to use state and lifecycle methods in functional components. The useState hook manages component state.",
       JSON.stringify({
         title: "React Hooks Guide",
@@ -363,9 +449,7 @@ describe("Database Migrations", () => {
     );
 
     insertDoc.run(
-      libraryId,
-      versionId,
-      "https://example.com/vue-composition",
+      vuePageId,
       "Vue composition API provides a way to organize component logic. It offers reactive state management and computed properties for building dynamic applications.",
       JSON.stringify({
         title: "Vue Composition API",
@@ -375,9 +459,7 @@ describe("Database Migrations", () => {
     );
 
     insertDoc.run(
-      libraryId,
-      versionId,
-      "https://example.com/angular-services",
+      angularPageId,
       "Angular services are singleton objects that provide functionality across the application. Dependency injection makes services available to components.",
       JSON.stringify({
         title: "Angular Services",
@@ -387,9 +469,7 @@ describe("Database Migrations", () => {
     );
 
     insertDoc.run(
-      libraryId,
-      versionId,
-      "https://example.com/database-design",
+      dbPageId,
       "Database normalization reduces redundancy and improves data integrity. Primary keys uniquely identify records in relational databases.",
       JSON.stringify({
         title: "Database Design",
@@ -413,12 +493,13 @@ describe("Database Migrations", () => {
         d.id,
         d.content,
         json_extract(d.metadata, '$.title') as title,
-        d.url,
+        p.url,
         json_extract(d.metadata, '$.path') as path,
         fts.rank
       FROM documents_fts fts
       JOIN documents d ON fts.rowid = d.id
-      JOIN versions v ON d.version_id = v.id
+      JOIN pages p ON d.page_id = p.id
+      JOIN versions v ON p.version_id = v.id
       JOIN libraries l ON v.library_id = l.id
       WHERE documents_fts MATCH ?
       AND l.name = ?
@@ -465,12 +546,13 @@ describe("Database Migrations", () => {
         d.id,
         d.content,
         json_extract(d.metadata, '$.title') as title,
-        d.url,
+        p.url,
         json_extract(d.metadata, '$.path') as path,
         fts.rank
       FROM documents_fts fts
       JOIN documents d ON fts.rowid = d.id
-      JOIN versions v ON d.version_id = v.id
+      JOIN pages p ON d.page_id = p.id
+      JOIN versions v ON p.version_id = v.id
       JOIN libraries l ON v.library_id = l.id
       WHERE fts.title MATCH ?
       AND l.name = ?
@@ -514,7 +596,8 @@ describe("Database Migrations", () => {
         bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as bm25_score
       FROM documents_fts fts
       JOIN documents d ON fts.rowid = d.id
-      JOIN versions v ON d.version_id = v.id
+      JOIN pages p ON d.page_id = p.id
+      JOIN versions v ON p.version_id = v.id
       JOIN libraries l ON v.library_id = l.id
       WHERE documents_fts MATCH ?
       AND l.name = ?

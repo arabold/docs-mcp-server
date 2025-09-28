@@ -1,4 +1,4 @@
-import type { Document, ProgressCallback } from "../../types";
+import type { ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import type { ScraperOptions, ScraperProgress, ScraperStrategy } from "../types";
 import { GitHubRepoScraperStrategy } from "./GitHubRepoScraperStrategy";
