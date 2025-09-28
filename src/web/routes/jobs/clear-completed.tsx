@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { ClearCompletedJobsTool } from "../../../tools/ClearCompletedJobsTool";
+import { ToolError } from "../../../tools/errors";
 
 /**
  * Registers the API route for clearing completed jobs.
@@ -13,19 +14,27 @@ export function registerClearCompletedJobsRoute(
   // POST /web/jobs/clear-completed - Clear all completed jobs
   server.post("/web/jobs/clear-completed", async (_, reply) => {
     try {
-      const result = await clearCompletedJobsTool.execute({});
+      await clearCompletedJobsTool.execute({});
 
       reply.type("application/json");
       return {
-        success: result.success,
-        message: result.message,
+        success: true,
+        message: "Completed jobs cleared successfully",
       };
     } catch (error) {
-      reply.code(500);
-      return {
-        success: false,
-        message: `Internal server error: ${error instanceof Error ? error.message : String(error)}`,
-      };
+      if (error instanceof ToolError) {
+        reply.code(400);
+        return {
+          success: false,
+          message: error.message,
+        };
+      } else {
+        reply.code(500);
+        return {
+          success: false,
+          message: `Internal server error: ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
     }
   });
 }

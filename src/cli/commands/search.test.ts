@@ -26,12 +26,12 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("searchAction", () => {
   it("invokes SearchTool with parameters", async () => {
-    await searchAction(
-      "react",
-      "hooks",
-      { version: "18.x", limit: "3", exactMatch: false, serverUrl: undefined },
-      cmd(),
-    );
+    await searchAction("react", "hooks", {
+      version: "18.x",
+      limit: "3",
+      exactMatch: false,
+      serverUrl: undefined,
+    });
     const { SearchTool } = await import("../../tools");
     expect(SearchTool).toHaveBeenCalledTimes(1);
   });

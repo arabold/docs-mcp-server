@@ -11,12 +11,15 @@ import type { ScraperOptions } from "../scraper/types";
 import { ScrapeMode } from "../scraper/types";
 import type { ContentChunk } from "../splitter/types";
 import { analytics, extractHostname, TelemetryEvent } from "../telemetry";
-import { LibraryNotFoundError, VersionNotFoundError } from "../tools";
 import { logger } from "../utils/logger";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
-import { StoreError } from "./errors";
+import {
+  LibraryNotFoundInStoreError,
+  StoreError,
+  VersionNotFoundInStoreError,
+} from "./errors";
 import type {
   DbVersionWithLibrary,
   FindVersionResult,
@@ -182,9 +185,9 @@ export class DocumentManagementService {
 
   /**
    * Validates if a library exists in the store (either versioned or unversioned).
-   * Throws LibraryNotFoundError with suggestions if the library is not found.
+   * Throws LibraryNotFoundInStoreError with suggestions if the library is not found.
    * @param library The name of the library to validate.
-   * @throws {LibraryNotFoundError} If the library does not exist.
+   * @throws {LibraryNotFoundInStoreError} If the library does not exist.
    */
   async validateLibraryExists(library: string): Promise<void> {
     logger.info(`🔎 Validating existence of library: ${library}`);
@@ -207,7 +210,7 @@ export class DocumentManagementService {
           // Configure fuse.js options if needed (e.g., threshold)
           // isCaseSensitive: false, // Handled by normalizing library names
           // includeScore: true,
-          threshold: 0.4, // Adjust threshold for desired fuzziness (0=exact, 1=match anything)
+          threshold: 0.7, // Adjust threshold for desired fuzziness (0=exact, 1=match anything)
         });
         const results = fuse.search(normalizedLibrary);
         // Take top 3 suggestions
@@ -215,7 +218,7 @@ export class DocumentManagementService {
         logger.info(`🔍 Found suggestions: ${suggestions.join(", ")}`);
       }
 
-      throw new LibraryNotFoundError(library, suggestions);
+      throw new LibraryNotFoundInStoreError(library, suggestions);
     }
 
     logger.info(`✅ Library '${library}' confirmed to exist.`);
@@ -269,10 +272,10 @@ export class DocumentManagementService {
       }
       // Throw error only if NO versions (semver or unversioned) exist
       logger.warn(`⚠️  No valid versions found for ${library}`);
-      // Fetch detailed versions to pass to the error constructor
-      const allLibraryDetails = await this.store.queryLibraryVersions();
-      const libraryDetails = allLibraryDetails.get(library) ?? [];
-      throw new VersionNotFoundError(library, targetVersion ?? "", libraryDetails);
+      // The next line should usually throw
+      await this.validateLibraryExists(library);
+      // Fallback, should not reach here
+      throw new LibraryNotFoundInStoreError(library, []);
     }
 
     let bestMatch: string | null = null;
@@ -281,7 +284,7 @@ export class DocumentManagementService {
       bestMatch = semver.maxSatisfying(versionStrings, "*");
     } else {
       const versionRegex = /^(\d+)(?:\.(?:x(?:\.x)?|\d+(?:\.(?:x|\d+))?))?$|^$/;
-      if (!versionRegex.test(targetVersion)) {
+      if (!semver.valid(targetVersion) && !versionRegex.test(targetVersion)) {
         logger.warn(`⚠️  Invalid target version format: ${targetVersion}`);
         // Don't throw yet, maybe unversioned exists
       } else {
@@ -312,7 +315,12 @@ export class DocumentManagementService {
       // Fetch detailed versions to pass to the error constructor
       const allLibraryDetails = await this.store.queryLibraryVersions();
       const libraryDetails = allLibraryDetails.get(library) ?? [];
-      throw new VersionNotFoundError(library, targetVersion ?? "", libraryDetails);
+      const availableVersions = libraryDetails.map((v) => v.version);
+      throw new VersionNotFoundInStoreError(
+        library,
+        targetVersion ?? "",
+        availableVersions,
+      );
     }
 
     return { bestMatch, hasUnversioned };

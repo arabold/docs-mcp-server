@@ -22,7 +22,8 @@ export function createResponse(text: string): CallToolResult {
  * @param text The error message.
  * @returns The response object.
  */
-export function createError(text: string): CallToolResult {
+export function createError(errorOrText: unknown): CallToolResult {
+  const text = errorOrText instanceof Error ? errorOrText.message : String(errorOrText);
   return {
     content: [
       {

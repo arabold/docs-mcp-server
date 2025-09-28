@@ -1,6 +1,7 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { PipelineJobStatus } from "../pipeline/types";
 import type { VersionStatus } from "../store/types";
+import { ToolError, ValidationError } from "./errors";
 
 /**
  * Input parameters for the GetJobInfoTool.
@@ -38,7 +39,7 @@ export interface JobInfo {
  * Response structure for the GetJobInfoTool.
  */
 export interface GetJobInfoToolResponse {
-  job: JobInfo | null;
+  job: JobInfo;
 }
 
 /**
@@ -58,14 +59,23 @@ export class GetJobInfoTool {
   /**
    * Executes the tool to retrieve simplified info for a specific job using enhanced PipelineJob interface.
    * @param input - The input parameters, containing the jobId.
-   * @returns A promise that resolves with the simplified job info or null if not found.
+   * @returns A promise that resolves with the simplified job info.
+   * @throws {ValidationError} If the jobId is invalid.
+   * @throws {ToolError} If the job is not found.
    */
   async execute(input: GetJobInfoInput): Promise<GetJobInfoToolResponse> {
+    // Validate input
+    if (!input.jobId || typeof input.jobId !== "string" || input.jobId.trim() === "") {
+      throw new ValidationError(
+        "Job ID is required and must be a non-empty string.",
+        this.constructor.name,
+      );
+    }
+
     const job = await this.pipeline.getJob(input.jobId);
 
     if (!job) {
-      // Return null in the result if job not found
-      return { job: null };
+      throw new ToolError(`Job with ID ${input.jobId} not found.`, this.constructor.name);
     }
 
     // Transform the job into a simplified object using enhanced PipelineJob interface

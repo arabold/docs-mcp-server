@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
+import { ToolError } from "./errors";
 import { GetJobInfoTool } from "./GetJobInfoTool"; // Updated import
 
 // Mock dependencies
@@ -67,10 +68,13 @@ describe("GetJobInfoTool", () => {
     expect(result.job?.error).toBeNull(); // Based on mockJob
   });
 
-  it("should return null if the job is not found", async () => {
-    const result = await getJobInfoTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND }); // Updated tool call
-
+  it("should throw ToolError if the job is not found", async () => {
+    await expect(
+      getJobInfoTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND }),
+    ).rejects.toThrow(ToolError);
+    await expect(
+      getJobInfoTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND }),
+    ).rejects.toThrow("not found");
     expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_NOT_FOUND);
-    expect(result.job).toBeNull();
   });
 });

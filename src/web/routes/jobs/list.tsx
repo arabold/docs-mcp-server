@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { ListJobsTool } from "../../../tools/ListJobsTool"; // Adjusted import path
+import type { ListJobsTool } from "../../../tools/ListJobsTool";
 import JobList from "../../components/JobList"; // Import the extracted component
 
 /**

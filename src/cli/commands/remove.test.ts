@@ -23,7 +23,7 @@ beforeEach(() => {
 
 describe("removeAction", () => {
   it("calls removeAllDocuments", async () => {
-    await removeAction("react", { version: "18.0.0", serverUrl: undefined }, cmd());
+    await removeAction("react", { version: "18.0.0", serverUrl: undefined });
     expect(removeFn).toHaveBeenCalledWith("react", "18.0.0");
   });
 });

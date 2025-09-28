@@ -1,7 +1,8 @@
+import { VersionNotFoundInStoreError } from "../store";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import type { StoreSearchResult, VersionSummary } from "../store/types";
+import type { StoreSearchResult } from "../store/types";
 import { logger } from "../utils/logger";
-import { VersionNotFoundError } from "./errors";
+import { ValidationError } from "./errors";
 
 export interface SearchToolOptions {
   library: string;
@@ -19,7 +20,7 @@ export interface SearchToolResultError {
     uniqueUrlCount: number;
     indexedAt: string | null;
   }>;
-  suggestions?: string[]; // Specific to LibraryNotFoundError
+  suggestions?: string[]; // Specific to LibraryNotFoundInStoreError
 }
 
 export interface SearchToolResult {
@@ -41,6 +42,28 @@ export class SearchTool {
   async execute(options: SearchToolOptions): Promise<SearchToolResult> {
     const { library, version, query, limit = 5, exactMatch = false } = options;
 
+    // Validate required inputs
+    if (!library || typeof library !== "string" || library.trim() === "") {
+      throw new ValidationError(
+        "Library name is required and must be a non-empty string.",
+        this.constructor.name,
+      );
+    }
+
+    if (!query || typeof query !== "string" || query.trim() === "") {
+      throw new ValidationError(
+        "Query is required and must be a non-empty string.",
+        this.constructor.name,
+      );
+    }
+
+    if (limit !== undefined && (typeof limit !== "number" || limit < 1 || limit > 100)) {
+      throw new ValidationError(
+        "Limit must be a number between 1 and 100.",
+        this.constructor.name,
+      );
+    }
+
     // When exactMatch is true, version must be specified and not 'latest'
     if (exactMatch && (!version || version === "latest")) {
       // Get available *detailed* versions for error message
@@ -48,15 +71,14 @@ export class SearchTool {
       // Fetch detailed versions using listLibraries and find the specific library
       const allLibraries = await this.docService.listLibraries();
       const libraryInfo = allLibraries.find((lib) => lib.library === library);
-      const detailedVersions = libraryInfo
-        ? (libraryInfo.versions as VersionSummary[]).map((v) => ({
-            version: v.ref.version,
-            documentCount: v.counts.documents,
-            uniqueUrlCount: v.counts.uniqueUrls,
-            indexedAt: v.indexedAt,
-          }))
+      const availableVersions = libraryInfo
+        ? libraryInfo.versions.map((v) => v.ref.version)
         : [];
-      throw new VersionNotFoundError(library, version ?? "latest", detailedVersions);
+      throw new VersionNotFoundInStoreError(
+        library,
+        version ?? "latest",
+        availableVersions,
+      );
     }
 
     // Default to 'latest' only when exactMatch is false
@@ -82,7 +104,7 @@ export class SearchTool {
         // If findBestVersion returned null (no matching semver) AND unversioned docs exist,
         // should we search unversioned? The current logic passes null to searchStore,
         // which gets normalized to "" (unversioned). This seems reasonable.
-        // If findBestVersion threw VersionNotFoundError, it's caught below.
+        // If findBestVersion threw VersionNotFoundInStoreError, it's caught below.
       }
       // If exactMatch is true, versionToSearch remains the originally provided version.
 

@@ -2,8 +2,11 @@ import path from "node:path";
 import { Document } from "@langchain/core/documents";
 import { createFsFromVolume, vol } from "memfs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LibraryNotFoundError, VersionNotFoundError } from "../tools/errors";
-import { StoreError } from "./errors";
+import {
+  LibraryNotFoundInStoreError,
+  StoreError,
+  VersionNotFoundInStoreError,
+} from "./errors";
 
 vi.mock("node:fs", () => ({
   default: createFsFromVolume(vol),
@@ -508,23 +511,24 @@ describe("DocumentManagementService", () => {
         expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: false });
       });
 
-      it("should throw VersionNotFoundError when no versions (semver or unversioned) exist", async () => {
+      it("should throw LibraryNotFoundInStoreError when no versions (semver or unversioned) exist", async () => {
         mockStore.queryUniqueVersions.mockResolvedValue([]); // No semver // Fix: Use mockStoreInstance
         mockStore.checkDocumentExists.mockResolvedValue(false); // No unversioned // Fix: Use mockStoreInstance
 
         await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
-          VersionNotFoundError,
+          LibraryNotFoundInStoreError,
         );
         await expect(docService.findBestVersion(library)).rejects.toThrow(
-          VersionNotFoundError,
+          LibraryNotFoundInStoreError,
         );
 
         // Check error details
-        const error = await docService.findBestVersion(library).catch((e) => e);
-        expect(error).toBeInstanceOf(VersionNotFoundError);
+        const error = (await docService
+          .findBestVersion(library)
+          .catch((e) => e)) as LibraryNotFoundInStoreError;
+        expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
         expect(error.library).toBe(library);
-        expect(error.requestedVersion).toBe(""); // Default requested version is empty
-        expect(error.availableVersions).toEqual([]); // No valid semver versions found
+        expect(error.similarLibraries).toEqual([]); // No similar libraries in this mock setup
       });
 
       it("should not throw for invalid target version format if unversioned exists", async () => {
@@ -536,14 +540,14 @@ describe("DocumentManagementService", () => {
         expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
       });
 
-      it("should throw VersionNotFoundError for invalid target version format if only semver exists", async () => {
+      it("should throw VersionNotFoundInStoreError for invalid target version format if only semver exists", async () => {
         mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]); // Has semver // Fix: Use mockStoreInstance
         mockStore.checkDocumentExists.mockResolvedValue(false); // No unversioned // Fix: Use mockStoreInstance
 
         // Invalid format, no unversioned fallback -> throw
         await expect(
           docService.findBestVersion(library, "invalid-format"),
-        ).rejects.toThrow(VersionNotFoundError);
+        ).rejects.toThrow(VersionNotFoundInStoreError);
       });
     });
 
@@ -861,7 +865,7 @@ describe("DocumentManagementService", () => {
         );
       });
 
-      it("should throw LibraryNotFoundError if library does not exist (no suggestions)", async () => {
+      it("should throw LibraryNotFoundInStoreError if library does not exist (no suggestions)", async () => {
         const nonExistentLibrary = "non-existent-lib";
         mockStore.queryUniqueVersions.mockResolvedValue([]); // Fix: Use mockStoreInstance
         mockStore.checkDocumentExists.mockResolvedValue(false); // Fix: Use mockStoreInstance
@@ -869,18 +873,18 @@ describe("DocumentManagementService", () => {
 
         await expect(
           docService.validateLibraryExists(nonExistentLibrary),
-        ).rejects.toThrow(LibraryNotFoundError);
+        ).rejects.toThrow(LibraryNotFoundInStoreError);
 
-        const error = await docService
+        const error = (await docService
           .validateLibraryExists(nonExistentLibrary)
-          .catch((e) => e);
-        expect(error).toBeInstanceOf(LibraryNotFoundError);
-        expect(error.requestedLibrary).toBe(nonExistentLibrary);
-        expect(error.suggestions).toEqual([]);
+          .catch((e) => e)) as LibraryNotFoundInStoreError;
+        expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
+        expect(error.library).toBe(nonExistentLibrary);
+        expect(error.similarLibraries).toEqual([]);
         expect(mockStore.queryLibraryVersions).toHaveBeenCalled(); // Ensure it tried to get suggestions // Fix: Use mockStoreInstance
       });
 
-      it("should throw LibraryNotFoundError with suggestions if library does not exist", async () => {
+      it("should throw LibraryNotFoundInStoreError with suggestions if library does not exist", async () => {
         const misspelledLibrary = "reac"; // Misspelled 'react'
         mockStore.queryUniqueVersions.mockResolvedValue([]); // Fix: Use mockStoreInstance
         mockStore.checkDocumentExists.mockResolvedValue(false); // Fix: Use mockStoreInstance
@@ -907,15 +911,15 @@ describe("DocumentManagementService", () => {
         mockStore.queryLibraryVersions.mockResolvedValue(mockLibraryMap);
 
         await expect(docService.validateLibraryExists(misspelledLibrary)).rejects.toThrow(
-          LibraryNotFoundError,
+          LibraryNotFoundInStoreError,
         );
 
-        const error = await docService
+        const error = (await docService
           .validateLibraryExists(misspelledLibrary)
-          .catch((e) => e);
-        expect(error).toBeInstanceOf(LibraryNotFoundError);
-        expect(error.requestedLibrary).toBe(misspelledLibrary);
-        expect(error.suggestions).toEqual(["react"]); // Expect 'react' as suggestion
+          .catch((e) => e)) as LibraryNotFoundInStoreError;
+        expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
+        expect(error.library).toBe(misspelledLibrary);
+        expect(error.similarLibraries).toEqual(["react"]); // Expect 'react' as suggestion
         expect(mockStore.queryLibraryVersions).toHaveBeenCalled(); // Fix: Use mockStoreInstance
       });
 

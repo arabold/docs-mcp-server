@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
 import { CancelJobTool } from "./CancelJobTool";
+import { ToolError } from "./errors";
 
 // Mock dependencies
 vi.mock("../pipeline/PipelineManager");
@@ -70,12 +71,15 @@ describe("CancelJobTool", () => {
     expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_QUEUED);
   });
 
-  it("should return success: false if job is not found", async () => {
-    const result = await cancelJobTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND });
+  it("should throw ToolError if job is not found", async () => {
+    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND })).rejects.toThrow(
+      ToolError,
+    );
+    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_NOT_FOUND })).rejects.toThrow(
+      "not found",
+    );
     expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_NOT_FOUND);
     expect(mockManagerInstance.cancelJob).not.toHaveBeenCalled();
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("not found");
   });
 
   it.each([
@@ -83,13 +87,13 @@ describe("CancelJobTool", () => {
     { id: MOCK_JOB_ID_FAILED, status: PipelineJobStatus.FAILED },
     { id: MOCK_JOB_ID_CANCELLED, status: PipelineJobStatus.CANCELLED },
   ])(
-    "should return success: true and not call cancelJob if job is already $status",
+    "should return success data and not call cancelJob if job is already $status",
     async ({ id, status }) => {
       const result = await cancelJobTool.execute({ jobId: id });
       expect(mockManagerInstance.getJob).toHaveBeenCalledWith(id);
       expect(mockManagerInstance.cancelJob).not.toHaveBeenCalled();
-      expect(result.success).toBe(true);
       expect(result.message).toContain(`already ${status}`);
+      expect(result.finalStatus).toBe(status);
     },
   );
 
@@ -97,7 +101,7 @@ describe("CancelJobTool", () => {
     { id: MOCK_JOB_ID_QUEUED, status: PipelineJobStatus.QUEUED },
     { id: MOCK_JOB_ID_RUNNING, status: PipelineJobStatus.RUNNING },
   ])(
-    "should call cancelJob and return success: true if job is $status",
+    "should call cancelJob and return success data if job is $status",
     async ({ id }) => {
       // Mock getJob to return the job again after cancellation attempt for status check
       (mockManagerInstance.getJob as Mock)
@@ -111,22 +115,26 @@ describe("CancelJobTool", () => {
 
       expect(mockManagerInstance.getJob).toHaveBeenCalledWith(id);
       expect(mockManagerInstance.cancelJob).toHaveBeenCalledWith(id);
-      expect(result.success).toBe(true);
       expect(result.message).toContain("Cancellation requested");
       expect(result.message).toContain(PipelineJobStatus.CANCELLING); // Check updated status in message
+      expect(result.finalStatus).toBe(PipelineJobStatus.CANCELLING);
     },
   );
 
-  it("should return success: false if cancelJob throws an error", async () => {
+  it("should throw ToolError if cancelJob throws an error", async () => {
     const cancelError = new Error("Cancellation failed");
     (mockManagerInstance.cancelJob as Mock).mockRejectedValue(cancelError);
 
-    const result = await cancelJobTool.execute({ jobId: MOCK_JOB_ID_RUNNING });
-
+    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_RUNNING })).rejects.toThrow(
+      ToolError,
+    );
+    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_RUNNING })).rejects.toThrow(
+      "Failed to cancel job",
+    );
+    await expect(cancelJobTool.execute({ jobId: MOCK_JOB_ID_RUNNING })).rejects.toThrow(
+      cancelError.message,
+    );
     expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_RUNNING);
     expect(mockManagerInstance.cancelJob).toHaveBeenCalledWith(MOCK_JOB_ID_RUNNING);
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("Failed to cancel job");
-    expect(result.message).toContain(cancelError.message);
   });
 });

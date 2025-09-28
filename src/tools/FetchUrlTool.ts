@@ -6,9 +6,8 @@ import type { ContentPipeline, ProcessedContent } from "../scraper/pipelines/typ
 import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
 import { resolveCharset } from "../scraper/utils/charset";
-import { ScraperError } from "../utils/errors";
 import { logger } from "../utils/logger";
-import { ToolError } from "./errors";
+import { ToolError, ValidationError } from "./errors";
 
 export interface FetchUrlToolOptions {
   /**
@@ -77,7 +76,7 @@ export class FetchUrlTool {
     const { url, scrapeMode = ScrapeMode.Auto, headers } = options;
 
     if (!this.fetcher.canFetch(url)) {
-      throw new ToolError(
+      throw new ValidationError(
         `Invalid URL: ${url}. Must be an HTTP/HTTPS URL or a file:// URL.`,
         this.constructor.name,
       );
@@ -150,14 +149,13 @@ export class FetchUrlTool {
       logger.info(`✅ Successfully processed ${url}`);
       return processed.textContent;
     } catch (error) {
-      if (error instanceof ScraperError || error instanceof ToolError) {
-        throw new ToolError(
-          `Failed to fetch or process URL: ${error.message}`,
-          this.constructor.name,
-        );
+      // Preserve ToolError as it already has user-friendly messages, wrap others
+      if (error instanceof ToolError) {
+        throw error;
       }
+
       throw new ToolError(
-        `Failed to fetch or process URL: ${error instanceof Error ? error.message : String(error)}`,
+        `Unable to fetch or process the URL "${url}". Please verify the URL is correct and accessible.`,
         this.constructor.name,
       );
     } finally {

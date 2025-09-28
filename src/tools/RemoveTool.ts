@@ -2,7 +2,7 @@ import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { PipelineJobStatus } from "../pipeline/types";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { logger } from "../utils/logger";
-import { ToolError } from "./errors";
+import { ToolError, ValidationError } from "./errors";
 
 /**
  * Represents the arguments for the remove_docs tool.
@@ -31,9 +31,39 @@ export class RemoveTool {
   async execute(args: RemoveToolArgs): Promise<{ message: string }> {
     const { library, version } = args;
 
+    // Validate input
+    if (!library || typeof library !== "string" || library.trim() === "") {
+      throw new ValidationError(
+        "Library name is required and must be a non-empty string.",
+        this.constructor.name,
+      );
+    }
+
     logger.info(`🗑️ Removing library: ${library}${version ? `@${version}` : ""}`);
 
     try {
+      // This will throw if no matching library or version is found
+      const result = await this.documentManagementService.findBestVersion(
+        library,
+        version,
+      );
+
+      // For removal, we need an exact match of the requested version
+      // Handle the case where version is undefined/empty (unversioned) and bestMatch is null
+      const normalizedVersion = version && version.trim() !== "" ? version : null;
+      const versionExists =
+        result.bestMatch === normalizedVersion ||
+        (result.hasUnversioned && normalizedVersion === null);
+      if (!versionExists) {
+        const versionText = normalizedVersion
+          ? `Version ${normalizedVersion}`
+          : "Version";
+        throw new ToolError(
+          `${versionText} not found for library ${library}. Cannot remove non-existent version.`,
+          this.constructor.name,
+        );
+      }
+
       // Abort any QUEUED or RUNNING job for this library+version
       const allJobs = await this.pipeline.getJobs();
       const jobs = allJobs.filter(
@@ -61,6 +91,11 @@ export class RemoveTool {
       // Return a simple success object, the McpServer will format the final response
       return { message };
     } catch (error) {
+      // If it's already a ToolError or other known error types, re-throw as is
+      if (error instanceof ToolError) {
+        throw error;
+      }
+
       const errorMessage = `Failed to remove ${library}${version ? `@${version}` : ""}: ${error instanceof Error ? error.message : String(error)}`;
       logger.error(`❌ Error removing library: ${errorMessage}`);
       // Re-throw the error for the McpServer to handle and format

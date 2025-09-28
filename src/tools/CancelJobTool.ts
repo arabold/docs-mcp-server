@@ -1,6 +1,7 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { PipelineJobStatus } from "../pipeline/types";
 import { logger } from "../utils/logger";
+import { ToolError, ValidationError } from "./errors";
 
 /**
  * Input parameters for the CancelJobTool.
@@ -16,8 +17,8 @@ export interface CancelJobInput {
 export interface CancelJobResult {
   /** A message indicating the outcome of the cancellation attempt. */
   message: string;
-  /** Indicates if the cancellation request was successfully initiated or if the job was already finished/cancelled. */
-  success: boolean;
+  /** The final status of the job after cancellation attempt. */
+  finalStatus: string;
 }
 
 /**
@@ -38,18 +39,28 @@ export class CancelJobTool {
    * Executes the tool to attempt cancellation of a specific job.
    * @param input - The input parameters, containing the jobId.
    * @returns A promise that resolves with the outcome message.
+   * @throws {ValidationError} If the jobId is invalid.
+   * @throws {ToolError} If the job is not found or cancellation fails.
    */
   async execute(input: CancelJobInput): Promise<CancelJobResult> {
+    // Validate input
+    if (!input.jobId || typeof input.jobId !== "string" || input.jobId.trim() === "") {
+      throw new ValidationError(
+        "Job ID is required and must be a non-empty string.",
+        this.constructor.name,
+      );
+    }
+
     try {
       // Retrieve the job first to check its status before attempting cancellation
       const job = await this.pipeline.getJob(input.jobId);
 
       if (!job) {
         logger.warn(`❓ [CancelJobTool] Job not found: ${input.jobId}`);
-        return {
-          message: `Job with ID ${input.jobId} not found.`,
-          success: false,
-        };
+        throw new ToolError(
+          `Job with ID ${input.jobId} not found.`,
+          this.constructor.name,
+        );
       }
 
       // Check if the job is already in a final state
@@ -61,7 +72,7 @@ export class CancelJobTool {
         logger.debug(`Job ${input.jobId} is already in a final state: ${job.status}.`);
         return {
           message: `Job ${input.jobId} is already ${job.status}. No action taken.`,
-          success: true, // Considered success as no cancellation needed
+          finalStatus: job.status,
         };
       }
 
@@ -78,16 +89,16 @@ export class CancelJobTool {
       );
       return {
         message: `Cancellation requested for job ${input.jobId}. Current status: ${finalStatus}.`,
-        success: true,
+        finalStatus,
       };
     } catch (error) {
       logger.error(`❌ Error cancelling job ${input.jobId}: ${error}`);
-      return {
-        message: `Failed to cancel job ${input.jobId}: ${
+      throw new ToolError(
+        `Failed to cancel job ${input.jobId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
-        success: false,
-      };
+        this.constructor.name,
+      );
     }
   }
 }

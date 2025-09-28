@@ -39,7 +39,7 @@ export class BrowserFetcher implements ContentFetcher {
       const timeout = options?.timeout || 30000;
 
       // Navigate to the page and wait for it to load
-      logger.debug(`🌐 Navigating to ${source} with browser...`);
+      logger.debug(`Navigating to ${source} with browser...`);
       const response = await this.page.goto(source, {
         waitUntil: "networkidle",
         timeout,
@@ -95,7 +95,7 @@ export class BrowserFetcher implements ContentFetcher {
 
   private async ensureBrowserReady(): Promise<void> {
     if (!this.browser) {
-      logger.debug("🚀 Launching browser...");
+      logger.debug("Launching browser...");
       this.browser = await chromium.launch({
         headless: true,
         args: [
@@ -133,7 +133,7 @@ export class BrowserFetcher implements ContentFetcher {
         await this.browser.close();
         this.browser = null;
       }
-      logger.debug("🔒 Browser closed successfully");
+      logger.debug("Browser closed successfully");
     } catch (error) {
       logger.warn(`⚠️ Error closing browser: ${error}`);
     }

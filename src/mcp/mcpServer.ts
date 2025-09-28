@@ -2,7 +2,8 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mc
 import { z } from "zod/v3";
 import { PipelineJobStatus } from "../pipeline/types";
 import { analytics, TelemetryEvent } from "../telemetry";
-import { type JobInfo, LibraryNotFoundError, VersionNotFoundError } from "../tools";
+import type { JobInfo } from "../tools";
+import { ToolError } from "../tools/errors";
 import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_PAGES } from "../utils/config";
 import { logger } from "../utils/logger";
 import type { McpServerTools } from "./tools";
@@ -42,8 +43,8 @@ export function createMcpServerInstance(
       "Scrape and index documentation from a URL for a library. Use this tool to index a new library or a new version.",
       {
         url: z.string().url().describe("Documentation root URL to scrape."),
-        library: z.string().describe("Library name."),
-        version: z.string().optional().describe("Library version (optional)."),
+        library: z.string().trim().describe("Library name."),
+        version: z.string().trim().optional().describe("Library version (optional)."),
         maxPages: z
           .number()
           .optional()
@@ -110,11 +111,7 @@ export function createMcpServerInstance(
           );
         } catch (error) {
           // Handle errors during job *enqueueing* or initial setup
-          return createError(
-            `Failed to scrape documentation: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          return createError(error);
         }
       },
     );
@@ -129,12 +126,13 @@ export function createMcpServerInstance(
       '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
       '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
     {
-      library: z.string().describe("Library name."),
+      library: z.string().trim().describe("Library name."),
       version: z
         .string()
+        .trim()
         .optional()
         .describe("Library version (exact or X-Range, optional)."),
-      query: z.string().describe("Documentation search query."),
+      query: z.string().trim().describe("Documentation search query."),
       limit: z.number().optional().default(5).describe("Maximum number of results."),
     },
     {
@@ -177,32 +175,7 @@ ${r.content}\n`,
         }
         return createResponse(formattedResults.join(""));
       } catch (error) {
-        if (error instanceof LibraryNotFoundError) {
-          return createResponse(
-            [
-              `Library "${library}" not found.`,
-              error.suggestions?.length
-                ? `Did you mean: ${error.suggestions?.join(", ")}?`
-                : undefined,
-            ].join(" "),
-          );
-        }
-        if (error instanceof VersionNotFoundError) {
-          const indexedVersions = error.availableVersions.map((v) => v.version);
-          return createResponse(
-            [
-              `Version "${version}" not found.`,
-              indexedVersions.length > 0
-                ? `Available indexed versions for ${library}: ${indexedVersions.join(", ")}`
-                : undefined,
-            ].join(" "),
-          );
-        }
-        return createError(
-          `Failed to search documentation: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        return createError(error);
       }
     },
   );
@@ -236,11 +209,7 @@ ${r.content}\n`,
           `Indexed libraries:\n\n${result.libraries.map((lib: { name: string }) => `- ${lib.name}`).join("\n")}`,
         );
       } catch (error) {
-        return createError(
-          `Failed to list libraries: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        return createError(error);
       }
     },
   );
@@ -250,9 +219,10 @@ ${r.content}\n`,
     "find_version",
     "Find the best matching version for a library. Use to identify available or closest versions.",
     {
-      library: z.string().describe("Library name."),
+      library: z.string().trim().describe("Library name."),
       targetVersion: z
         .string()
+        .trim()
         .optional()
         .describe("Version pattern to match (exact or X-Range, optional)."),
     },
@@ -271,22 +241,15 @@ ${r.content}\n`,
       });
 
       try {
-        const message = await tools.findVersion.execute({
+        const result = await tools.findVersion.execute({
           library,
           targetVersion,
         });
 
-        if (!message) {
-          return createError("No matching version found");
-        }
-
-        return createResponse(message);
+        // Tool now returns a structured object with message
+        return createResponse(result.message);
       } catch (error) {
-        return createError(
-          `Failed to find version: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+        return createError(error);
       }
     },
   );
@@ -334,11 +297,7 @@ ${r.content}\n`,
               : "No jobs found.",
           );
         } catch (error) {
-          return createError(
-            `Failed to list jobs: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          return createError(error);
         }
       },
     );
@@ -365,18 +324,13 @@ ${r.content}\n`,
 
         try {
           const result = await tools.getJobInfo.execute({ jobId });
-          if (!result.job) {
-            return createError(`Job with ID ${jobId} not found.`);
-          }
+          // Tool now guarantees result.job is always present on success
           const job = result.job;
           const formattedJob = `- ID: ${job.id}\n  Status: ${job.status}\n  Library: ${job.library}@${job.version}\n  Created: ${job.createdAt}${job.startedAt ? `\n  Started: ${job.startedAt}` : ""}${job.finishedAt ? `\n  Finished: ${job.finishedAt}` : ""}${job.error ? `\n  Error: ${job.error}` : ""}`;
           return createResponse(`Job Info:\n\n${formattedJob}`);
         } catch (error) {
-          return createError(
-            `Failed to get job info for ${jobId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          // Tool now throws error when job not found
+          return createError(error);
         }
       },
     );
@@ -402,19 +356,11 @@ ${r.content}\n`,
 
         try {
           const result = await tools.cancelJob.execute({ jobId });
-          // Use the message and success status from the tool's result
-          if (result.success) {
-            return createResponse(result.message);
-          }
-          // If not successful according to the tool, treat it as an error in MCP
-          return createError(result.message);
+          // Tool now always returns success data or throws error
+          return createResponse(result.message);
         } catch (error) {
-          // Catch any unexpected errors during the tool execution itself
-          return createError(
-            `Failed to cancel job ${jobId}: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          // Catch any errors thrown by the tool (job not found, cancellation failed, etc.)
+          return createError(error);
         }
       },
     );
@@ -424,9 +370,10 @@ ${r.content}\n`,
       "remove_docs",
       "Remove indexed documentation for a library version. Use only if explicitly instructed.",
       {
-        library: z.string().describe("Library name."),
+        library: z.string().trim().describe("Library name."),
         version: z
           .string()
+          .trim()
           .optional()
           .describe("Library version (optional, removes unversioned if omitted)."),
       },
@@ -450,11 +397,7 @@ ${r.content}\n`,
           return createResponse(result.message);
         } catch (error) {
           // Catch errors thrown by the RemoveTool's execute method
-          return createError(
-            `Failed to remove documents: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+          return createError(error);
         }
       },
     );
@@ -491,9 +434,7 @@ ${r.content}\n`,
         const result = await tools.fetchUrl.execute({ url, followRedirects });
         return createResponse(result);
       } catch (error) {
-        return createError(
-          `Failed to fetch URL: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        return createError(error);
       }
     },
   );
@@ -610,31 +551,38 @@ ${r.content}\n`,
           return { contents: [] }; // Return empty content for invalid ID format
         }
 
-        // Fetch the simplified job info using GetJobInfoTool
-        const result = await tools.getJobInfo.execute({ jobId });
+        try {
+          // Fetch the simplified job info using GetJobInfoTool
+          const result = await tools.getJobInfo.execute({ jobId });
 
-        // result.job is either the simplified job object or null
-        if (!result.job) {
-          // Job not found, return empty content
+          // Tool now guarantees result.job is always present on success
+          return {
+            contents: [
+              {
+                uri: uri.href,
+                mimeType: "application/json",
+                text: JSON.stringify({
+                  id: result.job.id,
+                  library: result.job.library,
+                  version: result.job.version,
+                  status: result.job.status,
+                  error: result.job.error || undefined,
+                }),
+              },
+            ],
+          };
+        } catch (error) {
+          if (error instanceof ToolError) {
+            // Expected error (job not found, etc.)
+            logger.warn(`⚠️  Job not found for resource request: ${jobId}`);
+          } else {
+            // Unexpected error
+            logger.error(
+              `❌ Unexpected error in job resource handler: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
           return { contents: [] };
         }
-
-        // Job found, return its simplified details as JSON
-        return {
-          contents: [
-            {
-              uri: uri.href,
-              mimeType: "application/json",
-              text: JSON.stringify({
-                id: result.job.id,
-                library: result.job.library,
-                version: result.job.version,
-                status: result.job.status,
-                error: result.job.error || undefined,
-              }),
-            },
-          ],
-        };
       },
     );
   }

@@ -1,11 +1,12 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { ScrapeTool } from "../../../tools/ScrapeTool"; // Adjusted import path
-import { ScrapeMode } from "../../../scraper/types"; // Adjusted import path
-import { logger } from "../../../utils/logger"; // Adjusted import path
-import ScrapeForm from "../../components/ScrapeForm"; // Import extracted component
-import Alert from "../../components/Alert"; // Import Alert component
-import ScrapeFormContent from "../../components/ScrapeFormContent"; // Import for OOB swap
-import { DEFAULT_EXCLUSION_PATTERNS } from "../../../scraper/utils/defaultPatterns"; // Import default patterns
+import type { ScrapeTool } from "../../../tools/ScrapeTool";
+import { ScrapeMode } from "../../../scraper/types";
+import { logger } from "../../../utils/logger";
+import ScrapeForm from "../../components/ScrapeForm";
+import Alert from "../../components/Alert";
+import ScrapeFormContent from "../../components/ScrapeFormContent";
+import { DEFAULT_EXCLUSION_PATTERNS } from "../../../scraper/utils/defaultPatterns";
+import { ValidationError } from "../../../tools/errors";
 
 /**
  * Registers the API routes for creating new jobs.
@@ -130,7 +131,9 @@ export function registerNewJobRoutes(
               />
               {/* OOB target response - contains only the inner form content */}
               <div id="scrape-form-container" hx-swap-oob="innerHTML">
-                <ScrapeFormContent defaultExcludePatterns={DEFAULT_EXCLUSION_PATTERNS} />
+                <ScrapeFormContent
+                  defaultExcludePatterns={DEFAULT_EXCLUSION_PATTERNS}
+                />
               </div>
             </>
           );
@@ -145,12 +148,20 @@ export function registerNewJobRoutes(
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error";
         logger.error(`Scrape job submission failed: ${error}`);
-        reply.status(500); // Keep status code for errors
-        // Use Alert component for server error
+
+        // Use appropriate HTTP status code based on error type
+        if (error instanceof ValidationError) {
+          reply.status(400); // Bad Request for validation errors
+        } else {
+          reply.status(500); // Internal Server Error for other errors
+        }
+
+        // Return the error message directly - it's already user-friendly
         return (
           <Alert
             type="error"
-            message={<>Failed to queue job: {errorMessage}</>}
+            title="Error:"
+            message={<span safe>{errorMessage}</span>}
           />
         );
       }

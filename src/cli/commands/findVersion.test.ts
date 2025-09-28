@@ -22,7 +22,7 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("findVersionAction", () => {
   it("calls FindVersionTool", async () => {
-    await findVersionAction("react", { version: "18.x", serverUrl: undefined }, cmd());
+    await findVersionAction("react", { version: "18.x", serverUrl: undefined });
     const { FindVersionTool } = await import("../../tools");
     expect(FindVersionTool).toHaveBeenCalledTimes(1);
   });

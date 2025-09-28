@@ -1,4 +1,4 @@
-import ScrapeFormContent from "./ScrapeFormContent"; // Adjusted import path
+import ScrapeFormContent from "./ScrapeFormContent";
 
 interface ScrapeFormProps {
   defaultExcludePatterns?: string[];

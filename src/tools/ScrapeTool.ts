@@ -7,6 +7,7 @@ import {
   DEFAULT_MAX_PAGES,
 } from "../utils/config";
 import { logger } from "../utils/logger";
+import { ValidationError } from "./errors";
 
 export interface ScrapeToolOptions {
   library: string;
@@ -103,13 +104,15 @@ export class ScrapeTool {
         if (coercedVersion) {
           internalVersion = coercedVersion.version;
         } else {
-          throw new Error(
+          throw new ValidationError(
             `Invalid version format for scraping: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
+            "ScrapeTool",
           );
         }
       } else {
-        throw new Error(
+        throw new ValidationError(
           `Invalid version format for scraping: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
+          "ScrapeTool",
         );
       }
     }

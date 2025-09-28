@@ -31,7 +31,7 @@ beforeEach(() => {
 
 describe("listAction", () => {
   it("executes ListLibrariesTool", async () => {
-    await expect(listAction({ serverUrl: undefined }, cmd())).resolves.not.toThrow();
+    await expect(listAction({ serverUrl: undefined })).resolves.not.toThrow();
     const { ListLibrariesTool } = await import("../../tools");
     expect(ListLibrariesTool).toHaveBeenCalledTimes(1);
   });

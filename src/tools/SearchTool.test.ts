@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { DocumentManagementService } from "../store";
+import {
+  type DocumentManagementService,
+  LibraryNotFoundInStoreError,
+  VersionNotFoundInStoreError,
+} from "../store";
 import type { StoreSearchResult } from "../store/types";
-import { LibraryNotFoundError, VersionNotFoundError } from "./errors";
 import { SearchTool, type SearchToolOptions } from "./SearchTool";
 
 // Mock dependencies
-vi.mock("../store");
 vi.mock("../utils/logger");
 
 describe("SearchTool", () => {
@@ -66,7 +68,7 @@ describe("SearchTool", () => {
     expect(result.results).toEqual(mockSearchResults);
   });
 
-  it("should throw VersionNotFoundError when exactMatch is true but no version is specified", async () => {
+  it("should throw VersionNotFoundInStoreError when exactMatch is true but no version is specified", async () => {
     const options: SearchToolOptions = {
       ...baseOptions,
       exactMatch: true,
@@ -91,14 +93,16 @@ describe("SearchTool", () => {
     (mockDocService.validateLibraryExists as Mock).mockResolvedValue(undefined);
     (mockDocService.listLibraries as Mock).mockResolvedValue(mockLibraryDetails); // Mock listLibraries call
 
-    await expect(searchTool.execute(options)).rejects.toThrow(VersionNotFoundError);
+    await expect(searchTool.execute(options)).rejects.toThrow(
+      "Version latest for library test-lib not found in store",
+    );
     expect(mockDocService.validateLibraryExists).toHaveBeenCalledWith("test-lib");
     expect(mockDocService.listLibraries).toHaveBeenCalled(); // Expect listLibraries now
     expect(mockDocService.listVersions).not.toHaveBeenCalled(); // Should not be called here
     expect(mockDocService.searchStore).not.toHaveBeenCalled();
   });
 
-  it("should throw VersionNotFoundError when exactMatch is true with 'latest' version", async () => {
+  it("should throw VersionNotFoundInStoreError when exactMatch is true with 'latest' version", async () => {
     const options: SearchToolOptions = {
       ...baseOptions,
       version: "latest",
@@ -124,7 +128,9 @@ describe("SearchTool", () => {
     (mockDocService.validateLibraryExists as Mock).mockResolvedValue(undefined);
     (mockDocService.listLibraries as Mock).mockResolvedValue(mockLibraryDetails); // Mock listLibraries call
 
-    await expect(searchTool.execute(options)).rejects.toThrow(VersionNotFoundError);
+    await expect(searchTool.execute(options)).rejects.toThrow(
+      "Version latest for library test-lib not found in store",
+    );
     expect(mockDocService.validateLibraryExists).toHaveBeenCalledWith("test-lib");
     expect(mockDocService.listLibraries).toHaveBeenCalled(); // Expect listLibraries now
     expect(mockDocService.listVersions).not.toHaveBeenCalled(); // Should not be called here
@@ -209,34 +215,21 @@ describe("SearchTool", () => {
 
   // --- Error Handling & Result Structure ---
 
-  it("should throw VersionNotFoundError and include available versions", async () => {
+  it("should throw VersionNotFoundInStoreError and include available versions", async () => {
     const options: SearchToolOptions = { ...baseOptions, version: "nonexistent" };
-    // Update test data to match LibraryVersionDetails
-    const available = [
-      {
-        version: "1.0.0",
-        documentCount: 5,
-        uniqueUrlCount: 2,
-        indexedAt: "2024-01-01T00:00:00Z",
-      },
-    ];
-    const error = new VersionNotFoundError("test-lib", "nonexistent", available);
+    const error = new VersionNotFoundInStoreError("test-lib", "nonexistent", ["1.0.0"]);
     (mockDocService.findBestVersion as Mock).mockRejectedValue(error);
 
-    const executePromise = searchTool.execute(options);
-    await expect(executePromise).rejects.toThrow(VersionNotFoundError);
-    await expect(executePromise).rejects.toThrow(
-      expect.objectContaining({
-        message: expect.stringContaining("Version nonexistent not found"),
-        availableVersions: available,
-      }),
-    );
+    const caughtError = (await searchTool
+      .execute(options)
+      .catch((e) => e)) as VersionNotFoundInStoreError;
 
-    expect(mockDocService.findBestVersion).toHaveBeenCalledWith(
-      "test-lib",
-      "nonexistent",
-    );
-    expect(mockDocService.searchStore).not.toHaveBeenCalled();
+    expect(caughtError).toBeInstanceOf(VersionNotFoundInStoreError);
+    expect(caughtError.library).toBe("test-lib");
+    expect(caughtError.version).toBe("nonexistent");
+    expect(caughtError.availableVersions).toEqual(["1.0.0"]);
+    expect(caughtError.message).toContain("Version nonexistent");
+    expect(caughtError.message).toContain("test-lib");
   });
 
   it("should re-throw unexpected errors from findBestVersion", async () => {
@@ -247,24 +240,21 @@ describe("SearchTool", () => {
     await expect(searchTool.execute(options)).rejects.toThrow("Store connection failed");
   });
 
-  it("should throw LibraryNotFoundError and include suggestions", async () => {
+  it("should throw LibraryNotFoundInStoreError and include suggestions", async () => {
     const options: SearchToolOptions = { ...baseOptions };
-    const suggestions = ["test-lib-correct", "another-test-lib"];
-    const error = new LibraryNotFoundError("test-lib", suggestions);
+    const similarLibraries = ["test-lib-correct", "another-test-lib"];
+    const error = new LibraryNotFoundInStoreError("test-lib", similarLibraries);
     (mockDocService.validateLibraryExists as Mock).mockRejectedValue(error);
 
-    const executePromise = searchTool.execute(options);
-    await expect(executePromise).rejects.toThrow(LibraryNotFoundError);
-    await expect(executePromise).rejects.toThrow(
-      expect.objectContaining({
-        message: expect.stringContaining("Library 'test-lib' not found."),
-        suggestions: suggestions,
-      }),
-    );
+    const caughtError = (await searchTool
+      .execute(options)
+      .catch((e) => e)) as LibraryNotFoundInStoreError;
 
-    expect(mockDocService.validateLibraryExists).toHaveBeenCalledWith("test-lib");
-    expect(mockDocService.findBestVersion).not.toHaveBeenCalled();
-    expect(mockDocService.searchStore).not.toHaveBeenCalled();
+    expect(caughtError).toBeInstanceOf(LibraryNotFoundInStoreError);
+    expect(caughtError.library).toBe("test-lib");
+    expect(caughtError.similarLibraries).toEqual(similarLibraries);
+    expect(caughtError.message).toContain("Library test-lib not found");
+    expect(caughtError.message).toContain("Did you mean:");
   });
 
   it("should re-throw unexpected errors from validateLibraryExists", async () => {

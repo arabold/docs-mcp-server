@@ -1,6 +1,6 @@
 import type { LibraryInfo } from "../../tools/ListLibrariesTool";
 import type { VersionSummary } from "../../store/types";
-import VersionDetailsRow from "./VersionDetailsRow"; // Adjusted import path
+import VersionDetailsRow from "./VersionDetailsRow";
 
 /**
  * Props for the LibraryDetailCard component.

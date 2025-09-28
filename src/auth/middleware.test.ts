@@ -23,6 +23,7 @@ describe("Authentication Middleware", () => {
       enabled: true,
       issuerUrl: "https://example.com/oauth2",
       audience: "https://api.example.com",
+      scopes: [],
     };
 
     mockManager = new ProxyAuthManager(authConfig);
@@ -47,7 +48,7 @@ describe("Authentication Middleware", () => {
 
   describe("createAuthMiddleware", () => {
     it("should skip auth when manager is disabled", async () => {
-      const disabledConfig: AuthConfig = { enabled: false };
+      const disabledConfig: AuthConfig = { enabled: false, scopes: [] };
       const disabledManager = new ProxyAuthManager(disabledConfig);
       const middleware = createAuthMiddleware(disabledManager);
 

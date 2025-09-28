@@ -1,5 +1,6 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { logger } from "../utils/logger";
+import { ToolError } from "./errors";
 
 /**
  * Input parameters for the ClearCompletedJobsTool.
@@ -15,8 +16,6 @@ export interface ClearCompletedJobsInput {
 export interface ClearCompletedJobsResult {
   /** A message indicating the outcome of the clear operation. */
   message: string;
-  /** Indicates if the clear operation was successful. */
-  success: boolean;
   /** The number of jobs that were cleared. */
   clearedCount: number;
 }
@@ -40,6 +39,7 @@ export class ClearCompletedJobsTool {
    * Executes the tool to clear all completed jobs from the pipeline.
    * @param input - The input parameters (currently unused).
    * @returns A promise that resolves with the outcome of the clear operation.
+   * @throws {ToolError} If the clear operation fails.
    */
   async execute(_input: ClearCompletedJobsInput): Promise<ClearCompletedJobsResult> {
     try {
@@ -54,7 +54,6 @@ export class ClearCompletedJobsTool {
 
       return {
         message,
-        success: true,
         clearedCount,
       };
     } catch (error) {
@@ -64,11 +63,7 @@ export class ClearCompletedJobsTool {
 
       logger.error(`❌ ${errorMessage}`);
 
-      return {
-        message: errorMessage,
-        success: false,
-        clearedCount: 0,
-      };
+      throw new ToolError(errorMessage, this.constructor.name);
     }
   }
 }

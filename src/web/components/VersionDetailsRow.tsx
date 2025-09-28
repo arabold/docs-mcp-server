@@ -1,5 +1,5 @@
 import type { VersionSummary } from "../../store/types";
-import VersionBadge from "./VersionBadge"; // Adjusted import path
+import VersionBadge from "./VersionBadge";
 import LoadingSpinner from "./LoadingSpinner"; // Import spinner
 
 /**

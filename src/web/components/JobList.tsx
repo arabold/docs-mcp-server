@@ -1,5 +1,5 @@
 import type { JobInfo } from "../../tools/GetJobInfoTool";
-import JobItem from "./JobItem"; // Adjusted import path
+import JobItem from "./JobItem";
 
 /**
  * Props for the JobList component.

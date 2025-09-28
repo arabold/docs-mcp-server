@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { CancelJobTool } from "../../../tools/CancelJobTool";
+import { ToolError } from "../../../tools/errors";
 
 /**
  * Registers the API route for cancelling jobs.
@@ -15,12 +16,17 @@ export function registerCancelJobRoute(
     "/web/jobs/:jobId/cancel",
     async (request, reply) => {
       const { jobId } = request.params;
-      const result = await cancelJobTool.execute({ jobId });
-      if (result.success) {
-        return { success: true, message: result.message };
-      } else {
-        reply.status(400);
-        return { success: false, message: result.message };
+      try {
+        await cancelJobTool.execute({ jobId });
+        return { success: true, message: "Job cancelled successfully" };
+      } catch (error) {
+        if (error instanceof ToolError) {
+          reply.status(400);
+          return { success: false, message: error.message };
+        } else {
+          reply.status(500);
+          return { success: false, message: "Internal server error" };
+        }
       }
     }
   );
