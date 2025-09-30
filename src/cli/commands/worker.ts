@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 import { Option } from "commander";
 import { startAppServer } from "../../app";
+import { resolveStorePath } from "../../utils/paths";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
@@ -81,9 +82,11 @@ export function createWorkerCommand(program: Command): Command {
           // Get global options from parent command
           const globalOptions = program.parent?.opts() || {};
 
+          const resolvedStorePath = resolveStorePath(globalOptions.storePath);
+
           // Initialize services
           const docService = await createLocalDocumentManagement(
-            globalOptions.storePath,
+            resolvedStorePath,
             embeddingConfig,
           );
           const pipelineOptions: PipelineOptions = {
