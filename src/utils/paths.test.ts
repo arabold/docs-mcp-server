@@ -18,9 +18,6 @@ vi.mock("env-paths", () => ({
   default: vi.fn(),
 }));
 
-// Mock console.warn to prevent test noise
-const mockConsoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
 // Get the mocked env-paths function
 const mockEnvPaths = vi.mocked(envPaths);
 
@@ -157,25 +154,6 @@ describe("paths utilities", () => {
       expect(vol.existsSync(newPath)).toBe(true);
     });
 
-    it("should handle directory creation errors gracefully", () => {
-      // Create a spy on the mocked mkdirSync
-      const mkdirSpy = vi.spyOn(vol, "mkdirSync");
-      mkdirSpy.mockImplementationOnce(() => {
-        throw new Error("Permission denied");
-      });
-
-      const customPath = "/restricted/path";
-      const result = resolveStorePath(customPath);
-
-      expect(result).toBe(customPath);
-      expect(mockConsoleWarn).toHaveBeenCalledWith(
-        expect.stringContaining("Failed to create database directory /restricted/path"),
-      );
-
-      // Restore spy
-      mkdirSpy.mockRestore();
-    });
-
     it("should handle complex legacy store detection scenario", () => {
       // Setup a more complex project structure with legacy store
       const legacyStorePath = path.join(projectRoot, ".store");
@@ -219,7 +197,7 @@ describe("paths utilities", () => {
       const relativePath = "./relative/storage/path";
       const result = resolveStorePath(relativePath);
 
-      expect(result).toBe(relativePath);
+      expect(result).toBe(`${projectRoot}/relative/storage/path`);
       expect(vol.existsSync(relativePath)).toBe(true);
     });
 

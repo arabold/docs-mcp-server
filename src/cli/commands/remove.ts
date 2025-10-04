@@ -9,6 +9,7 @@ import { analytics, TelemetryEvent } from "../../telemetry";
 export async function removeAction(
   library: string,
   options: { version?: string; serverUrl?: string },
+  command?: Command,
 ) {
   await analytics.track(TelemetryEvent.CLI_COMMAND, {
     command: "remove",
@@ -19,10 +20,18 @@ export async function removeAction(
 
   const serverUrl = options.serverUrl;
 
+  // Get global options from root command (which has resolved storePath in preAction hook)
+  let rootCommand = command;
+  while (rootCommand?.parent) {
+    rootCommand = rootCommand.parent;
+  }
+  const globalOptions = rootCommand?.opts() || {};
+
   // Remove command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig: serverUrl ? undefined : null,
+    storePath: globalOptions.storePath,
   });
   const { version } = options;
   try {

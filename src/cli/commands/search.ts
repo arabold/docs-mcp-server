@@ -19,6 +19,7 @@ export async function searchAction(
     embeddingModel?: string;
     serverUrl?: string;
   },
+  command?: Command,
 ) {
   await analytics.track(TelemetryEvent.CLI_COMMAND, {
     command: "search",
@@ -32,6 +33,13 @@ export async function searchAction(
 
   const serverUrl = options.serverUrl;
 
+  // Get global options from root command (which has resolved storePath in preAction hook)
+  let rootCommand = command;
+  while (rootCommand?.parent) {
+    rootCommand = rootCommand.parent;
+  }
+  const globalOptions = rootCommand?.opts() || {};
+
   // Resolve embedding configuration for local execution (search needs embeddings)
   const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
   if (!serverUrl && !embeddingConfig) {
@@ -44,6 +52,7 @@ export async function searchAction(
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig,
+    storePath: globalOptions.storePath,
   });
 
   try {

@@ -10,7 +10,6 @@ import { createLocalDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { DEFAULT_HOST, DEFAULT_MAX_CONCURRENCY } from "../../utils/config";
 import { logger } from "../../utils/logger";
-import { resolveStorePath } from "../../utils/paths";
 import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,
@@ -79,14 +78,12 @@ export function createWorkerCommand(program: Command): Command {
           // Resolve embedding configuration for worker (worker needs embeddings for indexing)
           const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
 
-          // Get global options from parent command
-          const globalOptions = program.parent?.opts() || {};
-
-          const resolvedStorePath = resolveStorePath(globalOptions.storePath);
+          // Get global options from root command (which has resolved storePath in preAction hook)
+          const globalOptions = program.opts();
 
           // Initialize services
           const docService = await createLocalDocumentManagement(
-            resolvedStorePath,
+            globalOptions.storePath,
             embeddingConfig,
           );
           const pipelineOptions: PipelineOptions = {

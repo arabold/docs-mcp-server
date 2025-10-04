@@ -61,8 +61,13 @@ export async function scrapeAction(
 
   const serverUrl = options.serverUrl;
 
-  // Get global options from parent command
-  const globalOptions = command?.parent?.opts() || {};
+  // Get global options from root command (which has resolved storePath in preAction hook)
+  // Navigate to root program by going up the parent chain
+  let rootCommand = command;
+  while (rootCommand?.parent) {
+    rootCommand = rootCommand.parent;
+  }
+  const globalOptions = rootCommand?.opts() || {};
 
   // Resolve embedding configuration for local execution (scrape needs embeddings)
   const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);

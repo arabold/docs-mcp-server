@@ -10,6 +10,7 @@ import { FindVersionTool } from "../../tools";
 export async function findVersionAction(
   library: string,
   options: { version?: string; serverUrl?: string },
+  command?: Command,
 ) {
   await analytics.track(TelemetryEvent.CLI_COMMAND, {
     command: "find-version",
@@ -20,10 +21,18 @@ export async function findVersionAction(
 
   const serverUrl = options.serverUrl;
 
+  // Get global options from root command (which has resolved storePath in preAction hook)
+  let rootCommand = command;
+  while (rootCommand?.parent) {
+    rootCommand = rootCommand.parent;
+  }
+  const globalOptions = rootCommand?.opts() || {};
+
   // Find version command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig: serverUrl ? undefined : null,
+    storePath: globalOptions.storePath,
   });
   try {
     const findVersionTool = new FindVersionTool(docService);

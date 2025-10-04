@@ -8,7 +8,7 @@ import { analytics, TelemetryEvent } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
 import { formatOutput } from "../utils";
 
-export async function listAction(options: { serverUrl?: string }) {
+export async function listAction(options: { serverUrl?: string }, command?: Command) {
   await analytics.track(TelemetryEvent.CLI_COMMAND, {
     command: "list",
     useServerUrl: !!options.serverUrl,
@@ -16,10 +16,18 @@ export async function listAction(options: { serverUrl?: string }) {
 
   const { serverUrl } = options;
 
+  // Get global options from root command (which has resolved storePath in preAction hook)
+  let rootCommand = command;
+  while (rootCommand?.parent) {
+    rootCommand = rootCommand.parent;
+  }
+  const globalOptions = rootCommand?.opts() || {};
+
   // List command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig: serverUrl ? undefined : null,
+    storePath: globalOptions.storePath,
   });
   try {
     const listLibrariesTool = new ListLibrariesTool(docService);
