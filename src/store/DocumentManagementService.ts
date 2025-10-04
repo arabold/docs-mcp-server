@@ -340,6 +340,27 @@ export class DocumentManagementService {
   }
 
   /**
+   * Removes all documents for a specific page ID.
+   * This is more efficient than URL-based deletion when the page ID is known.
+   */
+  async removeDocumentsByPageId(pageId: number): Promise<number> {
+    logger.debug(`🗑️ Removing documents for page ID: ${pageId}`);
+    const count = await this.store.deleteDocumentsByPageId(pageId);
+    logger.debug(`🗑️ Deleted ${count} documents for page ID: ${pageId}`);
+    return count;
+  }
+
+  /**
+   * Retrieves all pages for a specific version ID with their metadata.
+   * Used for refresh operations to get existing pages with their ETags.
+   */
+  async getPagesByVersionId(
+    versionId: number,
+  ): Promise<Array<{ id: number; url: string; etag: string | null }>> {
+    return this.store.getPagesByVersionId(versionId);
+  }
+
+  /**
    * Completely removes a library version and all associated documents.
    * Also removes the library if no other versions remain.
    * @param library Library name
