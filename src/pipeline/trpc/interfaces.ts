@@ -20,11 +20,12 @@ export interface PipelineOptions {
 export interface IPipeline {
   start(): Promise<void>;
   stop(): Promise<void>;
-  enqueueJob(
+  enqueueScrapeJob(
     library: string,
     version: string | undefined | null,
     options: ScraperOptions,
   ): Promise<string>;
+  enqueueRefreshJob(library: string, version: string | undefined | null): Promise<string>;
   getJob(jobId: string): Promise<PipelineJob | undefined>;
   getJobs(status?: PipelineJobStatus): Promise<PipelineJob[]>;
   cancelJob(jobId: string): Promise<void>;

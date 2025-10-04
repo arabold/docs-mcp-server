@@ -132,7 +132,7 @@ export class ScrapeTool {
     const enqueueVersion: string | null = internalVersion === "" ? null : internalVersion;
 
     // Enqueue the job using the injected pipeline
-    const jobId = await pipeline.enqueueJob(library, enqueueVersion, {
+    const jobId = await pipeline.enqueueScrapeJob(library, enqueueVersion, {
       url: url,
       library: library,
       version: internalVersion,

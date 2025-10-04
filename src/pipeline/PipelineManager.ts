@@ -235,7 +235,7 @@ export class PipelineManager implements IPipeline {
   /**
    * Enqueues a new document processing job, aborting any existing QUEUED/RUNNING job for the same library+version (including unversioned).
    */
-  async enqueueJob(
+  async enqueueScrapeJob(
     library: string,
     version: string | undefined | null,
     options: ScraperOptions,
@@ -323,6 +323,99 @@ export class PipelineManager implements IPipeline {
   }
 
   /**
+   * Enqueues a refresh job for an existing library version by re-scraping all pages
+   * and using Etag comparison to skip unchanged content.
+   */
+  async enqueueRefreshJob(
+    library: string,
+    version: string | undefined | null,
+  ): Promise<string> {
+    // Normalize version: treat undefined/null as "" (unversioned)
+    const normalizedVersion = version ?? "";
+
+    // First, check if the library version exists
+    try {
+      const versionId = await this.store.ensureVersion({
+        library,
+        version: normalizedVersion,
+      });
+
+      // Get all pages for this version
+      const pages = await this.store.getPagesByVersionId(versionId);
+
+      if (pages.length === 0) {
+        throw new Error(
+          `No pages found for ${library}@${normalizedVersion || "unversioned"}. Cannot refresh an empty version.`,
+        );
+      }
+
+      logger.info(
+        `🔄 Starting refresh for ${library}@${normalizedVersion || "unversioned"} with ${pages.length} page(s)`,
+      );
+
+      const jobId = uuidv4();
+      const abortController = new AbortController();
+      let resolveCompletion!: () => void;
+      let rejectCompletion!: (reason?: unknown) => void;
+
+      const completionPromise = new Promise<void>((resolve, reject) => {
+        resolveCompletion = resolve;
+        rejectCompletion = reject;
+      });
+      // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
+      completionPromise.catch(() => {});
+
+      const job: InternalPipelineJob = {
+        id: jobId,
+        library,
+        version: normalizedVersion,
+        status: PipelineJobStatus.QUEUED,
+        progress: null,
+        error: null,
+        createdAt: new Date(),
+        startedAt: null,
+        finishedAt: null,
+        abortController,
+        completionPromise,
+        resolveCompletion,
+        rejectCompletion,
+        // Database fields (single source of truth)
+        versionId,
+        versionStatus: this.mapJobStatusToVersionStatus(PipelineJobStatus.QUEUED),
+        progressPages: 0,
+        progressMaxPages: pages.length,
+        errorMessage: null,
+        updatedAt: new Date(),
+        sourceUrl: null, // No single source URL for refresh jobs
+        scraperOptions: null,
+        // Add refresh-specific metadata
+        refreshPages: pages, // Store the pages to refresh
+      };
+
+      this.jobMap.set(jobId, job);
+      this.jobQueue.push(jobId);
+      logger.info(
+        `📝 Refresh job enqueued: ${jobId} for ${library}${normalizedVersion ? `@${normalizedVersion}` : " (unversioned)"} with ${pages.length} pages`,
+      );
+
+      // Update database status to QUEUED
+      await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
+
+      // Trigger processing if manager is running
+      if (this.isRunning) {
+        this._processQueue().catch((error) => {
+          logger.error(`❌ Error in processQueue during refresh enqueue: ${error}`);
+        });
+      }
+
+      return jobId;
+    } catch (error) {
+      logger.error(`❌ Failed to enqueue refresh job: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
    * Enqueues a job using stored scraper options from a previous indexing run.
    * If no stored options are found, throws an error.
    */
@@ -360,7 +453,7 @@ export class PipelineManager implements IPipeline {
         `🔄 Re-indexing ${library}@${normalizedVersion || "unversioned"} with stored options from ${stored.sourceUrl}`,
       );
 
-      return this.enqueueJob(library, normalizedVersion, completeOptions);
+      return this.enqueueScrapeJob(library, normalizedVersion, completeOptions);
     } catch (error) {
       logger.error(`❌ Failed to enqueue job with stored options: ${error}`);
       throw error;

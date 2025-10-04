@@ -80,6 +80,7 @@ export class DocumentStore {
     getPageId: Database.Statement<[number, string]>;
     deleteDocuments: Database.Statement<[string, string]>;
     deleteDocumentsByUrl: Database.Statement<[string, string, string]>;
+    deleteDocumentsByPageId: Database.Statement<[number]>;
     deletePages: Database.Statement<[string, string]>;
     queryVersions: Database.Statement<[string]>;
     checkExists: Database.Statement<[string, string]>;
@@ -114,6 +115,7 @@ export class DocumentStore {
     deleteLibraryById: Database.Statement<[number]>;
     countVersionsByLibraryId: Database.Statement<[number]>;
     getVersionId: Database.Statement<[string, string]>;
+    getPagesByVersionId: Database.Statement<[number]>;
   };
 
   /**
@@ -238,6 +240,9 @@ export class DocumentStore {
            JOIN libraries l ON v.library_id = l.id
            WHERE p.url = ? AND l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
          )`,
+      ),
+      deleteDocumentsByPageId: this.db.prepare<[number]>(
+        "DELETE FROM documents WHERE page_id = ?",
       ),
       deletePages: this.db.prepare<[string, string]>(
         `DELETE FROM pages 
@@ -382,6 +387,9 @@ export class DocumentStore {
         `SELECT v.id, v.library_id FROM versions v
          JOIN libraries l ON v.library_id = l.id
          WHERE l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')`,
+      ),
+      getPagesByVersionId: this.db.prepare<[number]>(
+        "SELECT id, url, etag FROM pages WHERE version_id = ?",
       ),
     };
     this.statements = statements;
@@ -1071,6 +1079,40 @@ export class DocumentStore {
       return result.changes;
     } catch (error) {
       throw new ConnectionError("Failed to delete documents by URL", error);
+    }
+  }
+
+  /**
+   * Removes all documents for a specific page ID.
+   * This is more efficient than URL-based deletion when the page ID is known.
+   * @returns Number of documents deleted
+   */
+  async deleteDocumentsByPageId(pageId: number): Promise<number> {
+    try {
+      const result = this.statements.deleteDocumentsByPageId.run(pageId);
+      return result.changes;
+    } catch (error) {
+      throw new ConnectionError("Failed to delete documents by page ID", error);
+    }
+  }
+
+  /**
+   * Retrieves all pages for a specific version ID with their metadata.
+   * Used for refresh operations to get existing pages with their ETags.
+   * @returns Array of page records
+   */
+  async getPagesByVersionId(
+    versionId: number,
+  ): Promise<Array<{ id: number; url: string; etag: string | null }>> {
+    try {
+      const result = this.statements.getPagesByVersionId.all(versionId) as Array<{
+        id: number;
+        url: string;
+        etag: string | null;
+      }>;
+      return result;
+    } catch (error) {
+      throw new ConnectionError("Failed to get pages by version ID", error);
     }
   }
 
