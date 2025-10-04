@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import envPaths from "env-paths";
+import { logger } from "./logger";
 
 let projectRoot: string | null = null;
 
@@ -62,7 +63,7 @@ export function resolveStorePath(storePath?: string): string {
 
   // 1. Check storePath parameter
   if (storePath) {
-    dbDir = storePath;
+    dbDir = path.resolve(storePath);
   } else {
     // 2. Check Old Local Path
     const projectRoot = getProjectRoot();
@@ -85,7 +86,7 @@ export function resolveStorePath(storePath?: string): string {
   } catch (error) {
     // Log potential error during directory creation but proceed
     // The DocumentStore constructor might handle DB file creation errors
-    console.warn(`⚠️  Failed to create database directory ${dbDir}: ${error}`);
+    logger.warn(`⚠️  Failed to create database directory ${dbDir}: ${error}`);
   }
 
   return dbDir;

@@ -11,15 +11,10 @@ vi.mock("../../tools", () => ({
     .fn()
     .mockImplementation(() => ({ execute: vi.fn(async () => ({ results: [] })) })),
 }));
-vi.mock("../utils", () => ({
-  setupLogging: vi.fn(),
-  formatOutput: (v: unknown) => v,
-  resolveEmbeddingContext: vi.fn(() => ({ type: "mock" })),
-}));
 
 import { searchAction } from "./search";
 
-function cmd() {
+function _cmd() {
   return new Command();
 }
 beforeEach(() => vi.clearAllMocks());
@@ -31,6 +26,7 @@ describe("searchAction", () => {
       limit: "3",
       exactMatch: false,
       serverUrl: undefined,
+      embeddingModel: "mock-embedding-model",
     });
     const { SearchTool } = await import("../../tools");
     expect(SearchTool).toHaveBeenCalledTimes(1);

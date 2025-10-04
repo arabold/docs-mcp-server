@@ -15,6 +15,7 @@ import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,
   createPipelineWithCallbacks,
+  getGlobalOptions,
   resolveEmbeddingContext,
   validateHost,
   validatePort,
@@ -56,12 +57,15 @@ export function createWebCommand(program: Command): Command {
       "URL of external pipeline worker RPC (e.g., http://localhost:6280/api)",
     )
     .action(
-      async (cmdOptions: {
-        port: string;
-        host: string;
-        embeddingModel?: string;
-        serverUrl?: string;
-      }) => {
+      async (
+        cmdOptions: {
+          port: string;
+          host: string;
+          embeddingModel?: string;
+          serverUrl?: string;
+        },
+        command?: Command,
+      ) => {
         await analytics.track(TelemetryEvent.CLI_COMMAND, {
           command: "web",
           port: cmdOptions.port,
@@ -74,6 +78,8 @@ export function createWebCommand(program: Command): Command {
         const serverUrl = cmdOptions.serverUrl;
 
         try {
+          const globalOptions = getGlobalOptions(command);
+
           // Resolve embedding configuration for local execution
           const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
           if (!serverUrl && !embeddingConfig) {
@@ -86,6 +92,7 @@ export function createWebCommand(program: Command): Command {
           const docService: IDocumentManagement = await createDocumentManagement({
             serverUrl,
             embeddingConfig,
+            storePath: globalOptions.storePath,
           });
           const pipelineOptions: PipelineOptions = {
             recoverJobs: false, // Web command doesn't support job recovery

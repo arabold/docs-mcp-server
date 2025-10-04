@@ -329,7 +329,11 @@ describe("CLI command handler parameters", () => {
       program.parseAsync(["node", "test", "list", "--server-url", serverUrl]),
     ).resolves.not.toThrow();
 
-    expect(capturedCreateArgs).toContainEqual({ serverUrl });
+    expect(capturedCreateArgs).toContainEqual({
+      serverUrl,
+      storePath: expect.any(String),
+      embeddingConfig: undefined,
+    });
     expect(listToolExecuteCalled).toBe(true);
   });
 });

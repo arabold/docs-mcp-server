@@ -11,11 +11,10 @@ vi.mock("../../tools", () => ({
     .fn()
     .mockImplementation(() => ({ execute: vi.fn(async () => ({ version: "1.0.0" })) })),
 }));
-vi.mock("../utils", () => ({ setupLogging: vi.fn() }));
 
 import { findVersionAction } from "./findVersion";
 
-function cmd() {
+function _cmd() {
   return new Command();
 }
 beforeEach(() => vi.clearAllMocks());

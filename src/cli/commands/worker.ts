@@ -78,8 +78,8 @@ export function createWorkerCommand(program: Command): Command {
           // Resolve embedding configuration for worker (worker needs embeddings for indexing)
           const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
 
-          // Get global options from parent command
-          const globalOptions = program.parent?.opts() || {};
+          // Get global options from root command (which has resolved storePath in preAction hook)
+          const globalOptions = program.opts();
 
           // Initialize services
           const docService = await createLocalDocumentManagement(

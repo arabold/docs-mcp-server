@@ -6,20 +6,22 @@ import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
-import { formatOutput } from "../utils";
+import { formatOutput, getGlobalOptions } from "../utils";
 
-export async function listAction(options: { serverUrl?: string }) {
+export async function listAction(options: { serverUrl?: string }, command?: Command) {
   await analytics.track(TelemetryEvent.CLI_COMMAND, {
     command: "list",
     useServerUrl: !!options.serverUrl,
   });
 
   const { serverUrl } = options;
+  const globalOptions = getGlobalOptions(command);
 
   // List command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig: serverUrl ? undefined : null,
+    storePath: globalOptions.storePath,
   });
   try {
     const listLibrariesTool = new ListLibrariesTool(docService);

@@ -7,7 +7,7 @@ import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { SearchTool } from "../../tools";
-import { formatOutput, resolveEmbeddingContext } from "../utils";
+import { formatOutput, getGlobalOptions, resolveEmbeddingContext } from "../utils";
 
 export async function searchAction(
   library: string,
@@ -19,6 +19,7 @@ export async function searchAction(
     embeddingModel?: string;
     serverUrl?: string;
   },
+  command?: Command,
 ) {
   await analytics.track(TelemetryEvent.CLI_COMMAND, {
     command: "search",
@@ -31,6 +32,7 @@ export async function searchAction(
   });
 
   const serverUrl = options.serverUrl;
+  const globalOptions = getGlobalOptions(command);
 
   // Resolve embedding configuration for local execution (search needs embeddings)
   const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
@@ -44,6 +46,7 @@ export async function searchAction(
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig,
+    storePath: globalOptions.storePath,
   });
 
   try {

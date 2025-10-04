@@ -143,8 +143,8 @@ export function createMcpCommand(program: Command): Command {
             validateAuthConfig(authConfig);
           }
 
-          // Get global options from parent command
-          const globalOptions = program.parent?.opts() || {};
+          // Get global options from root command (which has resolved storePath in preAction hook)
+          const globalOptions = program.opts();
 
           try {
             // Resolve embedding configuration for local execution

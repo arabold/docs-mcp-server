@@ -18,6 +18,7 @@ import {
 } from "../../utils/config";
 import {
   createPipelineWithCallbacks,
+  getGlobalOptions,
   parseHeaders,
   resolveEmbeddingContext,
 } from "../utils";
@@ -60,9 +61,7 @@ export async function scrapeAction(
   });
 
   const serverUrl = options.serverUrl;
-
-  // Get global options from parent command
-  const globalOptions = command?.parent?.opts() || {};
+  const globalOptions = getGlobalOptions(command);
 
   // Resolve embedding configuration for local execution (scrape needs embeddings)
   const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
