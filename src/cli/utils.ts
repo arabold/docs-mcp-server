@@ -4,6 +4,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import type { Command } from "commander";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
@@ -17,6 +18,20 @@ import {
 import { LogLevel, logger, setLogLevel } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
+
+/**
+ * Traverses the command hierarchy to find the root command and returns its options.
+ * This is useful for accessing global options from within any subcommand.
+ * @param command The current command instance.
+ * @returns The global options from the root command.
+ */
+export function getGlobalOptions(command?: Command): GlobalOptions {
+  let rootCommand = command;
+  while (rootCommand?.parent) {
+    rootCommand = rootCommand.parent;
+  }
+  return rootCommand?.opts() || {};
+}
 
 /**
  * Embedding context.

@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
+import { getGlobalOptions } from "../utils";
 
 export async function removeAction(
   library: string,
@@ -19,13 +20,7 @@ export async function removeAction(
   });
 
   const serverUrl = options.serverUrl;
-
-  // Get global options from root command (which has resolved storePath in preAction hook)
-  let rootCommand = command;
-  while (rootCommand?.parent) {
-    rootCommand = rootCommand.parent;
-  }
-  const globalOptions = rootCommand?.opts() || {};
+  const globalOptions = getGlobalOptions(command);
 
   // Remove command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({

@@ -17,10 +17,10 @@ vi.mock("../../tools", () => ({
     .mockImplementation(() => ({ execute: vi.fn(async () => ({ jobId: "job-123" })) })),
 }));
 vi.mock("../utils", () => ({
-  setupLogging: vi.fn(),
-  parseHeaders: () => ({}),
   createPipelineWithCallbacks: vi.fn(async () => pipelineMock),
-  resolveEmbeddingContext: vi.fn(() => ({ type: "mock" })),
+  getGlobalOptions: vi.fn(() => ({ storePath: undefined })),
+  parseHeaders: vi.fn(() => ({})),
+  resolveEmbeddingContext: vi.fn(() => ({ provider: "mock", model: "mock-model" })),
 }));
 
 import { scrapeAction } from "./scrape";
@@ -47,6 +47,7 @@ describe("scrapeAction", () => {
         excludePattern: [],
         header: [],
         serverUrl: undefined,
+        embeddingModel: "mock-embedding-model",
       },
       cmd(),
     );

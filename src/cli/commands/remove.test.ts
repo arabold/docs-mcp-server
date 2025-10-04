@@ -10,7 +10,6 @@ vi.mock("../../store", () => ({
     removeAllDocuments: removeFn,
   })),
 }));
-vi.mock("../utils", () => ({ setupLogging: vi.fn() }));
 
 import { removeAction } from "./remove";
 

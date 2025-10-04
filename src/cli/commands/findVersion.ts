@@ -6,6 +6,7 @@ import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
+import { getGlobalOptions } from "../utils";
 
 export async function findVersionAction(
   library: string,
@@ -20,13 +21,7 @@ export async function findVersionAction(
   });
 
   const serverUrl = options.serverUrl;
-
-  // Get global options from root command (which has resolved storePath in preAction hook)
-  let rootCommand = command;
-  while (rootCommand?.parent) {
-    rootCommand = rootCommand.parent;
-  }
-  const globalOptions = rootCommand?.opts() || {};
+  const globalOptions = getGlobalOptions(command);
 
   // Find version command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({

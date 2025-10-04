@@ -7,7 +7,7 @@ import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { SearchTool } from "../../tools";
-import { formatOutput, resolveEmbeddingContext } from "../utils";
+import { formatOutput, getGlobalOptions, resolveEmbeddingContext } from "../utils";
 
 export async function searchAction(
   library: string,
@@ -32,13 +32,7 @@ export async function searchAction(
   });
 
   const serverUrl = options.serverUrl;
-
-  // Get global options from root command (which has resolved storePath in preAction hook)
-  let rootCommand = command;
-  while (rootCommand?.parent) {
-    rootCommand = rootCommand.parent;
-  }
-  const globalOptions = rootCommand?.opts() || {};
+  const globalOptions = getGlobalOptions(command);
 
   // Resolve embedding configuration for local execution (search needs embeddings)
   const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);

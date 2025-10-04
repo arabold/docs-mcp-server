@@ -15,6 +15,7 @@ import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,
   createPipelineWithCallbacks,
+  getGlobalOptions,
   resolveEmbeddingContext,
   validateHost,
   validatePort,
@@ -77,12 +78,7 @@ export function createWebCommand(program: Command): Command {
         const serverUrl = cmdOptions.serverUrl;
 
         try {
-          // Get global options from root command (which has resolved storePath in preAction hook)
-          let rootCommand = command;
-          while (rootCommand?.parent) {
-            rootCommand = rootCommand.parent;
-          }
-          const globalOptions = rootCommand?.opts() || {};
+          const globalOptions = getGlobalOptions(command);
 
           // Resolve embedding configuration for local execution
           const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);

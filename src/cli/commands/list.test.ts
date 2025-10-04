@@ -14,10 +14,6 @@ vi.mock("../../tools", () => ({
     .fn()
     .mockImplementation(() => ({ execute: vi.fn(async () => ({ libraries: [] })) })),
 }));
-vi.mock("../utils", () => ({
-  setupLogging: vi.fn(),
-  formatOutput: (v: unknown) => JSON.stringify(v, null, 2),
-}));
 
 import { listAction } from "./list";
 
