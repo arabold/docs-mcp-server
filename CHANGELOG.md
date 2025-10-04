@@ -1,3 +1,10 @@
+## [1.26.1](https://github.com/arabold/docs-mcp-server/compare/v1.26.0...v1.26.1) (2025-10-04)
+
+
+### Bug Fixes
+
+* fixed issue with store path not being passed to individual CLI commands ([dfa6d97](https://github.com/arabold/docs-mcp-server/commit/dfa6d97527b2212af27311da2d53cc32f5c05914))
+
 # [1.26.0](https://github.com/arabold/docs-mcp-server/compare/v1.25.3...v1.26.0) (2025-09-27)
 
 
