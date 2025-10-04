@@ -5,12 +5,12 @@
 import type { Command } from "commander";
 import { Option } from "commander";
 import { startAppServer } from "../../app";
-import { resolveStorePath } from "../../utils/paths";
 import type { PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { DEFAULT_HOST, DEFAULT_MAX_CONCURRENCY } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { resolveStorePath } from "../../utils/paths";
 import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,

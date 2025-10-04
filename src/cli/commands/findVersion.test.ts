@@ -15,7 +15,7 @@ vi.mock("../utils", () => ({ setupLogging: vi.fn() }));
 
 import { findVersionAction } from "./findVersion";
 
-function cmd() {
+function _cmd() {
   return new Command();
 }
 beforeEach(() => vi.clearAllMocks());

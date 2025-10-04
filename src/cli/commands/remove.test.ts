@@ -14,7 +14,7 @@ vi.mock("../utils", () => ({ setupLogging: vi.fn() }));
 
 import { removeAction } from "./remove";
 
-function cmd() {
+function _cmd() {
   return new Command();
 }
 beforeEach(() => {
