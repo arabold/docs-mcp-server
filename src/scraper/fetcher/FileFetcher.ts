@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { ScraperError } from "../../utils/errors";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
@@ -28,16 +29,27 @@ export class FileFetcher implements ContentFetcher {
     }
 
     try {
-      const content = await fs.readFile(filePath);
+      const [content, stats] = await Promise.all([
+        fs.readFile(filePath),
+        fs.stat(filePath),
+      ]);
 
       // Use enhanced MIME type detection that properly handles source code files
       const detectedMimeType = MimeTypeUtils.detectMimeTypeFromPath(filePath);
       const mimeType = detectedMimeType || "application/octet-stream";
 
+      // Generate pseudo-ETag from last modified time
+      const etag = crypto
+        .createHash("md5")
+        .update(stats.mtime.toISOString())
+        .digest("hex");
+
       return {
         content,
         mimeType,
         source,
+        etag,
+        lastModified: stats.mtime.toISOString(),
         // Don't assume charset for text files - let the pipeline detect it
       };
     } catch (error: unknown) {

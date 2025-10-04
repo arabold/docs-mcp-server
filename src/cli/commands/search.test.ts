@@ -19,7 +19,7 @@ vi.mock("../utils", () => ({
 
 import { searchAction } from "./search";
 
-function cmd() {
+function _cmd() {
   return new Command();
 }
 beforeEach(() => vi.clearAllMocks());

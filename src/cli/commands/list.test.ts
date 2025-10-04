@@ -21,7 +21,7 @@ vi.mock("../utils", () => ({
 
 import { listAction } from "./list";
 
-function cmd() {
+function _cmd() {
   return new Command();
 }
 
