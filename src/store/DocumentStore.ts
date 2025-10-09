@@ -1102,6 +1102,12 @@ export class DocumentStore {
 
       const { id: versionId, library_id: libraryId } = versionResult;
 
+      // Delete in order to respect foreign key constraints:
+      // 1. documents (page_id → pages.id)
+      // 2. pages (version_id → versions.id)
+      // 3. versions (library_id → libraries.id)
+      // 4. libraries (if empty)
+
       // Delete all documents for this version
       const documentsDeleted = await this.deleteDocuments(library, version);
 
