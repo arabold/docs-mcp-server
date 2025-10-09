@@ -155,6 +155,82 @@ describe("DocumentStore - With Embeddings", () => {
       expect(await store.checkDocumentExists("templib", "1.0.0")).toBe(false);
     });
 
+    it("should completely remove a version including pages and documents", async () => {
+      const docs: Document[] = [
+        {
+          pageContent: "First document for removal test",
+          metadata: {
+            title: "Doc 1",
+            url: "https://example.com/doc1",
+            path: ["docs"],
+          },
+        },
+        {
+          pageContent: "Second document for removal test",
+          metadata: {
+            title: "Doc 2",
+            url: "https://example.com/doc2",
+            path: ["docs"],
+          },
+        },
+      ];
+
+      // Add documents and verify they exist
+      await store.addDocuments("removelib", "1.0.0", docs);
+      expect(await store.checkDocumentExists("removelib", "1.0.0")).toBe(true);
+
+      // Remove the version
+      const result = await store.removeVersion("removelib", "1.0.0", true);
+
+      // Verify the results
+      expect(result.documentsDeleted).toBe(2);
+      expect(result.versionDeleted).toBe(true);
+      expect(result.libraryDeleted).toBe(true);
+
+      // Verify documents no longer exist
+      expect(await store.checkDocumentExists("removelib", "1.0.0")).toBe(false);
+    });
+
+    it("should remove version but keep library when other versions exist", async () => {
+      const v1Docs: Document[] = [
+        {
+          pageContent: "Version 1 document",
+          metadata: {
+            title: "V1 Doc",
+            url: "https://example.com/v1",
+            path: ["v1"],
+          },
+        },
+      ];
+
+      const v2Docs: Document[] = [
+        {
+          pageContent: "Version 2 document",
+          metadata: {
+            title: "V2 Doc",
+            url: "https://example.com/v2",
+            path: ["v2"],
+          },
+        },
+      ];
+
+      // Add two versions
+      await store.addDocuments("multilib", "1.0.0", v1Docs);
+      await store.addDocuments("multilib", "2.0.0", v2Docs);
+
+      // Remove only version 1.0.0
+      const result = await store.removeVersion("multilib", "1.0.0", true);
+
+      // Verify version 1 was deleted but library remains
+      expect(result.documentsDeleted).toBe(1);
+      expect(result.versionDeleted).toBe(true);
+      expect(result.libraryDeleted).toBe(false);
+
+      // Verify version 1 no longer exists but version 2 does
+      expect(await store.checkDocumentExists("multilib", "1.0.0")).toBe(false);
+      expect(await store.checkDocumentExists("multilib", "2.0.0")).toBe(true);
+    });
+
     it("should handle multiple versions of the same library", async () => {
       const v1Docs: Document[] = [
         {

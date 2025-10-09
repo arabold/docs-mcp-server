@@ -80,6 +80,7 @@ export class DocumentStore {
     getPageId: Database.Statement<[number, string]>;
     deleteDocuments: Database.Statement<[string, string]>;
     deleteDocumentsByUrl: Database.Statement<[string, string, string]>;
+    deletePages: Database.Statement<[string, string]>;
     queryVersions: Database.Statement<[string]>;
     checkExists: Database.Statement<[string, string]>;
     queryLibraryVersions: Database.Statement<[]>;
@@ -236,6 +237,14 @@ export class DocumentStore {
            JOIN versions v ON p.version_id = v.id
            JOIN libraries l ON v.library_id = l.id
            WHERE p.url = ? AND l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
+         )`,
+      ),
+      deletePages: this.db.prepare<[string, string]>(
+        `DELETE FROM pages 
+         WHERE version_id IN (
+           SELECT v.id FROM versions v
+           JOIN libraries l ON v.library_id = l.id
+           WHERE l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
          )`,
       ),
       getDocumentBySort: this.db.prepare<[string, string]>(
@@ -1095,6 +1104,9 @@ export class DocumentStore {
 
       // Delete all documents for this version
       const documentsDeleted = await this.deleteDocuments(library, version);
+
+      // Delete all pages for this version (must be done after documents, before version)
+      this.statements.deletePages.run(normalizedLibrary, normalizedVersion);
 
       // Delete the version record
       const versionDeleteResult = this.statements.deleteVersionById.run(versionId);
