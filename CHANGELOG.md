@@ -1,3 +1,10 @@
+## [1.26.2](https://github.com/arabold/docs-mcp-server/compare/v1.26.1...v1.26.2) (2025-10-11)
+
+
+### Bug Fixes
+
+* delete pages before versions to prevent foreign key constraint failure ([6defe01](https://github.com/arabold/docs-mcp-server/commit/6defe015b0b4e62bd37761d67860eabff48b5b90))
+
 ## [1.26.1](https://github.com/arabold/docs-mcp-server/compare/v1.26.0...v1.26.1) (2025-10-04)
 
 
