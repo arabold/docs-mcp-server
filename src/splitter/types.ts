@@ -6,7 +6,7 @@ export type SectionContentType = "text" | "code" | "table" | "heading" | "struct
 /**
  * Final output chunk after processing and size-based splitting
  */
-export interface ContentChunk {
+export interface Chunk {
   types: SectionContentType[];
   content: string;
   section: {
@@ -19,5 +19,5 @@ export interface ContentChunk {
  * Interface for a splitter that processes markdown content into chunks
  */
 export interface DocumentSplitter {
-  splitText(markdown: string, contentType?: string): Promise<ContentChunk[]>;
+  splitText(markdown: string, contentType?: string): Promise<Chunk[]>;
 }

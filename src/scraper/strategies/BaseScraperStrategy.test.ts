@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ScraperOptions } from "../types";
-import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
+import type { ProgressCallback } from "../../types";
+import { FetchStatus } from "../fetcher/types";
+import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
+import { BaseScraperStrategy } from "./BaseScraperStrategy";
 
 // Mock logger
 vi.mock("../../utils/logger");
@@ -34,11 +36,18 @@ describe("BaseScraperStrategy", () => {
       maxPages: 1,
       maxDepth: 1,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     strategy.processItem.mockResolvedValue({
-      document: { content: "test", metadata: {} },
+      content: {
+        textContent: "test",
+        metadata: {},
+        links: [],
+        errors: [],
+        chunks: [],
+      },
       links: [],
+      status: FetchStatus.SUCCESS,
     });
 
     await strategy.scrape(options, progressCallback);
@@ -51,8 +60,19 @@ describe("BaseScraperStrategy", () => {
       currentUrl: "https://example.com/",
       depth: 0,
       maxDepth: 1,
-      document: { content: "test", metadata: {} },
-    });
+      pageId: undefined,
+      result: {
+        url: "https://example.com/",
+        title: "",
+        contentType: "",
+        textContent: "test",
+        etag: null,
+        lastModified: null,
+        links: [],
+        errors: [],
+        chunks: [],
+      },
+    } satisfies ScraperProgressEvent);
   });
 
   it("should respect maxPages", async () => {
@@ -64,11 +84,18 @@ describe("BaseScraperStrategy", () => {
       maxDepth: 1,
     };
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     strategy.processItem.mockResolvedValue({
-      document: { content: "test", metadata: {} },
+      content: {
+        textContent: "test",
+        metadata: {},
+        links: [],
+        errors: [],
+        chunks: [],
+      },
       links: ["https://example.com/page2", "https://example.com/page3"],
+      status: FetchStatus.SUCCESS,
     });
 
     await strategy.scrape(options, progressCallback);
@@ -84,7 +111,7 @@ describe("BaseScraperStrategy", () => {
       maxDepth: 1,
       ignoreErrors: true,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     const error = new Error("Test error");
 
     strategy.processItem.mockRejectedValue(error);
@@ -104,7 +131,7 @@ describe("BaseScraperStrategy", () => {
       maxDepth: 1,
       ignoreErrors: false,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     const error = new Error("Test error");
 
     strategy.processItem.mockRejectedValue(error);
@@ -125,24 +152,38 @@ describe("BaseScraperStrategy", () => {
       maxPages: 5,
       maxDepth: 2,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     // Return the same URLs multiple times to simulate duplicate links
     strategy.processItem.mockImplementation(async (item: QueueItem) => {
       if (item.url === "https://example.com/") {
         return {
-          document: { content: "main page", metadata: {} },
+          content: {
+            textContent: "main page",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
           links: [
             "https://example.com/page1",
             "https://example.com/page1", // Duplicate
             "https://example.com/page2",
             "https://example.com/page2/", // Duplicate with trailing slash
           ],
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
-        document: { content: "sub page", metadata: {} },
+        content: {
+          textContent: "sub page",
+          metadata: {},
+          links: [],
+          errors: [],
+          chunks: [],
+        },
         links: [],
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -170,7 +211,7 @@ describe("BaseScraperStrategy", () => {
       maxPages: 10,
       maxDepth: 2,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     // First page returns variations of the same URL
     let firstPageCalled = false;
@@ -178,7 +219,13 @@ describe("BaseScraperStrategy", () => {
       if (item.url === "https://example.com/") {
         firstPageCalled = true;
         return {
-          document: { content: "main page", metadata: {} },
+          content: {
+            textContent: "main page",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
           links: [
             "https://example.com/path/",
             "https://example.com/path", // Without trailing slash
@@ -186,11 +233,19 @@ describe("BaseScraperStrategy", () => {
             "https://example.com/path?q=1#anchor", // With anchor
             "https://example.com/path", // Different case
           ],
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
-        document: { content: "sub page", metadata: {} },
+        content: {
+          textContent: "sub page",
+          metadata: {},
+          links: [],
+          errors: [],
+          chunks: [],
+        },
         links: [],
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -219,7 +274,7 @@ describe("BaseScraperStrategy", () => {
       maxDepth: 3,
       maxConcurrency: 3,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     // Simulate the link structure and timing
     strategy.processItem.mockImplementation(async (item: QueueItem) => {
@@ -251,8 +306,15 @@ describe("BaseScraperStrategy", () => {
       }
       // X has no links
       return {
-        document: { content: `Content for ${url}`, metadata: {} },
+        content: {
+          textContent: `Content for ${url}`,
+          metadata: {},
+          links: [],
+          errors: [],
+          chunks: [],
+        },
         links,
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -297,19 +359,36 @@ describe("BaseScraperStrategy", () => {
         maxDepth: 1,
         includePatterns: ["docs/*"],
       };
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       strategy.processItem.mockImplementation(async (item: QueueItem) => {
         if (item.url === "https://example.com/docs/start") {
           return {
-            document: { content: "main", metadata: {} },
+            content: {
+              textContent: "main",
+              metadata: {},
+              links: [],
+              errors: [],
+              chunks: [],
+            },
             links: [
               "https://example.com/docs/intro",
               "https://example.com/docs/other",
               "https://example.com/api/should-not-include",
             ],
+            status: FetchStatus.SUCCESS,
           };
         }
-        return { document: { content: "sub", metadata: {} }, links: [] };
+        return {
+          content: {
+            textContent: "sub",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+          links: [],
+          status: FetchStatus.SUCCESS,
+        };
       });
       await strategy.scrape(options, progressCallback);
       const processedUrls = strategy.processItem.mock.calls.map((call) => call[0].url);
@@ -328,19 +407,36 @@ describe("BaseScraperStrategy", () => {
         maxDepth: 1,
         includePatterns: ["/docs\\/intro.*/"],
       };
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       strategy.processItem.mockImplementation(async (item: QueueItem) => {
         if (item.url === "https://example.com/docs/start") {
           return {
-            document: { content: "main", metadata: {} },
+            content: {
+              textContent: "main",
+              metadata: {},
+              links: [],
+              errors: [],
+              chunks: [],
+            },
             links: [
               "https://example.com/docs/intro",
               "https://example.com/docs/intro2",
               "https://example.com/docs/other",
             ],
+            status: FetchStatus.SUCCESS,
           };
         }
-        return { document: { content: "sub", metadata: {} }, links: [] };
+        return {
+          content: {
+            textContent: "sub",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+          links: [],
+          status: FetchStatus.SUCCESS,
+        };
       });
       await strategy.scrape(options, progressCallback);
       const processedUrls = strategy.processItem.mock.calls.map((call) => call[0].url);
@@ -358,19 +454,36 @@ describe("BaseScraperStrategy", () => {
         maxDepth: 1,
         excludePatterns: ["docs/private/*"],
       };
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       strategy.processItem.mockImplementation(async (item: QueueItem) => {
         if (item.url === "https://example.com/docs/start") {
           return {
-            document: { content: "main", metadata: {} },
+            content: {
+              textContent: "main",
+              metadata: {},
+              links: [],
+              errors: [],
+              chunks: [],
+            },
             links: [
               "https://example.com/docs/intro",
               "https://example.com/docs/private/secret",
               "https://example.com/docs/other",
             ],
+            status: FetchStatus.SUCCESS,
           };
         }
-        return { document: { content: "sub", metadata: {} }, links: [] };
+        return {
+          content: {
+            textContent: "sub",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+          links: [],
+          status: FetchStatus.SUCCESS,
+        };
       });
       await strategy.scrape(options, progressCallback);
       const processedUrls = strategy.processItem.mock.calls.map((call) => call[0].url);
@@ -388,19 +501,36 @@ describe("BaseScraperStrategy", () => {
         maxDepth: 1,
         excludePatterns: ["/private/"],
       };
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       strategy.processItem.mockImplementation(async (item: QueueItem) => {
         if (item.url === "https://example.com/docs/start") {
           return {
-            document: { content: "main", metadata: {} },
+            content: {
+              textContent: "main",
+              metadata: {},
+              links: [],
+              errors: [],
+              chunks: [],
+            },
             links: [
               "https://example.com/docs/intro",
               "https://example.com/docs/private/secret",
               "https://example.com/docs/other",
             ],
+            status: FetchStatus.SUCCESS,
           };
         }
-        return { document: { content: "sub", metadata: {} }, links: [] };
+        return {
+          content: {
+            textContent: "sub",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+          links: [],
+          status: FetchStatus.SUCCESS,
+        };
       });
       await strategy.scrape(options, progressCallback);
       const processedUrls = strategy.processItem.mock.calls.map((call) => call[0].url);
@@ -419,19 +549,36 @@ describe("BaseScraperStrategy", () => {
         includePatterns: ["docs/*"],
         excludePatterns: ["docs/private/*"],
       };
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       strategy.processItem.mockImplementation(async (item: QueueItem) => {
         if (item.url === "https://example.com/docs/start") {
           return {
-            document: { content: "main", metadata: {} },
+            content: {
+              textContent: "main",
+              metadata: {},
+              links: [],
+              errors: [],
+              chunks: [],
+            },
             links: [
               "https://example.com/docs/intro",
               "https://example.com/docs/private/secret",
               "https://example.com/docs/other",
             ],
+            status: FetchStatus.SUCCESS,
           };
         }
-        return { document: { content: "sub", metadata: {} }, links: [] };
+        return {
+          content: {
+            textContent: "sub",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+          links: [],
+          status: FetchStatus.SUCCESS,
+        };
       });
       await strategy.scrape(options, progressCallback);
       const processedUrls = strategy.processItem.mock.calls.map((call) => call[0].url);

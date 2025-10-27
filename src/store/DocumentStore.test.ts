@@ -1,5 +1,6 @@
-import type { Document } from "@langchain/core/documents";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ScrapeResult } from "../scraper/types";
+import type { Chunk } from "../splitter/types";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
 import { VersionStatus } from "./types";
@@ -63,6 +64,41 @@ vi.mock("./embeddings/EmbeddingFactory", async (importOriginal) => {
 });
 
 /**
+ * Helper function to create minimal ScrapeResult for testing.
+ * Converts simplified test data to the ScrapeResult format expected by addDocuments.
+ */
+function createScrapeResult(
+  title: string,
+  url: string,
+  content: string,
+  path: string[] = [],
+  options?: {
+    etag?: string | null;
+    lastModified?: string | null;
+  },
+): ScrapeResult {
+  const chunks: Chunk[] = [
+    {
+      types: ["text"],
+      content,
+      section: { level: 0, path },
+    },
+  ];
+
+  return {
+    url,
+    title,
+    contentType: "text/html",
+    textContent: content,
+    links: [],
+    errors: [],
+    chunks,
+    etag: options?.etag,
+    lastModified: options?.lastModified,
+  } satisfies ScrapeResult;
+}
+
+/**
  * Tests for DocumentStore with embeddings enabled
  * Uses explicit embedding configuration and tests hybrid search functionality
  */
@@ -88,26 +124,29 @@ describe("DocumentStore - With Embeddings", () => {
 
   describe("Document Storage and Retrieval", () => {
     it("should store and retrieve documents with proper metadata", async () => {
-      const docs: Document[] = [
-        {
-          pageContent: "JavaScript programming tutorial with examples",
-          metadata: {
-            title: "JS Tutorial",
-            url: "https://example.com/js-tutorial",
-            path: ["programming", "javascript"],
-          },
-        },
-        {
-          pageContent: "Python data science guide with pandas",
-          metadata: {
-            title: "Python DS",
-            url: "https://example.com/python-ds",
-            path: ["programming", "python"],
-          },
-        },
-      ];
-
-      await store.addDocuments("testlib", "1.0.0", docs);
+      // Add two pages separately
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "JS Tutorial",
+          "https://example.com/js-tutorial",
+          "JavaScript programming tutorial with examples",
+          ["programming", "javascript"],
+        ),
+      );
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Python DS",
+          "https://example.com/python-ds",
+          "Python data science guide with pandas",
+          ["programming", "python"],
+        ),
+      );
 
       // Verify documents were stored
       expect(await store.checkDocumentExists("testlib", "1.0.0")).toBe(true);
@@ -136,18 +175,17 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should handle document deletion correctly", async () => {
-      const docs: Document[] = [
-        {
-          pageContent: "Temporary document for deletion test",
-          metadata: {
-            title: "Temp Doc",
-            url: "https://example.com/temp",
-            path: ["temp"],
-          },
-        },
-      ];
-
-      await store.addDocuments("templib", "1.0.0", docs);
+      await store.addDocuments(
+        "templib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Temp Doc",
+          "https://example.com/temp",
+          "Temporary document for deletion test",
+          ["temp"],
+        ),
+      );
       expect(await store.checkDocumentExists("templib", "1.0.0")).toBe(true);
 
       const deletedCount = await store.deleteDocuments("templib", "1.0.0");
@@ -156,27 +194,29 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should completely remove a version including pages and documents", async () => {
-      const docs: Document[] = [
-        {
-          pageContent: "First document for removal test",
-          metadata: {
-            title: "Doc 1",
-            url: "https://example.com/doc1",
-            path: ["docs"],
-          },
-        },
-        {
-          pageContent: "Second document for removal test",
-          metadata: {
-            title: "Doc 2",
-            url: "https://example.com/doc2",
-            path: ["docs"],
-          },
-        },
-      ];
-
-      // Add documents and verify they exist
-      await store.addDocuments("removelib", "1.0.0", docs);
+      // Add two pages
+      await store.addDocuments(
+        "removelib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Doc 1",
+          "https://example.com/doc1",
+          "First document for removal test",
+          ["docs"],
+        ),
+      );
+      await store.addDocuments(
+        "removelib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Doc 2",
+          "https://example.com/doc2",
+          "Second document for removal test",
+          ["docs"],
+        ),
+      );
       expect(await store.checkDocumentExists("removelib", "1.0.0")).toBe(true);
 
       // Remove the version
@@ -192,31 +232,23 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should remove version but keep library when other versions exist", async () => {
-      const v1Docs: Document[] = [
-        {
-          pageContent: "Version 1 document",
-          metadata: {
-            title: "V1 Doc",
-            url: "https://example.com/v1",
-            path: ["v1"],
-          },
-        },
-      ];
-
-      const v2Docs: Document[] = [
-        {
-          pageContent: "Version 2 document",
-          metadata: {
-            title: "V2 Doc",
-            url: "https://example.com/v2",
-            path: ["v2"],
-          },
-        },
-      ];
-
       // Add two versions
-      await store.addDocuments("multilib", "1.0.0", v1Docs);
-      await store.addDocuments("multilib", "2.0.0", v2Docs);
+      await store.addDocuments(
+        "multilib",
+        "1.0.0",
+        1,
+        createScrapeResult("V1 Doc", "https://example.com/v1", "Version 1 document", [
+          "v1",
+        ]),
+      );
+      await store.addDocuments(
+        "multilib",
+        "2.0.0",
+        1,
+        createScrapeResult("V2 Doc", "https://example.com/v2", "Version 2 document", [
+          "v2",
+        ]),
+      );
 
       // Remove only version 1.0.0
       const result = await store.removeVersion("multilib", "1.0.0", true);
@@ -232,30 +264,28 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should handle multiple versions of the same library", async () => {
-      const v1Docs: Document[] = [
-        {
-          pageContent: "Version 1.0 feature documentation",
-          metadata: {
-            title: "V1 Features",
-            url: "https://example.com/v1",
-            path: ["features"],
-          },
-        },
-      ];
-
-      const v2Docs: Document[] = [
-        {
-          pageContent: "Version 2.0 feature documentation with new capabilities",
-          metadata: {
-            title: "V2 Features",
-            url: "https://example.com/v2",
-            path: ["features"],
-          },
-        },
-      ];
-
-      await store.addDocuments("versionlib", "1.0.0", v1Docs);
-      await store.addDocuments("versionlib", "2.0.0", v2Docs);
+      await store.addDocuments(
+        "versionlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "V1 Features",
+          "https://example.com/v1",
+          "Version 1.0 feature documentation",
+          ["features"],
+        ),
+      );
+      await store.addDocuments(
+        "versionlib",
+        "2.0.0",
+        1,
+        createScrapeResult(
+          "V2 Features",
+          "https://example.com/v2",
+          "Version 2.0 feature documentation with new capabilities",
+          ["features"],
+        ),
+      );
 
       expect(await store.checkDocumentExists("versionlib", "1.0.0")).toBe(true);
       expect(await store.checkDocumentExists("versionlib", "2.0.0")).toBe(true);
@@ -269,20 +299,18 @@ describe("DocumentStore - With Embeddings", () => {
       const testEtag = '"abc123-def456"';
       const testLastModified = "2023-12-01T10:30:00Z";
 
-      const docs: Document[] = [
-        {
-          pageContent: "Test document with etag and lastModified",
-          metadata: {
-            title: "ETag Test Doc",
-            url: "https://example.com/etag-test",
-            path: ["test"],
-            etag: testEtag,
-            lastModified: testLastModified,
-          },
-        },
-      ];
-
-      await store.addDocuments("etagtest", "1.0.0", docs);
+      await store.addDocuments(
+        "etagtest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "ETag Test Doc",
+          "https://example.com/etag-test",
+          "Test document with etag and lastModified",
+          ["test"],
+          { etag: testEtag, lastModified: testLastModified },
+        ),
+      );
 
       // Query the database directly to verify the etag and last_modified are stored
       // @ts-expect-error Accessing private property for testing
@@ -311,43 +339,46 @@ describe("DocumentStore - With Embeddings", () => {
       expect(results.length).toBeGreaterThan(0);
 
       const doc = results[0];
-      expect(doc.metadata.url).toBe("https://example.com/etag-test");
+      expect(doc.url).toBe("https://example.com/etag-test");
     });
   });
 
   describe("Hybrid Search with Embeddings", () => {
     beforeEach(async () => {
       // Set up test documents with known semantic relationships for ranking tests
-      const docs: Document[] = [
-        {
-          pageContent: "JavaScript programming tutorial with code examples and functions",
-          metadata: {
-            title: "JavaScript Programming Guide",
-            url: "https://example.com/js-guide",
-            path: ["programming", "javascript"],
-          },
-        },
-        {
-          pageContent:
-            "Advanced JavaScript frameworks like React and Vue for building applications",
-          metadata: {
-            title: "JavaScript Frameworks",
-            url: "https://example.com/js-frameworks",
-            path: ["programming", "javascript", "frameworks"],
-          },
-        },
-        {
-          pageContent:
-            "Python programming language tutorial for data science and machine learning",
-          metadata: {
-            title: "Python Programming",
-            url: "https://example.com/python-guide",
-            path: ["programming", "python"],
-          },
-        },
-      ];
-
-      await store.addDocuments("searchtest", "1.0.0", docs);
+      await store.addDocuments(
+        "searchtest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "JavaScript Programming Guide",
+          "https://example.com/js-guide",
+          "JavaScript programming tutorial with code examples and functions",
+          ["programming", "javascript"],
+        ),
+      );
+      await store.addDocuments(
+        "searchtest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "JavaScript Frameworks",
+          "https://example.com/js-frameworks",
+          "Advanced JavaScript frameworks like React and Vue for building applications",
+          ["programming", "javascript", "frameworks"],
+        ),
+      );
+      await store.addDocuments(
+        "searchtest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Python Programming",
+          "https://example.com/python-guide",
+          "Python programming language tutorial for data science and machine learning",
+          ["programming", "python"],
+        ),
+      );
     });
 
     it("should perform hybrid search combining vector and FTS", async () => {
@@ -362,31 +393,28 @@ describe("DocumentStore - With Embeddings", () => {
 
       // JavaScript documents should rank higher than non-JavaScript documents
       const topResult = results[0];
-      expect(topResult.pageContent.toLowerCase()).toContain("javascript");
+      expect(topResult.content.toLowerCase()).toContain("javascript");
 
       // Results should have both vector and FTS ranking metadata
       const hybridResults = results.filter(
-        (r) => r.metadata.vec_rank !== undefined && r.metadata.fts_rank !== undefined,
+        (r) => r.vec_rank !== undefined && r.fts_rank !== undefined,
       );
 
       // At least some results should be hybrid matches
       if (hybridResults.length > 0) {
         for (const result of hybridResults) {
-          expect(result.metadata.vec_rank).toBeGreaterThan(0);
-          expect(result.metadata.fts_rank).toBeGreaterThan(0);
-          expect(result.metadata.score).toBeGreaterThan(0);
+          expect(result.vec_rank).toBeGreaterThan(0);
+          expect(result.fts_rank).toBeGreaterThan(0);
+          expect(result.score).toBeGreaterThan(0);
         }
       }
 
       // All results should have valid scores
       for (const result of results) {
-        expect(result.metadata.score).toBeGreaterThan(0);
-        expect(typeof result.metadata.score).toBe("number");
+        expect(result.score).toBeGreaterThan(0);
+        expect(typeof result.score).toBe("number");
         // Results should have either vec_rank, fts_rank, or both
-        expect(
-          result.metadata.vec_rank !== undefined ||
-            result.metadata.fts_rank !== undefined,
-        ).toBe(true);
+        expect(result.vec_rank !== undefined || result.fts_rank !== undefined).toBe(true);
       }
     });
 
@@ -402,22 +430,22 @@ describe("DocumentStore - With Embeddings", () => {
 
       // Should find programming documents
       const programmingResults = results.filter((r) =>
-        r.pageContent.toLowerCase().includes("programming"),
+        r.content.toLowerCase().includes("programming"),
       );
 
       expect(programmingResults.length).toBeGreaterThan(0);
 
       // At least some results should have vector ranks (semantic/embedding matching)
       // If no vector results, it might be because embeddings were disabled in this test run
-      const vectorResults = results.filter((r) => r.metadata.vec_rank !== undefined);
-      const ftsResults = results.filter((r) => r.metadata.fts_rank !== undefined);
+      const vectorResults = results.filter((r) => r.vec_rank !== undefined);
+      const ftsResults = results.filter((r) => r.fts_rank !== undefined);
 
       // Either we have vector results (hybrid search) or FTS results (fallback)
       expect(vectorResults.length > 0 || ftsResults.length > 0).toBe(true);
 
       // All results should have valid scores
       for (const result of results) {
-        expect(result.metadata.score).toBeGreaterThan(0);
+        expect(result.score).toBeGreaterThan(0);
       }
     });
   });
@@ -444,16 +472,19 @@ describe("DocumentStore - With Embeddings", () => {
 
       // Create 3 docs that fit 2 per batch by character size
       const contentSize = 24000; // 24KB each
-      const docs: Document[] = Array.from({ length: 3 }, (_, i) => ({
-        pageContent: "x".repeat(contentSize),
-        metadata: {
-          title: `Doc ${i + 1}`,
-          url: `https://example.com/doc${i + 1}`,
-          path: ["section"],
-        },
-      }));
-
-      await store.addDocuments("testlib", "1.0.0", docs);
+      for (let i = 0; i < 3; i++) {
+        await store.addDocuments(
+          "testlib",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            `Doc ${i + 1}`,
+            `https://example.com/doc${i + 1}`,
+            "x".repeat(contentSize),
+            ["section"],
+          ),
+        );
+      }
 
       // Should create 2 batches - first with 2 docs, second with 1 doc
       expect(mockEmbedDocuments).toHaveBeenCalledTimes(2);
@@ -468,18 +499,16 @@ describe("DocumentStore - With Embeddings", () => {
         return;
       }
 
-      const docs: Document[] = [
-        {
-          pageContent: "Test content",
-          metadata: {
-            title: "Test Title",
-            url: "https://example.com/test",
-            path: ["path", "to", "doc"],
-          },
-        },
-      ];
-
-      await store.addDocuments("testlib", "1.0.0", docs);
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult("Test Title", "https://example.com/test", "Test content", [
+          "path",
+          "to",
+          "doc",
+        ]),
+      );
 
       // Embedding text should include structured metadata
       expect(mockEmbedDocuments).toHaveBeenCalledTimes(1);
@@ -494,18 +523,17 @@ describe("DocumentStore - With Embeddings", () => {
 
   describe("Status Tracking and Metadata", () => {
     it("should update version status correctly", async () => {
-      const docs: Document[] = [
-        {
-          pageContent: "Status tracking test content",
-          metadata: {
-            title: "Status Test",
-            url: "https://example.com/status-test",
-            path: ["test"],
-          },
-        },
-      ];
-
-      await store.addDocuments("statuslib", "1.0.0", docs);
+      await store.addDocuments(
+        "statuslib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Status Test",
+          "https://example.com/status-test",
+          "Status tracking test content",
+          ["test"],
+        ),
+      );
       const versionId = await store.resolveVersionId("statuslib", "1.0.0");
 
       await store.updateVersionStatus(versionId, VersionStatus.QUEUED);
@@ -579,19 +607,18 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       store = new DocumentStore(":memory:");
       await store.initialize();
 
-      const testDocuments: Document[] = [
-        {
-          pageContent: "This is a test document about React hooks.",
-          metadata: {
-            url: "https://example.com/react-hooks",
-            title: "React Hooks Guide",
-            path: ["React", "Hooks"],
-          },
-        },
-      ];
-
       await expect(
-        store.addDocuments("react", "18.0.0", testDocuments),
+        store.addDocuments(
+          "react",
+          "18.0.0",
+          1,
+          createScrapeResult(
+            "React Hooks Guide",
+            "https://example.com/react-hooks",
+            "This is a test document about React hooks.",
+            ["React", "Hooks"],
+          ),
+        ),
       ).resolves.not.toThrow();
 
       const exists = await store.checkDocumentExists("react", "18.0.0");
@@ -604,43 +631,45 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       store = new DocumentStore(":memory:");
       await store.initialize();
 
-      const testDocuments: Document[] = [
-        {
-          pageContent: "React hooks are a powerful feature for state management.",
-          metadata: {
-            url: "https://example.com/react-hooks",
-            title: "React Hooks Guide",
-            path: ["React", "Hooks"],
-          },
-        },
-        {
-          pageContent: "TypeScript provides excellent type safety for JavaScript.",
-          metadata: {
-            url: "https://example.com/typescript-intro",
-            title: "TypeScript Introduction",
-            path: ["TypeScript", "Intro"],
-          },
-        },
-      ];
-
-      await store.addDocuments("testlib", "1.0.0", testDocuments);
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "React Hooks Guide",
+          "https://example.com/react-hooks",
+          "React hooks are a powerful feature for state management.",
+          ["React", "Hooks"],
+        ),
+      );
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "TypeScript Introduction",
+          "https://example.com/typescript-intro",
+          "TypeScript provides excellent type safety for JavaScript.",
+          ["TypeScript", "Intro"],
+        ),
+      );
     });
 
     it("should perform FTS-only search", async () => {
       const results = await store.findByContent("testlib", "1.0.0", "React hooks", 5);
 
       expect(results.length).toBeGreaterThan(0);
-      expect(results[0].pageContent).toContain("React hooks");
-      expect(results[0].metadata).toHaveProperty("score");
-      expect(results[0].metadata).toHaveProperty("fts_rank");
+      expect(results[0].content).toContain("React hooks");
+      expect(results[0]).toHaveProperty("score");
+      expect(results[0]).toHaveProperty("fts_rank");
       // Should NOT have vector rank since vectorization is disabled
-      expect(results[0].metadata.vec_rank).toBeUndefined();
+      expect((results[0] as any).vec_rank).toBeUndefined();
     });
 
     it("should handle various search queries correctly", async () => {
       const jsResults = await store.findByContent("testlib", "1.0.0", "TypeScript", 5);
       expect(jsResults.length).toBeGreaterThan(0);
-      expect(jsResults[0].pageContent).toContain("TypeScript");
+      expect(jsResults[0].content).toContain("TypeScript");
 
       // Empty query should return empty results
       const emptyResults = await store.findByContent("testlib", "1.0.0", "", 5);
@@ -706,64 +735,61 @@ describe("DocumentStore - Common Functionality", () => {
 
   describe("Version Isolation", () => {
     it("should search within specific versions only", async () => {
-      const docsV1: Document[] = [
-        {
-          pageContent: "Old feature documentation",
-          metadata: {
-            title: "Old Feature",
-            url: "https://example.com/old",
-            path: ["features"],
-          },
-        },
-      ];
-
-      const docsV2: Document[] = [
-        {
-          pageContent: "New feature documentation",
-          metadata: {
-            title: "New Feature",
-            url: "https://example.com/new",
-            path: ["features"],
-          },
-        },
-      ];
-
-      await store.addDocuments("featuretest", "1.0.0", docsV1);
-      await store.addDocuments("featuretest", "2.0.0", docsV2);
+      await store.addDocuments(
+        "featuretest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Old Feature",
+          "https://example.com/old",
+          "Old feature documentation",
+          ["features"],
+        ),
+      );
+      await store.addDocuments(
+        "featuretest",
+        "2.0.0",
+        1,
+        createScrapeResult(
+          "New Feature",
+          "https://example.com/new",
+          "New feature documentation",
+          ["features"],
+        ),
+      );
 
       const v1Results = await store.findByContent("featuretest", "1.0.0", "feature", 10);
       expect(v1Results.length).toBeGreaterThan(0);
-      expect(v1Results[0].metadata.title).toBe("Old Feature");
+      expect(v1Results[0].title).toBe("Old Feature");
 
       const v2Results = await store.findByContent("featuretest", "2.0.0", "feature", 10);
       expect(v2Results.length).toBeGreaterThan(0);
-      expect(v2Results[0].metadata.title).toBe("New Feature");
+      expect(v2Results[0].title).toBe("New Feature");
     });
   });
 
   describe("Document Management", () => {
     it("should retrieve documents by ID", async () => {
-      const docs: Document[] = [
-        {
-          pageContent: "Test document for ID retrieval",
-          metadata: {
-            title: "ID Test Doc",
-            url: "https://example.com/id-test",
-            path: ["test"],
-          },
-        },
-      ];
-
-      await store.addDocuments("idtest", "1.0.0", docs);
+      await store.addDocuments(
+        "idtest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "ID Test Doc",
+          "https://example.com/id-test",
+          "Test document for ID retrieval",
+          ["test"],
+        ),
+      );
       const results = await store.findByContent("idtest", "1.0.0", "test document", 10);
       expect(results.length).toBeGreaterThan(0);
 
       const doc = results[0];
-      expect(doc.metadata.id).toBeDefined();
+      expect(doc.id).toBeDefined();
 
-      const retrievedDoc = await store.getById(doc.metadata.id);
+      const retrievedDoc = await store.getById(doc.id);
       expect(retrievedDoc).not.toBeNull();
-      expect(retrievedDoc?.metadata.title).toBe("ID Test Doc");
+      expect(retrievedDoc?.title).toBe("ID Test Doc");
     });
 
     it("should handle URL pre-deletion correctly", async () => {
@@ -794,39 +820,50 @@ describe("DocumentStore - Common Functionality", () => {
         return result.count;
       }
 
-      // Add initial documents
-      const initialDocs: Document[] = [
-        {
-          pageContent: "Initial content chunk 1",
-          metadata: { url, title: "Initial Test Page", path: ["section1"] },
-        },
-        {
-          pageContent: "Initial content chunk 2",
-          metadata: { url, title: "Initial Test Page", path: ["section2"] },
-        },
-      ];
-
-      await store.addDocuments(library, version, initialDocs);
+      // Add initial page with 2 chunks
+      await store.addDocuments(library, version, 1, {
+        ...createScrapeResult("Initial Test Page", url, "Initial content chunk 1", [
+          "section1",
+        ]),
+        chunks: [
+          {
+            types: ["text"],
+            content: "Initial content chunk 1",
+            section: { level: 0, path: ["section1"] },
+          },
+          {
+            types: ["text"],
+            content: "Initial content chunk 2",
+            section: { level: 0, path: ["section2"] },
+          },
+        ],
+      });
       expect(await countDocuments()).toBe(2);
       expect(await countDocuments(url)).toBe(2);
 
-      // Update with new documents (should trigger pre-deletion)
-      const updatedDocs: Document[] = [
-        {
-          pageContent: "Updated content chunk 1",
-          metadata: { url, title: "Updated Test Page", path: ["updated-section1"] },
-        },
-        {
-          pageContent: "Updated content chunk 2",
-          metadata: { url, title: "Updated Test Page", path: ["updated-section2"] },
-        },
-        {
-          pageContent: "Updated content chunk 3",
-          metadata: { url, title: "Updated Test Page", path: ["updated-section3"] },
-        },
-      ];
-
-      await store.addDocuments(library, version, updatedDocs);
+      // Update with new page (should trigger pre-deletion)
+      await store.addDocuments(library, version, 1, {
+        ...createScrapeResult("Updated Test Page", url, "Updated content chunk 1", [
+          "updated-section1",
+        ]),
+        chunks: [
+          {
+            types: ["text"],
+            content: "Updated content chunk 1",
+            section: { level: 0, path: ["updated-section1"] },
+          },
+          {
+            types: ["text"],
+            content: "Updated content chunk 2",
+            section: { level: 0, path: ["updated-section2"] },
+          },
+          {
+            types: ["text"],
+            content: "Updated content chunk 3",
+            section: { level: 0, path: ["updated-section3"] },
+          },
+        ],
+      });
       expect(await countDocuments()).toBe(3);
       expect(await countDocuments(url)).toBe(3);
     });
@@ -834,18 +871,17 @@ describe("DocumentStore - Common Functionality", () => {
 
   describe("Search Security", () => {
     beforeEach(async () => {
-      const docs: Document[] = [
-        {
-          pageContent: "Programming computers is fun and educational for developers",
-          metadata: {
-            title: "Programming Guide",
-            url: "https://example.com/programming",
-            path: ["programming", "guide"],
-          },
-        },
-      ];
-
-      await store.addDocuments("security-test", "1.0.0", docs);
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Programming Guide",
+          "https://example.com/programming",
+          "Programming computers is fun and educational for developers",
+          ["programming", "guide"],
+        ),
+      );
     });
 
     it("should safely handle malicious queries", async () => {

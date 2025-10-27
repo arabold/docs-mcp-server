@@ -18,7 +18,7 @@ import type { ScraperOptions } from "../types";
 import { convertToString } from "../utils/buffer";
 import { resolveCharset } from "../utils/charset";
 import { BasePipeline } from "./BasePipeline";
-import type { ProcessedContent } from "./types";
+import type { PipelineResult } from "./types";
 
 /**
  * Pipeline for processing HTML content using middleware and semantic splitting with size optimization.
@@ -57,15 +57,15 @@ export class HtmlPipeline extends BasePipeline {
     );
   }
 
-  canProcess(rawContent: RawContent): boolean {
-    return MimeTypeUtils.isHtml(rawContent.mimeType);
+  canProcess(mimeType: string): boolean {
+    return MimeTypeUtils.isHtml(mimeType);
   }
 
   async process(
     rawContent: RawContent,
     options: ScraperOptions,
     fetcher?: ContentFetcher,
-  ): Promise<ProcessedContent> {
+  ): Promise<PipelineResult> {
     // Use enhanced charset detection that considers HTML meta tags
     const resolvedCharset = resolveCharset(
       rawContent.charset,
@@ -76,8 +76,9 @@ export class HtmlPipeline extends BasePipeline {
 
     const context: MiddlewareContext = {
       content: contentString,
+      contentType: rawContent.mimeType || "text/html",
       source: rawContent.source,
-      metadata: {},
+      // metadata: {},
       links: [],
       errors: [],
       options,
@@ -99,8 +100,8 @@ export class HtmlPipeline extends BasePipeline {
     );
 
     return {
-      textContent: typeof context.content === "string" ? context.content : "",
-      metadata: context.metadata,
+      title: context.title,
+      textContent: context.content,
       links: context.links,
       errors: context.errors,
       chunks,

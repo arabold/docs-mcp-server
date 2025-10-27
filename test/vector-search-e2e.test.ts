@@ -212,7 +212,7 @@ describe("Vector Search End-to-End Tests", () => {
       library: "non-existent-library",
       version: "1.0.0", 
       query: "test query",
-    })).rejects.toThrow("Library 'non-existent-library' not found");
+    })).rejects.toThrow("Library non-existent-library not found in store. Did you mean: test-library?");
   }, 10000);
 
   it("should handle non-existent version searches gracefully", async () => {

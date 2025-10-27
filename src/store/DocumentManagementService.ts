@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { Document } from "@langchain/core/documents";
 import Fuse from "fuse.js";
 import semver from "semver";
 import {
@@ -7,9 +6,8 @@ import {
   PipelineFactory,
 } from "../scraper/pipelines/PipelineFactory";
 import type { ContentPipeline } from "../scraper/pipelines/types";
-import type { ScraperOptions } from "../scraper/types";
-import { ScrapeMode } from "../scraper/types";
-import type { ContentChunk } from "../splitter/types";
+import type { ScrapeResult, ScraperOptions } from "../scraper/types";
+import type { Chunk } from "../splitter/types";
 import { analytics, extractHostname, TelemetryEvent } from "../telemetry";
 import { logger } from "../utils/logger";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
@@ -344,19 +342,21 @@ export class DocumentManagementService {
    * This is more efficient than URL-based deletion when the page ID is known.
    */
   async removeDocumentsByPageId(pageId: number): Promise<number> {
-    logger.debug(`🗑️ Removing documents for page ID: ${pageId}`);
+    logger.debug(`Removing documents for page ID: ${pageId}`);
     const count = await this.store.deleteDocumentsByPageId(pageId);
-    logger.debug(`🗑️ Deleted ${count} documents for page ID: ${pageId}`);
+    logger.info(`🗑️ Deleted ${count} documents`);
     return count;
   }
 
   /**
    * Retrieves all pages for a specific version ID with their metadata.
-   * Used for refresh operations to get existing pages with their ETags.
+   * Used for refresh operations to get existing pages with their ETags and depths.
    */
   async getPagesByVersionId(
     versionId: number,
-  ): Promise<Array<{ id: number; url: string; etag: string | null }>> {
+  ): Promise<
+    Array<{ id: number; url: string; etag: string | null; depth: number | null }>
+  > {
     return this.store.getPagesByVersionId(versionId);
   }
 
@@ -368,18 +368,16 @@ export class DocumentManagementService {
    */
   async removeVersion(library: string, version?: string | null): Promise<void> {
     const normalizedVersion = this.normalizeVersion(version);
-    logger.info(`🗑️ Removing version: ${library}@${normalizedVersion || "[no version]"}`);
+    logger.debug(`Removing version: ${library}@${normalizedVersion || "[no version]"}`);
 
     const result = await this.store.removeVersion(library, normalizedVersion, true);
 
-    logger.info(
-      `🗑️ Removed ${result.documentsDeleted} documents, version: ${result.versionDeleted}, library: ${result.libraryDeleted}`,
-    );
+    logger.info(`🗑️ Removed ${result.documentsDeleted} documents`);
 
     if (result.versionDeleted && result.libraryDeleted) {
-      logger.info(`✅ Completely removed library ${library} (was last version)`);
+      logger.info(`🗑️ Completely removed library ${library} (was last version)`);
     } else if (result.versionDeleted) {
-      logger.info(`✅ Removed version ${library}@${normalizedVersion || "[no version]"}`);
+      logger.info(`🗑️ Removed version ${library}@${normalizedVersion || "[no version]"}`);
     } else {
       logger.warn(
         `⚠️ Version ${library}@${normalizedVersion || "[no version]"} not found`,
@@ -388,108 +386,71 @@ export class DocumentManagementService {
   }
 
   /**
-   * Adds a document to the store, splitting it into smaller chunks for better search results.
-   * Uses SemanticMarkdownSplitter to maintain markdown structure and content types during splitting.
-   * Preserves hierarchical structure of documents and distinguishes between text and code segments.
-   * If version is omitted, the document is added without a specific version.
+   * Adds pre-processed content directly to the store.
+   * This method is used when content has already been processed by a pipeline,
+   * avoiding redundant processing. Used primarily by the scraping pipeline.
+   *
+   * @param library Library name
+   * @param version Version string (null/undefined for unversioned)
+   * @param processed Pre-processed content with chunks already created
+   * @param pageId Optional page ID for refresh operations
    */
-  async addDocument(
+  async addScrapeResult(
     library: string,
     version: string | null | undefined,
-    document: Document,
+    depth: number,
+    result: ScrapeResult,
   ): Promise<void> {
     const processingStart = performance.now();
     const normalizedVersion = this.normalizeVersion(version);
-    const url = document.metadata.url as string;
-
-    if (!url || typeof url !== "string" || !url.trim()) {
-      throw new StoreError("Document metadata must include a valid URL");
+    const { url, title, chunks, contentType } = result;
+    if (!url) {
+      throw new StoreError("Processed content metadata must include a valid URL");
     }
 
-    logger.info(`📚 Adding document: ${document.metadata.title}`);
+    logger.info(`📚 Adding processed content: ${title || url}`);
 
-    if (!document.pageContent.trim()) {
-      throw new Error("Document content cannot be empty");
+    if (chunks.length === 0) {
+      logger.warn(`⚠️  No chunks in processed content for ${url}. Skipping.`);
+      return;
     }
-
-    const contentType = document.metadata.mimeType as string | undefined;
 
     try {
-      // Create a mock RawContent for pipeline selection
-      const rawContent = {
-        source: url,
-        content: document.pageContent,
-        mimeType: contentType || "text/plain",
-      };
-
-      // Find appropriate pipeline for content type
-      const pipeline = this.pipelines.find((p) => p.canProcess(rawContent));
-
-      if (!pipeline) {
-        logger.warn(
-          `⚠️  Unsupported content type "${rawContent.mimeType}" for document ${url}. Skipping processing.`,
-        );
-        return;
-      }
-
-      // Debug logging for pipeline selection
-      logger.debug(
-        `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
-      );
-
-      // Use content-type-specific pipeline for processing and splitting
-      // Create minimal scraper options for processing
-      const scraperOptions = {
-        url: url,
-        library: library,
-        version: normalizedVersion,
-        scrapeMode: ScrapeMode.Fetch,
-        ignoreErrors: false,
-        maxConcurrency: 1,
-      };
-
-      const processed = await pipeline.process(rawContent, scraperOptions);
-      const chunks = processed.chunks;
-
-      // Convert semantic chunks to documents
-      const splitDocs = chunks.map((chunk: ContentChunk) => ({
-        pageContent: chunk.content,
-        metadata: {
-          ...document.metadata,
-          level: chunk.section.level,
-          path: chunk.section.path,
-        },
-      }));
-      logger.info(`✂️  Split document into ${splitDocs.length} chunks`);
+      logger.info(`✂️  Storing ${chunks.length} pre-split chunks`);
 
       // Add split documents to store
-      await this.store.addDocuments(library, normalizedVersion, splitDocs);
+      await this.store.addDocuments(library, normalizedVersion, depth, result);
 
       // Track successful document processing
       const processingTime = performance.now() - processingStart;
+      const totalContentSize = chunks.reduce(
+        (sum: number, chunk: Chunk) => sum + chunk.content.length,
+        0,
+      );
+
       analytics.track(TelemetryEvent.DOCUMENT_PROCESSED, {
         // Content characteristics (privacy-safe)
-        mimeType: contentType || "unknown",
-        contentSizeBytes: document.pageContent.length,
+        mimeType: contentType,
+        contentSizeBytes: totalContentSize,
 
         // Processing metrics
         processingTimeMs: Math.round(processingTime),
-        chunksCreated: splitDocs.length,
+        chunksCreated: chunks.length,
 
         // Document characteristics
-        hasTitle: !!document.metadata.title,
-        hasDescription: !!document.metadata.description,
+        hasTitle: !!title,
+        // hasDescription: !!processed.metadata.description,
         urlDomain: extractHostname(url),
-        depth: document.metadata.depth,
+        depth,
 
         // Library context
         library,
         libraryVersion: normalizedVersion || null,
 
         // Processing efficiency
-        avgChunkSizeBytes: Math.round(document.pageContent.length / splitDocs.length),
+        avgChunkSizeBytes: Math.round(totalContentSize / chunks.length),
         processingSpeedKbPerSec: Math.round(
-          document.pageContent.length / 1024 / (processingTime / 1000),
+          totalContentSize / 1024 / (processingTime / 1000),
         ),
       });
     } catch (error) {
@@ -498,12 +459,15 @@ export class DocumentManagementService {
 
       if (error instanceof Error) {
         analytics.captureException(error, {
-          mimeType: contentType || "unknown",
-          contentSizeBytes: document.pageContent.length,
+          mimeType: contentType,
+          contentSizeBytes: chunks.reduce(
+            (sum: number, chunk: Chunk) => sum + chunk.content.length,
+            0,
+          ),
           processingTimeMs: Math.round(processingTime),
           library,
           libraryVersion: normalizedVersion || null,
-          context: "document_processing",
+          context: "processed_content_storage",
           component: DocumentManagementService.constructor.name,
         });
       }

@@ -21,7 +21,7 @@ describe("ScrapeTool", () => {
     // Mock the manager instance methods
     mockManagerInstance = {
       start: vi.fn().mockResolvedValue(undefined),
-      enqueueJob: vi.fn().mockResolvedValue(MOCK_JOB_ID), // Return a mock job ID
+      enqueueScrapeJob: vi.fn().mockResolvedValue(MOCK_JOB_ID), // Return a mock job ID
       waitForJobCompletion: vi.fn().mockResolvedValue(undefined), // Default success
       getJob: vi.fn().mockResolvedValue({
         // Mock getJob for final status check
@@ -64,13 +64,13 @@ describe("ScrapeTool", () => {
       const options = getBaseOptions(input);
       await scrapeTool.execute(options);
 
-      // Check enqueueJob call (implies constructor was called)
+      // Check enqueueScrapeJob call (implies constructor was called)
       const expectedVersionArg =
         typeof expectedInternal === "string"
           ? expectedInternal.toLowerCase()
           : expectedInternal; // null stays null
 
-      expect(mockManagerInstance.enqueueJob).toHaveBeenCalledWith(
+      expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
         "test-lib",
         expectedVersionArg,
         expect.objectContaining({ url: options.url }), // Check basic options passed
@@ -87,7 +87,7 @@ describe("ScrapeTool", () => {
       await expect(scrapeTool.execute(options)).rejects.toThrow(
         /Invalid version format for scraping/,
       );
-      expect(mockManagerInstance.enqueueJob).not.toHaveBeenCalled();
+      expect(mockManagerInstance.enqueueScrapeJob).not.toHaveBeenCalled();
     },
   );
 
@@ -105,8 +105,8 @@ describe("ScrapeTool", () => {
     };
     await scrapeTool.execute(options);
 
-    // Check enqueueJob options
-    expect(mockManagerInstance.enqueueJob).toHaveBeenCalledWith(
+    // Check enqueueScrapeJob options
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
       "test-lib",
       "1.0.0", // Normalized and lowercased
       {
@@ -148,7 +148,7 @@ describe("ScrapeTool", () => {
     const result = await scrapeTool.execute(options);
 
     expect(result).toEqual({ jobId: MOCK_JOB_ID });
-    expect(mockManagerInstance.enqueueJob).toHaveBeenCalledOnce();
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledOnce();
     expect(mockManagerInstance.waitForJobCompletion).not.toHaveBeenCalled(); // Should not wait
   });
 
@@ -156,7 +156,7 @@ describe("ScrapeTool", () => {
     const options = getBaseOptions("1.0.0"); // waitForCompletion is omitted (defaults to true)
     await scrapeTool.execute(options);
 
-    expect(mockManagerInstance.enqueueJob).toHaveBeenCalledOnce();
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledOnce();
     expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID); // Should wait
   });
 
@@ -166,7 +166,7 @@ describe("ScrapeTool", () => {
     (mockManagerInstance.waitForJobCompletion as Mock).mockRejectedValue(jobError);
 
     await expect(scrapeTool.execute(options)).rejects.toThrow("Job failed");
-    expect(mockManagerInstance.enqueueJob).toHaveBeenCalledOnce(); // Job was still enqueued
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledOnce(); // Job was still enqueued
   });
 
   it("should pass custom headers to the pipeline manager", async () => {
@@ -180,7 +180,7 @@ describe("ScrapeTool", () => {
       },
     };
     await scrapeTool.execute(options);
-    expect(mockManagerInstance.enqueueJob).toHaveBeenCalledWith(
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
       "test-lib",
       "2.0.0",
       expect.objectContaining({

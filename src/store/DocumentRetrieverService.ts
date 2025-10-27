@@ -1,7 +1,6 @@
-import type { Document } from "@langchain/core/documents";
 import { createContentAssemblyStrategy } from "./assembly/ContentAssemblyStrategyFactory";
 import type { DocumentStore } from "./DocumentStore";
-import type { StoreSearchResult } from "./types";
+import type { DbChunkRank, DbPageChunk, StoreSearchResult } from "./types";
 
 export class DocumentRetrieverService {
   private documentStore: DocumentStore;
@@ -59,11 +58,13 @@ export class DocumentRetrieverService {
   /**
    * Groups search results by URL.
    */
-  private groupResultsByUrl(results: Document[]): Map<string, Document[]> {
-    const resultsByUrl = new Map<string, Document[]>();
+  private groupResultsByUrl(
+    results: (DbPageChunk & DbChunkRank)[],
+  ): Map<string, (DbPageChunk & DbChunkRank)[]> {
+    const resultsByUrl = new Map<string, (DbPageChunk & DbChunkRank)[]>();
 
     for (const result of results) {
-      const url = result.metadata.url as string;
+      const url = result.url;
       if (!resultsByUrl.has(url)) {
         resultsByUrl.set(url, []);
       }
@@ -83,18 +84,14 @@ export class DocumentRetrieverService {
     library: string,
     version: string,
     url: string,
-    initialChunks: Document[],
+    initialChunks: (DbPageChunk & DbChunkRank)[],
   ): Promise<StoreSearchResult> {
-    // Extract mimeType from the first document's metadata
-    const mimeType =
-      initialChunks.length > 0
-        ? (initialChunks[0].metadata.mimeType as string | undefined)
-        : undefined;
+    // Extract mimeType from the first document's content_type (page-level field)
+    // Convert null to undefined for consistency
+    const mimeType = initialChunks.length > 0 ? initialChunks[0].content_type : undefined;
 
     // Find the maximum score from the initial results
-    const maxScore = Math.max(
-      ...initialChunks.map((chunk) => chunk.metadata.score as number),
-    );
+    const maxScore = Math.max(...initialChunks.map((chunk) => chunk.score));
 
     // Create appropriate assembly strategy based on content type
     const strategy = createContentAssemblyStrategy(mimeType);

@@ -1,6 +1,6 @@
 // Copyright (c) 2025
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RawContent } from "../fetcher/types";
+import { FetchStatus, type RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
 import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
 import { HtmlMetadataExtractorMiddleware } from "../middleware/HtmlMetadataExtractorMiddleware";
@@ -21,17 +21,14 @@ describe("HtmlPipeline", () => {
 
   it("canProcess returns true for text/html", () => {
     const pipeline = new HtmlPipeline();
-    expect(pipeline.canProcess({ mimeType: "text/html" } as RawContent)).toBe(true);
-    expect(pipeline.canProcess({ mimeType: "application/xhtml+xml" } as RawContent)).toBe(
-      true,
-    );
+    expect(pipeline.canProcess("text/html")).toBe(true);
+    expect(pipeline.canProcess("application/xhtml+xml")).toBe(true);
   });
 
   it("canProcess returns false for non-html", () => {
     const pipeline = new HtmlPipeline();
-    expect(pipeline.canProcess({ mimeType: "text/markdown" } as RawContent)).toBe(false);
-    // @ts-expect-error
-    expect(pipeline.canProcess({ mimeType: undefined } as RawContent)).toBe(false);
+    expect(pipeline.canProcess("text/markdown")).toBe(false);
+    expect(pipeline.canProcess("")).toBe(false);
   });
 
   it("process decodes Buffer content with UTF-8 charset", async () => {
@@ -41,6 +38,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     // Check that we got some markdown content (exact format depends on the actual middleware)
@@ -68,6 +66,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "iso-8859-1", // Explicitly set charset to ISO-8859-1
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
 
@@ -86,6 +85,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       // No charset specified
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     // Check that we got some markdown content (exact format depends on the actual middleware)
@@ -100,6 +100,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     // Check that we got some markdown content (exact format depends on the actual middleware)
@@ -116,6 +117,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-16le",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("abc");
@@ -130,6 +132,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("abc");
@@ -143,6 +146,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("こんにちは世界");
@@ -156,6 +160,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("Привет, мир");
@@ -178,6 +183,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
 
@@ -189,7 +195,7 @@ describe("HtmlPipeline", () => {
     expect(HtmlToMarkdownMiddleware.prototype.process).toHaveBeenCalledTimes(1);
 
     // Verify the result contains expected data from the actual middleware
-    expect(result.metadata.title).toBe("Test Title");
+    expect(result.title).toBe("Test Title");
     expect(result.links).toContain("https://test.link/");
     expect(result.textContent).toBeTruthy();
     expect(result.textContent).toEqual("This is a [test link](https://test.link/).");
@@ -210,9 +216,10 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.errors.some((e) => e.message === "fail")).toBe(true);
+    expect(result.errors?.some((e) => e.message === "fail")).toBe(true);
   });
 
   it("should correctly process HTML through the full standard middleware stack (E2E with spies)", async () => {
@@ -242,6 +249,7 @@ describe("HtmlPipeline", () => {
       mimeType: "text/html",
       charset: "utf-8",
       source: "http://test.example.com",
+      status: FetchStatus.SUCCESS,
     };
 
     const result = await pipeline.process(raw, {
@@ -260,7 +268,7 @@ describe("HtmlPipeline", () => {
 
     // Verify the result contains expected data
     // The exact values will depend on the actual middleware implementations
-    expect(result.metadata.title).toBe("Test Page");
+    expect(result.title).toBe("Test Page");
     expect(result.links).toContain("https://example.com/test/link");
 
     // Verify the content was sanitized (no script tags) and converted to markdown

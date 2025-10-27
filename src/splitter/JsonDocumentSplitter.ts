@@ -13,7 +13,7 @@
  * 5. Let GreedySplitter handle size optimization
  */
 
-import type { ContentChunk, DocumentSplitter } from "./types";
+import type { Chunk, DocumentSplitter } from "./types";
 
 type JsonValue =
   | string
@@ -35,10 +35,10 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     this.preserveFormatting = options.preserveFormatting ?? true;
   }
 
-  async splitText(content: string, _contentType?: string): Promise<ContentChunk[]> {
+  async splitText(content: string, _contentType?: string): Promise<Chunk[]> {
     try {
       const parsed: JsonValue = JSON.parse(content);
-      const chunks: ContentChunk[] = [];
+      const chunks: Chunk[] = [];
 
       // Process the JSON structure recursively, starting with root path
       this.processValue(parsed, ["root"], 1, 0, chunks, true);
@@ -64,7 +64,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     path: string[],
     level: number,
     indentLevel: number,
-    chunks: ContentChunk[],
+    chunks: Chunk[],
     isLastItem: boolean,
   ): void {
     if (Array.isArray(value)) {
@@ -81,7 +81,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     path: string[],
     level: number,
     indentLevel: number,
-    chunks: ContentChunk[],
+    chunks: Chunk[],
     isLastItem: boolean,
   ): void {
     const indent = this.getIndent(indentLevel);
@@ -114,7 +114,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     path: string[],
     level: number,
     indentLevel: number,
-    chunks: ContentChunk[],
+    chunks: Chunk[],
     isLastItem: boolean,
   ): void {
     const indent = this.getIndent(indentLevel);
@@ -157,7 +157,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     path: string[],
     level: number,
     indentLevel: number,
-    chunks: ContentChunk[],
+    chunks: Chunk[],
     isLastProperty: boolean,
   ): void {
     const indent = this.getIndent(indentLevel);
@@ -189,7 +189,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     path: string[],
     level: number,
     indentLevel: number,
-    chunks: ContentChunk[],
+    chunks: Chunk[],
     isLastItem: boolean,
   ): void {
     const indent = this.getIndent(indentLevel);

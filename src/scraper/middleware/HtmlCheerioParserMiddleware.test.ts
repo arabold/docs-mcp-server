@@ -64,8 +64,8 @@ const createMockContext = (
 ): MiddlewareContext => {
   return {
     content: htmlContent,
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: { ...createMockScraperOptions(source), ...options },

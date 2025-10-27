@@ -1,11 +1,13 @@
-import type { Document, ProgressCallback } from "../../types";
+import type { ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import { HttpFetcher } from "../fetcher";
+import { FetchStatus } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
-import type { ContentPipeline } from "../pipelines/types";
-import { ScrapeMode, type ScraperOptions, type ScraperProgress } from "../types";
+import type { ContentPipeline, PipelineResult } from "../pipelines/types";
+import type { QueueItem } from "../types";
+import { ScrapeMode, type ScraperOptions, type ScraperProgressEvent } from "../types";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
-import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
+import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 interface GitHubWikiInfo {
   owner: string;
@@ -93,12 +95,11 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
     }
   }
 
-  protected async processItem(
+  async processItem(
     item: QueueItem,
     options: ScraperOptions,
-    _progressCallback?: ProgressCallback<ScraperProgress>,
     signal?: AbortSignal,
-  ): Promise<{ document?: Document; links?: string[] }> {
+  ): Promise<ProcessItemResult> {
     const currentUrl = item.url;
 
     logger.info(
@@ -110,10 +111,10 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
       const rawContent = await this.httpFetcher.fetch(currentUrl, { signal });
 
       // Process content through appropriate pipeline
-      let processed: Awaited<ReturnType<ContentPipeline["process"]>> | undefined;
+      let processed: PipelineResult | undefined;
 
       for (const pipeline of this.pipelines) {
-        if (pipeline.canProcess(rawContent)) {
+        if (pipeline.canProcess(rawContent.mimeType, rawContent.content)) {
           logger.debug(
             `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${currentUrl})`,
           );
@@ -130,10 +131,10 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for wiki page ${currentUrl}. Skipping processing.`,
         );
-        return { document: undefined, links: [] };
+        return { url: currentUrl, links: [], status: FetchStatus.SUCCESS };
       }
 
-      for (const err of processed.errors) {
+      for (const err of processed.errors ?? []) {
         logger.warn(`⚠️  Processing error for ${currentUrl}: ${err.message}`);
       }
 
@@ -144,24 +145,6 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
         .replace(`/${wikiInfo.owner}/${wikiInfo.repo}/wiki`, "")
         .replace(/^\//, "");
       const pageTitle = wikiPagePath || "Home";
-
-      // Create document with wiki-specific metadata
-      const document: Document = {
-        content: typeof processed.textContent === "string" ? processed.textContent : "",
-        metadata: {
-          url: currentUrl,
-          title:
-            typeof processed.metadata.title === "string" &&
-            processed.metadata.title.trim() !== ""
-              ? processed.metadata.title
-              : pageTitle,
-          library: options.library,
-          version: options.version,
-          etag: rawContent.etag,
-          lastModified: rawContent.lastModified,
-        },
-        contentType: rawContent.mimeType,
-      };
 
       // Extract links from the processed content
       const links = processed.links || [];
@@ -202,16 +185,25 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
           }
         });
 
-      return { document, links: wikiLinks };
+      return {
+        url: currentUrl,
+        title: pageTitle,
+        etag: rawContent.etag,
+        lastModified: rawContent.lastModified,
+        contentType: rawContent.mimeType,
+        content: processed,
+        links: wikiLinks,
+        status: FetchStatus.SUCCESS,
+      };
     } catch (error) {
       logger.warn(`⚠️  Failed to process wiki page ${currentUrl}: ${error}`);
-      return { document: undefined, links: [] };
+      return { url: currentUrl, links: [], status: FetchStatus.SUCCESS };
     }
   }
 
   async scrape(
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal,
   ): Promise<void> {
     // Validate it's a GitHub wiki URL

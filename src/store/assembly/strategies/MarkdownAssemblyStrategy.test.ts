@@ -1,6 +1,6 @@
-import { Document } from "@langchain/core/documents";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentStore } from "../../DocumentStore";
+import type { DbPageChunk } from "../../types";
 import { MarkdownAssemblyStrategy } from "./MarkdownAssemblyStrategy";
 
 // Mock DocumentStore with just the methods we need
@@ -17,88 +17,96 @@ const createMockDocumentStore = () =>
 const createDocumentUniverse = () => {
   return {
     // Target chunk (the one we're finding relations for)
-    target: new Document({
+    target: {
       id: "target",
-      pageContent: "Target content",
-      metadata: { url: "https://example.com", path: ["Chapter 1", "Section 1.1"] },
-    }),
+      content: "Target content",
+      url: "https://example.com",
+      metadata: { path: ["Chapter 1", "Section 1.1"] },
+    } as DbPageChunk,
 
     // Parent
-    parent: new Document({
+    parent: {
       id: "parent",
-      pageContent: "Parent section content",
-      metadata: { url: "https://example.com", path: ["Chapter 1"] },
-    }),
+      content: "Parent section content",
+      url: "https://example.com",
+      metadata: { path: ["Chapter 1"] },
+    } as DbPageChunk,
 
     // Children (limit = 3, so child4 should be excluded)
-    child1: new Document({
+    child1: {
       id: "child1",
-      pageContent: "First child content",
+      content: "First child content",
+      url: "https://example.com",
       metadata: {
-        url: "https://example.com",
         path: ["Chapter 1", "Section 1.1", "Subsection A"],
       },
-    }),
-    child2: new Document({
+    } as DbPageChunk,
+    child2: {
       id: "child2",
-      pageContent: "Second child content",
+      content: "Second child content",
+      url: "https://example.com",
       metadata: {
-        url: "https://example.com",
         path: ["Chapter 1", "Section 1.1", "Subsection B"],
       },
-    }),
-    child3: new Document({
+    } as DbPageChunk,
+    child3: {
       id: "child3",
-      pageContent: "Third child content",
+      content: "Third child content",
+      url: "https://example.com",
       metadata: {
-        url: "https://example.com",
         path: ["Chapter 1", "Section 1.1", "Subsection C"],
       },
-    }),
-    child4: new Document({
+    } as DbPageChunk,
+    child4: {
       id: "child4",
-      pageContent: "Fourth child content (should be excluded)",
+      content: "Fourth child content (should be excluded)",
+      url: "https://example.com",
       metadata: {
-        url: "https://example.com",
         path: ["Chapter 1", "Section 1.1", "Subsection D"],
       },
-    }),
+    } as DbPageChunk,
 
     // Preceding siblings (limit = 1, so only prev1 should be included)
-    prev1: new Document({
+    prev1: {
       id: "prev1",
-      pageContent: "Previous sibling 1",
-      metadata: { url: "https://example.com", path: ["Chapter 1", "Section 1.0"] },
-    }),
-    prev2: new Document({
+      content: "Previous sibling 1",
+      url: "https://example.com",
+      metadata: { path: ["Chapter 1", "Section 1.0"] },
+    } as DbPageChunk,
+    prev2: {
       id: "prev2",
-      pageContent: "Previous sibling 2 (should be excluded)",
-      metadata: { url: "https://example.com", path: ["Chapter 1", "Section 0.9"] },
-    }),
+      content: "Previous sibling 2 (should be excluded)",
+      url: "https://example.com",
+      metadata: { path: ["Chapter 1", "Section 0.9"] },
+    } as DbPageChunk,
 
     // Subsequent siblings (limit = 2)
-    next1: new Document({
+    next1: {
       id: "next1",
-      pageContent: "Next sibling 1",
-      metadata: { url: "https://example.com", path: ["Chapter 1", "Section 1.2"] },
-    }),
-    next2: new Document({
+      content: "Next sibling 1",
+      url: "https://example.com",
+      metadata: { path: ["Chapter 1", "Section 1.2"] },
+    } as DbPageChunk,
+    next2: {
       id: "next2",
-      pageContent: "Next sibling 2",
-      metadata: { url: "https://example.com", path: ["Chapter 1", "Section 1.3"] },
-    }),
-    next3: new Document({
+      content: "Next sibling 2",
+      url: "https://example.com",
+      metadata: { path: ["Chapter 1", "Section 1.3"] },
+    } as DbPageChunk,
+    next3: {
       id: "next3",
-      pageContent: "Next sibling 3 (should be excluded)",
-      metadata: { url: "https://example.com", path: ["Chapter 1", "Section 1.4"] },
-    }),
+      content: "Next sibling 3 (should be excluded)",
+      url: "https://example.com",
+      metadata: { path: ["Chapter 1", "Section 1.4"] },
+    } as DbPageChunk,
 
     // Orphan chunk (no relations)
-    orphan: new Document({
+    orphan: {
       id: "orphan",
-      pageContent: "Orphan content",
-      metadata: { url: "https://example.com/other", path: ["Standalone"] },
-    }),
+      content: "Orphan content",
+      url: "https://example.com/other",
+      metadata: { path: ["Standalone"] },
+    } as DbPageChunk,
   };
 };
 
@@ -206,11 +214,11 @@ describe("MarkdownAssemblyStrategy", () => {
     });
 
     it("handles chunks with existing newlines", () => {
-      const chunkWithNewlines = new Document({
+      const chunkWithNewlines = {
         id: "newlines",
-        pageContent: "Line 1\nLine 2\n\nLine 4",
+        content: "Line 1\nLine 2\n\nLine 4",
         metadata: {},
-      });
+      } as DbPageChunk;
 
       const result = strategy.assembleContent([universe.target, chunkWithNewlines]);
       expect(result).toBe("Target content\n\nLine 1\nLine 2\n\nLine 4");
@@ -575,10 +583,10 @@ describe("MarkdownAssemblyStrategy", () => {
       });
 
       it("handles chunks without IDs gracefully", async () => {
-        const invalidChunk = new Document({
-          pageContent: "No ID chunk",
+        const invalidChunk = {
+          content: "No ID chunk",
           metadata: {},
-        });
+        } as DbPageChunk;
 
         // Mock all store methods to return empty arrays for undefined IDs
         vi.mocked(mockStore.findParentChunk).mockResolvedValue(null);

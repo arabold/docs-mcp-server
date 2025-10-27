@@ -1,4 +1,4 @@
-import type { ContentChunk, DocumentSplitter, SectionContentType } from "./types";
+import type { Chunk, DocumentSplitter, SectionContentType } from "./types";
 
 /**
  * Takes small document chunks and greedily concatenates them into larger, more meaningful units
@@ -36,10 +36,10 @@ export class GreedySplitter implements DocumentSplitter {
    * section boundaries to maintain document structure. This balances the need for
    * context with semantic coherence.
    */
-  async splitText(markdown: string, contentType?: string): Promise<ContentChunk[]> {
+  async splitText(markdown: string, contentType?: string): Promise<Chunk[]> {
     const initialChunks = await this.baseSplitter.splitText(markdown, contentType);
-    const concatenatedChunks: ContentChunk[] = [];
-    let currentChunk: ContentChunk | null = null;
+    const concatenatedChunks: Chunk[] = [];
+    let currentChunk: Chunk | null = null;
 
     for (const nextChunk of initialChunks) {
       if (currentChunk) {
@@ -71,7 +71,7 @@ export class GreedySplitter implements DocumentSplitter {
     return concatenatedChunks;
   }
 
-  private cloneChunk(chunk: ContentChunk): ContentChunk {
+  private cloneChunk(chunk: Chunk): Chunk {
     return {
       types: [...chunk.types],
       content: chunk.content,
@@ -86,7 +86,7 @@ export class GreedySplitter implements DocumentSplitter {
    * H1 and H2 headings represent major conceptual breaks in the document.
    * Preserving these splits helps maintain the document's logical structure.
    */
-  private startsNewMajorSection(chunk: ContentChunk): boolean {
+  private startsNewMajorSection(chunk: Chunk): boolean {
     return chunk.section.level === 1 || chunk.section.level === 2;
   }
 
@@ -94,10 +94,7 @@ export class GreedySplitter implements DocumentSplitter {
    * Size limit check to ensure chunks remain within embedding model constraints.
    * Essential for maintaining consistent embedding quality and avoiding truncation.
    */
-  private wouldExceedMaxSize(
-    currentChunk: ContentChunk | null,
-    nextChunk: ContentChunk,
-  ): boolean {
+  private wouldExceedMaxSize(currentChunk: Chunk | null, nextChunk: Chunk): boolean {
     if (!currentChunk) {
       return false;
     }
@@ -122,10 +119,7 @@ export class GreedySplitter implements DocumentSplitter {
    *    - For siblings/unrelated sections, uses the common parent path
    *    - If no common path exists, uses the root path ([])
    */
-  private mergeSectionInfo(
-    currentChunk: ContentChunk,
-    nextChunk: ContentChunk,
-  ): ContentChunk["section"] {
+  private mergeSectionInfo(currentChunk: Chunk, nextChunk: Chunk): Chunk["section"] {
     // Always use the lowest level
     const level = Math.min(currentChunk.section.level, nextChunk.section.level);
 

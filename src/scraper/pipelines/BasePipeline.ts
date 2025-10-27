@@ -1,7 +1,7 @@
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import type { ScraperOptions } from "../types";
-import type { ContentPipeline, ProcessedContent } from "./types";
+import type { ContentPipeline, PipelineResult } from "./types";
 
 /**
  * Base class for content processing pipelines.
@@ -9,10 +9,10 @@ import type { ContentPipeline, ProcessedContent } from "./types";
  */
 export class BasePipeline implements ContentPipeline {
   /**
-   * Determines if this pipeline can process the given content.
+   * Determines if this pipeline can process content with the given MIME type.
    * Must be implemented by derived classes.
    */
-  public canProcess(_rawContent: RawContent): boolean {
+  public canProcess(_mimeType: string, _content?: Buffer): boolean {
     throw new Error("Method not implemented.");
   }
 
@@ -24,7 +24,7 @@ export class BasePipeline implements ContentPipeline {
     _rawContent: RawContent,
     _options: ScraperOptions,
     _fetcher?: ContentFetcher,
-  ): Promise<ProcessedContent> {
+  ): Promise<PipelineResult> {
     throw new Error("Method not implemented.");
   }
 

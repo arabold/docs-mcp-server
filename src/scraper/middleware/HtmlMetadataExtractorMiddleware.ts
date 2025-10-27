@@ -39,7 +39,7 @@ export class HtmlMetadataExtractorMiddleware implements ContentProcessorMiddlewa
       // Basic cleanup (replace multiple spaces with single space)
       title = title.replace(/\s+/g, " ").trim();
 
-      context.metadata.title = title;
+      context.title = title;
       logger.debug(`Extracted title: "${title}" from ${context.source}`);
     } catch (error) {
       logger.error(`❌ Error extracting metadata from ${context.source}: ${error}`);

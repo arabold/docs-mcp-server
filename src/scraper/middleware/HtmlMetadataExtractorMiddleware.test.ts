@@ -29,8 +29,8 @@ const createMockContext = (
 ): MiddlewareContext => {
   const context: MiddlewareContext = {
     content: htmlContent || "",
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: { ...createMockScraperOptions(source), ...options },
@@ -52,7 +52,7 @@ describe("HtmlMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("Head Title");
+    expect(context.title).toBe("Head Title");
     expect(context.errors).toHaveLength(0);
 
     // No need to close Cheerio object
@@ -67,7 +67,7 @@ describe("HtmlMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("Untitled");
+    expect(context.title).toBe("Untitled");
     expect(context.errors).toHaveLength(0);
 
     // No need to close Cheerio object
@@ -82,7 +82,7 @@ describe("HtmlMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("Untitled");
+    expect(context.title).toBe("Untitled");
     expect(context.errors).toHaveLength(0);
 
     // No need to close Cheerio object
@@ -98,7 +98,7 @@ describe("HtmlMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("Extra Whitespace Title");
+    expect(context.title).toBe("Extra Whitespace Title");
     expect(context.errors).toHaveLength(0);
 
     // No need to close Cheerio object
@@ -113,7 +113,7 @@ describe("HtmlMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBeUndefined(); // Title should not be set
+    expect(context.title).toBeUndefined(); // Title should not be set
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("context.dom is missing"),
     );
@@ -139,7 +139,7 @@ describe("HtmlMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce(); // Should still call next
-    expect(context.metadata.title).toBeUndefined();
+    expect(context.title).toBeUndefined();
     expect(context.errors).toHaveLength(1);
     // Check if the error message includes the original error's message
     expect(context.errors[0].message).toContain("Failed to extract metadata from HTML");

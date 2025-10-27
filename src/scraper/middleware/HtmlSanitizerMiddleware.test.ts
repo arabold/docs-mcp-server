@@ -33,8 +33,8 @@ const createMockContext = (
   const fullOptions = { ...createMockScraperOptions(source), ...options };
   const context: MiddlewareContext = {
     content: htmlContent || "",
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: fullOptions,

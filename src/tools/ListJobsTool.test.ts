@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
-import type { ScraperProgress } from "../scraper/types";
+import type { ScraperProgressEvent } from "../scraper/types";
 import { VersionStatus } from "../store/types";
 import { ListJobsTool } from "./ListJobsTool";
 
@@ -49,7 +49,7 @@ describe("ListJobsTool", () => {
         currentUrl: "url2/page5",
         depth: 1,
         maxDepth: 3,
-      } as ScraperProgress,
+      } as ScraperProgressEvent,
       error: null,
       finishedAt: null,
       // Database fields
@@ -60,7 +60,12 @@ describe("ListJobsTool", () => {
       errorMessage: null,
       updatedAt: new Date("2023-01-01T11:05:00Z"),
       sourceUrl: "url2",
-      scraperOptions: { maxDepth: 3 },
+      scraperOptions: {
+        url: "url2",
+        library: "lib-b",
+        version: "2.0.0",
+        maxDepth: 3,
+      },
     },
     {
       id: "job-3",
@@ -76,7 +81,7 @@ describe("ListJobsTool", () => {
         currentUrl: "url3/page10",
         depth: 2,
         maxDepth: 2,
-      } as ScraperProgress,
+      } as ScraperProgressEvent,
       error: null,
       // Database fields
       versionId: 3,
@@ -86,7 +91,12 @@ describe("ListJobsTool", () => {
       errorMessage: null,
       updatedAt: new Date("2023-01-01T12:15:00Z"),
       sourceUrl: "url3",
-      scraperOptions: { maxDepth: 2 },
+      scraperOptions: {
+        url: "url3",
+        library: "lib-a",
+        version: "1.1.0",
+        maxDepth: 2,
+      },
     },
   ];
 

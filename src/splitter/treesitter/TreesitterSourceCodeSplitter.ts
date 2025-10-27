@@ -8,7 +8,7 @@
 
 import { SPLITTER_MAX_CHUNK_SIZE } from "../../utils";
 import { TextContentSplitter } from "../splitters/TextContentSplitter";
-import type { ContentChunk, DocumentSplitter } from "../types";
+import type { Chunk, DocumentSplitter } from "../types";
 import { LanguageParserRegistry } from "./LanguageParserRegistry";
 import type { CodeBoundary, LanguageParser } from "./parsers/types";
 
@@ -41,7 +41,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     });
   }
 
-  async splitText(content: string, contentType?: string): Promise<ContentChunk[]> {
+  async splitText(content: string, contentType?: string): Promise<Chunk[]> {
     if (!content.trim()) {
       return [];
     }
@@ -89,7 +89,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
   /**
    * Helper method to fall back to TextContentSplitter and convert results to ContentChunk[]
    */
-  private async fallbackToTextSplitter(content: string): Promise<ContentChunk[]> {
+  private async fallbackToTextSplitter(content: string): Promise<Chunk[]> {
     const textChunks = await this.textContentSplitter.split(content);
     return textChunks.map((chunk) => ({
       types: ["code"],
@@ -173,7 +173,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     content: string,
     path: string[],
     level: number,
-  ): Promise<ContentChunk[]> {
+  ): Promise<Chunk[]> {
     // Preserve whitespace-only content if it fits within chunk size (for perfect reconstruction)
     // Only skip if content is completely empty
     if (content.length === 0) {
@@ -223,7 +223,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     boundaries: CodeBoundary[],
     content: string,
     _contentType?: string,
-  ): Promise<ContentChunk[]> {
+  ): Promise<Chunk[]> {
     const lines = content.split("\n");
     const totalLines = lines.length;
 
@@ -299,7 +299,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
     }
 
     // Step 4: Convert segments directly to chunks (whitespace retained verbatim)
-    const chunks: ContentChunk[] = [];
+    const chunks: Chunk[] = [];
 
     // Ensure only ONE structural chunk is emitted per structural boundary.
     const structuralBoundaryFirstChunk = new Set<CodeBoundary>();

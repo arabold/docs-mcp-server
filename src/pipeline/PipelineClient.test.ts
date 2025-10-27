@@ -6,7 +6,8 @@ vi.mock("../utils/logger");
 // Mock tRPC client factory
 const mockClient: any = {
   ping: { query: vi.fn() },
-  enqueueJob: { mutate: vi.fn() },
+  enqueueScrapeJob: { mutate: vi.fn() },
+  enqueueRefreshJob: { mutate: vi.fn() },
   getJob: { query: vi.fn() },
   getJobs: { query: vi.fn() },
   cancelJob: { mutate: vi.fn() },
@@ -28,7 +29,8 @@ describe("PipelineClient", () => {
     vi.resetAllMocks();
     // Reset default mock behaviors
     mockClient.ping.query.mockResolvedValue({ status: "ok" });
-    mockClient.enqueueJob.mutate.mockResolvedValue({ jobId: "job-123" });
+    mockClient.enqueueScrapeJob.mutate.mockResolvedValue({ jobId: "job-123" });
+    mockClient.enqueueRefreshJob.mutate.mockResolvedValue({ jobId: "job-456" });
     mockClient.getJob.query.mockResolvedValue(undefined);
     mockClient.getJobs.query.mockResolvedValue({ jobs: [] });
     mockClient.cancelJob.mutate.mockResolvedValue({ success: true });
@@ -50,18 +52,18 @@ describe("PipelineClient", () => {
     });
   });
 
-  describe("enqueueJob", () => {
+  describe("enqueueScrapeJob", () => {
     it("should delegate job creation to external API", async () => {
       const mockJobId = "job-123";
-      mockClient.enqueueJob.mutate.mockResolvedValueOnce({ jobId: mockJobId });
-      const jobId = await client.enqueueJob("react", "18.0.0", {
+      mockClient.enqueueScrapeJob.mutate.mockResolvedValueOnce({ jobId: mockJobId });
+      const jobId = await client.enqueueScrapeJob("react", "18.0.0", {
         url: "https://react.dev",
         library: "react",
         version: "18.0.0",
       });
 
       expect(jobId).toBe(mockJobId);
-      expect(mockClient.enqueueJob.mutate).toHaveBeenCalledWith({
+      expect(mockClient.enqueueScrapeJob.mutate).toHaveBeenCalledWith({
         library: "react",
         version: "18.0.0",
         options: {
@@ -73,9 +75,9 @@ describe("PipelineClient", () => {
     });
 
     it("should handle API errors gracefully", async () => {
-      mockClient.enqueueJob.mutate.mockRejectedValueOnce(new Error("Bad request"));
+      mockClient.enqueueScrapeJob.mutate.mockRejectedValueOnce(new Error("Bad request"));
 
-      await expect(client.enqueueJob("invalid", null, {} as any)).rejects.toThrow(
+      await expect(client.enqueueScrapeJob("invalid", null, {} as any)).rejects.toThrow(
         "Failed to enqueue job: Bad request",
       );
     });

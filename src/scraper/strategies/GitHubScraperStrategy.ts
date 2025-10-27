@@ -1,6 +1,6 @@
 import type { ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
-import type { ScraperOptions, ScraperProgress, ScraperStrategy } from "../types";
+import type { ScraperOptions, ScraperProgressEvent, ScraperStrategy } from "../types";
 import { GitHubRepoScraperStrategy } from "./GitHubRepoScraperStrategy";
 import { GitHubWikiScraperStrategy } from "./GitHubWikiScraperStrategy";
 
@@ -48,7 +48,7 @@ export class GitHubScraperStrategy implements ScraperStrategy {
 
   async scrape(
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal,
   ): Promise<void> {
     // Validate it's a GitHub URL
@@ -72,7 +72,7 @@ export class GitHubScraperStrategy implements ScraperStrategy {
     let wikiCompleted = false;
     let repoCompleted = false;
 
-    const mergedProgressCallback: ProgressCallback<ScraperProgress> = async (
+    const mergedProgressCallback: ProgressCallback<ScraperProgressEvent> = async (
       progress,
     ) => {
       // For the first strategy (wiki), accumulate discovered pages and scraped count

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ProgressCallback } from "../../types";
+import type { ScraperProgressEvent } from "../types";
 import { GitHubRepoScraperStrategy } from "./GitHubRepoScraperStrategy";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
 import { GitHubWikiScraperStrategy } from "./GitHubWikiScraperStrategy";
@@ -77,7 +79,7 @@ describe("GitHubScraperStrategy", () => {
         version: "1.0.0",
       };
 
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
       repoStrategyInstance.scrape.mockResolvedValue(undefined);
       wikiStrategyInstance.scrape.mockResolvedValue(undefined);
@@ -112,7 +114,7 @@ describe("GitHubScraperStrategy", () => {
         version: "1.0.0",
       };
 
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
       repoStrategyInstance.scrape.mockResolvedValue(undefined);
       wikiStrategyInstance.scrape.mockRejectedValue(new Error("Wiki not found"));
@@ -131,7 +133,7 @@ describe("GitHubScraperStrategy", () => {
         version: "1.0.0",
       };
 
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
       await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
         "URL must be a GitHub URL",
@@ -145,7 +147,7 @@ describe("GitHubScraperStrategy", () => {
         version: "1.0.0",
       };
 
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
       await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
         "URL must be a base GitHub repository URL",

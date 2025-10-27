@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpFetcher } from "../fetcher";
+import { FetchStatus, HttpFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
 import { HtmlPipeline } from "../pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
+import type { PipelineResult } from "../pipelines/types";
 import { ScrapeMode, type ScraperOptions } from "../types";
 import { GitHubWikiScraperStrategy } from "./GitHubWikiScraperStrategy";
 
@@ -85,9 +86,7 @@ describe("GitHubWikiScraperStrategy", () => {
 
   describe("parseGitHubWikiUrl", () => {
     it("should parse basic wiki URL", () => {
-      const result = (strategy as any).parseGitHubWikiUrl(
-        "https://github.com/owner/repo/wiki",
-      );
+      const result = strategy.parseGitHubWikiUrl("https://github.com/owner/repo/wiki");
       expect(result).toEqual({
         owner: "owner",
         repo: "repo",
@@ -95,9 +94,7 @@ describe("GitHubWikiScraperStrategy", () => {
     });
 
     it("should parse wiki URL with trailing slash", () => {
-      const result = (strategy as any).parseGitHubWikiUrl(
-        "https://github.com/owner/repo/wiki/",
-      );
+      const result = strategy.parseGitHubWikiUrl("https://github.com/owner/repo/wiki/");
       expect(result).toEqual({
         owner: "owner",
         repo: "repo",
@@ -105,7 +102,7 @@ describe("GitHubWikiScraperStrategy", () => {
     });
 
     it("should parse wiki URL with specific page", () => {
-      const result = (strategy as any).parseGitHubWikiUrl(
+      const result = strategy.parseGitHubWikiUrl(
         "https://github.com/owner/repo/wiki/Home",
       );
       expect(result).toEqual({
@@ -115,7 +112,7 @@ describe("GitHubWikiScraperStrategy", () => {
     });
 
     it("should parse wiki URL with complex page name", () => {
-      const result = (strategy as any).parseGitHubWikiUrl(
+      const result = strategy.parseGitHubWikiUrl(
         "https://github.com/owner/repo/wiki/Getting-Started-Guide",
       );
       expect(result).toEqual({
@@ -125,7 +122,7 @@ describe("GitHubWikiScraperStrategy", () => {
     });
 
     it("should handle www subdomain", () => {
-      const result = (strategy as any).parseGitHubWikiUrl(
+      const result = strategy.parseGitHubWikiUrl(
         "https://www.github.com/owner/repo/wiki",
       );
       expect(result).toEqual({
@@ -136,11 +133,11 @@ describe("GitHubWikiScraperStrategy", () => {
 
     it("should throw error for invalid wiki URL", () => {
       expect(() => {
-        (strategy as any).parseGitHubWikiUrl("https://github.com/invalid");
+        strategy.parseGitHubWikiUrl("https://github.com/invalid");
       }).toThrow("Invalid GitHub wiki URL");
 
       expect(() => {
-        (strategy as any).parseGitHubWikiUrl("https://github.com/owner/repo");
+        strategy.parseGitHubWikiUrl("https://github.com/owner/repo");
       }).toThrow("Invalid GitHub wiki URL");
     });
   });
@@ -154,19 +151,16 @@ describe("GitHubWikiScraperStrategy", () => {
 
     it("should process URLs within the same wiki", () => {
       expect(
-        (strategy as any).shouldProcessUrl(
-          "https://github.com/owner/repo/wiki/Home",
-          options,
-        ),
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl("https://github.com/owner/repo/wiki/Home", options),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessUrl(
-          "https://github.com/owner/repo/wiki/API",
-          options,
-        ),
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl("https://github.com/owner/repo/wiki/API", options),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessUrl(
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl(
           "https://github.com/owner/repo/wiki/Getting-Started",
           options,
         ),
@@ -175,19 +169,16 @@ describe("GitHubWikiScraperStrategy", () => {
 
     it("should not process URLs outside the wiki", () => {
       expect(
-        (strategy as any).shouldProcessUrl("https://github.com/owner/repo", options),
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl("https://github.com/owner/repo", options),
       ).toBe(false);
       expect(
-        (strategy as any).shouldProcessUrl(
-          "https://github.com/owner/repo/tree/main",
-          options,
-        ),
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl("https://github.com/owner/repo/tree/main", options),
       ).toBe(false);
       expect(
-        (strategy as any).shouldProcessUrl(
-          "https://github.com/other/repo/wiki/Home",
-          options,
-        ),
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl("https://github.com/other/repo/wiki/Home", options),
       ).toBe(false);
     });
 
@@ -198,19 +189,22 @@ describe("GitHubWikiScraperStrategy", () => {
       };
 
       expect(
-        (strategy as any).shouldProcessUrl(
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl(
           "https://github.com/owner/repo/wiki/API-Reference",
           optionsWithInclude,
         ),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessUrl(
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl(
           "https://github.com/owner/repo/wiki/Getting-Started",
           optionsWithInclude,
         ),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessUrl(
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl(
           "https://github.com/owner/repo/wiki/Home",
           optionsWithInclude,
         ),
@@ -224,19 +218,22 @@ describe("GitHubWikiScraperStrategy", () => {
       };
 
       expect(
-        (strategy as any).shouldProcessUrl(
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl(
           "https://github.com/owner/repo/wiki/deprecated-api",
           optionsWithExclude,
         ),
       ).toBe(false);
       expect(
-        (strategy as any).shouldProcessUrl(
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl(
           "https://github.com/owner/repo/wiki/old-guide",
           optionsWithExclude,
         ),
       ).toBe(false);
       expect(
-        (strategy as any).shouldProcessUrl(
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl(
           "https://github.com/owner/repo/wiki/current-guide",
           optionsWithExclude,
         ),
@@ -245,19 +242,20 @@ describe("GitHubWikiScraperStrategy", () => {
 
     it("should handle Home page as default", () => {
       expect(
-        (strategy as any).shouldProcessUrl("https://github.com/owner/repo/wiki", options),
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl("https://github.com/owner/repo/wiki", options),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessUrl(
-          "https://github.com/owner/repo/wiki/",
-          options,
-        ),
+        // @ts-expect-error - testing internal method
+        strategy.shouldProcessUrl("https://github.com/owner/repo/wiki/", options),
       ).toBe(true);
     });
 
     it("should handle malformed URLs gracefully", () => {
-      expect((strategy as any).shouldProcessUrl("invalid-url", options)).toBe(false);
-      expect((strategy as any).shouldProcessUrl("", options)).toBe(false);
+      // @ts-expect-error - testing internal method
+      expect(strategy.shouldProcessUrl("invalid-url", options)).toBe(false);
+      // @ts-expect-error - testing internal method
+      expect(strategy.shouldProcessUrl("", options)).toBe(false);
     });
   });
 
@@ -288,12 +286,14 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki/Home",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent:
           "Wiki Home\n\nWelcome to the Wiki\n\nThis is the home page of our documentation.",
-        metadata: { title: "Wiki Home" },
+        title: "Wiki Home",
+        chunks: [],
         errors: [],
         links: [
           "/owner/repo/wiki/API",
@@ -307,18 +307,15 @@ describe("GitHubWikiScraperStrategy", () => {
       htmlPipelineInstance.process.mockResolvedValue(processedContent);
 
       const item = { url: "https://github.com/owner/repo/wiki/Home", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document).toEqual({
-        content:
+      expect(result.content).toEqual({
+        textContent:
           "Wiki Home\n\nWelcome to the Wiki\n\nThis is the home page of our documentation.",
-        contentType: "text/html",
-        metadata: {
-          url: "https://github.com/owner/repo/wiki/Home",
-          title: "Wiki Home",
-          library: "test-lib",
-          version: "1.0.0",
-        },
+        title: "Wiki Home",
+        chunks: expect.any(Array),
+        links: expect.any(Array),
+        errors: expect.any(Array),
       });
 
       // Should only include wiki links, not external links
@@ -334,11 +331,12 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki/Getting-Started",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Content without title",
-        metadata: { title: "" },
+        chunks: [],
         errors: [],
         links: [],
       };
@@ -351,9 +349,9 @@ describe("GitHubWikiScraperStrategy", () => {
         url: "https://github.com/owner/repo/wiki/Getting-Started",
         depth: 1,
       };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document?.metadata.title).toBe("Getting-Started");
+      expect(result.title).toBe("Getting-Started");
     });
 
     it("should handle Home page title fallback", async () => {
@@ -362,11 +360,12 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Home page content",
-        metadata: { title: "" },
+        chunks: [],
         errors: [],
         links: [],
       };
@@ -376,9 +375,9 @@ describe("GitHubWikiScraperStrategy", () => {
       htmlPipelineInstance.process.mockResolvedValue(processedContent);
 
       const item = { url: "https://github.com/owner/repo/wiki", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document?.metadata.title).toBe("Home");
+      expect(result.title).toBe("Home");
     });
 
     it("should force ScrapeMode.Fetch for consistent behavior", async () => {
@@ -387,11 +386,13 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki/Test",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Test",
-        metadata: { title: "Test" },
+        title: "Test",
+        chunks: [],
         errors: [],
         links: [],
       };
@@ -411,7 +412,7 @@ describe("GitHubWikiScraperStrategy", () => {
       };
 
       const item = { url: "https://github.com/owner/repo/wiki/Test", depth: 1 };
-      await (strategy as any).processItem(item, optionsWithPlaywright);
+      await strategy.processItem(item, optionsWithPlaywright);
 
       expect(htmlPipelineInstance.process).toHaveBeenCalledWith(
         rawContent,
@@ -426,6 +427,7 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "application/octet-stream",
         source: "https://github.com/owner/repo/wiki/Binary",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
       httpFetcherInstance.fetch.mockResolvedValue(rawContent);
@@ -433,9 +435,9 @@ describe("GitHubWikiScraperStrategy", () => {
       markdownPipelineInstance.canProcess.mockReturnValue(false);
 
       const item = { url: "https://github.com/owner/repo/wiki/Binary", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document).toBeUndefined();
+      expect(result.content).toBeUndefined();
       expect(result.links).toEqual([]);
     });
 
@@ -443,9 +445,9 @@ describe("GitHubWikiScraperStrategy", () => {
       httpFetcherInstance.fetch.mockRejectedValue(new Error("Network error"));
 
       const item = { url: "https://github.com/owner/repo/wiki/Unreachable", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document).toBeUndefined();
+      expect(result.content).toBeUndefined();
       expect(result.links).toEqual([]);
     });
 
@@ -455,11 +457,13 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki/Test",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
       const processedContentWithErrors = {
         textContent: "Test",
         metadata: { title: "Test" },
+        chunks: [],
         errors: [new Error("Processing warning")],
         links: [],
       };
@@ -469,10 +473,10 @@ describe("GitHubWikiScraperStrategy", () => {
       htmlPipelineInstance.process.mockResolvedValue(processedContentWithErrors);
 
       const item = { url: "https://github.com/owner/repo/wiki/Test", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document).toBeDefined();
-      expect(result.document?.content).toBe("Test");
+      expect(result.content).toBeDefined();
+      expect(result.content?.textContent).toBe("Test");
     });
   });
 
@@ -600,11 +604,13 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki/Home",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Content",
-        metadata: { title: "Test" },
+        title: "Test",
+        chunks: [],
         errors: [],
         links: ["/owner/repo/wiki/API", "Getting-Started", "./Advanced-Topics"],
       };
@@ -614,7 +620,7 @@ describe("GitHubWikiScraperStrategy", () => {
       htmlPipelineInstance.process.mockResolvedValue(processedContent);
 
       const item = { url: "https://github.com/owner/repo/wiki/Home", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
       expect(result.links).toEqual([
         "https://github.com/owner/repo/wiki/API",
@@ -629,11 +635,13 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki/Home",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Content",
-        metadata: { title: "Test" },
+        title: "Test",
+        chunks: [],
         errors: [],
         links: [
           "https://github.com/owner/repo/wiki/API", // Should include
@@ -649,7 +657,7 @@ describe("GitHubWikiScraperStrategy", () => {
       htmlPipelineInstance.process.mockResolvedValue(processedContent);
 
       const item = { url: "https://github.com/owner/repo/wiki/Home", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
       expect(result.links).toEqual(["https://github.com/owner/repo/wiki/API"]);
     });
@@ -660,11 +668,13 @@ describe("GitHubWikiScraperStrategy", () => {
         mimeType: "text/html",
         source: "https://github.com/owner/repo/wiki/Home",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Content",
-        metadata: { title: "Test" },
+        title: "Test",
+        chunks: [],
         errors: [],
         links: [
           "invalid-url",
@@ -679,7 +689,7 @@ describe("GitHubWikiScraperStrategy", () => {
       htmlPipelineInstance.process.mockResolvedValue(processedContent);
 
       const item = { url: "https://github.com/owner/repo/wiki/Home", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
       // Should only include the valid wiki link
       expect(result.links).toEqual(["https://github.com/owner/repo/wiki/Valid"]);

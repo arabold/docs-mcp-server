@@ -1,13 +1,12 @@
-import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
 import { AutoDetectFetcher } from "../fetcher";
-import type { RawContent } from "../fetcher/types";
+import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
-import type { ContentPipeline, ProcessedContent } from "../pipelines/types";
-import type { ScraperOptions, ScraperProgress } from "../types";
+import type { ContentPipeline, PipelineResult } from "../pipelines/types";
+import type { QueueItem, ScraperOptions } from "../types";
 import { isInScope } from "../utils/scope";
-import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
+import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 export interface WebScraperStrategyOptions {
   urlNormalizerOptions?: UrlNormalizerOptions;
@@ -47,26 +46,51 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   protected override async processItem(
     item: QueueItem,
     options: ScraperOptions,
-    _progressCallback?: ProgressCallback<ScraperProgress>, // Base class passes it, but not used here
-    signal?: AbortSignal, // Add signal
-  ): Promise<{ document?: Document; links?: string[]; finalUrl?: string }> {
+    signal?: AbortSignal,
+  ): Promise<ProcessItemResult> {
     const { url } = item;
 
     try {
-      // Define fetch options, passing signal, followRedirects, and headers
+      // Check if this is a refresh operation (has pageId and etag)
+      const isRefresh = item.pageId !== undefined && item.etag !== undefined;
+
+      // Define fetch options, passing signal, followRedirects, headers, and etag
       const fetchOptions = {
         signal,
         followRedirects: options.followRedirects,
         headers: options.headers, // Forward custom headers
+        etag: item.etag, // Pass ETag for conditional requests
       };
 
       // Use AutoDetectFetcher which handles fallbacks automatically
       const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
 
+      // Handle NOT_MODIFIED status (HTTP 304)
+      if (rawContent.status === FetchStatus.NOT_MODIFIED) {
+        if (isRefresh) {
+          logger.debug(`✓ Page unchanged (304): ${url}`);
+          // Return empty result, no processing needed
+          return { url, links: [], status: FetchStatus.NOT_MODIFIED };
+        }
+        // For non-refresh operations, 304 shouldn't happen
+        logger.warn(`⚠️  Unexpected 304 response for non-refresh operation: ${url}`);
+        return { url, links: [], status: FetchStatus.NOT_MODIFIED };
+      }
+
+      // Handle SUCCESS status (HTTP 200)
+      // For refresh operations with existing pages, mark for deletion before re-adding
+      const shouldRefresh = isRefresh && item.pageId;
+      if (shouldRefresh) {
+        logger.debug(`✓ Refreshing page content: ${url}`);
+      }
+
       // --- Start Pipeline Processing ---
-      let processed: ProcessedContent | undefined;
+      let processed: PipelineResult | undefined;
       for (const pipeline of this.pipelines) {
-        if (pipeline.canProcess(rawContent)) {
+        const contentBuffer = Buffer.isBuffer(rawContent.content)
+          ? rawContent.content
+          : Buffer.from(rawContent.content);
+        if (pipeline.canProcess(rawContent.mimeType || "text/plain", contentBuffer)) {
           logger.debug(
             `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
           );
@@ -79,11 +103,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for URL ${url}. Skipping processing.`,
         );
-        return { document: undefined, links: [] };
+        return { url, links: [], status: FetchStatus.SUCCESS };
       }
 
       // Log errors from pipeline
-      for (const err of processed.errors) {
+      for (const err of processed.errors ?? []) {
         logger.warn(`⚠️  Processing error for ${url}: ${err.message}`);
       }
 
@@ -92,48 +116,48 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  No processable content found for ${url} after pipeline execution.`,
         );
-        return { document: undefined, links: processed.links };
+        return {
+          url,
+          links: processed.links,
+          status: FetchStatus.SUCCESS,
+        };
       }
 
-      // Determine base for scope filtering:
-      // For depth 0 (initial page) use the final fetched URL (rawContent.source) so protocol/host redirects don't drop links.
-      // For deeper pages, use canonicalBaseUrl (set after first page) or fallback to original.
-      const baseUrl =
-        item.depth === 0
-          ? new URL(rawContent.source)
-          : (this.canonicalBaseUrl ?? new URL(options.url));
+      // For refresh operations, don't extract or follow links
+      let filteredLinks: string[] = [];
 
-      const filteredLinks = processed.links.filter((link) => {
-        try {
-          const targetUrl = new URL(link);
-          const scope = options.scope || "subpages";
-          return (
-            isInScope(baseUrl, targetUrl, scope) &&
-            (!this.shouldFollowLinkFn || this.shouldFollowLinkFn(baseUrl, targetUrl))
-          );
-        } catch {
-          return false;
-        }
-      });
+      if (!isRefresh) {
+        // Determine base for scope filtering:
+        // For depth 0 (initial page) use the final fetched URL (rawContent.source) so protocol/host redirects don't drop links.
+        // For deeper pages, use canonicalBaseUrl (set after first page) or fallback to original.
+        const baseUrl =
+          item.depth === 0
+            ? new URL(rawContent.source)
+            : (this.canonicalBaseUrl ?? new URL(options.url));
+
+        filteredLinks =
+          processed.links?.filter((link) => {
+            try {
+              const targetUrl = new URL(link);
+              const scope = options.scope || "subpages";
+              return (
+                isInScope(baseUrl, targetUrl, scope) &&
+                (!this.shouldFollowLinkFn || this.shouldFollowLinkFn(baseUrl, targetUrl))
+              );
+            } catch {
+              return false;
+            }
+          }) ?? [];
+      }
 
       return {
-        document: {
-          content: processed.textContent,
-          metadata: {
-            url,
-            title:
-              typeof processed.metadata.title === "string"
-                ? processed.metadata.title
-                : "Untitled",
-            library: options.library,
-            version: options.version,
-            etag: rawContent.etag,
-            lastModified: rawContent.lastModified,
-            ...processed.metadata,
-          },
-        } satisfies Document,
+        url,
+        etag: rawContent.etag,
+        lastModified: rawContent.lastModified,
+        contentType: rawContent.mimeType,
+        content: processed,
         links: filteredLinks,
-        finalUrl: rawContent.source,
+        status: FetchStatus.SUCCESS,
       };
     } catch (error) {
       // Log fetch errors or pipeline execution errors (if run throws)

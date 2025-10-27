@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { HttpFetcher } from "../fetcher";
+import { FetchStatus, HttpFetcher } from "../fetcher";
 import type { RawContent } from "../fetcher/types";
 import { HtmlPipeline } from "../pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../pipelines/MarkdownPipeline";
+import type { PipelineResult } from "../pipelines/types";
 import type { ScraperOptions } from "../types";
 import { GitHubRepoScraperStrategy } from "./GitHubRepoScraperStrategy";
 
@@ -130,7 +131,7 @@ describe("GitHubRepoScraperStrategy", () => {
       httpFetcherInstance.fetch.mockImplementation((url: string) => {
         if (url.includes("api.github.com/repos")) {
           return Promise.resolve({
-            content: JSON.stringify({ default_branch: "main" }),
+            textContent: JSON.stringify({ default_branch: "main" }),
             mimeType: "application/json",
             source: url,
             charset: "utf-8",
@@ -138,7 +139,7 @@ describe("GitHubRepoScraperStrategy", () => {
         }
         if (url.includes("git/trees")) {
           return Promise.resolve({
-            content: JSON.stringify({
+            textContent: JSON.stringify({
               sha: "tree123",
               url: "https://api.github.com/repos/owner/repo/git/trees/tree123",
               tree: [
@@ -172,7 +173,7 @@ describe("GitHubRepoScraperStrategy", () => {
           });
         }
         return Promise.resolve({
-          content: "file content",
+          textContent: "file content",
           mimeType: "text/plain",
           source: url,
           charset: "utf-8",
@@ -218,13 +219,13 @@ describe("GitHubRepoScraperStrategy", () => {
           resolvedBranch: "main",
         });
 
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
       expect(result.links).toEqual([
         "github-file://README.md",
         "github-file://src/index.js",
       ]);
-      expect(result.document).toBeUndefined();
+      expect(result.content).toBeUndefined();
 
       // Clean up the spy
       mockFetchRepositoryTree.mockRestore();
@@ -236,10 +237,10 @@ describe("GitHubRepoScraperStrategy", () => {
         url: "https://github.com/owner/repo/blob/main/README.md",
       };
       const item = { url: "https://github.com/owner/repo/blob/main/README.md", depth: 0 };
-      const result = await (strategy as any).processItem(item, blobOptions);
+      const result = await strategy.processItem(item, blobOptions);
 
       expect(result.links).toEqual(["github-file://README.md"]);
-      expect(result.document).toBeUndefined();
+      expect(result.content).toBeUndefined();
     });
 
     it("should handle blob URL without file path", async () => {
@@ -248,10 +249,10 @@ describe("GitHubRepoScraperStrategy", () => {
         url: "https://github.com/owner/repo/blob/main",
       };
       const item = { url: "https://github.com/owner/repo/blob/main", depth: 0 };
-      const result = await (strategy as any).processItem(item, blobOptions);
+      const result = await strategy.processItem(item, blobOptions);
 
       expect(result.links).toEqual([]);
-      expect(result.document).toBeUndefined();
+      expect(result.content).toBeUndefined();
     });
 
     it("should process individual file content", async () => {
@@ -260,11 +261,13 @@ describe("GitHubRepoScraperStrategy", () => {
         mimeType: "text/markdown",
         source: "https://raw.githubusercontent.com/owner/repo/main/README.md",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Test File\nThis is a test markdown file.",
-        metadata: { title: "Test File" },
+        title: "Test File",
+        chunks: [],
         errors: [],
         links: [],
       };
@@ -274,18 +277,14 @@ describe("GitHubRepoScraperStrategy", () => {
       markdownPipelineInstance.process.mockResolvedValue(processedContent);
 
       const item = { url: "github-file://README.md", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document).toEqual({
-        content: "Test File\nThis is a test markdown file.",
-        contentType: "text/markdown",
-        metadata: {
-          url: "https://github.com/owner/repo/blob/main/README.md",
-          title: "Test File",
-          library: "test-lib",
-          version: "1.0.0",
-        },
-      });
+      expect(result.content?.textContent).toBe(
+        "Test File\nThis is a test markdown file.",
+      );
+      expect(result.contentType).toBe("text/markdown");
+      expect(result.url).toBe("https://github.com/owner/repo/blob/main/README.md");
+      expect(result.content?.title).toBe("Test File");
       expect(result.links).toEqual([]);
     });
 
@@ -295,11 +294,13 @@ describe("GitHubRepoScraperStrategy", () => {
         mimeType: "text/plain",
         source: "https://raw.githubusercontent.com/owner/repo/main/config.txt",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
-      const processedContent = {
+      const processedContent: PipelineResult = {
         textContent: "Some content without title",
-        metadata: { title: "" },
+        title: "",
+        chunks: [],
         errors: [],
         links: [],
       };
@@ -309,9 +310,9 @@ describe("GitHubRepoScraperStrategy", () => {
       markdownPipelineInstance.process.mockResolvedValue(processedContent);
 
       const item = { url: "github-file://config.txt", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document?.metadata.title).toBe("config.txt");
+      expect(result.title).toBe("config.txt");
     });
 
     it("should handle unsupported content types", async () => {
@@ -320,6 +321,7 @@ describe("GitHubRepoScraperStrategy", () => {
         mimeType: "application/octet-stream",
         source: "https://raw.githubusercontent.com/owner/repo/main/binary.bin",
         charset: "utf-8",
+        status: FetchStatus.SUCCESS,
       };
 
       httpFetcherInstance.fetch.mockResolvedValue(rawContent);
@@ -327,9 +329,9 @@ describe("GitHubRepoScraperStrategy", () => {
       markdownPipelineInstance.canProcess.mockReturnValue(false);
 
       const item = { url: "github-file://binary.bin", depth: 1 };
-      const result = await (strategy as any).processItem(item, options);
+      const result = await strategy.processItem(item, options);
 
-      expect(result.document).toBeUndefined();
+      expect(result.content).toBeUndefined();
       expect(result.links).toEqual([]);
     });
   });
@@ -352,7 +354,8 @@ describe("GitHubRepoScraperStrategy", () => {
       ];
 
       for (const file of textFiles) {
-        expect((strategy as any).shouldProcessFile(file, options)).toBe(true);
+        // @ts-expect-error Accessing private method for testing
+        expect(strategy.shouldProcessFile(file, options)).toBe(true);
       }
     });
 
@@ -365,13 +368,15 @@ describe("GitHubRepoScraperStrategy", () => {
       ];
 
       for (const file of binaryFiles) {
-        expect((strategy as any).shouldProcessFile(file, options)).toBe(false);
+        // @ts-expect-error Accessing private method for testing
+        expect(strategy.shouldProcessFile(file, options)).toBe(false);
       }
     });
 
     it("should skip tree items", () => {
       const treeItem = { path: "src", type: "tree" as const };
-      expect((strategy as any).shouldProcessFile(treeItem, options)).toBe(false);
+      // @ts-expect-error Accessing private method for testing
+      expect(strategy.shouldProcessFile(treeItem, options)).toBe(false);
     });
 
     it("should respect include patterns", () => {
@@ -381,20 +386,38 @@ describe("GitHubRepoScraperStrategy", () => {
       };
 
       expect(
-        (strategy as any).shouldProcessFile(
-          { path: "README.md", type: "blob" as const },
+        // @ts-expect-error Accessing private method for testing
+        strategy.shouldProcessFile(
+          {
+            path: "README.md",
+            type: "blob" as const,
+            sha: "abc123",
+            url: "https://api.github.com/repos/owner/repo/git/blobs/abc123",
+          },
           optionsWithInclude,
         ),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessFile(
-          { path: "src/index.js", type: "blob" as const },
+        // @ts-expect-error Accessing private method for testing
+        strategy.shouldProcessFile(
+          {
+            path: "src/index.js",
+            type: "blob" as const,
+            sha: "def456",
+            url: "https://api.github.com/repos/owner/repo/git/blobs/def456",
+          },
           optionsWithInclude,
         ),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessFile(
-          { path: "package.json", type: "blob" as const },
+        // @ts-expect-error Accessing private method for testing
+        strategy.shouldProcessFile(
+          {
+            path: "package.json",
+            type: "blob" as const,
+            sha: "ghi789",
+            url: "https://api.github.com/repos/owner/repo/git/blobs/ghi789",
+          },
           optionsWithInclude,
         ),
       ).toBe(false);
@@ -407,20 +430,38 @@ describe("GitHubRepoScraperStrategy", () => {
       };
 
       expect(
-        (strategy as any).shouldProcessFile(
-          { path: "src/index.js", type: "blob" as const },
+        // @ts-expect-error Accessing private method for testing
+        strategy.shouldProcessFile(
+          {
+            path: "src/index.js",
+            type: "blob" as const,
+            sha: "abc123",
+            url: "https://api.github.com/repos/owner/repo/git/blobs/abc123",
+          },
           optionsWithExclude,
         ),
       ).toBe(true);
       expect(
-        (strategy as any).shouldProcessFile(
-          { path: "src/index.test.js", type: "blob" as const },
+        // @ts-expect-error Accessing private method for testing
+        strategy.shouldProcessFile(
+          {
+            path: "src/index.test.js",
+            type: "blob" as const,
+            sha: "def456",
+            url: "https://api.github.com/repos/owner/repo/git/blobs/def456",
+          },
           optionsWithExclude,
         ),
       ).toBe(false);
       expect(
-        (strategy as any).shouldProcessFile(
-          { path: "node_modules/package/index.js", type: "blob" as const },
+        // @ts-expect-error Accessing private method for testing
+        strategy.shouldProcessFile(
+          {
+            path: "node_modules/package/index.js",
+            type: "blob" as const,
+            sha: "ghi789",
+            url: "https://api.github.com/repos/owner/repo/git/blobs/ghi789",
+          },
           optionsWithExclude,
         ),
       ).toBe(false);

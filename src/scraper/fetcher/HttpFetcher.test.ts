@@ -292,8 +292,8 @@ describe("HttpFetcher", () => {
 
     it("should not retry on non-retryable HTTP status codes", async () => {
       const fetcher = new HttpFetcher();
-      // Test various non-retryable status codes
-      const nonRetryableStatuses = [400, 401, 403, 404, 405, 410];
+      // Test various non-retryable status codes (excluding 404 which has special handling)
+      const nonRetryableStatuses = [400, 401, 403, 405, 410];
 
       for (const status of nonRetryableStatuses) {
         mockedAxios.get.mockReset();
@@ -308,6 +308,20 @@ describe("HttpFetcher", () => {
 
         expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries
       }
+    });
+
+    it("should return not_found status for 404 responses", async () => {
+      const fetcher = new HttpFetcher();
+      mockedAxios.get.mockRejectedValue({ response: { status: 404 } });
+
+      const result = await fetcher.fetch("https://example.com", {
+        maxRetries: 2,
+        retryDelay: 1,
+      });
+
+      // 404 should return result with not_found status instead of throwing
+      expect(result.status).toBe("not_found");
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries
     });
 
     it("should retry on undefined status (network errors)", async () => {
@@ -363,11 +377,12 @@ describe("HttpFetcher", () => {
     const fetcher = new HttpFetcher();
     mockedAxios.get.mockRejectedValue({ response: { status: 404 } });
 
-    await expect(
-      fetcher.fetch("https://example.com", {
-        retryDelay: 1, // Use minimal delay
-      }),
-    ).rejects.toThrow(ScraperError);
+    const result = await fetcher.fetch("https://example.com", {
+      retryDelay: 1, // Use minimal delay
+    });
+
+    // Should return result with error status instead of throwing
+    expect(result.status).toBe("not_found");
     expect(mockedAxios.get).toHaveBeenCalledTimes(1);
   });
 

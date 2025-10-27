@@ -9,7 +9,7 @@ import type { ContentAssemblyStrategy } from "./types";
  * @returns The appropriate strategy instance
  */
 export function createContentAssemblyStrategy(
-  mimeType?: string,
+  mimeType?: string | null,
 ): ContentAssemblyStrategy {
   // Default to MarkdownAssemblyStrategy for unknown or missing MIME types
   if (!mimeType) {

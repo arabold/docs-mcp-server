@@ -3,7 +3,7 @@ import type { ProgressCallback } from "../types";
 import { ScraperError } from "../utils/errors";
 import type { ScraperRegistry } from "./ScraperRegistry";
 import { ScraperService } from "./ScraperService";
-import type { ScraperOptions, ScraperProgress } from "./types";
+import type { ScraperOptions, ScraperProgressEvent } from "./types";
 
 vi.mock("../utils/logger");
 
@@ -27,7 +27,7 @@ describe("ScraperService", () => {
       maxPages: 10,
       maxDepth: 1,
     };
-    const progressCallback: ProgressCallback<ScraperProgress> = vi.fn();
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
 
     mockRegistry.getStrategy.mockReturnValue(mockStrategy);
     // Call scrape without a signal (it's optional)
@@ -51,7 +51,7 @@ describe("ScraperService", () => {
       maxPages: 10,
       maxDepth: 1,
     };
-    const progressCallback: ProgressCallback<ScraperProgress> = vi.fn();
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
 
     mockRegistry.getStrategy.mockReturnValue(mockStrategy);
     // Call scrape without a signal
@@ -74,7 +74,7 @@ describe("ScraperService", () => {
       maxPages: 10,
       maxDepth: 1,
     };
-    const progressCallback: ProgressCallback<ScraperProgress> = vi.fn();
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
 
     mockRegistry.getStrategy.mockReturnValue(mockStrategy);
     // Call scrape without a signal
@@ -98,7 +98,7 @@ describe("ScraperService", () => {
       maxPages: 10,
       maxDepth: 1,
     };
-    const progressCallback: ProgressCallback<ScraperProgress> = vi.fn();
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
 
     mockRegistry.getStrategy.mockReturnValue(null);
 
@@ -117,7 +117,7 @@ describe("ScraperService", () => {
       maxPages: 10,
       maxDepth: 1,
     };
-    const progressCallback: ProgressCallback<ScraperProgress> = vi.fn();
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
 
     mockRegistry.getStrategy.mockReturnValue(mockStrategy);
     mockStrategy.scrape.mockRejectedValue(new Error("Strategy error"));
@@ -138,7 +138,7 @@ describe("ScraperService", () => {
       maxPages: 1,
       maxDepth: 1,
     };
-    const progressCallback: ProgressCallback<ScraperProgress> = vi.fn();
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
 
     // Mock a strategy that would handle JSON files
     const jsonStrategy = {

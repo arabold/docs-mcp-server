@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Document } from "../../types";
-import type { ScraperOptions } from "../types";
+import type { ProgressCallback } from "../../types";
+import { FetchStatus } from "../fetcher/types";
+import type { ScrapeResult, ScraperOptions, ScraperProgressEvent } from "../types";
 import { ScrapeMode } from "../types"; // Import ScrapeMode
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
@@ -32,6 +33,7 @@ describe("WebScraperStrategy", () => {
       content: "<html><body><h1>Default Mock Content</h1></body></html>",
       mimeType: "text/html",
       source: "https://example.com", // Default source
+      status: FetchStatus.SUCCESS,
     });
 
     // Create a fresh instance of the strategy for each test
@@ -67,7 +69,7 @@ describe("WebScraperStrategy", () => {
   }, 10000);
 
   it("should use HttpFetcher to fetch content and process result", async () => {
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     const testUrl = "https://example.com";
     options.url = testUrl; // Ensure options match
 
@@ -77,6 +79,7 @@ describe("WebScraperStrategy", () => {
       content: `<html><head><title>${expectedTitle}</title></head><body><h1>Fetched Content</h1></body></html>`,
       mimeType: "text/html",
       source: testUrl,
+      status: FetchStatus.SUCCESS,
     });
 
     await strategy.scrape(options, progressCallback);
@@ -90,17 +93,17 @@ describe("WebScraperStrategy", () => {
     // Verify that the pipeline processed and called the callback with a document
     expect(progressCallback).toHaveBeenCalled();
     const documentProcessingCall = progressCallback.mock.calls.find(
-      (call) => call[0].document,
+      (call) => call[0].result,
     );
     expect(documentProcessingCall).toBeDefined();
     // Use non-null assertion operator (!) since we've asserted it's defined
-    expect(documentProcessingCall![0].document.content).toBe("# Fetched Content"); // Check processed markdown (from H1)
-    expect(documentProcessingCall![0].document.metadata.title).toBe(expectedTitle); // Check extracted title (from <title>)
+    expect(documentProcessingCall![0].result?.textContent).toBe("# Fetched Content"); // Check processed markdown (from H1)
+    expect(documentProcessingCall![0].result?.title).toBe(expectedTitle); // Check extracted title (from <title>)
   }, 10000);
 
   it("should respect the followRedirects option", async () => {
     options.followRedirects = false;
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     await strategy.scrape(options, progressCallback);
 
@@ -112,7 +115,7 @@ describe("WebScraperStrategy", () => {
     // Also check that processing still happened
     expect(progressCallback).toHaveBeenCalled();
     const documentProcessingCall = progressCallback.mock.calls.find(
-      (call) => call[0].document,
+      (call) => call[0].result,
     );
     expect(documentProcessingCall).toBeDefined();
   }, 10000);
@@ -134,19 +137,25 @@ describe("WebScraperStrategy", () => {
 
     mockFetchFn.mockImplementation(async (url: string) => {
       if (url === "https://example.com")
-        return { content: baseHtml, mimeType: "text/html", source: url };
+        return {
+          content: baseHtml,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
       // Return simple content for subpages, title reflects URL
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
     options.scope = "subpages";
     options.maxDepth = 1; // Limit depth for simplicity
     options.maxPages = 5; // Allow enough pages
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     await strategy.scrape(options, progressCallback);
 
@@ -174,22 +183,17 @@ describe("WebScraperStrategy", () => {
     );
 
     // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls
-      .map((call) => call[0].document)
-      .filter((doc): doc is Document => doc !== undefined); // Type guard
-
+    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
     expect(receivedDocs).toHaveLength(4);
-    expect(receivedDocs.some((doc) => doc.metadata.title === "Test Site")).toBe(true);
+    expect(receivedDocs.some((doc) => doc?.title === "Test Site")).toBe(true);
     expect(
-      receivedDocs.some((doc) => doc.metadata.title === "https://example.com/subpage1"),
+      receivedDocs.some((doc) => doc?.title === "https://example.com/subpage1"),
     ).toBe(true);
     expect(
-      receivedDocs.some((doc) => doc.metadata.title === "https://example.com/subpage2/"),
+      receivedDocs.some((doc) => doc?.title === "https://example.com/subpage2/"),
     ).toBe(true);
     expect(
-      receivedDocs.some(
-        (doc) => doc.metadata.title === "https://example.com/relative-path",
-      ),
+      receivedDocs.some((doc) => doc?.title === "https://example.com/relative-path"),
     ).toBe(true);
   }, 10000);
 
@@ -201,18 +205,20 @@ describe("WebScraperStrategy", () => {
             '<html><head><title>Base</title></head><body><a href="/subpage">Sub</a><a href="https://api.example.com/ep">API</a><a href="https://other.com">Other</a></body></html>',
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
     options.scope = "hostname";
     options.maxDepth = 1;
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     await strategy.scrape(options, progressCallback);
 
@@ -229,14 +235,12 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).not.toHaveBeenCalledWith("https://other.com", expect.anything());
 
     // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls
-      .map((call) => call[0].document)
-      .filter((doc): doc is Document => doc !== undefined);
+    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
     expect(receivedDocs).toHaveLength(2);
-    expect(receivedDocs.some((doc) => doc.metadata.title === "Base")).toBe(true);
-    expect(
-      receivedDocs.some((doc) => doc.metadata.title === "https://example.com/subpage"),
-    ).toBe(true);
+    expect(receivedDocs.some((doc) => doc?.title === "Base")).toBe(true);
+    expect(receivedDocs.some((doc) => doc?.title === "https://example.com/subpage")).toBe(
+      true,
+    );
   }, 10000);
 
   it("should follow links based on scope=domain", async () => {
@@ -247,18 +251,20 @@ describe("WebScraperStrategy", () => {
             '<html><head><title>Base</title></head><body><a href="/subpage">Sub</a><a href="https://api.example.com/ep">API</a><a href="https://other.com">Other</a></body></html>',
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
     options.scope = "domain";
     options.maxDepth = 1;
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     await strategy.scrape(options, progressCallback);
 
@@ -275,17 +281,15 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).not.toHaveBeenCalledWith("https://other.com", expect.anything());
 
     // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls
-      .map((call) => call[0].document)
-      .filter((doc): doc is Document => doc !== undefined);
+    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
     expect(receivedDocs).toHaveLength(3);
-    expect(receivedDocs.some((doc) => doc.metadata.title === "Base")).toBe(true);
-    expect(
-      receivedDocs.some((doc) => doc.metadata.title === "https://example.com/subpage"),
-    ).toBe(true);
-    expect(
-      receivedDocs.some((doc) => doc.metadata.title === "https://api.example.com/ep"),
-    ).toBe(true);
+    expect(receivedDocs.some((doc) => doc?.title === "Base")).toBe(true);
+    expect(receivedDocs.some((doc) => doc?.title === "https://example.com/subpage")).toBe(
+      true,
+    );
+    expect(receivedDocs.some((doc) => doc?.title === "https://api.example.com/ep")).toBe(
+      true,
+    );
   }, 10000);
 
   // --- Limit Tests ---
@@ -300,6 +304,7 @@ describe("WebScraperStrategy", () => {
             '<html><head><title>L0</title></head><body><a href="/level1">L1</a></body></html>',
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       if (url === "https://example.com/level1") {
@@ -309,6 +314,7 @@ describe("WebScraperStrategy", () => {
             '<html><head><title>L1</title></head><body><a href="/level2">L2</a></body></html>',
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       if (url === "https://example.com/level2") {
@@ -318,6 +324,7 @@ describe("WebScraperStrategy", () => {
             '<html><head><title>L2</title></head><body><a href="/level3">L3</a></body></html>',
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       // Default for unexpected calls
@@ -325,11 +332,12 @@ describe("WebScraperStrategy", () => {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
     options.maxDepth = 1; // Limit depth
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     await strategy.scrape(options, progressCallback);
 
@@ -345,12 +353,10 @@ describe("WebScraperStrategy", () => {
     ); // Exceeds depth
 
     // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls
-      .map((call) => call[0].document)
-      .filter((doc): doc is Document => doc !== undefined);
+    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
     expect(receivedDocs).toHaveLength(2); // Base (L0) + L1
-    expect(receivedDocs.some((doc) => doc.metadata.title === "L0")).toBe(true);
-    expect(receivedDocs.some((doc) => doc.metadata.title === "L1")).toBe(true);
+    expect(receivedDocs.some((doc) => doc?.title === "L0")).toBe(true);
+    expect(receivedDocs.some((doc) => doc?.title === "L1")).toBe(true);
   }, 10000);
 
   it("should respect maxPages option", async () => {
@@ -362,17 +368,19 @@ describe("WebScraperStrategy", () => {
             '<html><head><title>Base</title></head><body><a href="/page1">1</a><a href="/page2">2</a><a href="/page3">3</a></body></html>',
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
     options.maxPages = 2; // Limit pages
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     await strategy.scrape(options, progressCallback);
 
@@ -396,9 +404,7 @@ describe("WebScraperStrategy", () => {
     expect(subpagesFetchedCount).toBe(1); // Exactly one subpage fetched
 
     // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls
-      .map((call) => call[0].document)
-      .filter((doc): doc is Document => doc !== undefined);
+    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
     expect(receivedDocs).toHaveLength(2); // Base + 1 subpage
   }, 10000);
 
@@ -413,23 +419,25 @@ describe("WebScraperStrategy", () => {
             '<html><head><title>Base</title></head><body><a href="/page1">1</a><a href="/page2">2</a></body></html>',
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     options.maxPages = 3; // Allow all pages
     options.maxDepth = 1;
 
     await strategy.scrape(options, progressCallback);
 
     // Verify callback calls
-    const callsWithDocs = progressCallback.mock.calls.filter((call) => call[0].document);
+    const callsWithDocs = progressCallback.mock.calls.filter((call) => call[0].result);
     expect(callsWithDocs).toHaveLength(3); // Base + page1 + page2
 
     // Check structure of a progress call with a document
@@ -439,19 +447,15 @@ describe("WebScraperStrategy", () => {
       currentUrl: expect.any(String),
       depth: expect.any(Number),
       maxDepth: options.maxDepth,
-      document: expect.objectContaining({
-        content: expect.any(String),
-        metadata: expect.objectContaining({
-          url: expect.any(String),
-          title: expect.any(String), // Title comes from pipeline now
-          library: options.library,
-          version: options.version,
-        }),
-      }),
-    });
+      result: expect.objectContaining({
+        textContent: expect.any(String),
+        url: expect.any(String),
+        title: expect.any(String),
+      } satisfies Partial<ScrapeResult>),
+    } satisfies Partial<ScraperProgressEvent>);
 
     // Check specific URLs reported
-    const reportedUrls = callsWithDocs.map((call) => call[0].document.metadata.url);
+    const reportedUrls = callsWithDocs.map((call) => call[0].result?.url);
     expect(reportedUrls).toEqual(
       expect.arrayContaining([
         "https://example.com",
@@ -477,9 +481,10 @@ describe("WebScraperStrategy", () => {
       content: `<html><head><title>${expectedTitle}</title></head><body><h1>Processed Content</h1></body></html>`,
       mimeType: "text/html",
       source: urlWithCreds,
+      status: FetchStatus.SUCCESS,
     });
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     await strategy.scrape(options, progressCallback);
 
     // Ensure fetch was called with the credentialed URL
@@ -488,14 +493,14 @@ describe("WebScraperStrategy", () => {
       expect.objectContaining({ followRedirects: true }),
     );
     // Ensure a document was produced with the expected markdown and title
-    const docCall = progressCallback.mock.calls.find((call) => call[0].document);
+    const docCall = progressCallback.mock.calls.find((call) => call[0].result);
     expect(docCall).toBeDefined();
-    expect(docCall![0].document.content).toContain(expectedMarkdown);
-    expect(docCall![0].document.metadata.title).toBe(expectedTitle);
+    expect(docCall![0].result?.textContent).toContain(expectedMarkdown);
+    expect(docCall![0].result?.title).toBe(expectedTitle);
   }, 10000); // Keep timeout for consistency but test should run quickly with fetch mode
 
   it("should forward custom headers to HttpFetcher", async () => {
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     const testUrl = "https://example.com";
     options.url = testUrl;
     options.headers = {
@@ -506,6 +511,7 @@ describe("WebScraperStrategy", () => {
       content: "<html><body>Header Test</body></html>",
       mimeType: "text/html",
       source: testUrl,
+      status: FetchStatus.SUCCESS,
     });
     await strategy.scrape(options, progressCallback);
     expect(mockFetchFn).toHaveBeenCalledWith(
@@ -521,7 +527,7 @@ describe("WebScraperStrategy", () => {
 
   describe("pipeline selection", () => {
     it("should process HTML content through HtmlPipeline", async () => {
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testUrl = "https://example.com";
       options.url = testUrl;
 
@@ -530,19 +536,20 @@ describe("WebScraperStrategy", () => {
           "<html><head><title>HTML Test</title></head><body><h1>HTML Content</h1></body></html>",
         mimeType: "text/html",
         source: testUrl,
+        status: FetchStatus.SUCCESS,
       });
 
       await strategy.scrape(options, progressCallback);
 
       // Verify HTML content was processed (converted to markdown)
-      const docCall = progressCallback.mock.calls.find((call) => call[0].document);
+      const docCall = progressCallback.mock.calls.find((call) => call[0].result);
       expect(docCall).toBeDefined();
-      expect(docCall![0].document.content).toContain("# HTML Content");
-      expect(docCall![0].document.metadata.title).toBe("HTML Test");
+      expect(docCall![0].result?.textContent).toContain("# HTML Content");
+      expect(docCall![0].result?.title).toBe("HTML Test");
     });
 
     it("should process markdown content through MarkdownPipeline", async () => {
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testUrl = "https://example.com/readme.md";
       options.url = testUrl;
 
@@ -551,19 +558,22 @@ describe("WebScraperStrategy", () => {
         content: markdownContent,
         mimeType: "text/markdown",
         source: testUrl,
+        status: FetchStatus.SUCCESS,
       });
 
       await strategy.scrape(options, progressCallback);
 
       // Verify markdown content was processed
-      const docCall = progressCallback.mock.calls.find((call) => call[0].document);
+      const docCall = progressCallback.mock.calls.find((call) => call[0].result);
       expect(docCall).toBeDefined();
-      expect(docCall![0].document.content).toContain("# Markdown Title");
-      expect(docCall![0].document.content).toContain("This is already markdown content.");
+      expect(docCall![0].result?.textContent).toContain("# Markdown Title");
+      expect(docCall![0].result?.textContent).toContain(
+        "This is already markdown content.",
+      );
     });
 
     it("should skip unsupported content types", async () => {
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testUrl = "https://example.com/image.png";
       options.url = testUrl;
 
@@ -571,19 +581,20 @@ describe("WebScraperStrategy", () => {
         content: Buffer.from([0x89, 0x50, 0x4e, 0x47]), // PNG header
         mimeType: "image/png",
         source: testUrl,
+        status: FetchStatus.SUCCESS,
       });
 
       await strategy.scrape(options, progressCallback);
 
       // Verify no document was produced for unsupported content
-      const docCall = progressCallback.mock.calls.find((call) => call[0].document);
+      const docCall = progressCallback.mock.calls.find((call) => call[0].result);
       expect(docCall).toBeUndefined();
     });
   });
 
   describe("error handling", () => {
     it("should handle fetch failures gracefully", async () => {
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testUrl = "https://example.com/error";
       options.url = testUrl;
 
@@ -595,12 +606,12 @@ describe("WebScraperStrategy", () => {
       );
 
       // Verify no documents were processed
-      const docCalls = progressCallback.mock.calls.filter((call) => call[0].document);
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
       expect(docCalls).toHaveLength(0);
     });
 
     it("should handle empty content gracefully", async () => {
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testUrl = "https://example.com/empty";
       options.url = testUrl;
 
@@ -608,6 +619,7 @@ describe("WebScraperStrategy", () => {
         content: "<html><body></body></html>", // Empty content
         mimeType: "text/html",
         source: testUrl,
+        status: FetchStatus.SUCCESS,
       });
 
       await strategy.scrape(options, progressCallback);
@@ -640,17 +652,19 @@ describe("WebScraperStrategy", () => {
               </body></html>`,
             mimeType: "text/html",
             source: url,
+            status: FetchStatus.SUCCESS,
           };
         }
         return {
           content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       });
 
       options.maxDepth = 1;
-      const progressCallback = vi.fn();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
       await customStrategy.scrape(options, progressCallback);
 
@@ -673,9 +687,7 @@ describe("WebScraperStrategy", () => {
       );
 
       // Verify documents were produced for allowed pages
-      const receivedDocs = progressCallback.mock.calls
-        .map((call) => call[0].document)
-        .filter((doc): doc is Document => doc !== undefined);
+      const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
       expect(receivedDocs).toHaveLength(3); // Base + 2 allowed pages
     });
   });
@@ -695,12 +707,14 @@ describe("WebScraperStrategy", () => {
           content: `<html><body><a href="${relHref}">Link</a></body></html>`,
           mimeType: "text/html",
           source: canonical, // Final URL after redirect
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -708,7 +722,7 @@ describe("WebScraperStrategy", () => {
     options.maxDepth = 1;
     options.maxPages = 5;
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     await strategy.scrape(options, progressCallback);
 
     expect(mockFetchFn).toHaveBeenCalledWith(original, expect.anything());
@@ -732,12 +746,14 @@ describe("WebScraperStrategy", () => {
           </body></html>`,
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -746,7 +762,7 @@ describe("WebScraperStrategy", () => {
     options.maxDepth = 1;
     options.maxPages = 5;
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     await strategy.scrape(options, progressCallback);
 
     expect(mockFetchFn).toHaveBeenCalledWith(start, expect.anything());
@@ -771,12 +787,14 @@ describe("WebScraperStrategy", () => {
           </body></html>`,
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -785,7 +803,7 @@ describe("WebScraperStrategy", () => {
     options.maxDepth = 1;
     options.maxPages = 10;
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     await strategy.scrape(options, progressCallback);
 
     expect(mockFetchFn).toHaveBeenCalledWith(start, expect.anything());
@@ -805,12 +823,14 @@ describe("WebScraperStrategy", () => {
           content: `<html><body><a href="${nestedRel}">Nested</a></body></html>`,
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -819,7 +839,7 @@ describe("WebScraperStrategy", () => {
     options.maxDepth = 1;
     options.maxPages = 5;
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     await strategy.scrape(options, progressCallback);
 
     expect(mockFetchFn).toHaveBeenCalledWith(startDir, expect.anything());
@@ -838,6 +858,7 @@ describe("WebScraperStrategy", () => {
           content: `<html><head><base href="${cdnBase}"></head><body><a href="${relLink}">Script</a></body></html>`,
           mimeType: "text/html",
           source: url,
+          status: FetchStatus.SUCCESS,
         };
       }
       // Any unexpected fetches return generic content
@@ -845,6 +866,7 @@ describe("WebScraperStrategy", () => {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
         source: url,
+        status: FetchStatus.SUCCESS,
       };
     });
 
@@ -853,7 +875,7 @@ describe("WebScraperStrategy", () => {
     options.maxDepth = 1;
     options.maxPages = 5;
 
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     await strategy.scrape(options, progressCallback);
 
     // Should fetch only the start page; the cross-origin (different hostname) base-derived link is filtered out
@@ -866,14 +888,16 @@ describe("WebScraperStrategy", () => {
       const strategy = new WebScraperStrategy();
 
       // Spy on the close method of all pipelines
-      (strategy as any).pipelines.forEach((pipeline: any) => {
+      // @ts-expect-error - pipelines is private, but we need to access it for testing
+      strategy.pipelines.forEach((pipeline: any) => {
         vi.spyOn(pipeline, "close");
       });
 
       await strategy.cleanup();
 
       // Verify close was called on all pipelines
-      (strategy as any).pipelines.forEach((pipeline: any) => {
+      // @ts-expect-error - pipelines is private, but we need to access it for testing
+      strategy.pipelines.forEach((pipeline: any) => {
         expect(pipeline.close).toHaveBeenCalledOnce();
       });
     });
@@ -882,7 +906,8 @@ describe("WebScraperStrategy", () => {
       const strategy = new WebScraperStrategy();
 
       // Mock one pipeline to throw an error during cleanup
-      vi.spyOn((strategy as any).pipelines[0], "close").mockRejectedValue(
+      // @ts-expect-error - pipelines is private, but we need to access it for testing
+      vi.spyOn(strategy.pipelines[0], "close").mockRejectedValue(
         new Error("Pipeline cleanup failed"),
       );
 
@@ -896,6 +921,298 @@ describe("WebScraperStrategy", () => {
       // Multiple calls should not throw
       await expect(strategy.cleanup()).resolves.not.toThrow();
       await expect(strategy.cleanup()).resolves.not.toThrow();
+    });
+  });
+
+  describe("refresh workflow", () => {
+    beforeEach(() => {
+      vi.resetAllMocks();
+      mockFetchFn.mockResolvedValue({
+        content: "<html><body><h1>Default Mock Content</h1></body></html>",
+        mimeType: "text/html",
+        source: "https://example.com",
+        status: FetchStatus.SUCCESS,
+      });
+      strategy = new WebScraperStrategy();
+      options = {
+        url: "https://example.com",
+        library: "test",
+        version: "1.0",
+        maxPages: 99,
+        maxDepth: 3,
+        scope: "subpages",
+        followRedirects: true,
+        scrapeMode: ScrapeMode.Fetch,
+      };
+    });
+
+    it("should skip processing when page returns 304 Not Modified", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      // Configure mock to return 304 for a refresh operation
+      mockFetchFn.mockResolvedValue({
+        content: "",
+        mimeType: "text/html",
+        source: "https://example.com/page1",
+        status: FetchStatus.NOT_MODIFIED,
+      });
+
+      // Create a queue item with pageId and etag (refresh operation)
+      options.initialQueue = [
+        {
+          url: "https://example.com/page1",
+          depth: 0,
+          pageId: 123,
+          etag: "existing-etag",
+        },
+      ];
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify fetch was called with etag
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/page1",
+        expect.objectContaining({
+          etag: "existing-etag",
+        }),
+      );
+
+      // Verify no documents were processed (304 means unchanged)
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(0);
+    });
+
+    it("should report deleted flag when page returns 404 Not Found during refresh", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      // Configure mock to return 404
+      mockFetchFn.mockResolvedValue({
+        content: "",
+        mimeType: "text/html",
+        source: "https://example.com/deleted-page",
+        status: FetchStatus.NOT_FOUND,
+      });
+
+      // Create a queue item with pageId and etag (refresh operation)
+      options.initialQueue = [
+        {
+          url: "https://example.com/deleted-page",
+          depth: 0,
+          pageId: 456,
+          etag: "old-etag",
+        },
+      ];
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify fetch was called
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/deleted-page",
+        expect.objectContaining({
+          etag: "old-etag",
+        }),
+      );
+
+      // Verify no processed documents were returned
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(0);
+    });
+
+    it("should refresh page content when page returns 200 OK", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const updatedContent =
+        "<html><head><title>Updated</title></head><body><h1>New Content</h1></body></html>";
+
+      // Configure mock to return 200 with new content
+      mockFetchFn.mockResolvedValue({
+        content: updatedContent,
+        mimeType: "text/html",
+        source: "https://example.com/updated-page",
+        status: FetchStatus.SUCCESS,
+        etag: "new-etag",
+      });
+
+      // Create a queue item with pageId and etag (refresh operation)
+      options.initialQueue = [
+        {
+          url: "https://example.com/updated-page",
+          depth: 0,
+          pageId: 789,
+          etag: "old-etag",
+        },
+      ];
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify fetch was called with old etag
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/updated-page",
+        expect.objectContaining({
+          etag: "old-etag",
+        }),
+      );
+
+      // Verify new content was processed
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(1);
+      expect(docCalls[0][0].result?.textContent).toContain("# New Content");
+      expect(docCalls[0][0].result?.title).toBe("Updated");
+      expect(docCalls[0][0].result?.etag).toBe("new-etag");
+    });
+
+    it("should not follow links during refresh operations", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const contentWithLinks = `
+        <html>
+          <head><title>Refreshed Page</title></head>
+          <body>
+            <h1>Content</h1>
+            <a href="https://example.com/new-link">New Link</a>
+            <a href="https://example.com/another-new-link">Another New Link</a>
+          </body>
+        </html>
+      `;
+
+      // Configure mock to return 200 with new links
+      mockFetchFn.mockResolvedValue({
+        content: contentWithLinks,
+        mimeType: "text/html",
+        source: "https://example.com/page-with-links",
+        status: FetchStatus.SUCCESS,
+        etag: "new-etag",
+      });
+
+      // Create a queue item with pageId and etag (refresh operation)
+      options.initialQueue = [
+        {
+          url: "https://example.com/page-with-links",
+          depth: 0,
+          pageId: 999,
+          etag: "old-etag",
+        },
+      ];
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify only the initial page was fetched (no link following)
+      expect(mockFetchFn).toHaveBeenCalledTimes(1);
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/page-with-links",
+        expect.anything(),
+      );
+
+      // Verify the new links were not followed
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/new-link",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/another-new-link",
+        expect.anything(),
+      );
+    });
+
+    it("should process multiple pages in a refresh operation with mixed statuses", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      // Configure mock to return different statuses for different URLs
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/unchanged") {
+          return {
+            content: "",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.NOT_MODIFIED,
+          };
+        }
+        if (url === "https://example.com/deleted") {
+          return {
+            content: "",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          };
+        }
+        if (url === "https://example.com/updated") {
+          return {
+            content:
+              "<html><head><title>Updated</title></head><body><h1>New</h1></body></html>",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+            etag: "new-etag",
+          };
+        }
+        return {
+          content: "<html><body>Default</body></html>",
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      // Create a queue with multiple pages
+      options.initialQueue = [
+        {
+          url: "https://example.com/unchanged",
+          depth: 0,
+          pageId: 1,
+          etag: "etag-1",
+        },
+        {
+          url: "https://example.com/deleted",
+          depth: 0,
+          pageId: 2,
+          etag: "etag-2",
+        },
+        {
+          url: "https://example.com/updated",
+          depth: 0,
+          pageId: 3,
+          etag: "etag-3",
+        },
+      ];
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify all three pages were fetched
+      expect(mockFetchFn).toHaveBeenCalledTimes(3);
+
+      // Verify only the updated page produced a processed document
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(1);
+      expect(docCalls[0][0].result?.url).toBe("https://example.com/updated");
+      expect(docCalls[0][0].result?.title).toBe("Updated");
+    });
+
+    it("should preserve depth from original scrape during refresh", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      mockFetchFn.mockResolvedValue({
+        content:
+          "<html><head><title>Depth Test</title></head><body><h1>Content</h1></body></html>",
+        mimeType: "text/html",
+        source: "https://example.com/deep-page",
+        status: FetchStatus.SUCCESS,
+        etag: "new-etag",
+      });
+
+      // Create a queue item with depth from original scrape
+      options.initialQueue = [
+        {
+          url: "https://example.com/deep-page",
+          depth: 2, // This page was originally scraped at depth 2
+          pageId: 555,
+          etag: "old-etag",
+        },
+      ];
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify the processed document preserves the original depth
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(1);
+      expect(docCalls[0][0].depth).toBe(2);
     });
   });
 });

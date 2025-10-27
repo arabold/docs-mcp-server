@@ -173,7 +173,7 @@ export async function createPipelineWithCallbacks(
 ): Promise<IPipeline> {
   logger.debug(`Initializing pipeline with options: ${JSON.stringify(options)}`);
   const { serverUrl, ...rest } = options;
-  const pipeline = serverUrl
+  const pipeline: IPipeline = serverUrl
     ? await PipelineFactory.createPipeline(undefined, { serverUrl, ...rest })
     : await (async () => {
         if (!docService) {
@@ -194,7 +194,7 @@ export async function createPipelineWithCallbacks(
     },
     onJobError: async (job, error, document) => {
       logger.warn(
-        `⚠️ Job ${job.id} error ${document ? `on document ${document.metadata.url}` : ""}: ${error.message}`,
+        `⚠️ Job ${job.id} error ${document ? `on document ${document.url}` : ""}: ${error.message}`,
       );
     },
   });

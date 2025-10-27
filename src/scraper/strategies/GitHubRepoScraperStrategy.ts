@@ -1,13 +1,14 @@
-import type { Document, ProgressCallback } from "../../types";
+import type { ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
-import type { RawContent } from "../fetcher/types";
+import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
-import type { ContentPipeline } from "../pipelines/types";
-import { ScrapeMode, type ScraperOptions, type ScraperProgress } from "../types";
+import type { ContentPipeline, PipelineResult } from "../pipelines/types";
+import type { QueueItem } from "../types";
+import { ScrapeMode, type ScraperOptions, type ScraperProgressEvent } from "../types";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
-import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
+import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 interface GitHubRepoInfo {
   owner: string;
@@ -364,14 +365,14 @@ export class GitHubRepoScraperStrategy extends BaseScraperStrategy {
     return rawContent;
   }
 
-  protected async processItem(
+  async processItem(
     item: QueueItem,
     options: ScraperOptions,
-    _progressCallback?: ProgressCallback<ScraperProgress>,
     signal?: AbortSignal,
-  ): Promise<{ document?: Document; links?: string[] }> {
+  ): Promise<ProcessItemResult> {
     // Parse the URL to get repository information
     const repoInfo = this.parseGitHubUrl(options.url);
+    const pageCount = this.pageCount;
 
     // For the initial item, handle blob URLs differently than tree URLs
     if (item.depth === 0) {
@@ -383,13 +384,17 @@ export class GitHubRepoScraperStrategy extends BaseScraperStrategy {
           );
 
           // Process the single file directly
-          return { links: [`github-file://${repoInfo.filePath}`] };
+          return {
+            url: item.url,
+            links: [`github-file://${repoInfo.filePath}`],
+            status: FetchStatus.SUCCESS,
+          };
         } else {
           // Blob URL without file path - return empty links
           logger.warn(
             `⚠️  Blob URL without file path: ${options.url}. No files to process.`,
           );
-          return { links: [] };
+          return { url: item.url, links: [], status: FetchStatus.SUCCESS };
         }
       }
 
@@ -410,24 +415,25 @@ export class GitHubRepoScraperStrategy extends BaseScraperStrategy {
       // Convert tree items to URLs for the queue
       const links = fileItems.map((treeItem) => `github-file://${treeItem.path}`);
 
-      return { links };
+      return { url: item.url, links, status: FetchStatus.SUCCESS };
     }
 
     // Process individual files
     if (item.url.startsWith("github-file://")) {
       const filePath = item.url.replace("github-file://", "");
 
-      logger.info(
-        `🗂️  Processing file ${this.pageCount}/${options.maxPages}: ${filePath}`,
-      );
+      logger.info(`🗂️  Processing file ${pageCount}/${options.maxPages}: ${filePath}`);
 
       const rawContent = await this.fetchFileContent(repoInfo, filePath, signal);
 
       // Process content through appropriate pipeline
-      let processed: Awaited<ReturnType<ContentPipeline["process"]>> | undefined;
+      let processed: PipelineResult | undefined;
 
       for (const pipeline of this.pipelines) {
-        if (pipeline.canProcess(rawContent)) {
+        const contentBuffer = Buffer.isBuffer(rawContent.content)
+          ? rawContent.content
+          : Buffer.from(rawContent.content);
+        if (pipeline.canProcess(rawContent.mimeType || "text/plain", contentBuffer)) {
           logger.debug(
             `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${filePath})`,
           );
@@ -447,10 +453,10 @@ export class GitHubRepoScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for file ${filePath}. Skipping processing.`,
         );
-        return { document: undefined, links: [] };
+        return { url: item.url, links: [], status: FetchStatus.SUCCESS };
       }
 
-      for (const err of processed.errors) {
+      for (const err of processed.errors ?? []) {
         logger.warn(`⚠️  Processing error for ${filePath}: ${err.message}`);
       }
 
@@ -458,29 +464,21 @@ export class GitHubRepoScraperStrategy extends BaseScraperStrategy {
       const githubUrl = `https://github.com/${repoInfo.owner}/${repoInfo.repo}/blob/${this.resolvedBranch || repoInfo.branch || "main"}/${filePath}`;
 
       // Use filename as fallback if title is empty or not a string
-      const processedTitle = processed.metadata.title;
-      const hasValidTitle =
-        typeof processedTitle === "string" && processedTitle.trim() !== "";
-      const fallbackTitle = filePath.split("/").pop() || "Untitled";
+      const filename = filePath.split("/").pop() || "Untitled";
 
       return {
-        document: {
-          content: typeof processed.textContent === "string" ? processed.textContent : "",
-          metadata: {
-            url: githubUrl,
-            title: hasValidTitle ? processedTitle : fallbackTitle,
-            library: options.library,
-            version: options.version,
-            etag: rawContent.etag,
-            lastModified: rawContent.lastModified,
-          },
-          contentType: rawContent.mimeType, // Preserve the detected MIME type
-        } satisfies Document,
+        url: githubUrl,
+        title: processed.title?.trim() || filename || "Untitled",
+        etag: rawContent.etag,
+        lastModified: rawContent.lastModified,
+        contentType: rawContent.mimeType,
+        content: processed,
         links: [], // Always return empty links array for individual files
+        status: FetchStatus.SUCCESS,
       };
     }
 
-    return { document: undefined, links: [] };
+    return { url: item.url, links: [], status: FetchStatus.SUCCESS };
   }
 
   /**
@@ -510,7 +508,7 @@ export class GitHubRepoScraperStrategy extends BaseScraperStrategy {
 
   async scrape(
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal,
   ): Promise<void> {
     // Validate it's a GitHub URL

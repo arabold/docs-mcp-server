@@ -1,12 +1,7 @@
 import path from "node:path";
-import { Document } from "@langchain/core/documents";
 import { createFsFromVolume, vol } from "memfs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  LibraryNotFoundInStoreError,
-  StoreError,
-  VersionNotFoundInStoreError,
-} from "./errors";
+import { LibraryNotFoundInStoreError, VersionNotFoundInStoreError } from "./errors";
 
 vi.mock("node:fs", () => ({
   default: createFsFromVolume(vol),
@@ -268,108 +263,6 @@ describe("DocumentManagementService", () => {
       const exists = await docService.exists("test-lib", "1.0.0");
       expect(exists).toBe(false);
       expect(mockStore.checkDocumentExists).toHaveBeenCalledWith("test-lib", "1.0.0");
-    });
-
-    describe("document processing", () => {
-      it("should add and search documents with basic metadata", async () => {
-        const library = "test-lib";
-        const version = "1.0.0";
-        const validDocument = new Document({
-          pageContent: "Test document content about testing",
-          metadata: {
-            url: "http://example.com",
-            title: "Test Doc",
-          },
-        });
-
-        const documentNoUrl = new Document({
-          pageContent: "Test document without URL",
-          metadata: {
-            title: "Test Doc",
-          },
-        });
-
-        // Should fail when URL is missing
-        await expect(
-          docService.addDocument(library, version, documentNoUrl),
-        ).rejects.toThrow(StoreError);
-
-        await expect(
-          docService.addDocument(library, version, documentNoUrl),
-        ).rejects.toHaveProperty("message", "Document metadata must include a valid URL");
-
-        // Should succeed with valid URL
-        mockRetriever.search.mockResolvedValue(["Mocked search result"]);
-
-        await docService.addDocument(library, version, validDocument);
-
-        const results = await docService.searchStore(library, version, "testing");
-        expect(mockStore.addDocuments).toHaveBeenCalledWith(
-          // Fix: Use mockStoreInstance
-          library,
-          version,
-          expect.arrayContaining([
-            expect.objectContaining({ pageContent: validDocument.pageContent }),
-          ]),
-        );
-        expect(results).toEqual(["Mocked search result"]); // Expect mocked result
-      });
-
-      it("should preserve semantic metadata when processing markdown documents", async () => {
-        const library = "test-lib";
-        const version = "1.0.0";
-        const document = new Document({
-          pageContent: "# Chapter 1\nTest content\n## Section 1.1\nMore testing content",
-          metadata: {
-            url: "http://example.com/docs",
-            title: "Root Doc",
-          },
-        });
-
-        // Mock the search result to match what would actually be stored after processing
-        mockRetriever.search.mockResolvedValue(["Mocked search result"]);
-
-        await docService.addDocument(library, version, document);
-
-        // Verify the documents were stored with semantic metadata
-        expect(mockStore.addDocuments).toHaveBeenCalledWith(
-          library,
-          version,
-          expect.arrayContaining([
-            expect.objectContaining({
-              metadata: expect.objectContaining({
-                level: 0,
-                path: [],
-              }),
-            }),
-          ]),
-        );
-
-        // Verify search results preserve metadata
-        const results = await docService.searchStore(library, version, "testing");
-        expect(results).toEqual(["Mocked search result"]);
-      });
-
-      it("should handle unsupported content types gracefully", async () => {
-        const library = "test-lib";
-        const version = "1.0.0";
-        const binaryDocument = new Document({
-          pageContent: "binary content with null bytes\0",
-          metadata: {
-            url: "http://example.com/image.png",
-            title: "Binary Image",
-            mimeType: "image/png",
-          },
-        });
-
-        // Should not throw an error, just log a warning and return early
-        await expect(
-          docService.addDocument(library, version, binaryDocument),
-        ).resolves.toBeUndefined();
-
-        // Verify that no documents were added to the store
-        expect(mockStore.addDocuments).not.toHaveBeenCalled();
-      });
     });
 
     it("should remove all documents for a specific library and version", async () => {
@@ -768,46 +661,21 @@ describe("DocumentManagementService", () => {
     // Tests for handling optional version parameter (null/undefined/"")
     describe("Optional Version Handling", () => {
       const library = "opt-lib";
-      const doc = new Document({
-        pageContent: "Optional version test",
-        metadata: { url: "http://opt.com" },
-      });
       const query = "optional";
 
       it("exists should normalize version to empty string", async () => {
         await docService.exists(library, null);
-        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
+        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
         await docService.exists(library, undefined);
-        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
+        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
         await docService.exists(library, "");
-        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
-      });
-
-      it("addDocument should normalize version to empty string", async () => {
-        await docService.addDocument(library, null, doc);
-        expect(mockStore.addDocuments).toHaveBeenCalledWith(
-          library,
-          "",
-          expect.any(Array),
-        ); // Fix: Use mockStoreInstance
-        await docService.addDocument(library, undefined, doc);
-        expect(mockStore.addDocuments).toHaveBeenCalledWith(
-          library,
-          "",
-          expect.any(Array),
-        ); // Fix: Use mockStoreInstance
-        await docService.addDocument(library, "", doc);
-        expect(mockStore.addDocuments).toHaveBeenCalledWith(
-          library,
-          "",
-          expect.any(Array),
-        ); // Fix: Use mockStoreInstance
+        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
       });
 
       it("searchStore should normalize version to empty string", async () => {
         // Call without explicit limit, should use default limit of 5
         await docService.searchStore(library, null, query);
-        expect(mockRetriever.search).toHaveBeenCalledWith(library, "", query, 5); // Expect default limit 5
+        expect(mockRetriever.search).toHaveBeenCalledWith(library, "", query, 5);
 
         // Call with explicit limit
         await docService.searchStore(library, undefined, query, 7);

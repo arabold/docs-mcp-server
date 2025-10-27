@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import { BasePipeline } from "./BasePipeline";
-import type { ProcessedContent } from "./types";
+import type { PipelineResult } from "./types";
 
 // Create a concrete subclass of BasePipeline for testing
 class TestPipeline extends BasePipeline {
@@ -10,8 +10,13 @@ class TestPipeline extends BasePipeline {
     return true;
   }
 
-  async process(): Promise<ProcessedContent> {
-    return { textContent: "", metadata: {}, links: [], errors: [], chunks: [] };
+  async process(): Promise<PipelineResult> {
+    return {
+      textContent: "",
+      links: [],
+      errors: [],
+      chunks: [],
+    };
   }
 
   // Expose the protected method for testing
@@ -39,21 +44,21 @@ describe("BasePipeline", () => {
     // Create mock middleware
     const middleware1 = {
       process: vi.fn(async (ctx, next) => {
-        ctx.metadata.step1 = true;
+        ctx.title = "Step 1";
         await next();
       }),
     };
 
     const middleware2 = {
       process: vi.fn(async (ctx, next) => {
-        ctx.metadata.step2 = true;
+        ctx.title = "Step 2";
         await next();
       }),
     };
 
     const middleware3 = {
       process: vi.fn(async (ctx, next) => {
-        ctx.metadata.step3 = true;
+        ctx.title = "Step 3";
         await next();
       }),
     };
@@ -67,10 +72,8 @@ describe("BasePipeline", () => {
     expect(middleware2.process).toHaveBeenCalledTimes(1);
     expect(middleware3.process).toHaveBeenCalledTimes(1);
 
-    // Verify the context was updated by each middleware
-    expect(context.metadata.step1).toBe(true);
-    expect(context.metadata.step2).toBe(true);
-    expect(context.metadata.step3).toBe(true);
+    // Verify the context was updated by the middleware
+    expect(context.title).toBe("Step 3");
   });
 
   it("executeMiddlewareStack catches errors and adds them to context", async () => {

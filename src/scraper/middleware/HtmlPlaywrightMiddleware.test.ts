@@ -52,8 +52,8 @@ const createPipelineTestContext = (
   const fullOptions = { ...createMockScraperOptions(source), ...options };
   return {
     content,
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: fullOptions,

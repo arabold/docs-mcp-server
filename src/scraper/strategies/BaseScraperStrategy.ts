@@ -1,10 +1,18 @@
 import { URL } from "node:url";
 import { CancellationError } from "../../pipeline/errors";
-import type { Document, ProgressCallback } from "../../types";
+import type { ProgressCallback } from "../../types";
 import { DEFAULT_MAX_PAGES } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { normalizeUrl, type UrlNormalizerOptions } from "../../utils/url";
-import type { ScraperOptions, ScraperProgress, ScraperStrategy } from "../types";
+import { FetchStatus } from "../fetcher/types";
+import type { PipelineResult } from "../pipelines/types";
+import type {
+  QueueItem,
+  ScrapeResult,
+  ScraperOptions,
+  ScraperProgressEvent,
+  ScraperStrategy,
+} from "../types";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
 import { isInScope } from "../utils/scope";
 
@@ -12,13 +20,33 @@ import { isInScope } from "../utils/scope";
 const DEFAULT_MAX_DEPTH = 3;
 const DEFAULT_CONCURRENCY = 3;
 
-export type QueueItem = {
-  url: string;
-  depth: number;
-};
-
 export interface BaseScraperStrategyOptions {
   urlNormalizerOptions?: UrlNormalizerOptions;
+}
+
+/**
+ * Result of processing a single queue item.
+ * - processed: The processed content (when available)
+ * - links: Discovered links for crawling (may exist without content, e.g., directories)
+ * - status: The fetch status (SUCCESS, NOT_MODIFIED, NOT_FOUND)
+ */
+export interface ProcessItemResult {
+  /** The URL of the content */
+  url: string;
+  /** The title of the page or document, extracted during processing */
+  title?: string | null;
+  /** The MIME type of the content being processed, if known */
+  contentType?: string | null;
+  /** The ETag header value from the HTTP response, if available, used for caching and change detection. */
+  etag?: string | null;
+  /** The Last-Modified header value, if available, used for caching and change detection. */
+  lastModified?: string | null;
+  /** The pipeline-processed content, including title, text content, links, errors, and chunks. This may be null if the content was not successfully processed (e.g., 404 or 304). */
+  content?: PipelineResult;
+  /** Extracted links from the content. This may be an empty array if no links were found or if the content was not processed. */
+  links?: string[];
+  /** Any non-critical errors encountered during processing. This may be an empty array if no errors were encountered or if the content was not processed. */
+  status: FetchStatus;
 }
 
 export abstract class BaseScraperStrategy implements ScraperStrategy {
@@ -56,26 +84,19 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   /**
    * Process a single item from the queue.
    *
-   * @returns A list of URLs to add to the queue
+   * @returns Processed content, links, and metadata
    */
   protected abstract processItem(
     item: QueueItem,
     options: ScraperOptions,
-    progressCallback?: ProgressCallback<ScraperProgress>,
-    signal?: AbortSignal, // Add signal
-  ): Promise<{
-    document?: Document;
-    links?: string[];
-    finalUrl?: string; // Effective fetched URL (post-redirect)
-  }>;
-
-  // Removed getProcessor method as processing is now handled by strategies using middleware pipelines
+    signal?: AbortSignal,
+  ): Promise<ProcessItemResult>;
 
   protected async processBatch(
     batch: QueueItem[],
     baseUrl: URL,
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add signal
   ): Promise<QueueItem[]> {
     const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
@@ -93,31 +114,76 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
         try {
           // Pass signal to processItem
-          const result = await this.processItem(item, options, undefined, signal);
-          // If this is the root (depth 0) and we have a finalUrl differing from original, set canonicalBaseUrl
-          if (item.depth === 0 && !this.canonicalBaseUrl && result?.finalUrl) {
-            try {
-              const finalUrlStr = result.finalUrl as string;
-              const original = new URL(options.url);
-              const finalUrlObj = new URL(finalUrlStr);
-              if (
-                finalUrlObj.href !== original.href &&
-                (finalUrlObj.protocol === "http:" || finalUrlObj.protocol === "https:")
-              ) {
-                this.canonicalBaseUrl = finalUrlObj;
-                logger.debug(
-                  `Updated scope base after redirect: ${original.href} -> ${finalUrlObj.href}`,
-                );
+          const result = await this.processItem(item, options, signal);
+
+          // Handle different fetch statuses
+          switch (result.status) {
+            case FetchStatus.NOT_MODIFIED:
+              // File/page hasn't changed, skip processing
+              logger.debug(`Page unchanged (304): ${item.url}`);
+              return [];
+
+            case FetchStatus.NOT_FOUND:
+              // File/page was deleted
+              if (item.pageId) {
+                // Signal deletion to the pipeline for refresh operations
+                this.pageCount++;
+                logger.info(`Page deleted (404): ${item.url}`);
+                await progressCallback({
+                  pagesScraped: this.pageCount,
+                  totalPages: this.effectiveTotal,
+                  totalDiscovered: this.totalDiscovered,
+                  currentUrl: item.url,
+                  depth: item.depth,
+                  maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
+                  result: null,
+                  pageId: item.pageId,
+                  deleted: true,
+                });
               } else {
-                this.canonicalBaseUrl = original;
+                logger.warn(`Page not found (404): ${item.url}`);
               }
-            } catch {
-              // Ignore canonical base errors
-              this.canonicalBaseUrl = new URL(options.url);
-            }
+              return [];
+
+            case FetchStatus.SUCCESS:
+              // Continue with normal processing
+              break;
+
+            default:
+              logger.error(`Unknown fetch status: ${result.status}`);
+              return [];
           }
 
-          if (result.document) {
+          // FIXME: I believe this is no longer required
+          // // If this is the root (depth 0) and we have processed content with a URL, check for redirects
+          // if (item.depth === 0 && !this.canonicalBaseUrl && result?.processed) {
+          //   try {
+          //     const finalUrlStr = result.processed.metadata.url as string | undefined;
+          //     if (finalUrlStr) {
+          //       const original = new URL(options.url);
+          //       const finalUrlObj = new URL(finalUrlStr);
+          //       if (
+          //         finalUrlObj.href !== original.href &&
+          //         (finalUrlObj.protocol === "http:" || finalUrlObj.protocol === "https:")
+          //       ) {
+          //         this.canonicalBaseUrl = finalUrlObj;
+          //         logger.debug(
+          //           `Updated scope base after redirect: ${original.href} -> ${finalUrlObj.href}`,
+          //         );
+          //       } else {
+          //         this.canonicalBaseUrl = original;
+          //       }
+          //     } else {
+          //       this.canonicalBaseUrl = new URL(options.url);
+          //     }
+          //   } catch {
+          //     // Ignore canonical base errors
+          //     this.canonicalBaseUrl = new URL(options.url);
+          //   }
+          // }
+
+          // Handle successful processing
+          if (result.content) {
             this.pageCount++;
             // maxDepth already resolved above
             logger.info(
@@ -130,7 +196,18 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               currentUrl: item.url,
               depth: item.depth,
               maxDepth: maxDepth,
-              document: result.document,
+              result: {
+                url: item.url,
+                title: result.content.title?.trim() || result.title?.trim() || "",
+                contentType: result.contentType || "",
+                textContent: result.content.textContent || "",
+                links: result.content.links || [],
+                errors: result.content.errors || [],
+                chunks: result.content.chunks || [],
+                etag: result.etag || null,
+                lastModified: result.lastModified || null,
+              } satisfies ScrapeResult,
+              pageId: item.pageId,
             });
           }
 
@@ -190,46 +267,68 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
   async scrape(
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add signal
   ): Promise<void> {
     this.visited.clear();
     this.pageCount = 0;
-    this.totalDiscovered = 1; // Start with the initial URL (unlimited counter)
-    this.effectiveTotal = 1; // Start with the initial URL (limited counter)
 
+    // Check if this is a refresh operation with pre-populated queue
+    const initialQueue = options.initialQueue || [];
+    const isRefreshMode = initialQueue.length > 0;
+
+    // Initialize queue and tracking
+    if (isRefreshMode) {
+      // Initialize from provided queue
+      this.totalDiscovered = initialQueue.length;
+      this.effectiveTotal = initialQueue.length;
+
+      // Mark all URLs in the initial queue as visited to prevent re-discovery
+      for (const item of initialQueue) {
+        this.visited.add(normalizeUrl(item.url, this.options.urlNormalizerOptions));
+      }
+
+      logger.debug(
+        `Starting refresh mode with ${initialQueue.length} pre-populated pages`,
+      );
+    } else {
+      // Normal scraping mode
+      this.totalDiscovered = 1; // Start with the initial URL (unlimited counter)
+      this.effectiveTotal = 1; // Start with the initial URL (limited counter)
+
+      // Track the initial URL as visited
+      this.visited.add(normalizeUrl(options.url, this.options.urlNormalizerOptions));
+    }
+
+    // Set up base URL and queue
     this.canonicalBaseUrl = new URL(options.url);
     let baseUrl = this.canonicalBaseUrl;
-    const queue = [{ url: options.url, depth: 0 } satisfies QueueItem];
-
-    // Track values we've seen (either queued or visited)
-    this.visited.add(normalizeUrl(options.url, this.options.urlNormalizerOptions));
+    const queue: QueueItem[] = isRefreshMode
+      ? [...initialQueue]
+      : [{ url: options.url, depth: 0 } satisfies QueueItem];
 
     // Resolve optional values to defaults using temporary variables
     const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
     const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
 
+    // Unified processing loop for both normal and refresh modes
     while (queue.length > 0 && this.pageCount < maxPages) {
-      // Use variable
       // Check for cancellation at the start of each loop iteration
       if (signal?.aborted) {
-        logger.debug("Scraping cancelled by signal.");
-        throw new CancellationError("Scraping cancelled by signal");
+        logger.debug(`${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal.`);
+        throw new CancellationError(
+          `${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal`,
+        );
       }
 
-      const remainingPages = maxPages - this.pageCount; // Use variable
+      const remainingPages = maxPages - this.pageCount;
       if (remainingPages <= 0) {
         break;
       }
 
-      const batchSize = Math.min(
-        maxConcurrency, // Use variable
-        remainingPages,
-        queue.length,
-      );
-
+      const batchSize = Math.min(maxConcurrency, remainingPages, queue.length);
       const batch = queue.splice(0, batchSize);
-      // Pass signal to processBatch
+
       // Always use latest canonical base (may have been updated after first fetch)
       baseUrl = this.canonicalBaseUrl ?? baseUrl;
       const newUrls = await this.processBatch(

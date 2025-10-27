@@ -16,7 +16,7 @@ export class MarkdownMetadataExtractorMiddleware implements ContentProcessorMidd
       if (match?.[1]) {
         title = match[1].trim();
       }
-      context.metadata.title = title;
+      context.title = title;
     } catch (error) {
       context.errors.push(
         new Error(

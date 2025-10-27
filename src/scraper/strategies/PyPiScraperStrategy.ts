@@ -1,5 +1,5 @@
 import type { ProgressCallback } from "../../types";
-import type { ScraperOptions, ScraperProgress, ScraperStrategy } from "../types";
+import type { ScraperOptions, ScraperProgressEvent, ScraperStrategy } from "../types";
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
 export class PyPiScraperStrategy implements ScraperStrategy {
@@ -23,7 +23,7 @@ export class PyPiScraperStrategy implements ScraperStrategy {
 
   async scrape(
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal,
   ): Promise<void> {
     // Use default strategy with our configuration, passing the signal

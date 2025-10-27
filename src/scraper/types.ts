@@ -1,4 +1,15 @@
-import type { Document, ProgressCallback } from "../types";
+import type { Chunk } from "../splitter/types";
+import type { ProgressCallback } from "../types";
+
+/**
+ * Represents an item in the scraping queue
+ */
+export type QueueItem = {
+  url: string;
+  depth: number;
+  pageId?: number; // Database page ID for efficient deletion during refresh
+  etag?: string | null; // Last known ETag for conditional requests during refresh
+};
 
 /**
  * Enum defining the available HTML processing strategies.
@@ -16,7 +27,7 @@ export interface ScraperStrategy {
   canHandle(url: string): boolean;
   scrape(
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add optional signal
   ): Promise<void>;
 
@@ -28,7 +39,16 @@ export interface ScraperStrategy {
 }
 
 /**
- * Options for configuring the scraping process
+ * Internal runtime options for configuring the scraping process.
+ *
+ * This is the comprehensive configuration object used by ScraperService, PipelineWorker,
+ * and scraper strategies. It includes both:
+ * - User-facing options (provided via tools like scrape_docs)
+ * - System-managed options (set internally by PipelineManager)
+ *
+ * Note: User-facing tools should NOT expose all these options directly. Instead,
+ * PipelineManager is responsible for translating user input into this complete
+ * runtime configuration.
  */
 export interface ScraperOptions {
   url: string;
@@ -76,28 +96,75 @@ export interface ScraperOptions {
    * Keys are header names, values are header values.
    */
   headers?: Record<string, string>;
+  /**
+   * Pre-populated queue of pages to visit.
+   * When provided:
+   * - Disables link discovery and crawling
+   * - Processes only the provided URLs
+   * - Uses provided metadata (pageId, etag) for optimization
+   */
+  initialQueue?: QueueItem[];
+  /**
+   * Indicates whether this is a refresh operation (re-indexing existing version).
+   * When true:
+   * - Skips initial removeAllDocuments call to preserve existing data
+   * - Uses ETags for conditional requests
+   * - Only updates changed/deleted pages
+   * @default false
+   */
+  isRefresh?: boolean;
 }
 
 /**
- * Result of scraping a single page. Used internally by HtmlScraper.
+ * Result of scraping a single page.
  */
-export interface ScrapedPage {
-  content: string;
-  title: string;
+export interface ScrapeResult {
+  /** The URL of the page that was scraped */
   url: string;
-  /** URLs extracted from page links, used for recursive scraping */
+  /** Page title */
+  title: string;
+  /** MIME type of the content being processed */
+  contentType: string;
+  /** The final processed content, typically as a string (e.g., Markdown). Used primarily for debugging */
+  textContent: string;
+  /** Extracted links from the content. */
   links: string[];
+  /** Any non-critical errors encountered during processing. */
+  errors: Error[];
+  /** Pre-split chunks from pipeline processing */
+  chunks: Chunk[];
+  /** ETag from HTTP response for caching */
+  etag?: string | null;
+  /** Last-Modified from HTTP response for caching */
+  lastModified?: string | null;
 }
 
 /**
  * Progress information during scraping
  */
-export interface ScraperProgress {
+export interface ScraperProgressEvent {
+  /** Number of pages successfully scraped so far */
   pagesScraped: number;
-  totalPages: number; // Effective total pages (limited by maxPages configuration)
-  totalDiscovered: number; // Actual number of pages discovered (may exceed totalPages)
+  /**
+   * Maximum number of pages to scrape (from maxPages option).
+   * May be undefined if no limit is set.
+   */
+  totalPages: number;
+  /**
+   * Total number of URLs discovered during crawling.
+   * This may be higher than totalPages if maxPages limit is reached.
+   */
+  totalDiscovered: number;
+  /** Current URL being processed */
   currentUrl: string;
+  /** Current depth in the crawl tree */
   depth: number;
+  /** Maximum depth allowed (from maxDepth option) */
   maxDepth: number;
-  document?: Document;
+  /** The result of scraping the current page, if available. This may be null if the page has been deleted or if an error occurred. */
+  result: ScrapeResult | null;
+  /** Database page ID (for refresh operations or tracking) */
+  pageId?: number;
+  /** Indicates this page was deleted (404 during refresh or broken link) */
+  deleted?: boolean;
 }

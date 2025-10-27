@@ -112,10 +112,33 @@ describe("FileFetcher", () => {
     expect(mdResult.mimeType).toBe("text/markdown");
   });
 
-  it("should throw error if file does not exist", async () => {
+  it("should return status NOT_FOUND if file does not exist", async () => {
     const fetcher = new FileFetcher();
 
-    await expect(fetcher.fetch("file:///path/to/file.txt")).rejects.toThrow(ScraperError);
+    const result = await fetcher.fetch("file:///path/to/nonexistent-file.txt");
+    expect(result.status).toBe("not_found");
+  });
+
+  it("should throw ScraperError for other file system errors", async () => {
+    const fetcher = new FileFetcher();
+    const filePath = "/path/to/permission-denied.txt";
+
+    // Create the file in the virtual filesystem first
+    vol.fromJSON({
+      [filePath]: "test content",
+    });
+
+    // Simulate a permission error by mocking stat to succeed but readFile to fail
+    const permissionError = new Error("EACCES: permission denied");
+    (permissionError as NodeJS.ErrnoException).code = "EACCES";
+    const readFileSpy = vi
+      .spyOn(vol.promises, "readFile")
+      .mockRejectedValue(permissionError);
+
+    await expect(fetcher.fetch(`file://${filePath}`)).rejects.toThrow(ScraperError);
+
+    // Restore the spy
+    readFileSpy.mockRestore();
   });
 
   it("should only handle file protocol", async () => {

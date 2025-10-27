@@ -1,6 +1,7 @@
 import { vol } from "memfs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ScraperOptions } from "../types";
+import type { ProgressCallback } from "../../types";
+import type { ScrapeResult, ScraperOptions, ScraperProgressEvent } from "../types";
 import { LocalFileStrategy } from "./LocalFileStrategy";
 
 vi.mock("node:fs/promises", () => ({ default: vol.promises }));
@@ -27,7 +28,7 @@ describe("LocalFileStrategy", () => {
       maxPages: 1,
       maxDepth: 0,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     vol.fromJSON(
       {
@@ -39,27 +40,37 @@ describe("LocalFileStrategy", () => {
     await strategy.scrape(options, progressCallback);
 
     expect(progressCallback).toHaveBeenCalledTimes(1);
-    expect(progressCallback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pagesScraped: 1,
-        currentUrl: "file:///test.md",
-        depth: 0,
-        maxDepth: 0,
-        totalPages: 1,
-        document: {
-          content: "# Test\n\nThis is a test file.",
-          contentType: "text/markdown",
-          metadata: expect.objectContaining({
-            url: "file:///test.md",
-            title: "Test",
-            library: "test",
-            version: "1.0",
-            etag: expect.any(String),
-            lastModified: expect.any(String),
-          }),
-        },
-      }),
-    );
+
+    const firstCall = progressCallback.mock.calls[0][0];
+    expect(firstCall).toMatchObject({
+      pagesScraped: 1,
+      currentUrl: "file:///test.md",
+      depth: 0,
+      maxDepth: 0,
+      totalPages: 1,
+      totalDiscovered: 1,
+      pageId: undefined,
+      result: {
+        textContent: "# Test\n\nThis is a test file.",
+        contentType: "text/markdown",
+        url: "file:///test.md",
+        title: "Test",
+        links: [],
+        errors: [],
+        chunks: [
+          {
+            content: "# Test\nThis is a test file.", // content is simplified
+            section: {
+              level: 1,
+              path: ["Test"],
+            },
+            types: ["heading", "text"],
+          },
+        ],
+      },
+    } satisfies Partial<ScraperProgressEvent>);
+    expect(firstCall.result?.etag).toBeDefined();
+    expect(firstCall.result?.lastModified).toBeDefined();
   });
 
   it("should process a directory with files and a subdirectory", async () => {
@@ -71,7 +82,7 @@ describe("LocalFileStrategy", () => {
       maxPages: 10,
       maxDepth: 2,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     vol.fromJSON(
       {
@@ -98,7 +109,7 @@ describe("LocalFileStrategy", () => {
       maxDepth: 1,
       maxConcurrency: 1,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     vol.fromJSON(
       {
         "/testdir/file1.md": "# File 1",
@@ -110,7 +121,7 @@ describe("LocalFileStrategy", () => {
     );
 
     await strategy.scrape(options, progressCallback);
-    // All 3 files are processed: file1.md, file2.html, and file3.txt (as markdown)
+    // All 3 files are page: file1.md, file2.html, and file3.txt (as markdown)
     expect(progressCallback).toHaveBeenCalledTimes(3);
 
     // Validate .md
@@ -122,16 +133,14 @@ describe("LocalFileStrategy", () => {
         depth: 1,
         maxDepth: 1,
         totalPages: 4,
-        document: expect.objectContaining({
-          content: "# File 1",
-          metadata: expect.objectContaining({
-            url: "file:///testdir/file1.md",
-            title: "File 1",
-            library: "test",
-            version: "1.0",
-          }),
-        }),
-      }),
+        totalDiscovered: 4,
+        result: expect.objectContaining({
+          textContent: "# File 1",
+          contentType: "text/markdown",
+          url: "file:///testdir/file1.md",
+          title: "File 1",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
     // Validate .html
     expect(progressCallback).toHaveBeenNthCalledWith(
@@ -142,16 +151,14 @@ describe("LocalFileStrategy", () => {
         depth: 1,
         maxDepth: 1,
         totalPages: 4,
-        document: expect.objectContaining({
-          content: expect.stringContaining("# File 2"),
-          metadata: expect.objectContaining({
-            url: "file:///testdir/file2.html",
-            title: "File 2 Title",
-            library: "test",
-            version: "1.0",
-          }),
-        }),
-      }),
+        totalDiscovered: 4,
+        result: expect.objectContaining({
+          textContent: expect.stringContaining("# File 2"),
+          contentType: "text/html",
+          url: "file:///testdir/file2.html",
+          title: "File 2 Title",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
     // Validate .txt
     expect(progressCallback).toHaveBeenNthCalledWith(
@@ -162,16 +169,14 @@ describe("LocalFileStrategy", () => {
         depth: 1,
         maxDepth: 1,
         totalPages: 4,
-        document: expect.objectContaining({
-          content: "File 3",
-          metadata: expect.objectContaining({
-            url: "file:///testdir/file3.txt",
-            title: "Untitled",
-            library: "test",
-            version: "1.0",
-          }),
-        }),
-      }),
+        totalDiscovered: 4,
+        result: expect.objectContaining({
+          textContent: "File 3",
+          contentType: "text/plain",
+          url: "file:///testdir/file3.txt",
+          title: "file3.txt",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
   });
 
@@ -185,7 +190,7 @@ describe("LocalFileStrategy", () => {
       maxDepth: 1,
       maxConcurrency: 1,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     vol.fromJSON(
       {
@@ -209,105 +214,96 @@ describe("LocalFileStrategy", () => {
     // Check TypeScript file
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          title: "app.ts",
+          textContent: expect.stringContaining("interface User"),
           contentType: "text/x-typescript",
-          content: expect.stringContaining("interface User"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/app.ts",
-          }),
-        }),
-      }),
+          url: "file:///codebase/app.ts",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
 
     // Check TSX file
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          title: "component.tsx",
+          textContent: expect.stringContaining("export const App"),
           contentType: "text/x-tsx",
-          content: expect.stringContaining("export const App"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/component.tsx",
-          }),
-        }),
-      }),
+          url: "file:///codebase/component.tsx",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
 
     // Check Python file
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          title: "script.py",
+          textContent: expect.stringContaining("def hello"),
           contentType: "text/x-python",
-          content: expect.stringContaining("def hello"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/script.py",
-          }),
-        }),
-      }),
+          url: "file:///codebase/script.py",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
 
     // Check Go file
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          title: "main.go",
+          textContent: expect.stringContaining("package main"),
           contentType: "text/x-go",
-          content: expect.stringContaining("package main"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/main.go",
-          }),
-        }),
-      }),
+          url: "file:///codebase/main.go",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
 
     // Check Rust file
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          title: "lib.rs",
+          textContent: expect.stringContaining("fn main"),
           contentType: "text/x-rust",
-          content: expect.stringContaining("fn main"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/lib.rs",
-          }),
-        }),
-      }),
+          url: "file:///codebase/lib.rs",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
 
     // Check Kotlin file
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          title: "App.kt",
+          textContent: expect.stringContaining("fun main"),
           contentType: "text/x-kotlin",
-          content: expect.stringContaining("fun main"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/App.kt",
-          }),
-        }),
-      }),
+          url: "file:///codebase/App.kt",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
 
     // Check Ruby file
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          title: "script.rb",
+          textContent: expect.stringContaining("puts"),
           contentType: "text/x-ruby",
-          content: expect.stringContaining("puts"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/script.rb",
-          }),
-        }),
-      }),
+          url: "file:///codebase/script.rb",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
 
     // Check Shell script
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        document: expect.objectContaining({
+        result: expect.objectContaining({
+          textContent: expect.stringContaining("#!/bin/bash"),
           contentType: "text/x-shellscript",
-          content: expect.stringContaining("#!/bin/bash"),
-          metadata: expect.objectContaining({
-            url: "file:///codebase/run.sh",
-          }),
-        }),
-      }),
+          url: "file:///codebase/run.sh",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
   });
 
@@ -321,7 +317,7 @@ describe("LocalFileStrategy", () => {
       maxDepth: 1,
       maxConcurrency: 1,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     vol.fromJSON(
       {
         "/testdir/empty.md": "",
@@ -336,16 +332,13 @@ describe("LocalFileStrategy", () => {
       expect.objectContaining({
         pagesScraped: 1,
         currentUrl: "file:///testdir/empty.md",
-        document: expect.objectContaining({
-          content: "",
-          metadata: expect.objectContaining({
-            title: "Untitled",
-            url: "file:///testdir/empty.md",
-            library: "test",
-            version: "1.0",
-          }),
-        }),
-      }),
+        result: expect.objectContaining({
+          textContent: "",
+          contentType: "text/markdown",
+          title: "Untitled",
+          url: "file:///testdir/empty.md",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
   });
 
@@ -359,7 +352,7 @@ describe("LocalFileStrategy", () => {
       maxDepth: 1,
       maxConcurrency: 1,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     // Simulate a binary file (with null bytes) and an image file
     vol.fromJSON(
       {
@@ -399,7 +392,7 @@ describe("LocalFileStrategy", () => {
       includePatterns: ["/file1.md", "/file3.txt"],
       excludePatterns: ["/file3.txt"], // exclude takes precedence
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     vol.fromJSON(
       {
         "/testdir/file1.md": "# File 1", // should be included
@@ -426,7 +419,7 @@ describe("LocalFileStrategy", () => {
       maxPages: 1,
       maxDepth: 0,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     vol.fromJSON(
       {
         "/test dir/space file.md": "# Space File\n\nThis file has spaces in its name.",
@@ -439,14 +432,13 @@ describe("LocalFileStrategy", () => {
       expect.objectContaining({
         pagesScraped: 1,
         currentUrl: "file:///test%20dir/space%20file.md",
-        document: expect.objectContaining({
-          content: "# Space File\n\nThis file has spaces in its name.",
-          metadata: expect.objectContaining({
-            url: "file:///test%20dir/space%20file.md",
-            title: "Space File",
-          }),
-        }),
-      }),
+        result: expect.objectContaining({
+          textContent: "# Space File\n\nThis file has spaces in its name.",
+          contentType: "text/markdown",
+          url: "file:///test%20dir/space%20file.md",
+          title: "Space File",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
   });
 
@@ -460,7 +452,7 @@ describe("LocalFileStrategy", () => {
       maxDepth: 1,
       maxConcurrency: 1,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     vol.fromJSON(
       {
         "/test dir/file with space.md": "# File With Space",
@@ -485,7 +477,7 @@ describe("LocalFileStrategy", () => {
       maxPages: 1,
       maxDepth: 0,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     // Create a JSON file with API documentation structure
     const jsonContent = JSON.stringify(
@@ -540,17 +532,13 @@ describe("LocalFileStrategy", () => {
         maxDepth: 0,
         totalPages: 1,
         totalDiscovered: 1,
-        document: expect.objectContaining({
-          content: jsonContent,
+        result: expect.objectContaining({
+          textContent: jsonContent,
           contentType: "application/json",
-          metadata: expect.objectContaining({
-            library: "test-api",
-            title: "Test API Documentation",
-            url: "file:///api-docs.json",
-            version: "1.0.0",
-          }),
-        }),
-      }),
+          title: "Test API Documentation",
+          url: "file:///api-docs.json",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
   });
 
@@ -564,7 +552,7 @@ describe("LocalFileStrategy", () => {
       maxDepth: 0,
       maxConcurrency: 1,
     };
-    const progressCallback = vi.fn();
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
     const testContent = "# Test Content\nThis is a test file.";
 
     vol.fromJSON(
@@ -581,17 +569,294 @@ describe("LocalFileStrategy", () => {
       expect.objectContaining({
         pagesScraped: 1,
         currentUrl: "file://testdir/test.md", // Original malformed URL preserved
-        document: expect.objectContaining({
-          content: testContent,
+        result: expect.objectContaining({
+          textContent: testContent,
           contentType: "text/markdown",
-          metadata: expect.objectContaining({
-            title: "Test Content",
-            url: "file://testdir/test.md",
-            library: "test",
-            version: "1.0",
-          }),
-        }),
-      }),
+          title: "Test Content",
+          url: "file://testdir/test.md",
+        } satisfies Partial<ScrapeResult>),
+      } satisfies Partial<ScraperProgressEvent>),
     );
+  });
+
+  describe("refresh workflow", () => {
+    it("should skip processing when file returns NOT_MODIFIED (unchanged)", async () => {
+      const strategy = new LocalFileStrategy();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const testContent = "# Test File\nOriginal content";
+
+      // Create initial file
+      vol.fromJSON({ "/test.md": testContent }, "/");
+
+      // First scrape to get the initial etag
+      const initialOptions: ScraperOptions = {
+        url: "file:///test.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 0,
+      };
+
+      await strategy.scrape(initialOptions, progressCallback);
+      expect(progressCallback).toHaveBeenCalledTimes(1);
+
+      // Get the etag from the first scrape
+      const firstCall = progressCallback.mock.calls[0][0];
+      const etag = firstCall.result?.etag;
+
+      // Reset the callback
+      progressCallback.mockClear();
+
+      // Now do a refresh with the same etag (file unchanged)
+      const refreshOptions: ScraperOptions = {
+        url: "file:///test.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 0,
+        initialQueue: [
+          {
+            url: "file:///test.md",
+            depth: 0,
+            pageId: 123,
+            etag: etag,
+          },
+        ],
+      };
+
+      await strategy.scrape(refreshOptions, progressCallback);
+
+      // Verify no documents were processed (file unchanged)
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(0);
+    });
+
+    it("should re-process file when it has been modified", async () => {
+      const strategy = new LocalFileStrategy();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const originalContent = "# Original\nOriginal content";
+      const updatedContent = "# Updated\nNew updated content";
+
+      // Create initial file
+      vol.fromJSON({ "/test.md": originalContent }, "/");
+
+      // First scrape
+      const initialOptions: ScraperOptions = {
+        url: "file:///test.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 0,
+      };
+
+      await strategy.scrape(initialOptions, progressCallback);
+      const firstCall = progressCallback.mock.calls[0][0];
+      const oldEtag = firstCall.result?.etag;
+
+      // Modify the file (update content and mtime)
+      // Using a new date for fromJSON will create a new mtime
+      vol.reset();
+      vol.fromJSON({ "/test.md": updatedContent }, "/");
+
+      // Wait a bit to ensure different mtime
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      progressCallback.mockClear();
+
+      // Refresh with old etag
+      const refreshOptions: ScraperOptions = {
+        url: "file:///test.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 0,
+        initialQueue: [
+          {
+            url: "file:///test.md",
+            depth: 0,
+            pageId: 456,
+            etag: oldEtag,
+          },
+        ],
+      };
+
+      await strategy.scrape(refreshOptions, progressCallback);
+
+      // Verify file was re-processed
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(1);
+      expect(docCalls[0][0].result?.textContent).toContain("# Updated");
+      expect(docCalls[0][0].result?.textContent).toContain("New updated content");
+      expect(docCalls[0][0].result?.title).toBe("Updated");
+      // Verify new etag is different
+      expect(docCalls[0][0].result?.etag).not.toBe(oldEtag);
+    });
+
+    it("should handle deleted files during refresh", async () => {
+      const strategy = new LocalFileStrategy();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const testContent = "# Test File\nContent";
+
+      // Create initial file
+      vol.fromJSON({ "/test.md": testContent }, "/");
+
+      // First scrape
+      const initialOptions: ScraperOptions = {
+        url: "file:///test.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 0,
+      };
+
+      await strategy.scrape(initialOptions, progressCallback);
+      const firstCall = progressCallback.mock.calls[0][0];
+      const etag = firstCall.result?.etag;
+
+      // Delete the file
+      vol.reset();
+
+      progressCallback.mockClear();
+
+      // Refresh with deleted file
+      const refreshOptions: ScraperOptions = {
+        url: "file:///test.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 0,
+        initialQueue: [
+          {
+            url: "file:///test.md",
+            depth: 0,
+            pageId: 789,
+            etag: etag,
+          },
+        ],
+      };
+
+      await strategy.scrape(refreshOptions, progressCallback);
+
+      // Verify no processed documents were returned
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(0);
+    });
+
+    it("should discover and process new files in a directory during refresh", async () => {
+      const strategy = new LocalFileStrategy();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      // Create initial directory with one file
+      vol.fromJSON(
+        {
+          "/testdir/file1.md": "# File 1",
+        },
+        "/",
+      );
+
+      // First scrape
+      const initialOptions: ScraperOptions = {
+        url: "file:///testdir",
+        library: "test",
+        version: "1.0",
+        maxPages: 10,
+        maxDepth: 1,
+      };
+
+      await strategy.scrape(initialOptions, progressCallback);
+      expect(progressCallback).toHaveBeenCalledTimes(1);
+
+      // Add a new file to the directory
+      vol.fromJSON(
+        {
+          "/testdir/file1.md": "# File 1",
+          "/testdir/file2.md": "# File 2\nNew file added",
+        },
+        "/",
+      );
+
+      progressCallback.mockClear();
+
+      // Refresh the directory (directories don't use etag, they just re-scan)
+      const refreshOptions: ScraperOptions = {
+        url: "file:///testdir",
+        library: "test",
+        version: "1.0",
+        maxPages: 10,
+        maxDepth: 1,
+      };
+
+      await strategy.scrape(refreshOptions, progressCallback);
+
+      // Should process both files
+      expect(progressCallback).toHaveBeenCalledTimes(2);
+      const calledUrls = progressCallback.mock.calls.map((call) => call[0].currentUrl);
+      expect(calledUrls).toContain("file:///testdir/file1.md");
+      expect(calledUrls).toContain("file:///testdir/file2.md");
+    });
+
+    it("should preserve depth from original scrape during refresh", async () => {
+      const strategy = new LocalFileStrategy();
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const testContent = "# Deep File\nContent at depth 2";
+
+      vol.fromJSON(
+        {
+          "/deep/file.md": testContent,
+        },
+        "/",
+      );
+
+      // First scrape to get etag
+      const initialOptions: ScraperOptions = {
+        url: "file:///deep/file.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 2,
+      };
+
+      await strategy.scrape(initialOptions, progressCallback);
+      const firstCall = progressCallback.mock.calls[0][0];
+      const etag = firstCall.result?.etag;
+
+      // Update the file with new content
+      vol.reset();
+      vol.fromJSON(
+        {
+          "/deep/file.md": "# Deep File\nUpdated content",
+        },
+        "/",
+      );
+
+      // Wait a bit to ensure different mtime
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      progressCallback.mockClear();
+
+      // Refresh with original depth
+      const refreshOptions: ScraperOptions = {
+        url: "file:///deep/file.md",
+        library: "test",
+        version: "1.0",
+        maxPages: 1,
+        maxDepth: 2,
+        initialQueue: [
+          {
+            url: "file:///deep/file.md",
+            depth: 2, // Original depth preserved
+            pageId: 555,
+            etag: etag,
+          },
+        ],
+      };
+
+      await strategy.scrape(refreshOptions, progressCallback);
+
+      // Verify depth is preserved
+      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
+      expect(docCalls).toHaveLength(1);
+      expect(docCalls[0][0].depth).toBe(2);
+    });
   });
 });

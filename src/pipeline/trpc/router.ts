@@ -31,10 +31,15 @@ const optionalTrimmed = z.preprocess(
   z.string().min(1).optional().nullable(),
 );
 
-const enqueueInput = z.object({
+const enqueueScrapeInput = z.object({
   library: nonEmptyTrimmed,
   version: optionalTrimmed,
   options: z.custom<ScraperOptions>(),
+});
+
+const enqueueRefreshInput = z.object({
+  library: nonEmptyTrimmed,
+  version: optionalTrimmed,
 });
 
 const jobIdInput = z.object({ id: z.string().min(1) });
@@ -47,17 +52,17 @@ const getJobsInput = z.object({
 export function createPipelineRouter(trpc: unknown) {
   const tt = trpc as typeof t;
   return tt.router({
-    enqueueJob: tt.procedure
-      .input(enqueueInput)
+    enqueueScrapeJob: tt.procedure
+      .input(enqueueScrapeInput)
       .mutation(
         async ({
           ctx,
           input,
         }: {
           ctx: PipelineTrpcContext;
-          input: z.infer<typeof enqueueInput>;
+          input: z.infer<typeof enqueueScrapeInput>;
         }) => {
-          const jobId = await ctx.pipeline.enqueueJob(
+          const jobId = await ctx.pipeline.enqueueScrapeJob(
             input.library,
             input.version ?? null,
             input.options,
@@ -78,6 +83,25 @@ export function createPipelineRouter(trpc: unknown) {
               input.options.headers && Object.keys(input.options.headers).length > 0
             ),
           });
+
+          return { jobId };
+        },
+      ),
+
+    enqueueRefreshJob: tt.procedure
+      .input(enqueueRefreshInput)
+      .mutation(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: PipelineTrpcContext;
+          input: z.infer<typeof enqueueRefreshInput>;
+        }) => {
+          const jobId = await ctx.pipeline.enqueueRefreshJob(
+            input.library,
+            input.version ?? null,
+          );
 
           return { jobId };
         },

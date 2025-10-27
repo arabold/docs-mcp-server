@@ -7,7 +7,7 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "../middlewar
 import type { ScraperOptions } from "../types";
 import { convertToString } from "../utils/buffer";
 import { BasePipeline } from "./BasePipeline";
-import type { ProcessedContent } from "./types";
+import type { PipelineResult } from "./types";
 
 /**
  * Pipeline for processing JSON content with semantic, hierarchical splitting.
@@ -28,16 +28,16 @@ export class JsonPipeline extends BasePipeline {
     });
   }
 
-  canProcess(rawContent: RawContent): boolean {
-    if (!rawContent.mimeType) return false;
-    return MimeTypeUtils.isJson(rawContent.mimeType);
+  canProcess(mimeType: string): boolean {
+    if (!mimeType) return false;
+    return MimeTypeUtils.isJson(mimeType);
   }
 
   async process(
     rawContent: RawContent,
     options: ScraperOptions,
     fetcher?: ContentFetcher,
-  ): Promise<ProcessedContent> {
+  ): Promise<PipelineResult> {
     const contentString = convertToString(rawContent.content, rawContent.charset);
 
     // Validate JSON structure
@@ -55,23 +55,26 @@ export class JsonPipeline extends BasePipeline {
       const fallbackChunks = await this.splitter.splitText(contentString);
       return {
         textContent: contentString,
-        metadata: {
-          isValidJson: false,
-        },
+        // metadata: {
+        //   isValidJson: false,
+        // },
         links: [],
         errors: [],
         chunks: fallbackChunks,
       };
     }
 
+    const metadata = this.extractMetadata(parsedJson);
     const context: MiddlewareContext = {
       content: contentString,
       source: rawContent.source,
-      metadata: {
-        ...this.extractMetadata(parsedJson),
-        isValidJson,
-        jsonStructure: this.analyzeJsonStructure(parsedJson),
-      },
+      title: metadata.title,
+      contentType: rawContent.mimeType || "application/json",
+      // metadata: {
+      //   ...this.extractMetadata(parsedJson),
+      //   isValidJson,
+      //   jsonStructure: this.analyzeJsonStructure(parsedJson),
+      // },
       links: [], // JSON files typically don't contain links
       errors: [],
       options,
@@ -85,8 +88,8 @@ export class JsonPipeline extends BasePipeline {
     const chunks = await this.splitter.splitText(context.content);
 
     return {
+      title: context.title,
       textContent: context.content,
-      metadata: context.metadata,
       links: context.links,
       errors: context.errors,
       chunks,
@@ -122,36 +125,6 @@ export class JsonPipeline extends BasePipeline {
     }
 
     return metadata;
-  }
-
-  /**
-   * Analyzes the structure of valid JSON for metadata
-   */
-  private analyzeJsonStructure(parsedJson: unknown): {
-    type: string;
-    depth: number;
-    itemCount?: number;
-    propertyCount?: number;
-  } {
-    if (Array.isArray(parsedJson)) {
-      return {
-        type: "array",
-        depth: this.calculateDepth(parsedJson),
-        itemCount: parsedJson.length,
-      };
-    } else if (typeof parsedJson === "object" && parsedJson !== null) {
-      const obj = parsedJson as Record<string, unknown>;
-      return {
-        type: "object",
-        depth: this.calculateDepth(parsedJson),
-        propertyCount: Object.keys(obj).length,
-      };
-    } else {
-      return {
-        type: typeof parsedJson,
-        depth: 1,
-      };
-    }
   }
 
   /**

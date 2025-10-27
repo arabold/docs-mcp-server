@@ -1,7 +1,7 @@
-import type { Document } from "@langchain/core/documents";
 import { logger } from "../../../utils/logger";
 import { MimeTypeUtils } from "../../../utils/mimeTypeUtils";
 import type { DocumentStore } from "../../DocumentStore";
+import type { DbPageChunk } from "../../types";
 import type { ContentAssemblyStrategy } from "../types";
 
 /**
@@ -44,18 +44,18 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   async selectChunks(
     library: string,
     version: string,
-    initialChunks: Document[],
+    initialChunks: DbPageChunk[],
     documentStore: DocumentStore,
-  ): Promise<Document[]> {
+  ): Promise<DbPageChunk[]> {
     if (initialChunks.length === 0) {
       return [];
     }
 
     try {
       // Group chunks by document URL
-      const chunksByDocument = new Map<string, Document[]>();
+      const chunksByDocument = new Map<string, DbPageChunk[]>();
       for (const chunk of initialChunks) {
-        const url = chunk.metadata.url as string;
+        const url = chunk.url;
         if (!chunksByDocument.has(url)) {
           chunksByDocument.set(url, []);
         }
@@ -111,7 +111,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
           }
 
           // IMPORTANT: Always include the original matched chunk first
-          allChunkIds.add(matched.id as string);
+          allChunkIds.add(matched.id);
 
           // Use promoted ancestor (may still be the original matched chunk if promotion not applicable)
           const ancestorParentChain = await this.walkToRoot(
@@ -138,7 +138,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
           // Multiple matches: use selective subtree reassembly
           // IMPORTANT: Always include all original matched chunks first
           for (const matched of documentChunks) {
-            allChunkIds.add(matched.id as string);
+            allChunkIds.add(matched.id);
           }
 
           const subtreeIds = await this.selectSubtreeChunks(
@@ -171,18 +171,18 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
    * Assembles chunks using simple concatenation.
    * Relies on splitter concatenation guarantees - chunks are designed to join seamlessly.
    */
-  assembleContent(chunks: Document[], debug = false): string {
+  assembleContent(chunks: DbPageChunk[], debug = false): string {
     if (debug) {
       return chunks
         .map(
           (chunk) =>
             `=== #${chunk.id} ${chunk.metadata.path?.join("/")} [${chunk.metadata.level}] ===\n` +
-            chunk.pageContent,
+            chunk.content,
         )
         .join("");
     }
     // Production/default: simple concatenation leveraging splitter guarantees.
-    return chunks.map((chunk) => chunk.pageContent).join("");
+    return chunks.map((chunk) => chunk.content).join("");
   }
 
   /**
@@ -197,18 +197,18 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   private async walkToRoot(
     library: string,
     version: string,
-    chunk: Document,
+    chunk: DbPageChunk,
     documentStore: DocumentStore,
   ): Promise<string[]> {
     const chainIds: string[] = [];
     const visited = new Set<string>();
-    let currentChunk: Document | null = chunk;
+    let currentChunk: DbPageChunk | null = chunk;
     const maxDepth = 50; // Safety limit to prevent runaway loops
     let depth = 0;
 
     // Walk up parent chain until we reach the root
     while (currentChunk && depth < maxDepth) {
-      const currentId = currentChunk.id as string;
+      const currentId = currentChunk.id;
 
       // Check for circular references
       if (visited.has(currentId)) {
@@ -235,22 +235,20 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
           currentChunk = await this.findAncestorWithGaps(
             library,
             version,
-            currentChunk.metadata as { url: string; path?: string[] },
+            currentChunk.url,
+            currentChunk.metadata.path ?? [],
             documentStore,
           );
         }
       } catch (error) {
         // If standard lookup fails, try gap-aware ancestor search
         try {
-          const currentMetadata = currentChunk?.metadata as {
-            url: string;
-            path?: string[];
-          };
-          if (currentMetadata) {
+          if (currentChunk) {
             currentChunk = await this.findAncestorWithGaps(
               library,
               version,
-              currentMetadata,
+              currentChunk.url,
+              currentChunk.metadata.path ?? [],
               documentStore,
             );
           } else {
@@ -281,12 +279,10 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   private async findAncestorWithGaps(
     library: string,
     version: string,
-    metadata: { url: string; path?: string[] },
+    url: string,
+    path: string[],
     documentStore: DocumentStore,
-  ): Promise<Document | null> {
-    const path = metadata.path || [];
-    const url = metadata.url;
-
+  ): Promise<DbPageChunk | null> {
     if (path.length <= 1) {
       return null; // Already at or near root
     }
@@ -331,7 +327,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     url: string,
     targetPath: string[],
     documentStore: DocumentStore,
-  ): Promise<Document[]> {
+  ): Promise<DbPageChunk[]> {
     try {
       // Get all chunks from the same document URL
       const allChunks = await documentStore.findChunksByUrl(library, version, url);
@@ -342,7 +338,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
 
       const matchingChunks = allChunks.filter((chunk) => {
         const chunkPath = (chunk.metadata.path as string[]) || [];
-        const chunkUrl = chunk.metadata.url as string;
+        const chunkUrl = chunk.url;
 
         // Must be in the same document
         if (chunkUrl !== url) return false;
@@ -368,13 +364,13 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   private async findStructuralAncestor(
     library: string,
     version: string,
-    chunk: Document,
+    chunk: DbPageChunk,
     documentStore: DocumentStore,
-  ): Promise<Document | null> {
-    let current: Document | null = chunk;
+  ): Promise<DbPageChunk | null> {
+    let current: DbPageChunk | null = chunk;
 
     // If current is structural already, return it
-    const isStructural = (c: Document | null) =>
+    const isStructural = (c: DbPageChunk | null) =>
       !!c && Array.isArray(c.metadata?.types) && c.metadata.types.includes("structural");
 
     if (isStructural(current)) {
@@ -383,11 +379,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
 
     // Walk up until we find a structural ancestor
     while (true) {
-      const parent = await documentStore.findParentChunk(
-        library,
-        version,
-        current.id as string,
-      );
+      const parent = await documentStore.findParentChunk(library, version, current.id);
       if (!parent) {
         return null;
       }
@@ -405,7 +397,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   private async selectSubtreeChunks(
     library: string,
     version: string,
-    documentChunks: Document[],
+    documentChunks: DbPageChunk[],
     documentStore: DocumentStore,
   ): Promise<string[]> {
     const chunkIds = new Set<string>();
@@ -458,7 +450,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   /**
    * Finds the common ancestor path from a list of chunks by finding the longest common prefix.
    */
-  private findCommonAncestorPath(chunks: Document[]): string[] {
+  private findCommonAncestorPath(chunks: DbPageChunk[]): string[] {
     if (chunks.length === 0) return [];
     if (chunks.length === 1) return (chunks[0].metadata.path as string[]) ?? [];
 
@@ -488,7 +480,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   private async findContainerChunks(
     library: string,
     version: string,
-    referenceChunk: Document,
+    referenceChunk: DbPageChunk,
     ancestorPath: string[],
     documentStore: DocumentStore,
   ): Promise<string[]> {
@@ -500,13 +492,13 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       const ancestorChunks = await this.findChunksByExactPath(
         library,
         version,
-        referenceChunk.metadata.url as string,
+        referenceChunk.url,
         ancestorPath,
         documentStore,
       );
 
       for (const chunk of ancestorChunks) {
-        containerIds.push(chunk.id as string);
+        containerIds.push(chunk.id);
       }
     } catch (error) {
       logger.warn(
@@ -527,7 +519,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     url: string,
     path: string[],
     documentStore: DocumentStore,
-  ): Promise<Document[]> {
+  ): Promise<DbPageChunk[]> {
     try {
       // For root path, return empty - no specific chunks to find
       if (path.length === 0) {
@@ -569,17 +561,17 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   private async findSubtreeChunks(
     library: string,
     version: string,
-    rootChunk: Document,
+    rootChunk: DbPageChunk,
     documentStore: DocumentStore,
   ): Promise<string[]> {
     const subtreeIds: string[] = [];
     const visited = new Set<string>();
-    const queue: Document[] = [rootChunk];
+    const queue: DbPageChunk[] = [rootChunk];
 
     while (queue.length > 0) {
       // biome-ignore lint/style/noNonNullAssertion: this is safe due to the while condition
       const currentChunk = queue.shift()!;
-      const currentId = currentChunk.id as string;
+      const currentId = currentChunk.id;
 
       if (visited.has(currentId)) continue;
       visited.add(currentId);
@@ -609,21 +601,21 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   private async fallbackSelection(
     library: string,
     version: string,
-    initialChunks: Document[],
+    initialChunks: DbPageChunk[],
     documentStore: DocumentStore,
-  ): Promise<Document[]> {
+  ): Promise<DbPageChunk[]> {
     const chunkIds = new Set<string>();
 
     // Just include the initial chunks and their immediate parents/children
     for (const chunk of initialChunks) {
-      const id = chunk.id as string;
+      const id = chunk.id;
       chunkIds.add(id);
 
       // Add parent for context
       try {
         const parent = await documentStore.findParentChunk(library, version, id);
         if (parent) {
-          chunkIds.add(parent.id as string);
+          chunkIds.add(parent.id);
         }
       } catch (error) {
         logger.warn(`Failed to find parent for chunk ${id}: ${error}`);

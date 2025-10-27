@@ -6,7 +6,12 @@ import { ChallengeError, RedirectError, ScraperError } from "../../utils/errors"
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
-import type { ContentFetcher, FetchOptions, RawContent } from "./types";
+import {
+  type ContentFetcher,
+  type FetchOptions,
+  FetchStatus,
+  type RawContent,
+} from "./types";
 
 /**
  * Fetches content from remote sources using HTTP/HTTPS.
@@ -116,10 +121,15 @@ export class HttpFetcher implements ContentFetcher {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const fingerprint = this.fingerprintGenerator.generateHeaders();
-        const headers = {
+        const headers: Record<string, string> = {
           ...fingerprint,
           ...options?.headers, // User-provided headers override generated ones
         };
+
+        // Add If-None-Match header for conditional requests if ETag is provided
+        if (options?.etag) {
+          headers["If-None-Match"] = options.etag;
+        }
 
         const config: AxiosRequestConfig = {
           responseType: "arraybuffer",
@@ -137,6 +147,17 @@ export class HttpFetcher implements ContentFetcher {
         };
 
         const response = await axios.get(source, config);
+
+        // Handle 304 Not Modified responses for conditional requests
+        if (response.status === 304) {
+          logger.debug(`🔄 Content not modified (304): ${source}`);
+          return {
+            content: Buffer.from(""),
+            mimeType: "text/plain",
+            source: source,
+            status: FetchStatus.NOT_MODIFIED,
+          } satisfies RawContent;
+        }
 
         const contentTypeHeader = response.headers["content-type"];
         const { mimeType, charset } = MimeTypeUtils.parseContentType(contentTypeHeader);
@@ -182,6 +203,7 @@ export class HttpFetcher implements ContentFetcher {
           source: finalUrl,
           etag,
           lastModified: lastModifiedISO,
+          status: FetchStatus.SUCCESS,
         } satisfies RawContent;
       } catch (error: unknown) {
         const axiosError = error as AxiosError;
@@ -192,6 +214,17 @@ export class HttpFetcher implements ContentFetcher {
         if (options?.signal?.aborted || code === "ERR_CANCELED") {
           // Throw with isError = false to indicate cancellation is not an error
           throw new CancellationError("HTTP fetch cancelled");
+        }
+
+        // Handle 404 Not Found - return special status for refresh operations
+        if (status === 404) {
+          logger.debug(`❌ Resource not found (404): ${source}`);
+          return {
+            content: Buffer.from(""),
+            mimeType: "text/plain",
+            source: source,
+            status: FetchStatus.NOT_FOUND,
+          } satisfies RawContent;
         }
 
         // Handle redirect errors (status codes 301, 302, 303, 307, 308)
