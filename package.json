@@ -36,6 +36,7 @@
     "test:e2e:watch": "vitest --config test/vitest.config.ts",
     "lint": "biome check .",
     "lint:fix": "biome check . --fix",
+    "typecheck": "npx tsc --noEmit --project tsconfig.test.json",
     "format": "biome format . --write",
     "postinstall": "echo 'Skipping Playwright browser install. See README.md for details.'"
   },
