@@ -51,10 +51,11 @@ export class DocumentManagementService {
     embeddingConfig?: EmbeddingModelConfig | null,
     pipelineConfig?: PipelineConfiguration,
   ) {
-    const dbDir = storePath;
-    const dbPath = path.join(dbDir, "documents.db");
+    // Handle special :memory: case for in-memory databases (primarily for testing)
+    const dbPath =
+      storePath === ":memory:" ? ":memory:" : path.join(storePath, "documents.db");
 
-    logger.debug(`Using database directory: ${dbDir}`);
+    logger.debug(`Using database path: ${dbPath}`);
 
     // Directory creation is handled by the centralized path resolution
 

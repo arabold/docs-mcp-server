@@ -51,9 +51,6 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     const { url } = item;
 
     try {
-      // Check if this is a refresh operation (has pageId and etag)
-      const isRefresh = item.pageId !== undefined && item.etag !== undefined;
-
       // Define fetch options, passing signal, followRedirects, headers, and etag
       const fetchOptions = {
         signal,
@@ -65,23 +62,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       // Use AutoDetectFetcher which handles fallbacks automatically
       const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
 
-      // Handle NOT_MODIFIED status (HTTP 304)
-      if (rawContent.status === FetchStatus.NOT_MODIFIED) {
-        if (isRefresh) {
-          logger.debug(`✓ Page unchanged (304): ${url}`);
-          // Return empty result, no processing needed
-          return { url, links: [], status: FetchStatus.NOT_MODIFIED };
-        }
-        // For non-refresh operations, 304 shouldn't happen
-        logger.warn(`⚠️  Unexpected 304 response for non-refresh operation: ${url}`);
-        return { url, links: [], status: FetchStatus.NOT_MODIFIED };
-      }
-
-      // Handle SUCCESS status (HTTP 200)
-      // For refresh operations with existing pages, mark for deletion before re-adding
-      const shouldRefresh = isRefresh && item.pageId;
-      if (shouldRefresh) {
-        logger.debug(`✓ Refreshing page content: ${url}`);
+      // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
+      if (rawContent.status !== FetchStatus.SUCCESS) {
+        return { url, links: [], status: rawContent.status };
       }
 
       // --- Start Pipeline Processing ---
@@ -123,32 +106,27 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         };
       }
 
-      // For refresh operations, don't extract or follow links
-      let filteredLinks: string[] = [];
+      // Determine base for scope filtering:
+      // For depth 0 (initial page) use the final fetched URL (rawContent.source) so protocol/host redirects don't drop links.
+      // For deeper pages, use canonicalBaseUrl (set after first page) or fallback to original.
+      const baseUrl =
+        item.depth === 0
+          ? new URL(rawContent.source)
+          : (this.canonicalBaseUrl ?? new URL(options.url));
 
-      if (!isRefresh) {
-        // Determine base for scope filtering:
-        // For depth 0 (initial page) use the final fetched URL (rawContent.source) so protocol/host redirects don't drop links.
-        // For deeper pages, use canonicalBaseUrl (set after first page) or fallback to original.
-        const baseUrl =
-          item.depth === 0
-            ? new URL(rawContent.source)
-            : (this.canonicalBaseUrl ?? new URL(options.url));
-
-        filteredLinks =
-          processed.links?.filter((link) => {
-            try {
-              const targetUrl = new URL(link);
-              const scope = options.scope || "subpages";
-              return (
-                isInScope(baseUrl, targetUrl, scope) &&
-                (!this.shouldFollowLinkFn || this.shouldFollowLinkFn(baseUrl, targetUrl))
-              );
-            } catch {
-              return false;
-            }
-          }) ?? [];
-      }
+      const filteredLinks =
+        processed.links?.filter((link) => {
+          try {
+            const targetUrl = new URL(link);
+            const scope = options.scope || "subpages";
+            return (
+              isInScope(baseUrl, targetUrl, scope) &&
+              (!this.shouldFollowLinkFn || this.shouldFollowLinkFn(baseUrl, targetUrl))
+            );
+          } catch {
+            return false;
+          }
+        }) ?? [];
 
       return {
         url,

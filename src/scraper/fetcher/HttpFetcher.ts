@@ -144,6 +144,10 @@ export class HttpFetcher implements ContentFetcher {
           // Axios follows redirects by default, we need to explicitly disable it if needed
           maxRedirects: followRedirects ? 5 : 0,
           decompress: true,
+          // Allow 304 responses to be handled as successful responses
+          validateStatus: (status) => {
+            return (status >= 200 && status < 300) || status === 304;
+          },
         };
 
         const response = await axios.get(source, config);

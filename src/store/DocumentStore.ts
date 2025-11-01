@@ -1049,6 +1049,7 @@ export class DocumentStore {
   async deleteDocumentsByPageId(pageId: number): Promise<number> {
     try {
       const result = this.statements.deleteDocumentsByPageId.run(pageId);
+      logger.debug(`Deleted ${result.changes} document(s) for page ID ${pageId}`);
       return result.changes;
     } catch (error) {
       throw new ConnectionError("Failed to delete documents by page ID", error);
