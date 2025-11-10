@@ -78,8 +78,8 @@ export class DocumentStore {
     >;
     getPageId: Database.Statement<[number, string]>;
     deleteDocuments: Database.Statement<[string, string]>;
-    deleteDocumentsByUrl: Database.Statement<[string, string, string]>;
     deleteDocumentsByPageId: Database.Statement<[number]>;
+    deletePage: Database.Statement<[number]>;
     deletePages: Database.Statement<[string, string]>;
     queryVersions: Database.Statement<[string]>;
     checkExists: Database.Statement<[string, string]>;
@@ -220,11 +220,11 @@ export class DocumentStore {
         "SELECT id FROM libraries WHERE name = ?",
       ),
       // New version-related statements
-      insertVersion: this.db.prepare<[number, string | null]>(
+      insertVersion: this.db.prepare<[number, string]>(
         "INSERT INTO versions (library_id, name, status) VALUES (?, ?, 'not_indexed') ON CONFLICT(library_id, name) DO NOTHING",
       ),
-      resolveVersionId: this.db.prepare<[number, string | null]>(
-        "SELECT id FROM versions WHERE library_id = ? AND name IS ?",
+      resolveVersionId: this.db.prepare<[number, string]>(
+        "SELECT id FROM versions WHERE library_id = ? AND name = ?",
       ),
       getVersionById: this.db.prepare<[number]>("SELECT * FROM versions WHERE id = ?"),
       queryVersionsByLibraryId: this.db.prepare<[number]>(
@@ -239,18 +239,10 @@ export class DocumentStore {
            WHERE l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
          )`,
       ),
-      deleteDocumentsByUrl: this.db.prepare<[string, string, string]>(
-        `DELETE FROM documents 
-         WHERE page_id IN (
-           SELECT p.id FROM pages p
-           JOIN versions v ON p.version_id = v.id
-           JOIN libraries l ON v.library_id = l.id
-           WHERE p.url = ? AND l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
-         )`,
-      ),
       deleteDocumentsByPageId: this.db.prepare<[number]>(
         "DELETE FROM documents WHERE page_id = ?",
       ),
+      deletePage: this.db.prepare<[number]>("DELETE FROM pages WHERE id = ?"),
       deletePages: this.db.prepare<[string, string]>(
         `DELETE FROM pages 
          WHERE version_id IN (
@@ -602,7 +594,7 @@ export class DocumentStore {
     this.statements.insertVersion.run(libraryId, normalizedVersion);
     const versionIdRow = this.statements.resolveVersionId.get(
       libraryId,
-      normalizedVersion === null ? "" : normalizedVersion,
+      normalizedVersion,
     ) as { id: number } | undefined;
     if (!versionIdRow || typeof versionIdRow.id !== "number") {
       throw new StoreError(
@@ -687,8 +679,16 @@ export class DocumentStore {
    */
   async storeScraperOptions(versionId: number, options: ScraperOptions): Promise<void> {
     try {
-      // biome-ignore lint/correctness/noUnusedVariables: Extract source URL and exclude runtime-only fields using destructuring
-      const { url: source_url, library, version, signal, ...scraper_options } = options;
+      // Extract source URL and exclude runtime-only fields using destructuring
+      const {
+        url: source_url,
+        library: _,
+        version: __,
+        signal: ___,
+        initialQueue: ____,
+        isRefresh: _____,
+        ...scraper_options
+      } = options;
 
       const optionsJson = JSON.stringify(scraper_options);
       this.statements.updateVersionScraperOptions.run(source_url, optionsJson, versionId);
@@ -929,10 +929,17 @@ export class DocumentStore {
       // Resolve library and version IDs (creates them if they don't exist)
       const versionId = await this.resolveVersionId(library, version);
 
-      // Delete existing documents for these URLs to prevent conflicts
-      const deletedCount = await this.deleteDocumentsByUrl(library, version, url);
-      if (deletedCount > 0) {
-        logger.debug(`Deleted ${deletedCount} existing documents for URL: ${url}`);
+      // Delete existing documents for this page to prevent conflicts
+      // First check if the page exists and get its ID
+      const existingPage = this.statements.getPageId.get(versionId, url) as
+        | { id: number }
+        | undefined;
+
+      if (existingPage) {
+        const result = this.statements.deleteDocumentsByPageId.run(existingPage.id);
+        if (result.changes > 0) {
+          logger.debug(`Deleted ${result.changes} existing documents for URL: ${url}`);
+        }
       }
 
       // Insert documents in a transaction
@@ -1003,16 +1010,23 @@ export class DocumentStore {
   }
 
   /**
-   * Removes documents matching specified library and version
+   * Removes documents and pages matching specified library and version.
+   * This consolidated method deletes both documents and their associated pages.
    * @returns Number of documents deleted
    */
-  async deleteDocuments(library: string, version: string): Promise<number> {
+  async deletePages(library: string, version: string): Promise<number> {
     try {
       const normalizedVersion = version.toLowerCase();
+
+      // First delete documents
       const result = this.statements.deleteDocuments.run(
         library.toLowerCase(),
         normalizedVersion,
       );
+
+      // Then delete the pages (after documents are gone, due to foreign key constraints)
+      this.statements.deletePages.run(library.toLowerCase(), normalizedVersion);
+
       return result.changes;
     } catch (error) {
       throw new ConnectionError("Failed to delete documents", error);
@@ -1020,39 +1034,26 @@ export class DocumentStore {
   }
 
   /**
-   * Removes documents for a specific URL within a library and version
-   * @returns Number of documents deleted
+   * Deletes a page and all its associated document chunks.
+   * Performs manual deletion in the correct order to satisfy foreign key constraints:
+   * 1. Delete document chunks (page_id references pages.id)
+   * 2. Delete page record
+   *
+   * This method is used during refresh operations when a page returns 404 Not Found.
    */
-  async deleteDocumentsByUrl(
-    library: string,
-    version: string,
-    url: string,
-  ): Promise<number> {
+  async deletePage(pageId: number): Promise<void> {
     try {
-      const normalizedVersion = version.toLowerCase();
-      const result = this.statements.deleteDocumentsByUrl.run(
-        url,
-        library.toLowerCase(),
-        normalizedVersion,
-      );
-      return result.changes;
-    } catch (error) {
-      throw new ConnectionError("Failed to delete documents by URL", error);
-    }
-  }
+      // Delete documents first (due to foreign key constraint)
+      const docResult = this.statements.deleteDocumentsByPageId.run(pageId);
+      logger.debug(`Deleted ${docResult.changes} document(s) for page ID ${pageId}`);
 
-  /**
-   * Removes all documents for a specific page ID.
-   * This is more efficient than URL-based deletion when the page ID is known.
-   * @returns Number of documents deleted
-   */
-  async deleteDocumentsByPageId(pageId: number): Promise<number> {
-    try {
-      const result = this.statements.deleteDocumentsByPageId.run(pageId);
-      logger.debug(`Deleted ${result.changes} document(s) for page ID ${pageId}`);
-      return result.changes;
+      // Then delete the page record
+      const pageResult = this.statements.deletePage.run(pageId);
+      if (pageResult.changes > 0) {
+        logger.debug(`Deleted page record for page ID ${pageId}`);
+      }
     } catch (error) {
-      throw new ConnectionError("Failed to delete documents by page ID", error);
+      throw new ConnectionError(`Failed to delete page ${pageId}`, error);
     }
   }
 
@@ -1111,7 +1112,7 @@ export class DocumentStore {
       // 4. libraries (if empty)
 
       // Delete all documents for this version
-      const documentsDeleted = await this.deleteDocuments(library, version);
+      const documentsDeleted = await this.deletePages(library, version);
 
       // Delete all pages for this version (must be done after documents, before version)
       this.statements.deletePages.run(normalizedLibrary, normalizedVersion);

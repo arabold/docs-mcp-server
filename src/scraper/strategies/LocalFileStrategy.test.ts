@@ -585,8 +585,12 @@ describe("LocalFileStrategy", () => {
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testContent = "# Test File\nOriginal content";
 
-      // Create initial file
+      // Create initial file with a specific mtime
       vol.fromJSON({ "/test.md": testContent }, "/");
+
+      // Get the file stats to capture the exact mtime
+      const stats = await vol.promises.stat("/test.md");
+      const initialMtime = stats.mtime;
 
       // First scrape to get the initial etag
       const initialOptions: ScraperOptions = {
@@ -604,7 +608,12 @@ describe("LocalFileStrategy", () => {
       const firstCall = progressCallback.mock.calls[0][0];
       const etag = firstCall.result?.etag;
 
-      // Reset the callback
+      // Verify the mtime hasn't changed
+      const statsAfterScrape = await vol.promises.stat("/test.md");
+      expect(statsAfterScrape.mtime.getTime()).toBe(initialMtime.getTime());
+
+      // Reset the callback but DON'T reset the filesystem
+      // This preserves the file's mtime, so the etag stays the same
       progressCallback.mockClear();
 
       // Now do a refresh with the same etag (file unchanged)
@@ -626,9 +635,18 @@ describe("LocalFileStrategy", () => {
 
       await strategy.scrape(refreshOptions, progressCallback);
 
-      // Verify no documents were processed (file unchanged)
-      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
-      expect(docCalls).toHaveLength(0);
+      // Verify file was checked but returned NOT_MODIFIED (no result with content)
+      // The root URL at depth 0 is always processed to check for changes
+      expect(progressCallback).toHaveBeenCalledTimes(1);
+      expect(progressCallback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pagesScraped: 1,
+          currentUrl: "file:///test.md",
+          depth: 0,
+          result: null, // NOT_MODIFIED returns null result
+          pageId: 123,
+        }),
+      );
     });
 
     it("should re-process file when it has been modified", async () => {
@@ -795,56 +813,56 @@ describe("LocalFileStrategy", () => {
       expect(calledUrls).toContain("file:///testdir/file2.md");
     });
 
-    it("should preserve depth from original scrape during refresh", async () => {
+    it("should preserve depth from original scrape during refresh for nested files", async () => {
       const strategy = new LocalFileStrategy();
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
-      const testContent = "# Deep File\nContent at depth 2";
 
       vol.fromJSON(
         {
-          "/deep/file.md": testContent,
+          "/testdir/subdir/deep/file.md": "# Deep File\nOriginal content",
         },
         "/",
       );
 
-      // First scrape to get etag
+      // First scrape starting from directory - file will be discovered at depth 3
       const initialOptions: ScraperOptions = {
-        url: "file:///deep/file.md",
+        url: "file:///testdir",
         library: "test",
         version: "1.0",
-        maxPages: 1,
-        maxDepth: 2,
+        maxPages: 10,
+        maxDepth: 3,
       };
 
       await strategy.scrape(initialOptions, progressCallback);
+      expect(progressCallback).toHaveBeenCalledTimes(1);
       const firstCall = progressCallback.mock.calls[0][0];
+      expect(firstCall.depth).toBe(3); // File discovered at depth 3
       const etag = firstCall.result?.etag;
 
       // Update the file with new content
       vol.reset();
       vol.fromJSON(
         {
-          "/deep/file.md": "# Deep File\nUpdated content",
+          "/testdir/subdir/deep/file.md": "# Deep File\nUpdated content",
         },
         "/",
       );
 
-      // Wait a bit to ensure different mtime
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       progressCallback.mockClear();
 
-      // Refresh with original depth
+      // Refresh starting from same directory with file in initialQueue at depth 3
       const refreshOptions: ScraperOptions = {
-        url: "file:///deep/file.md",
+        url: "file:///testdir",
         library: "test",
         version: "1.0",
-        maxPages: 1,
-        maxDepth: 2,
+        maxPages: 10,
+        maxDepth: 3,
         initialQueue: [
           {
-            url: "file:///deep/file.md",
-            depth: 2, // Original depth preserved
+            url: "file:///testdir/subdir/deep/file.md",
+            depth: 3, // Original depth from discovery
             pageId: 555,
             etag: etag,
           },
@@ -853,10 +871,12 @@ describe("LocalFileStrategy", () => {
 
       await strategy.scrape(refreshOptions, progressCallback);
 
-      // Verify depth is preserved
+      // Verify file was re-processed and depth from initialQueue is preserved
       const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
       expect(docCalls).toHaveLength(1);
-      expect(docCalls[0][0].depth).toBe(2);
+      expect(docCalls[0][0].depth).toBe(3);
+      expect(docCalls[0][0].pageId).toBe(555);
+      expect(docCalls[0][0].result?.textContent).toContain("Updated content");
     });
   });
 });

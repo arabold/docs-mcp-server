@@ -129,6 +129,9 @@ export class HttpFetcher implements ContentFetcher {
         // Add If-None-Match header for conditional requests if ETag is provided
         if (options?.etag) {
           headers["If-None-Match"] = options.etag;
+          logger.debug(
+            `Conditional request for ${source} with If-None-Match: ${options.etag}`,
+          );
         }
 
         const config: AxiosRequestConfig = {
@@ -154,7 +157,7 @@ export class HttpFetcher implements ContentFetcher {
 
         // Handle 304 Not Modified responses for conditional requests
         if (response.status === 304) {
-          logger.debug(`🔄 Content not modified (304): ${source}`);
+          logger.debug(`HTTP 304 Not Modified for ${source}`);
           return {
             content: Buffer.from(""),
             mimeType: "text/plain",
@@ -192,6 +195,9 @@ export class HttpFetcher implements ContentFetcher {
 
         // Extract ETag header for caching
         const etag = response.headers.etag || response.headers.ETag;
+        if (etag) {
+          logger.debug(`Received ETag for ${source}: ${etag}`);
+        }
 
         // Extract Last-Modified header for caching
         const lastModified = response.headers["last-modified"];
@@ -222,7 +228,7 @@ export class HttpFetcher implements ContentFetcher {
 
         // Handle 404 Not Found - return special status for refresh operations
         if (status === 404) {
-          logger.debug(`❌ Resource not found (404): ${source}`);
+          logger.debug(`Resource not found (404): ${source}`);
           return {
             content: Buffer.from(""),
             mimeType: "text/plain",

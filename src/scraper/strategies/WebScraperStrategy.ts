@@ -51,6 +51,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     const { url } = item;
 
     try {
+      // Log when processing with ETag for conditional requests
+      if (item.etag) {
+        logger.debug(`Processing ${url} with stored ETag: ${item.etag}`);
+      }
+
       // Define fetch options, passing signal, followRedirects, headers, and etag
       const fetchOptions = {
         signal,
@@ -62,8 +67,13 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       // Use AutoDetectFetcher which handles fallbacks automatically
       const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
 
+      logger.debug(
+        `Fetch result for ${url}: status=${rawContent.status}, etag=${rawContent.etag || "none"}`,
+      );
+
       // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
       if (rawContent.status !== FetchStatus.SUCCESS) {
+        logger.debug(`Skipping pipeline for ${url} due to status: ${rawContent.status}`);
         return { url, links: [], status: rawContent.status };
       }
 

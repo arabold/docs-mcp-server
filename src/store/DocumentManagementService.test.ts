@@ -33,7 +33,7 @@ const mockStore = {
   checkDocumentExists: vi.fn(),
   queryLibraryVersions: vi.fn().mockResolvedValue(new Map<string, any[]>()),
   addDocuments: vi.fn(),
-  deleteDocuments: vi.fn(),
+  deletePages: vi.fn(),
   // Status tracking methods
   updateVersionStatus: vi.fn(),
   updateVersionProgress: vi.fn(),
@@ -270,17 +270,17 @@ describe("DocumentManagementService", () => {
       const version = "1.0.0";
 
       await docService.removeAllDocuments(library, version);
-      expect(mockStore.deleteDocuments).toHaveBeenCalledWith(library, version); // Fix: Use mockStoreInstance
+      expect(mockStore.deletePages).toHaveBeenCalledWith(library, version); // Fix: Use mockStoreInstance
     });
 
     it("should handle removing documents with null/undefined/empty version", async () => {
       const library = "test-lib";
       await docService.removeAllDocuments(library, null);
-      expect(mockStore.deleteDocuments).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
+      expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
       await docService.removeAllDocuments(library, undefined);
-      expect(mockStore.deleteDocuments).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
+      expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
       await docService.removeAllDocuments(library, "");
-      expect(mockStore.deleteDocuments).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
+      expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
     });
 
     describe("listVersions", () => {

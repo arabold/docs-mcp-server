@@ -238,6 +238,7 @@ describe("CLI Command Arguments Matrix", () => {
       "web",
       "worker",
       "scrape",
+      "refresh",
       "search",
       "list",
       "find-version",

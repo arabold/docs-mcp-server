@@ -25,7 +25,7 @@ describe("PipelineWorker", () => {
     mockStore = {
       addScrapeResult: vi.fn().mockResolvedValue(undefined),
       removeAllDocuments: vi.fn().mockResolvedValue(undefined),
-      removeDocumentsByPageId: vi.fn().mockResolvedValue(undefined),
+      deletePage: vi.fn().mockResolvedValue(undefined),
     };
 
     mockScraperService = {
@@ -331,8 +331,8 @@ describe("PipelineWorker", () => {
       },
     );
 
-    // Simulate removeDocumentsByPageId failing
-    (mockStore.removeDocumentsByPageId as Mock).mockRejectedValue(deletionError);
+    // Simulate deletePage failing
+    (mockStore.deletePage as Mock).mockRejectedValue(deletionError);
 
     // Execute the job - should fail due to deletion error
     await expect(worker.executeJob(mockJob, mockCallbacks)).rejects.toThrow(
@@ -342,7 +342,7 @@ describe("PipelineWorker", () => {
     // Verify scrape was called
     expect(mockScraperService.scrape).toHaveBeenCalledOnce();
     // Verify deletion was attempted
-    expect(mockStore.removeDocumentsByPageId).toHaveBeenCalledWith(123);
+    expect(mockStore.deletePage).toHaveBeenCalledWith(123);
     // Verify onJobProgress was called
     expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
     // Verify onJobError was called with the deletion error

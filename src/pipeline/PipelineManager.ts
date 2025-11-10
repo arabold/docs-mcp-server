@@ -334,6 +334,13 @@ export class PipelineManager implements IPipeline {
       // Get all pages for this version with their ETags and depths
       const pages = await this.store.getPagesByVersionId(versionId);
 
+      // Debug: Log first page to see what data we're getting
+      if (pages.length > 0) {
+        logger.debug(
+          `Sample page data: url=${pages[0].url}, etag=${pages[0].etag}, depth=${pages[0].depth}`,
+        );
+      }
+
       if (pages.length === 0) {
         throw new Error(
           `No pages found for ${library}@${normalizedVersion || "unversioned"}. Use scrape_docs to index it first.`,
@@ -360,10 +367,11 @@ export class PipelineManager implements IPipeline {
         url: storedOptions?.sourceUrl || pages[0].url, // Required but not used when initialQueue is set
         library,
         version: normalizedVersion,
+        ...(storedOptions?.options || {}), // Include stored options if available (spread first)
+        // Override with refresh-specific options (these must come after the spread)
         initialQueue, // Pre-populated queue with existing pages
         maxPages: pages.length,
         isRefresh: true, // Mark this as a refresh operation
-        ...(storedOptions?.options || {}), // Include stored options if available
       };
 
       // Enqueue as a standard scrape job with the initialQueue

@@ -436,20 +436,23 @@ describe("HttpFetcher", () => {
     await fetcher.fetch("https://example.com");
 
     // Test behavior: verify that axios is called with required properties
-    expect(mockedAxios.get).toHaveBeenCalledWith("https://example.com", {
-      responseType: "arraybuffer",
-      headers: expect.objectContaining({
-        "user-agent": expect.any(String),
-        accept: expect.any(String),
-        "accept-language": expect.any(String),
-        // Verify that our custom Accept-Encoding header is set (excluding zstd)
-        "Accept-Encoding": "gzip, deflate, br",
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      "https://example.com",
+      expect.objectContaining({
+        responseType: "arraybuffer",
+        headers: expect.objectContaining({
+          "user-agent": expect.any(String),
+          accept: expect.any(String),
+          "accept-language": expect.any(String),
+          // Verify that our custom Accept-Encoding header is set (excluding zstd)
+          "Accept-Encoding": "gzip, deflate, br",
+        }),
+        timeout: undefined,
+        maxRedirects: 5,
+        signal: undefined,
+        decompress: true,
       }),
-      timeout: undefined,
-      maxRedirects: 5,
-      signal: undefined,
-      decompress: true,
-    });
+    );
   });
 
   it("should respect custom headers", async () => {
@@ -464,14 +467,17 @@ describe("HttpFetcher", () => {
     await fetcher.fetch("https://example.com", { headers });
 
     // Test behavior: verify custom headers are included
-    expect(mockedAxios.get).toHaveBeenCalledWith("https://example.com", {
-      responseType: "arraybuffer",
-      headers: expect.objectContaining(headers),
-      timeout: undefined,
-      maxRedirects: 5,
-      signal: undefined,
-      decompress: true,
-    });
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      "https://example.com",
+      expect.objectContaining({
+        responseType: "arraybuffer",
+        headers: expect.objectContaining(headers),
+        timeout: undefined,
+        maxRedirects: 5,
+        signal: undefined,
+        decompress: true,
+      }),
+    );
   });
 
   describe("redirect handling", () => {

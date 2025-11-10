@@ -26,9 +26,9 @@ export interface DbPage {
 export interface DbChunkMetadata {
   level?: number; // Hierarchical level in document
   path?: string[]; // Hierarchical path in document
-  // TODO: Check if `types` is properly use
+  // TODO: Check if `types` is properly used
   types?: string[]; // Types of content in this chunk (e.g., "text", "code", "table")
-  // FIXME: Enable additional metadata fields again once we have a clear schema for what metadata we want to store with each chunk.
+  // TODO: Enable additional metadata fields again once we have a clear schema for what metadata we want to store with each chunk.
   // Allow for additional chunk-specific metadata
   // [key: string]: unknown;
 }

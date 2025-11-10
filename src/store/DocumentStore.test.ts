@@ -188,7 +188,7 @@ describe("DocumentStore - With Embeddings", () => {
       );
       expect(await store.checkDocumentExists("templib", "1.0.0")).toBe(true);
 
-      const deletedCount = await store.deleteDocuments("templib", "1.0.0");
+      const deletedCount = await store.deletePages("templib", "1.0.0");
       expect(deletedCount).toBe(1);
       expect(await store.checkDocumentExists("templib", "1.0.0")).toBe(false);
     });
@@ -769,6 +769,44 @@ describe("DocumentStore - Common Functionality", () => {
   });
 
   describe("Document Management", () => {
+    it("should delete both documents and pages when removing all documents", async () => {
+      const library = "delete-test";
+      const version = "1.0.0";
+
+      // Add multiple pages with documents
+      await store.addDocuments(
+        library,
+        version,
+        1,
+        createScrapeResult("Page 1", "https://example.com/page1", "Content for page 1", [
+          "section1",
+        ]),
+      );
+      await store.addDocuments(
+        library,
+        version,
+        1,
+        createScrapeResult("Page 2", "https://example.com/page2", "Content for page 2", [
+          "section2",
+        ]),
+      );
+
+      // Verify both pages and documents exist
+      const versionId = await store.resolveVersionId(library, version);
+      const pagesBefore = await store.getPagesByVersionId(versionId);
+      expect(pagesBefore.length).toBe(2);
+      expect(await store.checkDocumentExists(library, version)).toBe(true);
+
+      // Delete all documents for this version
+      const deletedCount = await store.deletePages(library, version);
+      expect(deletedCount).toBe(2); // Should delete 2 documents
+
+      // Verify both documents AND pages are gone
+      const pagesAfter = await store.getPagesByVersionId(versionId);
+      expect(pagesAfter.length).toBe(0); // Pages should be deleted too
+      expect(await store.checkDocumentExists(library, version)).toBe(false);
+    });
+
     it("should retrieve documents by ID", async () => {
       await store.addDocuments(
         "idtest",

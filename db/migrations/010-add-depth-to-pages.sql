@@ -5,6 +5,12 @@
 -- Add depth column to pages table
 ALTER TABLE pages ADD COLUMN depth INTEGER;
 
--- Backfill existing pages with depth 0 (conservative default)
--- This ensures all existing pages have a valid depth value
-UPDATE pages SET depth = 0 WHERE depth IS NULL;
+-- Backfill depth based on stored scraper options
+-- Depth 0: Pages whose URL exactly matches the source_url in scraper_options
+-- Depth 1: All other pages (discovered during crawl)
+UPDATE pages SET depth = CASE
+  WHEN url = (SELECT source_url FROM versions WHERE versions.id = pages.version_id)
+    THEN 0
+  ELSE 1
+END
+WHERE depth IS NULL;

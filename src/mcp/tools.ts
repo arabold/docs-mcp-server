@@ -8,6 +8,7 @@ import {
   GetJobInfoTool,
   ListJobsTool,
   ListLibrariesTool,
+  RefreshVersionTool,
   RemoveTool,
   ScrapeTool,
   SearchTool,
@@ -20,6 +21,7 @@ export interface McpServerTools {
   listLibraries: ListLibrariesTool;
   findVersion: FindVersionTool;
   scrape: ScrapeTool;
+  refresh: RefreshVersionTool;
   search: SearchTool;
   listJobs: ListJobsTool;
   getJobInfo: GetJobInfoTool;
@@ -43,6 +45,7 @@ export async function initializeTools(
     listLibraries: new ListLibrariesTool(docService),
     findVersion: new FindVersionTool(docService),
     scrape: new ScrapeTool(pipeline),
+    refresh: new RefreshVersionTool(pipeline),
     search: new SearchTool(docService),
     listJobs: new ListJobsTool(pipeline),
     getJobInfo: new GetJobInfoTool(pipeline),

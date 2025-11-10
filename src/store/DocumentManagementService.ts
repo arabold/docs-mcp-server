@@ -334,19 +334,17 @@ export class DocumentManagementService {
     logger.info(
       `🗑️ Removing all documents from ${library}@${normalizedVersion || "[no version]"} store`,
     );
-    const count = await this.store.deleteDocuments(library, normalizedVersion);
+    const count = await this.store.deletePages(library, normalizedVersion);
     logger.info(`🗑️ Deleted ${count} documents`);
   }
 
   /**
-   * Removes all documents for a specific page ID.
-   * This is more efficient than URL-based deletion when the page ID is known.
+   * Deletes a page and all its associated document chunks.
+   * This is used during refresh operations when a page returns 404 Not Found.
    */
-  async removeDocumentsByPageId(pageId: number): Promise<number> {
-    logger.debug(`Removing documents for page ID: ${pageId}`);
-    const count = await this.store.deleteDocumentsByPageId(pageId);
-    logger.info(`🗑️ Deleted ${count} documents`);
-    return count;
+  async deletePage(pageId: number): Promise<void> {
+    logger.debug(`Deleting page ID: ${pageId}`);
+    await this.store.deletePage(pageId);
   }
 
   /**

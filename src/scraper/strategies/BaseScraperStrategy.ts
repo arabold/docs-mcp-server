@@ -50,6 +50,22 @@ export interface ProcessItemResult {
 }
 
 export abstract class BaseScraperStrategy implements ScraperStrategy {
+  /**
+   * Set of normalized URLs that have been marked for processing.
+   *
+   * IMPORTANT: URLs are added to this set BEFORE they are actually processed, not after.
+   * This prevents the same URL from being queued multiple times when discovered from different sources.
+   *
+   * Usage flow:
+   * 1. Initial queue setup: Root URL and initialQueue items are added to visited
+   * 2. During processing: When a page returns links, each link is checked against visited
+   * 3. In processBatch deduplication: Only links NOT in visited are added to the queue AND to visited
+   *
+   * This approach ensures:
+   * - No URL is processed more than once
+   * - No URL appears in the queue multiple times
+   * - Efficient deduplication across concurrent processing
+   */
   protected visited = new Set<string>();
   protected pageCount = 0;
   protected totalDiscovered = 0; // Track total URLs discovered (unlimited)
@@ -116,81 +132,68 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           // Pass signal to processItem
           const result = await this.processItem(item, options, signal);
 
-          // Handle different fetch statuses
-          switch (result.status) {
-            case FetchStatus.NOT_MODIFIED:
-              // File/page hasn't changed, skip processing
-              logger.debug(`Page unchanged (304): ${item.url}`);
-              return [];
+          // Only count items that represent tracked pages or have actual content
+          // - Refresh operations (have pageId): Always count (they're tracked in DB)
+          // - New files with content: Count (they're being indexed)
+          // - Directory discovery (no pageId, no content): Don't count
+          const shouldCount = item.pageId !== undefined || result.content !== undefined;
 
-            case FetchStatus.NOT_FOUND:
-              // File/page was deleted
-              if (item.pageId) {
-                // Signal deletion to the pipeline for refresh operations
-                this.pageCount++;
-                logger.info(`Page deleted (404): ${item.url}`);
-                await progressCallback({
-                  pagesScraped: this.pageCount,
-                  totalPages: this.effectiveTotal,
-                  totalDiscovered: this.totalDiscovered,
-                  currentUrl: item.url,
-                  depth: item.depth,
-                  maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
-                  result: null,
-                  pageId: item.pageId,
-                  deleted: true,
-                });
-              } else {
-                logger.warn(`Page not found (404): ${item.url}`);
-              }
-              return [];
+          let currentPageCount = this.pageCount;
+          if (shouldCount) {
+            currentPageCount = ++this.pageCount;
 
-            case FetchStatus.SUCCESS:
-              // Continue with normal processing
-              break;
-
-            default:
-              logger.error(`Unknown fetch status: ${result.status}`);
-              return [];
+            // Log progress for all counted items
+            logger.info(
+              `🌐 Scraping page ${currentPageCount}/${this.effectiveTotal} (depth ${item.depth}/${maxDepth}): ${item.url}`,
+            );
           }
 
-          // FIXME: I believe this is no longer required
-          // // If this is the root (depth 0) and we have processed content with a URL, check for redirects
-          // if (item.depth === 0 && !this.canonicalBaseUrl && result?.processed) {
-          //   try {
-          //     const finalUrlStr = result.processed.metadata.url as string | undefined;
-          //     if (finalUrlStr) {
-          //       const original = new URL(options.url);
-          //       const finalUrlObj = new URL(finalUrlStr);
-          //       if (
-          //         finalUrlObj.href !== original.href &&
-          //         (finalUrlObj.protocol === "http:" || finalUrlObj.protocol === "https:")
-          //       ) {
-          //         this.canonicalBaseUrl = finalUrlObj;
-          //         logger.debug(
-          //           `Updated scope base after redirect: ${original.href} -> ${finalUrlObj.href}`,
-          //         );
-          //       } else {
-          //         this.canonicalBaseUrl = original;
-          //       }
-          //     } else {
-          //       this.canonicalBaseUrl = new URL(options.url);
-          //     }
-          //   } catch {
-          //     // Ignore canonical base errors
-          //     this.canonicalBaseUrl = new URL(options.url);
-          //   }
-          // }
+          if (result.status === FetchStatus.NOT_MODIFIED) {
+            // File/page hasn't changed, skip processing but count as processed
+            logger.debug(`Page unchanged (304): ${item.url}`);
+            if (shouldCount) {
+              await progressCallback({
+                pagesScraped: currentPageCount,
+                totalPages: this.effectiveTotal,
+                totalDiscovered: this.totalDiscovered,
+                currentUrl: item.url,
+                depth: item.depth,
+                maxDepth: maxDepth,
+                result: null,
+                pageId: item.pageId,
+              });
+            }
+            return [];
+          }
 
-          // Handle successful processing
+          if (result.status === FetchStatus.NOT_FOUND) {
+            // File/page was deleted, count as processed
+            logger.debug(`Page deleted (404): ${item.url}`);
+            if (shouldCount) {
+              await progressCallback({
+                pagesScraped: currentPageCount,
+                totalPages: this.effectiveTotal,
+                totalDiscovered: this.totalDiscovered,
+                currentUrl: item.url,
+                depth: item.depth,
+                maxDepth: maxDepth,
+                result: null,
+                pageId: item.pageId,
+                deleted: true,
+              });
+            }
+            return [];
+          }
+
+          if (result.status !== FetchStatus.SUCCESS) {
+            logger.error(`Unknown fetch status: ${result.status}`);
+            return [];
+          }
+
+          // Handle successful processing - report result with content
           if (result.content) {
-            this.pageCount++;
-            // maxDepth already resolved above
-            logger.info(
-              `🌐 Scraping page ${this.pageCount}/${this.effectiveTotal} (depth ${item.depth}/${maxDepth}): ${item.url}`,
-            );
             await progressCallback({
-              pagesScraped: this.pageCount,
+              pagesScraped: currentPageCount,
               totalPages: this.effectiveTotal,
               totalDiscovered: this.totalDiscovered,
               currentUrl: item.url,
@@ -278,34 +281,45 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     const isRefreshMode = initialQueue.length > 0;
 
     // Initialize queue and tracking
+    // Start with 1 to account for the depth 0 URL that will be processed
+    this.totalDiscovered = 1;
+    this.effectiveTotal = 1;
+
     if (isRefreshMode) {
-      // Initialize from provided queue
-      this.totalDiscovered = initialQueue.length;
-      this.effectiveTotal = initialQueue.length;
-
-      // Mark all URLs in the initial queue as visited to prevent re-discovery
-      for (const item of initialQueue) {
-        this.visited.add(normalizeUrl(item.url, this.options.urlNormalizerOptions));
-      }
-
       logger.debug(
         `Starting refresh mode with ${initialQueue.length} pre-populated pages`,
       );
-    } else {
-      // Normal scraping mode
-      this.totalDiscovered = 1; // Start with the initial URL (unlimited counter)
-      this.effectiveTotal = 1; // Start with the initial URL (limited counter)
-
-      // Track the initial URL as visited
-      this.visited.add(normalizeUrl(options.url, this.options.urlNormalizerOptions));
     }
 
     // Set up base URL and queue
     this.canonicalBaseUrl = new URL(options.url);
     let baseUrl = this.canonicalBaseUrl;
-    const queue: QueueItem[] = isRefreshMode
-      ? [...initialQueue]
-      : [{ url: options.url, depth: 0 } satisfies QueueItem];
+
+    // Initialize queue: Start with root URL or use items from initialQueue (refresh mode)
+    // The root URL is always processed (depth 0), but if it's in initialQueue, use that
+    // version to preserve etag/pageId for conditional fetching
+    const queue: QueueItem[] = [];
+    const normalizedRootUrl = normalizeUrl(
+      options.url,
+      this.options.urlNormalizerOptions,
+    );
+
+    if (isRefreshMode) {
+      // Add all items from initialQueue, using visited set to deduplicate
+      for (const item of initialQueue) {
+        const normalizedUrl = normalizeUrl(item.url, this.options.urlNormalizerOptions);
+        if (!this.visited.has(normalizedUrl)) {
+          this.visited.add(normalizedUrl);
+          queue.push(item);
+        }
+      }
+    }
+
+    // If root URL wasn't in initialQueue, add it now at depth 0
+    if (!this.visited.has(normalizedRootUrl)) {
+      this.visited.add(normalizedRootUrl);
+      queue.unshift({ url: options.url, depth: 0 } satisfies QueueItem);
+    }
 
     // Resolve optional values to defaults using temporary variables
     const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;

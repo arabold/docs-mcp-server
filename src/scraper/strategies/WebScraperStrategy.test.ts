@@ -1020,23 +1020,35 @@ describe("WebScraperStrategy", () => {
 
     it("should refresh page content when page returns 200 OK", async () => {
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const rootContent =
+        "<html><head><title>Root</title></head><body><h1>Root</h1></body></html>";
       const updatedContent =
         "<html><head><title>Updated</title></head><body><h1>New Content</h1></body></html>";
 
-      // Configure mock to return 200 with new content
-      mockFetchFn.mockResolvedValue({
-        content: updatedContent,
-        mimeType: "text/html",
-        source: "https://example.com/updated-page",
-        status: FetchStatus.SUCCESS,
-        etag: "new-etag",
+      // Configure mock to return different content for root vs updated page
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com") {
+          return {
+            content: rootContent,
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: updatedContent,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+          etag: "new-etag",
+        };
       });
 
       // Create a queue item with pageId and etag (refresh operation)
       options.initialQueue = [
         {
           url: "https://example.com/updated-page",
-          depth: 0,
+          depth: 1,
           pageId: 789,
           etag: "old-etag",
         },
@@ -1044,7 +1056,8 @@ describe("WebScraperStrategy", () => {
 
       await strategy.scrape(options, progressCallback);
 
-      // Verify fetch was called with old etag
+      // Verify fetch was called for both root and updated page
+      expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", expect.anything());
       expect(mockFetchFn).toHaveBeenCalledWith(
         "https://example.com/updated-page",
         expect.objectContaining({
@@ -1052,16 +1065,24 @@ describe("WebScraperStrategy", () => {
         }),
       );
 
-      // Verify new content was processed
+      // Verify both pages were processed (root at depth 0, updated page at depth 1)
       const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
-      expect(docCalls).toHaveLength(1);
-      expect(docCalls[0][0].result?.textContent).toContain("# New Content");
-      expect(docCalls[0][0].result?.title).toBe("Updated");
-      expect(docCalls[0][0].result?.etag).toBe("new-etag");
+      expect(docCalls).toHaveLength(2);
+
+      // Find the updated page call
+      const updatedPageCall = docCalls.find(
+        (call) => call[0].currentUrl === "https://example.com/updated-page",
+      );
+      expect(updatedPageCall).toBeDefined();
+      expect(updatedPageCall![0].result?.textContent).toContain("# New Content");
+      expect(updatedPageCall![0].result?.title).toBe("Updated");
+      expect(updatedPageCall![0].result?.etag).toBe("new-etag");
     });
 
-    it("should not follow links during refresh operations", async () => {
+    it("should discover and follow new links during refresh operations", async () => {
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const rootContent =
+        "<html><head><title>Root</title></head><body><h1>Root</h1></body></html>";
       const contentWithLinks = `
         <html>
           <head><title>Refreshed Page</title></head>
@@ -1073,20 +1094,30 @@ describe("WebScraperStrategy", () => {
         </html>
       `;
 
-      // Configure mock to return 200 with new links
-      mockFetchFn.mockResolvedValue({
-        content: contentWithLinks,
-        mimeType: "text/html",
-        source: "https://example.com/page-with-links",
-        status: FetchStatus.SUCCESS,
-        etag: "new-etag",
+      // Configure mock to return different content for root vs page
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com") {
+          return {
+            content: rootContent,
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: contentWithLinks,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+          etag: "new-etag",
+        };
       });
 
       // Create a queue item with pageId and etag (refresh operation)
       options.initialQueue = [
         {
           url: "https://example.com/page-with-links",
-          depth: 0,
+          depth: 1,
           pageId: 999,
           etag: "old-etag",
         },
@@ -1094,19 +1125,21 @@ describe("WebScraperStrategy", () => {
 
       await strategy.scrape(options, progressCallback);
 
-      // Verify only the initial page was fetched (no link following)
-      expect(mockFetchFn).toHaveBeenCalledTimes(1);
+      // Verify root, refresh page, and discovered links were all fetched
+      // Root (depth 0) + refresh page (depth 1) + 2 new links (depth 2) = 4 total
+      expect(mockFetchFn).toHaveBeenCalledTimes(4);
+      expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", expect.anything());
       expect(mockFetchFn).toHaveBeenCalledWith(
         "https://example.com/page-with-links",
         expect.anything(),
       );
 
-      // Verify the new links were not followed
-      expect(mockFetchFn).not.toHaveBeenCalledWith(
+      // Verify the new links discovered during refresh WERE followed (this is correct behavior)
+      expect(mockFetchFn).toHaveBeenCalledWith(
         "https://example.com/new-link",
         expect.anything(),
       );
-      expect(mockFetchFn).not.toHaveBeenCalledWith(
+      expect(mockFetchFn).toHaveBeenCalledWith(
         "https://example.com/another-new-link",
         expect.anything(),
       );
@@ -1151,23 +1184,23 @@ describe("WebScraperStrategy", () => {
         };
       });
 
-      // Create a queue with multiple pages
+      // Create a queue with multiple pages (all at depth > 0 to avoid root URL processing)
       options.initialQueue = [
         {
           url: "https://example.com/unchanged",
-          depth: 0,
+          depth: 1,
           pageId: 1,
           etag: "etag-1",
         },
         {
           url: "https://example.com/deleted",
-          depth: 0,
+          depth: 1,
           pageId: 2,
           etag: "etag-2",
         },
         {
           url: "https://example.com/updated",
-          depth: 0,
+          depth: 1,
           pageId: 3,
           etag: "etag-3",
         },
@@ -1175,26 +1208,43 @@ describe("WebScraperStrategy", () => {
 
       await strategy.scrape(options, progressCallback);
 
-      // Verify all three pages were fetched
-      expect(mockFetchFn).toHaveBeenCalledTimes(3);
+      // Verify all three pages plus root were fetched (4 total)
+      expect(mockFetchFn).toHaveBeenCalledTimes(4);
 
-      // Verify only the updated page produced a processed document
+      // Verify root was processed + only the updated page produced a processed document (2 total)
       const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
-      expect(docCalls).toHaveLength(1);
-      expect(docCalls[0][0].result?.url).toBe("https://example.com/updated");
-      expect(docCalls[0][0].result?.title).toBe("Updated");
+      expect(docCalls).toHaveLength(2);
+
+      // Find the updated page (not the root)
+      const updatedPageCall = docCalls.find(
+        (call) => call[0].currentUrl === "https://example.com/updated",
+      );
+      expect(updatedPageCall).toBeDefined();
+      expect(updatedPageCall![0].result?.url).toBe("https://example.com/updated");
+      expect(updatedPageCall![0].result?.title).toBe("Updated");
     });
 
     it("should preserve depth from original scrape during refresh", async () => {
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
-      mockFetchFn.mockResolvedValue({
-        content:
-          "<html><head><title>Depth Test</title></head><body><h1>Content</h1></body></html>",
-        mimeType: "text/html",
-        source: "https://example.com/deep-page",
-        status: FetchStatus.SUCCESS,
-        etag: "new-etag",
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com") {
+          return {
+            content:
+              "<html><head><title>Root</title></head><body><h1>Root</h1></body></html>",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content:
+            "<html><head><title>Depth Test</title></head><body><h1>Content</h1></body></html>",
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+          etag: "new-etag",
+        };
       });
 
       // Create a queue item with depth from original scrape
@@ -1209,10 +1259,17 @@ describe("WebScraperStrategy", () => {
 
       await strategy.scrape(options, progressCallback);
 
-      // Verify the processed document preserves the original depth
+      // Verify both root and deep page were processed (2 documents)
       const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
-      expect(docCalls).toHaveLength(1);
-      expect(docCalls[0][0].depth).toBe(2);
+      expect(docCalls).toHaveLength(2);
+
+      // Find the deep page and verify it preserved its depth
+      const deepPageCall = docCalls.find(
+        (call) => call[0].currentUrl === "https://example.com/deep-page",
+      );
+      expect(deepPageCall).toBeDefined();
+      expect(deepPageCall![0].depth).toBe(2);
+      expect(deepPageCall![0].pageId).toBe(555);
     });
   });
 });

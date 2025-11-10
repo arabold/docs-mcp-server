@@ -1,13 +1,12 @@
-import type { ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import { HttpFetcher } from "../fetcher";
 import { FetchStatus } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem } from "../types";
-import { ScrapeMode, type ScraperOptions, type ScraperProgressEvent } from "../types";
+import { ScrapeMode, type ScraperOptions } from "../types";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
-import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
+import type { ProcessItemResult } from "./BaseScraperStrategy";
 
 interface GitHubWikiInfo {
   owner: string;
@@ -15,7 +14,7 @@ interface GitHubWikiInfo {
 }
 
 /**
- * GitHubWikiScraperStrategy handles scraping GitHub wiki pages using standard web scraping techniques.
+ * GitHubWikiProcessor handles scraping GitHub wiki pages using standard web scraping techniques.
  * GitHub wikis are separate from the main repository and are hosted at /wiki/ URLs.
  *
  * Features:
@@ -24,32 +23,14 @@ interface GitHubWikiInfo {
  * - Processes wiki content as HTML/Markdown pages
  * - Stays within the wiki scope to avoid crawling the entire repository
  *
- * Note: This strategy is specifically for /wiki/ URLs and does not handle regular repository files.
+ * This processor is stateless and contains the core logic from GitHubWikiScraperStrategy.
  */
-export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
+export class GitHubWikiProcessor {
   private readonly httpFetcher = new HttpFetcher();
   private readonly pipelines: ContentPipeline[];
 
   constructor() {
-    super();
     this.pipelines = PipelineFactory.createStandardPipelines();
-  }
-
-  canHandle(url: string): boolean {
-    try {
-      const parsedUrl = new URL(url);
-      const { hostname, pathname } = parsedUrl;
-
-      // Check if it's a GitHub URL and contains /wiki/
-      // This should handle specific wiki URLs like /owner/repo/wiki/PageName
-      return (
-        ["github.com", "www.github.com"].includes(hostname) &&
-        pathname.includes("/wiki") &&
-        pathname.match(/^\/([^/]+)\/([^/]+)\/wiki/) !== null
-      );
-    } catch {
-      return false;
-    }
   }
 
   /**
@@ -68,15 +49,17 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
   }
 
   /**
-   * Override shouldProcessUrl to only process URLs within the wiki scope.
+   * Determines if a URL should be processed within the wiki scope.
    */
-  protected shouldProcessUrl(url: string, options: ScraperOptions): boolean {
+  shouldProcessUrl(url: string, options: ScraperOptions): boolean {
     try {
       const parsedUrl = new URL(url);
-      const wikiInfo = this.parseGitHubWikiUrl(options.url);
-      const expectedWikiPath = `/${wikiInfo.owner}/${wikiInfo.repo}/wiki`;
 
-      // Only process URLs that are within the same wiki
+      // Get the expected repository info from the base URL
+      const baseWikiInfo = this.parseGitHubWikiUrl(options.url);
+      const expectedWikiPath = `/${baseWikiInfo.owner}/${baseWikiInfo.repo}/wiki`;
+
+      // Check if the URL is within the same wiki
       if (!parsedUrl.pathname.startsWith(expectedWikiPath)) {
         return false;
       }
@@ -95,20 +78,27 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
     }
   }
 
-  async processItem(
+  /**
+   * Processes a single GitHub wiki page.
+   */
+  async process(
     item: QueueItem,
     options: ScraperOptions,
     signal?: AbortSignal,
   ): Promise<ProcessItemResult> {
     const currentUrl = item.url;
 
-    logger.info(
-      `📖 Processing wiki page ${this.pageCount}/${options.maxPages}: ${currentUrl}`,
-    );
-
     try {
-      // Fetch the wiki page content
-      const rawContent = await this.httpFetcher.fetch(currentUrl, { signal });
+      // Fetch the wiki page content with ETag for conditional requests
+      const rawContent = await this.httpFetcher.fetch(currentUrl, {
+        signal,
+        etag: item.etag,
+      });
+
+      // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
+      if (rawContent.status !== FetchStatus.SUCCESS) {
+        return { url: currentUrl, links: [], status: rawContent.status };
+      }
 
       // Process content through appropriate pipeline
       let processed: PipelineResult | undefined;
@@ -201,34 +191,8 @@ export class GitHubWikiScraperStrategy extends BaseScraperStrategy {
     }
   }
 
-  async scrape(
-    options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgressEvent>,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    // Validate it's a GitHub wiki URL
-    const url = new URL(options.url);
-    if (!url.hostname.includes("github.com") || !url.pathname.includes("/wiki")) {
-      throw new Error("URL must be a GitHub wiki URL");
-    }
-
-    // Ensure the starting URL points to the wiki home if no specific page is provided
-    let startUrl = options.url;
-    if (url.pathname.endsWith("/wiki") || url.pathname.endsWith("/wiki/")) {
-      // If the URL just points to /wiki/, start from the Home page
-      startUrl = url.pathname.endsWith("/")
-        ? `${options.url}Home`
-        : `${options.url}/Home`;
-    }
-
-    // Update options with the corrected start URL
-    const wikiOptions = { ...options, url: startUrl };
-
-    return super.scrape(wikiOptions, progressCallback, signal);
-  }
-
   /**
-   * Cleanup resources used by this strategy.
+   * Cleanup resources used by this processor.
    */
   async cleanup(): Promise<void> {
     await Promise.allSettled(this.pipelines.map((pipeline) => pipeline.close()));

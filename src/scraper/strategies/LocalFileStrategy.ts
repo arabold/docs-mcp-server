@@ -67,8 +67,6 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       return { url: item.url, links, status: FetchStatus.SUCCESS };
     }
 
-    logger.info(`🗂️  Processing file ${this.pageCount}/${options.maxPages}: ${filePath}`);
-
     const rawContent: RawContent = await this.fileFetcher.fetch(item.url, {
       etag: item.etag,
     });

@@ -64,13 +64,13 @@ export class PipelineWorker {
           // Handle deletion events (404 during refresh or broken links)
           if (progress.deleted && progress.pageId) {
             try {
-              await this.store.removeDocumentsByPageId(progress.pageId);
+              await this.store.deletePage(progress.pageId);
               logger.debug(
-                `[${jobId}] Deleted documents for page ${progress.pageId}: ${progress.currentUrl}`,
+                `[${jobId}] Deleted page ${progress.pageId}: ${progress.currentUrl}`,
               );
             } catch (docError) {
               logger.error(
-                `❌ [${jobId}] Failed to delete documents for page ${progress.pageId}: ${docError}`,
+                `❌ [${jobId}] Failed to delete page ${progress.pageId}: ${docError}`,
               );
 
               // Report the error and fail the job to ensure data integrity
@@ -87,9 +87,9 @@ export class PipelineWorker {
             try {
               // For refresh operations, delete old documents before adding new ones
               if (progress.pageId) {
-                await this.store.removeDocumentsByPageId(progress.pageId);
+                await this.store.deletePage(progress.pageId);
                 logger.debug(
-                  `[${jobId}] Refreshing documents for page ${progress.pageId}: ${progress.currentUrl}`,
+                  `[${jobId}] Refreshing page ${progress.pageId}: ${progress.currentUrl}`,
                 );
               }
 

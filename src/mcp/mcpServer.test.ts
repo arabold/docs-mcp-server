@@ -24,6 +24,9 @@ const mockTools: McpServerTools = {
   scrape: {
     execute: vi.fn(async () => ({ jobId: "job-123" })),
   } as any,
+  refresh: {
+    execute: vi.fn(async () => ({ jobId: "refresh-job-123" })),
+  } as any,
   listJobs: {
     execute: vi.fn(async () => ({ jobs: [] })),
   } as any,
