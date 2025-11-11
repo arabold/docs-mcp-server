@@ -101,16 +101,46 @@
 
 ### Test Files
 
-- Create unit test files alongside source files with `.test.ts` suffix
-- Run individual TypeScript files: `npx vite-node <file>`
+- Unit tests: alongside source files with `.test.ts` suffix
+- E2E tests: in `test/` directory with `*-e2e.test.ts` suffix
+- Run: `npx vite-node <file>`
 
-### Test Strategy
+### Testing Philosophy
 
-- Prioritize high-value, low-effort tests
-- Test intended behavior, not implementation details
-- Defer complex mocking, state management testing, and concurrent processing unless explicitly requested
-- Avoid timing-sensitive tests unless absolutely necessary
-- Balance maintainability with test coverage
+**Core Principle**: Test observable behavior (contracts), not implementation details.
+
+**Test the "what", not the "how"**:
+
+- ✅ "File change detection returns SUCCESS for modified files" (observable behavior)
+- ❌ "ETag generated from mtime timestamp" (implementation detail)
+
+**Prefer integration over isolation**:
+
+- E2E tests > Integration tests > Unit tests
+- Default to E2E for new features (highest confidence)
+- Add integration tests when components don't interact correctly
+- Add unit tests only for complex logic requiring detailed verification
+
+**What to test**:
+
+- Public contracts and API boundaries
+- Integration points between components
+- Complete workflows end-to-end
+- Critical business logic
+
+**What to skip**:
+
+- Private methods and internal state
+- Simple getters/setters and obvious mappings
+- Trivial parameter validation
+- Implementation-specific details (algorithms, data structures)
+
+**Quality markers**:
+
+- Fast: unit tests <100ms, suite <5s
+- Focused: one behavior per test
+- Maintainable: refactoring doesn't break tests unless behavior changes
+- Realistic: tests reflect actual usage patterns
 
 ## Git Workflow
 
