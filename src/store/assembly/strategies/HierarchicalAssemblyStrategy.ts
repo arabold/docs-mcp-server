@@ -220,47 +220,21 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       chainIds.push(currentId);
       depth++;
 
-      try {
-        // Try normal parent lookup first
-        const parentChunk = await documentStore.findParentChunk(
+      // Try normal parent lookup first
+      let parentChunk = await documentStore.findParentChunk(library, version, currentId);
+
+      // If no direct parent found, try gap-aware ancestor search
+      if (!parentChunk) {
+        parentChunk = await this.findAncestorWithGaps(
           library,
           version,
-          currentId,
+          currentChunk.url,
+          currentChunk.metadata.path ?? [],
+          documentStore,
         );
-
-        if (parentChunk) {
-          currentChunk = parentChunk;
-        } else {
-          // If normal parent lookup fails, try to find ancestors with gaps
-          currentChunk = await this.findAncestorWithGaps(
-            library,
-            version,
-            currentChunk.url,
-            currentChunk.metadata.path ?? [],
-            documentStore,
-          );
-        }
-      } catch (error) {
-        // If standard lookup fails, try gap-aware ancestor search
-        try {
-          if (currentChunk) {
-            currentChunk = await this.findAncestorWithGaps(
-              library,
-              version,
-              currentChunk.url,
-              currentChunk.metadata.path ?? [],
-              documentStore,
-            );
-          } else {
-            currentChunk = null;
-          }
-        } catch (gapError) {
-          logger.warn(
-            `Parent lookup failed for chunk ${currentId}: ${error}. Gap search also failed: ${gapError}`,
-          );
-          break;
-        }
       }
+
+      currentChunk = parentChunk;
     }
 
     if (depth >= maxDepth) {
@@ -612,13 +586,9 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       chunkIds.add(id);
 
       // Add parent for context
-      try {
-        const parent = await documentStore.findParentChunk(library, version, id);
-        if (parent) {
-          chunkIds.add(parent.id);
-        }
-      } catch (error) {
-        logger.warn(`Failed to find parent for chunk ${id}: ${error}`);
+      const parent = await documentStore.findParentChunk(library, version, id);
+      if (parent) {
+        chunkIds.add(parent.id);
       }
 
       // Add direct children (limited)

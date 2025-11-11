@@ -1,3 +1,4 @@
+import mime from "mime";
 import type { ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import { HttpFetcher } from "../fetcher";
@@ -297,11 +298,20 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       return fileNameLower === name || fileNameLower.startsWith(`${name}.`);
     });
 
-    if (!hasTextExtension && !hasCompoundExtension && !isCommonTextFile) {
-      return false;
+    // If file passes known checks, include it
+    if (hasTextExtension || hasCompoundExtension || isCommonTextFile) {
+      return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
     }
 
-    return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
+    // Fallback: check if unknown extension has text/* MIME type
+    const mimeType = mime.getType(path);
+    if (mimeType?.startsWith("text/")) {
+      logger.debug(`Including file with text MIME type: ${path} (${mimeType})`);
+      return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
+    }
+
+    // Not a text file
+    return false;
   }
 
   /**

@@ -682,11 +682,11 @@ export class DocumentStore {
       // Extract source URL and exclude runtime-only fields using destructuring
       const {
         url: source_url,
-        library: _,
-        version: __,
-        signal: ___,
-        initialQueue: ____,
-        isRefresh: _____,
+        library: _library,
+        version: _version,
+        signal: _signal,
+        initialQueue: _initialQueue,
+        isRefresh: _isRefresh,
         ...scraper_options
       } = options;
 
@@ -1463,6 +1463,8 @@ export class DocumentStore {
 
   /**
    * Finds the parent chunk of a given document.
+   * Returns null if no parent is found or if there's a database error.
+   * Database errors are logged but not thrown to maintain consistent behavior.
    */
   async findParentChunk(
     library: string,
@@ -1497,7 +1499,8 @@ export class DocumentStore {
 
       return this.parseMetadata(result);
     } catch (error) {
-      throw new ConnectionError(`Failed to find parent chunk for ID ${id}`, error);
+      logger.warn(`Failed to find parent chunk for ID ${id}: ${error}`);
+      return null;
     }
   }
 

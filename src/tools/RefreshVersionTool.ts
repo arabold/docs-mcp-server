@@ -20,7 +20,7 @@ export type RefreshExecuteResult = RefreshResult | { jobId: string };
 
 /**
  * Tool for refreshing an existing library version by re-scraping all pages
- * and using Etag comparison to skip unchanged content.
+ * and using ETag comparison to skip unchanged content.
  */
 export class RefreshVersionTool {
   private pipeline: IPipeline;

@@ -438,7 +438,6 @@ export class DocumentManagementService {
 
         // Document characteristics
         hasTitle: !!title,
-        // hasDescription: !!processed.metadata.description,
         urlDomain: extractHostname(url),
         depth,
 

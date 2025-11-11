@@ -17,7 +17,6 @@ import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { ScraperService } from "../src/scraper/ScraperService";
 import type { ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
-import { DocumentStore } from "../src/store/DocumentStore";
 import type { StoreSearchResult } from "../src/store/types";
 import { ScraperRegistry } from "../src/scraper";
 
@@ -99,7 +98,6 @@ describe("Refresh Pipeline E2E Tests", () => {
 
       const page2 = pages.find((p) => p.url === `${TEST_BASE_URL}/page2`);
       expect(page2).toBeDefined();
-      const page2Id = page2!.id;
 
       // Setup: Mock refresh with page2 deleted (404)
       // Enable nock logging to see what requests are made
