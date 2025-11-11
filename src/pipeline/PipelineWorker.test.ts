@@ -351,4 +351,181 @@ describe("PipelineWorker", () => {
     // Verify addScrapeResult was NOT called (deletion failed before that)
     expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
   });
+
+  describe("Database operations based on fetch status", () => {
+    it("should perform NO database writes for a 304 Not Modified status", async () => {
+      // Simulate scrape yielding a 304 Not Modified event
+      (mockScraperService.scrape as Mock).mockImplementation(
+        async (_options, progressCallback, _signal) => {
+          const progress: ScraperProgressEvent = {
+            pagesScraped: 1,
+            totalPages: 1,
+            currentUrl: "url1",
+            depth: 1,
+            maxDepth: 1,
+            result: null, // No result for 304
+            deleted: false,
+            pageId: 123, // Page ID from refresh queue
+            totalDiscovered: 0,
+          };
+          await progressCallback(progress);
+        },
+      );
+
+      await worker.executeJob(mockJob, mockCallbacks);
+
+      // Verify NO database operations were performed
+      expect(mockStore.deletePage).not.toHaveBeenCalled();
+      expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
+
+      // Verify progress was still reported
+      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
+      expect(mockCallbacks.onJobProgress).toHaveBeenCalledWith(
+        mockJob,
+        expect.objectContaining({
+          result: null,
+          deleted: false,
+          pageId: 123,
+        }),
+      );
+    });
+
+    it("should DELETE existing documents and INSERT new ones for a 200 OK status on an existing page", async () => {
+      const mockResult: ScrapeResult = {
+        textContent: "updated content",
+        url: "url1",
+        title: "Updated Doc",
+        contentType: "text/html",
+        chunks: [],
+        links: [],
+        errors: [],
+      };
+
+      // Simulate scrape yielding a 200 OK event with pageId (existing page)
+      (mockScraperService.scrape as Mock).mockImplementation(
+        async (_options, progressCallback, _signal) => {
+          const progress: ScraperProgressEvent = {
+            pagesScraped: 1,
+            totalPages: 1,
+            currentUrl: "url1",
+            depth: 1,
+            maxDepth: 1,
+            result: mockResult,
+            pageId: 123, // Existing page ID
+            totalDiscovered: 0,
+          };
+          await progressCallback(progress);
+        },
+      );
+
+      await worker.executeJob(mockJob, mockCallbacks);
+
+      // Verify DELETE was called first
+      expect(mockStore.deletePage).toHaveBeenCalledOnce();
+      expect(mockStore.deletePage).toHaveBeenCalledWith(123);
+
+      // Verify INSERT (addScrapeResult) was called after deletion
+      expect(mockStore.addScrapeResult).toHaveBeenCalledOnce();
+      expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
+        mockJob.library,
+        mockJob.version,
+        1,
+        mockResult,
+      );
+
+      // Verify call order: delete before add
+      const deleteCallOrder = (mockStore.deletePage as Mock).mock.invocationCallOrder[0];
+      const addCallOrder = (mockStore.addScrapeResult as Mock).mock
+        .invocationCallOrder[0];
+      expect(deleteCallOrder).toBeLessThan(addCallOrder);
+
+      // Verify progress was reported
+      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
+    });
+
+    it("should INSERT new documents for a 200 OK status on a new page", async () => {
+      const mockResult: ScrapeResult = {
+        textContent: "new content",
+        url: "url2",
+        title: "New Doc",
+        contentType: "text/html",
+        chunks: [],
+        links: [],
+        errors: [],
+      };
+
+      // Simulate scrape yielding a 200 OK event without pageId (new page)
+      (mockScraperService.scrape as Mock).mockImplementation(
+        async (_options, progressCallback, _signal) => {
+          const progress: ScraperProgressEvent = {
+            pagesScraped: 1,
+            totalPages: 1,
+            currentUrl: "url2",
+            depth: 1,
+            maxDepth: 1,
+            result: mockResult,
+            pageId: undefined, // No pageId = new page
+            totalDiscovered: 0,
+          };
+          await progressCallback(progress);
+        },
+      );
+
+      await worker.executeJob(mockJob, mockCallbacks);
+
+      // Verify NO deletion was performed (new page)
+      expect(mockStore.deletePage).not.toHaveBeenCalled();
+
+      // Verify INSERT (addScrapeResult) was called
+      expect(mockStore.addScrapeResult).toHaveBeenCalledOnce();
+      expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
+        mockJob.library,
+        mockJob.version,
+        1,
+        mockResult,
+      );
+
+      // Verify progress was reported
+      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
+    });
+
+    it("should call deletePage for a 404 Not Found status", async () => {
+      // Simulate scrape yielding a 404 Not Found event
+      (mockScraperService.scrape as Mock).mockImplementation(
+        async (_options, progressCallback, _signal) => {
+          const progress: ScraperProgressEvent = {
+            pagesScraped: 1,
+            totalPages: 1,
+            currentUrl: "url1",
+            depth: 1,
+            maxDepth: 1,
+            result: null,
+            deleted: true, // 404 - page was deleted
+            pageId: 123,
+            totalDiscovered: 0,
+          };
+          await progressCallback(progress);
+        },
+      );
+
+      await worker.executeJob(mockJob, mockCallbacks);
+
+      // Verify deletion was called
+      expect(mockStore.deletePage).toHaveBeenCalledOnce();
+      expect(mockStore.deletePage).toHaveBeenCalledWith(123);
+
+      // Verify NO insert was performed
+      expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
+
+      // Verify progress was reported
+      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
+      expect(mockCallbacks.onJobProgress).toHaveBeenCalledWith(
+        mockJob,
+        expect.objectContaining({
+          deleted: true,
+          pageId: 123,
+        }),
+      );
+    });
+  });
 });

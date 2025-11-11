@@ -639,8 +639,8 @@ describe("PipelineManager", () => {
       expect(scraperOpts?.initialQueue).toBeDefined();
       expect(scraperOpts?.initialQueue).toHaveLength(mockPages.length);
 
-      // Verify maxPages is set to the page count
-      expect(scraperOpts?.maxPages).toBe(mockPages.length);
+      // Verify maxPages is NOT set (allowing discovery of new pages during refresh)
+      expect(scraperOpts?.maxPages).toBeUndefined();
     });
 
     it("should handle unversioned libraries during refresh", async () => {

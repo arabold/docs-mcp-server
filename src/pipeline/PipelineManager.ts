@@ -370,7 +370,6 @@ export class PipelineManager implements IPipeline {
         ...(storedOptions?.options || {}), // Include stored options if available (spread first)
         // Override with refresh-specific options (these must come after the spread)
         initialQueue, // Pre-populated queue with existing pages
-        maxPages: pages.length,
         isRefresh: true, // Mark this as a refresh operation
       };
 

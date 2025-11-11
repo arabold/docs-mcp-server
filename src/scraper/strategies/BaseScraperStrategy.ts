@@ -191,16 +191,19 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           }
 
           // Handle successful processing - report result with content
+          // Use the final URL from the result (which may differ due to redirects)
+          const finalUrl = result.url || item.url;
+
           if (result.content) {
             await progressCallback({
               pagesScraped: currentPageCount,
               totalPages: this.effectiveTotal,
               totalDiscovered: this.totalDiscovered,
-              currentUrl: item.url,
+              currentUrl: finalUrl,
               depth: item.depth,
               maxDepth: maxDepth,
               result: {
-                url: item.url,
+                url: finalUrl,
                 title: result.content.title?.trim() || result.title?.trim() || "",
                 contentType: result.contentType || "",
                 textContent: result.content.textContent || "",
@@ -214,11 +217,14 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             });
           }
 
+          // Extract discovered links - use the final URL as the base for resolving relative links
           const nextItems = result.links || [];
+          const linkBaseUrl = finalUrl ? new URL(finalUrl) : baseUrl;
+
           return nextItems
             .map((value) => {
               try {
-                const targetUrl = new URL(value, baseUrl);
+                const targetUrl = new URL(value, linkBaseUrl);
                 // Filter using shouldProcessUrl
                 if (!this.shouldProcessUrl(targetUrl.href, options)) {
                   return null;
@@ -280,17 +286,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     const initialQueue = options.initialQueue || [];
     const isRefreshMode = initialQueue.length > 0;
 
-    // Initialize queue and tracking
-    // Start with 1 to account for the depth 0 URL that will be processed
-    this.totalDiscovered = 1;
-    this.effectiveTotal = 1;
-
-    if (isRefreshMode) {
-      logger.debug(
-        `Starting refresh mode with ${initialQueue.length} pre-populated pages`,
-      );
-    }
-
     // Set up base URL and queue
     this.canonicalBaseUrl = new URL(options.url);
     let baseUrl = this.canonicalBaseUrl;
@@ -305,6 +300,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     );
 
     if (isRefreshMode) {
+      logger.debug(
+        `Starting refresh mode with ${initialQueue.length} pre-populated pages`,
+      );
+
       // Add all items from initialQueue, using visited set to deduplicate
       for (const item of initialQueue) {
         const normalizedUrl = normalizeUrl(item.url, this.options.urlNormalizerOptions);
@@ -320,6 +319,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
       this.visited.add(normalizedRootUrl);
       queue.unshift({ url: options.url, depth: 0 } satisfies QueueItem);
     }
+
+    // Initialize counters based on actual queue length after population
+    this.totalDiscovered = queue.length;
+    this.effectiveTotal = queue.length;
 
     // Resolve optional values to defaults using temporary variables
     const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;

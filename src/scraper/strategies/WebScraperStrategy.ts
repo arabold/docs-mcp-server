@@ -72,9 +72,10 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       );
 
       // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
+      // Use the final URL from rawContent.source (which may differ due to redirects)
       if (rawContent.status !== FetchStatus.SUCCESS) {
         logger.debug(`Skipping pipeline for ${url} due to status: ${rawContent.status}`);
-        return { url, links: [], status: rawContent.status };
+        return { url: rawContent.source, links: [], status: rawContent.status };
       }
 
       // --- Start Pipeline Processing ---
@@ -96,7 +97,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for URL ${url}. Skipping processing.`,
         );
-        return { url, links: [], status: FetchStatus.SUCCESS };
+        return { url: rawContent.source, links: [], status: FetchStatus.SUCCESS };
       }
 
       // Log errors from pipeline
@@ -110,7 +111,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           `⚠️  No processable content found for ${url} after pipeline execution.`,
         );
         return {
-          url,
+          url: rawContent.source,
           links: processed.links,
           status: FetchStatus.SUCCESS,
         };
@@ -139,7 +140,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         }) ?? [];
 
       return {
-        url,
+        url: rawContent.source,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
         contentType: rawContent.mimeType,
