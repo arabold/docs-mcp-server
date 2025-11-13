@@ -64,6 +64,7 @@ export class SourceCodePipeline extends BasePipeline {
 
     return {
       title: context.title,
+      contentType: context.contentType,
       textContent: context.content,
       // metadata: context.metadata,
       links: context.links,

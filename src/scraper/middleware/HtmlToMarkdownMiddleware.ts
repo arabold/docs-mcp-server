@@ -111,6 +111,9 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
         context.content = markdown;
         logger.debug(`Successfully converted HTML to Markdown for ${context.source}`);
       }
+
+      // Update contentType to reflect the converted format
+      context.contentType = "text/markdown";
     } catch (error) {
       logger.error(
         `❌ Error converting HTML to Markdown for ${context.source}: ${error}`,

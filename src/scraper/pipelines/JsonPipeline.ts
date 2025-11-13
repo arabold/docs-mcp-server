@@ -89,6 +89,7 @@ export class JsonPipeline extends BasePipeline {
 
     return {
       title: context.title,
+      contentType: context.contentType,
       textContent: context.content,
       links: context.links,
       errors: context.errors,

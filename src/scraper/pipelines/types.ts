@@ -8,6 +8,8 @@ import type { ScraperOptions } from "../types";
 export interface PipelineResult {
   /** The title of the page or document, extracted during processing */
   title?: string | null;
+  /** The MIME type of the processed content (may differ from input if transformed, e.g., HTML → Markdown) */
+  contentType?: string | null;
   /** The final processed content, typically as a string (e.g., Markdown). */
   textContent?: string | null;
   /** Extracted links from the content. */

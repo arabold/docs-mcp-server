@@ -271,6 +271,9 @@ describe("HtmlPipeline", () => {
     expect(result.title).toBe("Test Page");
     expect(result.links).toContain("https://example.com/test/link");
 
+    // Verify contentType was updated to markdown after HTML conversion
+    expect(result.contentType).toBe("text/markdown");
+
     // Verify the content was sanitized (no script tags) and converted to markdown
     expect(result.textContent).not.toContain("alert");
     expect(result.textContent).toContain("Hello World");
@@ -278,6 +281,42 @@ describe("HtmlPipeline", () => {
 
     // Verify no errors occurred
     expect(result.errors).toHaveLength(0);
+  });
+
+  it("should convert contentType from text/html to text/markdown", async () => {
+    const pipeline = new HtmlPipeline();
+    const html = `
+      <html>
+        <head><title>Mimetype Test</title></head>
+        <body>
+          <h1>Testing Content Type</h1>
+          <p>This HTML should be converted to markdown.</p>
+        </body>
+      </html>
+    `;
+
+    const raw: RawContent = {
+      content: html,
+      mimeType: "text/html",
+      charset: "utf-8",
+      source: "http://test.example.com",
+      status: FetchStatus.SUCCESS,
+    };
+
+    const result = await pipeline.process(raw, {
+      url: "http://example.com",
+      library: "example",
+      version: "",
+      scrapeMode: ScrapeMode.Fetch,
+    });
+
+    // Verify contentType was transformed from HTML to Markdown
+    expect(result.contentType).toBe("text/markdown");
+    expect(result.contentType).not.toBe("text/html");
+
+    // Verify content is in markdown format
+    expect(result.textContent).toContain("# Testing Content Type");
+    expect(result.textContent).toContain("This HTML should be converted to markdown");
   });
 
   describe("cleanup", () => {

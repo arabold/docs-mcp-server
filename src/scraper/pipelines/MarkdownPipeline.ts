@@ -78,6 +78,7 @@ export class MarkdownPipeline extends BasePipeline {
 
     return {
       title: context.title,
+      contentType: context.contentType,
       textContent: typeof context.content === "string" ? context.content : "",
       links: context.links,
       errors: context.errors,

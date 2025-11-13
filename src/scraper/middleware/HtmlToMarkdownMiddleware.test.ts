@@ -61,6 +61,7 @@ describe("HtmlToMarkdownMiddleware", () => {
     expect(context.content).toBe(
       "# Heading 1\n\nThis is a paragraph with **bold** and _italic_ text.\n\n-   Item 1\n-   Item 2\n\n[Link](http://link.com)",
     );
+    expect(context.contentType).toBe("text/markdown");
     expect(context.errors).toHaveLength(0);
 
     // No close needed
