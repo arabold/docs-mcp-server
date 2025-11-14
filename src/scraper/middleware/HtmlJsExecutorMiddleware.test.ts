@@ -13,9 +13,6 @@ import { executeJsInSandbox } from "../utils/sandbox";
 import { HtmlJsExecutorMiddleware } from "./HtmlJsExecutorMiddleware";
 import type { MiddlewareContext } from "./types";
 
-// Mock the logger
-vi.mock("../../../utils/logger");
-
 // Mock the sandbox utility
 vi.mock("../utils/sandbox");
 

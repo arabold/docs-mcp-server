@@ -4,7 +4,6 @@ import { MarkdownLinkExtractorMiddleware } from "./MarkdownLinkExtractorMiddlewa
 import type { MiddlewareContext } from "./types";
 
 // Suppress logger output during tests
-vi.mock("../../utils/logger");
 
 // Helper to create a minimal valid ScraperOptions object
 const createMockScraperOptions = (url = "http://example.com"): ScraperOptions => ({

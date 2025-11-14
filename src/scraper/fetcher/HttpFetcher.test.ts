@@ -3,7 +3,6 @@ import { CancellationError } from "../../pipeline/errors";
 import { RedirectError, ScraperError } from "../../utils/errors";
 
 vi.mock("axios");
-vi.mock("../../utils/logger");
 
 import axios from "axios";
 

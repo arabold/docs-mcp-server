@@ -1,17 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { ScrapeMode } from "../types";
 import { HtmlPipeline } from "./HtmlPipeline";
-
-// Mock logger
-vi.mock("../../utils/logger", () => ({
-  logger: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-}));
 
 describe("HtmlPipeline charset integration", () => {
   let pipeline: HtmlPipeline;

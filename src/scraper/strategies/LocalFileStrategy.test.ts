@@ -5,7 +5,6 @@ import type { ScrapeResult, ScraperOptions, ScraperProgressEvent } from "../type
 import { LocalFileStrategy } from "./LocalFileStrategy";
 
 vi.mock("node:fs/promises", () => ({ default: vol.promises }));
-vi.mock("../../utils/logger");
 vi.mock("node:fs");
 
 describe("LocalFileStrategy", () => {

@@ -7,7 +7,6 @@ vi.mock("node:fs", () => ({
   default: createFsFromVolume(vol),
   existsSync: vi.fn(vol.existsSync),
 }));
-vi.mock("../utils/logger");
 vi.mock("../utils/paths", () => ({
   getProjectRoot: vi.fn(() => "/docs-mcp-server"),
 }));

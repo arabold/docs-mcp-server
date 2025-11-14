@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelineClient } from "./PipelineClient";
 
-vi.mock("../utils/logger");
-
 // Mock tRPC client factory
 const mockClient: any = {
   ping: { query: vi.fn() },

@@ -7,7 +7,6 @@ import { ScrapeTool, type ScrapeToolOptions } from "./ScrapeTool";
 
 // Mock dependencies
 vi.mock("../pipeline/PipelineManager");
-vi.mock("../utils/logger");
 
 describe("ScrapeTool", () => {
   let mockManagerInstance: Partial<PipelineManager>; // Mock manager instance

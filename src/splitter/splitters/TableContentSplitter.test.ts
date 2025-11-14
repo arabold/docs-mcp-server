@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { MinimumChunkSizeError } from "../errors";
 import { TableContentSplitter } from "./TableContentSplitter";
 import type { ContentSplitterOptions } from "./types";
-
-vi.mock("../../utils/logger");
 
 describe("TableContentSplitter", () => {
   const options = {

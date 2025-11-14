@@ -6,7 +6,6 @@ import { ScrapeMode } from "../types"; // Import ScrapeMode
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
 // Mock dependencies
-vi.mock("../../utils/logger");
 
 // Mock HttpFetcher module with a factory
 vi.mock("../fetcher/HttpFetcher", async (importActual) => {

@@ -4,7 +4,6 @@ import { DocumentStore } from "./DocumentStore";
 import type { DbChunkRank, DbPageChunk } from "./types";
 
 vi.mock("./DocumentStore");
-vi.mock("../utils/logger");
 
 describe("DocumentRetrieverService (consolidated logic)", () => {
   let retrieverService: DocumentRetrieverService;

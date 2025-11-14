@@ -5,7 +5,6 @@ import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { BaseScraperStrategy } from "./BaseScraperStrategy";
 
 // Mock logger
-vi.mock("../../utils/logger");
 
 // Mock implementation for testing abstract class
 class TestScraperStrategy extends BaseScraperStrategy {

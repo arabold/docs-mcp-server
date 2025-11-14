@@ -27,7 +27,6 @@ import { PipelineJobStatus } from "./types";
 vi.mock("../store/DocumentManagementService");
 vi.mock("../scraper/ScraperService");
 vi.mock("./PipelineWorker");
-vi.mock("../utils/logger");
 
 describe("PipelineManager", () => {
   let mockStore: Partial<DocumentManagementService>;

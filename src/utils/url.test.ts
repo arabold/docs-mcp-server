@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   extractPrimaryDomain,
   hasSameDomain,
@@ -6,8 +6,6 @@ import {
   isSubpath,
   normalizeUrl,
 } from "./url";
-
-vi.mock("./logger");
 
 describe("URL normalization", () => {
   describe("default behavior", () => {

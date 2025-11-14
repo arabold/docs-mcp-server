@@ -38,7 +38,6 @@ vi.mock("cheerio", () => {
 });
 
 // Suppress logger output during tests
-vi.mock("../../utils/logger");
 
 // Import cheerio after mocking
 import * as cheerio from "cheerio";

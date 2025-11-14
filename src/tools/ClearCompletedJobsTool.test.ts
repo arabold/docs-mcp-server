@@ -5,7 +5,6 @@ import { ToolError } from "./errors";
 
 // Mock dependencies
 vi.mock("../pipeline/PipelineManager");
-vi.mock("../utils/logger");
 
 describe("ClearCompletedJobsTool", () => {
   let mockManagerInstance: Partial<PipelineManager>;

@@ -17,7 +17,6 @@ import {
 import type { MiddlewareContext } from "./types";
 
 // Suppress logger output during tests
-vi.mock("../../../utils/logger");
 
 // Mock playwright using factory functions
 vi.mock("playwright", async (importOriginal) =>

@@ -7,7 +7,6 @@ import { PipelineManager } from "./PipelineManager";
 // Mock dependencies
 vi.mock("./PipelineManager");
 vi.mock("./PipelineClient");
-vi.mock("../utils/logger");
 
 describe("PipelineFactory", () => {
   let mockDocService: Partial<DocumentManagementService>;

@@ -13,7 +13,6 @@ import {
 } from "./utils";
 
 // Mocks for execution tests will be defined below in dedicated describe block
-vi.mock("../utils/logger");
 
 // --- Additional mocks for createPipelineWithCallbacks behavior tests ---
 vi.mock("../pipeline/PipelineFactory", () => ({

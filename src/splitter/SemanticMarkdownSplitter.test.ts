@@ -1,7 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { SemanticMarkdownSplitter } from "./SemanticMarkdownSplitter";
-
-vi.mock("../utils/logger");
 
 describe("SemanticMarkdownSplitter", () => {
   it("should handle empty markdown", async () => {

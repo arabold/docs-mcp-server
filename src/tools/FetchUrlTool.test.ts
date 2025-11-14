@@ -6,7 +6,6 @@ import { ToolError, ValidationError } from "./errors";
 import { FetchUrlTool, type FetchUrlToolOptions } from "./FetchUrlTool";
 
 // Mock dependencies
-vi.mock("../utils/logger");
 
 describe("FetchUrlTool", () => {
   let mockAutoDetectFetcher: Partial<AutoDetectFetcher>;

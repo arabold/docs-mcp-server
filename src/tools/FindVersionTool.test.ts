@@ -5,7 +5,6 @@ import { FindVersionTool, type FindVersionToolOptions } from "./FindVersionTool"
 
 // Mock dependencies
 vi.mock("../store"); // Mock the entire store module if DocumentManagementService is complex
-vi.mock("../utils/logger");
 
 describe("FindVersionTool", () => {
   let mockDocService: Partial<DocumentManagementService>;

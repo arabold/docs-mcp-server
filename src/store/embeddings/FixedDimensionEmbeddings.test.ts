@@ -1,11 +1,10 @@
 import { Embeddings } from "@langchain/core/embeddings";
-import { describe, expect, test, vi } from "vitest";
+import { describe, expect, test } from "vitest";
 import { DimensionError } from "../errors";
 import { VECTOR_DIMENSION } from "../types";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Suppress logger output during tests
-vi.mock("../../utils/logger");
 
 // Mock embedding models that produce vectors of different sizes
 class MockBaseEmbeddings extends Embeddings {

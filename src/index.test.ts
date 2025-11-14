@@ -54,17 +54,6 @@ vi.mock("./mcp/tools", () => ({
   initializeTools: vi.fn().mockResolvedValue({}),
 }));
 
-vi.mock("./utils/logger", () => ({
-  logger: {
-    info: vi.fn(),
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-  setLogLevel: vi.fn(),
-  LogLevel: { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 },
-}));
-
 vi.mock("playwright", () => ({
   chromium: { executablePath: vi.fn().mockReturnValue("/mock/chromium") },
 }));

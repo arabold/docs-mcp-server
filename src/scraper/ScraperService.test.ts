@@ -5,8 +5,6 @@ import type { ScraperRegistry } from "./ScraperRegistry";
 import { ScraperService } from "./ScraperService";
 import type { ScraperOptions, ScraperProgressEvent } from "./types";
 
-vi.mock("../utils/logger");
-
 describe("ScraperService", () => {
   // Mock registry
   const mockRegistry = {

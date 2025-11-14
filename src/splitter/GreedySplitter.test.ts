@@ -3,8 +3,6 @@ import { GreedySplitter } from "./GreedySplitter";
 import { SemanticMarkdownSplitter } from "./SemanticMarkdownSplitter";
 import type { Chunk } from "./types";
 
-vi.mock("../utils/logger");
-
 // Mock SemanticMarkdownSplitter
 const createMockSemanticSplitter = (chunks: Chunk[]) => {
   const mockSplitText = vi.fn().mockResolvedValue(chunks);

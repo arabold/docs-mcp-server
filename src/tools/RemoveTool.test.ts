@@ -7,7 +7,6 @@ import { RemoveTool, type RemoveToolArgs } from "./RemoveTool";
 
 // Mock dependencies
 vi.mock("../store");
-vi.mock("../utils/logger");
 
 // Create a properly typed mock using MockedObject
 const mockDocService = {

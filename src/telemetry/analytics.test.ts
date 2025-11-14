@@ -15,13 +15,6 @@ vi.mock("./TelemetryConfig", () => ({
   generateInstallationId: vi.fn(() => "test-installation-id"),
 }));
 
-// Mock the logger
-vi.mock("../utils/logger", () => ({
-  logger: {
-    debug: vi.fn(),
-  },
-}));
-
 // Mock PostHogClient
 vi.mock("./postHogClient", () => ({
   PostHogClient: vi.fn().mockImplementation(() => ({
