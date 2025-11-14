@@ -316,6 +316,9 @@ export class PipelineManager implements IPipeline {
   /**
    * Enqueues a refresh job for an existing library version by re-scraping all pages
    * and using ETag comparison to skip unchanged content.
+   *
+   * If the version was never completed (interrupted or failed scrape), performs a
+   * full re-scrape from scratch instead of a refresh to ensure completeness.
    */
   async enqueueRefreshJob(
     library: string,
@@ -330,6 +333,27 @@ export class PipelineManager implements IPipeline {
         library,
         version: normalizedVersion,
       });
+
+      // Check the version's status to detect incomplete scrapes
+      const versionInfo = await this.store.getVersionById(versionId);
+      if (!versionInfo) {
+        throw new Error(`Version ID ${versionId} not found`);
+      }
+
+      // Get library information
+      const libraryInfo = await this.store.getLibraryById(versionInfo.library_id);
+      if (!libraryInfo) {
+        throw new Error(`Library ID ${versionInfo.library_id} not found`);
+      }
+
+      // If the version is not completed, it means the previous scrape was interrupted
+      // or failed. In this case, perform a full re-scrape instead of a refresh.
+      if (versionInfo && versionInfo.status !== VersionStatus.COMPLETED) {
+        logger.info(
+          `⚠️  Version ${library}@${normalizedVersion || "unversioned"} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
+        );
+        return this.enqueueJobWithStoredOptions(library, normalizedVersion);
+      }
 
       // Get all pages for this version with their ETags and depths
       const pages = await this.store.getPagesByVersionId(versionId);

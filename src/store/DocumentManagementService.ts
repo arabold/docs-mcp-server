@@ -508,4 +508,18 @@ export class DocumentManagementService {
 
     return versionId;
   }
+
+  /**
+   * Retrieves a version by its ID from the database.
+   */
+  async getVersionById(versionId: number) {
+    return this.store.getVersionById(versionId);
+  }
+
+  /**
+   * Retrieves a library by its ID from the database.
+   */
+  async getLibraryById(libraryId: number) {
+    return this.store.getLibraryById(libraryId);
+  }
 }

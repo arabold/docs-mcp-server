@@ -96,6 +96,7 @@ export class DocumentStore {
     getParentChunk: Database.Statement<[string, string, string, string, bigint]>;
     insertLibrary: Database.Statement<[string]>;
     getLibraryIdByName: Database.Statement<[string]>;
+    getLibraryById: Database.Statement<[number]>;
     // New version-related statements
     insertVersion: Database.Statement<[number, string | null]>;
     resolveVersionId: Database.Statement<[number, string | null]>;
@@ -219,6 +220,7 @@ export class DocumentStore {
       getLibraryIdByName: this.db.prepare<[string]>(
         "SELECT id FROM libraries WHERE name = ?",
       ),
+      getLibraryById: this.db.prepare<[number]>("SELECT * FROM libraries WHERE id = ?"),
       // New version-related statements
       insertVersion: this.db.prepare<[number, string]>(
         "INSERT INTO versions (library_id, name, status) VALUES (?, ?, 'not_indexed') ON CONFLICT(library_id, name) DO NOTHING",
@@ -669,6 +671,36 @@ export class DocumentStore {
       return rows;
     } catch (error) {
       throw new StoreError(`Failed to get versions by status: ${error}`);
+    }
+  }
+
+  /**
+   * Retrieves a version by its ID.
+   * @param versionId The version ID to retrieve
+   * @returns The version record, or null if not found
+   */
+  async getVersionById(versionId: number): Promise<DbVersion | null> {
+    try {
+      const row = this.statements.getVersionById.get(versionId) as DbVersion | undefined;
+      return row || null;
+    } catch (error) {
+      throw new StoreError(`Failed to get version by ID: ${error}`);
+    }
+  }
+
+  /**
+   * Retrieves a library by its ID.
+   * @param libraryId The library ID to retrieve
+   * @returns The library record, or null if not found
+   */
+  async getLibraryById(libraryId: number): Promise<{ id: number; name: string } | null> {
+    try {
+      const row = this.statements.getLibraryById.get(libraryId) as
+        | { id: number; name: string }
+        | undefined;
+      return row || null;
+    } catch (error) {
+      throw new StoreError(`Failed to get library by ID: ${error}`);
     }
   }
 
