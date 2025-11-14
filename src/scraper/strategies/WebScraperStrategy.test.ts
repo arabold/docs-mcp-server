@@ -689,6 +689,134 @@ describe("WebScraperStrategy", () => {
       const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
       expect(receivedDocs).toHaveLength(3); // Base + 2 allowed pages
     });
+
+    it("should respect includePatterns and excludePatterns from base class", async () => {
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/") {
+          return {
+            content: `
+              <html><head><title>Docs</title></head><body>
+                <a href="/docs/guide">Guide</a>
+                <a href="/docs/api">API</a>
+                <a href="/docs/v2/">V2 Docs</a>
+                <a href="/docs/v2/guide">V2 Guide</a>
+                <a href="/api/endpoint">API Endpoint</a>
+              </body></html>`,
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      options.url = "https://example.com/docs/";
+      options.includePatterns = ["docs/*"];
+      options.excludePatterns = ["docs/v2/**"];
+      options.maxDepth = 2;
+      options.maxPages = 10;
+
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify base page was fetched
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/",
+        expect.anything(),
+      );
+
+      // Verify included pages were fetched
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/guide",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/api",
+        expect.anything(),
+      );
+
+      // Verify excluded pages were NOT fetched (v2 docs)
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/docs/v2/",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/docs/v2/guide",
+        expect.anything(),
+      );
+
+      // Verify page outside include pattern was NOT fetched
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/api/endpoint",
+        expect.anything(),
+      );
+
+      // Verify documents were produced only for included and non-excluded pages
+      const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
+      expect(receivedDocs).toHaveLength(3); // Base + guide + api
+    });
+
+    it("should apply excludePatterns even when no includePatterns are specified", async () => {
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/") {
+          return {
+            content: `
+              <html><head><title>Home</title></head><body>
+                <a href="/docs/intro">Intro</a>
+                <a href="/docs/private/secret">Secret</a>
+                <a href="/blog/post">Blog</a>
+              </body></html>`,
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      options.url = "https://example.com/";
+      options.excludePatterns = ["**/private/**"];
+      options.maxDepth = 1;
+      options.maxPages = 10;
+
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      await strategy.scrape(options, progressCallback);
+
+      // Verify base page was fetched
+      expect(mockFetchFn).toHaveBeenCalledWith("https://example.com/", expect.anything());
+
+      // Verify non-excluded pages were fetched
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/blog/post",
+        expect.anything(),
+      );
+
+      // Verify excluded page was NOT fetched
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/docs/private/secret",
+        expect.anything(),
+      );
+
+      // Verify documents
+      const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
+      expect(receivedDocs).toHaveLength(3); // Base + intro + blog
+    });
   });
 
   // Canonical redirect test: relative links resolve against canonical final URL (directory form)

@@ -5,7 +5,6 @@ import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem, ScraperOptions } from "../types";
-import { isInScope } from "../utils/scope";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 export interface WebScraperStrategyOptions {
@@ -117,23 +116,25 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         };
       }
 
-      // Determine base for scope filtering:
-      // For depth 0 (initial page) use the final fetched URL (rawContent.source) so protocol/host redirects don't drop links.
-      // For deeper pages, use canonicalBaseUrl (set after first page) or fallback to original.
-      const baseUrl =
-        item.depth === 0
-          ? new URL(rawContent.source)
-          : (this.canonicalBaseUrl ?? new URL(options.url));
+      // Update canonical base URL from the first page's final URL (after redirects)
+      if (item.depth === 0) {
+        this.canonicalBaseUrl = new URL(rawContent.source);
+      }
 
       const filteredLinks =
         processed.links?.filter((link) => {
           try {
             const targetUrl = new URL(link);
-            const scope = options.scope || "subpages";
-            return (
-              isInScope(baseUrl, targetUrl, scope) &&
-              (!this.shouldFollowLinkFn || this.shouldFollowLinkFn(baseUrl, targetUrl))
-            );
+            // Use the base class's shouldProcessUrl which handles scope + include/exclude patterns
+            if (!this.shouldProcessUrl(targetUrl.href, options)) {
+              return false;
+            }
+            // Apply optional custom filter function if provided
+            if (this.shouldFollowLinkFn) {
+              const baseUrl = this.canonicalBaseUrl ?? new URL(options.url);
+              return this.shouldFollowLinkFn(baseUrl, targetUrl);
+            }
+            return true;
           } catch {
             return false;
           }
