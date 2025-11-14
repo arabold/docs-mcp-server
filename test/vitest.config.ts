@@ -10,7 +10,7 @@ export default defineConfig({
     environment: "node",
     testTimeout: 30000, // 30 seconds for network operations
     include: ["test/**/*.test.ts"],
-    setupFiles: ["./setup.ts"],
+    setupFiles: ["test/setup.ts"],
     // // Allow parallel execution with reasonable concurrency
     // maxConcurrency: 5, // Limit concurrent tests to be respectful to target sites
     // Add retry for flaky network tests
