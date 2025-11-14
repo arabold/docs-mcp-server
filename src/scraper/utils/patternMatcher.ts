@@ -48,9 +48,12 @@ export function matchesAnyPattern(path: string, patterns?: string[]): boolean {
     if (isRegexPattern(pattern)) {
       return patternToRegExp(pattern).test(normalizedPath);
     }
-    // minimatch expects no leading slash for relative globs, but we keep it for consistency
-    // so we strip the leading slash for minimatch
-    return minimatch(normalizedPath.replace(/^\//, ""), pattern, { dot: true });
+    // For glob patterns:
+    // - If pattern starts with '/', strip leading slash from BOTH pattern and path for minimatch
+    // - Otherwise, strip leading slash only from path
+    const pathForMatch = normalizedPath.replace(/^\//, "");
+    const patternForMatch = pattern.startsWith("/") ? pattern.slice(1) : pattern;
+    return minimatch(pathForMatch, patternForMatch, { dot: true });
   });
 }
 
@@ -73,15 +76,20 @@ export function extractPathAndQuery(url: string): string {
  * If no user exclude patterns are provided, default exclusion patterns are automatically applied.
  * These defaults exclude common documentation files (CHANGELOG.md, LICENSE, etc.) and folders
  * (archives, non-English locales, etc.).
+ *
+ * Patterns are matched against both the full URL and the pathname for maximum flexibility:
+ * - Full URL: `https://example.com/docs/v3/**` matches `https://example.com/docs/v3/guide`
+ * - Pathname: `/docs/v3/**` matches `https://example.com/docs/v3/guide`
  */
 export function shouldIncludeUrl(
   url: string,
   includePatterns?: string[],
   excludePatterns?: string[],
 ): boolean {
-  // Always match from a leading slash for path-based globs
+  // Extract pathname for path-based pattern matching
   const path = extractPathAndQuery(url);
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+
   // For file:// URLs, also match against the basename (strip leading slash from pattern for basename matching)
   let basename: string | undefined;
   if (url.startsWith("file://")) {
@@ -98,13 +106,17 @@ export function shouldIncludeUrl(
   const effectiveExcludePatterns = getEffectiveExclusionPatterns(excludePatterns);
 
   // Exclude patterns take precedence
+  // Match against BOTH full URL and pathname for flexibility
   if (
+    matchesAnyPattern(url, effectiveExcludePatterns) ||
     matchesAnyPattern(normalizedPath, effectiveExcludePatterns) ||
     (basename && matchesAnyPattern(basename, stripSlash(effectiveExcludePatterns)))
   )
     return false;
   if (!includePatterns || includePatterns.length === 0) return true;
+  // Match against BOTH full URL and pathname for flexibility
   return (
+    matchesAnyPattern(url, includePatterns) ||
     matchesAnyPattern(normalizedPath, includePatterns) ||
     (basename ? matchesAnyPattern(basename, stripSlash(includePatterns)) : false)
   );

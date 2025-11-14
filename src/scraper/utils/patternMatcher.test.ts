@@ -452,4 +452,119 @@ describe("patternMatcher", () => {
       );
     });
   });
+
+  describe("full URL vs pathname pattern matching", () => {
+    it("should match patterns against both full URL and pathname", () => {
+      const testUrl = "https://example.com/docs/v3/guide";
+
+      // Full URL patterns should work
+      expect(
+        shouldIncludeUrl(testUrl, undefined, ["https://example.com/docs/v3/**"]),
+      ).toBe(false);
+      expect(
+        shouldIncludeUrl(testUrl, undefined, ["https://example.com/docs/v2/**"]),
+      ).toBe(true); // different version, should NOT exclude
+
+      // Path-based patterns should also work
+      expect(shouldIncludeUrl(testUrl, undefined, ["/docs/v3/**"])).toBe(false);
+      expect(shouldIncludeUrl(testUrl, undefined, ["/docs/v2/**"])).toBe(true); // different version, should NOT exclude
+
+      // Relative path patterns should work
+      expect(shouldIncludeUrl(testUrl, undefined, ["docs/v3/**"])).toBe(false);
+      expect(shouldIncludeUrl(testUrl, undefined, ["docs/v2/**"])).toBe(true); // different version, should NOT exclude
+    });
+
+    it("should match directory paths with trailing slash", () => {
+      const testUrl = "https://example.com/docs/v3/";
+
+      // Pattern should match both with and without trailing slash
+      expect(shouldIncludeUrl(testUrl, undefined, ["/docs/v3/**"])).toBe(false);
+      expect(
+        shouldIncludeUrl(testUrl, undefined, ["https://example.com/docs/v3/**"]),
+      ).toBe(false);
+      expect(shouldIncludeUrl(testUrl, undefined, ["docs/v3/**"])).toBe(false);
+    });
+
+    it("should support includePatterns with both full URL and pathname", () => {
+      const testUrl = "https://example.com/docs/guide";
+
+      // Full URL include pattern
+      expect(shouldIncludeUrl(testUrl, ["https://example.com/docs/**"])).toBe(true);
+      expect(shouldIncludeUrl(testUrl, ["https://example.com/api/**"])).toBe(false);
+
+      // Path-based include pattern
+      expect(shouldIncludeUrl(testUrl, ["/docs/**"])).toBe(true);
+      expect(shouldIncludeUrl(testUrl, ["/api/**"])).toBe(false);
+
+      // Relative path include pattern
+      expect(shouldIncludeUrl(testUrl, ["docs/**"])).toBe(true);
+      expect(shouldIncludeUrl(testUrl, ["api/**"])).toBe(false);
+    });
+
+    it("should handle v3 exclusion with full URL pattern", () => {
+      const v3Url = "https://example.com/docs/v3/";
+      const v3GuideUrl = "https://example.com/docs/v3/getting-started";
+
+      // Full URL pattern should exclude v3 URLs
+      expect(shouldIncludeUrl(v3Url, undefined, ["https://example.com/docs/v3/**"])).toBe(
+        false,
+      );
+      expect(
+        shouldIncludeUrl(v3GuideUrl, undefined, ["https://example.com/docs/v3/**"]),
+      ).toBe(false);
+    });
+
+    it("should handle v3 exclusion with absolute path pattern", () => {
+      const v3Url = "https://example.com/docs/v3/";
+      const v3GuideUrl = "https://example.com/docs/v3/getting-started";
+
+      // Absolute path pattern should exclude v3 URLs
+      expect(shouldIncludeUrl(v3Url, undefined, ["/docs/v3/**"])).toBe(false);
+      expect(shouldIncludeUrl(v3GuideUrl, undefined, ["/docs/v3/**"])).toBe(false);
+    });
+
+    it("should handle v3 exclusion with relative path pattern", () => {
+      const v3Url = "https://example.com/docs/v3/";
+      const v3GuideUrl = "https://example.com/docs/v3/getting-started";
+
+      // Relative path pattern should exclude v3 URLs
+      expect(shouldIncludeUrl(v3Url, undefined, ["docs/v3/**"])).toBe(false);
+      expect(shouldIncludeUrl(v3GuideUrl, undefined, ["docs/v3/**"])).toBe(false);
+    });
+
+    it("should support wildcards in domain for full URL patterns", () => {
+      const testUrl = "https://docs.example.com/guide";
+
+      // Exact domain match
+      expect(shouldIncludeUrl(testUrl, undefined, ["https://docs.example.com/**"])).toBe(
+        false,
+      );
+
+      // Different domain should not match
+      expect(shouldIncludeUrl(testUrl, undefined, ["https://api.example.com/**"])).toBe(
+        true,
+      );
+
+      // Wildcard subdomain (using regex)
+      expect(
+        shouldIncludeUrl(testUrl, undefined, ["/https:\\/\\/.*\\.example\\.com\\/.*/"]),
+      ).toBe(false);
+    });
+
+    it("should maintain backward compatibility with existing patterns", () => {
+      // All existing tests should still pass with the enhanced matching
+      const testUrl = "https://example.com/docs/archive/old.md";
+
+      // Pattern without leading slash (relative)
+      expect(shouldIncludeUrl(testUrl, undefined, ["**/archive/**"])).toBe(false);
+
+      // Pattern with leading slash (absolute path)
+      expect(shouldIncludeUrl(testUrl, undefined, ["/docs/archive/**"])).toBe(false);
+
+      // Basename matching for file:// URLs
+      expect(
+        shouldIncludeUrl("file:///path/to/CHANGELOG.md", undefined, ["**/CHANGELOG.md"]),
+      ).toBe(false);
+    });
+  });
 });
