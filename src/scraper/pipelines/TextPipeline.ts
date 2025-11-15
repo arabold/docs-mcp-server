@@ -1,6 +1,7 @@
 import { GreedySplitter } from "../../splitter";
 import { TextDocumentSplitter } from "../../splitter/TextDocumentSplitter";
 import {
+  SPLITTER_MAX_CHUNK_SIZE,
   SPLITTER_MIN_CHUNK_SIZE,
   SPLITTER_PREFERRED_CHUNK_SIZE,
 } from "../../utils/config";
@@ -22,14 +23,22 @@ export class TextPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
   private readonly splitter: GreedySplitter;
 
-  constructor(chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
+  constructor(
+    preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE,
+    maxChunkSize = SPLITTER_MAX_CHUNK_SIZE,
+  ) {
     super();
     // Text processing uses minimal middleware for maximum compatibility
     this.middleware = [];
 
     // Create the two-phase splitting: basic text splitting + size optimization
-    const textSplitter = new TextDocumentSplitter({ maxChunkSize: chunkSize });
-    this.splitter = new GreedySplitter(textSplitter, SPLITTER_MIN_CHUNK_SIZE, chunkSize);
+    const textSplitter = new TextDocumentSplitter({ maxChunkSize });
+    this.splitter = new GreedySplitter(
+      textSplitter,
+      SPLITTER_MIN_CHUNK_SIZE,
+      preferredChunkSize,
+      maxChunkSize,
+    );
   }
 
   canProcess(mimeType: string, content?: string | Buffer): boolean {

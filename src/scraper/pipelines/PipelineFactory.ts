@@ -50,10 +50,10 @@ export class PipelineFactory {
 
     return [
       new JsonPipeline(preferredChunkSize),
-      new SourceCodePipeline(preferredChunkSize),
+      new SourceCodePipeline(preferredChunkSize, maxChunkSize),
       new HtmlPipeline(preferredChunkSize, maxChunkSize),
       new MarkdownPipeline(preferredChunkSize, maxChunkSize),
-      new TextPipeline(preferredChunkSize), // Universal fallback - must be last
+      new TextPipeline(preferredChunkSize, maxChunkSize), // Universal fallback - must be last
     ];
   }
 }

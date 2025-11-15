@@ -42,6 +42,7 @@ export class MarkdownPipeline extends BasePipeline {
       semanticSplitter,
       SPLITTER_MIN_CHUNK_SIZE,
       preferredChunkSize,
+      maxChunkSize,
     );
   }
 

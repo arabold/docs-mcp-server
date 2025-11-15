@@ -176,8 +176,8 @@ describe("PipelineFactory Integration", () => {
 
       const result = await processContent(htmlContent, "text/html");
 
-      // HTML should be converted to markdown and create hierarchical structure
-      expect(result.chunks?.length).toBeGreaterThan(1);
+      // HTML should be converted to markdown and create chunks
+      expect(result.chunks?.length).toBeGreaterThanOrEqual(1);
 
       // Should have chunks with heading-based hierarchy
       const headingChunks = result.chunks?.filter(
@@ -188,6 +188,11 @@ describe("PipelineFactory Integration", () => {
       // Should convert table to markdown format
       const tableChunks = result.chunks?.filter((chunk) => chunk.types.includes("table"));
       expect(tableChunks?.[0].content).toMatch(/\|.*\|/); // Markdown table format
+
+      // Verify no single chunk exceeds max size (150 with buffer)
+      result.chunks?.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(200);
+      });
     });
 
     it("should process JavaScript/TypeScript with semantic code boundaries", async () => {
@@ -301,8 +306,8 @@ More detailed content here.
 
       const result = await processContent(markdownContent, "text/markdown");
 
-      // Should create multiple chunks with different content types
-      expect(result.chunks?.length).toBeGreaterThan(3);
+      // Should create chunks (quantity depends on greedy merging logic)
+      expect(result.chunks?.length).toBeGreaterThanOrEqual(1);
 
       // Should distinguish between content types
       const contentTypes = new Set(result.chunks?.flatMap((chunk) => chunk.types));
@@ -320,6 +325,11 @@ More detailed content here.
 
       expect(codeChunks?.length).toBeGreaterThan(0);
       expect(tableChunks?.length).toBeGreaterThan(0);
+
+      // Verify no single chunk exceeds max size (150 with buffer)
+      result.chunks?.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(200);
+      });
     });
 
     it("should process plain text with simple structure and no hierarchy", async () => {

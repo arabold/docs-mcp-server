@@ -1,3 +1,4 @@
+import { logger } from "../utils";
 import type { Chunk, DocumentSplitter, SectionContentType } from "./types";
 
 /**
@@ -14,6 +15,7 @@ export class GreedySplitter implements DocumentSplitter {
   private baseSplitter: DocumentSplitter;
   private minChunkSize: number;
   private preferredChunkSize: number;
+  private maxChunkSize: number;
 
   /**
    * Combines a base document splitter with size constraints to produce optimally-sized chunks.
@@ -24,10 +26,12 @@ export class GreedySplitter implements DocumentSplitter {
     baseSplitter: DocumentSplitter,
     minChunkSize: number,
     preferredChunkSize: number,
+    maxChunkSize: number,
   ) {
     this.baseSplitter = baseSplitter;
     this.minChunkSize = minChunkSize;
     this.preferredChunkSize = preferredChunkSize;
+    this.maxChunkSize = maxChunkSize;
   }
 
   /**
@@ -42,20 +46,49 @@ export class GreedySplitter implements DocumentSplitter {
     let currentChunk: Chunk | null = null;
 
     for (const nextChunk of initialChunks) {
+      // Warn if a chunk from the base splitter already exceeds max size
+      if (nextChunk.content.length > this.maxChunkSize) {
+        logger.warn(
+          `⚠ Chunk from base splitter exceeds max size: ${nextChunk.content.length} > ${this.maxChunkSize}`,
+        );
+      }
+
       if (currentChunk) {
-        if (this.wouldExceedMaxSize(currentChunk, nextChunk)) {
+        const combinedSize = currentChunk.content.length + nextChunk.content.length;
+
+        // HARD LIMIT: Never exceed max chunk size
+        if (combinedSize > this.maxChunkSize) {
           concatenatedChunks.push(currentChunk);
           currentChunk = this.cloneChunk(nextChunk);
           continue;
         }
+
+        // STRUCTURE > SIZE: Respect major section boundaries (H1/H2) when current chunk
+        // is large enough. This prevents headings from being merged with unrelated preceding
+        // content while still allowing tiny chunks to be merged to avoid orphans.
         if (
           currentChunk.content.length >= this.minChunkSize &&
-          this.startsNewMajorSection(nextChunk)
+          this.startsNewMajorSection(nextChunk) &&
+          !this.isSameSection(currentChunk, nextChunk)
         ) {
           concatenatedChunks.push(currentChunk);
           currentChunk = this.cloneChunk(nextChunk);
           continue;
         }
+
+        // If combining would exceed preferred size AND we're already at min size, split
+        // UNLESS the next chunk is very small (< min size), in which case merge it anyway
+        if (
+          combinedSize > this.preferredChunkSize &&
+          currentChunk.content.length >= this.minChunkSize &&
+          nextChunk.content.length >= this.minChunkSize
+        ) {
+          concatenatedChunks.push(currentChunk);
+          currentChunk = this.cloneChunk(nextChunk);
+          continue;
+        }
+
+        // Merge the chunks
         currentChunk.content += `${currentChunk.content.endsWith("\n") ? "" : "\n"}${nextChunk.content}`;
         currentChunk.section = this.mergeSectionInfo(currentChunk, nextChunk);
         currentChunk.types = this.mergeTypes(currentChunk.types, nextChunk.types);
@@ -91,16 +124,20 @@ export class GreedySplitter implements DocumentSplitter {
   }
 
   /**
-   * Size limit check to ensure chunks remain within embedding model constraints.
-   * Essential for maintaining consistent embedding quality and avoiding truncation.
+   * Checks if two chunks belong to the same section by comparing their paths.
+   * Returns true if the paths are identical or if one is a parent of the other.
    */
-  private wouldExceedMaxSize(currentChunk: Chunk | null, nextChunk: Chunk): boolean {
-    if (!currentChunk) {
-      return false;
+  private isSameSection(chunk1: Chunk, chunk2: Chunk): boolean {
+    const path1 = chunk1.section.path;
+    const path2 = chunk2.section.path;
+
+    // Exact match
+    if (path1.length === path2.length && path1.every((part, i) => part === path2[i])) {
+      return true;
     }
-    return (
-      currentChunk.content.length + nextChunk.content.length > this.preferredChunkSize
-    );
+
+    // Parent-child relationship (one path includes the other)
+    return this.isPathIncluded(path1, path2) || this.isPathIncluded(path2, path1);
   }
 
   /**

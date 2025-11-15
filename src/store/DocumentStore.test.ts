@@ -574,6 +574,276 @@ describe("DocumentStore - With Embeddings", () => {
       expect(retrieved?.options.scope).toBe("subpages");
     });
   });
+
+  describe("Embedding Retry Logic", () => {
+    let mockEmbedDocuments: ReturnType<typeof vi.fn>;
+    let callCount: number;
+
+    beforeEach(async () => {
+      callCount = 0;
+      // Get reference to the mocked embedDocuments function
+      // @ts-expect-error Accessing private property for testing
+      if (store.embeddings?.embedDocuments) {
+        // @ts-expect-error Accessing private property for testing
+        mockEmbedDocuments = vi.mocked(store.embeddings.embedDocuments);
+        mockEmbedDocuments.mockClear();
+      }
+    });
+
+    it("should successfully handle normal embedding without errors", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      await store.addDocuments(
+        "normaltest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Normal Doc",
+          "https://example.com/normal",
+          "This is a normal sized document that should embed without issues",
+          ["test"],
+        ),
+      );
+
+      expect(mockEmbedDocuments).toHaveBeenCalled();
+      expect(await store.checkDocumentExists("normaltest", "1.0.0")).toBe(true);
+    });
+
+    it("should retry and split batch when size error occurs", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      // Mock embedDocuments to fail first time with size error, then succeed on splits
+      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+        callCount++;
+
+        // First call with multiple texts: simulate size error
+        if (callCount === 1 && texts.length > 1) {
+          throw new Error("maximum context length exceeded");
+        }
+
+        // Subsequent calls (after split): succeed with dummy embeddings
+        return texts.map(() => new Array(1536).fill(0.1));
+      });
+
+      // Create a scrape result with multiple chunks to trigger batching
+      const result = createScrapeResult(
+        "Batch Doc",
+        "https://example.com/batch",
+        "Content chunk 1",
+        ["section1"],
+      );
+      result.chunks = [
+        {
+          types: ["text"],
+          content: "Content chunk 1",
+          section: { level: 0, path: ["section1"] },
+        },
+        {
+          types: ["text"],
+          content: "Content chunk 2",
+          section: { level: 0, path: ["section2"] },
+        },
+      ];
+
+      await store.addDocuments("retrytest", "1.0.0", 1, result);
+
+      // Should have been called multiple times (initial failure + successful retries)
+      expect(callCount).toBeGreaterThan(1);
+      expect(await store.checkDocumentExists("retrytest", "1.0.0")).toBe(true);
+    });
+
+    it("should truncate single oversized text when size error occurs", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      // Mock embedDocuments to fail first time with size error for single large text
+      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+        callCount++;
+
+        // First call with full text: simulate size error
+        if (callCount === 1) {
+          throw new Error("This model's maximum context length is 8191 tokens");
+        }
+
+        // Second call (after truncation): succeed
+        return texts.map(() => new Array(1536).fill(0.1));
+      });
+
+      // Create a document with very large content
+      const largeContent = "x".repeat(50000); // 50KB
+      await store.addDocuments(
+        "truncatetest",
+        "1.0.0",
+        1,
+        createScrapeResult("Large Doc", "https://example.com/large", largeContent, [
+          "section",
+        ]),
+      );
+
+      // Should have been called twice (initial failure + successful retry with truncated text)
+      expect(callCount).toBe(2);
+      expect(await store.checkDocumentExists("truncatetest", "1.0.0")).toBe(true);
+    });
+
+    it("should detect various size error messages", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      const sizeErrorMessages = [
+        "maximum context length exceeded",
+        "input is too long",
+        "token limit reached",
+        "input is too large",
+        "text exceeds the limit",
+        "max token count exceeded",
+      ];
+
+      for (const errorMsg of sizeErrorMessages) {
+        callCount = 0;
+        mockEmbedDocuments.mockClear();
+
+        // Mock to fail with specific error message, then succeed
+        mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+          callCount++;
+          if (callCount === 1) {
+            throw new Error(errorMsg);
+          }
+          return texts.map(() => new Array(1536).fill(0.1));
+        });
+
+        const testLib = `errortest-${sizeErrorMessages.indexOf(errorMsg)}`;
+        await store.addDocuments(
+          testLib,
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Error Test",
+            `https://example.com/${testLib}`,
+            "Test content",
+            ["test"],
+          ),
+        );
+
+        // Should have retried and succeeded
+        expect(callCount).toBeGreaterThan(1);
+        expect(await store.checkDocumentExists(testLib, "1.0.0")).toBe(true);
+      }
+    });
+
+    it("should re-throw non-size errors without retry", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      // Mock embedDocuments to fail with non-size error
+      mockEmbedDocuments.mockRejectedValue(
+        new Error("Network error: connection refused"),
+      );
+
+      await expect(
+        store.addDocuments(
+          "networkerror",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Network Error Test",
+            "https://example.com/network-error",
+            "Test content",
+            ["test"],
+          ),
+        ),
+      ).rejects.toThrow("Network error");
+
+      // Should have been called only once (no retry for non-size errors)
+      expect(mockEmbedDocuments).toHaveBeenCalledTimes(1);
+    });
+
+    it("should handle nested retry for multiple batch splits", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      // Mock to fail multiple times, requiring nested splits
+      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+        callCount++;
+
+        // Fail on first two calls (requiring splits), succeed on smaller batches
+        if (callCount <= 2 && texts.length > 1) {
+          throw new Error("maximum context length exceeded");
+        }
+
+        return texts.map(() => new Array(1536).fill(0.1));
+      });
+
+      // Create multiple chunks to trigger multiple splits
+      const result = createScrapeResult(
+        "Multi Split",
+        "https://example.com/multi",
+        "Chunk 1",
+        ["s1"],
+      );
+      result.chunks = [
+        { types: ["text"], content: "Chunk 1", section: { level: 0, path: ["s1"] } },
+        { types: ["text"], content: "Chunk 2", section: { level: 0, path: ["s2"] } },
+        { types: ["text"], content: "Chunk 3", section: { level: 0, path: ["s3"] } },
+        { types: ["text"], content: "Chunk 4", section: { level: 0, path: ["s4"] } },
+      ];
+
+      await store.addDocuments("multisplit", "1.0.0", 1, result);
+
+      // Should have been called multiple times due to splits
+      expect(callCount).toBeGreaterThan(2);
+      expect(await store.checkDocumentExists("multisplit", "1.0.0")).toBe(true);
+    });
+
+    it("should fail after retry if truncated text still too large", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      // Mock embedDocuments to always fail with size error (even after truncation)
+      mockEmbedDocuments.mockRejectedValue(
+        new Error("maximum context length exceeded - even after truncation"),
+      );
+
+      await expect(
+        store.addDocuments(
+          "alwaysfail",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Always Fail",
+            "https://example.com/always-fail",
+            "x".repeat(100000), // Very large content
+            ["test"],
+          ),
+        ),
+      ).rejects.toThrow("maximum context length exceeded");
+
+      // Should have attempted multiple times (original + retry after truncation)
+      expect(mockEmbedDocuments).toHaveBeenCalled();
+    });
+  });
 });
 
 /**

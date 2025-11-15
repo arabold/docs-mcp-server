@@ -9,6 +9,7 @@ import {
   SEARCH_OVERFETCH_FACTOR,
   SEARCH_WEIGHT_FTS,
   SEARCH_WEIGHT_VEC,
+  SPLITTER_MAX_CHUNK_SIZE,
   VECTOR_SEARCH_MULTIPLIER,
 } from "../utils/config";
 import { logger } from "../utils/logger";
@@ -881,6 +882,93 @@ export class DocumentStore {
   }
 
   /**
+   * Helper method to detect if an error is related to input size limits.
+   * Checks for common error messages from various embedding providers.
+   */
+  private isInputSizeError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("maximum context length") ||
+      message.includes("too long") ||
+      message.includes("token limit") ||
+      message.includes("input is too large") ||
+      message.includes("exceeds") ||
+      (message.includes("max") && message.includes("token"))
+    );
+  }
+
+  /**
+   * Creates embeddings for an array of texts with automatic retry logic for size-related errors.
+   * If a batch fails due to size limits:
+   * - Batches with multiple texts are split in half and retried recursively
+   * - Single texts that are too large are truncated and retried once
+   *
+   * @param texts Array of texts to embed
+   * @returns Array of embedding vectors
+   */
+  private async embedDocumentsWithRetry(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) {
+      return [];
+    }
+
+    try {
+      // Try to embed the batch normally
+      return await this.embeddings.embedDocuments(texts);
+    } catch (error) {
+      // Check if this is a size-related error
+      if (this.isInputSizeError(error)) {
+        if (texts.length > 1) {
+          // Split batch in half and retry each half recursively
+          const midpoint = Math.floor(texts.length / 2);
+          const firstHalf = texts.slice(0, midpoint);
+          const secondHalf = texts.slice(midpoint);
+
+          logger.warn(
+            `⚠️  Batch of ${texts.length} texts exceeded size limit, splitting into ${firstHalf.length} + ${secondHalf.length}`,
+          );
+
+          const [firstEmbeddings, secondEmbeddings] = await Promise.all([
+            this.embedDocumentsWithRetry(firstHalf),
+            this.embedDocumentsWithRetry(secondHalf),
+          ]);
+
+          return [...firstEmbeddings, ...secondEmbeddings];
+        } else {
+          // Single text that's too large - split in half and retry
+          const text = texts[0];
+          const midpoint = Math.floor(text.length / 2);
+          const firstHalf = text.substring(0, midpoint);
+
+          logger.warn(
+            `⚠️  Single text exceeded embedding size limit (${text.length} chars). Truncating at ${firstHalf.length} chars.`,
+          );
+
+          try {
+            // Recursively retry with first half only
+            // This preserves the beginning of the text which typically contains the most important context
+            const embedding = await this.embedDocumentsWithRetry([firstHalf]);
+            logger.info(
+              `✓ Using embedding from first half of split text (${firstHalf.length} chars)`,
+            );
+            return embedding;
+          } catch (retryError) {
+            // If even split text fails, log error and throw
+            logger.error(
+              `❌ Failed to embed even after splitting. Original length: ${text.length}`,
+            );
+            throw retryError;
+          }
+        }
+      }
+
+      // Not a size error, re-throw
+      throw error;
+    }
+  }
+
+  /**
    * Stores documents with library and version metadata, generating embeddings
    * for vector similarity search. Uses the new pages table to normalize page-level
    * metadata and avoid duplication across document chunks.
@@ -906,6 +994,16 @@ export class DocumentStore {
           return `${header}${chunk.content}`;
         });
 
+        // Validate chunk sizes before creating embeddings
+        for (let i = 0; i < texts.length; i++) {
+          const textSize = texts[i].length;
+          if (textSize > SPLITTER_MAX_CHUNK_SIZE) {
+            logger.warn(
+              `⚠️  Chunk ${i + 1}/${texts.length} exceeds max size: ${textSize} > ${SPLITTER_MAX_CHUNK_SIZE} chars (URL: ${url})`,
+            );
+          }
+        }
+
         // Batch embedding creation to avoid token limit errors
         const maxBatchChars = EMBEDDING_BATCH_CHARS;
         const rawEmbeddings: number[][] = [];
@@ -923,7 +1021,7 @@ export class DocumentStore {
             logger.debug(
               `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
             );
-            const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
+            const batchEmbeddings = await this.embedDocumentsWithRetry(currentBatch);
             rawEmbeddings.push(...batchEmbeddings);
             currentBatch = [];
             currentBatchSize = 0;
@@ -939,7 +1037,7 @@ export class DocumentStore {
             logger.debug(
               `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
             );
-            const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
+            const batchEmbeddings = await this.embedDocumentsWithRetry(currentBatch);
             rawEmbeddings.push(...batchEmbeddings);
             currentBatch = [];
             currentBatchSize = 0;
@@ -952,7 +1050,7 @@ export class DocumentStore {
           logger.debug(
             `Processing final embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
           );
-          const batchEmbeddings = await this.embeddings.embedDocuments(currentBatch);
+          const batchEmbeddings = await this.embedDocumentsWithRetry(currentBatch);
           rawEmbeddings.push(...batchEmbeddings);
         }
         paddedEmbeddings = rawEmbeddings.map((vector) => this.padVector(vector));
