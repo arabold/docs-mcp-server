@@ -7,7 +7,7 @@ import path from "node:path";
 import formBody from "@fastify/formbody";
 import fastifyStatic from "@fastify/static";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import packageJson from "../../package.json";
 import { ProxyAuthManager } from "../auth";
 import { resolveEmbeddingContext } from "../cli/utils";
@@ -16,6 +16,7 @@ import { cleanupMcpService, registerMcpService } from "../services/mcpService";
 import { registerTrpcService } from "../services/trpcService";
 import { registerWebService } from "../services/webService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
+import type { EmbeddingModelConfig } from "../store/embeddings/EmbeddingConfig";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { analytics, TelemetryEvent } from "../telemetry";
 import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
@@ -31,6 +32,7 @@ export class AppServer {
   private mcpServer: McpServer | null = null;
   private authManager: ProxyAuthManager | null = null;
   private config: AppServerConfig;
+  private embeddingConfig: EmbeddingModelConfig | null = null;
 
   constructor(
     private docService: IDocumentManagement,
@@ -72,13 +74,15 @@ export class AppServer {
   async start(): Promise<FastifyInstance> {
     this.validateConfig();
 
+    // Resolve embedding configuration early for use in startup logging and telemetry
+    this.embeddingConfig = resolveEmbeddingContext();
+
     // Initialize telemetry if enabled
     if (this.config.telemetry !== false && shouldEnableTelemetry()) {
       try {
         // Set global application context that will be included in all events
         if (analytics.isEnabled()) {
           // Resolve embedding configuration for global context
-          const embeddingConfig = resolveEmbeddingContext();
 
           analytics.setGlobalContext({
             appVersion: packageJson.version,
@@ -88,10 +92,10 @@ export class AppServer {
             appAuthEnabled: Boolean(this.config.auth),
             appReadOnly: Boolean(this.config.readOnly),
             // Add embedding configuration to global context
-            ...(embeddingConfig && {
-              aiEmbeddingProvider: embeddingConfig.provider,
-              aiEmbeddingModel: embeddingConfig.model,
-              aiEmbeddingDimensions: embeddingConfig.dimensions,
+            ...(this.embeddingConfig && {
+              aiEmbeddingProvider: this.embeddingConfig.provider,
+              aiEmbeddingModel: this.embeddingConfig.model,
+              aiEmbeddingDimensions: this.embeddingConfig.dimensions,
             }),
           });
 
@@ -216,7 +220,7 @@ export class AppServer {
 
     // Setup Fastify error handler (if method exists - for testing compatibility)
     if (typeof this.server.setErrorHandler === "function") {
-      this.server.setErrorHandler(async (error, request, reply) => {
+      this.server.setErrorHandler<FastifyError>(async (error, request, reply) => {
         if (analytics.isEnabled()) {
           analytics.captureException(error, {
             errorCategory: "http",
@@ -409,9 +413,17 @@ export class AppServer {
     }
 
     if (this.config.enableWorker) {
-      enabledServices.push("Embedded worker: enabled");
+      enabledServices.push("Worker: internal");
     } else if (this.config.externalWorkerUrl) {
-      enabledServices.push(`External worker: ${this.config.externalWorkerUrl}`);
+      enabledServices.push(`Worker: ${this.config.externalWorkerUrl}`);
+    }
+
+    if (this.embeddingConfig) {
+      enabledServices.push(
+        `Embeddings: ${this.embeddingConfig.provider}:${this.embeddingConfig.model}`,
+      );
+    } else {
+      enabledServices.push(`Embeddings: disabled (full text search only)`);
     }
 
     for (const service of enabledServices) {

@@ -14,6 +14,15 @@ import {
 
 // Mocks for execution tests will be defined below in dedicated describe block
 
+// Mock CLI utils early to prevent side effects (like Playwright installation)
+vi.mock("./utils", async () => {
+  const actual = await vi.importActual<any>("./utils");
+  return {
+    ...actual,
+    ensurePlaywrightBrowsersInstalled: vi.fn(), // Mock to prevent side effects in tests
+  };
+});
+
 // --- Additional mocks for createPipelineWithCallbacks behavior tests ---
 vi.mock("../pipeline/PipelineFactory", () => ({
   PipelineFactory: {

@@ -109,7 +109,10 @@ export class Analytics {
   /**
    * Capture exception using PostHog's native error tracking with global context
    */
-  captureException(error: Error, properties: Record<string, unknown> = {}): void {
+  captureException(
+    error: Error | unknown,
+    properties: Record<string, unknown> = {},
+  ): void {
     if (!this.enabled) return;
 
     // Merge global context and error properties with timestamp
@@ -118,7 +121,11 @@ export class Analytics {
       ...properties,
       timestamp: new Date().toISOString(),
     };
-    this.postHogClient.captureException(this.distinctId, error, enrichedProperties);
+    this.postHogClient.captureException(
+      this.distinctId,
+      error instanceof Error ? error : new Error(String(error)),
+      enrichedProperties,
+    );
   }
 
   /**

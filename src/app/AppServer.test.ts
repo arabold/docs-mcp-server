@@ -598,7 +598,7 @@ describe("AppServer Behavior Tests", () => {
 
       await server.start();
 
-      // Embedded worker should take precedence - external worker should not be registered
+      // Worker should take precedence - external worker should not be registered
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
     });
 

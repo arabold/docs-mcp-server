@@ -264,7 +264,7 @@ describe("JsonDocumentSplitter", () => {
       const { GreedySplitter } = await import("./GreedySplitter");
 
       const jsonSplitter = new JsonDocumentSplitter();
-      const greedySplitter = new GreedySplitter(jsonSplitter, 500, 1500);
+      const greedySplitter = new GreedySplitter(jsonSplitter, 500, 1500, 5000);
 
       const complexJson = {
         application: {

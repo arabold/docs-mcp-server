@@ -3,7 +3,7 @@
  * Tests critical startup behavior and validates against regression bugs.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 // Mock external dependencies to prevent actual server startup
 const mockPipelineStart = vi.fn().mockResolvedValue(undefined);
@@ -271,7 +271,7 @@ describe("Service Configuration Validation", () => {
 });
 
 describe("Service Registration for Telemetry", () => {
-  let mockRegisterGlobalServices: ReturnType<typeof vi.fn>;
+  let mockRegisterGlobalServices: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -459,9 +459,9 @@ describe("Service Registration for Telemetry", () => {
 
 describe("CLI Command Telemetry Integration", () => {
   let mockAnalytics: {
-    setGlobalContext: ReturnType<typeof vi.fn>;
-    track: ReturnType<typeof vi.fn>;
-    shutdown: ReturnType<typeof vi.fn>;
+    setGlobalContext: Mock;
+    track: Mock;
+    shutdown: Mock;
   };
 
   beforeEach(() => {

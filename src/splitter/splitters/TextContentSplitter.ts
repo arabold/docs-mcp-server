@@ -1,4 +1,4 @@
-import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
+import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { MinimumChunkSizeError } from "../errors";
 import type { ContentSplitter, ContentSplitterOptions } from "./types";
 
