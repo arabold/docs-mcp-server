@@ -463,7 +463,7 @@ describe("Refresh Pipeline E2E Tests", () => {
           ETag: '"page1-v1"',
         })
         .get("/timeout-page")
-        .delayConnection(30000) // Simulate timeout
+        .delay(5000) // Simulate timeout
         .reply(200, "Should never reach this");
 
       // Execute scrape - should complete despite timeout
@@ -493,7 +493,7 @@ describe("Refresh Pipeline E2E Tests", () => {
       // Verify working page content is searchable
       const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "working page", 10);
       expect(search.length).toBeGreaterThan(0);
-    }, 60000);
+    }, 15000); // Reduced timeout from 60s to 15s
 
     it("should follow redirects and use the final URL for indexing", async () => {
       // Setup: Mock site with redirect

@@ -74,9 +74,16 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    testTimeout: 5000,
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-    exclude: ["test/**/*.test.ts"],
-    setupFiles: ["test/setup.ts"],
+    testTimeout: 30000, // 30 seconds for network operations
+    // Include both unit tests and e2e tests
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "test/**/*.test.ts",
+    ],
+    // Exclude live e2e tests by default (they can be run manually)
+    exclude: ["test/**/*-live-e2e.test.ts"],
+    // Use the e2e setup which includes both logger mock and mock server
+    setupFiles: ["test/setup-e2e.ts"],
   },
 });
