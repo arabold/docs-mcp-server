@@ -30,9 +30,18 @@ export class DocumentManagementClient implements IDocumentManagement {
 
   async initialize(): Promise<void> {
     // Connectivity check
-    await (
-      this.client as unknown as { ping: { query: () => Promise<unknown> } }
-    ).ping.query();
+    try {
+      await (
+        this.client as unknown as { ping: { query: () => Promise<unknown> } }
+      ).ping.query();
+    } catch (error) {
+      logger.debug(
+        `Failed to connect to DocumentManagement server at ${this.baseUrl}: ${error}`,
+      );
+      throw new Error(
+        `Failed to connect to server at ${this.baseUrl}.\n\nPlease verify the server URL includes the correct port (default 8080) and ends with '/api' (e.g., 'http://localhost:8080/api').`,
+      );
+    }
   }
 
   async shutdown(): Promise<void> {

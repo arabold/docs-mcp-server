@@ -18,3 +18,8 @@ dist
 README.md
 ARCHITECTURE.md
 CHANGELOG.md
+AGENTS.md
+docker-compose.yml
+commitlint.config.js
+test
+docs

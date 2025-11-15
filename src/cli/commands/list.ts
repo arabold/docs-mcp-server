@@ -41,7 +41,7 @@ export function createListCommand(program: Command): Command {
     .description("List all available libraries and their versions")
     .option(
       "--server-url <url>",
-      "URL of external pipeline worker RPC (e.g., http://localhost:6280/api)",
+      "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
     )
     .action(listAction);
 }
