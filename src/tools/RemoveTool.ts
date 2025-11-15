@@ -42,27 +42,8 @@ export class RemoveTool {
     logger.info(`🗑️ Removing library: ${library}${version ? `@${version}` : ""}`);
 
     try {
-      // This will throw if no matching library or version is found
-      const result = await this.documentManagementService.findBestVersion(
-        library,
-        version,
-      );
-
-      // For removal, we need an exact match of the requested version
-      // Handle the case where version is undefined/empty (unversioned) and bestMatch is null
-      const normalizedVersion = version && version.trim() !== "" ? version : null;
-      const versionExists =
-        result.bestMatch === normalizedVersion ||
-        (result.hasUnversioned && normalizedVersion === null);
-      if (!versionExists) {
-        const versionText = normalizedVersion
-          ? `Version ${normalizedVersion}`
-          : "Version";
-        throw new ToolError(
-          `${versionText} not found for library ${library}. Cannot remove non-existent version.`,
-          this.constructor.name,
-        );
-      }
+      // Validate that the library exists before attempting removal
+      await this.documentManagementService.validateLibraryExists(library);
 
       // Abort any QUEUED or RUNNING job for this library+version
       const allJobs = await this.pipeline.getJobs();
