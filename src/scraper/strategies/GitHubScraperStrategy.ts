@@ -44,6 +44,12 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
   private readonly repoProcessor = new GitHubRepoProcessor();
 
   canHandle(url: string): boolean {
+    // Handle legacy github-file:// protocol URLs (no longer supported)
+    // These will be processed and marked as NOT_FOUND to trigger cleanup
+    if (url.startsWith("github-file://")) {
+      return true;
+    }
+
     try {
       const parsedUrl = new URL(url);
       const { hostname, pathname } = parsedUrl;
@@ -340,6 +346,18 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     options: ScraperOptions,
     signal?: AbortSignal,
   ): Promise<ProcessItemResult> {
+    // Handle legacy github-file:// URLs - treat as deleted/not found
+    if (item.url.startsWith("github-file://")) {
+      logger.info(
+        `🗑️  Legacy github-file:// URL detected, marking as deleted: ${item.url}`,
+      );
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.NOT_FOUND,
+      };
+    }
+
     // Delegate to wiki processor for wiki URLs
     // Use precise pattern matching: /owner/repo/wiki or /owner/repo/wiki/
     try {

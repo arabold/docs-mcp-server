@@ -53,6 +53,12 @@ describe("GitHubScraperStrategy", () => {
       expect(strategy.canHandle("https://example.com")).toBe(false);
     });
 
+    it("should handle legacy github-file:// URLs", () => {
+      expect(strategy.canHandle("github-file://src/cli/types.ts")).toBe(true);
+      expect(strategy.canHandle("github-file://README.md")).toBe(true);
+      expect(strategy.canHandle("github-file://src/index.js")).toBe(true);
+    });
+
     it("should not handle GitHub wiki URLs", () => {
       expect(strategy.canHandle("https://github.com/owner/repo/wiki")).toBe(false);
       expect(strategy.canHandle("https://github.com/owner/repo/wiki/Page")).toBe(false);
@@ -397,6 +403,25 @@ describe("GitHubScraperStrategy", () => {
       expect(result.status).toBe(FetchStatus.SUCCESS);
       // Strict scoping: blob URL should index ONLY that file, not discover wiki
       expect(result.links).toEqual(["https://github.com/owner/repo/blob/main/README.md"]);
+    });
+
+    it("should mark legacy github-file:// URLs as NOT_FOUND", async () => {
+      const item = { url: "github-file://src/cli/types.ts", depth: 1 };
+      const result = await strategy.processItem(item, options);
+
+      expect(result.status).toBe(FetchStatus.NOT_FOUND);
+      expect(result.links).toEqual([]);
+      expect(result.url).toBe("github-file://src/cli/types.ts");
+    });
+
+    it("should mark legacy github-file:// URLs as NOT_FOUND at any depth", async () => {
+      const item0 = { url: "github-file://README.md", depth: 0 };
+      const result0 = await strategy.processItem(item0, options);
+      expect(result0.status).toBe(FetchStatus.NOT_FOUND);
+
+      const item2 = { url: "github-file://src/index.js", depth: 2 };
+      const result2 = await strategy.processItem(item2, options);
+      expect(result2.status).toBe(FetchStatus.NOT_FOUND);
     });
   });
 });
