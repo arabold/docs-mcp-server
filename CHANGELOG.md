@@ -1,3 +1,30 @@
+# [1.27.0](https://github.com/arabold/docs-mcp-server/compare/v1.26.2...v1.27.0) (2025-11-15)
+
+
+### Bug Fixes
+
+* **cli:** update server URL in CLI commands to reflect default port ([4689d5e](https://github.com/arabold/docs-mcp-server/commit/4689d5eb96d5410472b7d98a629dbb5a9461ecb2))
+* **remove:** fix deletion of libraries and versions ([a2f90fb](https://github.com/arabold/docs-mcp-server/commit/a2f90fb8cec918f9055ed4fe3ea1735ff370d592)), closes [#257](https://github.com/arabold/docs-mcp-server/issues/257)
+* **scraper:** enhance refresh mode handling and page processing ([abda63a](https://github.com/arabold/docs-mcp-server/commit/abda63adba3c9176e9b53cfbaf2d729c2c89db7f))
+* **scraper:** implement include/exclude patterns for link processing in WebScraperStrategy ([91a0be3](https://github.com/arabold/docs-mcp-server/commit/91a0be39d2e128ff0271f9619ef53388e1705622))
+* **tests:** correct setupFiles path in vitest configuration ([5dfe222](https://github.com/arabold/docs-mcp-server/commit/5dfe2221091334780c7523c605e987d5a91430d3))
+
+
+### Features
+
+* add ETag and lastModified support for caching in fetchers and strategies ([faa2508](https://github.com/arabold/docs-mcp-server/commit/faa2508d1c0849175a3eb7d4609d28335360e898))
+* **chunking:** improved chunking strategy to favor larger chunks with better context ([697d92d](https://github.com/arabold/docs-mcp-server/commit/697d92d118b6d095a933fa30295bf0f54d7a1686))
+* **ci:** add type checking script and tsconfig for tests ([9fc6cf9](https://github.com/arabold/docs-mcp-server/commit/9fc6cf9a46b7e89d088be62cfdc98e79d4a9a0d7))
+* enable source maps for better error reporting ([90fcf1f](https://github.com/arabold/docs-mcp-server/commit/90fcf1fa0cee3e4785854d267af5c96c36aeebfa))
+* implement refresh job functionality ([ba3a72e](https://github.com/arabold/docs-mcp-server/commit/ba3a72e2a27118cb4eb3e7c6a6877b21284ed32d))
+* **pipeline:** enhance enqueueRefreshJob to handle incomplete versions with full re-scrape ([838af52](https://github.com/arabold/docs-mcp-server/commit/838af52169c9dd05197b10ff42eeb88b5c9229b4))
+* **refresh:** improve depth handling and backfill logic in migrations ([b82dc27](https://github.com/arabold/docs-mcp-server/commit/b82dc274b4de5195f8de73a749291c0be6a8fafd))
+* **schema:** add database schema comparison tool for migration validation ([e8410f3](https://github.com/arabold/docs-mcp-server/commit/e8410f3a9410aa7bbda98c091b2cb5f55d1d0653))
+* **scraper:** add support for legacy github-file:// URLs and mark them as NOT_FOUND ([2d18b69](https://github.com/arabold/docs-mcp-server/commit/2d18b69d3c38fa0804a28202e0a3e3db24dde673))
+* **scraper:** enhance URL matching to support full URL and pathname patterns ([158eda1](https://github.com/arabold/docs-mcp-server/commit/158eda1c26c286796bdd02074343c86421efea36))
+* **scraper:** implement efficient version refresh using ETags ([93a6ee3](https://github.com/arabold/docs-mcp-server/commit/93a6ee33ab0e787bd0a880ffd30d1456f49b9323))
+* update contentType handling across pipelines to reflect transformed formats ([b915bcf](https://github.com/arabold/docs-mcp-server/commit/b915bcf2c37df0cc9429582a66e773eb9d0e7416))
+
 ## [1.26.2](https://github.com/arabold/docs-mcp-server/compare/v1.26.1...v1.26.2) (2025-10-11)
 
 
