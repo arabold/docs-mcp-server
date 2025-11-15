@@ -47,7 +47,7 @@ export async function registerWorkerService(pipeline: IPipeline): Promise<void> 
     },
     onJobError: async (job, error, document) => {
       logger.warn(
-        `⚠️ Job ${job.id} error ${document ? `on document ${document.metadata.url}` : ""}: ${error.message}`,
+        `⚠️ Job ${job.id} error ${document ? `on document ${document.url}` : ""}: ${error.message}`,
       );
 
       // Use PostHog's native error tracking instead of custom events

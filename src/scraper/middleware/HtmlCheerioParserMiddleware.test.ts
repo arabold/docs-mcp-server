@@ -38,7 +38,6 @@ vi.mock("cheerio", () => {
 });
 
 // Suppress logger output during tests
-vi.mock("../../utils/logger");
 
 // Import cheerio after mocking
 import * as cheerio from "cheerio";
@@ -64,8 +63,8 @@ const createMockContext = (
 ): MiddlewareContext => {
   return {
     content: htmlContent,
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: { ...createMockScraperOptions(source), ...options },

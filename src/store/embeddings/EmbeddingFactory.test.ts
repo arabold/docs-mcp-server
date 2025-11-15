@@ -8,7 +8,6 @@ import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFacto
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Suppress logger output during tests
-vi.mock("../../utils/logger");
 
 // Mock process.env for each test
 const originalEnv = process.env;

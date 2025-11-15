@@ -7,14 +7,11 @@ import {
   type MockedObject,
   vi,
 } from "vitest";
-import type { ContentFetcher, RawContent } from "../fetcher/types";
+import { type ContentFetcher, FetchStatus, type RawContent } from "../fetcher/types";
 import type { SandboxExecutionOptions, SandboxExecutionResult } from "../utils/sandbox";
 import { executeJsInSandbox } from "../utils/sandbox";
 import { HtmlJsExecutorMiddleware } from "./HtmlJsExecutorMiddleware";
 import type { MiddlewareContext } from "./types";
-
-// Mock the logger
-vi.mock("../../../utils/logger");
 
 // Mock the sandbox utility
 vi.mock("../utils/sandbox");
@@ -37,7 +34,7 @@ describe("HtmlJsExecutorMiddleware", () => {
     mockContext = {
       source: "http://example.com",
       content: "", // Will be set in tests
-      metadata: {},
+      contentType: "text/html",
       links: [],
       errors: [],
       options: {
@@ -136,6 +133,7 @@ describe("HtmlJsExecutorMiddleware", () => {
       content: Buffer.from(mockScriptContent),
       mimeType: "application/javascript",
       source: "http://example.com/ext.js",
+      status: FetchStatus.SUCCESS,
     };
     mockFetcher.fetch.mockResolvedValue(mockRawContent);
 
@@ -192,6 +190,7 @@ describe("HtmlJsExecutorMiddleware", () => {
       content: "body { color: red; }",
       mimeType: "text/css", // Incorrect MIME type
       source: "http://example.com/style.css",
+      status: FetchStatus.SUCCESS,
     };
     mockFetcher.fetch.mockResolvedValue(mockRawContent);
 

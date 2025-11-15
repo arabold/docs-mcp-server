@@ -1,17 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RawContent } from "../fetcher/types";
+import { beforeEach, describe, expect, it } from "vitest";
+import { FetchStatus, type RawContent } from "../fetcher/types";
 import { ScrapeMode } from "../types";
 import { HtmlPipeline } from "./HtmlPipeline";
-
-// Mock logger
-vi.mock("../../utils/logger", () => ({
-  logger: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-}));
 
 describe("HtmlPipeline charset integration", () => {
   let pipeline: HtmlPipeline;
@@ -41,6 +31,7 @@ describe("HtmlPipeline charset integration", () => {
       mimeType: "text/html",
       charset: "utf-8", // Wrong charset from HTTP header
       source: "https://example.com/test.html",
+      status: FetchStatus.SUCCESS,
     };
 
     const result = await pipeline.process(rawContent, {
@@ -82,6 +73,7 @@ describe("HtmlPipeline charset integration", () => {
       mimeType: "text/html",
       charset: "iso-8859-1", // Correct charset from HTTP header
       source: "https://example.com/test.html",
+      status: FetchStatus.SUCCESS,
     };
 
     const result = await pipeline.process(rawContent, {
@@ -121,6 +113,7 @@ describe("HtmlPipeline charset integration", () => {
       mimeType: "text/html",
       // No charset information
       source: "https://example.com/test.html",
+      status: FetchStatus.SUCCESS,
     };
 
     const result = await pipeline.process(rawContent, {

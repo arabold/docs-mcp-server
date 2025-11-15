@@ -52,7 +52,7 @@ export function createFindVersionCommand(program: Command): Command {
     .option("-v, --version <string>", "Pattern to match (optional, supports ranges)")
     .option(
       "--server-url <url>",
-      "URL of external pipeline worker RPC (e.g., http://localhost:6280/api)",
+      "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
     )
     .action(findVersionAction);
 }

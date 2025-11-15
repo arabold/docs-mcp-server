@@ -69,4 +69,4 @@ ENV PORT=6280
 ENV HOST=0.0.0.0
 
 # Set the command to run the application
-ENTRYPOINT ["node", "dist/index.js"]
+ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]

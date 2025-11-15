@@ -3,7 +3,12 @@ import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
-import type { ContentFetcher, FetchOptions, RawContent } from "./types";
+import {
+  type ContentFetcher,
+  type FetchOptions,
+  FetchStatus,
+  type RawContent,
+} from "./types";
 
 /**
  * Fetches content using a headless browser (Playwright).
@@ -72,12 +77,17 @@ export class BrowserFetcher implements ContentFetcher {
       const contentType = response.headers()["content-type"] || "text/html";
       const { mimeType, charset } = MimeTypeUtils.parseContentType(contentType);
 
+      // Extract ETag header for caching
+      const etag = response.headers().etag;
+
       return {
         content: contentBuffer,
         mimeType,
         charset,
         encoding: undefined, // Browser handles encoding automatically
         source: finalUrl,
+        etag,
+        status: FetchStatus.SUCCESS,
       } satisfies RawContent;
     } catch (error) {
       if (options?.signal?.aborted) {

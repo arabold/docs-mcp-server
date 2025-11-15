@@ -24,8 +24,7 @@ export namespace PipelineFactory {
   // Overload: Remote pipeline client (out-of-process worker)
   export async function createPipeline(
     docService: undefined,
-    options: Required<Pick<PipelineOptions, "serverUrl">> &
-      Omit<PipelineOptions, "serverUrl">,
+    options: PipelineOptions & { serverUrl: string },
   ): Promise<PipelineClient>;
   // Implementation
   export async function createPipeline(

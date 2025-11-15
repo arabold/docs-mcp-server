@@ -19,8 +19,8 @@ describe("HtmlNormalizationMiddleware", () => {
     };
     return {
       content: htmlContent,
+      contentType: "text/html",
       source,
-      metadata: {},
       links: [],
       errors: [],
       options,
@@ -37,8 +37,8 @@ describe("HtmlNormalizationMiddleware", () => {
       };
       const context: MiddlewareContext = {
         content: "<p>test</p>",
+        contentType: "text/html",
         source: "https://example.com",
-        metadata: {},
         links: [],
         errors: [],
         options,

@@ -1,7 +1,7 @@
 import type { ProgressCallback } from "../types";
 import { ScraperError } from "../utils/errors";
 import type { ScraperRegistry } from "./ScraperRegistry";
-import type { ScraperOptions, ScraperProgress } from "./types";
+import type { ScraperOptions, ScraperProgressEvent } from "./types";
 
 /**
  * Orchestrates document scraping operations using registered scraping strategies.
@@ -20,7 +20,7 @@ export class ScraperService {
    */
   async scrape(
     options: ScraperOptions,
-    progressCallback: ProgressCallback<ScraperProgress>,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add optional signal parameter
   ): Promise<void> {
     // Find strategy for this URL

@@ -1,13 +1,11 @@
-import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
 import { AutoDetectFetcher } from "../fetcher";
-import type { RawContent } from "../fetcher/types";
+import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
-import type { ContentPipeline, ProcessedContent } from "../pipelines/types";
-import type { ScraperOptions, ScraperProgress } from "../types";
-import { isInScope } from "../utils/scope";
-import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
+import type { ContentPipeline, PipelineResult } from "../pipelines/types";
+import type { QueueItem, ScraperOptions } from "../types";
+import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 export interface WebScraperStrategyOptions {
   urlNormalizerOptions?: UrlNormalizerOptions;
@@ -47,26 +45,45 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   protected override async processItem(
     item: QueueItem,
     options: ScraperOptions,
-    _progressCallback?: ProgressCallback<ScraperProgress>, // Base class passes it, but not used here
-    signal?: AbortSignal, // Add signal
-  ): Promise<{ document?: Document; links?: string[]; finalUrl?: string }> {
+    signal?: AbortSignal,
+  ): Promise<ProcessItemResult> {
     const { url } = item;
 
     try {
-      // Define fetch options, passing signal, followRedirects, and headers
+      // Log when processing with ETag for conditional requests
+      if (item.etag) {
+        logger.debug(`Processing ${url} with stored ETag: ${item.etag}`);
+      }
+
+      // Define fetch options, passing signal, followRedirects, headers, and etag
       const fetchOptions = {
         signal,
         followRedirects: options.followRedirects,
         headers: options.headers, // Forward custom headers
+        etag: item.etag, // Pass ETag for conditional requests
       };
 
       // Use AutoDetectFetcher which handles fallbacks automatically
       const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
 
+      logger.debug(
+        `Fetch result for ${url}: status=${rawContent.status}, etag=${rawContent.etag || "none"}`,
+      );
+
+      // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
+      // Use the final URL from rawContent.source (which may differ due to redirects)
+      if (rawContent.status !== FetchStatus.SUCCESS) {
+        logger.debug(`Skipping pipeline for ${url} due to status: ${rawContent.status}`);
+        return { url: rawContent.source, links: [], status: rawContent.status };
+      }
+
       // --- Start Pipeline Processing ---
-      let processed: ProcessedContent | undefined;
+      let processed: PipelineResult | undefined;
       for (const pipeline of this.pipelines) {
-        if (pipeline.canProcess(rawContent)) {
+        const contentBuffer = Buffer.isBuffer(rawContent.content)
+          ? rawContent.content
+          : Buffer.from(rawContent.content);
+        if (pipeline.canProcess(rawContent.mimeType || "text/plain", contentBuffer)) {
           logger.debug(
             `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
           );
@@ -79,11 +96,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for URL ${url}. Skipping processing.`,
         );
-        return { document: undefined, links: [] };
+        return { url: rawContent.source, links: [], status: FetchStatus.SUCCESS };
       }
 
       // Log errors from pipeline
-      for (const err of processed.errors) {
+      for (const err of processed.errors ?? []) {
         logger.warn(`⚠️  Processing error for ${url}: ${err.message}`);
       }
 
@@ -92,46 +109,45 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  No processable content found for ${url} after pipeline execution.`,
         );
-        return { document: undefined, links: processed.links };
+        return {
+          url: rawContent.source,
+          links: processed.links,
+          status: FetchStatus.SUCCESS,
+        };
       }
 
-      // Determine base for scope filtering:
-      // For depth 0 (initial page) use the final fetched URL (rawContent.source) so protocol/host redirects don't drop links.
-      // For deeper pages, use canonicalBaseUrl (set after first page) or fallback to original.
-      const baseUrl =
-        item.depth === 0
-          ? new URL(rawContent.source)
-          : (this.canonicalBaseUrl ?? new URL(options.url));
+      // Update canonical base URL from the first page's final URL (after redirects)
+      if (item.depth === 0) {
+        this.canonicalBaseUrl = new URL(rawContent.source);
+      }
 
-      const filteredLinks = processed.links.filter((link) => {
-        try {
-          const targetUrl = new URL(link);
-          const scope = options.scope || "subpages";
-          return (
-            isInScope(baseUrl, targetUrl, scope) &&
-            (!this.shouldFollowLinkFn || this.shouldFollowLinkFn(baseUrl, targetUrl))
-          );
-        } catch {
-          return false;
-        }
-      });
+      const filteredLinks =
+        processed.links?.filter((link) => {
+          try {
+            const targetUrl = new URL(link);
+            // Use the base class's shouldProcessUrl which handles scope + include/exclude patterns
+            if (!this.shouldProcessUrl(targetUrl.href, options)) {
+              return false;
+            }
+            // Apply optional custom filter function if provided
+            if (this.shouldFollowLinkFn) {
+              const baseUrl = this.canonicalBaseUrl ?? new URL(options.url);
+              return this.shouldFollowLinkFn(baseUrl, targetUrl);
+            }
+            return true;
+          } catch {
+            return false;
+          }
+        }) ?? [];
 
       return {
-        document: {
-          content: processed.textContent,
-          metadata: {
-            url,
-            title:
-              typeof processed.metadata.title === "string"
-                ? processed.metadata.title
-                : "Untitled",
-            library: options.library,
-            version: options.version,
-            ...processed.metadata,
-          },
-        } satisfies Document,
+        url: rawContent.source,
+        etag: rawContent.etag,
+        lastModified: rawContent.lastModified,
+        contentType: processed.contentType || rawContent.mimeType,
+        content: processed,
         links: filteredLinks,
-        finalUrl: rawContent.source,
+        status: FetchStatus.SUCCESS,
       };
     } catch (error) {
       // Log fetch errors or pipeline execution errors (if run throws)

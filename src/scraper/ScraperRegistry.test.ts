@@ -6,8 +6,6 @@ import { LocalFileStrategy } from "./strategies/LocalFileStrategy";
 import { NpmScraperStrategy } from "./strategies/NpmScraperStrategy";
 import { PyPiScraperStrategy } from "./strategies/PyPiScraperStrategy";
 
-vi.mock("../utils/logger");
-
 describe("ScraperRegistry", () => {
   it("should throw error for unknown URLs", () => {
     const registry = new ScraperRegistry();

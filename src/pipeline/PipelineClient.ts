@@ -68,7 +68,7 @@ export class PipelineClient implements IPipeline {
     logger.debug("PipelineClient stopped");
   }
 
-  async enqueueJob(
+  async enqueueScrapeJob(
     library: string,
     version: string | undefined | null,
     options: ScraperOptions,
@@ -78,7 +78,7 @@ export class PipelineClient implements IPipeline {
         typeof version === "string" && version.trim().length === 0
           ? null
           : (version ?? null);
-      const result = await this.client.enqueueJob.mutate({
+      const result = await this.client.enqueueScrapeJob.mutate({
         library,
         version: normalizedVersion,
         options,
@@ -88,6 +88,28 @@ export class PipelineClient implements IPipeline {
     } catch (error) {
       throw new Error(
         `Failed to enqueue job: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async enqueueRefreshJob(
+    library: string,
+    version: string | undefined | null,
+  ): Promise<string> {
+    try {
+      const normalizedVersion =
+        typeof version === "string" && version.trim().length === 0
+          ? null
+          : (version ?? null);
+      const result = await this.client.enqueueRefreshJob.mutate({
+        library,
+        version: normalizedVersion,
+      });
+      logger.debug(`Refresh job ${result.jobId} enqueued successfully`);
+      return result.jobId;
+    } catch (error) {
+      throw new Error(
+        `Failed to enqueue refresh job: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

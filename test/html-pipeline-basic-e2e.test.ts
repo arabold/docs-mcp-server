@@ -147,7 +147,8 @@ describe("HTML Pipeline Basic Tests", () => {
       expect(result).toBeTruthy();
       expect(typeof result).toBe("string");
       // The response should include our custom header
-      expect(result).toContain("X-Test-Header");
+      // Note: The result is markdown-converted JSON, so check for both key and value
+      expect(result.toLowerCase()).toContain("x-test-header");
       expect(result).toContain("test-value");
     }, 30000);
   });

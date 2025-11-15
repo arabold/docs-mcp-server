@@ -2,7 +2,7 @@ import type { AutoDetectFetcher, RawContent } from "../scraper/fetcher";
 import { HtmlPipeline } from "../scraper/pipelines/HtmlPipeline";
 import { MarkdownPipeline } from "../scraper/pipelines/MarkdownPipeline";
 import { TextPipeline } from "../scraper/pipelines/TextPipeline";
-import type { ContentPipeline, ProcessedContent } from "../scraper/pipelines/types";
+import type { ContentPipeline, PipelineResult } from "../scraper/pipelines/types";
 import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
 import { resolveCharset } from "../scraper/utils/charset";
@@ -96,9 +96,9 @@ export class FetchUrlTool {
 
       logger.info("🔄 Processing content...");
 
-      let processed: Awaited<ProcessedContent> | undefined;
+      let processed: Awaited<PipelineResult> | undefined;
       for (const pipeline of this.pipelines) {
-        if (pipeline.canProcess(rawContent)) {
+        if (pipeline.canProcess(rawContent.mimeType, rawContent.content)) {
           processed = await pipeline.process(
             rawContent,
             {
@@ -135,7 +135,7 @@ export class FetchUrlTool {
         return contentString;
       }
 
-      for (const err of processed.errors) {
+      for (const err of processed.errors ?? []) {
         logger.warn(`⚠️  Processing error for ${url}: ${err.message}`);
       }
 

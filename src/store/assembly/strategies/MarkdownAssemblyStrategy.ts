@@ -1,6 +1,6 @@
-import type { Document } from "@langchain/core/documents";
 import { MimeTypeUtils } from "../../../utils/mimeTypeUtils";
 import type { DocumentStore } from "../../DocumentStore";
+import type { DbPageChunk } from "../../types";
 import type { ContentAssemblyStrategy } from "../types";
 
 const CHILD_LIMIT = 3;
@@ -53,9 +53,9 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
   async selectChunks(
     library: string,
     version: string,
-    initialChunks: Document[],
+    initialChunks: DbPageChunk[],
     documentStore: DocumentStore,
-  ): Promise<Document[]> {
+  ): Promise<DbPageChunk[]> {
     const allChunkIds = new Set<string>();
 
     // Process all initial chunks in parallel to gather related chunk IDs
@@ -82,8 +82,8 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
   /**
    * Assembles chunks using simple "\n\n" joining (current behavior).
    */
-  assembleContent(chunks: Document[]): string {
-    return chunks.map((chunk) => chunk.pageContent).join("\n\n");
+  assembleContent(chunks: DbPageChunk[]): string {
+    return chunks.map((chunk) => chunk.content).join("\n\n");
   }
 
   /**
@@ -93,10 +93,10 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
   private async getRelatedChunkIds(
     library: string,
     version: string,
-    doc: Document,
+    doc: DbPageChunk,
     documentStore: DocumentStore,
   ): Promise<Set<string>> {
-    const id = doc.id as string;
+    const id = doc.id;
     const relatedIds = new Set<string>();
 
     // Add the original chunk
@@ -105,7 +105,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
     // Parent
     const parent = await documentStore.findParentChunk(library, version, id);
     if (parent) {
-      relatedIds.add(parent.id as string);
+      relatedIds.add(parent.id);
     }
 
     // Preceding Siblings
@@ -116,7 +116,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       PRECEDING_SIBLINGS_LIMIT,
     );
     for (const sib of precedingSiblings) {
-      relatedIds.add(sib.id as string);
+      relatedIds.add(sib.id);
     }
 
     // Child Chunks
@@ -127,7 +127,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       CHILD_LIMIT,
     );
     for (const child of childChunks) {
-      relatedIds.add(child.id as string);
+      relatedIds.add(child.id);
     }
 
     // Subsequent Siblings
@@ -138,7 +138,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       SUBSEQUENT_SIBLINGS_LIMIT,
     );
     for (const sib of subsequentSiblings) {
-      relatedIds.add(sib.id as string);
+      relatedIds.add(sib.id);
     }
 
     return relatedIds;

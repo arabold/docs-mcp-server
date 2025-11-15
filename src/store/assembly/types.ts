@@ -1,5 +1,5 @@
-import type { Document } from "@langchain/core/documents";
 import type { DocumentStore } from "../DocumentStore";
+import type { DbPageChunk } from "../types";
 
 /**
  * Strategy interface for content-type-aware search result assembly.
@@ -28,9 +28,9 @@ export interface ContentAssemblyStrategy {
   selectChunks(
     library: string,
     version: string,
-    initialChunks: Document[],
+    initialChunks: DbPageChunk[],
     documentStore: DocumentStore,
-  ): Promise<Document[]>;
+  ): Promise<DbPageChunk[]>;
 
   /**
    * Assembles the selected chunks into final content.
@@ -38,7 +38,7 @@ export interface ContentAssemblyStrategy {
    * @param chunks The chunks to assemble (already in proper order)
    * @returns The assembled content string
    */
-  assembleContent(chunks: Document[]): string;
+  assembleContent(chunks: DbPageChunk[]): string;
 }
 
 /**
@@ -46,7 +46,7 @@ export interface ContentAssemblyStrategy {
  */
 export interface ContentAssemblyContext {
   /** The chunks that matched the search query */
-  initialChunks: Document[];
+  initialChunks: DbPageChunk[];
   /** MIME type of the content (from first chunk metadata) */
   mimeType?: string;
   /** Document URL for grouping */
@@ -60,7 +60,7 @@ export interface ContentAssemblyContext {
  */
 export interface ChunkSelectionResult {
   /** Selected chunks in proper order for assembly */
-  chunks: Document[];
+  chunks: DbPageChunk[];
   /** Strategy that was used for selection */
   strategy: string;
   /** Any warnings or notes about the selection process */

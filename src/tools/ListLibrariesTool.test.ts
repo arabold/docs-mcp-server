@@ -4,7 +4,6 @@ import { ListLibrariesTool } from "./ListLibrariesTool";
 
 // Mock dependencies
 vi.mock("../store/DocumentManagementService");
-vi.mock("../utils/logger");
 
 describe("ListLibrariesTool", () => {
   let mockDocService: Partial<DocumentManagementService>;

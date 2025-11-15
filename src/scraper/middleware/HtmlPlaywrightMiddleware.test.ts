@@ -17,7 +17,6 @@ import {
 import type { MiddlewareContext } from "./types";
 
 // Suppress logger output during tests
-vi.mock("../../../utils/logger");
 
 // Mock playwright using factory functions
 vi.mock("playwright", async (importOriginal) =>
@@ -52,8 +51,8 @@ const createPipelineTestContext = (
   const fullOptions = { ...createMockScraperOptions(source), ...options };
   return {
     content,
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: fullOptions,

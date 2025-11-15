@@ -12,7 +12,7 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "../middlewar
 import type { ScraperOptions } from "../types";
 import { convertToString } from "../utils/buffer";
 import { BasePipeline } from "./BasePipeline";
-import type { ProcessedContent } from "./types";
+import type { PipelineResult } from "./types";
 
 /**
  * Pipeline for processing Markdown content using middleware and semantic splitting with size optimization.
@@ -45,22 +45,22 @@ export class MarkdownPipeline extends BasePipeline {
     );
   }
 
-  canProcess(rawContent: RawContent): boolean {
-    if (!rawContent.mimeType) return false;
-    return MimeTypeUtils.isMarkdown(rawContent.mimeType);
+  canProcess(mimeType: string): boolean {
+    if (!mimeType) return false;
+    return MimeTypeUtils.isMarkdown(mimeType);
   }
 
   async process(
     rawContent: RawContent,
     options: ScraperOptions,
     fetcher?: ContentFetcher,
-  ): Promise<ProcessedContent> {
+  ): Promise<PipelineResult> {
     const contentString = convertToString(rawContent.content, rawContent.charset);
 
     const context: MiddlewareContext = {
+      contentType: rawContent.mimeType || "text/markdown",
       content: contentString,
       source: rawContent.source,
-      metadata: {},
       links: [],
       errors: [],
       options,
@@ -77,8 +77,9 @@ export class MarkdownPipeline extends BasePipeline {
     );
 
     return {
+      title: context.title,
+      contentType: context.contentType,
       textContent: typeof context.content === "string" ? context.content : "",
-      metadata: context.metadata,
       links: context.links,
       errors: context.errors,
       chunks,

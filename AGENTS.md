@@ -1,83 +1,171 @@
-# Custom Instructions
+# Agent Instructions for docs-mcp-server
 
-- The repository for this project is located on GitHub at `arabold/docs-mcp-server`.
-- You must read the `README.md` to understand the project structure and setup.
-- You must read the `ARCHITECTURE.md` file before making changes across multiple services.
-- You must follow DRY, KISS, YAGNI, and SOLID principles.
-- You must use the latest version of the programming language and libraries.
-- Prefer the simplest solution.
-- Never commit secrets, credentials, or sensitive data to the repository.
+## Repository Context
+
+- Repository: `arabold/docs-mcp-server`
+- Read `README.md` for project structure and setup
+- Read `ARCHITECTURE.md` before making changes across multiple services
+- Follow DRY, KISS, YAGNI, and SOLID principles
+- Use latest stable versions of programming language and libraries
+- Prefer the simplest solution that meets requirements
+- Never commit secrets, credentials, or sensitive data
 
 ## Documentation
 
-- The `README.md` targets end users that utilize the library for the first time. It should primarily cover prerequisites, installation, configuration, first start, trouble shooting.
-- The `ARCHITECTURE.md` targets developers making active changes to the code. It should give a high level overview of the architecture of the library, a feature list, and then reference individual feature documentations in the docs/ folder.
-- Write in present tense, describing how the system currently works
-- Focus on what the system does, not what it doesn't do or used to do
-- Avoid discussing past problems, bugs, or alternative approaches unless directly relevant to understanding the current design
-- Use declarative statements rather than explanatory narratives
-- Don't include "Important" callouts or emphasis unless documenting critical constraints
-- Avoid problem/solution framing - just describe the current behavior and its rationale
-- Keep examples focused on illustrating current functionality, not contrasting with previous versions
-- Do not create new documentation files unless explicitly asked to. Instead update existing files or create new sections as needed.
+### File Targets
+
+- `README.md` targets end users: prerequisites, installation, configuration, first start, troubleshooting
+- `ARCHITECTURE.md` targets active developers: high-level architecture, feature list, references to `docs/` folder
+- `docs/` folder provides deep dives into specific features, subsystems, or technical concepts
+
+### Writing Principles
+
+- Use present tense to describe current system behavior
+- Use declarative statements, not explanatory narratives
+- Describe what the system does, not what it doesn't do or used to do
+- Avoid problem/solution framing - describe current behavior and rationale
+- Omit "Important" callouts unless documenting critical constraints or safety issues
+- Keep examples focused on current functionality, not historical comparisons
+- Update existing documentation or add sections; only create new files when explicitly requested
+
+### Structure Guidelines
+
+- Start with high-level overview before details
+- Use clear, descriptive section headers
+- Progress from concepts to specifics (allows readers to stop when satisfied)
+- Use tables for comparing options, statuses, or behaviors
+- Include Mermaid diagrams for workflows, state machines, or component relationships
+- Focus on high-level concepts and component relationships (use class/interface names when helpful, as they change less frequently than implementation details)
+- Explain architectural decisions with trade-offs
+- Avoid explaining source code implementation - use TSDoc comments in source files instead
 
 ### Source Code Documentation
 
-- Ensure each source file begins with a comment block summarizing its purpose and logic.
-- If no block exists, create one before editing.
-- After completing changes, update this block to reflect the changes.
-- Always make the comment block clear and concise.
+- Document source code with TSDoc comments (not in separate documentation files)
+- Each source file must begin with a comment block summarizing purpose and logic
+- Create the comment block before editing if it doesn't exist
+- Update the comment block after completing changes
+- Keep comment blocks clear and concise
 
-## Architecture
+## Architecture Documentation
 
-- Focus on system concepts and component relationships.
-- Put implementation details in source code.
-- Update `ARCHITECTURE.md` when the architecture changes.
-- Do not use special characters like braces in mermaid diagram titles or names. Quote them if necessary.
-- Do not use markdown in mermaid diagrams.
+- Focus on system concepts and component relationships
+- Place implementation details in source code, not architecture docs
+- Update `ARCHITECTURE.md` when architecture changes
+- In Mermaid diagrams:
+  - Avoid special characters (e.g., braces) in titles or names; quote if necessary
+  - Do not use markdown formatting
 
-## TypeScript
+## TypeScript Conventions
 
-- Install dependencies using `npm install` inside `apps/<service_name>` instead of adding them to the `package.json` file manually.
-- We're using Node.js 22.x, `vite-node` for running TypeScript files, and `vitest` for testing.
-- Prefer a specific type or `unknown` over `any`.
-- Do not use non-null assertions (`!`). Use optional chaining (`?.`) or nullish coalescing (`??`).
-- Follow `biome` for formatting and import order.
-- Always place `import` statements at the top of the file.
+### Dependencies and Tooling
 
-## Web UI
+- Install dependencies via `npm install` (not by manually editing `package.json`)
+- Runtime: Node.js 22.x
+- Execution: `vite-node` for running TypeScript files
+- Testing: `vitest`
 
-- Use AlpineJS for frontend components and TailwindCSS for styling.
-- Use TSX with kitajs for AlpineJS components.
-- Use HTMX for server-side interactions.
-- Avoid `{foo && <Bar />}` in TSX; use ternary expressions instead.
+### Type Safety
 
-## Logging
+- Prefer specific types or `unknown` over `any`
+- Avoid non-null assertions (`!`)
+- Use optional chaining (`?.`) and nullish coalescing (`??`)
 
-- Use `console.*` for CLI user output (results, direct feedback).
-- Use `logger.info/warn/error` for meaningful application events; prefix with a relevant emoji.
-- Use `logger.debug` for detailed developer/tracing logs; no emoji prefix.
-- Prefer `logger.debug` over `logger.info` for granular internal steps to reduce log verbosity.
+### Code Style
 
-## Testing
+- Follow `biome` for formatting and import order
+- Place all `import` statements at the top of files
 
-- Consider maintainability and efforts when writing tests.
-- Always create unit test files alongside the source file with `.test.ts` suffix.
-- Focus on high value, low effort tests first. Defer complex mocking, complex state management testing and concurrent processing unless explicitly requested by the user.
-- Always test the intended bevavior, not the implementation details.
-- Avoid timing sensitive tests unless absolutely necessary.
+## Web UI Stack
 
-## Git
+- Frontend components: AlpineJS
+- Styling: TailwindCSS
+- AlpineJS components: TSX with kitajs
+- Server-side interactions: HTMX
+- TSX pattern: Use ternary expressions (`{foo ? <Bar /> : null}`), not short-circuit evaluation (`{foo && <Bar />}`)
 
-- Branches must be created locally before pushing.
-- Branch names must be prefixed with type (`feature/`, `bugfix/`, `chore/`) and include the issue number if available (e.g., `feature/1234-description`).
-- All commit messages must use Conventional Commits (`feat:`, `fix:`, etc.).
-- Commit subject must be imperative mood and ≤72 characters.
-- If a commit body is present, add a blank line before it.
-- Commit body (for non-trivial changes) must explain what and why, not how.
-- Reference related issues in commit messages when relevant (e.g., `Closes #123`).
-- Do not include unrelated changes in a single commit.
-- Do not use vague or generic commit messages.
-- Pull request descriptions must summarize the what and why of all changes in the branch (not just a list of commits or the how).
-- Pull requests must target `main` unless specified otherwise.
-- When creating new GitHub issues, use built-in labels to categorize them (e.g., `bug`, `enhancement`, `documentation`) but avoid creating new labels unless explicitly asked to.
+## Logging Strategy
+
+### Output Channels
+
+- `console.*`: CLI user output (results, direct feedback to user)
+- `logger.info/warn/error`: Meaningful application events (prefix with relevant emoji)
+- `logger.debug`: Detailed developer/tracing logs (no emoji prefix)
+
+### Verbosity Control
+
+- Prefer `logger.debug` over `logger.info` for granular internal steps
+- Reduces default log verbosity while maintaining debugging capability
+
+## Testing Approach
+
+### Test Files
+
+- Unit tests: alongside source files with `.test.ts` suffix
+- E2E tests: in `test/` directory with `*-e2e.test.ts` suffix
+- Run: `npx vite-node <file>`
+
+### Testing Philosophy
+
+**Core Principle**: Test observable behavior (contracts), not implementation details.
+
+**Test the "what", not the "how"**:
+
+- ✅ "File change detection returns SUCCESS for modified files" (observable behavior)
+- ❌ "ETag generated from mtime timestamp" (implementation detail)
+
+**Prefer integration over isolation**:
+
+- E2E tests > Integration tests > Unit tests
+- Default to E2E for new features (highest confidence)
+- Add integration tests when components don't interact correctly
+- Add unit tests only for complex logic requiring detailed verification
+
+**What to test**:
+
+- Public contracts and API boundaries
+- Integration points between components
+- Complete workflows end-to-end
+- Critical business logic
+
+**What to skip**:
+
+- Private methods and internal state
+- Simple getters/setters and obvious mappings
+- Trivial parameter validation
+- Implementation-specific details (algorithms, data structures)
+
+**Quality markers**:
+
+- Fast: unit tests <100ms, suite <5s
+- Focused: one behavior per test
+- Maintainable: refactoring doesn't break tests unless behavior changes
+- Realistic: tests reflect actual usage patterns
+
+## Git Workflow
+
+### Branching
+
+- Create branches locally before pushing
+- Branch naming: `<type>/<issue-number>-<description>` (e.g., `feature/1234-add-refresh-logic`)
+- Types: `feature/`, `bugfix/`, `chore/`
+
+### Commits
+
+- Format: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`)
+- Subject: Imperative mood, ≤72 characters
+- Body: Separate from subject with blank line
+- Body content: Explain what and why, not how (for non-trivial changes)
+- Reference issues when relevant (e.g., `Closes #123`)
+- One logical change per commit (no unrelated changes)
+- Avoid vague messages (e.g., "fix bug", "update code")
+
+### Pull Requests
+
+- Description: Summarize what and why of all changes (not just commit list or how)
+- Target: `main` branch unless specified otherwise
+
+### Issues
+
+- Use built-in labels to categorize (e.g., `bug`, `enhancement`, `documentation`)
+- Avoid creating new labels unless explicitly requested

@@ -11,8 +11,8 @@ export default defineConfig({
       generateBundle(options, bundle) {
         const indexBundle = bundle['index.js'];
         if (indexBundle && indexBundle.type === 'chunk' && indexBundle.code) {
-          // Add shebang to the beginning of the file
-          indexBundle.code = '#!/usr/bin/env node\n' + indexBundle.code;
+          // Add shebang to the beginning of the file with source maps enabled
+          indexBundle.code = '#!/usr/bin/env node --enable-source-maps\n' + indexBundle.code;
         }
       },
       writeBundle(options) {
@@ -74,8 +74,16 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
-    testTimeout: 5000,
-    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-    exclude: ["test/**/*.test.ts"],
+    testTimeout: 30000, // 30 seconds for network operations
+    // Include both unit tests and e2e tests
+    include: [
+      "src/**/*.test.ts",
+      "src/**/*.test.tsx",
+      "test/**/*.test.ts",
+    ],
+    // Exclude live e2e tests by default (they can be run manually)
+    exclude: ["test/**/*-live-e2e.test.ts"],
+    // Use the e2e setup which includes both logger mock and mock server
+    setupFiles: ["test/setup-e2e.ts"],
   },
 });

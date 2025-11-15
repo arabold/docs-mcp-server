@@ -1,5 +1,5 @@
 import type { ScraperService } from "../scraper";
-import type { ScraperProgress } from "../scraper/types";
+import type { ScraperProgressEvent } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { logger } from "../utils/logger";
 import { CancellationError } from "./errors";
@@ -29,37 +29,29 @@ export class PipelineWorker {
     job: InternalPipelineJob,
     callbacks: PipelineManagerCallbacks,
   ): Promise<void> {
-    const {
-      id: jobId,
-      library,
-      version,
-      sourceUrl,
-      scraperOptions,
-      abortController,
-    } = job;
+    const { id: jobId, library, version, scraperOptions, abortController } = job;
     const signal = abortController.signal;
 
     logger.debug(`[${jobId}] Worker starting job for ${library}@${version}`);
 
     try {
       // Clear existing documents for this library/version before scraping
-      await this.store.removeAllDocuments(library, version);
-      logger.info(
-        `💾 Cleared store for ${library}@${version || "[no version]"} before scraping.`,
-      );
-
-      // Construct runtime options from job context + stored configuration
-      const runtimeOptions = {
-        url: sourceUrl ?? "",
-        library,
-        version,
-        ...scraperOptions,
-      };
+      // Skip this step for refresh operations to preserve existing data
+      if (!scraperOptions.isRefresh) {
+        await this.store.removeAllDocuments(library, version);
+        logger.info(
+          `💾 Cleared store for ${library}@${version || "[no version]"} before scraping.`,
+        );
+      } else {
+        logger.info(
+          `🔄 Refresh operation - preserving existing data for ${library}@${version || "[no version]"}.`,
+        );
+      }
 
       // --- Core Job Logic ---
       await this.scraperService.scrape(
-        runtimeOptions,
-        async (progress: ScraperProgress) => {
+        scraperOptions,
+        async (progress: ScraperProgressEvent) => {
           // Check for cancellation signal before processing each document
           if (signal.aborted) {
             throw new CancellationError("Job cancelled during scraping progress");
@@ -69,27 +61,55 @@ export class PipelineWorker {
           // Report progress via manager's callback (single source of truth)
           await callbacks.onJobProgress?.(job, progress);
 
-          if (progress.document) {
+          // Handle deletion events (404 during refresh or broken links)
+          if (progress.deleted && progress.pageId) {
             try {
-              await this.store.addDocument(library, version, {
-                pageContent: progress.document.content,
-                metadata: {
-                  ...progress.document.metadata,
-                  mimeType: progress.document.contentType, // Pass contentType as mimeType in metadata
-                },
-              });
+              await this.store.deletePage(progress.pageId);
               logger.debug(
-                `[${jobId}] Stored document: ${progress.document.metadata.url}`,
+                `[${jobId}] Deleted page ${progress.pageId}: ${progress.currentUrl}`,
               );
             } catch (docError) {
               logger.error(
-                `❌ [${jobId}] Failed to store document ${progress.document.metadata.url}: ${docError}`,
+                `❌ [${jobId}] Failed to delete page ${progress.pageId}: ${docError}`,
+              );
+
+              // Report the error and fail the job to ensure data integrity
+              const error =
+                docError instanceof Error ? docError : new Error(String(docError));
+              await callbacks.onJobError?.(job, error);
+              // Re-throw to fail the job - deletion failures indicate serious database issues
+              // and leaving orphaned documents would compromise index accuracy
+              throw error;
+            }
+          }
+          // Handle successful content processing
+          else if (progress.result) {
+            try {
+              // For refresh operations, delete old documents before adding new ones
+              if (progress.pageId) {
+                await this.store.deletePage(progress.pageId);
+                logger.debug(
+                  `[${jobId}] Refreshing page ${progress.pageId}: ${progress.currentUrl}`,
+                );
+              }
+
+              // Add the processed content to the store
+              await this.store.addScrapeResult(
+                library,
+                version,
+                progress.depth,
+                progress.result,
+              );
+              logger.debug(`[${jobId}] Stored processed content: ${progress.currentUrl}`);
+            } catch (docError) {
+              logger.error(
+                `❌ [${jobId}] Failed to process content ${progress.currentUrl}: ${docError}`,
               );
               // Report document-specific errors via manager's callback
               await callbacks.onJobError?.(
                 job,
                 docError instanceof Error ? docError : new Error(String(docError)),
-                progress.document,
+                progress.result,
               );
               // Decide if a single document error should fail the whole job
               // For now, we log and continue. To fail, re-throw here.

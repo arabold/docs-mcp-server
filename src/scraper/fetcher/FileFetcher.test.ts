@@ -4,7 +4,6 @@ import { ScraperError } from "../../utils/errors";
 import { FileFetcher } from "./FileFetcher";
 
 vi.mock("node:fs/promises", () => ({ default: vol.promises }));
-vi.mock("../../utils/logger");
 
 describe("FileFetcher", () => {
   beforeEach(() => {
@@ -43,79 +42,59 @@ describe("FileFetcher", () => {
     expect(result.mimeType).toBe("text/html");
   });
 
-  it("should detect source code MIME types correctly", async () => {
+  it.each([
+    [".ts", "text/x-typescript", "interface User { name: string; }"],
+    [".tsx", "text/x-tsx", "export const App = () => <div>Hello</div>;"],
+    [".py", "text/x-python", "def hello(): print('world')"],
+    [".go", "text/x-go", "package main\nfunc main() {}"],
+    [".rs", "text/x-rust", 'fn main() { println!("Hello"); }'],
+    [".kt", "text/x-kotlin", 'fun main() { println("Hello") }'],
+    [".rb", "text/x-ruby", "puts 'Hello world'"],
+    [".js", "text/javascript", "console.log('Hello');"],
+    [".css", "text/css", "body { margin: 0; }"],
+    [".json", "application/json", '{"name": "test"}'],
+    [".xml", "application/xml", "<config></config>"],
+    [".md", "text/markdown", "# Hello"],
+    [".sh", "text/x-shellscript", "#!/bin/bash\necho hello"],
+  ])("should detect %s files as %s", async (extension, expectedMimeType, content) => {
     const fetcher = new FileFetcher();
-    const files = {
-      "/code/app.ts": "interface User { name: string; }",
-      "/code/component.tsx": "export const App = () => <div>Hello</div>;",
-      "/code/script.py": "def hello(): print('world')",
-      "/code/main.go": "package main\nfunc main() {}",
-      "/code/lib.rs": 'fn main() { println!("Hello"); }',
-      "/code/App.kt": 'fun main() { println("Hello") }',
-      "/code/script.rb": "puts 'Hello world'",
-      "/code/index.js": "console.log('Hello');",
-      "/code/style.css": "body { margin: 0; }",
-      "/code/data.json": '{"name": "test"}',
-      "/code/config.xml": "<config></config>",
-      "/code/readme.md": "# Hello",
-      "/code/script.sh": "#!/bin/bash\necho hello",
-    };
+    const fileName = `/code/file${extension}`;
 
-    vol.fromJSON(files);
+    vol.fromJSON({
+      [fileName]: content,
+    });
 
-    // Test TypeScript files
-    const tsResult = await fetcher.fetch("file:///code/app.ts");
-    expect(tsResult.mimeType).toBe("text/x-typescript");
-
-    const tsxResult = await fetcher.fetch("file:///code/component.tsx");
-    expect(tsxResult.mimeType).toBe("text/x-tsx");
-
-    // Test Python files
-    const pyResult = await fetcher.fetch("file:///code/script.py");
-    expect(pyResult.mimeType).toBe("text/x-python");
-
-    // Test Go files
-    const goResult = await fetcher.fetch("file:///code/main.go");
-    expect(goResult.mimeType).toBe("text/x-go");
-
-    // Test Rust files
-    const rsResult = await fetcher.fetch("file:///code/lib.rs");
-    expect(rsResult.mimeType).toBe("text/x-rust");
-
-    // Test Kotlin files
-    const ktResult = await fetcher.fetch("file:///code/App.kt");
-    expect(ktResult.mimeType).toBe("text/x-kotlin");
-
-    // Test Ruby files
-    const rbResult = await fetcher.fetch("file:///code/script.rb");
-    expect(rbResult.mimeType).toBe("text/x-ruby");
-
-    // Test JavaScript files (fallback to mime package)
-    const jsResult = await fetcher.fetch("file:///code/index.js");
-    expect(jsResult.mimeType).toBe("text/javascript");
-
-    // Test shell scripts
-    const shResult = await fetcher.fetch("file:///code/script.sh");
-    expect(shResult.mimeType).toBe("text/x-shellscript");
-
-    // Test other file types (fallback to mime package)
-    const cssResult = await fetcher.fetch("file:///code/style.css");
-    expect(cssResult.mimeType).toBe("text/css");
-
-    const jsonResult = await fetcher.fetch("file:///code/data.json");
-    expect(jsonResult.mimeType).toBe("application/json");
-
-    const xmlResult = await fetcher.fetch("file:///code/config.xml");
-    expect(xmlResult.mimeType).toBe("application/xml");
-
-    const mdResult = await fetcher.fetch("file:///code/readme.md");
-    expect(mdResult.mimeType).toBe("text/markdown");
+    const result = await fetcher.fetch(`file://${fileName}`);
+    expect(result.mimeType).toBe(expectedMimeType);
   });
 
-  it("should throw error if file does not exist", async () => {
+  it("should return status NOT_FOUND if file does not exist", async () => {
     const fetcher = new FileFetcher();
 
-    await expect(fetcher.fetch("file:///path/to/file.txt")).rejects.toThrow(ScraperError);
+    const result = await fetcher.fetch("file:///path/to/nonexistent-file.txt");
+    expect(result.status).toBe("not_found");
+  });
+
+  it("should throw ScraperError for other file system errors", async () => {
+    const fetcher = new FileFetcher();
+    const filePath = "/path/to/permission-denied.txt";
+
+    // Create the file in the virtual filesystem first
+    vol.fromJSON({
+      [filePath]: "test content",
+    });
+
+    // Simulate a permission error by mocking stat to succeed but readFile to fail
+    const permissionError = new Error("EACCES: permission denied");
+    (permissionError as NodeJS.ErrnoException).code = "EACCES";
+    const readFileSpy = vi
+      .spyOn(vol.promises, "readFile")
+      .mockRejectedValue(permissionError);
+
+    await expect(fetcher.fetch(`file://${filePath}`)).rejects.toThrow(ScraperError);
+
+    // Restore the spy
+    readFileSpy.mockRestore();
   });
 
   it("should only handle file protocol", async () => {
@@ -199,5 +178,82 @@ describe("FileFetcher", () => {
     expect(result.content.toString()).toBe(mockContent);
     expect(result.mimeType).toBe("text/plain");
     expect(result.source).toBe("file://Users/testuser/foo/bar/file.txt");
+  });
+
+  describe("File status detection for refresh", () => {
+    beforeEach(() => {
+      vol.reset();
+    });
+
+    it("should return NOT_MODIFIED when fetching an unchanged file with its etag", async () => {
+      const fetcher = new FileFetcher();
+      const filePath = "/test/unchanged.txt";
+
+      vol.fromJSON({
+        [filePath]: "content",
+      });
+
+      // First fetch to get the ETag
+      const result1 = await fetcher.fetch(`file://${filePath}`);
+      const etag = result1.etag;
+
+      // Second fetch with the same ETag should return NOT_MODIFIED
+      const result2 = await fetcher.fetch(`file://${filePath}`, { etag });
+
+      expect(result2.status).toBe("not_modified");
+      expect(result2.etag).toBe(etag);
+      expect(result2.content).toEqual(Buffer.from(""));
+    });
+
+    it("should return SUCCESS when fetching a modified file with its old etag", async () => {
+      const fetcher = new FileFetcher();
+      const filePath = "/test/modified.txt";
+
+      // Create initial file
+      vol.fromJSON({
+        [filePath]: "initial",
+      });
+
+      const result1 = await fetcher.fetch(`file://${filePath}`);
+      const oldEtag = result1.etag;
+
+      // Wait and modify file
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      vol.fromJSON({
+        [filePath]: "modified",
+      });
+
+      // Fetch with old ETag should detect change and return SUCCESS
+      const result2 = await fetcher.fetch(`file://${filePath}`, { etag: oldEtag });
+
+      expect(result2.status).toBe("success");
+      expect(result2.etag).not.toBe(oldEtag);
+      expect(result2.content.toString()).toBe("modified");
+    });
+
+    it("should return NOT_FOUND when the file has been deleted", async () => {
+      const fetcher = new FileFetcher();
+
+      const result = await fetcher.fetch("file:///test/does-not-exist.txt");
+
+      expect(result.status).toBe("not_found");
+      expect(result.content).toEqual(Buffer.from(""));
+    });
+
+    it("should return SUCCESS when fetching a new file without an etag", async () => {
+      const fetcher = new FileFetcher();
+      const filePath = "/test/file.txt";
+
+      vol.fromJSON({
+        [filePath]: "content",
+      });
+
+      // Fetch without etag should always return SUCCESS
+      const result = await fetcher.fetch(`file://${filePath}`);
+
+      expect(result.status).toBe("success");
+      expect(result.etag).toBeTruthy();
+      expect(result.content.toString()).toBe("content");
+    });
   });
 });

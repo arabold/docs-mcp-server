@@ -16,6 +16,7 @@ import { createFetchUrlCommand } from "./commands/fetchUrl";
 import { createFindVersionCommand } from "./commands/findVersion";
 import { createListCommand } from "./commands/list";
 import { createMcpCommand } from "./commands/mcp";
+import { createRefreshCommand } from "./commands/refresh";
 import { createRemoveCommand } from "./commands/remove";
 import { createScrapeCommand } from "./commands/scrape";
 import { createSearchCommand } from "./commands/search";
@@ -132,6 +133,7 @@ export function createCliProgram(): Command {
   createWebCommand(program);
   createWorkerCommand(program);
   createScrapeCommand(program);
+  createRefreshCommand(program);
   createSearchCommand(program);
   createListCommand(program);
   createFindVersionCommand(program);

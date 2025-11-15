@@ -1,6 +1,6 @@
 // Copyright (c) 2025
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RawContent } from "../fetcher/types";
+import { FetchStatus, type RawContent } from "../fetcher/types";
 import { MarkdownLinkExtractorMiddleware } from "../middleware/MarkdownLinkExtractorMiddleware";
 import { MarkdownMetadataExtractorMiddleware } from "../middleware/MarkdownMetadataExtractorMiddleware";
 import { ScrapeMode, type ScraperOptions } from "../types";
@@ -15,18 +15,15 @@ describe("MarkdownPipeline", () => {
 
   it("canProcess returns true for text/markdown", () => {
     const pipeline = new MarkdownPipeline();
-    expect(pipeline.canProcess({ mimeType: "text/markdown" } as RawContent)).toBe(true);
-    expect(pipeline.canProcess({ mimeType: "text/x-markdown" } as RawContent)).toBe(true);
+    expect(pipeline.canProcess("text/markdown")).toBe(true);
+    expect(pipeline.canProcess("text/x-markdown")).toBe(true);
   });
 
   // MarkdownPipeline now processes all text/* types as markdown, including text/html.
   it("canProcess returns false for non-text types", () => {
     const pipeline = new MarkdownPipeline();
-    expect(pipeline.canProcess({ mimeType: "application/json" } as RawContent)).toBe(
-      false,
-    );
-    // @ts-expect-error
-    expect(pipeline.canProcess({ mimeType: undefined } as RawContent)).toBe(false);
+    expect(pipeline.canProcess("application/json")).toBe(false);
+    expect(pipeline.canProcess("")).toBe(false);
   });
 
   it("process decodes Buffer content with UTF-8 charset", async () => {
@@ -36,6 +33,7 @@ describe("MarkdownPipeline", () => {
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toBe("# Header\n\nThis is a test.");
@@ -67,6 +65,7 @@ describe("MarkdownPipeline", () => {
       mimeType: "text/markdown",
       charset: "iso-8859-1", // Explicitly set charset to ISO-8859-1
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toBe("# Café");
@@ -82,6 +81,7 @@ describe("MarkdownPipeline", () => {
       mimeType: "text/markdown",
       // No charset specified
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toBe("# Default UTF-8\n\nContent");
@@ -94,6 +94,7 @@ describe("MarkdownPipeline", () => {
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toBe(
@@ -118,6 +119,7 @@ This is a paragraph with a [link](https://test.example.com).
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
 
@@ -148,9 +150,10 @@ This is a paragraph with a [link](https://test.example.com).
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.errors.some((e) => e.message === "fail")).toBe(true);
+    expect(result.errors?.some((e) => e.message === "fail")).toBe(true);
   });
 
   it("process decodes Buffer content with UTF-16LE BOM", async () => {
@@ -169,6 +172,7 @@ This is a paragraph with a [link](https://test.example.com).
       mimeType: "text/markdown",
       charset: "utf-16le",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("# Café");
@@ -184,6 +188,7 @@ This is a paragraph with a [link](https://test.example.com).
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("# Café");
@@ -197,6 +202,7 @@ This is a paragraph with a [link](https://test.example.com).
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("こんにちは世界");
@@ -210,6 +216,7 @@ This is a paragraph with a [link](https://test.example.com).
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test",
+      status: FetchStatus.SUCCESS,
     };
     const result = await pipeline.process(raw, {} as ScraperOptions);
     expect(result.textContent).toContain("Привет, мир");
@@ -241,6 +248,7 @@ More content here.
       mimeType: "text/markdown",
       charset: "utf-8",
       source: "http://test.example.com",
+      status: FetchStatus.SUCCESS,
     };
 
     const result = await pipeline.process(raw, {
@@ -288,6 +296,7 @@ Final content in section B.`;
         mimeType: "text/markdown",
         charset: "utf-8",
         source: "http://test.example.com",
+        status: FetchStatus.SUCCESS,
       };
 
       const result = await pipeline.process(raw, {
@@ -298,14 +307,14 @@ Final content in section B.`;
       });
 
       // Verify we got chunks with proper hierarchy
-      expect(result.chunks.length).toBeGreaterThan(0);
+      expect(result.chunks?.length).toBeGreaterThan(0);
 
       // GreedySplitter may merge small content into fewer chunks
       // But the hierarchy structure should still be semantically meaningful
-      expect(result.chunks.length).toBeGreaterThanOrEqual(1);
+      expect(result.chunks?.length).toBeGreaterThanOrEqual(1);
 
       // Check that all chunks have valid hierarchy metadata
-      result.chunks.forEach((chunk) => {
+      result.chunks?.forEach((chunk) => {
         expect(chunk.section).toBeDefined();
         expect(typeof chunk.section.level).toBe("number");
         expect(Array.isArray(chunk.section.path)).toBe(true);
@@ -313,8 +322,8 @@ Final content in section B.`;
       });
 
       // Verify that headings and text are properly identified
-      const hasHeadings = result.chunks.some((chunk) => chunk.types.includes("heading"));
-      const hasText = result.chunks.some((chunk) => chunk.types.includes("text"));
+      const hasHeadings = result.chunks?.some((chunk) => chunk.types.includes("heading"));
+      const hasText = result.chunks?.some((chunk) => chunk.types.includes("text"));
       expect(hasHeadings || hasText).toBe(true); // Should have semantic content
     });
 
@@ -336,6 +345,7 @@ Content under second level.`;
         mimeType: "text/markdown",
         charset: "utf-8",
         source: "http://test.example.com",
+        status: FetchStatus.SUCCESS,
       };
 
       const result = await pipeline.process(raw, {
@@ -346,7 +356,7 @@ Content under second level.`;
       });
 
       // Should not create separate whitespace-only chunks at level 0
-      const whitespaceOnlyChunks = result.chunks.filter(
+      const whitespaceOnlyChunks = result.chunks?.filter(
         (chunk) =>
           chunk.section.level === 0 &&
           chunk.section.path.length === 0 &&
@@ -355,7 +365,7 @@ Content under second level.`;
       expect(whitespaceOnlyChunks).toHaveLength(0);
 
       // First heading should be at level 1, not degraded by whitespace
-      const firstHeading = result.chunks.find(
+      const firstHeading = result.chunks?.find(
         (chunk) =>
           chunk.types.includes("heading") && chunk.content.includes("First Heading"),
       );
@@ -363,7 +373,7 @@ Content under second level.`;
       expect(firstHeading!.section.level).toBe(1);
 
       // Minimum level should be 1 (not degraded to 0 by GreedySplitter)
-      const minLevel = Math.min(...result.chunks.map((c) => c.section.level));
+      const minLevel = Math.min(...result.chunks!.map((c) => c.section.level));
       expect(minLevel).toBe(1);
     });
 
@@ -395,6 +405,7 @@ ${longContent}`;
         mimeType: "text/markdown",
         charset: "utf-8",
         source: "http://test.example.com",
+        status: FetchStatus.SUCCESS,
       };
 
       const result = await pipeline.process(raw, {
@@ -405,15 +416,15 @@ ${longContent}`;
       });
 
       // Should have multiple chunks due to size constraints
-      expect(result.chunks.length).toBeGreaterThan(1);
+      expect(result.chunks?.length).toBeGreaterThan(1);
 
       // All chunks should be within size limits
-      result.chunks.forEach((chunk) => {
+      result.chunks?.forEach((chunk) => {
         expect(chunk.content.length).toBeLessThanOrEqual(100);
       });
 
       // Should maintain hierarchy levels (not degrade to 0)
-      const minLevel = Math.min(...result.chunks.map((c) => c.section.level));
+      const minLevel = Math.min(...result.chunks!.map((c) => c.section.level));
       expect(minLevel).toBeGreaterThanOrEqual(1);
     });
 
@@ -440,6 +451,7 @@ More details here.`;
         mimeType: "text/markdown",
         charset: "utf-8",
         source: "http://test.example.com",
+        status: FetchStatus.SUCCESS,
       };
 
       const result = await pipeline.process(raw, {
@@ -450,14 +462,14 @@ More details here.`;
       });
 
       // Verify we have content with semantic types (GreedySplitter may merge them)
-      expect(result.chunks.length).toBeGreaterThan(0);
+      expect(result.chunks?.length).toBeGreaterThan(0);
 
       // Check that we have the expected content types somewhere in the chunks
-      const allTypes = new Set(result.chunks.flatMap((chunk) => chunk.types));
+      const allTypes = new Set(result.chunks?.flatMap((chunk) => chunk.types));
       expect(allTypes.has("heading") || allTypes.has("text")).toBe(true);
 
       // Verify all chunks have proper section metadata
-      result.chunks.forEach((chunk) => {
+      result.chunks?.forEach((chunk) => {
         expect(chunk.section).toBeDefined();
         expect(typeof chunk.section.level).toBe("number");
         expect(Array.isArray(chunk.section.path)).toBe(true);
@@ -465,7 +477,7 @@ More details here.`;
       });
 
       // Verify content is preserved (at least the key parts)
-      const allContent = result.chunks.map((chunk) => chunk.content).join("");
+      const allContent = result.chunks?.map((chunk) => chunk.content).join("");
       expect(allContent).toContain("Documentation");
       expect(allContent).toContain("Implementation");
       expect(allContent).toContain("Hello, world!");
@@ -487,6 +499,7 @@ Final paragraph.`;
         mimeType: "text/markdown",
         charset: "utf-8",
         source: "http://test.example.com",
+        status: FetchStatus.SUCCESS,
       };
 
       const result = await pipeline.process(raw, {
@@ -497,7 +510,7 @@ Final paragraph.`;
       });
 
       // Verify semantic content is preserved (may not be perfect reconstruction due to whitespace normalization)
-      const allContent = result.chunks.map((chunk) => chunk.content).join("");
+      const allContent = result.chunks?.map((chunk) => chunk.content).join("");
       expect(allContent).toContain("# Title");
       expect(allContent).toContain("## Subtitle");
       expect(allContent).toContain("Paragraph with text");
@@ -506,10 +519,10 @@ Final paragraph.`;
       expect(allContent).toContain("Final paragraph");
 
       // Verify we have semantic chunks
-      expect(result.chunks.length).toBeGreaterThan(0);
+      expect(result.chunks?.length).toBeGreaterThan(0);
 
       // Verify hierarchical structure is preserved
-      const minLevel = Math.min(...result.chunks.map((chunk) => chunk.section.level));
+      const minLevel = Math.min(...result.chunks!.map((chunk) => chunk.section.level));
       expect(minLevel).toBeGreaterThanOrEqual(1); // Should not degrade to 0
     });
   });

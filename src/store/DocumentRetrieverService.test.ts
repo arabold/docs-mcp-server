@@ -1,10 +1,9 @@
-import { Document } from "@langchain/core/documents";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
+import type { DbChunkRank, DbPageChunk } from "./types";
 
 vi.mock("./DocumentStore");
-vi.mock("../utils/logger");
 
 describe("DocumentRetrieverService (consolidated logic)", () => {
   let retrieverService: DocumentRetrieverService;
@@ -27,21 +26,26 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
     const version = "1.0.0";
     const query = "test";
     // Two initial hits from the same URL, with overlapping context
-    const initialResult1 = new Document({
+    const initialResult1 = {
       id: "doc1",
-      pageContent: "Chunk A",
-      metadata: { url: "url", score: 0.9 },
-    });
-    const initialResult2 = new Document({
+      content: "Chunk A",
+      url: "url",
+      score: 0.9,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const initialResult2 = {
       id: "doc3",
-      pageContent: "Chunk C",
-      metadata: { url: "url", score: 0.8 },
-    });
-    const doc2 = new Document({
+      content: "Chunk C",
+      url: "url",
+      score: 0.8,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const doc2 = {
       id: "doc2",
-      pageContent: "Chunk B",
-      metadata: { url: "url" },
-    });
+      content: "Chunk B",
+      url: "url",
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([
       initialResult1,
@@ -85,21 +89,25 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
     const library = "lib";
     const version = "1.0.0";
     const query = "test";
-    const initialResult = new Document({
+    const initialResult = {
       id: "doc1",
-      pageContent: "Main chunk",
-      metadata: { url: "url", score: 0.7 },
-    });
-    const parent = new Document({
+      content: "Main chunk",
+      score: 0.7,
+      url: "url",
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const parent = {
       id: "parent1",
-      pageContent: "Parent",
-      metadata: { url: "url" },
-    });
-    const child = new Document({
+      content: "Parent",
+      url: "url",
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const child = {
       id: "child1",
-      pageContent: "Child",
-      metadata: { url: "url" },
-    });
+      content: "Child",
+      url: "url",
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
     vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parent);
@@ -130,16 +138,20 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
     const library = "lib";
     const version = "1.0.0";
     const query = "test";
-    const docA = new Document({
+    const docA = {
       id: "a1",
-      pageContent: "A1",
-      metadata: { url: "urlA", score: 0.8 },
-    });
-    const docB = new Document({
+      content: "A1",
+      url: "urlA",
+      score: 0.8,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const docB = {
       id: "b1",
-      pageContent: "B1",
-      metadata: { url: "urlB", score: 0.9 },
-    });
+      content: "B1",
+      url: "urlB",
+      score: 0.9,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([docA, docB]);
     vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -174,11 +186,13 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
     const library = "lib";
     const version = "1.0.0";
     const query = "test";
-    const initialResult = new Document({
+    const initialResult = {
       id: "doc1",
-      pageContent: "Main chunk",
-      metadata: { url: "url", score: 0.5 },
-    });
+      content: "Main chunk",
+      url: "url",
+      score: 0.5,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
     vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -210,11 +224,13 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
     const version = "1.0.0";
     const query = "test";
     const limit = 3;
-    const initialResult = new Document({
+    const initialResult = {
       id: "doc1",
-      pageContent: "Main chunk",
-      metadata: { url: "url", score: 0.5 },
-    });
+      content: "Main chunk",
+      url: "url",
+      score: 0.5,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
     vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -247,11 +263,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
     const mimeType = "text/html";
 
     // Create a document with mimeType in metadata
-    const initialResult = new Document({
+    const initialResult = {
       id: "doc1",
-      pageContent: "HTML content",
-      metadata: { url: "https://example.com", score: 0.9, mimeType },
-    });
+      content: "HTML content",
+      url: "https://example.com",
+      score: 0.9,
+      content_type: mimeType,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
     vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -277,11 +296,13 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
     const query = "test";
 
     // Create a document without mimeType in metadata
-    const initialResult = new Document({
+    const initialResult = {
       id: "doc1",
-      pageContent: "Plain content",
-      metadata: { url: "https://example.com", score: 0.9 },
-    });
+      content: "Plain content",
+      url: "https://example.com",
+      score: 0.9,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
     vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -308,27 +329,27 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const query = "test";
 
       // Child chunk with path ["Chapter 1", "Section 1.1"]
-      const childResult = new Document({
+      const childResult = {
         id: "child1",
-        pageContent: "Child content",
+        content: "Child content",
+        url: "https://example.com",
+        score: 0.8,
         metadata: {
-          url: "https://example.com",
-          score: 0.8,
           path: ["Chapter 1", "Section 1.1"],
           level: 2,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Parent chunk with path ["Chapter 1"]
-      const parentChunk = new Document({
+      const parentChunk = {
         id: "parent1",
-        pageContent: "Parent content",
+        content: "Parent content",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Chapter 1"],
           level: 1,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([childResult]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parentChunk);
@@ -363,38 +384,38 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const query = "test";
 
       // Main result chunk
-      const mainResult = new Document({
+      const mainResult = {
         id: "main1",
-        pageContent: "Main content",
+        content: "Main content",
+        url: "https://example.com",
+        score: 0.9,
         metadata: {
-          url: "https://example.com",
-          score: 0.9,
           path: ["Chapter 1", "Section 1.2"],
           level: 2,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Preceding sibling with same path level
-      const precedingSibling = new Document({
+      const precedingSibling = {
         id: "preceding1",
-        pageContent: "Preceding content",
+        content: "Preceding content",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Chapter 1", "Section 1.1"],
           level: 2,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Subsequent sibling with same path level
-      const subsequentSibling = new Document({
+      const subsequentSibling = {
         id: "subsequent1",
-        pageContent: "Subsequent content",
+        content: "Subsequent content",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Chapter 1", "Section 1.3"],
           level: 2,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([mainResult]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -441,37 +462,37 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const query = "test";
 
       // Parent result chunk
-      const parentResult = new Document({
+      const parentResult = {
         id: "parent1",
-        pageContent: "Parent section",
+        content: "Parent section",
+        url: "https://example.com",
+        score: 0.7,
         metadata: {
-          url: "https://example.com",
-          score: 0.7,
           path: ["Chapter 1"],
           level: 1,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Child chunks at deeper level
-      const child1 = new Document({
+      const child1 = {
         id: "child1",
-        pageContent: "First subsection",
+        content: "First subsection",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Chapter 1", "Section 1.1"],
           level: 2,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
-      const child2 = new Document({
+      const child2 = {
         id: "child2",
-        pageContent: "Second subsection",
+        content: "Second subsection",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Chapter 1", "Section 1.2"],
           level: 2,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([parentResult]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -508,27 +529,27 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const query = "test";
 
       // Multiple chunks from same document/URL, returned out of sort_order
-      const chunk3 = new Document({
+      const chunk3 = {
         id: "chunk3",
-        pageContent: "Third chunk",
+        content: "Third chunk",
+        url: "https://example.com",
+        score: 0.6,
         metadata: {
-          url: "https://example.com",
-          score: 0.6,
           path: ["Section C"],
           level: 1,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
-      const chunk1 = new Document({
+      const chunk1 = {
         id: "chunk1",
-        pageContent: "First chunk",
+        content: "First chunk",
+        url: "https://example.com",
+        score: 0.8,
         metadata: {
-          url: "https://example.com",
-          score: 0.8,
           path: ["Section A"],
           level: 1,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([chunk3, chunk1]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -558,60 +579,60 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const query = "test";
 
       // Main search result - a subsection
-      const mainResult = new Document({
+      const mainResult = {
         id: "main1",
-        pageContent: "Key subsection content",
+        content: "Key subsection content",
+        url: "https://example.com",
+        score: 0.9,
         metadata: {
-          url: "https://example.com",
-          score: 0.9,
           path: ["Guide", "Installation", "Setup"],
           level: 3,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Parent at level 2
-      const parent = new Document({
+      const parent = {
         id: "parent1",
-        pageContent: "Installation overview",
+        content: "Installation overview",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Guide", "Installation"],
           level: 2,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Preceding sibling at same level
-      const precedingSibling = new Document({
+      const precedingSibling = {
         id: "preceding1",
-        pageContent: "Prerequisites section",
+        content: "Prerequisites section",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Guide", "Installation", "Prerequisites"],
           level: 3,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Child at deeper level
-      const child = new Document({
+      const child = {
         id: "child1",
-        pageContent: "Detailed setup steps",
+        content: "Detailed setup steps",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Guide", "Installation", "Setup", "Steps"],
           level: 4,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       // Subsequent sibling
-      const subsequentSibling = new Document({
+      const subsequentSibling = {
         id: "subsequent1",
-        pageContent: "Configuration section",
+        content: "Configuration section",
+        url: "https://example.com",
         metadata: {
-          url: "https://example.com",
           path: ["Guide", "Installation", "Configuration"],
           level: 3,
         },
-      });
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([mainResult]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parent);
@@ -652,15 +673,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const version = "1.0.0";
       const query = "test";
 
-      const markdownChunk = new Document({
+      const markdownChunk = {
         id: "md1",
-        pageContent: "# Heading\n\nSome content",
-        metadata: {
-          url: "https://example.com/doc.md",
-          score: 0.9,
-          mimeType: "text/markdown",
-        },
-      });
+        content: "# Heading\n\nSome content",
+        url: "https://example.com/doc.md",
+        score: 0.9,
+        content_type: "text/markdown",
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([markdownChunk]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -685,15 +705,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const version = "1.0.0";
       const query = "test";
 
-      const codeChunk = new Document({
+      const codeChunk = {
         id: "ts1",
-        pageContent: "function test() {\n  return 'hello';\n}",
-        metadata: {
-          url: "https://example.com/code.ts",
-          score: 0.9,
-          mimeType: "text/x-typescript",
-        },
-      });
+        content: "function test() {\n  return 'hello';\n}",
+        url: "https://example.com/code.ts",
+        score: 0.9,
+        content_type: "text/x-typescript",
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([codeChunk]);
       // Mock the hierarchical strategy's fallback behavior since we don't have full hierarchy implementation
@@ -717,15 +736,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const version = "1.0.0";
       const query = "test";
 
-      const jsonChunk = new Document({
+      const jsonChunk = {
         id: "json1",
-        pageContent: '{"key": "value"}',
-        metadata: {
-          url: "https://example.com/config.json",
-          score: 0.9,
-          mimeType: "application/json",
-        },
-      });
+        content: '{"key": "value"}',
+        url: "https://example.com/config.json",
+        score: 0.9,
+        content_type: "application/json",
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([jsonChunk]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
@@ -748,15 +766,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       const version = "1.0.0";
       const query = "test";
 
-      const unknownChunk = new Document({
+      const unknownChunk = {
         id: "unknown1",
-        pageContent: "Some content",
-        metadata: {
-          url: "https://example.com/unknown",
-          score: 0.9,
-          // No mimeType specified
-        },
-      });
+        content: "Some content",
+        url: "https://example.com/unknown",
+        score: 0.9,
+        // No mimeType specified
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
 
       vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([unknownChunk]);
       vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);

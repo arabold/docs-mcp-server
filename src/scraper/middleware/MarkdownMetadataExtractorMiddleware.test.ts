@@ -4,7 +4,6 @@ import { MarkdownMetadataExtractorMiddleware } from "./MarkdownMetadataExtractor
 import type { MiddlewareContext } from "./types";
 
 // Suppress logger output during tests
-vi.mock("../../utils/logger");
 
 // Helper to create a minimal valid ScraperOptions object
 const createMockScraperOptions = (url = "http://example.com"): ScraperOptions => ({
@@ -27,8 +26,8 @@ const createMockContext = (
 ): MiddlewareContext => {
   return {
     content: markdownContent,
+    contentType: "text/markdown",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: { ...createMockScraperOptions(source), ...options },
@@ -45,7 +44,7 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("My Title");
+    expect(context.title).toBe("My Title");
     expect(context.errors).toHaveLength(0);
   });
 
@@ -58,7 +57,7 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("Untitled");
+    expect(context.title).toBe("Untitled");
     expect(context.errors).toHaveLength(0);
   });
 
@@ -71,7 +70,7 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("My Spaced Title");
+    expect(context.title).toBe("My Spaced Title");
     expect(context.errors).toHaveLength(0);
   });
 
@@ -84,7 +83,7 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("First Title");
+    expect(context.title).toBe("First Title");
     expect(context.errors).toHaveLength(0);
   });
 
@@ -97,7 +96,7 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("Untitled");
+    expect(context.title).toBe("Untitled");
     expect(context.errors).toHaveLength(0);
   });
 
@@ -110,7 +109,7 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
-    expect(context.metadata.title).toBe("The Actual Title");
+    expect(context.title).toBe("The Actual Title");
     expect(context.errors).toHaveLength(0);
   });
 

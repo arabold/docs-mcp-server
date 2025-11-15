@@ -1,4 +1,30 @@
 /**
+ * Semantic status of a fetch operation, abstracting HTTP status codes
+ * into meaningful states for content processing.
+ */
+export enum FetchStatus {
+  /**
+   * Content was successfully fetched (HTTP 200 or new file).
+   * The content field will contain the fetched data.
+   */
+  SUCCESS = "success",
+
+  /**
+   * Content has not been modified since the last fetch (HTTP 304).
+   * The content field will be empty. Occurs when etag is provided
+   * in FetchOptions and matches the server's current ETag.
+   */
+  NOT_MODIFIED = "not_modified",
+
+  /**
+   * The resource was not found (HTTP 404 or file doesn't exist).
+   * The content field will be empty. In refresh operations,
+   * this indicates the page should be removed from the index.
+   */
+  NOT_FOUND = "not_found",
+}
+
+/**
  * Raw content fetched from a source before processing.
  * Includes metadata about the content for proper processing.
  */
@@ -20,6 +46,26 @@ export interface RawContent {
   encoding?: string;
   /** Original source location */
   source: string;
+  /**
+   * ETag value for caching purposes.
+   * For HTTP sources, this comes from the ETag header.
+   * For local files, this is a hash of the last modified date.
+   */
+  etag?: string;
+  /**
+   * Last modified timestamp in ISO8601 format.
+   * For HTTP sources, this comes from the Last-Modified header.
+   * For local files, this is the file modification time.
+   */
+  lastModified?: string;
+  /**
+   * Semantic status of the fetch operation.
+   * Abstracts HTTP status codes into meaningful states:
+   * - SUCCESS: Content was fetched successfully
+   * - NOT_MODIFIED: Content unchanged since last fetch (conditional request)
+   * - NOT_FOUND: Resource doesn't exist (should be removed from index)
+   */
+  status: FetchStatus;
 }
 
 /**
@@ -38,6 +84,12 @@ export interface FetchOptions {
   signal?: AbortSignal;
   /** Whether to follow HTTP redirects (3xx responses) */
   followRedirects?: boolean;
+  /**
+   * ETag value for conditional requests.
+   * When provided, the fetcher will include an If-None-Match header
+   * and may return a 304 Not Modified response if content hasn't changed.
+   */
+  etag?: string | null;
 }
 
 /**

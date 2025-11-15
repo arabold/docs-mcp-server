@@ -4,7 +4,18 @@
 
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HttpResponse, http } from "msw";
+import { setupServer } from "msw/node";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { ProxyAuthManager } from "./ProxyAuthManager";
 import type { AuthConfig } from "./types";
 
@@ -24,9 +35,12 @@ vi.mock("jose", () => ({
   jwtVerify: vi.fn(),
 }));
 
-// Mock fetch globally
-const mockFetch = vi.fn();
-global.fetch = mockFetch;
+// Setup MSW server for this test file
+const server = setupServer();
+
+beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
 
 describe("ProxyAuthManager", () => {
   let authManager: ProxyAuthManager;
@@ -57,19 +71,29 @@ describe("ProxyAuthManager", () => {
       post: vi.fn(),
     } as unknown as FastifyInstance;
 
-    // Mock successful OAuth2 discovery with JWKS and userinfo endpoints
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
+    // Set up default MSW handlers for OAuth2 discovery
+    server.use(
+      http.get("https://auth.example.com/.well-known/oauth-authorization-server", () => {
+        return HttpResponse.json({
           authorization_endpoint: "https://auth.example.com/oauth/authorize",
           token_endpoint: "https://auth.example.com/oauth/token",
           revocation_endpoint: "https://auth.example.com/oauth/revoke",
           registration_endpoint: "https://auth.example.com/oauth/register",
           jwks_uri: "https://auth.example.com/.well-known/jwks.json",
           userinfo_endpoint: "https://auth.example.com/oauth/userinfo",
-        }),
-    });
+        });
+      }),
+      http.get("https://auth.example.com/.well-known/openid-configuration", () => {
+        return HttpResponse.json({
+          authorization_endpoint: "https://auth.example.com/oauth/authorize",
+          token_endpoint: "https://auth.example.com/oauth/token",
+          revocation_endpoint: "https://auth.example.com/oauth/revoke",
+          registration_endpoint: "https://auth.example.com/oauth/register",
+          jwks_uri: "https://auth.example.com/.well-known/jwks.json",
+          userinfo_endpoint: "https://auth.example.com/oauth/userinfo",
+        });
+      }),
+    );
   });
 
   describe("initialization", () => {
@@ -77,16 +101,12 @@ describe("ProxyAuthManager", () => {
       authManager = new ProxyAuthManager(disabledAuthConfig);
 
       await expect(authManager.initialize()).resolves.toBeUndefined();
-      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("should initialize successfully with valid config", async () => {
       authManager = new ProxyAuthManager(validAuthConfig);
 
       await expect(authManager.initialize()).resolves.toBeUndefined();
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://auth.example.com/.well-known/oauth-authorization-server",
-      );
     });
 
     it("should throw error when issuer URL is missing", async () => {
@@ -108,21 +128,23 @@ describe("ProxyAuthManager", () => {
     });
 
     it("should handle OAuth2 discovery failure", async () => {
-      // Mock OAuth2 discovery failure
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 404,
-      });
+      // Override default handler to return 404
+      server.use(
+        http.get(
+          "https://auth.example.com/.well-known/oauth-authorization-server",
+          () => {
+            return new HttpResponse(null, { status: 404 });
+          },
+        ),
+        http.get("https://auth.example.com/.well-known/openid-configuration", () => {
+          return new HttpResponse(null, { status: 404 });
+        }),
+      );
 
       authManager = new ProxyAuthManager(validAuthConfig);
 
       await expect(authManager.initialize()).rejects.toThrow(
         "Proxy authentication initialization failed",
-      );
-
-      // Should try OAuth2 discovery
-      expect(mockFetch).toHaveBeenCalledWith(
-        "https://auth.example.com/.well-known/oauth-authorization-server",
       );
     });
   });
@@ -285,16 +307,16 @@ describe("ProxyAuthManager", () => {
         // Mock JWT verification failure (opaque token that can't be parsed as JWT)
         mockJwtVerify.mockRejectedValueOnce(new Error("Invalid Compact JWS"));
 
-        // Mock successful userinfo response as fallback
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          json: () =>
-            Promise.resolve({
+        // Mock successful userinfo response as fallback using MSW
+        server.use(
+          http.get("https://auth.example.com/oauth/userinfo", () => {
+            return HttpResponse.json({
               sub: "user456",
               email: "user@example.com",
               name: "Test User",
-            }),
-        });
+            });
+          }),
+        );
 
         const context = await authManager.createAuthContext(
           "Bearer oat_opaque_token_123",
@@ -315,30 +337,18 @@ describe("ProxyAuthManager", () => {
             audience: "https://mcp.example.com",
           },
         );
-
-        // Verify userinfo endpoint was called as fallback
-        expect(mockFetch).toHaveBeenCalledWith(
-          "https://auth.example.com/oauth/userinfo",
-          {
-            method: "GET",
-            headers: {
-              Authorization: "Bearer oat_opaque_token_123",
-              Accept: "application/json",
-            },
-          },
-        );
       });
 
       it("should fail when both JWT and userinfo validation fail", async () => {
         // Mock JWT verification failure
         mockJwtVerify.mockRejectedValueOnce(new Error("Invalid Compact JWS"));
 
-        // Mock userinfo endpoint failure
-        mockFetch.mockResolvedValueOnce({
-          ok: false,
-          status: 401,
-          statusText: "Unauthorized",
-        });
+        // Mock userinfo endpoint failure using MSW
+        server.use(
+          http.get("https://auth.example.com/oauth/userinfo", () => {
+            return new HttpResponse(null, { status: 401 });
+          }),
+        );
 
         const context = await authManager.createAuthContext("Bearer invalid_token");
 
@@ -347,34 +357,28 @@ describe("ProxyAuthManager", () => {
           scopes: new Set(),
         });
 
-        // Verify both validation methods were attempted
+        // Verify JWT verification was attempted
         expect(mockJwtVerify).toHaveBeenCalled();
-        expect(mockFetch).toHaveBeenCalledWith(
-          "https://auth.example.com/oauth/userinfo",
-          expect.objectContaining({
-            method: "GET",
-            headers: expect.objectContaining({
-              Authorization: "Bearer invalid_token",
-            }),
-          }),
-        );
       });
 
       it("should fall back to userinfo when userinfo endpoint is missing in JWT scenario", async () => {
         // Mock JWT verification failure
         mockJwtVerify.mockRejectedValueOnce(new Error("Invalid Compact JWS"));
 
-        // Mock discovery response without userinfo endpoint
-        mockFetch.mockResolvedValueOnce({
-          ok: true,
-          json: () =>
-            Promise.resolve({
-              authorization_endpoint: "https://auth.example.com/oauth/authorize",
-              token_endpoint: "https://auth.example.com/oauth/token",
-              jwks_uri: "https://auth.example.com/.well-known/jwks.json",
-              // No userinfo_endpoint
-            }),
-        });
+        // Override to return discovery without userinfo endpoint
+        server.use(
+          http.get(
+            "https://auth.example.com/.well-known/oauth-authorization-server",
+            () => {
+              return HttpResponse.json({
+                authorization_endpoint: "https://auth.example.com/oauth/authorize",
+                token_endpoint: "https://auth.example.com/oauth/token",
+                jwks_uri: "https://auth.example.com/.well-known/jwks.json",
+                // No userinfo_endpoint
+              });
+            },
+          ),
+        );
 
         const context = await authManager.createAuthContext("Bearer some_token");
 

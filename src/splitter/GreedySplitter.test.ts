@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { GreedySplitter } from "./GreedySplitter";
 import { SemanticMarkdownSplitter } from "./SemanticMarkdownSplitter";
-import type { ContentChunk } from "./types";
-
-vi.mock("../utils/logger");
+import type { Chunk } from "./types";
 
 // Mock SemanticMarkdownSplitter
-const createMockSemanticSplitter = (chunks: ContentChunk[]) => {
+const createMockSemanticSplitter = (chunks: Chunk[]) => {
   const mockSplitText = vi.fn().mockResolvedValue(chunks);
   const mockSemanticSplitter = {
     splitText: mockSplitText,
@@ -23,7 +21,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should return the original chunk if it's within min and max size", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "This is a single chunk.",
@@ -37,7 +35,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should concatenate chunks until minChunkSize is reached", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "Short text 1.",
@@ -62,7 +60,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should respect H1/H2 boundaries", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "Text before heading.",
@@ -102,7 +100,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should not exceed preferredChunkSize", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "This is a long text chunk. ",
@@ -132,7 +130,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should preserve section metadata when concatenating chunks with identical sections", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "Short text 1.",
@@ -157,7 +155,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should merge heading with its content when minChunkSize > 0", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["heading"],
         content: "# Section 1",
@@ -182,7 +180,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should keep heading separate when minChunkSize = 0", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["heading"],
         content: "# Section 1",
@@ -201,7 +199,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should use deeper path when merging parent with child section", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "Parent content",
@@ -232,7 +230,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should use common parent when merging sibling sections", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "First subsection",
@@ -266,7 +264,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should use root when merging sections with no common path", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "First section",
@@ -300,7 +298,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should handle deeply nested sections", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       {
         types: ["text"],
         content: "Level 1",
@@ -333,7 +331,7 @@ describe("GreedySplitter", () => {
   });
 
   it("should handle deep sibling sections with common parent", async () => {
-    const initialChunks: ContentChunk[] = [
+    const initialChunks: Chunk[] = [
       // Deep sibling sections under Section 1 -> SubSection 1.1
       {
         types: ["text"],

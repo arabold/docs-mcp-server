@@ -115,6 +115,56 @@ export function createMcpServerInstance(
         }
       },
     );
+
+    // Refresh version tool - suppress deep inference issues
+    server.tool(
+      "refresh_version",
+      "Re-scrape a previously indexed library version, updating only changed pages.",
+      {
+        library: z.string().trim().describe("Library name."),
+        version: z
+          .string()
+          .trim()
+          .optional()
+          .describe("Library version (optional, refreshes unversioned if omitted)."),
+      },
+      {
+        title: "Refresh Library Version",
+        destructiveHint: false, // Only updates changed content
+        openWorldHint: true, // requires internet access
+      },
+      async ({ library, version }) => {
+        // Track MCP tool usage
+        analytics.track(TelemetryEvent.TOOL_USED, {
+          tool: "refresh_version",
+          context: "mcp_server",
+          library,
+          version,
+        });
+
+        try {
+          // Execute refresh tool without waiting
+          const result = await tools.refresh.execute({
+            library,
+            version,
+            waitForCompletion: false, // Don't wait for completion
+          });
+
+          // Check the type of result
+          if ("jobId" in result) {
+            // If we got a jobId back, report that
+            return createResponse(`🔄 Refresh job started with ID: ${result.jobId}.`);
+          }
+          // This case shouldn't happen if waitForCompletion is false, but handle defensively
+          return createResponse(
+            `Refresh finished immediately (unexpectedly) with ${result.pagesRefreshed} pages.`,
+          );
+        } catch (error) {
+          // Handle errors during job enqueueing or initial setup
+          return createError(error);
+        }
+      },
+    );
   }
 
   // Search docs tool

@@ -7,7 +7,6 @@ import { HtmlToMarkdownMiddleware } from "./HtmlToMarkdownMiddleware";
 import type { MiddlewareContext } from "./types";
 
 // Suppress logger output during tests
-vi.mock("../../../utils/logger");
 
 // Helper to create a minimal valid ScraperOptions object
 const createMockScraperOptions = (url = "http://example.com"): ScraperOptions => ({
@@ -30,8 +29,8 @@ const createMockContext = (
 ): MiddlewareContext => {
   const context: MiddlewareContext = {
     content: htmlContent || "",
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: { ...createMockScraperOptions(source), ...options },
@@ -61,6 +60,7 @@ describe("HtmlToMarkdownMiddleware", () => {
     expect(context.content).toBe(
       "# Heading 1\n\nThis is a paragraph with **bold** and _italic_ text.\n\n-   Item 1\n-   Item 2\n\n[Link](http://link.com)",
     );
+    expect(context.contentType).toBe("text/markdown");
     expect(context.errors).toHaveLength(0);
 
     // No close needed

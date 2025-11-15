@@ -1,13 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Document, ProgressCallback } from "../../types";
 import { logger } from "../../utils/logger";
 import { FileFetcher } from "../fetcher";
-import type { RawContent } from "../fetcher/types";
+import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
-import type { ContentPipeline } from "../pipelines/types";
-import type { ScraperOptions, ScraperProgress } from "../types";
-import { BaseScraperStrategy, type QueueItem } from "./BaseScraperStrategy";
+import type { ContentPipeline, PipelineResult } from "../pipelines/types";
+import type { QueueItem, ScraperOptions } from "../types";
+import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 /**
  * LocalFileStrategy handles crawling and scraping of local files and folders using file:// URLs.
@@ -29,12 +28,11 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     return url.startsWith("file://");
   }
 
-  protected async processItem(
+  async processItem(
     item: QueueItem,
     options: ScraperOptions,
-    _progressCallback?: ProgressCallback<ScraperProgress>,
     _signal?: AbortSignal,
-  ): Promise<{ document?: Document; links?: string[] }> {
+  ): Promise<ProcessItemResult> {
     // Parse the file URL properly to handle both file:// and file:/// formats
     let filePath = item.url.replace(/^file:\/\/\/?/, "");
     filePath = decodeURIComponent(filePath);
@@ -44,7 +42,21 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       filePath = `/${filePath}`;
     }
 
-    const stats = await fs.stat(filePath);
+    let stats: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      stats = await fs.stat(filePath);
+    } catch (error) {
+      // File not found
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        logger.info(`✓ File deleted or not available: ${filePath}`);
+        return {
+          url: item.url,
+          links: [],
+          status: FetchStatus.NOT_FOUND,
+        };
+      }
+      throw error;
+    }
 
     if (stats.isDirectory()) {
       const contents = await fs.readdir(filePath);
@@ -52,17 +64,23 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       const links = contents
         .map((name) => `file://${path.join(filePath, name)}`)
         .filter((url) => this.shouldProcessUrl(url, options));
-      return { links };
+      return { url: item.url, links, status: FetchStatus.SUCCESS };
     }
 
-    logger.info(`🗂️  Processing file ${this.pageCount}/${options.maxPages}: ${filePath}`);
+    const rawContent: RawContent = await this.fileFetcher.fetch(item.url, {
+      etag: item.etag,
+    });
 
-    const rawContent: RawContent = await this.fileFetcher.fetch(item.url);
+    // Handle NOT_MODIFIED status (file hasn't changed)
+    if (rawContent.status === FetchStatus.NOT_MODIFIED) {
+      logger.debug(`✓ File unchanged: ${filePath}`);
+      return { url: rawContent.source, links: [], status: FetchStatus.NOT_MODIFIED };
+    }
 
-    let processed: Awaited<ReturnType<ContentPipeline["process"]>> | undefined;
+    let processed: PipelineResult | undefined;
 
     for (const pipeline of this.pipelines) {
-      if (pipeline.canProcess(rawContent)) {
+      if (pipeline.canProcess(rawContent.mimeType, rawContent.content)) {
         logger.debug(
           `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${filePath})`,
         );
@@ -75,27 +93,28 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       logger.warn(
         `⚠️  Unsupported content type "${rawContent.mimeType}" for file ${filePath}. Skipping processing.`,
       );
-      return { document: undefined, links: [] };
+      return { url: rawContent.source, links: [], status: FetchStatus.SUCCESS };
     }
 
-    for (const err of processed.errors) {
+    for (const err of processed.errors ?? []) {
       logger.warn(`⚠️  Processing error for ${filePath}: ${err.message}`);
     }
 
+    // Use filename as fallback if title is empty or not a string
+    const filename = path.basename(filePath);
+    const title = processed.title?.trim() || filename || null;
+
+    // For local files, we don't follow links (no crawling within file content)
+    // Return empty links array
     return {
-      document: {
-        content: typeof processed.textContent === "string" ? processed.textContent : "",
-        contentType: rawContent.mimeType,
-        metadata: {
-          url: rawContent.source,
-          title:
-            typeof processed.metadata.title === "string"
-              ? processed.metadata.title
-              : "Untitled",
-          library: options.library,
-          version: options.version,
-        },
-      } satisfies Document,
+      url: rawContent.source,
+      title: title,
+      etag: rawContent.etag,
+      lastModified: rawContent.lastModified,
+      contentType: rawContent.mimeType,
+      content: processed,
+      links: [],
+      status: FetchStatus.SUCCESS,
     };
   }
 

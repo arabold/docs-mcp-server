@@ -8,7 +8,6 @@ import type { StoreSearchResult } from "../store/types";
 import { SearchTool, type SearchToolOptions } from "./SearchTool";
 
 // Mock dependencies
-vi.mock("../utils/logger");
 
 describe("SearchTool", () => {
   let mockDocService: Partial<DocumentManagementService>;

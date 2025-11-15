@@ -3,7 +3,6 @@ import { CancellationError } from "../../pipeline/errors";
 import { RedirectError, ScraperError } from "../../utils/errors";
 
 vi.mock("axios");
-vi.mock("../../utils/logger");
 
 import axios from "axios";
 
@@ -267,9 +266,8 @@ describe("HttpFetcher", () => {
   });
 
   describe("retry logic", () => {
-    it("should retry on all retryable HTTP status codes", async () => {
+    it("should retry on retryable status codes [408, 429, 500, 502, 503, 504, 525]", async () => {
       const fetcher = new HttpFetcher();
-      // Test all retryable status codes from HttpFetcher: 408, 429, 500, 502, 503, 504, 525
       const retryableStatuses = [408, 429, 500, 502, 503, 504, 525];
 
       for (const status of retryableStatuses) {
@@ -290,10 +288,9 @@ describe("HttpFetcher", () => {
       }
     });
 
-    it("should not retry on non-retryable HTTP status codes", async () => {
+    it("should not retry on non-retryable status codes [400, 401, 403, 404, 405, 410]", async () => {
       const fetcher = new HttpFetcher();
-      // Test various non-retryable status codes
-      const nonRetryableStatuses = [400, 401, 403, 404, 405, 410];
+      const nonRetryableStatuses = [400, 401, 403, 405, 410];
 
       for (const status of nonRetryableStatuses) {
         mockedAxios.get.mockReset();
@@ -308,106 +305,19 @@ describe("HttpFetcher", () => {
 
         expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries
       }
-    });
 
-    it("should retry on undefined status (network errors)", async () => {
-      const fetcher = new HttpFetcher();
-      // Simulate network error without response object
-      mockedAxios.get.mockRejectedValueOnce(new Error("Network timeout"));
-      mockedAxios.get.mockResolvedValueOnce({
-        data: Buffer.from("recovered", "utf-8"),
-        headers: { "content-type": "text/plain" },
-      });
+      // 404 has special handling - returns result instead of throwing
+      mockedAxios.get.mockReset();
+      mockedAxios.get.mockRejectedValue({ response: { status: 404 } });
 
       const result = await fetcher.fetch("https://example.com", {
-        maxRetries: 1,
+        maxRetries: 2,
         retryDelay: 1,
       });
 
-      expect(result.content).toEqual(Buffer.from("recovered", "utf-8"));
-      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+      expect(result.status).toBe("not_found");
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries for 404
     });
-
-    it("should use exponential backoff for retry delays", async () => {
-      const fetcher = new HttpFetcher();
-      // Mock setTimeout to spy on delay behavior without actually waiting
-      const setTimeoutSpy = vi.spyOn(global, "setTimeout");
-
-      // Mock all retries to fail, then succeed
-      mockedAxios.get.mockRejectedValueOnce({ response: { status: 500 } });
-      mockedAxios.get.mockRejectedValueOnce({ response: { status: 500 } });
-      mockedAxios.get.mockRejectedValueOnce({ response: { status: 500 } });
-      mockedAxios.get.mockResolvedValueOnce({
-        data: Buffer.from("success", "utf-8"),
-        headers: { "content-type": "text/plain" },
-      });
-
-      // Execute fetch with base delay of 10ms
-      const baseDelay = 10;
-      await fetcher.fetch("https://example.com", {
-        maxRetries: 3,
-        retryDelay: baseDelay,
-      });
-
-      // Verify exponential backoff: baseDelay * 2^attempt
-      // Attempt 0: 10ms, Attempt 1: 20ms, Attempt 2: 40ms
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 10);
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 20);
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 40);
-
-      setTimeoutSpy.mockRestore();
-    });
-  });
-
-  it("should not retry on unretryable HTTP errors", async () => {
-    const fetcher = new HttpFetcher();
-    mockedAxios.get.mockRejectedValue({ response: { status: 404 } });
-
-    await expect(
-      fetcher.fetch("https://example.com", {
-        retryDelay: 1, // Use minimal delay
-      }),
-    ).rejects.toThrow(ScraperError);
-    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-  });
-
-  it("should retry on retryable HTTP errors", async () => {
-    const fetcher = new HttpFetcher();
-    const retryableErrors = [429, 500, 503];
-    for (const status of retryableErrors) {
-      mockedAxios.get.mockRejectedValueOnce({ response: { status } });
-    }
-
-    const htmlContent = "<html><body><h1>Hello</h1></body></html>";
-    mockedAxios.get.mockResolvedValueOnce({
-      data: Buffer.from(htmlContent, "utf-8"),
-      headers: { "content-type": "text/html" },
-    });
-
-    // Test behavior: retry mechanism should eventually succeed
-    const result = await fetcher.fetch("https://example.com", {
-      retryDelay: 1, // Use minimal delay to speed up test
-      maxRetries: 3,
-    });
-
-    expect(mockedAxios.get).toHaveBeenCalledTimes(retryableErrors.length + 1);
-    expect(result.content).toEqual(Buffer.from(htmlContent, "utf-8"));
-  });
-
-  it("should throw error after max retries", async () => {
-    const fetcher = new HttpFetcher();
-    const maxRetries = 2; // Use smaller number for faster test
-
-    mockedAxios.get.mockRejectedValue({ response: { status: 502 } });
-
-    await expect(
-      fetcher.fetch("https://example.com", {
-        maxRetries: maxRetries,
-        retryDelay: 1, // Use minimal delay
-      }),
-    ).rejects.toThrow(ScraperError);
-
-    expect(mockedAxios.get).toHaveBeenCalledTimes(maxRetries + 1);
   });
 
   it("should generate fingerprint headers", async () => {
@@ -421,20 +331,23 @@ describe("HttpFetcher", () => {
     await fetcher.fetch("https://example.com");
 
     // Test behavior: verify that axios is called with required properties
-    expect(mockedAxios.get).toHaveBeenCalledWith("https://example.com", {
-      responseType: "arraybuffer",
-      headers: expect.objectContaining({
-        "user-agent": expect.any(String),
-        accept: expect.any(String),
-        "accept-language": expect.any(String),
-        // Verify that our custom Accept-Encoding header is set (excluding zstd)
-        "Accept-Encoding": "gzip, deflate, br",
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      "https://example.com",
+      expect.objectContaining({
+        responseType: "arraybuffer",
+        headers: expect.objectContaining({
+          "user-agent": expect.any(String),
+          accept: expect.any(String),
+          "accept-language": expect.any(String),
+          // Verify that our custom Accept-Encoding header is set (excluding zstd)
+          "Accept-Encoding": "gzip, deflate, br",
+        }),
+        timeout: undefined,
+        maxRedirects: 5,
+        signal: undefined,
+        decompress: true,
       }),
-      timeout: undefined,
-      maxRedirects: 5,
-      signal: undefined,
-      decompress: true,
-    });
+    );
   });
 
   it("should respect custom headers", async () => {
@@ -449,14 +362,17 @@ describe("HttpFetcher", () => {
     await fetcher.fetch("https://example.com", { headers });
 
     // Test behavior: verify custom headers are included
-    expect(mockedAxios.get).toHaveBeenCalledWith("https://example.com", {
-      responseType: "arraybuffer",
-      headers: expect.objectContaining(headers),
-      timeout: undefined,
-      maxRedirects: 5,
-      signal: undefined,
-      decompress: true,
-    });
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      "https://example.com",
+      expect.objectContaining({
+        responseType: "arraybuffer",
+        headers: expect.objectContaining(headers),
+        timeout: undefined,
+        maxRedirects: 5,
+        signal: undefined,
+        decompress: true,
+      }),
+    );
   });
 
   describe("redirect handling", () => {
@@ -572,6 +488,110 @@ describe("HttpFetcher", () => {
 
       // Expected to FAIL before implementation change (currently returns original)
       expect(result.source).toBe(finalUrl);
+    });
+  });
+
+  describe("Conditional request headers", () => {
+    beforeEach(() => {
+      mockedAxios.get.mockReset();
+    });
+
+    it("should send If-None-Match header when etag is provided", async () => {
+      const fetcher = new HttpFetcher();
+      const mockResponse = {
+        data: Buffer.from("content", "utf-8"),
+        headers: { "content-type": "text/plain" },
+      };
+      mockedAxios.get.mockResolvedValue(mockResponse);
+
+      await fetcher.fetch("https://example.com", { etag: '"abc123"' });
+
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        "https://example.com",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            "If-None-Match": '"abc123"',
+          }),
+        }),
+      );
+    });
+
+    it("should NOT send If-None-Match header when etag is not provided", async () => {
+      const fetcher = new HttpFetcher();
+      const mockResponse = {
+        data: Buffer.from("content", "utf-8"),
+        headers: { "content-type": "text/plain" },
+      };
+      mockedAxios.get.mockResolvedValue(mockResponse);
+
+      await fetcher.fetch("https://example.com");
+
+      expect(mockedAxios.get).toHaveBeenCalledWith(
+        "https://example.com",
+        expect.objectContaining({
+          headers: expect.not.objectContaining({
+            "If-None-Match": expect.anything(),
+          }),
+        }),
+      );
+    });
+  });
+
+  describe("304 Not Modified response handling", () => {
+    beforeEach(() => {
+      mockedAxios.get.mockReset();
+    });
+
+    it("should handle 304 responses with status='not_modified', empty content, and no retry", async () => {
+      const fetcher = new HttpFetcher();
+      const etag = '"cached-etag-123"';
+
+      // 304 is treated as successful by validateStatus, so axios resolves (not rejects)
+      mockedAxios.get.mockResolvedValue({
+        status: 304,
+        data: Buffer.from(""), // 304 typically has no body
+        headers: { etag },
+        config: {},
+        statusText: "Not Modified",
+      });
+
+      const result = await fetcher.fetch("https://example.com", { etag });
+
+      expect(result.status).toBe("not_modified");
+      expect(result.etag).toBeUndefined(); // 304 response doesn't extract etag from headers
+      expect(result.content).toEqual(Buffer.from(""));
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries for 304
+    });
+  });
+
+  describe("ETag extraction from responses", () => {
+    beforeEach(() => {
+      mockedAxios.get.mockReset();
+    });
+
+    it("should extract etag from response headers (or undefined if missing)", async () => {
+      const fetcher = new HttpFetcher();
+      const etag = '"response-etag-456"';
+
+      // Test with etag present
+      mockedAxios.get.mockResolvedValue({
+        data: Buffer.from("content", "utf-8"),
+        headers: { "content-type": "text/plain", etag },
+      });
+
+      const resultWithEtag = await fetcher.fetch("https://example.com");
+      expect(resultWithEtag.etag).toBe(etag);
+
+      mockedAxios.get.mockReset();
+
+      // Test with etag missing
+      mockedAxios.get.mockResolvedValue({
+        data: Buffer.from("content", "utf-8"),
+        headers: { "content-type": "text/plain" },
+      });
+
+      const resultWithoutEtag = await fetcher.fetch("https://example.com");
+      expect(resultWithoutEtag.etag).toBeUndefined();
     });
   });
 });

@@ -6,7 +6,6 @@ import { HtmlLinkExtractorMiddleware } from "./HtmlLinkExtractorMiddleware";
 import type { MiddlewareContext } from "./types";
 
 // Suppress logger output during tests
-vi.mock("../../../utils/logger");
 
 // Helper to create a minimal valid ScraperOptions object
 const createMockScraperOptions = (url = "http://example.com"): ScraperOptions => ({
@@ -29,8 +28,8 @@ const createMockContext = (
 ): MiddlewareContext => {
   const context: MiddlewareContext = {
     content: htmlContent || "",
+    contentType: "text/html",
     source,
-    metadata: {},
     links: [],
     errors: [],
     options: { ...createMockScraperOptions(source), ...options },

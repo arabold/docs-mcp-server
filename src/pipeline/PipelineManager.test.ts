@@ -15,7 +15,7 @@ vi.mock("uuid", () => {
 });
 
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { ScraperProgress } from "../scraper/types";
+import type { ScraperProgressEvent } from "../scraper/types";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import { ListJobsTool } from "../tools/ListJobsTool";
 import { PipelineManager } from "./PipelineManager";
@@ -27,7 +27,6 @@ import { PipelineJobStatus } from "./types";
 vi.mock("../store/DocumentManagementService");
 vi.mock("../scraper/ScraperService");
 vi.mock("./PipelineWorker");
-vi.mock("../utils/logger");
 
 describe("PipelineManager", () => {
   let mockStore: Partial<DocumentManagementService>;
@@ -67,7 +66,11 @@ describe("PipelineManager", () => {
     progress: null,
     error: null,
     sourceUrl: "https://example.com",
-    scraperOptions: null,
+    scraperOptions: {
+      url: "https://example.com",
+      library: "test-lib",
+      version: "1.0.0",
+    },
     abortController: new AbortController(),
     completionPromise: Promise.resolve(),
     resolveCompletion: () => {},
@@ -79,13 +82,22 @@ describe("PipelineManager", () => {
   const createTestProgress = (
     pagesScraped: number,
     totalPages: number,
-  ): ScraperProgress => ({
+  ): ScraperProgressEvent => ({
     pagesScraped,
     totalPages,
     currentUrl: `https://example.com/page-${pagesScraped}`,
     depth: 1,
     maxDepth: 3,
     totalDiscovered: 0,
+    result: {
+      url: `https://example.com/page-${pagesScraped}`,
+      title: `Page ${pagesScraped}`,
+      contentType: "text/html",
+      textContent: "",
+      links: [],
+      errors: [],
+      chunks: [],
+    },
   });
 
   beforeEach(() => {
@@ -98,6 +110,22 @@ describe("PipelineManager", () => {
       updateVersionStatus: vi.fn().mockResolvedValue(undefined),
       updateVersionProgress: vi.fn().mockResolvedValue(undefined), // For progress tests
       getVersionsByStatus: vi.fn().mockResolvedValue([]),
+      // Refresh job methods
+      ensureVersion: vi.fn().mockResolvedValue(1),
+      getPagesByVersionId: vi.fn().mockResolvedValue([]),
+      getScraperOptions: vi.fn().mockResolvedValue(null),
+      getVersionById: vi.fn().mockResolvedValue({
+        id: 1,
+        library_id: 1,
+        name: "1.0.0",
+        status: "completed",
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:01:00.000Z",
+      }),
+      getLibraryById: vi.fn().mockResolvedValue({
+        id: 1,
+        name: "test-lib",
+      }),
     };
 
     // Mock the worker's executeJob method
@@ -128,7 +156,7 @@ describe("PipelineManager", () => {
   // --- Enqueueing Tests ---
   it("should enqueue a job with QUEUED status and return a job ID", async () => {
     const options = { url: "http://a.com", library: "libA", version: "1.0" };
-    const jobId = await manager.enqueueJob("libA", "1.0", options);
+    const jobId = await manager.enqueueScrapeJob("libA", "1.0", options);
     const job = await manager.getJob(jobId);
     expect(job?.status).toBe(PipelineJobStatus.QUEUED);
     expect(job?.library).toBe("libA");
@@ -149,7 +177,7 @@ describe("PipelineManager", () => {
       maxPages: 1,
       maxDepth: 1,
     };
-    const jobId = await manager.enqueueJob("libA", "1.0", options);
+    const jobId = await manager.enqueueScrapeJob("libA", "1.0", options);
     await manager.start();
     await vi.advanceTimersByTimeAsync(1);
     const job = await manager.getJob(jobId);
@@ -160,7 +188,7 @@ describe("PipelineManager", () => {
 
   it("should complete a job and transition to COMPLETED", async () => {
     const options = { url: "http://a.com", library: "libA", version: "1.0" };
-    const jobId = await manager.enqueueJob("libA", "1.0", options);
+    const jobId = await manager.enqueueScrapeJob("libA", "1.0", options);
     await manager.start();
     await vi.advanceTimersByTimeAsync(1);
     await manager.waitForJobCompletion(jobId);
@@ -189,7 +217,7 @@ describe("PipelineManager", () => {
           }),
         );
       }
-      const jobId1 = await manager.enqueueJob(
+      const jobId1 = await manager.enqueueScrapeJob(
         "libA",
         desc === "unversioned" ? undefined : "1.0",
         options1,
@@ -204,7 +232,7 @@ describe("PipelineManager", () => {
         library: "libA",
         version: desc === "unversioned" ? "" : "1.0",
       };
-      const jobId2 = await manager.enqueueJob(
+      const jobId2 = await manager.enqueueScrapeJob(
         "libA",
         desc === "unversioned" ? undefined : "1.0",
         options2,
@@ -228,7 +256,7 @@ describe("PipelineManager", () => {
   it("should transition job to FAILED if worker throws", async () => {
     mockWorkerInstance.executeJob.mockRejectedValue(new Error("fail"));
     const options = { url: "http://fail.com", library: "libFail", version: "1.0" };
-    const jobId = await manager.enqueueJob("libFail", "1.0", options);
+    const jobId = await manager.enqueueScrapeJob("libFail", "1.0", options);
     await manager.start();
     await vi.advanceTimersByTimeAsync(1);
     await manager.waitForJobCompletion(jobId).catch(() => {}); // Handle expected rejection
@@ -245,7 +273,7 @@ describe("PipelineManager", () => {
       }),
     );
     const options = { url: "http://cancel.com", library: "libCancel", version: "1.0" };
-    const jobId = await manager.enqueueJob("libCancel", "1.0", options);
+    const jobId = await manager.enqueueScrapeJob("libCancel", "1.0", options);
     await manager.start();
     await vi.advanceTimersByTimeAsync(1);
     await manager.cancelJob(jobId);
@@ -272,7 +300,7 @@ describe("PipelineManager", () => {
       library: "libProgress",
       version: "1.0",
     };
-    const jobId = await manager.enqueueJob("libProgress", "1.0", options);
+    const jobId = await manager.enqueueScrapeJob("libProgress", "1.0", options);
     await manager.start();
     await vi.advanceTimersByTimeAsync(1);
     await manager.waitForJobCompletion(jobId);
@@ -286,8 +314,8 @@ describe("PipelineManager", () => {
     const optionsB = { url: "http://b.com", library: "libB", version: "1.0" };
     const pendingPromise = new Promise(() => {});
     mockWorkerInstance.executeJob.mockReturnValue(pendingPromise);
-    const jobIdA = await manager.enqueueJob("libA", "1.0", optionsA);
-    const jobIdB = await manager.enqueueJob("libB", "1.0", optionsB);
+    const jobIdA = await manager.enqueueScrapeJob("libA", "1.0", optionsA);
+    const jobIdB = await manager.enqueueScrapeJob("libB", "1.0", optionsB);
     await manager.start();
     await vi.advanceTimersByTimeAsync(1);
     const jobA = await manager.getJob(jobIdA);
@@ -398,7 +426,7 @@ describe("PipelineManager", () => {
   describe("Database Status Integration", () => {
     it("should update database status when job is enqueued", async () => {
       const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
-      await manager.enqueueJob("test-lib", "1.0", options);
+      await manager.enqueueScrapeJob("test-lib", "1.0", options);
 
       // Should ensure library/version exists and update status to QUEUED
       expect(mockStore.ensureLibraryAndVersion).toHaveBeenCalledWith("test-lib", "1.0");
@@ -407,7 +435,7 @@ describe("PipelineManager", () => {
 
     it("should handle unversioned jobs correctly", async () => {
       const options = { url: "http://example.com", library: "test-lib", version: "" };
-      await manager.enqueueJob("test-lib", null, options);
+      await manager.enqueueScrapeJob("test-lib", null, options);
 
       // Should treat null version as empty string
       expect(mockStore.ensureLibraryAndVersion).toHaveBeenCalledWith("test-lib", "");
@@ -476,7 +504,7 @@ describe("PipelineManager", () => {
     it("should map job statuses to database statuses correctly", async () => {
       // Test that the mapping function works correctly by checking enum values
       const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
-      const jobId = await manager.enqueueJob("test-lib", "1.0", options);
+      const jobId = await manager.enqueueScrapeJob("test-lib", "1.0", options);
 
       // Verify the job was created with correct status
       const job = await manager.getJob(jobId);
@@ -495,7 +523,9 @@ describe("PipelineManager", () => {
       const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
 
       // Should not throw even if database update fails
-      await expect(manager.enqueueJob("test-lib", "1.0", options)).resolves.toBeDefined();
+      await expect(
+        manager.enqueueScrapeJob("test-lib", "1.0", options),
+      ).resolves.toBeDefined();
 
       // Job should still be created in memory despite database error
       const allJobs = await manager.getJobs();
@@ -549,7 +579,7 @@ describe("PipelineManager", () => {
 
       // This should not cause the system to hang
       try {
-        const jobId = await manager.enqueueJob("test-lib", "1.0", options);
+        const jobId = await manager.enqueueScrapeJob("test-lib", "1.0", options);
         // If it succeeds, verify the job exists
         if (jobId) {
           const job = await manager.getJob(jobId);
@@ -580,6 +610,249 @@ describe("PipelineManager", () => {
 
       // Verify the cleanup chain was invoked
       expect(cleanupSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // --- Refresh Job Tests ---
+  describe("enqueueRefreshJob", () => {
+    it("should successfully enqueue a refresh job with initial queue", async () => {
+      // Setup: Mock pages and scraper options for an existing version
+      const mockPages = [
+        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
+        { id: 2, url: "https://example.com/page2", depth: 1, etag: "etag2" },
+        { id: 3, url: "https://example.com/page3", depth: 1, etag: "etag3" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(456);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com",
+        options: { maxDepth: 2 },
+      });
+
+      // Action: Enqueue a refresh job
+      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0");
+
+      // Assertions: Verify the job was created with correct properties
+      expect(jobId).toBeDefined();
+      expect(typeof jobId).toBe("string");
+
+      const job = await manager.getJob(jobId);
+      expect(job).toBeDefined();
+      expect(job?.status).toBe(PipelineJobStatus.QUEUED);
+      expect(job?.library).toBe("test-lib");
+      expect(job?.version).toBe("1.0.0");
+
+      // Verify the scraper options contain an initialQueue with the same number of pages
+      // Note: initialQueue is part of ScraperOptions but not VersionScraperOptions (storage type)
+      expect(job?.scraperOptions).toBeDefined();
+      const scraperOpts = job?.scraperOptions as any;
+      expect(scraperOpts?.initialQueue).toBeDefined();
+      expect(scraperOpts?.initialQueue).toHaveLength(mockPages.length);
+
+      // Verify maxPages is NOT set (allowing discovery of new pages during refresh)
+      expect(scraperOpts?.maxPages).toBeUndefined();
+    });
+
+    it("should handle unversioned libraries during refresh", async () => {
+      const mockPages = [
+        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(789);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com",
+        options: {},
+      });
+
+      // Action: Enqueue refresh for unversioned library (null/undefined version)
+      const jobId = await manager.enqueueRefreshJob("unversioned-lib", null);
+
+      // Assertions
+      const job = await manager.getJob(jobId);
+      expect(job).toBeDefined();
+      expect(job?.library).toBe("unversioned-lib");
+      expect(job?.version).toBe(null); // Public API uses null for unversioned
+      const scraperOpts = job?.scraperOptions as any;
+      expect(scraperOpts?.initialQueue).toHaveLength(1);
+    });
+
+    it("should throw error when refreshing a version with no pages", async () => {
+      // Setup: Mock empty pages array
+      (mockStore.ensureVersion as Mock).mockResolvedValue(999);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
+
+      // Action & Assertion: Should throw with clear error message
+      await expect(manager.enqueueRefreshJob("empty-lib", "1.0.0")).rejects.toThrow(
+        "No pages found for empty-lib@1.0.0",
+      );
+    });
+
+    it("should throw error when refreshing unversioned library with no pages", async () => {
+      // Setup: Mock empty pages array for unversioned library
+      (mockStore.ensureVersion as Mock).mockResolvedValue(888);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
+
+      // Action & Assertion: Should throw with clear error message including "unversioned"
+      await expect(manager.enqueueRefreshJob("empty-lib", undefined)).rejects.toThrow(
+        "No pages found for empty-lib@unversioned",
+      );
+    });
+
+    it("should preserve page depth and etag in initialQueue", async () => {
+      const mockPages = [
+        { id: 10, url: "https://example.com/deep", depth: 5, etag: "deep-etag" },
+        { id: 11, url: "https://example.com/shallow", depth: 0, etag: null },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(111);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com",
+        options: {},
+      });
+
+      const jobId = await manager.enqueueRefreshJob("depth-test", "1.0.0");
+      const job = await manager.getJob(jobId);
+
+      // Verify initialQueue contains depth and etag information
+      // Note: initialQueue is part of ScraperOptions but not VersionScraperOptions (storage type)
+      const scraperOpts = job?.scraperOptions as any;
+      const queue = scraperOpts?.initialQueue;
+      expect(queue).toBeDefined();
+      expect(queue).toHaveLength(2);
+
+      // Verify deep page
+      const deepItem = queue?.find(
+        (item: any) => item.url === "https://example.com/deep",
+      );
+      expect(deepItem).toBeDefined();
+      expect(deepItem?.depth).toBe(5);
+      expect(deepItem?.etag).toBe("deep-etag");
+      expect(deepItem?.pageId).toBe(10);
+
+      // Verify shallow page
+      const shallowItem = queue?.find(
+        (item: any) => item.url === "https://example.com/shallow",
+      );
+      expect(shallowItem).toBeDefined();
+      expect(shallowItem?.depth).toBe(0);
+      expect(shallowItem?.etag).toBe(null);
+      expect(shallowItem?.pageId).toBe(11);
+    });
+
+    it("should perform full re-scrape instead of refresh when version is not completed", async () => {
+      // Setup: Mock an incomplete version (failed scrape)
+      const mockPages = [
+        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
+        { id: 2, url: "https://example.com/page2", depth: 1, etag: "etag2" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(555);
+      (mockStore.getVersionById as Mock).mockResolvedValue({
+        id: 555,
+        library_id: 1,
+        name: "1.0.0",
+        status: "failed", // Version was not completed
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:01:00.000Z",
+      });
+      (mockStore.getLibraryById as Mock).mockResolvedValue({
+        id: 1,
+        name: "incomplete-lib",
+      });
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com",
+        options: { maxDepth: 2 },
+      });
+
+      // Spy on enqueueJobWithStoredOptions to verify it's called
+      const enqueueStoredSpy = vi.spyOn(manager, "enqueueJobWithStoredOptions");
+      enqueueStoredSpy.mockResolvedValue("mock-job-id");
+
+      // Action: Attempt to enqueue a refresh job
+      const jobId = await manager.enqueueRefreshJob("incomplete-lib", "1.0.0");
+
+      // Assertions: Should have called enqueueJobWithStoredOptions instead of normal refresh
+      expect(enqueueStoredSpy).toHaveBeenCalledWith("incomplete-lib", "1.0.0");
+      expect(jobId).toBe("mock-job-id");
+
+      // Should NOT have called getPagesByVersionId since we're doing a full re-scrape
+      expect(mockStore.getPagesByVersionId).not.toHaveBeenCalled();
+    });
+
+    it("should perform full re-scrape for queued versions during refresh", async () => {
+      // Setup: Mock a queued version (never started)
+      (mockStore.ensureVersion as Mock).mockResolvedValue(666);
+      (mockStore.getVersionById as Mock).mockResolvedValue({
+        id: 666,
+        library_id: 2,
+        name: "2.0.0",
+        status: "queued", // Version is still queued
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:00:00.000Z",
+      });
+      (mockStore.getLibraryById as Mock).mockResolvedValue({
+        id: 2,
+        name: "queued-lib",
+      });
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com",
+        options: {},
+      });
+
+      // Spy on enqueueJobWithStoredOptions
+      const enqueueStoredSpy = vi.spyOn(manager, "enqueueJobWithStoredOptions");
+      enqueueStoredSpy.mockResolvedValue("queued-job-id");
+
+      // Action: Attempt to enqueue a refresh job
+      await manager.enqueueRefreshJob("queued-lib", "2.0.0");
+
+      // Assertions: Should perform full re-scrape for queued versions
+      expect(enqueueStoredSpy).toHaveBeenCalledWith("queued-lib", "2.0.0");
+    });
+
+    it("should perform normal refresh for completed versions", async () => {
+      // Setup: Mock a completed version
+      const mockPages = [
+        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(777);
+      (mockStore.getVersionById as Mock).mockResolvedValue({
+        id: 777,
+        library_id: 3,
+        name: "3.0.0",
+        status: "completed", // Version is completed successfully
+        created_at: "2025-01-01T00:00:00.000Z",
+        updated_at: "2025-01-01T00:01:00.000Z",
+      });
+      (mockStore.getLibraryById as Mock).mockResolvedValue({
+        id: 3,
+        name: "completed-lib",
+      });
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com",
+        options: {},
+      });
+
+      // Spy on enqueueJobWithStoredOptions to ensure it's NOT called
+      const enqueueStoredSpy = vi.spyOn(manager, "enqueueJobWithStoredOptions");
+
+      // Action: Enqueue a refresh job
+      const jobId = await manager.enqueueRefreshJob("completed-lib", "3.0.0");
+
+      // Assertions: Should perform normal refresh, NOT full re-scrape
+      expect(enqueueStoredSpy).not.toHaveBeenCalled();
+      expect(mockStore.getPagesByVersionId).toHaveBeenCalledWith(777);
+
+      const job = await manager.getJob(jobId);
+      expect(job).toBeDefined();
+      expect(job?.library).toBe("completed-lib");
+      expect(job?.version).toBe("3.0.0");
     });
   });
 });

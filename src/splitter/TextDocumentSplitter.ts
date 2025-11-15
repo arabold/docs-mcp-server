@@ -9,7 +9,7 @@
 
 import { SPLITTER_MAX_CHUNK_SIZE } from "../utils";
 import { TextContentSplitter } from "./splitters/TextContentSplitter";
-import type { ContentChunk, DocumentSplitter } from "./types";
+import type { Chunk, DocumentSplitter } from "./types";
 
 /**
  * Configuration options for text document splitting
@@ -39,7 +39,7 @@ export class TextDocumentSplitter implements DocumentSplitter {
     });
   }
 
-  async splitText(content: string): Promise<ContentChunk[]> {
+  async splitText(content: string): Promise<Chunk[]> {
     if (!content.trim()) {
       return [];
     }

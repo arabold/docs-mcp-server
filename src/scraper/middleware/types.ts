@@ -6,12 +6,14 @@ import type { ScraperOptions } from "../types";
  * Represents the context passed through the middleware pipeline.
  */
 export interface MiddlewareContext {
+  /** The title of the page or document, extracted during processing */
+  title?: string;
+  /** The MIME type of the content being processed. */
+  contentType: string;
   /** The content being processed (always a string in middleware). */
   content: string;
   /** The original source URL of the content. */
   readonly source: string;
-  /** Extracted metadata (e.g., title). */
-  metadata: Record<string, unknown>;
   /** Extracted links from the content. */
   links: string[];
   /** Errors encountered during processing. */

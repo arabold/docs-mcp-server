@@ -3,15 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logger } from "../../utils/logger";
 import { executeJsInSandbox } from "./sandbox";
 
-// Mock the logger
-vi.mock("../../utils/logger", () => ({
-  logger: {
-    debug: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
 // Mock the JSDOM module
 vi.mock("jsdom");
 

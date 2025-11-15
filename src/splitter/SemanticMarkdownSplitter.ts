@@ -11,7 +11,7 @@ import { ContentSplitterError, MinimumChunkSizeError } from "./errors";
 import { CodeContentSplitter } from "./splitters/CodeContentSplitter";
 import { TableContentSplitter } from "./splitters/TableContentSplitter";
 import { TextContentSplitter } from "./splitters/TextContentSplitter";
-import type { ContentChunk, DocumentSplitter, SectionContentType } from "./types";
+import type { Chunk, DocumentSplitter, SectionContentType } from "./types";
 
 /**
  * Represents a section of content within a document,
@@ -101,7 +101,7 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
   /**
    * Main entry point for splitting markdown content
    */
-  async splitText(markdown: string, _contentType?: string): Promise<ContentChunk[]> {
+  async splitText(markdown: string, _contentType?: string): Promise<Chunk[]> {
     // Note: JSON content is now handled by dedicated JsonDocumentSplitter in JsonPipeline
     // This splitter focuses on markdown, HTML, and plain text content
 
@@ -219,10 +219,8 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
   /**
    * Step 2: Split section content into smaller chunks
    */
-  private async splitSectionContent(
-    sections: DocumentSection[],
-  ): Promise<ContentChunk[]> {
-    const chunks: ContentChunk[] = [];
+  private async splitSectionContent(sections: DocumentSection[]): Promise<Chunk[]> {
+    const chunks: Chunk[] = [];
 
     for (const section of sections) {
       for (const content of section.content) {
@@ -296,7 +294,7 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
         // Create chunks from split content
         chunks.push(
           ...splitContent.map(
-            (text): ContentChunk => ({
+            (text): Chunk => ({
               types: [content.type],
               content: text,
               section: {

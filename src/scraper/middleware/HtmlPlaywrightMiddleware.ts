@@ -587,10 +587,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    */
   async process(context: MiddlewareContext, next: () => Promise<void>): Promise<void> {
     // Check if we have a MIME type from the raw content and if it's suitable for HTML processing
-    const contentType =
-      context.options?.headers?.["content-type"] ||
-      context.metadata?.contentType ||
-      context.metadata?.mimeType;
+    const contentType = context.options?.headers?.["content-type"] || context.contentType;
 
     // Safety check: If we detect this is definitely not HTML content, skip Playwright
     if (
