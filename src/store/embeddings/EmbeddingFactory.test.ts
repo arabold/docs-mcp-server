@@ -51,10 +51,10 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should throw MissingCredentialsError for OpenAI without OPENAI_API_KEY", () => {
+  test("should throw MissingCredentialsError for OpenAI without OPENAI_API_KEY or OPENAI_API_BASE", () => {
     vi.stubGlobal("process", {
       env: {
-        // Missing OPENAI_API_KEY
+        // Missing both OPENAI_API_KEY and OPENAI_API_BASE
       },
     });
 
@@ -63,6 +63,48 @@ describe("createEmbeddingModel", () => {
     );
     expect(() => createEmbeddingModel("openai:text-embedding-3-small")).toThrow(
       MissingCredentialsError,
+    );
+  });
+
+  test("should create OpenAI embeddings with OPENAI_API_BASE but no API key (local models)", () => {
+    vi.stubGlobal("process", {
+      env: {
+        OPENAI_API_BASE: "http://localhost:11434/v1",
+        // No OPENAI_API_KEY
+      },
+    });
+
+    const model = createEmbeddingModel("text-embedding-3-small");
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({
+      modelName: "text-embedding-3-small",
+    });
+  });
+
+  test("should treat invalid provider prefix as model name when OpenAI credentials available", () => {
+    vi.stubGlobal("process", {
+      env: {
+        OPENAI_API_BASE: "http://localhost:11434/v1",
+      },
+    });
+
+    // "snowflake-arctic-embed:latest" should be treated as a full model name for OpenAI
+    const model = createEmbeddingModel("snowflake-arctic-embed:latest");
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({
+      modelName: "snowflake-arctic-embed:latest",
+    });
+  });
+
+  test("should throw UnsupportedProviderError for invalid provider when no OpenAI credentials", () => {
+    vi.stubGlobal("process", {
+      env: {
+        // No OpenAI credentials
+      },
+    });
+
+    expect(() => createEmbeddingModel("snowflake-arctic-embed:latest")).toThrow(
+      UnsupportedProviderError,
     );
   });
 
@@ -131,8 +173,31 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should throw UnsupportedProviderError for unknown provider", () => {
+  test("should throw UnsupportedProviderError for unknown provider when no OpenAI credentials", () => {
+    vi.stubGlobal("process", {
+      env: {
+        // No OpenAI credentials
+        GOOGLE_APPLICATION_CREDENTIALS: "credentials.json",
+        GOOGLE_API_KEY: "test-gemini-key",
+      },
+    });
+
     expect(() => createEmbeddingModel("unknown:model")).toThrow(UnsupportedProviderError);
+  });
+
+  test("should treat unknown provider as OpenAI model when OpenAI credentials available", () => {
+    vi.stubGlobal("process", {
+      env: {
+        OPENAI_API_KEY: "test-openai-key",
+      },
+    });
+
+    // With OpenAI credentials, "unknown:model" is treated as an OpenAI model name
+    const model = createEmbeddingModel("unknown:model");
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({
+      modelName: "unknown:model",
+    });
   });
 
   test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {

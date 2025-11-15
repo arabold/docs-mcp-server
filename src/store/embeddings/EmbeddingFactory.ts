@@ -59,7 +59,7 @@ export class ModelConfigurationError extends Error {
 export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
   switch (provider) {
     case "openai":
-      return !!process.env.OPENAI_API_KEY;
+      return !!process.env.OPENAI_API_KEY || !!process.env.OPENAI_API_BASE;
 
     case "vertex":
       return !!process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -121,15 +121,52 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
   // Parse provider and model name
   const [providerOrModel, ...modelNameParts] = providerAndModel.split(":");
   const modelName = modelNameParts.join(":");
-  const provider = modelName ? (providerOrModel as EmbeddingProvider) : "openai";
-  const model = modelName || providerOrModel;
+
+  // Determine the provider:
+  // 1. If a provider prefix is given (e.g., "openai:model"), validate it
+  // 2. If no prefix or invalid provider, check for OpenAI credentials and default to openai
+  // 3. Otherwise, assume openai as the default provider
+  let provider: EmbeddingProvider;
+  let model: string;
+
+  if (modelName) {
+    // Provider prefix was specified (e.g., "openai:text-embedding-3-small")
+    const validProviders: EmbeddingProvider[] = [
+      "openai",
+      "vertex",
+      "gemini",
+      "aws",
+      "microsoft",
+      "sagemaker",
+    ];
+
+    if (validProviders.includes(providerOrModel as EmbeddingProvider)) {
+      // Valid provider prefix
+      provider = providerOrModel as EmbeddingProvider;
+      model = modelName;
+    } else {
+      // Invalid provider prefix - check if OpenAI credentials are available
+      if (areCredentialsAvailable("openai")) {
+        // Treat the entire string as a model name for OpenAI
+        provider = "openai";
+        model = providerAndModel;
+      } else {
+        throw new UnsupportedProviderError(providerOrModel);
+      }
+    }
+  } else {
+    // No provider prefix (e.g., "text-embedding-3-small")
+    provider = "openai";
+    model = providerOrModel;
+  }
 
   // Default configuration for each provider
   const baseConfig = { stripNewLines: true };
 
   switch (provider) {
     case "openai": {
-      if (!process.env.OPENAI_API_KEY) {
+      // Require API key only if no custom base URL is set
+      if (!process.env.OPENAI_API_KEY && !process.env.OPENAI_API_BASE) {
         throw new MissingCredentialsError("openai", ["OPENAI_API_KEY"]);
       }
       const config: Partial<OpenAIEmbeddingsParams> & { configuration?: ClientOptions } =
