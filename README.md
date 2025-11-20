@@ -66,7 +66,7 @@ Run a standalone server that includes both MCP endpoints and web interface in a 
 
 ### Option 2: npx
 
-1. **Install Node.js 22.x or later.**
+1. **Install Node.js 20.x or later.**
 2. **Start the server:**
 
    ```bash
