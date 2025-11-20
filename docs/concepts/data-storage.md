@@ -101,13 +101,9 @@ Database location determined by priority:
 2. OS-specific application data directory
 3. Temporary directory as fallback
 
-### Cross-Platform Support
+### Default Storage Location
 
-Platform-specific paths:
-
-- **macOS:** `~/Library/Application Support/docs-mcp-server/`
-- **Linux:** `~/.local/share/docs-mcp-server/`
-- **Windows:** `%APPDATA%/docs-mcp-server/`
+On macOS: `~/Library/Application Support/docs-mcp-server/`
 
 ## Document Management
 
