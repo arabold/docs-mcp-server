@@ -457,7 +457,7 @@ npx @arabold/docs-mcp-server@latest
 
 For more architectural details, see the [ARCHITECTURE.md](ARCHITECTURE.md).
 
-For enterprise authentication and security features, see the [Authentication Guide](docs/authentication.md).
+For enterprise authentication and security features, see the [Authentication Guide](docs/infrastructure/authentication.md).
 
 ## Telemetry
 
@@ -506,7 +506,7 @@ docker run \
   ghcr.io/arabold/docs-mcp-server:latest
 ```
 
-For more details about our telemetry practices, see the [Telemetry Guide](docs/telemetry.md).
+For more details about our telemetry practices, see the [Telemetry Guide](docs/infrastructure/telemetry.md).
 
 ## Development
 
