@@ -4,6 +4,62 @@
 
 The pipeline system manages asynchronous document processing with persistent job state and coordinated execution across embedded or external workers.
 
+## Architecture Pattern
+
+The pipeline uses a Factory pattern to provide a unified interface for both local and remote job processing:
+
+```mermaid
+classDiagram
+    class IPipeline {
+        <<interface>>
+        +start() Promise~void~
+        +stop() Promise~void~
+        +enqueueScrapeJob() Promise~string~
+        +enqueueRefreshJob() Promise~string~
+        +getJob() Promise~PipelineJob~
+        +cancelJob() Promise~void~
+    }
+    
+    class PipelineFactory {
+        <<factory>>
+        +createPipeline(docService, options) Promise~IPipeline~
+    }
+    
+    class PipelineManager {
+        -docService DocumentManagementService
+        -workers PipelineWorker[]
+        -queue JobQueue
+        +start() Promise~void~
+        +enqueueScrapeJob() Promise~string~
+    }
+    
+    class PipelineClient {
+        -serverUrl string
+        -trpcClient TRPCClient
+        +start() Promise~void~
+        +enqueueScrapeJob() Promise~string~
+    }
+    
+    class PipelineWorker {
+        -job PipelineJob
+        -scraper ScraperService
+        +execute() Promise~void~
+    }
+    
+    IPipeline <|.. PipelineManager : implements
+    IPipeline <|.. PipelineClient : implements
+    PipelineFactory ..> IPipeline : creates
+    PipelineFactory ..> PipelineManager : creates (local)
+    PipelineFactory ..> PipelineClient : creates (remote)
+    PipelineManager o-- PipelineWorker : manages
+```
+
+**Code Reference:** 
+- `src/pipeline/PipelineFactory.ts` - Factory implementation
+- `src/pipeline/trpc/interfaces.ts` lines 20-35 - IPipeline interface
+- `src/pipeline/PipelineManager.ts` - Local implementation
+- `src/pipeline/PipelineClient.ts` - Remote implementation
+
 ## Core Components
 
 ### PipelineFactory
