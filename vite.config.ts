@@ -12,7 +12,7 @@ export default defineConfig({
         const indexBundle = bundle['index.js'];
         if (indexBundle && indexBundle.type === 'chunk' && indexBundle.code) {
           // Add shebang to the beginning of the file with source maps enabled
-          indexBundle.code = '#!/usr/bin/env node --enable-source-maps\n' + indexBundle.code;
+          indexBundle.code = '#!/usr/bin/env node\n' + indexBundle.code;
         }
       },
       writeBundle(options) {
