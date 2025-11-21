@@ -4,6 +4,65 @@
 
 The content processing system transforms raw content from various sources into searchable document chunks through a modular strategy-pipeline-splitter architecture. The system handles web pages, local files, and package registries, processing different content types with specialized pipelines that preserve document structure while optimizing chunk sizes for embedding generation.
 
+## Strategy Pattern Architecture
+
+The content processing system uses the Strategy pattern to handle different content sources:
+
+```mermaid
+classDiagram
+    class ScraperStrategy {
+        <<interface>>
+        +canHandle(url) boolean
+        +scrape(options, callback, signal) Promise~void~
+        +cleanup() Promise~void~
+    }
+    
+    class BaseScraperStrategy {
+        <<abstract>>
+        #visited Set~string~
+        #queue QueueItem[]
+        +scrape(options, callback, signal) Promise~void~
+        #processItem(item) Promise~ProcessItemResult~*
+    }
+    
+    class WebScraperStrategy {
+        +canHandle(url) boolean
+        #processItem(item) Promise~ProcessItemResult~
+    }
+    
+    class LocalFileStrategy {
+        +canHandle(url) boolean
+        #processItem(item) Promise~ProcessItemResult~
+    }
+    
+    class NpmScraperStrategy {
+        +canHandle(url) boolean
+        #processItem(item) Promise~ProcessItemResult~
+    }
+    
+    class PyPiScraperStrategy {
+        +canHandle(url) boolean
+        #processItem(item) Promise~ProcessItemResult~
+    }
+    
+    class GitHubScraperStrategy {
+        +canHandle(url) boolean
+        #processItem(item) Promise~ProcessItemResult~
+    }
+    
+    ScraperStrategy <|.. BaseScraperStrategy : implements
+    BaseScraperStrategy <|-- WebScraperStrategy : extends
+    BaseScraperStrategy <|-- LocalFileStrategy : extends
+    BaseScraperStrategy <|-- NpmScraperStrategy : extends
+    BaseScraperStrategy <|-- PyPiScraperStrategy : extends
+    BaseScraperStrategy <|-- GitHubScraperStrategy : extends
+```
+
+**Code Reference:**
+- `src/scraper/types.ts` - ScraperStrategy interface definition
+- `src/scraper/strategies/BaseScraperStrategy.ts` - Abstract base implementation
+- `src/scraper/strategies/*.ts` - Concrete strategy implementations
+
 ## Architecture Components
 
 ### Scraper Strategies
