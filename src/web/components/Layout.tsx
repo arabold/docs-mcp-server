@@ -1,12 +1,10 @@
 /**
  * Defines the shared HTML skeleton for all web pages, including the global
  * header with version badge and the hook for client-side update notifications.
- * The component resolves the current version from props or package metadata
+ * The component resolves the current version from props or build-time injection
  * and renders placeholders that AlpineJS hydrates at runtime.
  */
 import type { PropsWithChildren } from "@kitajs/html";
-import { readFileSync } from "node:fs";
-import { logger } from "../../utils/logger";
 
 /**
  * Props for the Layout component.
@@ -33,21 +31,8 @@ const Layout = ({
   children,
   eventClientConfig,
 }: LayoutProps) => {
-  let versionString = version;
-  if (!versionString) {
-    // If no version is provided, use the version from package.json
-    // We cannot bake the version into the bundle, as the package.json will
-    // be updated by the build process, after the bundle is created.
-    try {
-      const packageJson = JSON.parse(readFileSync("package.json", "utf-8")) as {
-        version: string;
-      };
-      versionString = packageJson.version;
-      logger.debug(`Resolved version from package.json: ${versionString}`);
-    } catch (error) {
-      logger.error(`❌ Error reading package.json: ${error}`);
-    }
-  }
+  // Use provided version prop, or fall back to build-time injected version
+  const versionString = version || __APP_VERSION__;
   const versionInitializer = `versionUpdate({ currentVersion: ${
     versionString ? `'${versionString}'` : "null"
   } })`;

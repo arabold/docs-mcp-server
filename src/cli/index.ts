@@ -3,7 +3,6 @@
  */
 
 import { Command, Option } from "commander";
-import packageJson from "../../package.json";
 import { EventBusService } from "../events";
 import {
   initTelemetry,
@@ -44,7 +43,7 @@ export function createCliProgram(): Command {
   program
     .name("docs-mcp-server")
     .description("Unified CLI, MCP Server, and Web Interface for Docs MCP Server.")
-    .version(packageJson.version)
+    .version(__APP_VERSION__)
     // Mutually exclusive logging flags
     .addOption(
       new Option("--verbose", "Enable verbose (debug) logging").conflicts("silent"),
@@ -110,7 +109,7 @@ export function createCliProgram(): Command {
       // Set global context for CLI commands
       if (telemetry.isEnabled()) {
         telemetry.setGlobalContext({
-          appVersion: packageJson.version,
+          appVersion: __APP_VERSION__,
           appPlatform: process.platform,
           appNodeVersion: process.version,
           appInterface: "cli",
