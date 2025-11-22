@@ -1,3 +1,10 @@
+## [1.27.1](https://github.com/arabold/docs-mcp-server/compare/v1.27.0...v1.27.1) (2025-11-20)
+
+
+### Bug Fixes
+
+* removed incompatible --enable-source-maps from shebang ([ab443ac](https://github.com/arabold/docs-mcp-server/commit/ab443aca15bc274f28bf8e55e460a9c3051ddc71))
+
 # [1.27.0](https://github.com/arabold/docs-mcp-server/compare/v1.26.2...v1.27.0) (2025-11-15)
 
 

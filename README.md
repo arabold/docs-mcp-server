@@ -66,14 +66,14 @@ Run a standalone server that includes both MCP endpoints and web interface in a 
 
 ### Option 2: npx
 
-1. **Install Node.js 22.x or later.**
+1. **Install Node.js 20.x or later.**
 2. **Start the server:**
 
    ```bash
    npx @arabold/docs-mcp-server@latest
    ```
 
-   This will run the server on port 6280 by default.
+   This runs the server on port 6280 by default.
 
    **Optional:** Prefix with `OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
@@ -321,7 +321,7 @@ This architecture allows independent scaling of processing (workers) and user in
 
 ## Configuration
 
-The Docs MCP Server can run without any configuration and will use full-text search only. To enable vector search for improved results, configure an embedding provider via environment variables.
+The Docs MCP Server runs without any configuration and uses full-text search only. To enable vector search for improved results, configure an embedding provider via environment variables.
 
 ### Command Line Argument Overrides
 
@@ -457,7 +457,7 @@ npx @arabold/docs-mcp-server@latest
 
 For more architectural details, see the [ARCHITECTURE.md](ARCHITECTURE.md).
 
-For enterprise authentication and security features, see the [Authentication Guide](docs/authentication.md).
+For enterprise authentication and security features, see the [Authentication Guide](docs/infrastructure/authentication.md).
 
 ## Telemetry
 
@@ -506,7 +506,7 @@ docker run \
   ghcr.io/arabold/docs-mcp-server:latest
 ```
 
-For more details about our telemetry practices, see the [Telemetry Guide](docs/telemetry.md).
+For more details about our telemetry practices, see the [Telemetry Guide](docs/infrastructure/telemetry.md).
 
 ## Development
 

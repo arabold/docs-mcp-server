@@ -173,8 +173,8 @@ Despite using conditional requests, refresh operations perform a **full re-crawl
 
 **If we only followed stored pages:**
 
-- Newly added pages would never be discovered
-- Reorganizations would break coverage
+- Newly added pages are never discovered
+- Reorganizations break coverage
 - Deleted pages might remain in index indefinitely
 
 ### How It Works
@@ -220,7 +220,7 @@ The **depth value is preserved** from the original scrape. This ensures:
 When refresh discovers a new page (not in `initialQueue`):
 
 1. Calculate depth based on parent page: `parent.depth + 1`
-2. Assign no `pageId` (will be created during database insert)
+2. Assign no `pageId` (created during database insert)
 3. Process through full pipeline as a new page
 
 ### Root URL Handling

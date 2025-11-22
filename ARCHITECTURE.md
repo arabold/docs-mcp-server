@@ -268,7 +268,17 @@ New functionality should follow established patterns:
 
 Detailed documentation for specific architectural areas:
 
-- `docs/deployment-modes.md` - Protocol detection and server modes
-- `docs/pipeline-architecture.md` - Job processing and worker coordination
-- `docs/content-processing.md` - Scraping and document processing
-- `docs/data-storage.md` - Database design and embedding management
+### Concepts
+- `docs/concepts/pipeline-architecture.md` - Job processing and worker coordination
+- `docs/concepts/content-processing.md` - Scraping and document processing
+- `docs/concepts/data-storage.md` - Database design and embedding management
+- `docs/concepts/refresh-architecture.md` - Efficient re-indexing with change detection
+- `docs/concepts/splitter-hierarchy.md` - Document chunk organization and hierarchy
+- `docs/concepts/search-result-reassembly.md` - Search result processing and assembly
+- `docs/concepts/source-code-splitter.md` - Source code chunking strategies
+- `docs/concepts/content-agnostic-assembly.md` - Content assembly patterns
+
+### Infrastructure
+- `docs/infrastructure/deployment-modes.md` - Protocol detection and server modes
+- `docs/infrastructure/authentication.md` - OAuth2 authentication and security
+- `docs/infrastructure/telemetry.md` - Privacy-first telemetry architecture
