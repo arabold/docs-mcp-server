@@ -57,38 +57,39 @@ describe("ScrapeTool", () => {
     { input: "1.2", expectedInternal: "1.2.0" }, // Coerced
     { input: null, expectedInternal: null }, // Null -> Unversioned (normalize to null for pipeline)
     { input: undefined, expectedInternal: null }, // Undefined -> Unversioned (normalize to null for pipeline)
-  ])(
-    "should handle valid version input '$input' correctly",
-    async ({ input, expectedInternal }) => {
-      const options = getBaseOptions(input);
-      await scrapeTool.execute(options);
+  ])("should handle valid version input '$input' correctly", async ({
+    input,
+    expectedInternal,
+  }) => {
+    const options = getBaseOptions(input);
+    await scrapeTool.execute(options);
 
-      // Check enqueueScrapeJob call (implies constructor was called)
-      const expectedVersionArg =
-        typeof expectedInternal === "string"
-          ? expectedInternal.toLowerCase()
-          : expectedInternal; // null stays null
+    // Check enqueueScrapeJob call (implies constructor was called)
+    const expectedVersionArg =
+      typeof expectedInternal === "string"
+        ? expectedInternal.toLowerCase()
+        : expectedInternal; // null stays null
 
-      expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
-        "test-lib",
-        expectedVersionArg,
-        expect.objectContaining({ url: options.url }), // Check basic options passed
-      );
-      expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
-    },
-  );
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
+      "test-lib",
+      expectedVersionArg,
+      expect.objectContaining({ url: options.url }), // Check basic options passed
+    );
+    expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
+  });
 
-  it.each(["latest", "1.x", "invalid-version"])(
-    "should throw error for invalid version format '%s'",
-    async (invalidVersion) => {
-      const options = getBaseOptions(invalidVersion);
+  it.each([
+    "latest",
+    "1.x",
+    "invalid-version",
+  ])("should throw error for invalid version format '%s'", async (invalidVersion) => {
+    const options = getBaseOptions(invalidVersion);
 
-      await expect(scrapeTool.execute(options)).rejects.toThrow(
-        /Invalid version format for scraping/,
-      );
-      expect(mockManagerInstance.enqueueScrapeJob).not.toHaveBeenCalled();
-    },
-  );
+    await expect(scrapeTool.execute(options)).rejects.toThrow(
+      /Invalid version format for scraping/,
+    );
+    expect(mockManagerInstance.enqueueScrapeJob).not.toHaveBeenCalled();
+  });
 
   // --- Pipeline Execution Tests ---
 

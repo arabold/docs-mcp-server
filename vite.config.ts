@@ -27,6 +27,7 @@ export default defineConfig({
   define: {
     // Inject environment variables at build time - MUST be set during CI/CD
     '__POSTHOG_API_KEY__': JSON.stringify(process.env.POSTHOG_API_KEY || ''),
+    '__APP_VERSION__': JSON.stringify(process.env.APP_VERSION || packageJson.version),
   },
   resolve: {
     // Keep existing resolve extensions

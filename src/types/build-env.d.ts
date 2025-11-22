@@ -4,3 +4,4 @@
  */
 
 declare const __POSTHOG_API_KEY__: string;
+declare const __APP_VERSION__: string;

@@ -9,7 +9,6 @@ import fastifyStatic from "@fastify/static";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { WebSocketServer } from "ws";
-import packageJson from "../../package.json";
 import { ProxyAuthManager } from "../auth";
 import { resolveEmbeddingContext } from "../cli/utils";
 import type { EventBusService } from "../events";
@@ -91,7 +90,7 @@ export class AppServer {
           // Resolve embedding configuration for global context
 
           telemetry.setGlobalContext({
-            appVersion: packageJson.version,
+            appVersion: __APP_VERSION__,
             appPlatform: process.platform,
             appNodeVersion: process.version,
             appServicesEnabled: this.getActiveServicesList(),
