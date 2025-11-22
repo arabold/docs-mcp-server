@@ -1,3 +1,19 @@
+# [1.28.0](https://github.com/arabold/docs-mcp-server/compare/v1.27.1...v1.28.0) (2025-11-22)
+
+
+### Bug Fixes
+
+* add JOB_LIST_CHANGE event and update event handling in PipelineManager and SSE route ([0f15f4e](https://github.com/arabold/docs-mcp-server/commit/0f15f4eb01efcd6557ff23c494ab835f85ac2214))
+* enhance handling of quoted search strings and special characters in DocumentStore ([57b7da1](https://github.com/arabold/docs-mcp-server/commit/57b7da1aa7ed2361f92ed644cf9a6a16df8ada45)), closes [#262](https://github.com/arabold/docs-mcp-server/issues/262)
+* inject correct app version at build time ([6f36709](https://github.com/arabold/docs-mcp-server/commit/6f36709ced66cba2adf6abb523bcaca3210de541)), closes [#264](https://github.com/arabold/docs-mcp-server/issues/264)
+* integrate superjson transformer across tRPC clients and routers ([d482b87](https://github.com/arabold/docs-mcp-server/commit/d482b87d55a3daabc94f78a654c3ee1e4ae41fc0))
+
+
+### Features
+
+* implement EventBusService for event-driven architecture ([7388933](https://github.com/arabold/docs-mcp-server/commit/7388933c2938ab13accc4560795cda528e1af9b8))
+* integrate EventBusService into PipelineClient and related commands ([eb09ff1](https://github.com/arabold/docs-mcp-server/commit/eb09ff1c3ada690bf02accb91474ce84fd1bfc9d))
+
 ## [1.27.1](https://github.com/arabold/docs-mcp-server/compare/v1.27.0...v1.27.1) (2025-11-20)
 
 

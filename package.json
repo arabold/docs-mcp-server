@@ -1,6 +1,6 @@
 {
   "name": "@arabold/docs-mcp-server",
-  "version": "1.27.1",
+  "version": "1.28.0",
   "description": "MCP server for fetching and searching documentation",
   "type": "module",
   "bin": {
