@@ -15,6 +15,7 @@ import { createLocalDocumentManagement } from "../src/store";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
 import { createAppServerConfig } from "../src/cli/utils";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
+import { EventBusService } from "../src/events";
 
 // Load environment variables from .env file
 config();
@@ -45,8 +46,9 @@ describe("Authentication End-to-End Tests", () => {
     baseUrl = `http://localhost:${serverPort}`;
 
     // Initialize services with temporary directory
-    docService = await createLocalDocumentManagement(tempDir); // Use temp dir for test database
-    pipeline = await PipelineFactory.createPipeline(docService);
+    const eventBus = new EventBusService();
+    docService = await createLocalDocumentManagement(tempDir, eventBus); // Use temp dir for test database
+    pipeline = await PipelineFactory.createPipeline(docService, eventBus);
 
     // Configure server with authentication enabled
     const config = createAppServerConfig({
@@ -69,7 +71,7 @@ describe("Authentication End-to-End Tests", () => {
     });
 
     // Start the server
-    appServer = await startAppServer(docService, pipeline, config);
+    appServer = await startAppServer(docService, pipeline, eventBus, config);
     
     // Give the server a moment to start
     await new Promise(resolve => setTimeout(resolve, 1000));

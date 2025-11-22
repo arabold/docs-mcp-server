@@ -11,7 +11,7 @@ import {
   UnsupportedProviderError,
 } from "../store/embeddings/EmbeddingFactory";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { analytics } from "../telemetry";
+import { type TelemetryService, telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
 import { createCliProgram } from "./index";
 
@@ -20,6 +20,7 @@ let activeAppServer: AppServer | null = null;
 let activeMcpStdioServer: McpServer | null = null;
 let activeDocService: IDocumentManagement | null = null;
 let activePipelineManager: IPipeline | null = null;
+let activeTelemetryService: TelemetryService | null = null;
 let isShuttingDown = false;
 
 /**
@@ -61,10 +62,17 @@ const sigintHandler = async (): Promise<void> => {
       logger.debug("SIGINT: DocumentManagementService shut down.");
     }
 
+    // Cleanup TelemetryService (removes event listeners)
+    if (activeTelemetryService) {
+      activeTelemetryService.shutdown();
+      activeTelemetryService = null;
+      logger.debug("SIGINT: TelemetryService shut down.");
+    }
+
     // Analytics shutdown is handled by AppServer.stop() above
     // Only shutdown analytics if no AppServer was running
-    if (!activeAppServer && analytics.isEnabled()) {
-      await analytics.shutdown();
+    if (!activeAppServer && telemetry.isEnabled()) {
+      await telemetry.shutdown();
       logger.debug("SIGINT: Analytics shut down.");
     }
 
@@ -88,7 +96,7 @@ export async function cleanupCliCommand(): Promise<void> {
     process.removeListener("SIGINT", sigintHandler);
 
     // Shutdown analytics for non-server CLI commands to ensure clean exit
-    await analytics.shutdown();
+    await telemetry.shutdown();
 
     // Avoid hanging processes by explicitly exiting
     process.exit(0);
@@ -103,11 +111,13 @@ export function registerGlobalServices(services: {
   mcpStdioServer?: McpServer;
   docService?: IDocumentManagement;
   pipeline?: IPipeline;
+  telemetryService?: TelemetryService;
 }): void {
   if (services.appServer) activeAppServer = services.appServer;
   if (services.mcpStdioServer) activeMcpStdioServer = services.mcpStdioServer;
   if (services.docService) activeDocService = services.docService;
   if (services.pipeline) activePipelineManager = services.pipeline;
+  if (services.telemetryService) activeTelemetryService = services.telemetryService;
 }
 
 /**

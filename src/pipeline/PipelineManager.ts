@@ -8,6 +8,8 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
+import type { EventBusService } from "../events/EventBusService";
+import { EventType } from "../events/types";
 import { ScraperRegistry, ScraperService } from "../scraper";
 import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
@@ -17,7 +19,7 @@ import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError } from "./errors";
 import { PipelineWorker } from "./PipelineWorker"; // Import the worker
 import type { IPipeline } from "./trpc/interfaces";
-import type { InternalPipelineJob, PipelineJob, PipelineManagerCallbacks } from "./types";
+import type { InternalPipelineJob, PipelineJob } from "./types";
 import { PipelineJobStatus } from "./types";
 
 /**
@@ -29,51 +31,32 @@ export class PipelineManager implements IPipeline {
   private activeWorkers: Set<string> = new Set();
   private isRunning = false;
   private concurrency: number;
-  private callbacks: PipelineManagerCallbacks = {};
-  private composedCallbacks: PipelineManagerCallbacks = {};
   private store: DocumentManagementService;
   private scraperService: ScraperService;
   private shouldRecoverJobs: boolean;
+  private eventBus: EventBusService;
 
   constructor(
     store: DocumentManagementService,
+    eventBus: EventBusService,
     concurrency: number = DEFAULT_MAX_CONCURRENCY,
     options: { recoverJobs?: boolean } = {},
   ) {
     this.store = store;
+    this.eventBus = eventBus;
     this.concurrency = concurrency;
     this.shouldRecoverJobs = options.recoverJobs ?? true; // Default to true for backward compatibility
     // ScraperService needs a registry. We create one internally for the manager.
     const registry = new ScraperRegistry();
     this.scraperService = new ScraperService(registry);
-
-    // Initialize composed callbacks to ensure progress persistence even before setCallbacks is called
-    this.rebuildComposedCallbacks();
   }
 
   /**
-   * Registers callback handlers for pipeline manager events.
+   * No-op method for backward compatibility with IPipeline interface.
+   * Events are now emitted directly to EventBusService.
    */
-  setCallbacks(callbacks: PipelineManagerCallbacks): void {
-    this.callbacks = callbacks || {};
-    this.rebuildComposedCallbacks();
-  }
-
-  /** Build composed callbacks that ensure persistence then delegate to user callbacks */
-  private rebuildComposedCallbacks(): void {
-    const user = this.callbacks;
-    this.composedCallbacks = {
-      onJobProgress: async (job, progress) => {
-        await this.updateJobProgress(job, progress);
-        await user.onJobProgress?.(job, progress);
-      },
-      onJobStatusChange: async (job) => {
-        await user.onJobStatusChange?.(job);
-      },
-      onJobError: async (job, error, document) => {
-        await user.onJobError?.(job, error, document);
-      },
-    };
+  setCallbacks(_callbacks: unknown): void {
+    // No-op: callbacks are no longer used
   }
 
   /**
@@ -570,6 +553,8 @@ export class PipelineManager implements IPipeline {
 
     if (clearedCount > 0) {
       logger.info(`🧹 Cleared ${clearedCount} completed job(s) from the queue`);
+      // Emit event to notify clients that the job list has changed
+      this.eventBus.emit(EventType.JOB_LIST_CHANGE, undefined);
     } else {
       logger.debug("No completed jobs to clear");
     }
@@ -634,8 +619,19 @@ export class PipelineManager implements IPipeline {
     const worker = new PipelineWorker(this.store, this.scraperService);
 
     try {
-      // Delegate the actual work to the worker using composed callbacks
-      await worker.executeJob(job, this.composedCallbacks);
+      // Delegate the actual work to the worker
+      // The worker works with InternalPipelineJob, we convert to public when needed
+      await worker.executeJob(job, {
+        onJobProgress: async (internalJob, progress) => {
+          await this.updateJobProgress(internalJob, progress);
+        },
+        onJobError: async (internalJob, error, document) => {
+          // Log job errors
+          logger.warn(
+            `⚠️ Job ${internalJob.id} error ${document ? `on document ${document.url}` : ""}: ${error.message}`,
+          );
+        },
+      });
 
       // If executeJob completes without throwing, and we weren't cancelled meanwhile...
       if (signal.aborted) {
@@ -752,12 +748,19 @@ export class PipelineManager implements IPipeline {
       // Don't throw - we don't want to break the pipeline for database issues
     }
 
-    // Fire callback
-    await this.callbacks.onJobStatusChange?.(job);
+    // Emit events to EventBusService
+    const publicJob = this.toPublicJob(job);
+
+    this.eventBus.emit(EventType.JOB_STATUS_CHANGE, publicJob);
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+
+    // Logging
+    logger.debug(`Job ${job.id} status changed to: ${job.status}`);
   }
 
   /**
    * Updates both in-memory job progress and database progress (write-through).
+   * Also emits progress events to the EventBusService.
    */
   async updateJobProgress(
     job: InternalPipelineJob,
@@ -783,7 +786,14 @@ export class PipelineManager implements IPipeline {
       }
     }
 
-    // Note: Do not invoke onJobProgress callback here.
-    // Callbacks are wired by services (e.g., workerService/CLI) and already call this method.
+    // Emit progress event to EventBusService
+    const publicJob = this.toPublicJob(job);
+
+    this.eventBus.emit(EventType.JOB_PROGRESS, { job: publicJob, progress });
+
+    // Logging
+    logger.debug(
+      `Job ${job.id} progress: ${progress.pagesScraped}/${progress.totalPages} pages`,
+    );
   }
 }

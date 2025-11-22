@@ -1,19 +1,22 @@
-# Build stage
-FROM node:22-slim AS builder
-
-# Accept build argument for PostHog API key
-ARG POSTHOG_API_KEY
-ENV POSTHOG_API_KEY=$POSTHOG_API_KEY
+# Base stage with build dependencies
+FROM node:22-slim AS base
 
 WORKDIR /app
 
-# Install build dependencies for native modules (tree-sitter)
+# Install build dependencies for native modules (better-sqlite3, tree-sitter, etc.)
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
   python3 \
   make \
   g++ \
   && rm -rf /var/lib/apt/lists/*
+
+# Build stage
+FROM base AS builder
+
+# Accept build argument for PostHog API key
+ARG POSTHOG_API_KEY
+ENV POSTHOG_API_KEY=$POSTHOG_API_KEY
 
 # Copy package files
 COPY package*.json ./
@@ -27,35 +30,29 @@ COPY . .
 # Build application
 RUN npm run build
 
-# Install production dependencies in a clean directory
-RUN rm -rf node_modules && npm ci --omit=dev
-
 # Production stage
-FROM node:22-slim
+FROM base AS production
 
-WORKDIR /app
+# Set environment variables for Playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+
+# Install system dependencies required by browsers
+RUN npx playwright install-deps
 
 # Copy package files and database
 COPY package*.json .
-COPY db            db
+COPY db db
 
-# Copy built files and production node_modules from builder
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/node_modules ./node_modules
+# Install production dependencies (with native modules built for target platform)
+RUN npm ci --omit=dev
 
 # Install system Chromium and required dependencies
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends chromium \
-  && apt-get clean \
-  && rm -rf /var/lib/apt/lists/* /tmp/* \
-  && CHROMIUM_PATH=$(command -v chromium || command -v chromium-browser) \
-  && if [ -z "$CHROMIUM_PATH" ]; then echo "Chromium executable not found!" && exit 1; fi \
-  && if [ "$CHROMIUM_PATH" != "/usr/bin/chromium" ]; then echo "Unexpected Chromium path: $CHROMIUM_PATH" && exit 1; fi \
-  && echo "Chromium installed at $CHROMIUM_PATH"
+RUN PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright npx -y playwright@1.56.1 install --only-shell
 
-# Set Playwright to use system Chromium (hardcoded path, as ENV cannot use shell vars)
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+# Copy built files from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/public ./public
 
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data

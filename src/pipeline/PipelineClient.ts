@@ -1,9 +1,19 @@
 /**
  * tRPC client implementation of the Pipeline interface.
  * Delegates all pipeline operations to an external worker via tRPC router.
+ * Uses WebSocket link for subscriptions and HTTP for queries/mutations.
  */
 
-import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
+import {
+  createTRPCProxyClient,
+  createWSClient,
+  httpBatchLink,
+  splitLink,
+  wsLink,
+} from "@trpc/client";
+import superjson from "superjson";
+import type { EventBusService } from "../events/EventBusService";
+import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
 import { logger } from "../utils/logger";
 import type { IPipeline } from "./trpc/interfaces";
@@ -11,49 +21,52 @@ import type { PipelineRouter } from "./trpc/router";
 import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "./types";
 
 /**
- * Deserializes a job object from JSON, converting date strings back to Date objects.
- * Only includes public fields - no internal job management fields.
- */
-function deserializeJob(serializedJob: Record<string, unknown>): PipelineJob {
-  return {
-    ...serializedJob,
-    createdAt: new Date(serializedJob.createdAt as string),
-    startedAt: serializedJob.startedAt
-      ? new Date(serializedJob.startedAt as string)
-      : null,
-    finishedAt: serializedJob.finishedAt
-      ? new Date(serializedJob.finishedAt as string)
-      : null,
-    updatedAt: serializedJob.updatedAt
-      ? new Date(serializedJob.updatedAt as string)
-      : undefined,
-  } as PipelineJob;
-}
-
-/**
  * HTTP client that implements the IPipeline interface by delegating to external worker.
  */
 export class PipelineClient implements IPipeline {
   private readonly baseUrl: string;
+  private readonly wsUrl: string;
   private readonly client: ReturnType<typeof createTRPCProxyClient<PipelineRouter>>;
-  private pollingInterval: number = 1000; // 1 second
-  private activePolling = new Set<string>(); // Track jobs being polled for completion
+  private readonly wsClient: ReturnType<typeof createWSClient>;
+  private readonly eventBus: EventBusService;
 
-  constructor(serverUrl: string) {
+  constructor(serverUrl: string, eventBus: EventBusService) {
     this.baseUrl = serverUrl.replace(/\/$/, "");
-    this.client = createTRPCProxyClient<PipelineRouter>({
-      links: [httpBatchLink({ url: this.baseUrl })],
+    this.eventBus = eventBus;
+
+    // Extract base URL without the /api path for WebSocket connection
+    // The tRPC WebSocket adapter handles the /api routing internally
+    const url = new URL(this.baseUrl);
+    const baseWsUrl = `${url.protocol}//${url.host}`;
+    this.wsUrl = baseWsUrl.replace(/^http/, "ws");
+
+    // Create WebSocket client for subscriptions
+    this.wsClient = createWSClient({
+      url: this.wsUrl,
     });
-    logger.debug(`PipelineClient (tRPC) created for: ${this.baseUrl}`);
+
+    // Create tRPC client with split link:
+    // - Subscriptions use WebSocket
+    // - Queries and mutations use HTTP
+    this.client = createTRPCProxyClient<PipelineRouter>({
+      links: [
+        splitLink({
+          condition: (op) => op.type === "subscription",
+          true: wsLink({ client: this.wsClient, transformer: superjson }),
+          false: httpBatchLink({ url: this.baseUrl, transformer: superjson }),
+        }),
+      ],
+    });
+
+    logger.debug(
+      `PipelineClient (tRPC) created for: ${this.baseUrl} (ws: ${this.wsUrl})`,
+    );
   }
 
   async start(): Promise<void> {
-    // Check connectivity via ping
+    // Check connectivity via ping procedure
     try {
-      // Root-level ping exists on the unified router; cast for this health check only
-      await (
-        this.client as unknown as { ping: { query: () => Promise<unknown> } }
-      ).ping.query();
+      await this.client.ping.query();
       logger.debug("PipelineClient connected to external worker via tRPC");
     } catch (error) {
       throw new Error(
@@ -63,8 +76,9 @@ export class PipelineClient implements IPipeline {
   }
 
   async stop(): Promise<void> {
-    // Clear any active polling
-    this.activePolling.clear();
+    // Close WebSocket connection
+    this.wsClient.close();
+
     logger.debug("PipelineClient stopped");
   }
 
@@ -116,10 +130,8 @@ export class PipelineClient implements IPipeline {
 
   async getJob(jobId: string): Promise<PipelineJob | undefined> {
     try {
-      const serializedJob = await this.client.getJob.query({ id: jobId });
-      return serializedJob
-        ? deserializeJob(serializedJob as unknown as Record<string, unknown>)
-        : undefined;
+      // superjson automatically deserializes Date objects
+      return await this.client.getJob.query({ id: jobId });
     } catch (error) {
       throw new Error(
         `Failed to get job ${jobId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -129,13 +141,11 @@ export class PipelineClient implements IPipeline {
 
   async getJobs(status?: PipelineJobStatus): Promise<PipelineJob[]> {
     try {
+      // superjson automatically deserializes Date objects
       const result = await this.client.getJobs.query({ status });
-      const serializedJobs = result.jobs || [];
-      return serializedJobs.map((j) =>
-        deserializeJob(j as unknown as Record<string, unknown>),
-      );
+      return result.jobs || [];
     } catch (error) {
-      logger.error(`Failed to get jobs from external worker: ${error}`);
+      logger.error(`❌ Failed to get jobs from external worker: ${error}`);
       throw error;
     }
   }
@@ -145,7 +155,7 @@ export class PipelineClient implements IPipeline {
       await this.client.cancelJob.mutate({ id: jobId });
       logger.debug(`Job cancelled via external worker: ${jobId}`);
     } catch (error) {
-      logger.error(`Failed to cancel job ${jobId} via external worker: ${error}`);
+      logger.error(`❌ Failed to cancel job ${jobId} via external worker: ${error}`);
       throw error;
     }
   }
@@ -156,48 +166,44 @@ export class PipelineClient implements IPipeline {
       logger.debug(`Cleared ${result.count} completed jobs via external worker`);
       return result.count || 0;
     } catch (error) {
-      logger.error(`Failed to clear completed jobs via external worker: ${error}`);
+      logger.error(`❌ Failed to clear completed jobs via external worker: ${error}`);
       throw error;
     }
   }
 
   async waitForJobCompletion(jobId: string): Promise<void> {
-    if (this.activePolling.has(jobId)) {
-      throw new Error(`Already waiting for completion of job ${jobId}`);
-    }
-
-    this.activePolling.add(jobId);
-
-    try {
-      while (this.activePolling.has(jobId)) {
-        const job = await this.getJob(jobId);
-        if (!job) {
-          throw new Error(`Job ${jobId} not found`);
-        }
-
-        // Check if job is in final state
-        if (
-          job.status === "completed" ||
-          job.status === "failed" ||
-          job.status === "cancelled"
-        ) {
-          if (job.status === "failed" && job.error) {
-            // Normalize to real Error instance
-            throw new Error(job.error.message);
+    return new Promise((resolve, reject) => {
+      // Listen for job status changes on the event bus
+      // RemoteEventProxy bridges remote worker events to this local bus
+      const unsubscribe = this.eventBus.on(
+        EventType.JOB_STATUS_CHANGE,
+        (job: PipelineJob) => {
+          // Filter for the specific job we're waiting for
+          if (job.id !== jobId) {
+            return;
           }
-          return;
-        }
 
-        // Poll every second
-        await new Promise((resolve) => setTimeout(resolve, this.pollingInterval));
-      }
-    } finally {
-      this.activePolling.delete(jobId);
-    }
+          // Check if job reached a terminal state
+          if (
+            job.status === "completed" ||
+            job.status === "failed" ||
+            job.status === "cancelled"
+          ) {
+            unsubscribe();
+
+            if (job.status === "failed" && job.error) {
+              reject(new Error(job.error.message));
+            } else {
+              resolve();
+            }
+          }
+        },
+      );
+    });
   }
 
   setCallbacks(_callbacks: PipelineManagerCallbacks): void {
-    // For external pipeline, callbacks are not used since all updates come via polling
+    // For external pipeline, callbacks are not used since all updates come via event bus
     logger.debug("PipelineClient.setCallbacks called - no-op for external worker");
   }
 }

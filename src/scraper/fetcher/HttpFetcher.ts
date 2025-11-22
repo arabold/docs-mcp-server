@@ -1,6 +1,5 @@
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import { CancellationError } from "../../pipeline/errors";
-import { analytics, extractHostname, extractProtocol } from "../../telemetry";
 import { FETCHER_BASE_DELAY, FETCHER_MAX_RETRIES } from "../../utils/config";
 import { ChallengeError, RedirectError, ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
@@ -53,62 +52,20 @@ export class HttpFetcher implements ContentFetcher {
   }
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
-    const startTime = performance.now();
     const maxRetries = options?.maxRetries ?? FETCHER_MAX_RETRIES;
     const baseDelay = options?.retryDelay ?? FETCHER_BASE_DELAY;
     // Default to following redirects if not specified
     const followRedirects = options?.followRedirects ?? true;
 
-    try {
-      const result = await this.performFetch(
-        source,
-        options,
-        maxRetries,
-        baseDelay,
-        followRedirects,
-      );
+    const result = await this.performFetch(
+      source,
+      options,
+      maxRetries,
+      baseDelay,
+      followRedirects,
+    );
 
-      // Track successful HTTP request
-      const duration = performance.now() - startTime;
-      analytics.track("http_request_completed", {
-        success: true,
-        hostname: extractHostname(source),
-        protocol: extractProtocol(source),
-        durationMs: Math.round(duration),
-        contentSizeBytes: result.content.length,
-        mimeType: result.mimeType,
-        hasEncoding: !!result.encoding,
-        followRedirects: followRedirects,
-        hadRedirects: result.source !== source,
-      });
-
-      return result;
-    } catch (error) {
-      // Track failed HTTP request
-      const duration = performance.now() - startTime;
-      const axiosError = error as AxiosError;
-      const status = axiosError.response?.status;
-
-      analytics.track("http_request_completed", {
-        success: false,
-        hostname: extractHostname(source),
-        protocol: extractProtocol(source),
-        durationMs: Math.round(duration),
-        statusCode: status,
-        errorType:
-          error instanceof CancellationError
-            ? "cancellation"
-            : error instanceof RedirectError
-              ? "redirect"
-              : error instanceof ScraperError
-                ? "scraper"
-                : "unknown",
-        errorCode: axiosError.code,
-        followRedirects: followRedirects,
-      });
-
-      throw error;
-    }
+    return result;
   }
 
   private async performFetch(

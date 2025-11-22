@@ -4,12 +4,12 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
-import { formatOutput, getGlobalOptions } from "../utils";
+import { formatOutput, getEventBus, getGlobalOptions } from "../utils";
 
 export async function listAction(options: { serverUrl?: string }, command?: Command) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "list",
     useServerUrl: !!options.serverUrl,
   });
@@ -17,8 +17,11 @@ export async function listAction(options: { serverUrl?: string }, command?: Comm
   const { serverUrl } = options;
   const globalOptions = getGlobalOptions(command);
 
+  const eventBus = getEventBus(command);
+
   // List command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
+    eventBus,
     serverUrl,
     embeddingConfig: serverUrl ? undefined : null,
     storePath: globalOptions.storePath,

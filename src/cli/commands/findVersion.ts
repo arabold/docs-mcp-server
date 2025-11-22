@@ -4,16 +4,16 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
-import { getGlobalOptions } from "../utils";
+import { getEventBus, getGlobalOptions } from "../utils";
 
 export async function findVersionAction(
   library: string,
   options: { version?: string; serverUrl?: string },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "find-version",
     library,
     version: options.version,
@@ -23,11 +23,14 @@ export async function findVersionAction(
   const serverUrl = options.serverUrl;
   const globalOptions = getGlobalOptions(command);
 
+  const eventBus = getEventBus(command);
+
   // Find version command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig: serverUrl ? undefined : null,
     storePath: globalOptions.storePath,
+    eventBus,
   });
   try {
     const findVersionTool = new FindVersionTool(docService);

@@ -14,6 +14,15 @@ import {
 
 // Mocks for execution tests will be defined below in dedicated describe block
 
+// Mock CLI utils early to prevent side effects (like Playwright installation)
+vi.mock("./utils", async () => {
+  const actual = await vi.importActual<any>("./utils");
+  return {
+    ...actual,
+    ensurePlaywrightBrowsersInstalled: vi.fn(), // Mock to prevent side effects in tests
+  };
+});
+
 // --- Additional mocks for createPipelineWithCallbacks behavior tests ---
 vi.mock("../pipeline/PipelineFactory", () => ({
   PipelineFactory: {
@@ -247,73 +256,6 @@ describe("CLI Command Arguments Matrix", () => {
   });
 });
 
-describe("createPipelineWithCallbacks behavior", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("attaches callbacks for local pipeline and throws when docService missing", async () => {
-    const { createPipelineWithCallbacks } = await import("./utils");
-    const { PipelineFactory } = await import("../pipeline/PipelineFactory");
-    const mockSetCallbacks = vi.fn();
-
-    // Local path requires a DocumentManagementService instance
-    await expect(createPipelineWithCallbacks(undefined as any, {})).rejects.toThrow(
-      "Local pipeline requires a DocumentManagementService instance",
-    );
-
-    // Provide a fake docService and ensure callbacks are wired
-    vi.mocked(PipelineFactory.createPipeline).mockResolvedValueOnce({
-      setCallbacks: mockSetCallbacks,
-    } as any);
-
-    const fakeDocService = {} as any;
-    const pipeline = await createPipelineWithCallbacks(fakeDocService, {
-      concurrency: 2,
-    });
-
-    expect(PipelineFactory.createPipeline).toHaveBeenCalledWith(fakeDocService, {
-      concurrency: 2,
-    });
-    expect(mockSetCallbacks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onJobProgress: expect.any(Function),
-        onJobStatusChange: expect.any(Function),
-        onJobError: expect.any(Function),
-      }),
-    );
-    expect(pipeline).toBeDefined();
-  });
-
-  it("creates remote pipeline when serverUrl is provided and attaches callbacks", async () => {
-    const { createPipelineWithCallbacks } = await import("./utils");
-    const { PipelineFactory } = await import("../pipeline/PipelineFactory");
-    const mockSetCallbacks = vi.fn();
-
-    vi.mocked(PipelineFactory.createPipeline).mockResolvedValueOnce({
-      setCallbacks: mockSetCallbacks,
-    } as any);
-
-    const pipeline = await createPipelineWithCallbacks(undefined, {
-      serverUrl: "http://localhost:8080",
-      concurrency: 1,
-    });
-
-    expect(PipelineFactory.createPipeline).toHaveBeenCalledWith(undefined, {
-      serverUrl: "http://localhost:8080",
-      concurrency: 1,
-    });
-    expect(mockSetCallbacks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onJobProgress: expect.any(Function),
-        onJobStatusChange: expect.any(Function),
-        onJobError: expect.any(Function),
-      }),
-    );
-    expect(pipeline).toBeDefined();
-  });
-});
-
 describe("CLI command handler parameters", () => {
   beforeEach(() => {
     capturedCreateArgs = [];
@@ -330,6 +272,7 @@ describe("CLI command handler parameters", () => {
     ).resolves.not.toThrow();
 
     expect(capturedCreateArgs).toContainEqual({
+      eventBus: expect.any(Object),
       serverUrl,
       storePath: expect.any(String),
       embeddingConfig: undefined,
@@ -418,7 +361,10 @@ describe("Global option propagation", () => {
     // Verify that createLocalDocumentManagement was called with the resolved path
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
       resolvedStorePath,
-      expect.any(Object), // embeddingConfig
+      expect.objectContaining({
+        emitter: expect.any(Object),
+      }), // EventBusService instance
+      null, // embeddingConfig (null in this test)
     );
 
     // The parseAsync promise will hang since it starts a server, but we've verified our assertions
@@ -451,7 +397,10 @@ describe("Global option propagation", () => {
     // Verify that createLocalDocumentManagement was called with the resolved path
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
       resolvedStorePath,
-      expect.any(Object), // embeddingConfig
+      expect.objectContaining({
+        emitter: expect.any(Object),
+      }), // EventBusService instance
+      null, // embeddingConfig (null in this test)
     );
 
     // Clean up

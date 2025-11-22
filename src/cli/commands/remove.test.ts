@@ -10,6 +10,13 @@ vi.mock("../../store", () => ({
     removeAllDocuments: removeFn,
   })),
 }));
+vi.mock("../utils", () => ({
+  getGlobalOptions: vi.fn(() => ({ storePath: undefined })),
+  getEventBus: vi.fn(() => ({
+    on: vi.fn(),
+    emit: vi.fn(),
+  })),
+}));
 
 import { removeAction } from "./remove";
 

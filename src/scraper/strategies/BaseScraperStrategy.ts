@@ -186,7 +186,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           }
 
           if (result.status !== FetchStatus.SUCCESS) {
-            logger.error(`Unknown fetch status: ${result.status}`);
+            logger.error(`❌ Unknown fetch status: ${result.status}`);
             return [];
           }
 

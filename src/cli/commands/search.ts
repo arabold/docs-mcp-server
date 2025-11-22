@@ -5,9 +5,14 @@
 import type { Command } from "commander";
 import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
-import { formatOutput, getGlobalOptions, resolveEmbeddingContext } from "../utils";
+import {
+  formatOutput,
+  getEventBus,
+  getGlobalOptions,
+  resolveEmbeddingContext,
+} from "../utils";
 
 export async function searchAction(
   library: string,
@@ -21,7 +26,7 @@ export async function searchAction(
   },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "search",
     library,
     version: options.version,
@@ -43,10 +48,13 @@ export async function searchAction(
     );
   }
 
+  const eventBus = getEventBus(command);
+
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig,
     storePath: globalOptions.storePath,
+    eventBus,
   });
 
   try {

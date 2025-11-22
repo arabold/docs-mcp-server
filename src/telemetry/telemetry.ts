@@ -1,10 +1,10 @@
 /**
- * Analytics wrapper for privacy-first telemetry using PostHog.
+ * Telemtry wrapper for privacy-first telemetry using PostHog.
  * Provides global context and automatic data sanitization.
  *
  * Architecture:
  * - PostHogClient: Handles PostHog SDK integration and event capture
- * - Analytics: High-level coordinator providing public API with global context
+ * - Telemtry: High-level coordinator providing public API with global context
  */
 
 import { logger } from "../utils/logger";
@@ -13,56 +13,55 @@ import { PostHogClient } from "./postHogClient";
 import { generateInstallationId, TelemetryConfig } from "./TelemetryConfig";
 
 /**
- * Telemetry event types for structured analytics
+ * Event types for structured telemetry tracking
  */
 export enum TelemetryEvent {
   APP_STARTED = "app_started",
   APP_SHUTDOWN = "app_shutdown",
   CLI_COMMAND = "cli_command",
   TOOL_USED = "tool_used",
+  PIPELINE_JOB_STARTED = "pipeline_job_started",
   PIPELINE_JOB_COMPLETED = "pipeline_job_completed",
-  DOCUMENT_PROCESSED = "document_processed",
-  WEB_SEARCH_PERFORMED = "web_search_performed",
-  WEB_SCRAPE_STARTED = "web_scrape_started",
+  PIPELINE_JOB_FAILED = "pipeline_job_failed",
 }
 
 /**
- * Main analytics class providing privacy-first telemetry
+ * Main telemetry class providing privacy-first telemetry
  */
-export class Analytics {
+export class Telemetry {
   private postHogClient: PostHogClient;
   private enabled: boolean;
   private distinctId: string;
   private globalContext: Record<string, unknown> = {};
 
   /**
-   * Create a new Analytics instance with proper initialization
-   * This is the recommended way to create Analytics instances
+   * Create a new Telemetry instance with proper initialization
+   * This is the recommended way to create Telemetry instances
    */
-  static create(): Analytics {
+  static create(): Telemetry {
     const config = TelemetryConfig.getInstance();
 
     // Single determination point for enabled status
     const shouldEnable = config.isEnabled() && !!__POSTHOG_API_KEY__;
 
-    const analytics = new Analytics(shouldEnable);
+    const telemetry = new Telemetry(shouldEnable);
 
     // Single log message after everything is initialized with better context
-    if (analytics.isEnabled()) {
-      logger.debug("Analytics enabled");
+    if (telemetry.isEnabled()) {
+      logger.debug("Telemetry enabled");
     } else if (!config.isEnabled()) {
-      logger.debug("Analytics disabled (user preference)");
+      logger.debug("Telemetry disabled (user preference)");
     } else if (!__POSTHOG_API_KEY__) {
-      logger.debug("Analytics disabled (no API key configured)");
+      logger.debug("Telemetry disabled (no API key configured)");
     } else {
-      logger.debug("Analytics disabled");
+      logger.debug("Telemetry disabled");
     }
 
-    return analytics;
+    return telemetry;
   }
 
   /**
-   * Private constructor - use Analytics.create() instead
+   * Private constructor - use Telemetry.create() instead
    */
   private constructor(enabled: boolean = true) {
     this.enabled = enabled;
@@ -103,13 +102,17 @@ export class Analytics {
       ...properties,
       timestamp: new Date().toISOString(),
     };
+    logger.debug(`Tracking event: ${event}`);
     this.postHogClient.capture(this.distinctId, event, enrichedProperties);
   }
 
   /**
    * Capture exception using PostHog's native error tracking with global context
    */
-  captureException(error: Error, properties: Record<string, unknown> = {}): void {
+  captureException(
+    error: Error | unknown,
+    properties: Record<string, unknown> = {},
+  ): void {
     if (!this.enabled) return;
 
     // Merge global context and error properties with timestamp
@@ -118,7 +121,14 @@ export class Analytics {
       ...properties,
       timestamp: new Date().toISOString(),
     };
-    this.postHogClient.captureException(this.distinctId, error, enrichedProperties);
+    logger.debug(
+      `Capturing exception: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    this.postHogClient.captureException(
+      this.distinctId,
+      error instanceof Error ? error : new Error(String(error)),
+      enrichedProperties,
+    );
   }
 
   /**
@@ -131,7 +141,7 @@ export class Analytics {
   }
 
   /**
-   * Check if analytics is enabled
+   * Check if telemetry is enabled
    */
   isEnabled(): boolean {
     return this.enabled;
@@ -139,19 +149,19 @@ export class Analytics {
 }
 
 /**
- * Global analytics instance - initialized lazily
+ * Global telemetry instance - initialized lazily
  */
-let analyticsInstance: Analytics | null = null;
+let telemetryInstance: Telemetry | null = null;
 
 /**
- * Get the global analytics instance, initializing it if needed
+ * Get the global telemetry instance, initializing it if needed
  */
-export function getAnalytics(): Analytics {
-  if (!analyticsInstance) {
-    // Create a basic analytics instance if not yet initialized
-    analyticsInstance = Analytics.create();
+export function getTelemetryInstance(): Telemetry {
+  if (!telemetryInstance) {
+    // Create a basic telemetry instance if not yet initialized
+    telemetryInstance = Telemetry.create();
   }
-  return analyticsInstance;
+  return telemetryInstance;
 }
 
 /**
@@ -165,22 +175,22 @@ export function initTelemetry(options: { enabled: boolean; storePath?: string })
   // Generate/retrieve installation ID with correct storePath
   generateInstallationId(options.storePath);
 
-  // Create the analytics instance with proper configuration (only once)
-  analyticsInstance = Analytics.create();
+  // Create the telemetry instance with proper configuration (only once)
+  telemetryInstance = Telemetry.create();
 }
 
-// Export a proxy object that caches the analytics instance after first access
-export const analytics = new Proxy({} as Analytics, {
+// Export a proxy object that caches the telemetry instance after first access
+export const telemetry = new Proxy({} as Telemetry, {
   get(target, prop) {
-    // Cache the analytics instance on first property access
+    // Cache the telemetry instance on first property access
     if (!target.isEnabled) {
-      const instance = getAnalytics();
+      const instance = getTelemetryInstance();
       // Copy all methods and properties to the target for future direct access
       Object.setPrototypeOf(target, Object.getPrototypeOf(instance));
       Object.assign(target, instance);
     }
 
     // Forward the property access to the cached instance
-    return target[prop as keyof Analytics];
+    return target[prop as keyof Telemetry];
   },
 });

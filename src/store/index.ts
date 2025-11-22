@@ -1,3 +1,4 @@
+import type { EventBusService } from "../events";
 import { DocumentManagementClient } from "./DocumentManagementClient";
 import { DocumentManagementService } from "./DocumentManagementService";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
@@ -10,13 +11,12 @@ export * from "./errors";
 export * from "./trpc/interfaces";
 
 /** Factory to create a document management implementation */
-export async function createDocumentManagement(
-  options: {
-    serverUrl?: string;
-    embeddingConfig?: EmbeddingModelConfig | null;
-    storePath?: string;
-  } = {},
-) {
+export async function createDocumentManagement(options: {
+  eventBus: EventBusService;
+  serverUrl?: string;
+  embeddingConfig?: EmbeddingModelConfig | null;
+  storePath?: string;
+}) {
   if (options.serverUrl) {
     const client = new DocumentManagementClient(options.serverUrl);
     await client.initialize();
@@ -27,6 +27,7 @@ export async function createDocumentManagement(
   }
   const service = new DocumentManagementService(
     options.storePath,
+    options.eventBus,
     options.embeddingConfig,
     undefined,
   );
@@ -40,9 +41,15 @@ export async function createDocumentManagement(
  */
 export async function createLocalDocumentManagement(
   storePath: string,
+  eventBus: EventBusService,
   embeddingConfig?: EmbeddingModelConfig | null,
 ) {
-  const service = new DocumentManagementService(storePath, embeddingConfig, undefined);
+  const service = new DocumentManagementService(
+    storePath,
+    eventBus,
+    embeddingConfig,
+    undefined,
+  );
   await service.initialize();
   return service;
 }

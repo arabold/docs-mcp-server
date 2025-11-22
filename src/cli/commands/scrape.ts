@@ -4,12 +4,13 @@
 
 import type { Command } from "commander";
 import { Option } from "commander";
-import type { PipelineOptions } from "../../pipeline";
+import { EventType } from "../../events";
+import { PipelineFactory, PipelineJobStatus, type PipelineOptions } from "../../pipeline";
 import type { IPipeline } from "../../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../../scraper/types";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import {
   DEFAULT_MAX_CONCURRENCY,
@@ -17,7 +18,7 @@ import {
   DEFAULT_MAX_PAGES,
 } from "../../utils/config";
 import {
-  createPipelineWithCallbacks,
+  getEventBus,
   getGlobalOptions,
   parseHeaders,
   resolveEmbeddingContext,
@@ -43,7 +44,7 @@ export async function scrapeAction(
   },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "scrape",
     library,
     version: options.version,
@@ -72,12 +73,39 @@ export async function scrapeAction(
     );
   }
 
+  const eventBus = getEventBus(command);
+
   const docService: IDocumentManagement = await createDocumentManagement({
     serverUrl,
     embeddingConfig,
     storePath: globalOptions.storePath,
+    eventBus,
   });
   let pipeline: IPipeline | null = null;
+
+  // Display initial status
+  console.log("⏳ Initializing scraping job...");
+
+  // Subscribe to event bus for progress updates (only for local pipelines)
+  let unsubscribeProgress: (() => void) | null = null;
+  let unsubscribeStatus: (() => void) | null = null;
+
+  if (!serverUrl) {
+    unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
+      const { job, progress } = event;
+      console.log(
+        `📄 Scraping ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
+      );
+    });
+
+    unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
+      if (event.status === PipelineJobStatus.RUNNING) {
+        console.log(
+          `🚀 Scraping ${event.library}${event.version ? ` v${event.version}` : ""}...`,
+        );
+      }
+    });
+  }
 
   try {
     const pipelineOptions: PipelineOptions = {
@@ -86,10 +114,17 @@ export async function scrapeAction(
       serverUrl,
     };
 
-    pipeline = await createPipelineWithCallbacks(
-      serverUrl ? undefined : (docService as unknown as never),
-      pipelineOptions,
-    );
+    pipeline = serverUrl
+      ? await PipelineFactory.createPipeline(undefined, eventBus, {
+          serverUrl,
+          ...pipelineOptions,
+        })
+      : await PipelineFactory.createPipeline(
+          docService as unknown as never,
+          eventBus,
+          pipelineOptions,
+        );
+
     await pipeline.start();
     const scrapeTool = new ScrapeTool(pipeline);
 
@@ -123,9 +158,18 @@ export async function scrapeAction(
     if ("pagesScraped" in result) {
       console.log(`✅ Successfully scraped ${result.pagesScraped} pages`);
     } else {
-      console.log(`🚀 Scraping job started with ID: ${result.jobId}`);
+      console.log(`✅ Scraping job started with ID: ${result.jobId}`);
     }
+  } catch (error) {
+    console.error(
+      `❌ Scraping failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    throw error;
   } finally {
+    // Clean up event listeners
+    if (unsubscribeProgress) unsubscribeProgress();
+    if (unsubscribeStatus) unsubscribeStatus();
+
     if (pipeline) await pipeline.stop();
     await docService.shutdown();
   }

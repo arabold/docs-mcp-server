@@ -7,17 +7,21 @@ import path from "node:path";
 import formBody from "@fastify/formbody";
 import fastifyStatic from "@fastify/static";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
+import { WebSocketServer } from "ws";
 import packageJson from "../../package.json";
 import { ProxyAuthManager } from "../auth";
 import { resolveEmbeddingContext } from "../cli/utils";
+import type { EventBusService } from "../events";
+import { RemoteEventProxy } from "../events/RemoteEventProxy";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { cleanupMcpService, registerMcpService } from "../services/mcpService";
-import { registerTrpcService } from "../services/trpcService";
+import { applyTrpcWebSocketHandler, registerTrpcService } from "../services/trpcService";
 import { registerWebService } from "../services/webService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
+import type { EmbeddingModelConfig } from "../store/embeddings/EmbeddingConfig";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../telemetry";
+import { TelemetryEvent, telemetry } from "../telemetry";
 import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
@@ -31,10 +35,14 @@ export class AppServer {
   private mcpServer: McpServer | null = null;
   private authManager: ProxyAuthManager | null = null;
   private config: AppServerConfig;
+  private embeddingConfig: EmbeddingModelConfig | null = null;
+  private remoteEventProxy: RemoteEventProxy | null = null;
+  private wss: WebSocketServer | null = null;
 
   constructor(
     private docService: IDocumentManagement,
     private pipeline: IPipeline,
+    private eventBus: EventBusService,
     config: AppServerConfig,
   ) {
     this.config = config;
@@ -72,15 +80,17 @@ export class AppServer {
   async start(): Promise<FastifyInstance> {
     this.validateConfig();
 
+    // Resolve embedding configuration early for use in startup logging and telemetry
+    this.embeddingConfig = resolveEmbeddingContext();
+
     // Initialize telemetry if enabled
     if (this.config.telemetry !== false && shouldEnableTelemetry()) {
       try {
         // Set global application context that will be included in all events
-        if (analytics.isEnabled()) {
+        if (telemetry.isEnabled()) {
           // Resolve embedding configuration for global context
-          const embeddingConfig = resolveEmbeddingContext();
 
-          analytics.setGlobalContext({
+          telemetry.setGlobalContext({
             appVersion: packageJson.version,
             appPlatform: process.platform,
             appNodeVersion: process.version,
@@ -88,15 +98,15 @@ export class AppServer {
             appAuthEnabled: Boolean(this.config.auth),
             appReadOnly: Boolean(this.config.readOnly),
             // Add embedding configuration to global context
-            ...(embeddingConfig && {
-              aiEmbeddingProvider: embeddingConfig.provider,
-              aiEmbeddingModel: embeddingConfig.model,
-              aiEmbeddingDimensions: embeddingConfig.dimensions,
+            ...(this.embeddingConfig && {
+              aiEmbeddingProvider: this.embeddingConfig.provider,
+              aiEmbeddingModel: this.embeddingConfig.model,
+              aiEmbeddingDimensions: this.embeddingConfig.dimensions,
             }),
           });
 
           // Track app start at the very beginning
-          analytics.track(TelemetryEvent.APP_STARTED, {
+          telemetry.track(TelemetryEvent.APP_STARTED, {
             services: this.getActiveServicesList(),
             port: this.config.port,
             externalWorker: Boolean(this.config.externalWorkerUrl),
@@ -125,6 +135,17 @@ export class AppServer {
         host: this.config.host,
       });
 
+      // Setup WebSocket server for tRPC subscriptions if API server is enabled
+      if (this.config.enableApiServer) {
+        this.setupWebSocketServer();
+      }
+
+      // Connect to remote worker after server is fully started
+      if (this.remoteEventProxy) {
+        // Don't await - let it connect in the background
+        this.remoteEventProxy.connect();
+      }
+
       this.logStartupInfo(address);
       return this.server;
     } catch (error) {
@@ -139,6 +160,11 @@ export class AppServer {
    */
   async stop(): Promise<void> {
     try {
+      // Disconnect remote event proxy if connected
+      if (this.remoteEventProxy) {
+        this.remoteEventProxy.disconnect();
+      }
+
       // Stop worker service if enabled
       if (this.config.enableWorker) {
         await stopWorkerService(this.pipeline);
@@ -149,15 +175,30 @@ export class AppServer {
         await cleanupMcpService(this.mcpServer);
       }
 
+      // Close WebSocket server if it exists
+      if (this.wss) {
+        await new Promise<void>((resolve, reject) => {
+          this.wss?.close((err) => {
+            if (err) {
+              logger.error(`❌ Failed to close WebSocket server: ${err}`);
+              reject(err);
+            } else {
+              logger.debug("WebSocket server closed");
+              resolve();
+            }
+          });
+        });
+      }
+
       // Track app shutdown
-      if (analytics.isEnabled()) {
-        analytics.track(TelemetryEvent.APP_SHUTDOWN, {
+      if (telemetry.isEnabled()) {
+        telemetry.track(TelemetryEvent.APP_SHUTDOWN, {
           graceful: true,
         });
       }
 
       // Shutdown telemetry service (this will flush remaining events)
-      await analytics.shutdown();
+      await telemetry.shutdown();
 
       // Close Fastify server
       await this.server.close();
@@ -166,12 +207,12 @@ export class AppServer {
       logger.error(`❌ Failed to stop AppServer gracefully: ${error}`);
 
       // Track ungraceful shutdown
-      if (analytics.isEnabled()) {
-        analytics.track(TelemetryEvent.APP_SHUTDOWN, {
+      if (telemetry.isEnabled()) {
+        telemetry.track(TelemetryEvent.APP_SHUTDOWN, {
           graceful: false,
           error: error instanceof Error ? error.constructor.name : "UnknownError",
         });
-        await analytics.shutdown();
+        await telemetry.shutdown();
       }
 
       throw error;
@@ -187,10 +228,10 @@ export class AppServer {
       // Catch unhandled promise rejections
       process.on("unhandledRejection", (reason) => {
         logger.error(`Unhandled Promise Rejection: ${reason}`);
-        if (analytics.isEnabled()) {
+        if (telemetry.isEnabled()) {
           // Create an Error object from the rejection reason for better tracking
           const error = reason instanceof Error ? reason : new Error(String(reason));
-          analytics.captureException(error, {
+          telemetry.captureException(error, {
             error_category: "system",
             component: AppServer.constructor.name,
             context: "process_unhandled_rejection",
@@ -203,8 +244,8 @@ export class AppServer {
       // Catch uncaught exceptions
       process.on("uncaughtException", (error) => {
         logger.error(`Uncaught Exception: ${error.message}`);
-        if (analytics.isEnabled()) {
-          analytics.captureException(error, {
+        if (telemetry.isEnabled()) {
+          telemetry.captureException(error, {
             error_category: "system",
             component: AppServer.constructor.name,
             context: "process_uncaught_exception",
@@ -216,9 +257,9 @@ export class AppServer {
 
     // Setup Fastify error handler (if method exists - for testing compatibility)
     if (typeof this.server.setErrorHandler === "function") {
-      this.server.setErrorHandler(async (error, request, reply) => {
-        if (analytics.isEnabled()) {
-          analytics.captureException(error, {
+      this.server.setErrorHandler<FastifyError>(async (error, request, reply) => {
+        if (telemetry.isEnabled()) {
+          telemetry.captureException(error, {
             errorCategory: "http",
             component: "FastifyServer",
             statusCode: error.statusCode || 500,
@@ -259,6 +300,9 @@ export class AppServer {
   private async setupServer(): Promise<void> {
     // Setup global error handling for telemetry
     this.setupErrorHandling();
+
+    // Setup remote event proxy if using an external worker
+    this.setupRemoteEventProxy();
 
     // Initialize authentication if enabled
     if (this.config.auth?.enabled) {
@@ -312,10 +356,30 @@ export class AppServer {
   }
 
   /**
+   * Initialize remote event proxy if using an external worker.
+   * The proxy is created here but connection is deferred until after server starts.
+   */
+  private setupRemoteEventProxy(): void {
+    // If using an external worker, create remote event proxy (connection happens later)
+    if (this.config.externalWorkerUrl) {
+      this.remoteEventProxy = new RemoteEventProxy(
+        this.config.externalWorkerUrl,
+        this.eventBus,
+      );
+      logger.debug(
+        "Remote event proxy created for external worker (connection deferred)",
+      );
+    }
+  }
+
+  /**
    * Enable web interface service.
    */
   private async enableWebInterface(): Promise<void> {
-    await registerWebService(this.server, this.docService, this.pipeline);
+    await registerWebService(this.server, this.docService, this.pipeline, this.eventBus, {
+      externalWorkerUrl: this.config.externalWorkerUrl,
+    });
+
     logger.debug("Web interface service enabled");
   }
 
@@ -337,8 +401,41 @@ export class AppServer {
    * Enable Pipeline RPC (tRPC) service.
    */
   private async enableTrpcApi(): Promise<void> {
-    await registerTrpcService(this.server, this.pipeline, this.docService);
+    await registerTrpcService(this.server, this.pipeline, this.docService, this.eventBus);
     logger.debug("API server (tRPC) enabled");
+  }
+
+  /**
+   * Setup WebSocket server for tRPC subscriptions.
+   * This is called after the HTTP server is listening.
+   */
+  private setupWebSocketServer(): void {
+    // Ensure the underlying HTTP server is available
+    if (!this.server.server) {
+      throw new Error(
+        "Cannot setup WebSocket server: HTTP server not available. " +
+          "This method must be called after server.listen() completes.",
+      );
+    }
+
+    // Create WebSocket server attached to the HTTP server
+    this.wss = new WebSocketServer({
+      noServer: true,
+    });
+
+    // Handle HTTP upgrade requests for WebSocket connections
+    this.server.server.on("upgrade", (request, socket, head) => {
+      // Let the WebSocket server handle all upgrade requests.
+      // tRPC's WebSocket handler manages routing internally after connection is established.
+      this.wss?.handleUpgrade(request, socket, head, (ws) => {
+        this.wss?.emit("connection", ws, request);
+      });
+    });
+
+    // Apply tRPC WebSocket handler to enable subscriptions
+    applyTrpcWebSocketHandler(this.wss, this.pipeline, this.docService, this.eventBus);
+
+    logger.debug("WebSocket server initialized for tRPC subscriptions");
   }
 
   /**
@@ -409,9 +506,17 @@ export class AppServer {
     }
 
     if (this.config.enableWorker) {
-      enabledServices.push("Embedded worker: enabled");
+      enabledServices.push("Worker: internal");
     } else if (this.config.externalWorkerUrl) {
-      enabledServices.push(`External worker: ${this.config.externalWorkerUrl}`);
+      enabledServices.push(`Worker: ${this.config.externalWorkerUrl}`);
+    }
+
+    if (this.embeddingConfig) {
+      enabledServices.push(
+        `Embeddings: ${this.embeddingConfig.provider}:${this.embeddingConfig.model}`,
+      );
+    } else {
+      enabledServices.push(`Embeddings: disabled (full text search only)`);
     }
 
     for (const service of enabledServices) {

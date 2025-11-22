@@ -1,6 +1,8 @@
 import path from "node:path";
 import Fuse from "fuse.js";
 import semver from "semver";
+import type { EventBusService } from "../events";
+import { EventType } from "../events";
 import {
   type PipelineConfiguration,
   PipelineFactory,
@@ -8,7 +10,7 @@ import {
 import type { ContentPipeline } from "../scraper/pipelines/types";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
-import { analytics, extractHostname, TelemetryEvent } from "../telemetry";
+import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
@@ -37,6 +39,7 @@ export class DocumentManagementService {
   private readonly store: DocumentStore;
   private readonly documentRetriever: DocumentRetrieverService;
   private readonly pipelines: ContentPipeline[];
+  private readonly eventBus: EventBusService;
 
   /**
    * Normalizes a version string, converting null or undefined to an empty string
@@ -48,9 +51,11 @@ export class DocumentManagementService {
 
   constructor(
     storePath: string,
+    eventBus: EventBusService,
     embeddingConfig?: EmbeddingModelConfig | null,
     pipelineConfig?: PipelineConfiguration,
   ) {
+    this.eventBus = eventBus;
     // Handle special :memory: case for in-memory databases (primarily for testing)
     const dbPath =
       storePath === ":memory:" ? ":memory:" : path.join(storePath, "documents.db");
@@ -336,6 +341,9 @@ export class DocumentManagementService {
     );
     const count = await this.store.deletePages(library, normalizedVersion);
     logger.info(`🗑️ Deleted ${count} documents`);
+
+    // Emit library change event
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**
@@ -345,6 +353,9 @@ export class DocumentManagementService {
   async deletePage(pageId: number): Promise<void> {
     logger.debug(`Deleting page ID: ${pageId}`);
     await this.store.deletePage(pageId);
+
+    // Emit library change event
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**
@@ -382,6 +393,9 @@ export class DocumentManagementService {
         `⚠️ Version ${library}@${normalizedVersion || "[no version]"} not found`,
       );
     }
+
+    // Emit library change event
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**
@@ -420,43 +434,14 @@ export class DocumentManagementService {
       // Add split documents to store
       await this.store.addDocuments(library, normalizedVersion, depth, result);
 
-      // Track successful document processing
-      const processingTime = performance.now() - processingStart;
-      const totalContentSize = chunks.reduce(
-        (sum: number, chunk: Chunk) => sum + chunk.content.length,
-        0,
-      );
-
-      analytics.track(TelemetryEvent.DOCUMENT_PROCESSED, {
-        // Content characteristics (privacy-safe)
-        mimeType: contentType,
-        contentSizeBytes: totalContentSize,
-
-        // Processing metrics
-        processingTimeMs: Math.round(processingTime),
-        chunksCreated: chunks.length,
-
-        // Document characteristics
-        hasTitle: !!title,
-        urlDomain: extractHostname(url),
-        depth,
-
-        // Library context
-        library,
-        libraryVersion: normalizedVersion || null,
-
-        // Processing efficiency
-        avgChunkSizeBytes: Math.round(totalContentSize / chunks.length),
-        processingSpeedKbPerSec: Math.round(
-          totalContentSize / 1024 / (processingTime / 1000),
-        ),
-      });
+      // Emit library change event after adding documents
+      this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
     } catch (error) {
       // Track processing failures with native error tracking
       const processingTime = performance.now() - processingStart;
 
       if (error instanceof Error) {
-        analytics.captureException(error, {
+        telemetry.captureException(error, {
           mimeType: contentType,
           contentSizeBytes: chunks.reduce(
             (sum: number, chunk: Chunk) => sum + chunk.content.length,

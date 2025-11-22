@@ -4,15 +4,32 @@ import Layout from "../components/Layout"; // Import the Layout component
 /**
  * Registers the root route that serves the main HTML page.
  * @param server - The Fastify instance.
+ * @param config - Optional configuration for the web UI.
  */
-export function registerIndexRoute(server: FastifyInstance) {
+export function registerIndexRoute(
+  server: FastifyInstance,
+  config?: { externalWorkerUrl?: string }
+) {
   server.get("/", async (_, reply) => {
     reply.type("text/html");
+
+    // Determine if we're using a remote worker
+    const useRemoteWorker = Boolean(config?.externalWorkerUrl);
+    const trpcUrl = config?.externalWorkerUrl
+      ? `${config.externalWorkerUrl}/api`
+      : undefined;
+
     // Use the Layout component and define the main content within it
     return (
       "<!DOCTYPE html>" +
       (
-        <Layout title="MCP Docs">
+        <Layout
+          title="MCP Docs"
+          eventClientConfig={{
+            useRemoteWorker,
+            trpcUrl,
+          }}
+        >
           {/* Job Queue Section */}
           <section class="mb-4 p-4 bg-white rounded-lg shadow dark:bg-gray-800 border border-gray-300 dark:border-gray-600">
             <div class="flex items-center justify-between mb-2">
@@ -31,8 +48,12 @@ export function registerIndexRoute(server: FastifyInstance) {
                 Clear Completed Jobs
               </button>
             </div>
-            {/* Container for the job list, loaded via HTMX */}
-            <div id="job-queue" hx-get="/web/jobs" hx-trigger="load, every 1s">
+            {/* Container for the job list, loaded via HTMX and updated via SSE */}
+            <div
+              id="job-queue"
+              hx-get="/web/jobs"
+              hx-trigger="load, job-status-change from:body, job-progress from:body, job-list-change from:body"
+            >
               {/* Initial loading state */}
               <div class="animate-pulse">
                 <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-48 mb-4" />
@@ -61,7 +82,7 @@ export function registerIndexRoute(server: FastifyInstance) {
             <div
               id="indexed-docs"
               hx-get="/web/libraries"
-              hx-trigger="load, every 10s"
+              hx-trigger="load, library-change from:body"
             >
               <div class="animate-pulse">
                 <div class="h-[0.8em] bg-gray-200 rounded-full dark:bg-gray-700 w-48 mb-4" />

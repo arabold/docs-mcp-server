@@ -146,10 +146,11 @@ Services integrate telemetry through direct analytics usage:
 The system tracks essential event types for usage understanding:
 
 - `app_started` / `app_shutdown`: Application lifecycle tracking
+- `cli_command`: CLI command execution and outcomes
 - `tool_used`: Individual tool execution and outcomes
-- `pipeline_job_progress` / `pipeline_job_completed`: Background processing results
-- `document_processed`: Document indexing metrics
-- `http_request_completed`: HTTP request performance
+- `pipeline_job_started`: Pipeline job initiation
+- `pipeline_job_completed`: Pipeline job successful completion
+- `pipeline_job_failed`: Pipeline job failures
 - **Error Tracking**: PostHog's native exception tracking with full stack traces and context
 
 ### Global Context
@@ -191,6 +192,10 @@ The following table details all telemetry properties, their usage patterns, and 
 | `mcpTransport`                         | enum     | Event  | APP_STARTED            | MCP transport: "sse" or "streamable" (when MCP enabled) |
 | **Application Lifecycle**              |          |        |                        |                                                         |
 | `graceful`                             | boolean  | Event  | APP_SHUTDOWN           | Whether shutdown was graceful                           |
+| **CLI Commands**                       |          |        |                        |                                                         |
+| `cliCommand`                           | string   | Event  | CLI_COMMAND            | CLI command name being executed                         |
+| `success`                              | boolean  | Event  | CLI_COMMAND            | Whether command execution succeeded                     |
+| `durationMs`                           | number   | Event  | CLI_COMMAND            | Command execution duration                              |
 | **Tool Usage**                         |          |        |                        |                                                         |
 | `tool`                                 | string   | Event  | TOOL_USED              | Tool name being executed                                |
 | `success`                              | boolean  | Event  | TOOL_USED              | Whether tool execution succeeded                        |
@@ -198,48 +203,16 @@ The following table details all telemetry properties, their usage patterns, and 
 | **Pipeline Jobs**                      |          |        |                        |                                                         |
 | `jobId`                                | string   | Event  | PIPELINE*JOB*\*        | Anonymous job identifier for correlation                |
 | `library`                              | string   | Event  | PIPELINE*JOB*\*        | Library being processed                                 |
-| `status`                               | string   | Event  | PIPELINE_JOB_COMPLETED | Job final status                                        |
+| `hasVersion`                           | boolean  | Event  | PIPELINE*JOB*\*        | Whether library version was specified                   |
+| `maxPagesConfigured`                   | number   | Event  | PIPELINE*JOB*\*        | Maximum pages configured                                |
+| `queueWaitTimeMs`                      | number   | Event  | PIPELINE_JOB_STARTED   | Time job waited in queue before starting                |
 | `durationMs`                           | number   | Event  | PIPELINE_JOB_COMPLETED | Job execution duration                                  |
-| `queueWaitTimeMs`                      | number   | Event  | PIPELINE_JOB_COMPLETED | Time job waited in queue                                |
-| `pagesProcessed`                       | number   | Event  | PIPELINE_JOB_COMPLETED | Total pages processed                                   |
-| `maxPagesConfigured`                   | number   | Event  | PIPELINE_JOB_COMPLETED | Maximum pages configured                                |
-| `hasVersion`                           | boolean  | Event  | PIPELINE_JOB_COMPLETED | Whether library version was specified                   |
-| `hasError`                             | boolean  | Event  | PIPELINE_JOB_COMPLETED | Whether job had errors                                  |
+| `durationMs`                           | number   | Event  | PIPELINE_JOB_FAILED    | Job execution duration before failure                   |
+| `pagesProcessed`                       | number   | Event  | PIPELINE_JOB_COMPLETED | Total pages successfully processed                      |
+| `pagesProcessed`                       | number   | Event  | PIPELINE_JOB_FAILED    | Pages processed before failure                          |
 | `throughputPagesPerSecond`             | number   | Event  | PIPELINE_JOB_COMPLETED | Processing throughput                                   |
-| `pagesScraped`                         | number   | Event  | PIPELINE_JOB_PROGRESS  | Number of pages processed so far                        |
-| `totalPages`                           | number   | Event  | PIPELINE_JOB_PROGRESS  | Total pages to process                                  |
-| `totalDiscovered`                      | number   | Event  | PIPELINE_JOB_PROGRESS  | Total pages discovered                                  |
-| `progressPercent`                      | number   | Event  | PIPELINE_JOB_PROGRESS  | Completion percentage                                   |
-| `currentDepth`                         | number   | Event  | PIPELINE_JOB_PROGRESS  | Current crawling depth                                  |
-| `maxDepth`                             | number   | Event  | PIPELINE_JOB_PROGRESS  | Maximum crawling depth                                  |
-| `discoveryRatio`                       | number   | Event  | PIPELINE_JOB_PROGRESS  | Discovery vs processing ratio                           |
-| `queueEfficiency`                      | number   | Event  | PIPELINE_JOB_PROGRESS  | Queue processing efficiency                             |
-| **Document Processing**                |          |        |                        |                                                         |
-| `mimeType`                             | string   | Event  | DOCUMENT_PROCESSED     | Document MIME type                                      |
-| `contentSizeBytes`                     | number   | Event  | DOCUMENT_PROCESSED     | Document content size                                   |
-| `processingTimeMs`                     | number   | Event  | DOCUMENT_PROCESSED     | Processing duration                                     |
-| `chunksCreated`                        | number   | Event  | DOCUMENT_PROCESSED     | Number of chunks created                                |
-| `hasTitle`                             | boolean  | Event  | DOCUMENT_PROCESSED     | Whether document has title                              |
-| `hasDescription`                       | boolean  | Event  | DOCUMENT_PROCESSED     | Whether document has description                        |
-| `urlDomain`                            | string   | Event  | DOCUMENT_PROCESSED     | Sanitized domain (privacy-safe)                         |
-| `depth`                                | number   | Event  | DOCUMENT_PROCESSED     | Crawl depth of document                                 |
-| `library`                              | string   | Event  | DOCUMENT_PROCESSED     | Library being processed                                 |
-| `libraryVersion`                       | string   | Event  | DOCUMENT_PROCESSED     | Library version                                         |
-| `avgChunkSizeBytes`                    | number   | Event  | DOCUMENT_PROCESSED     | Average chunk size                                      |
-| `processingSpeedKbPerSec`              | number   | Event  | DOCUMENT_PROCESSED     | Processing speed                                        |
-| **HTTP Request Processing**            |          |        |                        |                                                         |
-| `success`                              | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether request succeeded                               |
-| `hostname`                             | string   | Event  | HTTP_REQUEST_COMPLETED | Sanitized hostname (privacy-safe)                       |
-| `protocol`                             | string   | Event  | HTTP_REQUEST_COMPLETED | URL protocol (http/https/file)                          |
-| `durationMs`                           | number   | Event  | HTTP_REQUEST_COMPLETED | Request duration                                        |
-| `contentSizeBytes`                     | number   | Event  | HTTP_REQUEST_COMPLETED | Response content size                                   |
-| `mimeType`                             | string   | Event  | HTTP_REQUEST_COMPLETED | Response MIME type                                      |
-| `hasEncoding`                          | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether response had encoding                           |
-| `followRedirects`                      | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether redirects were followed                         |
-| `hadRedirects`                         | boolean  | Event  | HTTP_REQUEST_COMPLETED | Whether redirects occurred                              |
-| `statusCode`                           | number   | Event  | HTTP_REQUEST_COMPLETED | HTTP status code (failures only)                        |
-| `errorType`                            | string   | Event  | HTTP_REQUEST_COMPLETED | Error type (failures only)                              |
-| `errorCode`                            | string   | Event  | HTTP_REQUEST_COMPLETED | Error code (failures only)                              |
+| `hasError`                             | boolean  | Event  | PIPELINE_JOB_FAILED    | Whether job had errors (always true)                    |
+| `errorMessage`                         | string   | Event  | PIPELINE_JOB_FAILED    | Sanitized error message                                 |
 
 ### Property Scope Definitions
 
@@ -254,12 +227,6 @@ The following table details all telemetry properties, their usage patterns, and 
 - Application metadata: `appVersion`, `appPlatform`, `appAuthEnabled`, `appReadOnly`
 - AI/Embedding configuration: `aiEmbeddingProvider`, `aiEmbeddingModel`, `aiEmbeddingDimensions`
 
-**Session Context (minimal):**
-
-- Session correlation: `sessionId` (all events)
-- Interface identification: `appInterface` (session lifecycle events only)
-- Web navigation: `webRoute` (SESSION_STARTED for web sessions)
-
 **Application Configuration (APP_STARTED event):**
 
 - Service configuration: `services`, `port`, `externalWorker`
@@ -270,7 +237,7 @@ The following table details all telemetry properties, their usage patterns, and 
 
 - Passed explicitly when tracking specific events
 - Include performance metrics, outcomes, and event-specific context
-- `jobId` used for correlating related pipeline events
+- `jobId` used for correlating related pipeline events across the pipeline lifecycle
 
 This approach minimizes event payload size while ensuring all relevant context is available for analysis and debugging.
 

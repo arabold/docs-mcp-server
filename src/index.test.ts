@@ -3,7 +3,8 @@
  * Tests critical startup behavior and validates against regression bugs.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { TelemetryEvent } from "./telemetry";
 
 // Mock external dependencies to prevent actual server startup
 const mockPipelineStart = vi.fn().mockResolvedValue(undefined);
@@ -22,7 +23,7 @@ vi.mock("./app", () => ({
 }));
 
 vi.mock("./store/DocumentManagementService", () => ({
-  DocumentManagementService: vi.fn().mockImplementation(() => ({
+  DocumentManagementService: vi.fn().mockImplementation((_storePath, _eventBus) => ({
     initialize: mockDocServiceInitialize,
     shutdown: mockDocServiceShutdown,
   })),
@@ -151,6 +152,7 @@ describe("Double Initialization Prevention", () => {
 
   it("should NOT start pipeline during initialization in worker mode", async () => {
     const { PipelineFactory } = await import("./pipeline/PipelineFactory");
+    const { EventBusService } = await import("./events");
 
     // This test validates our critical bug fix:
     // ensurePipelineManagerInitialized should create but NOT start the pipeline
@@ -158,8 +160,10 @@ describe("Double Initialization Prevention", () => {
 
     // Simulate calling ensurePipelineManagerInitialized (the helper function)
     // In the real code, this gets called before startAppServer
+    const mockEventBus = new EventBusService();
     await PipelineFactory.createPipeline(
       {} as any, // mock docService
+      mockEventBus,
       { recoverJobs: true, concurrency: 3 },
     );
 
@@ -179,23 +183,25 @@ describe("Double Initialization Prevention", () => {
 
   it("should validate pipeline configuration for different modes", async () => {
     const { PipelineFactory } = await import("./pipeline/PipelineFactory");
+    const { EventBusService } = await import("./events");
 
     // Test that different modes pass correct options to PipelineFactory
+    const mockEventBus = new EventBusService();
 
     // Worker mode configuration
-    await PipelineFactory.createPipeline({} as any, {
+    await PipelineFactory.createPipeline({} as any, mockEventBus, {
       recoverJobs: true,
       concurrency: 3,
     });
 
     // CLI mode configuration
-    await PipelineFactory.createPipeline({} as any, {
+    await PipelineFactory.createPipeline({} as any, mockEventBus, {
       recoverJobs: false,
       concurrency: 1,
     });
 
-    // External worker mode configuration
-    await PipelineFactory.createPipeline({} as any, {
+    // External worker mode configuration (no eventBus needed for remote)
+    await PipelineFactory.createPipeline(undefined, mockEventBus, {
       recoverJobs: false,
       serverUrl: "http://localhost:8080/api",
     });
@@ -204,9 +210,9 @@ describe("Double Initialization Prevention", () => {
 
     // Verify different configurations were passed
     const calls = vi.mocked(PipelineFactory.createPipeline).mock.calls;
-    expect(calls[0][1]).toEqual({ recoverJobs: true, concurrency: 3 });
-    expect(calls[1][1]).toEqual({ recoverJobs: false, concurrency: 1 });
-    expect(calls[2][1]).toEqual({
+    expect(calls[0][2]).toEqual({ recoverJobs: true, concurrency: 3 });
+    expect(calls[1][2]).toEqual({ recoverJobs: false, concurrency: 1 });
+    expect(calls[2][2]).toEqual({
       recoverJobs: false,
       serverUrl: "http://localhost:8080/api",
     });
@@ -251,10 +257,12 @@ describe("Service Configuration Validation", () => {
     );
 
     // Simulate the service initialization sequence
-    const docService = new DocumentManagementService("/test/path");
+    const { EventBusService } = await import("./events");
+    const eventBus = new EventBusService();
+    const docService = new DocumentManagementService("/test/path", eventBus);
     await docService.initialize();
 
-    const pipeline = await PipelineFactory.createPipeline(docService, {});
+    const pipeline = await PipelineFactory.createPipeline(docService, eventBus, {});
     pipeline.setCallbacks({});
 
     await mockStartAppServer(docService, pipeline, {});
@@ -271,7 +279,7 @@ describe("Service Configuration Validation", () => {
 });
 
 describe("Service Registration for Telemetry", () => {
-  let mockRegisterGlobalServices: ReturnType<typeof vi.fn>;
+  let mockRegisterGlobalServices: Mock;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -458,24 +466,24 @@ describe("Service Registration for Telemetry", () => {
 });
 
 describe("CLI Command Telemetry Integration", () => {
-  let mockAnalytics: {
-    setGlobalContext: ReturnType<typeof vi.fn>;
-    track: ReturnType<typeof vi.fn>;
-    shutdown: ReturnType<typeof vi.fn>;
+  let mockTelemetry: {
+    setGlobalContext: Mock;
+    track: Mock;
+    shutdown: Mock;
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Mock analytics instance
-    mockAnalytics = {
+    // Mock telemetry instance
+    mockTelemetry = {
       setGlobalContext: vi.fn(),
       track: vi.fn(),
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
 
     vi.doMock("../telemetry", () => ({
-      analytics: mockAnalytics,
+      telemetry: mockTelemetry,
     }));
   });
 
@@ -488,9 +496,9 @@ describe("CLI Command Telemetry Integration", () => {
     };
 
     // Simulate CLI preAction calling setGlobalContext
-    mockAnalytics.setGlobalContext(expectedContext);
+    mockTelemetry.setGlobalContext(expectedContext);
 
-    expect(mockAnalytics.setGlobalContext).toHaveBeenCalledWith(expectedContext);
+    expect(mockTelemetry.setGlobalContext).toHaveBeenCalledWith(expectedContext);
   });
 
   it("should track CLI_COMMAND events in postAction hook", async () => {
@@ -499,13 +507,13 @@ describe("CLI Command Telemetry Integration", () => {
     const commandEndTime = commandStartTime + 1500; // 1.5 seconds
 
     // Simulate tracking CLI_COMMAND event
-    mockAnalytics.track("CLI_COMMAND", {
+    mockTelemetry.track(TelemetryEvent.CLI_COMMAND, {
       command: "web",
       success: true,
       durationMs: commandEndTime - commandStartTime,
     });
 
-    expect(mockAnalytics.track).toHaveBeenCalledWith("CLI_COMMAND", {
+    expect(mockTelemetry.track).toHaveBeenCalledWith(TelemetryEvent.CLI_COMMAND, {
       command: "web",
       success: true,
       durationMs: 1500,
@@ -514,13 +522,13 @@ describe("CLI Command Telemetry Integration", () => {
 
   it("should track failed CLI commands with success: false", async () => {
     // Mock failed command tracking
-    mockAnalytics.track("CLI_COMMAND", {
+    mockTelemetry.track(TelemetryEvent.CLI_COMMAND, {
       command: "invalid-command",
       success: false,
       durationMs: 100,
     });
 
-    expect(mockAnalytics.track).toHaveBeenCalledWith("CLI_COMMAND", {
+    expect(mockTelemetry.track).toHaveBeenCalledWith(TelemetryEvent.CLI_COMMAND, {
       command: "invalid-command",
       success: false,
       durationMs: 100,
@@ -532,20 +540,20 @@ describe("CLI Command Telemetry Integration", () => {
     const commands = ["web", "mcp", "worker", "fetch-url", "scrape-docs"];
 
     for (const command of commands) {
-      mockAnalytics.track("CLI_COMMAND", {
+      mockTelemetry.track(TelemetryEvent.CLI_COMMAND, {
         command,
         success: true,
         durationMs: 1000,
       });
     }
 
-    expect(mockAnalytics.track).toHaveBeenCalledTimes(commands.length);
+    expect(mockTelemetry.track).toHaveBeenCalledTimes(commands.length);
 
     // Verify each command was tracked correctly
-    const calls = mockAnalytics.track.mock.calls;
+    const calls = mockTelemetry.track.mock.calls;
     for (let i = 0; i < commands.length; i++) {
       expect(calls[i]).toEqual([
-        "CLI_COMMAND",
+        TelemetryEvent.CLI_COMMAND,
         {
           command: commands[i],
           success: true,

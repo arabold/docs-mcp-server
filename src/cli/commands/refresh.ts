@@ -4,17 +4,14 @@
 
 import type { Command } from "commander";
 import { Option } from "commander";
-import type { PipelineOptions } from "../../pipeline";
+import { EventType } from "../../events";
+import { PipelineFactory, PipelineJobStatus, type PipelineOptions } from "../../pipeline";
 import type { IPipeline } from "../../pipeline/trpc/interfaces";
-import { createDocumentManagement } from "../../store";
+import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
-import {
-  createPipelineWithCallbacks,
-  getGlobalOptions,
-  resolveEmbeddingContext,
-} from "../utils";
+import { getEventBus, getGlobalOptions, resolveEmbeddingContext } from "../utils";
 
 export async function refreshAction(
   library: string,
@@ -25,7 +22,7 @@ export async function refreshAction(
   },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "refresh",
     library,
     version: options.version,
@@ -44,12 +41,39 @@ export async function refreshAction(
     );
   }
 
+  const eventBus = getEventBus(command);
+
   const docService: IDocumentManagement = await createDocumentManagement({
     serverUrl,
     embeddingConfig,
     storePath: globalOptions.storePath,
+    eventBus,
   });
   let pipeline: IPipeline | null = null;
+
+  // Display initial status
+  console.log("⏳ Initializing refresh job...");
+
+  // Subscribe to event bus for progress updates (only for local pipelines)
+  let unsubscribeProgress: (() => void) | null = null;
+  let unsubscribeStatus: (() => void) | null = null;
+
+  if (!serverUrl) {
+    unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
+      const { job, progress } = event;
+      console.log(
+        `📄 Refreshing ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
+      );
+    });
+
+    unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
+      if (event.status === PipelineJobStatus.RUNNING) {
+        console.log(
+          `🚀 Refreshing ${event.library}${event.version ? ` v${event.version}` : ""}...`,
+        );
+      }
+    });
+  }
 
   try {
     const pipelineOptions: PipelineOptions = {
@@ -58,10 +82,17 @@ export async function refreshAction(
       serverUrl,
     };
 
-    pipeline = await createPipelineWithCallbacks(
-      serverUrl ? undefined : (docService as unknown as never),
-      pipelineOptions,
-    );
+    pipeline = serverUrl
+      ? await PipelineFactory.createPipeline(undefined, eventBus, {
+          serverUrl,
+          ...pipelineOptions,
+        })
+      : await PipelineFactory.createPipeline(
+          docService as DocumentManagementService,
+          eventBus,
+          pipelineOptions,
+        );
+
     await pipeline.start();
     const refreshTool = new RefreshVersionTool(pipeline);
 
@@ -75,9 +106,18 @@ export async function refreshAction(
     if ("pagesRefreshed" in result) {
       console.log(`✅ Successfully refreshed ${result.pagesRefreshed} pages`);
     } else {
-      console.log(`🚀 Refresh job started with ID: ${result.jobId}`);
+      console.log(`✅ Refresh job started with ID: ${result.jobId}`);
     }
+  } catch (error) {
+    console.error(
+      `❌ Refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    throw error;
   } finally {
+    // Clean up event listeners
+    if (unsubscribeProgress) unsubscribeProgress();
+    if (unsubscribeStatus) unsubscribeStatus();
+
     if (pipeline) await pipeline.stop();
     await docService.shutdown();
   }

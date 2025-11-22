@@ -5,7 +5,7 @@
 import type { Command } from "commander";
 import { AutoDetectFetcher } from "../../scraper/fetcher";
 import { ScrapeMode } from "../../scraper/types";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
 import { parseHeaders } from "../utils";
 
@@ -13,7 +13,7 @@ export async function fetchUrlAction(
   url: string,
   options: { followRedirects: boolean; scrapeMode: ScrapeMode; header: string[] },
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "fetch-url",
     url,
     scrapeMode: options.scrapeMode,

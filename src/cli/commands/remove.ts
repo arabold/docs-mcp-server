@@ -4,15 +4,15 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
-import { getGlobalOptions } from "../utils";
+import { TelemetryEvent, telemetry } from "../../telemetry";
+import { getEventBus, getGlobalOptions } from "../utils";
 
 export async function removeAction(
   library: string,
   options: { version?: string; serverUrl?: string },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "remove",
     library,
     version: options.version,
@@ -22,11 +22,14 @@ export async function removeAction(
   const serverUrl = options.serverUrl;
   const globalOptions = getGlobalOptions(command);
 
+  const eventBus = getEventBus(command);
+
   // Remove command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
     serverUrl,
     embeddingConfig: serverUrl ? undefined : null,
     storePath: globalOptions.storePath,
+    eventBus,
   });
   const { version } = options;
   try {

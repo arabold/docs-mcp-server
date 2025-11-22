@@ -1,13 +1,15 @@
 /**
  * Bootstraps the client-side experience for the Docs MCP Server web UI.
- * Initializes Alpine stores, HTMX helpers, Flowbite components, and the
- * release checker that surfaces update notifications in the header.
+ * Initializes Alpine stores, HTMX helpers, Flowbite components, the
+ * release checker that surfaces update notifications in the header,
+ * and the unified event client for real-time updates.
  */
 import "./styles/main.css";
 
 import Alpine from "alpinejs";
 import { initFlowbite } from "flowbite";
 import htmx from "htmx.org";
+import { EventClient } from "./EventClient";
 import { fallbackReleaseLabel, isVersionNewer } from "./utils/versionCheck";
 
 const LATEST_RELEASE_ENDPOINT =
@@ -108,25 +110,46 @@ document.addEventListener("job-list-refresh", () => {
   htmx.ajax("get", "/web/jobs", "#job-queue");
 });
 
-// Auto-refresh job list every 3 seconds for real-time progress updates
-function autoRefreshJobList() {
-  // Only refresh if the job queue element exists on the current page
-  if (document.querySelector("#job-queue")) {
-    htmx.ajax("get", "/web/jobs", "#job-queue");
-  }
-}
+// Listen for job status changes and trigger job list refresh
+document.addEventListener("job-status-change", () => {
+  htmx.ajax("get", "/web/jobs", "#job-queue");
+});
 
-// Global variable to track the current interval
-let autoRefreshInterval = setInterval(autoRefreshJobList, 3000);
+// Listen for job progress updates and trigger job list refresh
+document.addEventListener("job-progress", () => {
+  htmx.ajax("get", "/web/jobs", "#job-queue");
+});
 
-// Stop auto-refresh when page is hidden to save resources
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) {
-    clearInterval(autoRefreshInterval);
-  } else {
-    // Restart auto-refresh when page becomes visible again
-    autoRefreshInterval = setInterval(autoRefreshJobList, 3000);
-  }
+// Listen for job list changes and trigger job list refresh
+document.addEventListener("job-list-change", () => {
+  htmx.ajax("get", "/web/jobs", "#job-queue");
+});
+
+// Listen for library changes and trigger library list refresh
+document.addEventListener("library-change", () => {
+  htmx.ajax("get", "/web/libraries", "#library-list");
+});
+
+// Create and connect the unified event client
+const eventClient = new EventClient();
+
+// Subscribe to events and dispatch them as DOM events for HTMX
+eventClient.subscribe((event) => {
+  console.log(`📋 Received event: ${event.type}`, event.payload);
+  // Dispatch custom event with payload that HTMX can listen to
+  document.body.dispatchEvent(
+    new CustomEvent(event.type, {
+      detail: event.payload,
+    }),
+  );
+});
+
+// Start the connection
+eventClient.connect();
+
+// Clean up on page unload
+window.addEventListener("beforeunload", () => {
+  eventClient.disconnect();
 });
 
 // Add a global event listener for 'version-list-refresh' that reloads the version list container using HTMX

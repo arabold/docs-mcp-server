@@ -15,14 +15,24 @@ interface LayoutProps extends PropsWithChildren {
   title: string;
   /** Optional version string to display next to the title. */
   version?: string;
+  /** Event client configuration for real-time updates */
+  eventClientConfig?: {
+    useRemoteWorker: boolean;
+    trpcUrl?: string;
+  };
 }
 
 /**
  * Base HTML layout component for all pages.
  * Includes common head elements, header, and scripts.
- * @param props - Component props including title, version, and children.
+ * @param props - Component props including title, version, children, and eventClientConfig.
  */
-const Layout = ({ title, version, children }: LayoutProps) => {
+const Layout = ({
+  title,
+  version,
+  children,
+  eventClientConfig,
+}: LayoutProps) => {
   let versionString = version;
   if (!versionString) {
     // If no version is provided, use the version from package.json
@@ -35,7 +45,7 @@ const Layout = ({ title, version, children }: LayoutProps) => {
       versionString = packageJson.version;
       logger.debug(`Resolved version from package.json: ${versionString}`);
     } catch (error) {
-      logger.error(`Error reading package.json: ${error}`);
+      logger.error(`❌ Error reading package.json: ${error}`);
     }
   }
   const versionInitializer = `versionUpdate({ currentVersion: ${
@@ -282,6 +292,11 @@ const Layout = ({ title, version, children }: LayoutProps) => {
         <div class="container max-w-2xl mx-auto px-4 py-6">
           <main>{children}</main>
         </div>
+
+        {/* Event client configuration */}
+        <script>
+          {`window.__EVENT_CLIENT_CONFIG__ = ${JSON.stringify(eventClientConfig)};`}
+        </script>
 
         {/* Bundled JS (includes Flowbite, HTMX, AlpineJS, and initialization) */}
         <script type="module" src="/assets/main.js"></script>
