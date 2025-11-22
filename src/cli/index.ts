@@ -96,7 +96,7 @@ export function createCliProgram(): Command {
     if (!globalEventBus) {
       globalEventBus = new EventBusService();
     }
-    if (!globalTelemetryService && globalEventBus) {
+    if (!globalTelemetryService) {
       globalTelemetryService = new TelemetryService(globalEventBus);
       // Register TelemetryService for graceful shutdown
       registerGlobalServices({ telemetryService: globalTelemetryService });
