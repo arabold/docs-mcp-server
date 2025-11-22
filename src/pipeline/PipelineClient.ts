@@ -11,6 +11,7 @@ import {
   splitLink,
   wsLink,
 } from "@trpc/client";
+import superjson from "superjson";
 import type { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
@@ -47,13 +48,12 @@ export class PipelineClient implements IPipeline {
     // Create tRPC client with split link:
     // - Subscriptions use WebSocket
     // - Queries and mutations use HTTP
-    // Note: transformer is configured on the server's initTRPC
     this.client = createTRPCProxyClient<PipelineRouter>({
       links: [
         splitLink({
           condition: (op) => op.type === "subscription",
-          true: wsLink({ client: this.wsClient }),
-          false: httpBatchLink({ url: this.baseUrl }),
+          true: wsLink({ client: this.wsClient, transformer: superjson }),
+          false: httpBatchLink({ url: this.baseUrl, transformer: superjson }),
         }),
       ],
     });
@@ -64,12 +64,9 @@ export class PipelineClient implements IPipeline {
   }
 
   async start(): Promise<void> {
-    // Check connectivity via ping
+    // Check connectivity via ping procedure
     try {
-      // Root-level ping exists on the unified router; cast for this health check only
-      await (
-        this.client as unknown as { ping: { query: () => Promise<unknown> } }
-      ).ping.query();
+      await this.client.ping.query();
       logger.debug("PipelineClient connected to external worker via tRPC");
     } catch (error) {
       throw new Error(
@@ -134,8 +131,7 @@ export class PipelineClient implements IPipeline {
   async getJob(jobId: string): Promise<PipelineJob | undefined> {
     try {
       // superjson automatically deserializes Date objects
-      const job = await this.client.getJob.query({ id: jobId });
-      return job as PipelineJob | undefined;
+      return await this.client.getJob.query({ id: jobId });
     } catch (error) {
       throw new Error(
         `Failed to get job ${jobId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -147,7 +143,7 @@ export class PipelineClient implements IPipeline {
     try {
       // superjson automatically deserializes Date objects
       const result = await this.client.getJobs.query({ status });
-      return (result.jobs || []) as unknown as PipelineJob[];
+      return result.jobs || [];
     } catch (error) {
       logger.error(`❌ Failed to get jobs from external worker: ${error}`);
       throw error;

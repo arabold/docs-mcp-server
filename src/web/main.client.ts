@@ -120,6 +120,11 @@ document.addEventListener("job-progress", () => {
   htmx.ajax("get", "/web/jobs", "#job-queue");
 });
 
+// Listen for job list changes and trigger job list refresh
+document.addEventListener("job-list-change", () => {
+  htmx.ajax("get", "/web/jobs", "#job-queue");
+});
+
 // Listen for library changes and trigger library list refresh
 document.addEventListener("library-change", () => {
   htmx.ajax("get", "/web/libraries", "#library-list");

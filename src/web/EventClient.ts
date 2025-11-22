@@ -4,6 +4,7 @@
  */
 
 import type { SseEventName, SseEventPayloads } from "../events/types";
+import { ServerEventName } from "../events/types";
 
 export interface EventData<T extends SseEventName = SseEventName> {
   type: T;
@@ -45,14 +46,10 @@ export class EventClient {
       // EventSource will automatically attempt to reconnect
     });
 
-    // Listen for all event types
-    const eventTypes: SseEventName[] = [
-      "job-status-change",
-      "job-progress",
-      "library-change",
-    ];
+    // Listen for all event types defined in ServerEventName
+    const eventTypes = Object.values(ServerEventName) as SseEventName[];
 
-    console.log("🔧 Setting up event listeners");
+    console.log("🔧 Setting up event listeners", eventTypes);
 
     for (const eventType of eventTypes) {
       this.eventSource.addEventListener(eventType, (event: MessageEvent) => {

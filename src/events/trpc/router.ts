@@ -5,6 +5,7 @@
 
 import { initTRPC } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
+import superjson from "superjson";
 import { z } from "zod";
 import type { EventBusService } from "../EventBusService";
 import { EventType } from "../types";
@@ -14,7 +15,9 @@ export interface EventsTrpcContext {
   eventBus: EventBusService;
 }
 
-const t = initTRPC.context<EventsTrpcContext>().create();
+const t = initTRPC.context<EventsTrpcContext>().create({
+  transformer: superjson,
+});
 
 /**
  * Factory to create an events router from any t instance whose context contains `eventBus`.
@@ -37,11 +40,7 @@ export function createEventsRouter(trpc: unknown) {
       )
       .subscription(({ ctx, input }) => {
         // Determine which events to subscribe to (default: all)
-        const eventTypes = input?.events ?? [
-          EventType.JOB_STATUS_CHANGE,
-          EventType.JOB_PROGRESS,
-          EventType.LIBRARY_CHANGE,
-        ];
+        const eventTypes = input?.events ?? Object.values(EventType);
 
         return observable<{
           type: EventType;

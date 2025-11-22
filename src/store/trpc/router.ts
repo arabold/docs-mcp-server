@@ -3,6 +3,7 @@
  * Only procedures actually used externally are included to keep surface minimal.
  */
 import { initTRPC } from "@trpc/server";
+import superjson from "superjson";
 import { z } from "zod";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import type {
@@ -18,7 +19,9 @@ export interface DataTrpcContext {
   docService: IDocumentManagement;
 }
 
-const t = initTRPC.context<DataTrpcContext>().create();
+const t = initTRPC.context<DataTrpcContext>().create({
+  transformer: superjson,
+});
 
 // Common schemas
 const nonEmpty = z
@@ -34,6 +37,8 @@ const optionalVersion = z
 export function createDataRouter(trpc: unknown) {
   const tt = trpc as typeof t;
   return tt.router({
+    ping: tt.procedure.query(async () => ({ status: "ok", ts: Date.now() })),
+
     listLibraries: tt.procedure.query(async ({ ctx }: { ctx: DataTrpcContext }) => {
       return await ctx.docService.listLibraries(); // LibrarySummary[]
     }),

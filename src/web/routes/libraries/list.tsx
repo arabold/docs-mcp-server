@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ListLibrariesTool } from "../../../tools/ListLibrariesTool";
 import { RemoveTool } from "../../../tools";
+import { logger } from "../../../utils/logger";
 import LibraryList from "../../components/LibraryList";
 
 /**
@@ -23,7 +24,7 @@ export function registerLibrariesRoutes(
       // Render the component directly
       return <LibraryList libraries={result.libraries} />;
     } catch (error) {
-      server.log.error(error, "Failed to list libraries");
+      logger.error(`Failed to list libraries: ${error}`);
       reply.status(500).send("Internal Server Error"); // Handle errors
     }
   });
@@ -41,9 +42,8 @@ export function registerLibrariesRoutes(
         // Trigger library change event via body custom event
         // The SSE system will pick this up and broadcast to all connected clients
       } catch (error: any) {
-        server.log.error(
-          error,
-          `Failed to remove ${libraryName}@${versionParam}`
+        logger.error(
+          `Failed to remove ${libraryName}@${versionParam}: ${error}`
         );
         // Check for specific errors if needed, e.g., NotFoundError
         reply

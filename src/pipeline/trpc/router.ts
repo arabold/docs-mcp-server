@@ -7,6 +7,7 @@
  */
 
 import { initTRPC } from "@trpc/server";
+import superjson from "superjson";
 import { z } from "zod";
 import type { ScraperOptions } from "../../scraper/types";
 import { analytics, TelemetryEvent } from "../../telemetry";
@@ -18,7 +19,9 @@ export interface PipelineTrpcContext {
   pipeline: IPipeline;
 }
 
-const t = initTRPC.context<PipelineTrpcContext>().create();
+const t = initTRPC.context<PipelineTrpcContext>().create({
+  transformer: superjson,
+});
 
 // Schemas
 const nonEmptyTrimmed = z
@@ -52,6 +55,8 @@ const getJobsInput = z.object({
 export function createPipelineRouter(trpc: unknown) {
   const tt = trpc as typeof t;
   return tt.router({
+    ping: tt.procedure.query(async () => ({ status: "ok", ts: Date.now() })),
+
     enqueueScrapeJob: tt.procedure
       .input(enqueueScrapeInput)
       .mutation(

@@ -200,7 +200,7 @@ describe("Double Initialization Prevention", () => {
     });
 
     // External worker mode configuration (no eventBus needed for remote)
-    await PipelineFactory.createPipeline(undefined, undefined, {
+    await PipelineFactory.createPipeline(undefined, mockEventBus, {
       recoverJobs: false,
       serverUrl: "http://localhost:8080/api",
     });

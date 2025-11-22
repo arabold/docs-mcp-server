@@ -3,6 +3,7 @@
  * Implements IDocumentManagement and delegates to /api data router.
  */
 import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
+import superjson from "superjson";
 import type { ScraperOptions } from "../scraper/types";
 import { logger } from "../utils/logger";
 import type { IDocumentManagement } from "./trpc/interfaces";
@@ -23,17 +24,20 @@ export class DocumentManagementClient implements IDocumentManagement {
   constructor(serverUrl: string) {
     this.baseUrl = serverUrl.replace(/\/$/, "");
     this.client = createTRPCProxyClient<DataRouter>({
-      links: [httpBatchLink({ url: this.baseUrl })],
+      links: [
+        httpBatchLink({
+          url: this.baseUrl,
+          transformer: superjson,
+        }),
+      ],
     });
     logger.debug(`DocumentManagementClient (tRPC) created for: ${this.baseUrl}`);
   }
 
   async initialize(): Promise<void> {
-    // Connectivity check
+    // Connectivity check using ping procedure
     try {
-      await (
-        this.client as unknown as { ping: { query: () => Promise<unknown> } }
-      ).ping.query();
+      await this.client.ping.query();
     } catch (error) {
       logger.debug(
         `Failed to connect to DocumentManagement server at ${this.baseUrl}: ${error}`,

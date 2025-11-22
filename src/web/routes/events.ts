@@ -125,8 +125,8 @@ export function registerEventsRoute(
         try {
           const eventName = ServerEventName[eventType];
           const ssePayload = convertToSsePayload(eventType, payload);
-          logger.info(
-            `📤 SSE forwarding event: ${eventName} ${JSON.stringify(ssePayload)}`,
+          logger.debug(
+            `SSE forwarding event: ${eventName} ${JSON.stringify(ssePayload)}`,
           );
           sendSseMessage(reply, eventName, ssePayload);
         } catch (error) {
