@@ -54,7 +54,7 @@ describe("HtmlNormalizationMiddleware", () => {
     });
 
     it("should handle processing errors gracefully", async () => {
-      const context = createContext("<img src='test.jpg'>");
+      const context = createContext('<img src="test.jpg">');
       // Intentionally break the DOM to cause an error
       context.dom = null as any;
 
@@ -111,7 +111,7 @@ describe("HtmlNormalizationMiddleware", () => {
       expect($(images[1]).attr("src")).toBe("http://other.com/image2.png");
     });
 
-    it("should handle images without src attribute", async () => {
+    it("should remove images without src attribute", async () => {
       const context = createContext(`
         <div>
           <img alt="No source">
@@ -124,8 +124,8 @@ describe("HtmlNormalizationMiddleware", () => {
       const $ = context.dom!;
       const images = $("img");
 
-      expect($(images[0]).attr("src")).toBeUndefined();
-      expect($(images[1]).attr("src")).toBe("");
+      // Both images should be removed (no src or empty src)
+      expect(images).toHaveLength(0);
     });
 
     it("should handle malformed relative URLs gracefully", async () => {
@@ -279,6 +279,142 @@ describe("HtmlNormalizationMiddleware", () => {
       // URL constructor is permissive and will resolve this as a relative path
       expect($(links[0]).attr("href")).toBe("https://example.com/::invalid::url");
       expect($("a")).toHaveLength(1);
+    });
+  });
+
+  describe("tracking image removal", () => {
+    it("should remove tracking pixels from known ad networks", async () => {
+      const context = createContext(`
+        <div>
+          <img src="https://d.adroll.com/cm/pixel.gif" alt="Ad tracking">
+          <img src="https://bat.bing.com/action/0?ti=123" alt="Bing">
+          <img src="https://analytics.twitter.com/1/i/adsct?bci=4" alt="Twitter">
+          <img src="logo.png" alt="Logo">
+        </div>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const images = $("img");
+
+      // Only the legitimate logo image should remain
+      expect(images).toHaveLength(1);
+      expect($(images[0]).attr("alt")).toBe("Logo");
+    });
+
+    it("should remove tracking images with various tracking domains", async () => {
+      const context = createContext(`
+        <div>
+          <img src="https://pixel.rubiconproject.com/tap.php?nid=5578" alt="Rubicon">
+          <img src="https://dsum-sec.casalemedia.com/rum?cm_dsp_id=18" alt="Casale">
+          <img src="https://partners.tremorhub.com/sync?UIDM=abc123" alt="Tremor">
+          <img src="https://id.rlcdn.com/464526.gif" alt="RL">
+          <img src="content-image.jpg" alt="Content">
+        </div>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const images = $("img");
+
+      expect(images).toHaveLength(1);
+      expect($(images[0]).attr("alt")).toBe("Content");
+    });
+
+    it("should keep legitimate images with similar but non-tracking domains", async () => {
+      const context = createContext(`
+        <div>
+          <img src="https://cdn.example.com/adroll-logo.png" alt="Company logo">
+          <img src="https://images.site.com/pixel-art.png" alt="Pixel art">
+        </div>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const images = $("img");
+
+      // Both should remain - domain names contain tracking keywords but aren't tracking domains
+      expect(images).toHaveLength(2);
+    });
+
+    it("should preserve data URI images", async () => {
+      const context = createContext(`
+        <div>
+          <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" alt="Data URI">
+          <img src="https://d.adroll.com/pixel.gif" alt="Tracking">
+          <img src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3C/svg%3E" alt="SVG Data URI">
+        </div>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const images = $("img");
+
+      // Both data URI images should remain, tracking image removed
+      expect(images).toHaveLength(2);
+      expect($(images[0]).attr("src")).toContain("data:image/png");
+      expect($(images[1]).attr("src")).toContain("data:image/svg");
+    });
+
+    it("should remove images without src attribute", async () => {
+      const context = createContext(`
+        <div>
+          <img alt="No source">
+          <img src="valid-image.jpg" alt="Valid">
+        </div>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const images = $("img");
+
+      expect(images).toHaveLength(1);
+      expect($(images[0]).attr("alt")).toBe("Valid");
+    });
+
+    it("should handle mixed tracking and legitimate images", async () => {
+      const context = createContext(`
+        <div>
+          <img src="hero.jpg" alt="Hero">
+          <img src="https://bat.bing.com/action/0?ti=123" alt="Bing tracking">
+          <img src="logo.png" alt="Logo">
+          <img src="https://analytics.twitter.com/1/i/adsct" alt="Twitter tracking">
+          <img src="https://cdn.example.com/banner.jpg" alt="Banner">
+          <img src="data:image/png;base64,abc123" alt="Inline">
+        </div>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const images = $("img");
+
+      expect(images).toHaveLength(4);
+      const alts = images.map((_i, el) => $(el).attr("alt")).get();
+      expect(alts).toEqual(["Hero", "Logo", "Banner", "Inline"]);
+    });
+
+    it("should be case-insensitive when matching tracking domains", async () => {
+      const context = createContext(`
+        <div>
+          <img src="https://D.ADROLL.COM/pixel.gif" alt="Uppercase">
+          <img src="https://Analytics.Twitter.com/track" alt="Mixed case">
+          <img src="valid-image.jpg" alt="Valid">
+        </div>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const images = $("img");
+
+      expect(images).toHaveLength(1);
+      expect($(images[0]).attr("alt")).toBe("Valid");
     });
   });
 
