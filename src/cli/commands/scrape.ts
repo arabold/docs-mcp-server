@@ -115,7 +115,7 @@ export async function scrapeAction(
     };
 
     pipeline = serverUrl
-      ? await PipelineFactory.createPipeline(undefined, undefined, {
+      ? await PipelineFactory.createPipeline(undefined, eventBus, {
           serverUrl,
           ...pipelineOptions,
         })

@@ -7,7 +7,7 @@ import { Option } from "commander";
 import { EventType } from "../../events";
 import { PipelineFactory, PipelineJobStatus, type PipelineOptions } from "../../pipeline";
 import type { IPipeline } from "../../pipeline/trpc/interfaces";
-import { createDocumentManagement } from "../../store";
+import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
@@ -83,12 +83,12 @@ export async function refreshAction(
     };
 
     pipeline = serverUrl
-      ? await PipelineFactory.createPipeline(undefined, undefined, {
+      ? await PipelineFactory.createPipeline(undefined, eventBus, {
           serverUrl,
           ...pipelineOptions,
         })
       : await PipelineFactory.createPipeline(
-          docService as unknown as never,
+          docService as DocumentManagementService,
           eventBus,
           pipelineOptions,
         );

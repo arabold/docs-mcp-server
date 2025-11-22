@@ -26,7 +26,7 @@ export namespace PipelineFactory {
   // Overload: Remote pipeline client (out-of-process worker)
   export async function createPipeline(
     docService: undefined,
-    eventBus: undefined,
+    eventBus: EventBusService,
     options: PipelineOptions & { serverUrl: string },
   ): Promise<PipelineClient>;
   // Implementation
@@ -47,8 +47,11 @@ export namespace PipelineFactory {
 
     if (serverUrl) {
       // External pipeline requested
+      if (!eventBus) {
+        throw new Error("Remote pipeline requires EventBusService");
+      }
       logger.debug(`Creating PipelineClient for external worker at: ${serverUrl}`);
-      return new PipelineClient(serverUrl);
+      return new PipelineClient(serverUrl, eventBus);
     }
 
     // Local embedded pipeline with specified behavior

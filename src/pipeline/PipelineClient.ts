@@ -11,6 +11,8 @@ import {
   splitLink,
   wsLink,
 } from "@trpc/client";
+import type { EventBusService } from "../events/EventBusService";
+import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
 import { logger } from "../utils/logger";
 import type { IPipeline } from "./trpc/interfaces";
@@ -25,11 +27,11 @@ export class PipelineClient implements IPipeline {
   private readonly wsUrl: string;
   private readonly client: ReturnType<typeof createTRPCProxyClient<PipelineRouter>>;
   private readonly wsClient: ReturnType<typeof createWSClient>;
-  private pollingInterval: number = 1000; // 1 second
-  private activePolling = new Set<string>(); // Track jobs being polled for completion
+  private readonly eventBus: EventBusService;
 
-  constructor(serverUrl: string) {
+  constructor(serverUrl: string, eventBus: EventBusService) {
     this.baseUrl = serverUrl.replace(/\/$/, "");
+    this.eventBus = eventBus;
 
     // Extract base URL without the /api path for WebSocket connection
     // The tRPC WebSocket adapter handles the /api routing internally
@@ -77,9 +79,6 @@ export class PipelineClient implements IPipeline {
   }
 
   async stop(): Promise<void> {
-    // Clear any active polling
-    this.activePolling.clear();
-
     // Close WebSocket connection
     this.wsClient.close();
 
@@ -177,42 +176,38 @@ export class PipelineClient implements IPipeline {
   }
 
   async waitForJobCompletion(jobId: string): Promise<void> {
-    if (this.activePolling.has(jobId)) {
-      throw new Error(`Already waiting for completion of job ${jobId}`);
-    }
-
-    this.activePolling.add(jobId);
-
-    try {
-      while (this.activePolling.has(jobId)) {
-        const job = await this.getJob(jobId);
-        if (!job) {
-          throw new Error(`Job ${jobId} not found`);
-        }
-
-        // Check if job is in final state
-        if (
-          job.status === "completed" ||
-          job.status === "failed" ||
-          job.status === "cancelled"
-        ) {
-          if (job.status === "failed" && job.error) {
-            // Normalize to real Error instance
-            throw new Error(job.error.message);
+    return new Promise((resolve, reject) => {
+      // Listen for job status changes on the event bus
+      // RemoteEventProxy bridges remote worker events to this local bus
+      const unsubscribe = this.eventBus.on(
+        EventType.JOB_STATUS_CHANGE,
+        (job: PipelineJob) => {
+          // Filter for the specific job we're waiting for
+          if (job.id !== jobId) {
+            return;
           }
-          return;
-        }
 
-        // Poll every second
-        await new Promise((resolve) => setTimeout(resolve, this.pollingInterval));
-      }
-    } finally {
-      this.activePolling.delete(jobId);
-    }
+          // Check if job reached a terminal state
+          if (
+            job.status === "completed" ||
+            job.status === "failed" ||
+            job.status === "cancelled"
+          ) {
+            unsubscribe();
+
+            if (job.status === "failed" && job.error) {
+              reject(new Error(job.error.message));
+            } else {
+              resolve();
+            }
+          }
+        },
+      );
+    });
   }
 
   setCallbacks(_callbacks: PipelineManagerCallbacks): void {
-    // For external pipeline, callbacks are not used since all updates come via polling
+    // For external pipeline, callbacks are not used since all updates come via event bus
     logger.debug("PipelineClient.setCallbacks called - no-op for external worker");
   }
 }

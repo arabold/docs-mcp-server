@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { Option } from "commander";
 import { startAppServer } from "../../app";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { createDocumentManagement } from "../../store";
+import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { DEFAULT_HOST, DEFAULT_WEB_PORT } from "../../utils/config";
@@ -104,12 +104,12 @@ export function createWebCommand(program: Command): Command {
             concurrency: 3,
           };
           const pipeline = serverUrl
-            ? await PipelineFactory.createPipeline(undefined, undefined, {
+            ? await PipelineFactory.createPipeline(undefined, eventBus, {
                 serverUrl,
                 ...pipelineOptions,
               })
             : await PipelineFactory.createPipeline(
-                docService as unknown as never,
+                docService as DocumentManagementService,
                 eventBus,
                 pipelineOptions,
               );

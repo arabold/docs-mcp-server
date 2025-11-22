@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EventBusService } from "../events/EventBusService";
+import { EventType } from "../events/types";
 import { PipelineClient } from "./PipelineClient";
 
 // Mock tRPC client factory
@@ -29,6 +31,7 @@ vi.mock("@trpc/client", () => {
 
 describe("PipelineClient", () => {
   let client: PipelineClient;
+  let eventBus: EventBusService;
   const serverUrl = "http://localhost:8080";
 
   beforeEach(() => {
@@ -41,7 +44,8 @@ describe("PipelineClient", () => {
     mockClient.getJobs.query.mockResolvedValue({ jobs: [] });
     mockClient.cancelJob.mutate.mockResolvedValue({ success: true });
     mockClient.clearCompletedJobs.mutate.mockResolvedValue({ count: 5 });
-    client = new PipelineClient(serverUrl);
+    eventBus = new EventBusService();
+    client = new PipelineClient(serverUrl, eventBus);
   });
 
   describe("start", () => {
@@ -90,45 +94,72 @@ describe("PipelineClient", () => {
   });
 
   describe("waitForJobCompletion", () => {
-    it("should poll until job completes successfully", async () => {
+    it("should resolve when job completes successfully via event bus", async () => {
       const jobId = "job-123";
 
-      // Mock sequence: running -> running -> completed
-      mockClient.getJob.query
-        .mockResolvedValueOnce({ status: "running" })
-        .mockResolvedValueOnce({ status: "running" })
-        .mockResolvedValueOnce({ status: "completed" });
+      // Start waiting
+      const waitPromise = client.waitForJobCompletion(jobId);
 
-      await expect(client.waitForJobCompletion(jobId)).resolves.toBeUndefined();
-      expect(mockClient.getJob.query).toHaveBeenCalledTimes(3);
+      // Simulate event bus emitting status change
+      setTimeout(() => {
+        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+          id: jobId,
+          status: "completed",
+          library: "test",
+          version: null,
+        } as any);
+      }, 10);
+
+      await expect(waitPromise).resolves.toBeUndefined();
     });
 
-    it("should throw error when job fails", async () => {
+    it("should throw error when job fails via event bus", async () => {
       const jobId = "job-123";
-      const error = { message: "Scraping failed" } as any;
-      mockClient.getJob.query.mockResolvedValueOnce({ status: "failed", error });
 
-      await expect(client.waitForJobCompletion(jobId)).rejects.toThrow("Scraping failed");
+      // Start waiting
+      const waitPromise = client.waitForJobCompletion(jobId);
+
+      // Simulate event bus emitting failure
+      setTimeout(() => {
+        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+          id: jobId,
+          status: "failed",
+          library: "test",
+          version: null,
+          error: { message: "Scraping failed" },
+        } as any);
+      }, 10);
+
+      await expect(waitPromise).rejects.toThrow("Scraping failed");
     });
 
-    it("should prevent concurrent polling for same job", async () => {
+    it("should ignore events for other jobs", async () => {
       const jobId = "job-123";
 
-      // Start first polling (mock hanging response)
-      mockClient.getJob.query.mockImplementationOnce(
-        () => new Promise(() => {}), // Never resolves
-      );
+      // Start waiting
+      const waitPromise = client.waitForJobCompletion(jobId);
 
-      // Start first polling but don't await
-      client.waitForJobCompletion(jobId);
+      // Emit events for different job (should be ignored)
+      setTimeout(() => {
+        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+          id: "other-job",
+          status: "completed",
+          library: "test",
+          version: null,
+        } as any);
+      }, 10);
 
-      // Try to start second polling for same job
-      await expect(client.waitForJobCompletion(jobId)).rejects.toThrow(
-        "Already waiting for completion",
-      );
+      // Emit event for our job
+      setTimeout(() => {
+        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+          id: jobId,
+          status: "completed",
+          library: "test",
+          version: null,
+        } as any);
+      }, 20);
 
-      // Cleanup hanging promise
-      await client.stop();
+      await expect(waitPromise).resolves.toBeUndefined();
     });
   });
 

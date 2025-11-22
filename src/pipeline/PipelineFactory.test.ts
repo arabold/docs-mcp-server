@@ -45,11 +45,11 @@ describe("PipelineFactory", () => {
 
       const pipeline = await PipelineFactory.createPipeline(
         undefined,
-        undefined,
+        mockEventBus,
         options,
       );
 
-      expect(PipelineClient).toHaveBeenCalledWith("http://localhost:8080");
+      expect(PipelineClient).toHaveBeenCalledWith("http://localhost:8080", mockEventBus);
       expect(PipelineManager).not.toHaveBeenCalled();
       // Behavior: returned instance is the one constructed by PipelineClient
       const ClientMock = PipelineClient as unknown as { mock: { instances: any[] } };
@@ -77,13 +77,22 @@ describe("PipelineFactory", () => {
 
       const _pipeline = await PipelineFactory.createPipeline(
         undefined,
-        undefined,
+        mockEventBus,
         options,
       );
 
       // Should create client, ignoring local pipeline options
-      expect(PipelineClient).toHaveBeenCalledWith("http://external:9000");
+      expect(PipelineClient).toHaveBeenCalledWith("http://external:9000", mockEventBus);
       expect(PipelineManager).not.toHaveBeenCalled();
+    });
+
+    it("should throw error when serverUrl provided without eventBus", async () => {
+      const options = { serverUrl: "http://localhost:8080" };
+
+      await expect(
+        // @ts-expect-error - Testing error case where eventBus is missing
+        PipelineFactory.createPipeline(undefined, undefined, options),
+      ).rejects.toThrow("Remote pipeline requires EventBusService");
     });
   });
 });
