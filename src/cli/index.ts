@@ -6,11 +6,11 @@ import { Command, Option } from "commander";
 import packageJson from "../../package.json";
 import { EventBusService } from "../events";
 import {
-  analytics,
   initTelemetry,
   shouldEnableTelemetry,
   TelemetryEvent,
   TelemetryService,
+  telemetry,
 } from "../telemetry";
 import { resolveStorePath } from "../utils/paths";
 import { createDefaultAction } from "./commands/default";
@@ -108,8 +108,8 @@ export function createCliProgram(): Command {
     // Initialize telemetry if enabled
     if (shouldEnableTelemetry()) {
       // Set global context for CLI commands
-      if (analytics.isEnabled()) {
-        analytics.setGlobalContext({
+      if (telemetry.isEnabled()) {
+        telemetry.setGlobalContext({
           appVersion: packageJson.version,
           appPlatform: process.platform,
           appNodeVersion: process.version,
@@ -128,7 +128,7 @@ export function createCliProgram(): Command {
 
   // Track CLI command completion
   program.hook("postAction", async (_thisCommand, actionCommand) => {
-    if (analytics.isEnabled()) {
+    if (telemetry.isEnabled()) {
       // Track CLI_COMMAND event for all CLI commands (standalone and server)
       const trackingKey = (actionCommand as { _trackingKey?: string })._trackingKey;
       const startTime = trackingKey ? commandStartTimes.get(trackingKey) : Date.now();
@@ -139,13 +139,13 @@ export function createCliProgram(): Command {
         commandStartTimes.delete(trackingKey);
       }
 
-      analytics.track(TelemetryEvent.CLI_COMMAND, {
+      telemetry.track(TelemetryEvent.CLI_COMMAND, {
         cliCommand: actionCommand.name(),
         success: true, // If we reach postAction, command succeeded
         durationMs,
       });
 
-      await analytics.shutdown();
+      await telemetry.shutdown();
     }
   });
 

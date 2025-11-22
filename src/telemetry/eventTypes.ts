@@ -3,7 +3,7 @@
  * Each event type has a corresponding interface defining its required properties.
  */
 
-import type { TelemetryEvent } from "./analytics";
+import type { TelemetryEvent } from "./telemetry";
 
 // Base interface for all telemetry events
 interface BaseTelemetryProperties {
@@ -43,60 +43,33 @@ export interface ToolUsedProperties extends BaseTelemetryProperties {
 
 // Pipeline Events
 
+export interface PipelineJobStartedProperties extends BaseTelemetryProperties {
+  jobId: string;
+  library: string;
+  hasVersion: boolean;
+  maxPagesConfigured: number;
+  queueWaitTimeMs: number | null;
+}
+
 export interface PipelineJobCompletedProperties extends BaseTelemetryProperties {
   jobId: string;
   library: string;
-  status: string;
   durationMs: number | null;
-  queueWaitTimeMs: number | null;
+  pagesProcessed: number;
+  maxPagesConfigured: number;
+  hasVersion: boolean;
+  throughputPagesPerSecond: number;
+}
+
+export interface PipelineJobFailedProperties extends BaseTelemetryProperties {
+  jobId: string;
+  library: string;
+  durationMs: number | null;
   pagesProcessed: number;
   maxPagesConfigured: number;
   hasVersion: boolean;
   hasError: boolean;
-  throughputPagesPerSecond: number;
-}
-
-// Document Events
-export interface DocumentProcessedProperties extends BaseTelemetryProperties {
-  // Content characteristics
-  mimeType: string;
-  contentSizeBytes: number;
-  processingTimeMs: number;
-  chunksCreated: number;
-  hasTitle: boolean;
-  hasDescription: boolean;
-  // Privacy-safe location info
-  urlDomain: string;
-  depth: number;
-  // Library context
-  library: string;
-  libraryVersion: string | null;
-  // Processing efficiency
-  avgChunkSizeBytes: number;
-  processingSpeedKbPerSec: number;
-}
-
-// Web UI Events
-export interface WebSearchPerformedProperties extends BaseTelemetryProperties {
-  library: string;
-  version?: string;
-  queryLength: number;
-  resultCount: number;
-  limit: number;
-  exactMatch?: boolean;
-}
-
-export interface WebScrapeStartedProperties extends BaseTelemetryProperties {
-  library: string;
-  version?: string;
-  url: string;
-  scope: string;
-  maxDepth: number;
-  maxPages: number;
-  maxConcurrency?: number;
-  ignoreErrors?: boolean;
-  scrapeMode?: string;
-  hasCustomHeaders?: boolean;
+  errorMessage?: string;
 }
 
 // Type mapping for event to properties
@@ -105,8 +78,7 @@ export interface TelemetryEventPropertiesMap {
   [TelemetryEvent.APP_SHUTDOWN]: AppShutdownProperties;
   [TelemetryEvent.CLI_COMMAND]: CliCommandProperties;
   [TelemetryEvent.TOOL_USED]: ToolUsedProperties;
+  [TelemetryEvent.PIPELINE_JOB_STARTED]: PipelineJobStartedProperties;
   [TelemetryEvent.PIPELINE_JOB_COMPLETED]: PipelineJobCompletedProperties;
-  [TelemetryEvent.DOCUMENT_PROCESSED]: DocumentProcessedProperties;
-  [TelemetryEvent.WEB_SEARCH_PERFORMED]: WebSearchPerformedProperties;
-  [TelemetryEvent.WEB_SCRAPE_STARTED]: WebScrapeStartedProperties;
+  [TelemetryEvent.PIPELINE_JOB_FAILED]: PipelineJobFailedProperties;
 }

@@ -4,7 +4,7 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
 import { getEventBus, getGlobalOptions } from "../utils";
 
@@ -13,7 +13,7 @@ export async function findVersionAction(
   options: { version?: string; serverUrl?: string },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "find-version",
     library,
     version: options.version,

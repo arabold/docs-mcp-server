@@ -5,10 +5,10 @@
 
 import type { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
-import type { PipelineJob } from "../pipeline/types";
+import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
 import type { ScraperProgressEvent } from "../scraper/types";
 import { logger } from "../utils/logger";
-import { analytics, TelemetryEvent } from "./analytics";
+import { TelemetryEvent, telemetry } from "./telemetry";
 
 export class TelemetryService {
   private eventBus: EventBusService;
@@ -42,6 +42,7 @@ export class TelemetryService {
 
   /**
    * Handles job status change events and tracks them to analytics.
+   * Only tracks events for meaningful state transitions: started, completed, and failed.
    */
   private handleJobStatusChange(job: PipelineJob): void {
     const duration = job.startedAt ? Date.now() - job.startedAt.getTime() : null;
@@ -50,21 +51,49 @@ export class TelemetryService {
         ? job.startedAt.getTime() - job.createdAt.getTime()
         : null;
 
-    analytics.track(TelemetryEvent.PIPELINE_JOB_COMPLETED, {
-      jobId: job.id,
-      library: job.library,
-      status: job.status,
-      durationMs: duration,
-      queueWaitTimeMs: queueWaitTime,
-      pagesProcessed: job.progressPages || 0,
-      maxPagesConfigured: job.progressMaxPages || 0,
-      hasVersion: !!job.version,
-      hasError: !!job.error,
-      throughputPagesPerSecond:
-        duration && job.progressPages
-          ? Math.round((job.progressPages / duration) * 1000)
-          : 0,
-    });
+    switch (job.status) {
+      case PipelineJobStatus.RUNNING:
+        telemetry.track(TelemetryEvent.PIPELINE_JOB_STARTED, {
+          jobId: job.id,
+          library: job.library,
+          hasVersion: !!job.version,
+          maxPagesConfigured: job.progressMaxPages || 0,
+          queueWaitTimeMs: queueWaitTime,
+        });
+        break;
+
+      case PipelineJobStatus.COMPLETED:
+        telemetry.track(TelemetryEvent.PIPELINE_JOB_COMPLETED, {
+          jobId: job.id,
+          library: job.library,
+          durationMs: duration,
+          pagesProcessed: job.progressPages || 0,
+          maxPagesConfigured: job.progressMaxPages || 0,
+          hasVersion: !!job.version,
+          throughputPagesPerSecond:
+            duration && job.progressPages
+              ? Math.round((job.progressPages / duration) * 1000)
+              : 0,
+        });
+        break;
+
+      case PipelineJobStatus.FAILED:
+        telemetry.track(TelemetryEvent.PIPELINE_JOB_FAILED, {
+          jobId: job.id,
+          library: job.library,
+          durationMs: duration,
+          pagesProcessed: job.progressPages || 0,
+          maxPagesConfigured: job.progressMaxPages || 0,
+          hasVersion: !!job.version,
+          hasError: !!job.error,
+          errorMessage: job.error?.message,
+        });
+        break;
+
+      // Ignore queued, cancelling, and cancelled states - no telemetry needed
+      default:
+        break;
+    }
   }
 
   /**

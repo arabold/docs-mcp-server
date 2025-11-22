@@ -33,7 +33,7 @@ export interface AppServerConfig {
   /** Optional OAuth2/OIDC authentication configuration for MCP endpoints */
   auth?: AuthConfig;
 
-  /** Enable telemetry tracking for usage analytics and performance monitoring */
+  /** Enable telemetry tracking for usage and performance monitoring */
   telemetry?: boolean;
 
   /** Startup context for telemetry (optional) */

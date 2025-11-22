@@ -10,7 +10,7 @@ import type { IPipeline } from "../../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../../scraper/types";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import {
   DEFAULT_MAX_CONCURRENCY,
@@ -44,7 +44,7 @@ export async function scrapeAction(
   },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "scrape",
     library,
     version: options.version,

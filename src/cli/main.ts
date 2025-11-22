@@ -11,7 +11,7 @@ import {
   UnsupportedProviderError,
 } from "../store/embeddings/EmbeddingFactory";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { analytics, type TelemetryService } from "../telemetry";
+import { type TelemetryService, telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
 import { createCliProgram } from "./index";
 
@@ -71,8 +71,8 @@ const sigintHandler = async (): Promise<void> => {
 
     // Analytics shutdown is handled by AppServer.stop() above
     // Only shutdown analytics if no AppServer was running
-    if (!activeAppServer && analytics.isEnabled()) {
-      await analytics.shutdown();
+    if (!activeAppServer && telemetry.isEnabled()) {
+      await telemetry.shutdown();
       logger.debug("SIGINT: Analytics shut down.");
     }
 
@@ -96,7 +96,7 @@ export async function cleanupCliCommand(): Promise<void> {
     process.removeListener("SIGINT", sigintHandler);
 
     // Shutdown analytics for non-server CLI commands to ensure clean exit
-    await analytics.shutdown();
+    await telemetry.shutdown();
 
     // Avoid hanging processes by explicitly exiting
     process.exit(0);

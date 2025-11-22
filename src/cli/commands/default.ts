@@ -9,7 +9,7 @@ import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { DEFAULT_HOST, DEFAULT_HTTP_PORT } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
@@ -113,7 +113,7 @@ export function createDefaultAction(program: Command): Command {
           },
           command?: Command,
         ) => {
-          await analytics.track(TelemetryEvent.CLI_COMMAND, {
+          await telemetry.track(TelemetryEvent.CLI_COMMAND, {
             command: "default",
             protocol: options.protocol,
             port: options.port,

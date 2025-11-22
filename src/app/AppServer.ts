@@ -21,7 +21,7 @@ import { registerWebService } from "../services/webService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
 import type { EmbeddingModelConfig } from "../store/embeddings/EmbeddingConfig";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../telemetry";
+import { TelemetryEvent, telemetry } from "../telemetry";
 import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
@@ -87,10 +87,10 @@ export class AppServer {
     if (this.config.telemetry !== false && shouldEnableTelemetry()) {
       try {
         // Set global application context that will be included in all events
-        if (analytics.isEnabled()) {
+        if (telemetry.isEnabled()) {
           // Resolve embedding configuration for global context
 
-          analytics.setGlobalContext({
+          telemetry.setGlobalContext({
             appVersion: packageJson.version,
             appPlatform: process.platform,
             appNodeVersion: process.version,
@@ -106,7 +106,7 @@ export class AppServer {
           });
 
           // Track app start at the very beginning
-          analytics.track(TelemetryEvent.APP_STARTED, {
+          telemetry.track(TelemetryEvent.APP_STARTED, {
             services: this.getActiveServicesList(),
             port: this.config.port,
             externalWorker: Boolean(this.config.externalWorkerUrl),
@@ -191,14 +191,14 @@ export class AppServer {
       }
 
       // Track app shutdown
-      if (analytics.isEnabled()) {
-        analytics.track(TelemetryEvent.APP_SHUTDOWN, {
+      if (telemetry.isEnabled()) {
+        telemetry.track(TelemetryEvent.APP_SHUTDOWN, {
           graceful: true,
         });
       }
 
       // Shutdown telemetry service (this will flush remaining events)
-      await analytics.shutdown();
+      await telemetry.shutdown();
 
       // Close Fastify server
       await this.server.close();
@@ -207,12 +207,12 @@ export class AppServer {
       logger.error(`❌ Failed to stop AppServer gracefully: ${error}`);
 
       // Track ungraceful shutdown
-      if (analytics.isEnabled()) {
-        analytics.track(TelemetryEvent.APP_SHUTDOWN, {
+      if (telemetry.isEnabled()) {
+        telemetry.track(TelemetryEvent.APP_SHUTDOWN, {
           graceful: false,
           error: error instanceof Error ? error.constructor.name : "UnknownError",
         });
-        await analytics.shutdown();
+        await telemetry.shutdown();
       }
 
       throw error;
@@ -228,10 +228,10 @@ export class AppServer {
       // Catch unhandled promise rejections
       process.on("unhandledRejection", (reason) => {
         logger.error(`Unhandled Promise Rejection: ${reason}`);
-        if (analytics.isEnabled()) {
+        if (telemetry.isEnabled()) {
           // Create an Error object from the rejection reason for better tracking
           const error = reason instanceof Error ? reason : new Error(String(reason));
-          analytics.captureException(error, {
+          telemetry.captureException(error, {
             error_category: "system",
             component: AppServer.constructor.name,
             context: "process_unhandled_rejection",
@@ -244,8 +244,8 @@ export class AppServer {
       // Catch uncaught exceptions
       process.on("uncaughtException", (error) => {
         logger.error(`Uncaught Exception: ${error.message}`);
-        if (analytics.isEnabled()) {
-          analytics.captureException(error, {
+        if (telemetry.isEnabled()) {
+          telemetry.captureException(error, {
             error_category: "system",
             component: AppServer.constructor.name,
             context: "process_uncaught_exception",
@@ -258,8 +258,8 @@ export class AppServer {
     // Setup Fastify error handler (if method exists - for testing compatibility)
     if (typeof this.server.setErrorHandler === "function") {
       this.server.setErrorHandler<FastifyError>(async (error, request, reply) => {
-        if (analytics.isEnabled()) {
-          analytics.captureException(error, {
+        if (telemetry.isEnabled()) {
+          telemetry.captureException(error, {
             errorCategory: "http",
             component: "FastifyServer",
             statusCode: error.statusCode || 500,

@@ -4,12 +4,12 @@
 
 import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
 import { formatOutput, getEventBus, getGlobalOptions } from "../utils";
 
 export async function listAction(options: { serverUrl?: string }, command?: Command) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "list",
     useServerUrl: !!options.serverUrl,
   });

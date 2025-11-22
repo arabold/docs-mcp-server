@@ -13,7 +13,7 @@ import { createMcpServerInstance } from "../mcp/mcpServer";
 import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { analytics } from "../telemetry";
+import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
 
 /**
@@ -55,7 +55,7 @@ export async function registerMcpService(
         sseTransports[transport.sessionId] = transport;
 
         // Log client connection (simple connection tracking without sessions)
-        if (analytics.isEnabled()) {
+        if (telemetry.isEnabled()) {
           logger.info(`🔗 MCP client connected: ${transport.sessionId}`);
         }
 
@@ -64,7 +64,7 @@ export async function registerMcpService(
           transport.close();
 
           // Log client disconnection
-          if (analytics.isEnabled()) {
+          if (telemetry.isEnabled()) {
             logger.info(`🔗 MCP client disconnected: ${transport.sessionId}`);
           }
         });

@@ -7,7 +7,7 @@ import { Option } from "commander";
 import { startAppServer } from "../../app";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { DEFAULT_HOST, DEFAULT_MAX_CONCURRENCY } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
@@ -62,7 +62,7 @@ export function createWorkerCommand(program: Command): Command {
         },
         command?: Command,
       ) => {
-        await analytics.track(TelemetryEvent.CLI_COMMAND, {
+        await telemetry.track(TelemetryEvent.CLI_COMMAND, {
           command: "worker",
           port: cmdOptions.port,
           host: cmdOptions.host,

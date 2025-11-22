@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Analytics, TelemetryEvent } from "./analytics";
 import { TelemetryConfig } from "./TelemetryConfig";
+import { Telemetry, TelemetryEvent } from "./telemetry";
 
 // Set the global __POSTHOG_API_KEY__ for testing
 (global as any).__POSTHOG_API_KEY__ = "test-api-key";
@@ -25,8 +25,8 @@ vi.mock("./postHogClient", () => ({
   })),
 }));
 
-describe("Analytics", () => {
-  let analytics: Analytics;
+describe("Telemetry", () => {
+  let telemetry: Telemetry;
   let mockPostHogClient: any;
 
   beforeEach(() => {
@@ -38,16 +38,16 @@ describe("Analytics", () => {
     };
     vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
 
-    analytics = Analytics.create();
+    telemetry = Telemetry.create();
 
     // Get the mocked instance that was created by the constructor
-    mockPostHogClient = (analytics as any).postHogClient;
+    mockPostHogClient = (telemetry as any).postHogClient;
   });
 
   describe("constructor", () => {
     it("should initialize with PostHogClient", () => {
-      expect(analytics).toBeDefined();
-      expect(analytics.isEnabled()).toBe(true);
+      expect(telemetry).toBeDefined();
+      expect(telemetry.isEnabled()).toBe(true);
     });
 
     it("should respect disabled config", () => {
@@ -57,8 +57,8 @@ describe("Analytics", () => {
       };
       vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
 
-      const disabledAnalytics = Analytics.create();
-      expect(disabledAnalytics.isEnabled()).toBe(false);
+      const disabledTelemetry = Telemetry.create();
+      expect(disabledTelemetry.isEnabled()).toBe(false);
     });
   });
 
@@ -66,27 +66,27 @@ describe("Analytics", () => {
     it("should set and get global context", () => {
       const context = { appVersion: "1.0.0", appPlatform: "test" };
 
-      analytics.setGlobalContext(context);
+      telemetry.setGlobalContext(context);
 
-      expect(analytics.getGlobalContext()).toEqual(context);
+      expect(telemetry.getGlobalContext()).toEqual(context);
     });
 
     it("should return copy of global context", () => {
       const context = { appVersion: "1.0.0" };
-      analytics.setGlobalContext(context);
+      telemetry.setGlobalContext(context);
 
-      const retrieved = analytics.getGlobalContext();
+      const retrieved = telemetry.getGlobalContext();
       retrieved.appPlatform = "modified";
 
-      expect(analytics.getGlobalContext()).toEqual({ appVersion: "1.0.0" });
+      expect(telemetry.getGlobalContext()).toEqual({ appVersion: "1.0.0" });
     });
   });
 
   describe("event tracking", () => {
     it("should track events via PostHogClient with global context", () => {
-      analytics.setGlobalContext({ appVersion: "1.0.0" });
+      telemetry.setGlobalContext({ appVersion: "1.0.0" });
 
-      analytics.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+      telemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
 
       expect(mockPostHogClient.capture).toHaveBeenCalledWith(
         "test-installation-id",
@@ -100,7 +100,7 @@ describe("Analytics", () => {
     });
 
     it("should include timestamp in all events", () => {
-      analytics.track(TelemetryEvent.APP_STARTED, {});
+      telemetry.track(TelemetryEvent.APP_STARTED, {});
 
       expect(mockPostHogClient.capture).toHaveBeenCalledWith(
         "test-installation-id",
@@ -111,9 +111,9 @@ describe("Analytics", () => {
       );
     });
 
-    describe("disabled analytics behavior", () => {
+    describe("disabled telemetry behavior", () => {
       let mockConfig: any;
-      let disabledAnalytics: Analytics;
+      let disabledTelemetry: Telemetry;
 
       beforeEach(() => {
         // Mock config to return disabled
@@ -121,21 +121,21 @@ describe("Analytics", () => {
           isEnabled: vi.fn(() => false),
         };
         vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig);
-        disabledAnalytics = Analytics.create();
+        disabledTelemetry = Telemetry.create();
       });
 
       it("should return false for isEnabled when disabled", () => {
-        expect(disabledAnalytics.isEnabled()).toBe(false);
+        expect(disabledTelemetry.isEnabled()).toBe(false);
       });
 
       it("should not track events when disabled", () => {
-        disabledAnalytics.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+        disabledTelemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
         expect(mockPostHogClient.capture).not.toHaveBeenCalled();
       });
 
       it("should not capture exceptions when disabled", () => {
         const error = new Error("Test error");
-        disabledAnalytics.captureException(error);
+        disabledTelemetry.captureException(error);
         expect(mockPostHogClient.captureException).not.toHaveBeenCalled();
       });
     });
@@ -144,9 +144,9 @@ describe("Analytics", () => {
   describe("exception tracking", () => {
     it("should capture exceptions via PostHogClient with global context", () => {
       const error = new Error("Test error");
-      analytics.setGlobalContext({ appVersion: "1.0.0" });
+      telemetry.setGlobalContext({ appVersion: "1.0.0" });
 
-      analytics.captureException(error, { context: "test" });
+      telemetry.captureException(error, { context: "test" });
 
       expect(mockPostHogClient.captureException).toHaveBeenCalledWith(
         "test-installation-id",
@@ -162,7 +162,7 @@ describe("Analytics", () => {
 
   describe("shutdown", () => {
     it("should shutdown PostHogClient", async () => {
-      await analytics.shutdown();
+      await telemetry.shutdown();
 
       expect(mockPostHogClient.shutdown).toHaveBeenCalled();
     });
@@ -170,7 +170,7 @@ describe("Analytics", () => {
 
   describe("isEnabled", () => {
     it("should return enabled state", () => {
-      expect(analytics.isEnabled()).toBe(true);
+      expect(telemetry.isEnabled()).toBe(true);
     });
   });
 });

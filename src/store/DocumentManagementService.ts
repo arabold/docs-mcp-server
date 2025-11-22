@@ -10,7 +10,7 @@ import {
 import type { ContentPipeline } from "../scraper/pipelines/types";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
-import { analytics, extractHostname, TelemetryEvent } from "../telemetry";
+import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
@@ -436,44 +436,12 @@ export class DocumentManagementService {
 
       // Emit library change event after adding documents
       this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
-
-      // Track successful document processing
-      const processingTime = performance.now() - processingStart;
-      const totalContentSize = chunks.reduce(
-        (sum: number, chunk: Chunk) => sum + chunk.content.length,
-        0,
-      );
-
-      analytics.track(TelemetryEvent.DOCUMENT_PROCESSED, {
-        // Content characteristics (privacy-safe)
-        mimeType: contentType,
-        contentSizeBytes: totalContentSize,
-
-        // Processing metrics
-        processingTimeMs: Math.round(processingTime),
-        chunksCreated: chunks.length,
-
-        // Document characteristics
-        hasTitle: !!title,
-        urlDomain: extractHostname(url),
-        depth,
-
-        // Library context
-        library,
-        libraryVersion: normalizedVersion || null,
-
-        // Processing efficiency
-        avgChunkSizeBytes: Math.round(totalContentSize / chunks.length),
-        processingSpeedKbPerSec: Math.round(
-          totalContentSize / 1024 / (processingTime / 1000),
-        ),
-      });
     } catch (error) {
       // Track processing failures with native error tracking
       const processingTime = performance.now() - processingStart;
 
       if (error instanceof Error) {
-        analytics.captureException(error, {
+        telemetry.captureException(error, {
           mimeType: contentType,
           contentSizeBytes: chunks.reduce(
             (sum: number, chunk: Chunk) => sum + chunk.content.length,

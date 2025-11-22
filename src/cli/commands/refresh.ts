@@ -9,7 +9,7 @@ import { PipelineFactory, PipelineJobStatus, type PipelineOptions } from "../../
 import type { IPipeline } from "../../pipeline/trpc/interfaces";
 import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
 import { getEventBus, getGlobalOptions, resolveEmbeddingContext } from "../utils";
 
@@ -22,7 +22,7 @@ export async function refreshAction(
   },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "refresh",
     library,
     version: options.version,

@@ -5,7 +5,7 @@
 import type { Command } from "commander";
 import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import {
   formatOutput,
@@ -26,7 +26,7 @@ export async function searchAction(
   },
   command?: Command,
 ) {
-  await analytics.track(TelemetryEvent.CLI_COMMAND, {
+  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "search",
     library,
     version: options.version,

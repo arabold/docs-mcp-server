@@ -10,7 +10,7 @@ import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../../telemetry";
+import { TelemetryEvent, telemetry } from "../../telemetry";
 import { DEFAULT_HOST, DEFAULT_HTTP_PORT, DEFAULT_PROTOCOL } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
@@ -116,7 +116,7 @@ export function createMcpCommand(program: Command): Command {
           },
           command?: Command,
         ) => {
-          await analytics.track(TelemetryEvent.CLI_COMMAND, {
+          await telemetry.track(TelemetryEvent.CLI_COMMAND, {
             command: "mcp",
             protocol: cmdOptions.protocol,
             port: cmdOptions.port,

@@ -4,6 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { TelemetryEvent } from "./telemetry";
 
 // Mock external dependencies to prevent actual server startup
 const mockPipelineStart = vi.fn().mockResolvedValue(undefined);
@@ -465,7 +466,7 @@ describe("Service Registration for Telemetry", () => {
 });
 
 describe("CLI Command Telemetry Integration", () => {
-  let mockAnalytics: {
+  let mockTelemetry: {
     setGlobalContext: Mock;
     track: Mock;
     shutdown: Mock;
@@ -474,15 +475,15 @@ describe("CLI Command Telemetry Integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Mock analytics instance
-    mockAnalytics = {
+    // Mock telemetry instance
+    mockTelemetry = {
       setGlobalContext: vi.fn(),
       track: vi.fn(),
       shutdown: vi.fn().mockResolvedValue(undefined),
     };
 
     vi.doMock("../telemetry", () => ({
-      analytics: mockAnalytics,
+      telemetry: mockTelemetry,
     }));
   });
 
@@ -495,9 +496,9 @@ describe("CLI Command Telemetry Integration", () => {
     };
 
     // Simulate CLI preAction calling setGlobalContext
-    mockAnalytics.setGlobalContext(expectedContext);
+    mockTelemetry.setGlobalContext(expectedContext);
 
-    expect(mockAnalytics.setGlobalContext).toHaveBeenCalledWith(expectedContext);
+    expect(mockTelemetry.setGlobalContext).toHaveBeenCalledWith(expectedContext);
   });
 
   it("should track CLI_COMMAND events in postAction hook", async () => {
@@ -506,13 +507,13 @@ describe("CLI Command Telemetry Integration", () => {
     const commandEndTime = commandStartTime + 1500; // 1.5 seconds
 
     // Simulate tracking CLI_COMMAND event
-    mockAnalytics.track("CLI_COMMAND", {
+    mockTelemetry.track(TelemetryEvent.CLI_COMMAND, {
       command: "web",
       success: true,
       durationMs: commandEndTime - commandStartTime,
     });
 
-    expect(mockAnalytics.track).toHaveBeenCalledWith("CLI_COMMAND", {
+    expect(mockTelemetry.track).toHaveBeenCalledWith(TelemetryEvent.CLI_COMMAND, {
       command: "web",
       success: true,
       durationMs: 1500,
@@ -521,13 +522,13 @@ describe("CLI Command Telemetry Integration", () => {
 
   it("should track failed CLI commands with success: false", async () => {
     // Mock failed command tracking
-    mockAnalytics.track("CLI_COMMAND", {
+    mockTelemetry.track(TelemetryEvent.CLI_COMMAND, {
       command: "invalid-command",
       success: false,
       durationMs: 100,
     });
 
-    expect(mockAnalytics.track).toHaveBeenCalledWith("CLI_COMMAND", {
+    expect(mockTelemetry.track).toHaveBeenCalledWith(TelemetryEvent.CLI_COMMAND, {
       command: "invalid-command",
       success: false,
       durationMs: 100,
@@ -539,20 +540,20 @@ describe("CLI Command Telemetry Integration", () => {
     const commands = ["web", "mcp", "worker", "fetch-url", "scrape-docs"];
 
     for (const command of commands) {
-      mockAnalytics.track("CLI_COMMAND", {
+      mockTelemetry.track(TelemetryEvent.CLI_COMMAND, {
         command,
         success: true,
         durationMs: 1000,
       });
     }
 
-    expect(mockAnalytics.track).toHaveBeenCalledTimes(commands.length);
+    expect(mockTelemetry.track).toHaveBeenCalledTimes(commands.length);
 
     // Verify each command was tracked correctly
-    const calls = mockAnalytics.track.mock.calls;
+    const calls = mockTelemetry.track.mock.calls;
     for (let i = 0; i < commands.length; i++) {
       expect(calls[i]).toEqual([
-        "CLI_COMMAND",
+        TelemetryEvent.CLI_COMMAND,
         {
           command: commands[i],
           success: true,

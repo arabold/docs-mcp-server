@@ -5,7 +5,6 @@
 import { initTRPC } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
-import { analytics, TelemetryEvent } from "../../telemetry";
 import type {
   DbVersionWithLibrary,
   FindVersionResult,
@@ -98,15 +97,6 @@ export function createDataRouter(trpc: unknown) {
             input.query,
             input.limit ?? 5,
           );
-
-          // Track Web UI search
-          analytics.track(TelemetryEvent.WEB_SEARCH_PERFORMED, {
-            library: input.library,
-            version: input.version || undefined,
-            queryLength: input.query.length,
-            resultCount: results.length,
-            limit: input.limit ?? 5,
-          });
 
           return results as StoreSearchResult[];
         },
