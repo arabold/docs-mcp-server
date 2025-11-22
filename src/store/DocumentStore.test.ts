@@ -1197,6 +1197,17 @@ describe("DocumentStore - Common Functionality", () => {
           ["programming", "guide"],
         ),
       );
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "CLI Options",
+          "https://example.com/cli-options",
+          "Use the --error-on-warnings flag to fail the build on warnings.",
+          ["cli", "options"],
+        ),
+      );
     });
 
     it("should safely handle malicious queries", async () => {
@@ -1229,6 +1240,187 @@ describe("DocumentStore - Common Functionality", () => {
           store.findByContent("security-test", "1.0.0", query, 10),
         ).resolves.not.toThrow();
       }
+    });
+
+    it("should handle quoted strings with hyphens (issue #262)", async () => {
+      // Reproduction for: https://github.com/arabold/docs-mcp-server/issues/262
+      // Query: "--error-on-warnings" (including quotes) should not throw syntax error
+      const results = await store.findByContent(
+        "security-test",
+        "1.0.0",
+        '"--error-on-warnings"',
+        10,
+      );
+
+      // Should find the document containing --error-on-warnings
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].content).toContain("--error-on-warnings");
+    });
+
+    it("should handle other quoted strings with special characters", async () => {
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Special Chars",
+          "https://example.com/special",
+          "Use @decorator or $variable in your code.",
+          ["syntax"],
+        ),
+      );
+
+      // Test various quoted strings with special characters
+      const testQueries = [
+        '"@decorator"',
+        '"$variable"',
+        '"foo-bar-baz"',
+        '"test.method()"',
+      ];
+
+      for (const query of testQueries) {
+        await expect(
+          store.findByContent("security-test", "1.0.0", query, 10),
+        ).resolves.not.toThrow();
+      }
+    });
+
+    it("should handle unbalanced quotes by auto-closing them", async () => {
+      // User forgot closing quote
+      const query = '"--error-on-warnings';
+
+      // Should not throw syntax error
+      await expect(
+        store.findByContent("security-test", "1.0.0", query, 10),
+      ).resolves.not.toThrow();
+    });
+
+    it("should preserve phrase search when user provides quotes", async () => {
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Phrase Test",
+          "https://example.com/phrase",
+          "The quick brown fox jumps over the lazy dog.",
+          ["test"],
+        ),
+      );
+
+      // Quoted phrase should find exact phrase
+      const phraseResults = await store.findByContent(
+        "security-test",
+        "1.0.0",
+        '"quick brown fox"',
+        10,
+      );
+      expect(phraseResults.length).toBeGreaterThan(0);
+      expect(phraseResults[0].content).toContain("quick brown fox");
+    });
+
+    it("should support mixed quoted phrases and unquoted terms", async () => {
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Mixed Search Test",
+          "https://example.com/mixed",
+          "Modern programming requires knowledge of design patterns and best practices.",
+          ["programming"],
+        ),
+      );
+
+      // Test mixed search: unquoted term + quoted phrase
+      const results = await store.findByContent(
+        "security-test",
+        "1.0.0",
+        'programming "design patterns"',
+        10,
+      );
+
+      // Should find documents containing both "programming" AND the phrase "design patterns"
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].content).toContain("programming");
+      expect(results[0].content).toContain("design patterns");
+    });
+
+    it("should treat FTS operators as literal keywords when in unquoted position", async () => {
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "OR Keyword Test",
+          "https://example.com/or-test",
+          "You can use OR conditions in your queries to match multiple terms.",
+          ["queries"],
+        ),
+      );
+
+      // Query: "queries" OR malicious
+      // With our security fix, each unquoted term is wrapped in quotes (implicit AND)
+      // So this becomes: "queries" "OR" "malicious"
+      // This requires ALL three terms to match (queries AND OR AND malicious)
+      const results = await store.findByContent(
+        "security-test",
+        "1.0.0",
+        '"queries" OR malicious',
+        10,
+      );
+
+      // This document contains "queries" and "OR" but NOT "malicious"
+      // So with implicit AND semantics, it will NOT match
+      expect(results.length).toBe(0);
+
+      // However, searching for just the keywords that ARE present should work
+      const results2 = await store.findByContent(
+        "security-test",
+        "1.0.0",
+        '"queries" OR',
+        10,
+      );
+      expect(results2.length).toBeGreaterThan(0);
+      expect(results2[0].content).toContain("queries");
+      expect(results2[0].content).toContain("OR");
+    });
+
+    it("should handle NOT operator as a literal keyword", async () => {
+      await store.addDocuments(
+        "security-test",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "NOT Keyword Test",
+          "https://example.com/not-test",
+          "You should NOT use this approach in production code.",
+          ["warnings"],
+        ),
+      );
+
+      // Query with NOT - treated as literal keyword with implicit AND
+      // Becomes: "production" "NOT" "unsafe" (all must match)
+      const results = await store.findByContent(
+        "security-test",
+        "1.0.0",
+        '"production" NOT unsafe',
+        10,
+      );
+
+      // Document has "production" and "NOT" but not "unsafe", so no match
+      expect(results.length).toBe(0);
+
+      // Searching for terms that ARE present should work
+      const results2 = await store.findByContent(
+        "security-test",
+        "1.0.0",
+        '"production" NOT',
+        10,
+      );
+      expect(results2.length).toBeGreaterThan(0);
+      expect(results2[0].content).toContain("production");
+      expect(results2[0].content).toContain("NOT");
     });
   });
 
