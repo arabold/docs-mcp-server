@@ -70,53 +70,122 @@ src/
 
 ## System Architecture
 
-The system uses a layered architecture where interfaces delegate to shared tools, which coordinate pipeline operations for content processing and storage.
+The system uses a layered architecture where interfaces delegate to shared tools, which coordinate pipeline operations for content processing and storage. The architecture supports two deployment modes with different event flow patterns.
+
+### Unified Mode (Local In-Process)
+
+In unified mode, all components run within a single process. The `PipelineManager` executes jobs directly and emits events to the local `EventBus`, which notifies all consumers in real-time.
 
 ```mermaid
 graph TD
-    subgraph "Access Layer"
-        CLI[CLI Commands]
-        WEB[Web Interface]
-        MCP[MCP Server]
-    end
+    subgraph "Unified Application Process"
+        direction TB
 
-    subgraph "Business Logic"
-        TOOLS[Tools Layer]
-    end
+        subgraph "Interfaces"
+            CLI[CLI Commands]
+            WEB[Web Interface]
+            MCP[MCP Server]
+        end
 
-    subgraph "Pipeline Management"
-        FACTORY[PipelineFactory]
-        MANAGER[PipelineManager]
-        CLIENT[PipelineClient]
-        WORKER[PipelineWorker]
-    end
+        subgraph "Core Services"
+            EB[EventBus Service]
+            DOC[Document Service]
+        end
 
-    subgraph "Content Processing"
-        SCRAPER[Scraper]
-        SPLITTER[Splitter]
-        EMBEDDER[Embeddings]
-    end
+        subgraph "Pipeline"
+            FACTORY[PipelineFactory]
+            MANAGER[PipelineManager]
+            WORKER[PipelineWorker]
+        end
 
-    subgraph "Data Layer"
-        DOCMGMT[DocumentManagement]
-        STORE[DocumentStore]
-        DB[(SQLite)]
-    end
+        subgraph "Content Processing"
+            SCRAPER[Scraper]
+            SPLITTER[Splitter]
+            EMBEDDER[Embeddings]
+        end
 
-    CLI --> TOOLS
-    WEB --> TOOLS
-    MCP --> TOOLS
-    TOOLS --> FACTORY
-    FACTORY --> MANAGER
-    FACTORY --> CLIENT
-    MANAGER --> WORKER
-    WORKER --> SCRAPER
-    SCRAPER --> SPLITTER
-    SPLITTER --> EMBEDDER
-    EMBEDDER --> DOCMGMT
-    DOCMGMT --> STORE
-    STORE --> DB
+        %% Command Flow
+        CLI & WEB & MCP --> FACTORY
+        FACTORY -->|Creates| MANAGER
+        MANAGER -->|Manages| WORKER
+        WORKER --> SCRAPER
+        SCRAPER --> SPLITTER
+        SPLITTER --> EMBEDDER
+
+        %% Event Flow
+        MANAGER -.->|Emits Events| EB
+        EB -.->|Real-time Updates| CLI & WEB & MCP
+
+        %% Data Flow
+        EMBEDDER -->|Stores Content| DOC
+    end
 ```
+
+**Key Characteristics:**
+
+- Direct method calls between components
+- Local event propagation via `EventBus`
+- Immediate job status updates
+- Simple deployment (single process)
+
+### Distributed Mode (Hub & Spoke)
+
+In distributed mode, the worker runs as a separate process. Multiple coordinators (Web UI, MCP Server) connect to the shared worker via tRPC. Each coordinator uses `PipelineClient` to send commands over HTTP and receive real-time events via WebSocket. The `RemoteEventProxy` bridges remote events into the local `EventBus`, making the distributed setup transparent to consumers.
+
+```mermaid
+graph TD
+    subgraph "Web Coordinator Process"
+        WEB_UI[Web Interface]
+        WEB_CLIENT[PipelineClient]
+        WEB_PROXY[RemoteEventProxy]
+        WEB_EB[EventBus]
+
+        WEB_UI --> WEB_CLIENT
+        WEB_CLIENT -.->|Remote Events| WEB_PROXY
+        WEB_PROXY -->|Re-emit Locally| WEB_EB
+        WEB_EB -.->|Updates| WEB_UI
+    end
+
+    subgraph "MCP Coordinator Process"
+        MCP_SRV[MCP Server]
+        MCP_CLIENT[PipelineClient]
+        MCP_PROXY[RemoteEventProxy]
+        MCP_EB[EventBus]
+
+        MCP_SRV --> MCP_CLIENT
+        MCP_CLIENT -.->|Remote Events| MCP_PROXY
+        MCP_PROXY -->|Re-emit Locally| MCP_EB
+        MCP_EB -.->|Updates| MCP_SRV
+    end
+
+    subgraph "Worker Process"
+        TRPC[tRPC Router<br/>HTTP + WebSocket]
+        W_MGR[PipelineManager]
+        W_EB[Worker EventBus]
+        W_WORKER[PipelineWorker]
+
+        TRPC -->|Commands| W_MGR
+        W_MGR -->|Executes| W_WORKER
+        W_MGR -.->|Events| W_EB
+        W_EB -.->|Subscription| TRPC
+    end
+
+    %% Network Connections
+    WEB_CLIENT ==>|HTTP: Commands| TRPC
+    TRPC -.->|WebSocket: Events| WEB_CLIENT
+
+    MCP_CLIENT ==>|HTTP: Commands| TRPC
+    TRPC -.->|WebSocket: Events| MCP_CLIENT
+```
+
+**Key Characteristics:**
+
+- **Hub**: Shared worker process executes all jobs
+- **Spokes**: Independent coordinator processes (Web, MCP, CLI)
+- **Split-Link Communication**: HTTP for commands, WebSocket for events
+- **Event Bridging**: `RemoteEventProxy` makes remote events appear local
+- **Scalability**: Multiple coordinators can share one worker
+- **Transparency**: Consumers use the same `EventBus` API regardless of mode
 
 ### Protocol Auto-Detection
 
@@ -152,15 +221,19 @@ The tools layer includes:
 
 ### Pipeline Management
 
-The pipeline system manages asynchronous job processing with persistent state:
+The pipeline system manages asynchronous job processing with persistent state and real-time event propagation:
 
-**PipelineManager**: Coordinates job queue, concurrency limits, and state synchronization. Maintains write-through architecture where job state updates immediately persist to database.
+**PipelineManager**: Coordinates job queue, concurrency limits, and state synchronization. Maintains write-through architecture where job state updates immediately persist to database. Emits events to `EventBus` for real-time status updates to all consumers.
 
-**PipelineWorker**: Executes individual jobs, orchestrating content fetching, processing, and storage. Reports progress through callbacks to the manager.
+**PipelineWorker**: Executes individual jobs, orchestrating content fetching, processing, and storage. Reports progress through callbacks to the manager, which are converted to events.
 
-**PipelineClient**: tRPC client that provides identical interface to PipelineManager for external worker communication.
+**PipelineClient**: tRPC client that provides identical interface to PipelineManager for external worker communication. Uses event-driven `waitForJobCompletion` via `EventBus` subscription instead of polling.
 
-Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED. All state transitions persist to database, enabling recovery after restart.
+**RemoteEventProxy**: Bridges events from external workers to the local `EventBus`. Subscribes to the worker's tRPC event stream (WebSocket) and re-emits events locally, making distributed execution transparent to consumers.
+
+**EventBus**: Central pub/sub service that decouples event producers (PipelineManager) from consumers (CLI, Web UI, MCP). Enables real-time updates without direct coupling between components.
+
+Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED. All state transitions persist to database and emit events, enabling both recovery after restart and real-time monitoring. See [Event Bus Architecture](docs/concepts/eventbus-architecture.md) for detailed event flow diagrams.
 
 ### Content Processing
 
@@ -173,7 +246,7 @@ Content processing follows a modular strategy-pipeline-splitter architecture:
 5. **Size Optimization**: Apply universal chunk sizing for optimal embedding generation
 6. **Embedders**: Generate vector embeddings using configured provider
 
-The system uses a two-phase splitting approach: semantic splitting preserves document structure, followed by size optimization for embedding quality. See `docs/content-processing.md` for detailed processing flows.
+The system uses a two-phase splitting approach: semantic splitting preserves document structure, followed by size optimization for embedding quality. See [Content Processing](docs/concepts/content-processing.md) for detailed processing flows.
 
 ### Storage Architecture
 
@@ -269,16 +342,19 @@ New functionality should follow established patterns:
 Detailed documentation for specific architectural areas:
 
 ### Concepts
-- `docs/concepts/pipeline-architecture.md` - Job processing and worker coordination
-- `docs/concepts/content-processing.md` - Scraping and document processing
-- `docs/concepts/data-storage.md` - Database design and embedding management
-- `docs/concepts/refresh-architecture.md` - Efficient re-indexing with change detection
-- `docs/concepts/splitter-hierarchy.md` - Document chunk organization and hierarchy
-- `docs/concepts/search-result-reassembly.md` - Search result processing and assembly
-- `docs/concepts/source-code-splitter.md` - Source code chunking strategies
-- `docs/concepts/content-agnostic-assembly.md` - Content assembly patterns
+
+- [Event Bus Architecture](docs/concepts/eventbus-architecture.md) - Event-driven architecture and real-time updates
+- [Pipeline Architecture](docs/concepts/pipeline-architecture.md) - Job processing and worker coordination
+- [Content Processing](docs/concepts/content-processing.md) - Scraping and document processing
+- [Data Storage](docs/concepts/data-storage.md) - Database design and embedding management
+- [Refresh Architecture](docs/concepts/refresh-architecture.md) - Efficient re-indexing with change detection
+- [Splitter Hierarchy](docs/concepts/splitter-hierarchy.md) - Document chunk organization and hierarchy
+- [Search Result Reassembly](docs/concepts/search-result-reassembly.md) - Search result processing and assembly
+- [Source Code Splitter](docs/concepts/source-code-splitter.md) - Source code chunking strategies
+- [Content Agnostic Assembly](docs/concepts/content-agnostic-assembly.md) - Content assembly patterns
 
 ### Infrastructure
-- `docs/infrastructure/deployment-modes.md` - Protocol detection and server modes
-- `docs/infrastructure/authentication.md` - OAuth2 authentication and security
-- `docs/infrastructure/telemetry.md` - Privacy-first telemetry architecture
+
+- [Deployment Modes](docs/infrastructure/deployment-modes.md) - Protocol detection and server modes
+- [Authentication](docs/infrastructure/authentication.md) - OAuth2 authentication and security
+- [Telemetry](docs/infrastructure/telemetry.md) - Privacy-first telemetry architecture
