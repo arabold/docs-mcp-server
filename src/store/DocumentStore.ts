@@ -503,39 +503,91 @@ export class DocumentStore {
   }
 
   /**
-   * Generates a dual-mode FTS query that combines phrase and keyword matching.
-   * Creates a query like: "exact phrase" OR ("word1" OR "word2" OR "word3")
-   * This provides better recall by matching both exact phrases and individual terms,
-   * while safely handling special FTS keywords by quoting everything.
+   * Generates a safe FTS query by tokenizing the input and escaping for FTS5.
+   *
+   * Strategy:
+   * - Quotes toggle between "phrase mode" and "word mode" (simple state machine)
+   * - Text inside quotes becomes a single phrase token
+   * - Text outside quotes is split by whitespace into word tokens
+   * - All tokens are escaped (double quotes -> "") and wrapped in quotes for safety
+   *
+   * This prevents FTS5 syntax errors while supporting intuitive phrase searches.
+   *
+   * Query construction:
+   * - Exact match of full input: `("escaped full query")`
+   * - Individual terms: `("term1" AND "term2" AND "phrase")`
+   * - Combined: `("full query") OR ("term1" AND "term2")`
+   *
+   * Examples:
+   * - `foo bar` -> `("foo bar") OR ("foo" AND "bar")`
+   * - `"hello world"` -> `("hello world")`
+   * - `test "exact phrase" word` -> `("test exact phrase word") OR ("test" AND "exact phrase" AND "word")`
    */
   private escapeFtsQuery(query: string): string {
-    // If the query already contains quotes, respect them and return as-is (escaped)
-    if (query.includes('"')) {
-      return query.replace(/"/g, '""');
+    // Tokenize the query using a simple quote-toggle state machine
+    const tokens: string[] = [];
+    let currentToken = "";
+    let inQuote = false;
+
+    for (let i = 0; i < query.length; i++) {
+      const char = query[i];
+
+      if (char === '"') {
+        // Toggle quote mode
+        if (inQuote) {
+          // Closing quote: save the current phrase token
+          if (currentToken.length > 0) {
+            tokens.push(currentToken);
+            currentToken = "";
+          }
+          inQuote = false;
+        } else {
+          // Opening quote: save any accumulated word token first
+          if (currentToken.length > 0) {
+            tokens.push(currentToken);
+            currentToken = "";
+          }
+          inQuote = true;
+        }
+      } else if (char === " " && !inQuote) {
+        // Whitespace outside quotes: token separator
+        if (currentToken.length > 0) {
+          tokens.push(currentToken);
+          currentToken = "";
+        }
+      } else {
+        // Regular character: accumulate
+        currentToken += char;
+      }
     }
 
-    // Escape internal double quotes for the phrase part
-    const escapedQuotes = query.replace(/"/g, '""');
-    const phraseQuery = `"${escapedQuotes}"`;
-
-    // Split query into individual terms for keyword matching
-    const terms = query
-      .trim()
-      .split(/\s+/)
-      .filter((term) => term.length > 0);
-
-    // If only one term, just return the phrase query
-    if (terms.length <= 1) {
-      return phraseQuery;
+    // Save any remaining token
+    if (currentToken.length > 0) {
+      tokens.push(currentToken);
     }
 
-    // Create keyword query with each term safely quoted: ("term1" OR "term2" OR "term3")
-    const keywordQuery = terms
-      .map((term) => `"${term.replace(/"/g, '""')}"`)
-      .join(" OR ");
+    // Handle empty query or only whitespace
+    if (tokens.length === 0) {
+      return '""';
+    }
 
-    // Combine phrase and keyword queries
-    return `${phraseQuery} OR (${keywordQuery})`;
+    // Escape and quote each token for FTS5 safety
+    const escapedTokens = tokens.map((token) => {
+      const escaped = token.replace(/"/g, '""');
+      return `"${escaped}"`;
+    });
+
+    // If single token, just return it
+    if (escapedTokens.length === 1) {
+      return escapedTokens[0];
+    }
+
+    // Build query: (Exact match of semantic content) OR (Terms ANDed together)
+    // Join tokens with space to match the semantic phrase, not the syntactic quotes
+    const exactMatch = `"${tokens.join(" ").replace(/"/g, '""')}"`;
+    const termsQuery = escapedTokens.join(" ");
+
+    return `${exactMatch} OR (${termsQuery})`;
   }
 
   /**
