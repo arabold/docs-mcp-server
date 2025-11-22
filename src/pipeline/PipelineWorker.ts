@@ -1,9 +1,27 @@
 import type { ScraperService } from "../scraper";
-import type { ScraperProgressEvent } from "../scraper/types";
+import type {
+  ScrapeResult,
+  ScraperProgressEvent as ScraperProgress,
+  ScraperProgressEvent,
+} from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { logger } from "../utils/logger";
 import { CancellationError } from "./errors";
-import type { InternalPipelineJob, PipelineManagerCallbacks } from "./types";
+import type { InternalPipelineJob } from "./types";
+
+/**
+ * Internal callbacks used by PipelineWorker.
+ * These work with InternalPipelineJob before conversion to public interface.
+ */
+interface WorkerCallbacks {
+  onJobProgress?: (job: InternalPipelineJob, progress: ScraperProgress) => Promise<void>;
+  onJobError?: (
+    job: InternalPipelineJob,
+    error: Error,
+    page?: ScrapeResult,
+  ) => Promise<void>;
+  onJobStatusChange?: (job: InternalPipelineJob) => Promise<void>;
+}
 
 /**
  * Executes a single document processing job.
@@ -23,12 +41,9 @@ export class PipelineWorker {
   /**
    * Executes the given pipeline job.
    * @param job - The job to execute.
-   * @param callbacks - Callbacks provided by the manager for reporting.
+   * @param callbacks - Internal callbacks provided by the manager for reporting.
    */
-  async executeJob(
-    job: InternalPipelineJob,
-    callbacks: PipelineManagerCallbacks,
-  ): Promise<void> {
+  async executeJob(job: InternalPipelineJob, callbacks: WorkerCallbacks): Promise<void> {
     const { id: jobId, library, version, scraperOptions, abortController } = job;
     const signal = abortController.signal;
 

@@ -4,6 +4,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import type { EventBusService } from "../events/EventBusService";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { SearchTool } from "../tools";
@@ -14,6 +15,7 @@ import { ListJobsTool } from "../tools/ListJobsTool";
 import { ListLibrariesTool } from "../tools/ListLibrariesTool";
 import { RemoveTool } from "../tools/RemoveTool";
 import { ScrapeTool } from "../tools/ScrapeTool";
+import { registerEventsRoute } from "../web/routes/events";
 import { registerIndexRoute } from "../web/routes/index";
 import { registerCancelJobRoute } from "../web/routes/jobs/cancel";
 import { registerClearCompletedJobsRoute } from "../web/routes/jobs/clear-completed";
@@ -31,6 +33,8 @@ export async function registerWebService(
   server: FastifyInstance,
   docService: IDocumentManagement,
   pipeline: IPipeline,
+  eventBus: EventBusService,
+  config?: { externalWorkerUrl?: string },
 ): Promise<void> {
   // Note: Web interface uses direct event tracking without session management
   // This approach provides meaningful analytics without the complexity of per-request sessions
@@ -46,11 +50,12 @@ export async function registerWebService(
   const clearCompletedJobsTool = new ClearCompletedJobsTool(pipeline);
 
   // Register all web routes
-  registerIndexRoute(server);
+  registerIndexRoute(server, config);
   registerLibrariesRoutes(server, listLibrariesTool, removeTool);
   registerLibraryDetailRoutes(server, listLibrariesTool, searchTool);
   registerJobListRoutes(server, listJobsTool);
   registerNewJobRoutes(server, scrapeTool);
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
+  registerEventsRoute(server, eventBus);
 }

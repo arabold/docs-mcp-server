@@ -1,6 +1,8 @@
 import path from "node:path";
 import Fuse from "fuse.js";
 import semver from "semver";
+import type { EventBusService } from "../events";
+import { EventType } from "../events";
 import {
   type PipelineConfiguration,
   PipelineFactory,
@@ -37,6 +39,7 @@ export class DocumentManagementService {
   private readonly store: DocumentStore;
   private readonly documentRetriever: DocumentRetrieverService;
   private readonly pipelines: ContentPipeline[];
+  private readonly eventBus: EventBusService;
 
   /**
    * Normalizes a version string, converting null or undefined to an empty string
@@ -48,9 +51,11 @@ export class DocumentManagementService {
 
   constructor(
     storePath: string,
+    eventBus: EventBusService,
     embeddingConfig?: EmbeddingModelConfig | null,
     pipelineConfig?: PipelineConfiguration,
   ) {
+    this.eventBus = eventBus;
     // Handle special :memory: case for in-memory databases (primarily for testing)
     const dbPath =
       storePath === ":memory:" ? ":memory:" : path.join(storePath, "documents.db");
@@ -336,6 +341,9 @@ export class DocumentManagementService {
     );
     const count = await this.store.deletePages(library, normalizedVersion);
     logger.info(`🗑️ Deleted ${count} documents`);
+
+    // Emit library change event
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**
@@ -345,6 +353,9 @@ export class DocumentManagementService {
   async deletePage(pageId: number): Promise<void> {
     logger.debug(`Deleting page ID: ${pageId}`);
     await this.store.deletePage(pageId);
+
+    // Emit library change event
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**
@@ -382,6 +393,9 @@ export class DocumentManagementService {
         `⚠️ Version ${library}@${normalizedVersion || "[no version]"} not found`,
       );
     }
+
+    // Emit library change event
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**
@@ -419,6 +433,9 @@ export class DocumentManagementService {
 
       // Add split documents to store
       await this.store.addDocuments(library, normalizedVersion, depth, result);
+
+      // Emit library change event after adding documents
+      this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
 
       // Track successful document processing
       const processingTime = performance.now() - processingStart;

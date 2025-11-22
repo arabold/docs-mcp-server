@@ -7,7 +7,7 @@ import { Option } from "commander";
 import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
-import type { PipelineOptions } from "../../pipeline";
+import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { analytics, TelemetryEvent } from "../../telemetry";
@@ -16,7 +16,7 @@ import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,
-  createPipelineWithCallbacks,
+  getEventBus,
   parseAuthConfig,
   resolveEmbeddingContext,
   resolveProtocol,
@@ -102,17 +102,20 @@ export function createMcpCommand(program: Command): Command {
         ).env("DOCS_MCP_AUTH_AUDIENCE"),
       )
       .action(
-        async (cmdOptions: {
-          protocol: string;
-          port: string;
-          host: string;
-          embeddingModel?: string;
-          serverUrl?: string;
-          readOnly: boolean;
-          authEnabled?: boolean;
-          authIssuerUrl?: string;
-          authAudience?: string;
-        }) => {
+        async (
+          cmdOptions: {
+            protocol: string;
+            port: string;
+            host: string;
+            embeddingModel?: string;
+            serverUrl?: string;
+            readOnly: boolean;
+            authEnabled?: boolean;
+            authIssuerUrl?: string;
+            authAudience?: string;
+          },
+          command?: Command,
+        ) => {
           await analytics.track(TelemetryEvent.CLI_COMMAND, {
             command: "mcp",
             protocol: cmdOptions.protocol,
@@ -156,20 +159,29 @@ export function createMcpCommand(program: Command): Command {
               process.exit(1);
             }
 
+            const eventBus = getEventBus(command);
+
             const docService: IDocumentManagement = await createDocumentManagement({
               serverUrl,
               embeddingConfig,
               storePath: globalOptions.storePath,
+              eventBus,
             });
             const pipelineOptions: PipelineOptions = {
               recoverJobs: false, // MCP command doesn't support job recovery
               serverUrl,
               concurrency: 3,
             };
-            const pipeline = await createPipelineWithCallbacks(
-              serverUrl ? undefined : (docService as unknown as never),
-              pipelineOptions,
-            );
+            const pipeline = serverUrl
+              ? await PipelineFactory.createPipeline(undefined, undefined, {
+                  serverUrl,
+                  ...pipelineOptions,
+                })
+              : await PipelineFactory.createPipeline(
+                  docService as unknown as never,
+                  eventBus,
+                  pipelineOptions,
+                );
 
             if (resolvedProtocol === "stdio") {
               // Direct stdio mode - bypass AppServer entirely
@@ -210,7 +222,12 @@ export function createMcpCommand(program: Command): Command {
                 },
               });
 
-              const appServer = await startAppServer(docService, pipeline, config);
+              const appServer = await startAppServer(
+                docService,
+                pipeline,
+                eventBus,
+                config,
+              );
 
               // Register for graceful shutdown (http mode)
               // Note: pipeline is managed by AppServer, so don't register it globally

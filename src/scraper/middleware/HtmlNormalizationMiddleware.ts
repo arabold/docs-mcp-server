@@ -68,7 +68,6 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
         try {
           const absoluteUrl = new URL(src, baseUrl).href;
           $img.attr("src", absoluteUrl);
-          logger.debug(`Converted relative image URL: ${src} → ${absoluteUrl}`);
         } catch (error) {
           logger.debug(`Failed to resolve relative image URL: ${src} - ${error}`);
         }
@@ -95,7 +94,6 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
 
       // Handle anchor links (starting with #)
       if (href.startsWith("#")) {
-        logger.debug(`Removing anchor link: ${href}`);
         this.unwrapElement($, $link);
         return;
       }
@@ -106,7 +104,6 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
 
         // Handle non-HTTP protocols (javascript:, mailto:, etc.)
         if (url.protocol !== "http:" && url.protocol !== "https:") {
-          logger.debug(`Removing non-HTTP link: ${href}`);
           this.unwrapElement($, $link);
           return;
         }
@@ -117,7 +114,6 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
         try {
           const absoluteUrl = new URL(href, baseUrl).href;
           $link.attr("href", absoluteUrl);
-          logger.debug(`Converted relative link URL: ${href} → ${absoluteUrl}`);
         } catch (error) {
           logger.debug(`Failed to resolve relative link URL: ${href} - ${error}`);
           // If we can't resolve it, unwrap it to preserve the text content

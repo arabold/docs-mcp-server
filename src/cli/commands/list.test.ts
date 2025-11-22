@@ -14,6 +14,14 @@ vi.mock("../../tools", () => ({
     .fn()
     .mockImplementation(() => ({ execute: vi.fn(async () => ({ libraries: [] })) })),
 }));
+vi.mock("../utils", () => ({
+  getGlobalOptions: vi.fn(() => ({ storePath: undefined })),
+  getEventBus: vi.fn(() => ({
+    on: vi.fn(),
+    emit: vi.fn(),
+  })),
+  formatOutput: vi.fn((data) => JSON.stringify(data)),
+}));
 
 import { listAction } from "./list";
 

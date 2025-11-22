@@ -37,6 +37,9 @@ export function registerLibrariesRoutes(
       try {
         await removeTool.execute({ library: libraryName, version });
         reply.status(204).send(); // No Content on success
+
+        // Trigger library change event via body custom event
+        // The SSE system will pick this up and broadcast to all connected clients
       } catch (error: any) {
         server.log.error(
           error,

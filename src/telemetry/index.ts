@@ -18,3 +18,4 @@ export {
   shouldEnableTelemetry,
   TelemetryConfig,
 } from "./TelemetryConfig";
+export { TelemetryService } from "./TelemetryService";

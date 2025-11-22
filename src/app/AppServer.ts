@@ -8,12 +8,15 @@ import formBody from "@fastify/formbody";
 import fastifyStatic from "@fastify/static";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
+import { WebSocketServer } from "ws";
 import packageJson from "../../package.json";
 import { ProxyAuthManager } from "../auth";
 import { resolveEmbeddingContext } from "../cli/utils";
+import type { EventBusService } from "../events";
+import { RemoteEventProxy } from "../events/RemoteEventProxy";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { cleanupMcpService, registerMcpService } from "../services/mcpService";
-import { registerTrpcService } from "../services/trpcService";
+import { applyTrpcWebSocketHandler, registerTrpcService } from "../services/trpcService";
 import { registerWebService } from "../services/webService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
 import type { EmbeddingModelConfig } from "../store/embeddings/EmbeddingConfig";
@@ -33,10 +36,13 @@ export class AppServer {
   private authManager: ProxyAuthManager | null = null;
   private config: AppServerConfig;
   private embeddingConfig: EmbeddingModelConfig | null = null;
+  private remoteEventProxy: RemoteEventProxy | null = null;
+  private wss: WebSocketServer | null = null;
 
   constructor(
     private docService: IDocumentManagement,
     private pipeline: IPipeline,
+    private eventBus: EventBusService,
     config: AppServerConfig,
   ) {
     this.config = config;
@@ -129,6 +135,17 @@ export class AppServer {
         host: this.config.host,
       });
 
+      // Setup WebSocket server for tRPC subscriptions if API server is enabled
+      if (this.config.enableApiServer) {
+        this.setupWebSocketServer();
+      }
+
+      // Connect to remote worker after server is fully started
+      if (this.remoteEventProxy) {
+        // Don't await - let it connect in the background
+        this.remoteEventProxy.connect();
+      }
+
       this.logStartupInfo(address);
       return this.server;
     } catch (error) {
@@ -143,6 +160,11 @@ export class AppServer {
    */
   async stop(): Promise<void> {
     try {
+      // Disconnect remote event proxy if connected
+      if (this.remoteEventProxy) {
+        this.remoteEventProxy.disconnect();
+      }
+
       // Stop worker service if enabled
       if (this.config.enableWorker) {
         await stopWorkerService(this.pipeline);
@@ -151,6 +173,21 @@ export class AppServer {
       // Cleanup MCP service if enabled
       if (this.mcpServer) {
         await cleanupMcpService(this.mcpServer);
+      }
+
+      // Close WebSocket server if it exists
+      if (this.wss) {
+        await new Promise<void>((resolve, reject) => {
+          this.wss?.close((err) => {
+            if (err) {
+              logger.error(`❌ Failed to close WebSocket server: ${err}`);
+              reject(err);
+            } else {
+              logger.debug("WebSocket server closed");
+              resolve();
+            }
+          });
+        });
       }
 
       // Track app shutdown
@@ -264,6 +301,9 @@ export class AppServer {
     // Setup global error handling for telemetry
     this.setupErrorHandling();
 
+    // Setup remote event proxy if using an external worker
+    this.setupRemoteEventProxy();
+
     // Initialize authentication if enabled
     if (this.config.auth?.enabled) {
       await this.initializeAuth();
@@ -316,10 +356,30 @@ export class AppServer {
   }
 
   /**
+   * Initialize remote event proxy if using an external worker.
+   * The proxy is created here but connection is deferred until after server starts.
+   */
+  private setupRemoteEventProxy(): void {
+    // If using an external worker, create remote event proxy (connection happens later)
+    if (this.config.externalWorkerUrl) {
+      this.remoteEventProxy = new RemoteEventProxy(
+        this.config.externalWorkerUrl,
+        this.eventBus,
+      );
+      logger.debug(
+        "Remote event proxy created for external worker (connection deferred)",
+      );
+    }
+  }
+
+  /**
    * Enable web interface service.
    */
   private async enableWebInterface(): Promise<void> {
-    await registerWebService(this.server, this.docService, this.pipeline);
+    await registerWebService(this.server, this.docService, this.pipeline, this.eventBus, {
+      externalWorkerUrl: this.config.externalWorkerUrl,
+    });
+
     logger.debug("Web interface service enabled");
   }
 
@@ -341,8 +401,41 @@ export class AppServer {
    * Enable Pipeline RPC (tRPC) service.
    */
   private async enableTrpcApi(): Promise<void> {
-    await registerTrpcService(this.server, this.pipeline, this.docService);
+    await registerTrpcService(this.server, this.pipeline, this.docService, this.eventBus);
     logger.debug("API server (tRPC) enabled");
+  }
+
+  /**
+   * Setup WebSocket server for tRPC subscriptions.
+   * This is called after the HTTP server is listening.
+   */
+  private setupWebSocketServer(): void {
+    // Ensure the underlying HTTP server is available
+    if (!this.server.server) {
+      throw new Error(
+        "Cannot setup WebSocket server: HTTP server not available. " +
+          "This method must be called after server.listen() completes.",
+      );
+    }
+
+    // Create WebSocket server attached to the HTTP server
+    this.wss = new WebSocketServer({
+      noServer: true,
+    });
+
+    // Handle HTTP upgrade requests for WebSocket connections
+    this.server.server.on("upgrade", (request, socket, head) => {
+      // Let the WebSocket server handle all upgrade requests.
+      // tRPC's WebSocket handler manages routing internally after connection is established.
+      this.wss?.handleUpgrade(request, socket, head, (ws) => {
+        this.wss?.emit("connection", ws, request);
+      });
+    });
+
+    // Apply tRPC WebSocket handler to enable subscriptions
+    applyTrpcWebSocketHandler(this.wss, this.pipeline, this.docService, this.eventBus);
+
+    logger.debug("WebSocket server initialized for tRPC subscriptions");
   }
 
   /**

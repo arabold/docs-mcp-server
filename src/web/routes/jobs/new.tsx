@@ -147,7 +147,7 @@ export function registerNewJobRoutes(
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : "Unknown error";
-        logger.error(`Scrape job submission failed: ${error}`);
+        logger.error(`❌ Scrape job submission failed: ${error}`);
 
         // Use appropriate HTTP status code based on error type
         if (error instanceof ValidationError) {

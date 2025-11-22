@@ -5,7 +5,7 @@
 import type { Command } from "commander";
 import { Option } from "commander";
 import { startAppServer } from "../../app";
-import type { PipelineOptions } from "../../pipeline";
+import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { analytics, TelemetryEvent } from "../../telemetry";
@@ -14,7 +14,7 @@ import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,
-  createPipelineWithCallbacks,
+  getEventBus,
   getGlobalOptions,
   resolveEmbeddingContext,
   validateHost,
@@ -89,20 +89,30 @@ export function createWebCommand(program: Command): Command {
             process.exit(1);
           }
 
+          // Get the global EventBusService
+          const eventBus = getEventBus(command);
+
           const docService: IDocumentManagement = await createDocumentManagement({
             serverUrl,
             embeddingConfig,
             storePath: globalOptions.storePath,
+            eventBus,
           });
           const pipelineOptions: PipelineOptions = {
             recoverJobs: false, // Web command doesn't support job recovery
             serverUrl,
             concurrency: 3,
           };
-          const pipeline = await createPipelineWithCallbacks(
-            serverUrl ? undefined : (docService as unknown as never),
-            pipelineOptions,
-          );
+          const pipeline = serverUrl
+            ? await PipelineFactory.createPipeline(undefined, undefined, {
+                serverUrl,
+                ...pipelineOptions,
+              })
+            : await PipelineFactory.createPipeline(
+                docService as unknown as never,
+                eventBus,
+                pipelineOptions,
+              );
 
           // Configure web-only server
           const config = createAppServerConfig({
@@ -121,7 +131,7 @@ export function createWebCommand(program: Command): Command {
           logger.info(
             `🚀 Starting web interface${serverUrl ? ` connecting to worker at ${serverUrl}` : ""}`,
           );
-          const appServer = await startAppServer(docService, pipeline, config);
+          const appServer = await startAppServer(docService, pipeline, eventBus, config);
 
           // Register for graceful shutdown
           // Note: pipeline is managed by AppServer, so don't register it globally

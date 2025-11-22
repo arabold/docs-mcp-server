@@ -103,6 +103,7 @@ export class Analytics {
       ...properties,
       timestamp: new Date().toISOString(),
     };
+    logger.debug(`Tracking event: ${event}`);
     this.postHogClient.capture(this.distinctId, event, enrichedProperties);
   }
 
@@ -121,6 +122,9 @@ export class Analytics {
       ...properties,
       timestamp: new Date().toISOString(),
     };
+    logger.debug(
+      `Capturing exception: ${error instanceof Error ? error.message : String(error)}`,
+    );
     this.postHogClient.captureException(
       this.distinctId,
       error instanceof Error ? error : new Error(String(error)),

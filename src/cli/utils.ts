@@ -8,16 +8,22 @@ import type { Command } from "commander";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
-import type { IPipeline, PipelineOptions } from "../pipeline";
-import { PipelineFactory } from "../pipeline";
-import type { DocumentManagementService } from "../store";
+import { EventBusService } from "../events";
 import {
   EmbeddingConfig,
   type EmbeddingModelConfig,
 } from "../store/embeddings/EmbeddingConfig";
+import { TelemetryService } from "../telemetry";
 import { LogLevel, logger, setLogLevel } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
+
+/**
+ * Extended Command type that includes the global EventBusService instance
+ */
+export interface CommandWithEventBus extends Command {
+  _eventBus?: EventBusService;
+}
 
 /**
  * Traverses the command hierarchy to find the root command and returns its options.
@@ -34,6 +40,20 @@ export function getGlobalOptions(command?: Command): GlobalOptions {
 }
 
 /**
+ * Retrieves the global EventBusService from a command instance.
+ * @param command The command instance.
+ * @returns The global EventBusService.
+ * @throws Error if EventBusService is not initialized.
+ */
+export function getEventBus(command?: Command): EventBusService {
+  const eventBus = (command as CommandWithEventBus)?._eventBus;
+  if (!eventBus) {
+    throw new Error("EventBusService not initialized");
+  }
+  return eventBus;
+}
+
+/**
  * Embedding context.
  * Simplified subset of EmbeddingModelConfig for telemetry purposes.
  */
@@ -47,6 +67,13 @@ export interface EmbeddingContext {
  * Ensures that the Playwright browsers are installed, unless a system Chromium path is set.
  */
 export function ensurePlaywrightBrowsersInstalled(): void {
+  if (process.env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD === "1") {
+    logger.debug(
+      "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is set, skipping Playwright browser install.",
+    );
+    return;
+  }
+
   // If PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH is set, skip install
   const chromiumEnvPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
   if (chromiumEnvPath && existsSync(chromiumEnvPath)) {
@@ -62,13 +89,13 @@ export function ensurePlaywrightBrowsersInstalled(): void {
     if (!chromiumPath || !existsSync(chromiumPath)) {
       throw new Error("Playwright Chromium browser not found");
     }
-  } catch (_err) {
+  } catch (error) {
     // Not installed or not found, attempt to install
-    logger.debug(
-      "Playwright browsers not found. Installing Chromium browser for dynamic scraping (this may take a minute)...",
-    );
+    logger.debug(String(error));
     try {
-      logger.debug("Installing Playwright Chromium browser...");
+      console.log(
+        "🌐 Installing Playwright Chromium browser... (this may take a moment)",
+      );
       execSync("npm exec -y playwright install --no-shell --with-deps chromium", {
         stdio: "ignore", // Suppress output
         cwd: getProjectRoot(),
@@ -161,45 +188,6 @@ export function validateHost(hostString: string): string {
   }
 
   return trimmed;
-}
-
-/**
- * Creates a pipeline (local or client) and attaches default CLI callbacks.
- * This makes the side-effects explicit and keeps creation consistent.
- */
-export async function createPipelineWithCallbacks(
-  docService: DocumentManagementService | undefined,
-  options: PipelineOptions = {},
-): Promise<IPipeline> {
-  logger.debug(`Initializing pipeline with options: ${JSON.stringify(options)}`);
-  const { serverUrl, ...rest } = options;
-  const pipeline: IPipeline = serverUrl
-    ? await PipelineFactory.createPipeline(undefined, { serverUrl, ...rest })
-    : await (async () => {
-        if (!docService) {
-          throw new Error("Local pipeline requires a DocumentManagementService instance");
-        }
-        return PipelineFactory.createPipeline(docService, rest);
-      })();
-
-  // Configure progress callbacks for real-time updates
-  pipeline.setCallbacks({
-    onJobProgress: async (job, progress) => {
-      logger.debug(
-        `Job ${job.id} progress: ${progress.pagesScraped}/${progress.totalPages} pages`,
-      );
-    },
-    onJobStatusChange: async (job) => {
-      logger.debug(`Job ${job.id} status changed to: ${job.status}`);
-    },
-    onJobError: async (job, error, document) => {
-      logger.warn(
-        `⚠️ Job ${job.id} error ${document ? `on document ${document.url}` : ""}: ${error.message}`,
-      );
-    },
-  });
-
-  return pipeline;
 }
 
 /**
@@ -364,6 +352,20 @@ export function warnHttpUsage(authConfig: AuthConfig | undefined, port: number):
         "Consider using HTTPS for security.",
     );
   }
+}
+
+/**
+ * Creates EventBusService and TelemetryService together.
+ * The TelemetryService automatically subscribes to events from the EventBusService.
+ * @returns Object containing both services
+ */
+export function createEventServices(): {
+  eventBus: EventBusService;
+  telemetryService: TelemetryService;
+} {
+  const eventBus = new EventBusService();
+  const telemetryService = new TelemetryService(eventBus);
+  return { eventBus, telemetryService };
 }
 
 /**

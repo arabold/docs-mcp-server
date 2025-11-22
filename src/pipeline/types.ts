@@ -86,19 +86,14 @@ export interface InternalPipelineJob
 /**
  * Defines the structure for callback functions used with the PipelineManager.
  * Allows external components to hook into job lifecycle events.
+ * All callbacks receive the public PipelineJob representation to maintain
+ * clean separation between internal implementation and external API.
  */
 export interface PipelineManagerCallbacks {
   /** Callback triggered when a job's status changes. */
-  onJobStatusChange?: (job: InternalPipelineJob) => Promise<void>;
+  onJobStatusChange?: (job: PipelineJob) => Promise<void>;
   /** Callback triggered when a job makes progress. */
-  onJobProgress?: (
-    job: InternalPipelineJob,
-    progress: ScraperProgressEvent,
-  ) => Promise<void>;
+  onJobProgress?: (job: PipelineJob, progress: ScraperProgressEvent) => Promise<void>;
   /** Callback triggered when a job encounters an error during processing (e.g., storing a doc). */
-  onJobError?: (
-    job: InternalPipelineJob,
-    error: Error,
-    page?: ScrapeResult,
-  ) => Promise<void>;
+  onJobError?: (job: PipelineJob, error: Error, page?: ScrapeResult) => Promise<void>;
 }

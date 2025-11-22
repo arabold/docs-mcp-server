@@ -22,7 +22,7 @@ vi.mock("./app", () => ({
 }));
 
 vi.mock("./store/DocumentManagementService", () => ({
-  DocumentManagementService: vi.fn().mockImplementation(() => ({
+  DocumentManagementService: vi.fn().mockImplementation((_storePath, _eventBus) => ({
     initialize: mockDocServiceInitialize,
     shutdown: mockDocServiceShutdown,
   })),
@@ -151,6 +151,7 @@ describe("Double Initialization Prevention", () => {
 
   it("should NOT start pipeline during initialization in worker mode", async () => {
     const { PipelineFactory } = await import("./pipeline/PipelineFactory");
+    const { EventBusService } = await import("./events");
 
     // This test validates our critical bug fix:
     // ensurePipelineManagerInitialized should create but NOT start the pipeline
@@ -158,8 +159,10 @@ describe("Double Initialization Prevention", () => {
 
     // Simulate calling ensurePipelineManagerInitialized (the helper function)
     // In the real code, this gets called before startAppServer
+    const mockEventBus = new EventBusService();
     await PipelineFactory.createPipeline(
       {} as any, // mock docService
+      mockEventBus,
       { recoverJobs: true, concurrency: 3 },
     );
 
@@ -179,23 +182,25 @@ describe("Double Initialization Prevention", () => {
 
   it("should validate pipeline configuration for different modes", async () => {
     const { PipelineFactory } = await import("./pipeline/PipelineFactory");
+    const { EventBusService } = await import("./events");
 
     // Test that different modes pass correct options to PipelineFactory
+    const mockEventBus = new EventBusService();
 
     // Worker mode configuration
-    await PipelineFactory.createPipeline({} as any, {
+    await PipelineFactory.createPipeline({} as any, mockEventBus, {
       recoverJobs: true,
       concurrency: 3,
     });
 
     // CLI mode configuration
-    await PipelineFactory.createPipeline({} as any, {
+    await PipelineFactory.createPipeline({} as any, mockEventBus, {
       recoverJobs: false,
       concurrency: 1,
     });
 
-    // External worker mode configuration
-    await PipelineFactory.createPipeline({} as any, {
+    // External worker mode configuration (no eventBus needed for remote)
+    await PipelineFactory.createPipeline(undefined, undefined, {
       recoverJobs: false,
       serverUrl: "http://localhost:8080/api",
     });
@@ -204,9 +209,9 @@ describe("Double Initialization Prevention", () => {
 
     // Verify different configurations were passed
     const calls = vi.mocked(PipelineFactory.createPipeline).mock.calls;
-    expect(calls[0][1]).toEqual({ recoverJobs: true, concurrency: 3 });
-    expect(calls[1][1]).toEqual({ recoverJobs: false, concurrency: 1 });
-    expect(calls[2][1]).toEqual({
+    expect(calls[0][2]).toEqual({ recoverJobs: true, concurrency: 3 });
+    expect(calls[1][2]).toEqual({ recoverJobs: false, concurrency: 1 });
+    expect(calls[2][2]).toEqual({
       recoverJobs: false,
       serverUrl: "http://localhost:8080/api",
     });
@@ -251,10 +256,12 @@ describe("Service Configuration Validation", () => {
     );
 
     // Simulate the service initialization sequence
-    const docService = new DocumentManagementService("/test/path");
+    const { EventBusService } = await import("./events");
+    const eventBus = new EventBusService();
+    const docService = new DocumentManagementService("/test/path", eventBus);
     await docService.initialize();
 
-    const pipeline = await PipelineFactory.createPipeline(docService, {});
+    const pipeline = await PipelineFactory.createPipeline(docService, eventBus, {});
     pipeline.setCallbacks({});
 
     await mockStartAppServer(docService, pipeline, {});

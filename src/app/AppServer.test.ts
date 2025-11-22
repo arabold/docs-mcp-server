@@ -5,6 +5,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import { AppServer } from "./AppServer";
@@ -16,6 +17,9 @@ const mockFastify = vi.hoisted(() => ({
   listen: vi.fn(),
   close: vi.fn(),
   setErrorHandler: vi.fn(), // Add missing mock method
+  server: {
+    on: vi.fn(), // Mock HTTP server for WebSocket upgrade handling
+  },
 }));
 
 const mockMcpService = vi.hoisted(() => ({
@@ -25,6 +29,7 @@ const mockMcpService = vi.hoisted(() => ({
 
 const mockTrpcService = vi.hoisted(() => ({
   registerTrpcService: vi.fn(),
+  applyTrpcWebSocketHandler: vi.fn(),
 }));
 
 const mockWebService = vi.hoisted(() => ({
@@ -55,14 +60,18 @@ describe("AppServer Behavior Tests", () => {
   let mockDocService: Partial<DocumentManagementService>;
   let mockPipeline: Partial<IPipeline>;
   let mockMcpServer: Partial<McpServer>;
+  let eventBus: EventBusService;
 
   beforeEach(() => {
+    eventBus = new EventBusService();
     // Reset all mocks before each test
     vi.clearAllMocks();
 
     // Setup mock dependencies
     mockDocService = {};
-    mockPipeline = {};
+    mockPipeline = {
+      setCallbacks: vi.fn(), // Add mock for setCallbacks method
+    };
     mockMcpServer = {};
 
     // Setup default mock returns
@@ -92,6 +101,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -114,6 +124,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -135,6 +146,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -155,6 +167,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -174,6 +187,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -195,6 +209,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -221,6 +236,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -230,6 +246,10 @@ describe("AppServer Behavior Tests", () => {
         mockFastify,
         mockDocService,
         mockPipeline,
+        eventBus,
+        {
+          externalWorkerUrl: undefined,
+        },
       );
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
       expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
@@ -249,6 +269,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -280,6 +301,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -289,6 +311,7 @@ describe("AppServer Behavior Tests", () => {
         mockFastify,
         mockPipeline,
         mockDocService,
+        expect.any(Object), // eventBus
       );
       expect(mockWebService.registerWebService).not.toHaveBeenCalled();
       expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
@@ -308,6 +331,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -317,6 +341,10 @@ describe("AppServer Behavior Tests", () => {
         mockFastify,
         mockDocService,
         mockPipeline,
+        eventBus,
+        {
+          externalWorkerUrl: undefined,
+        },
       );
       expect(mockMcpService.registerMcpService).toHaveBeenCalledWith(
         mockFastify,
@@ -329,6 +357,7 @@ describe("AppServer Behavior Tests", () => {
         mockFastify,
         mockPipeline,
         mockDocService,
+        expect.any(Object), // eventBus
       );
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
     });
@@ -346,6 +375,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -379,6 +409,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -404,6 +435,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -437,6 +469,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -467,6 +500,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -490,6 +524,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -514,6 +549,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -541,6 +577,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -566,6 +603,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -576,6 +614,7 @@ describe("AppServer Behavior Tests", () => {
         mockFastify,
         mockPipeline,
         mockDocService,
+        expect.any(Object), // eventBus
       );
     });
 
@@ -593,6 +632,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 
@@ -615,6 +655,7 @@ describe("AppServer Behavior Tests", () => {
       const server = new AppServer(
         mockDocService as DocumentManagementService,
         mockPipeline as IPipeline,
+        eventBus,
         config,
       );
 

@@ -17,6 +17,7 @@ import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { ScraperService } from "../src/scraper/ScraperService";
 import type { ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
+import { EventBusService } from "../src/events";
 import type { StoreSearchResult } from "../src/store/types";
 import { ScraperRegistry } from "../src/scraper";
 
@@ -35,11 +36,12 @@ describe("Refresh Pipeline E2E Tests", () => {
   beforeEach(async () => {
     // Initialize in-memory store and services
     // DocumentManagementService creates its own DocumentStore internally
-    docService = new DocumentManagementService(":memory:", null);
+    const eventBus = new EventBusService();
+    docService = new DocumentManagementService(":memory:", eventBus, null);
     await docService.initialize();
     const registry = new ScraperRegistry();
     scraperService = new ScraperService(registry);
-    pipelineManager = new PipelineManager(docService, 3, { recoverJobs: false });
+    pipelineManager = new PipelineManager(docService, eventBus, 3, { recoverJobs: false });
     await pipelineManager.start();
 
     // Clear any previous nock mocks

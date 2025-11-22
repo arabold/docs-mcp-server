@@ -7,7 +7,7 @@ import { Option } from "commander";
 import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
-import type { PipelineOptions } from "../../pipeline";
+import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { analytics, TelemetryEvent } from "../../telemetry";
 import { DEFAULT_HOST, DEFAULT_HTTP_PORT } from "../../utils/config";
@@ -15,8 +15,8 @@ import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,
-  createPipelineWithCallbacks,
   ensurePlaywrightBrowsersInstalled,
+  getEventBus,
   parseAuthConfig,
   resolveEmbeddingContext,
   resolveProtocol,
@@ -99,17 +99,20 @@ export function createDefaultAction(program: Command): Command {
         ).env("DOCS_MCP_AUTH_AUDIENCE"),
       )
       .action(
-        async (options: {
-          protocol: string;
-          port: string;
-          host: string;
-          embeddingModel?: string;
-          resume: boolean;
-          readOnly: boolean;
-          authEnabled?: boolean;
-          authIssuerUrl?: string;
-          authAudience?: string;
-        }) => {
+        async (
+          options: {
+            protocol: string;
+            port: string;
+            host: string;
+            embeddingModel?: string;
+            resume: boolean;
+            readOnly: boolean;
+            authEnabled?: boolean;
+            authIssuerUrl?: string;
+            authAudience?: string;
+          },
+          command?: Command,
+        ) => {
           await analytics.track(TelemetryEvent.CLI_COMMAND, {
             command: "default",
             protocol: options.protocol,
@@ -150,15 +153,24 @@ export function createDefaultAction(program: Command): Command {
 
           // Resolve embedding configuration for local execution (default action needs embeddings)
           const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
+
+          // Get the global EventBusService
+          const eventBus = getEventBus(command);
+
           const docService = await createLocalDocumentManagement(
             globalOptions.storePath,
+            eventBus,
             embeddingConfig,
           );
           const pipelineOptions: PipelineOptions = {
             recoverJobs: options.resume || false, // Use --resume flag for job recovery
             concurrency: 3,
           };
-          const pipeline = await createPipelineWithCallbacks(docService, pipelineOptions);
+          const pipeline = await PipelineFactory.createPipeline(
+            docService,
+            eventBus,
+            pipelineOptions,
+          );
 
           if (resolvedProtocol === "stdio") {
             // Direct stdio mode - bypass AppServer entirely
@@ -196,7 +208,12 @@ export function createDefaultAction(program: Command): Command {
               },
             });
 
-            const appServer = await startAppServer(docService, pipeline, config);
+            const appServer = await startAppServer(
+              docService,
+              pipeline,
+              eventBus,
+              config,
+            );
 
             // Register for graceful shutdown (http mode)
             // Note: pipeline is managed by AppServer, so don't register it globally

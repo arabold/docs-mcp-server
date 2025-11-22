@@ -12,10 +12,18 @@ const mockClient: any = {
   clearCompletedJobs: { mutate: vi.fn() },
 };
 
+// Mock WebSocket client
+const mockWsClient = {
+  close: vi.fn(),
+};
+
 vi.mock("@trpc/client", () => {
   return {
     createTRPCProxyClient: () => mockClient,
     httpBatchLink: vi.fn(),
+    createWSClient: vi.fn(() => mockWsClient),
+    wsLink: vi.fn(),
+    splitLink: vi.fn(),
   } as any;
 });
 
@@ -133,15 +141,8 @@ describe("PipelineClient", () => {
     });
 
     it("should return job data for existing job", async () => {
+      // Mock returns a Date object (simulating superjson deserialization)
       const mockJob = {
-        id: "job-123",
-        status: "completed",
-        createdAt: "2023-01-01T00:00:00.000Z",
-        startedAt: null,
-        finishedAt: null,
-        updatedAt: undefined,
-      };
-      const expectedJob = {
         id: "job-123",
         status: "completed",
         createdAt: new Date("2023-01-01T00:00:00.000Z"),
@@ -153,7 +154,7 @@ describe("PipelineClient", () => {
       mockClient.getJob.query.mockResolvedValueOnce(mockJob);
 
       const result = await client.getJob("job-123");
-      expect(result).toEqual(expectedJob);
+      expect(result).toEqual(mockJob);
     });
   });
 });

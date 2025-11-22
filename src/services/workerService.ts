@@ -4,62 +4,21 @@
  */
 
 import type { IPipeline } from "../pipeline/trpc/interfaces";
-import { analytics, TelemetryEvent } from "../telemetry";
 import { logger } from "../utils/logger";
 
 /**
  * Register worker service to enable embedded pipeline processing.
  * This starts the pipeline and configures callbacks for job processing.
+ *
+ * Note: This function is now deprecated in favor of configuring callbacks
+ * in AppServer.setupPipelineEventBridge(). Keeping telemetry/logging here
+ * would overwrite the event bus callbacks, breaking SSE notifications.
+ * Telemetry and logging should be integrated into the event bus listeners instead.
  */
 export async function registerWorkerService(pipeline: IPipeline): Promise<void> {
-  // Configure progress callbacks for logging and analytics
-  pipeline.setCallbacks({
-    onJobProgress: async (job, progress) => {
-      logger.debug(
-        `Job ${job.id} progress: ${progress.pagesScraped}/${progress.totalPages} pages`,
-      );
-    },
-    onJobStatusChange: async (job) => {
-      logger.debug(`Job ${job.id} status changed to: ${job.status}`);
-
-      // Enhanced job completion tracking
-      const duration = job.startedAt ? Date.now() - job.startedAt.getTime() : null;
-      const queueWaitTime =
-        job.startedAt && job.createdAt
-          ? job.startedAt.getTime() - job.createdAt.getTime()
-          : null;
-
-      analytics.track(TelemetryEvent.PIPELINE_JOB_COMPLETED, {
-        jobId: job.id, // Job IDs are already anonymous
-        library: job.library,
-        status: job.status,
-        durationMs: duration,
-        queueWaitTimeMs: queueWaitTime,
-        pagesProcessed: job.progressPages || 0,
-        maxPagesConfigured: job.progressMaxPages || 0,
-        hasVersion: !!job.version,
-        hasError: !!job.error,
-        throughputPagesPerSecond:
-          duration && job.progressPages
-            ? Math.round((job.progressPages / duration) * 1000)
-            : 0,
-      });
-    },
-    onJobError: async (job, error, document) => {
-      logger.warn(
-        `⚠️ Job ${job.id} error ${document ? `on document ${document.url}` : ""}: ${error.message}`,
-      );
-
-      // Use PostHog's native error tracking instead of custom events
-      analytics.captureException(error, {
-        jobId: job.id, // Job IDs are already anonymous
-        library: job.library,
-        hasDocument: !!document,
-        stage: document ? "document_processing" : "job_setup",
-        pages_processed_before_error: job.progressPages || 0,
-      });
-    },
-  });
+  // DO NOT call pipeline.setCallbacks() here - it would overwrite the callbacks
+  // set by AppServer.setupPipelineEventBridge() that emit to the event bus.
+  // All callbacks (including telemetry/logging) should be configured in one place.
 
   // Start the pipeline for job processing
   await pipeline.start();

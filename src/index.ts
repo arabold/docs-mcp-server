@@ -1,3 +1,6 @@
+// Enable source maps (Node.js 20+)
+process.setSourceMapsEnabled(true);
+
 import "dotenv/config";
 import { runCli } from "./cli/main";
 import { ensurePlaywrightBrowsersInstalled } from "./cli/utils";

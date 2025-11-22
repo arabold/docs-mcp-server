@@ -11,6 +11,15 @@ vi.mock("../../tools", () => ({
     .fn()
     .mockImplementation(() => ({ execute: vi.fn(async () => ({ results: [] })) })),
 }));
+vi.mock("../utils", () => ({
+  getGlobalOptions: vi.fn(() => ({ storePath: undefined })),
+  getEventBus: vi.fn(() => ({
+    on: vi.fn(),
+    emit: vi.fn(),
+  })),
+  resolveEmbeddingContext: vi.fn(() => ({ provider: "mock", model: "mock-model" })),
+  formatOutput: vi.fn((data) => JSON.stringify(data)),
+}));
 
 import { searchAction } from "./search";
 

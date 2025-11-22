@@ -1,3 +1,4 @@
+import type { EventBusService } from "../events/EventBusService";
 import type { DocumentManagementService } from "../store";
 import { DEFAULT_MAX_CONCURRENCY } from "../utils/config";
 import { logger } from "../utils/logger";
@@ -19,16 +20,19 @@ export namespace PipelineFactory {
   // Overload: Local pipeline (in-process worker)
   export async function createPipeline(
     docService: DocumentManagementService,
+    eventBus: EventBusService,
     options?: Omit<PipelineOptions, "serverUrl">,
   ): Promise<PipelineManager>;
   // Overload: Remote pipeline client (out-of-process worker)
   export async function createPipeline(
     docService: undefined,
+    eventBus: undefined,
     options: PipelineOptions & { serverUrl: string },
   ): Promise<PipelineClient>;
   // Implementation
   export async function createPipeline(
     docService?: DocumentManagementService,
+    eventBus?: EventBusService,
     options: PipelineOptions = {},
   ): Promise<IPipeline> {
     const {
@@ -48,7 +52,13 @@ export namespace PipelineFactory {
     }
 
     // Local embedded pipeline with specified behavior
-    return new PipelineManager(docService as DocumentManagementService, concurrency, {
+    if (!docService || !eventBus) {
+      throw new Error(
+        "Local pipeline requires both DocumentManagementService and EventBusService",
+      );
+    }
+
+    return new PipelineManager(docService, eventBus, concurrency, {
       recoverJobs,
     });
   }
