@@ -62,6 +62,10 @@ function convertToSsePayload(
       return {} satisfies SseEventPayloads["library-change"];
     }
 
+    case EventType.JOB_LIST_CHANGE: {
+      return {} satisfies SseEventPayloads["job-list-change"];
+    }
+
     default: {
       // TypeScript ensures this is unreachable if all cases are handled
       const _exhaustive: never = eventType;
@@ -111,6 +115,7 @@ export function registerEventsRoute(
       EventType.JOB_STATUS_CHANGE,
       EventType.JOB_PROGRESS,
       EventType.LIBRARY_CHANGE,
+      EventType.JOB_LIST_CHANGE,
     ] as const;
 
     const unsubscribers: (() => void)[] = [];

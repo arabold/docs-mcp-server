@@ -553,6 +553,8 @@ export class PipelineManager implements IPipeline {
 
     if (clearedCount > 0) {
       logger.info(`🧹 Cleared ${clearedCount} completed job(s) from the queue`);
+      // Emit event to notify clients that the job list has changed
+      this.eventBus.emit(EventType.JOB_LIST_CHANGE, undefined);
     } else {
       logger.debug("No completed jobs to clear");
     }

@@ -52,7 +52,7 @@ export function registerIndexRoute(
             <div
               id="job-queue"
               hx-get="/web/jobs"
-              hx-trigger="load, job-status-change from:body, job-progress from:body"
+              hx-trigger="load, job-status-change from:body, job-progress from:body, job-list-change from:body"
             >
               {/* Initial loading state */}
               <div class="animate-pulse">

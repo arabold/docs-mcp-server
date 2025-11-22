@@ -14,6 +14,7 @@ export enum EventType {
   JOB_STATUS_CHANGE = "JOB_STATUS_CHANGE",
   JOB_PROGRESS = "JOB_PROGRESS",
   LIBRARY_CHANGE = "LIBRARY_CHANGE",
+  JOB_LIST_CHANGE = "JOB_LIST_CHANGE",
 }
 
 /**
@@ -24,6 +25,7 @@ export const ServerEventName = {
   [EventType.JOB_STATUS_CHANGE]: "job-status-change",
   [EventType.JOB_PROGRESS]: "job-progress",
   [EventType.LIBRARY_CHANGE]: "library-change",
+  [EventType.JOB_LIST_CHANGE]: "job-list-change",
 } as const;
 
 /**
@@ -36,6 +38,7 @@ export interface EventPayloads {
     progress: ScraperProgressEvent;
   };
   [EventType.LIBRARY_CHANGE]: undefined;
+  [EventType.JOB_LIST_CHANGE]: undefined;
 }
 
 /**
@@ -73,6 +76,7 @@ export interface SseEventPayloads {
     };
   };
   "library-change": Record<string, never>;
+  "job-list-change": Record<string, never>;
 }
 
 /**
