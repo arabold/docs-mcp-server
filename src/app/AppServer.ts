@@ -176,6 +176,11 @@ export class AppServer {
 
       // Close WebSocket server if it exists
       if (this.wss) {
+        // Forcibly close all active client connections before closing the server
+        for (const client of this.wss.clients) {
+          client.terminate();
+        }
+
         await new Promise<void>((resolve, reject) => {
           this.wss?.close((err) => {
             if (err) {
@@ -198,6 +203,11 @@ export class AppServer {
 
       // Shutdown telemetry service (this will flush remaining events)
       await telemetry.shutdown();
+
+      // Force close all connections to ensure immediate shutdown
+      if (this.server.server) {
+        this.server.server.closeAllConnections();
+      }
 
       // Close Fastify server
       await this.server.close();
