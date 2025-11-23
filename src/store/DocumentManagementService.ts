@@ -188,20 +188,19 @@ export class DocumentManagementService {
   }
 
   /**
-   * Validates if a library exists in the store (either versioned or unversioned).
+   * Validates if a library exists in the store.
+   * Checks if the library record exists in the database, regardless of whether it has versions or documents.
    * Throws LibraryNotFoundInStoreError with suggestions if the library is not found.
    * @param library The name of the library to validate.
    * @throws {LibraryNotFoundInStoreError} If the library does not exist.
    */
   async validateLibraryExists(library: string): Promise<void> {
     logger.info(`🔎 Validating existence of library: ${library}`);
-    const normalizedLibrary = library.toLowerCase(); // Ensure consistent casing
 
-    // Check for both versioned and unversioned documents
-    const versions = await this.listVersions(normalizedLibrary);
-    const hasUnversioned = await this.exists(normalizedLibrary, ""); // Check explicitly for unversioned
+    // Check if the library exists in the libraries table
+    const libraryRecord = await this.store.getLibrary(library);
 
-    if (versions.length === 0 && !hasUnversioned) {
+    if (!libraryRecord) {
       logger.warn(`⚠️  Library '${library}' not found.`);
 
       // Library doesn't exist, fetch all libraries to provide suggestions
@@ -211,12 +210,9 @@ export class DocumentManagementService {
       let suggestions: string[] = [];
       if (libraryNames.length > 0) {
         const fuse = new Fuse(libraryNames, {
-          // Configure fuse.js options if needed (e.g., threshold)
-          // isCaseSensitive: false, // Handled by normalizing library names
-          // includeScore: true,
           threshold: 0.7, // Adjust threshold for desired fuzziness (0=exact, 1=match anything)
         });
-        const results = fuse.search(normalizedLibrary);
+        const results = fuse.search(library.toLowerCase());
         // Take top 3 suggestions
         suggestions = results.slice(0, 3).map((result) => result.item);
         logger.info(`🔍 Found suggestions: ${suggestions.join(", ")}`);
@@ -373,6 +369,7 @@ export class DocumentManagementService {
   /**
    * Completely removes a library version and all associated documents.
    * Also removes the library if no other versions remain.
+   * If the specified version doesn't exist but the library exists with no versions, removes the library.
    * @param library Library name
    * @param version Version string (null/undefined for unversioned)
    */
@@ -389,9 +386,22 @@ export class DocumentManagementService {
     } else if (result.versionDeleted) {
       logger.info(`🗑️ Removed version ${library}@${normalizedVersion || "[no version]"}`);
     } else {
+      // Version not found - check if library exists but is empty (has no versions)
       logger.warn(
         `⚠️ Version ${library}@${normalizedVersion || "[no version]"} not found`,
       );
+
+      const libraryRecord = await this.store.getLibrary(library);
+      if (libraryRecord) {
+        // Library exists - check if it has any versions
+        const versions = await this.store.queryUniqueVersions(library);
+        if (versions.length === 0) {
+          // Library exists but has no versions - delete the library itself
+          logger.info(`🗑️ Library ${library} has no versions, removing library record`);
+          await this.store.deleteLibrary(libraryRecord.id);
+          logger.info(`🗑️ Completely removed library ${library} (had no versions)`);
+        }
+      }
     }
 
     // Emit library change event
