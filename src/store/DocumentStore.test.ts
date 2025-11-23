@@ -1360,9 +1360,9 @@ describe("DocumentStore - Common Functionality", () => {
       );
 
       // Query: "queries" OR malicious
-      // With our security fix, each unquoted term is wrapped in quotes (implicit AND)
-      // So this becomes: "queries" "OR" "malicious"
-      // This requires ALL three terms to match (queries AND OR AND malicious)
+      // With OR semantics, each term is treated as optional
+      // So this becomes: exact match "queries OR malicious" OR ("queries" OR "OR" OR "malicious")
+      // This document contains "queries" and "OR", so it will match
       const results = await store.findByContent(
         "security-test",
         "1.0.0",
@@ -1370,20 +1370,10 @@ describe("DocumentStore - Common Functionality", () => {
         10,
       );
 
-      // This document contains "queries" and "OR" but NOT "malicious"
-      // So with implicit AND semantics, it will NOT match
-      expect(results.length).toBe(0);
-
-      // However, searching for just the keywords that ARE present should work
-      const results2 = await store.findByContent(
-        "security-test",
-        "1.0.0",
-        '"queries" OR',
-        10,
-      );
-      expect(results2.length).toBeGreaterThan(0);
-      expect(results2[0].content).toContain("queries");
-      expect(results2[0].content).toContain("OR");
+      // This document contains "queries" and "OR" which satisfies the OR condition
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].content).toContain("queries");
+      expect(results[0].content).toContain("OR");
     });
 
     it("should handle NOT operator as a literal keyword", async () => {
@@ -1399,8 +1389,9 @@ describe("DocumentStore - Common Functionality", () => {
         ),
       );
 
-      // Query with NOT - treated as literal keyword with implicit AND
-      // Becomes: "production" "NOT" "unsafe" (all must match)
+      // Query with NOT - treated as literal keyword with OR semantics
+      // Becomes: exact match "production NOT unsafe" OR ("production" OR "NOT" OR "unsafe")
+      // Document has "production" and "NOT" which satisfies the OR condition
       const results = await store.findByContent(
         "security-test",
         "1.0.0",
@@ -1408,19 +1399,10 @@ describe("DocumentStore - Common Functionality", () => {
         10,
       );
 
-      // Document has "production" and "NOT" but not "unsafe", so no match
-      expect(results.length).toBe(0);
-
-      // Searching for terms that ARE present should work
-      const results2 = await store.findByContent(
-        "security-test",
-        "1.0.0",
-        '"production" NOT',
-        10,
-      );
-      expect(results2.length).toBeGreaterThan(0);
-      expect(results2[0].content).toContain("production");
-      expect(results2[0].content).toContain("NOT");
+      // Document has "production" and "NOT" which matches via OR
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].content).toContain("production");
+      expect(results[0].content).toContain("NOT");
     });
   });
 
