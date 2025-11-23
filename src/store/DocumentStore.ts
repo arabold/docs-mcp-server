@@ -758,6 +758,39 @@ export class DocumentStore {
   }
 
   /**
+   * Retrieves a library by its name.
+   * @param name The library name to retrieve
+   * @returns The library record, or null if not found
+   */
+  async getLibrary(name: string): Promise<{ id: number; name: string } | null> {
+    try {
+      const normalizedName = name.toLowerCase();
+      const row = this.statements.getLibraryIdByName.get(normalizedName) as
+        | { id: number }
+        | undefined;
+      if (!row) {
+        return null;
+      }
+      return { id: row.id, name: normalizedName };
+    } catch (error) {
+      throw new StoreError(`Failed to get library by name: ${error}`);
+    }
+  }
+
+  /**
+   * Deletes a library by its ID.
+   * This should only be called when the library has no remaining versions.
+   * @param libraryId The library ID to delete
+   */
+  async deleteLibrary(libraryId: number): Promise<void> {
+    try {
+      this.statements.deleteLibraryById.run(libraryId);
+    } catch (error) {
+      throw new StoreError(`Failed to delete library: ${error}`);
+    }
+  }
+
+  /**
    * Stores scraper options for a version to enable reproducible indexing.
    * @param versionId The version ID to update
    * @param options Complete scraper options used for indexing
