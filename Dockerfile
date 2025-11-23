@@ -35,23 +35,24 @@ FROM base AS production
 
 # Set environment variables for Playwright
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install system dependencies required by browsers
-RUN npx playwright install-deps
+# Install Chromium from apt-get
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+  chromium \
+  && rm -rf /var/lib/apt/lists/*
 
 # Copy package files and database
 COPY package*.json .
 COPY db db
 
 # Install production dependencies (with native modules built for target platform)
-RUN npm ci --omit=dev
-
-# Install system Chromium and required dependencies
-RUN PLAYWRIGHT_BROWSERS_PATH=/app/ms-playwright npx -y playwright@1.56.1 install --only-shell
+# RUN npm ci --omit=dev
 
 # Copy built files from builder
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 
 # Set data directory for the container
