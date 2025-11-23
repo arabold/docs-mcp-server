@@ -19,6 +19,7 @@ const mockFastify = vi.hoisted(() => ({
   setErrorHandler: vi.fn(), // Add missing mock method
   server: {
     on: vi.fn(), // Mock HTTP server for WebSocket upgrade handling
+    closeAllConnections: vi.fn(), // Mock for forcing connection closure
   },
 }));
 
