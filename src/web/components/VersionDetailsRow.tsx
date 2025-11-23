@@ -46,6 +46,8 @@ const VersionDetailsRow = ({
     <div
       id={rowId}
       class="flex justify-between items-center py-1 border-b border-gray-200 dark:border-gray-600 last:border-b-0"
+      x-data
+      x-bind:hx-preserve={`$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}'`}
     >
       {/* Version Label */}
       <span

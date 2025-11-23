@@ -26,7 +26,12 @@ const JobItem = ({ job }: JobItemProps) => {
       job.status === PipelineJobStatus.RUNNING;
 
   return (
-    <div class="block p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+    <div
+      id={`job-item-${job.id}`}
+      class="block p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
+      x-data
+      x-bind:hx-preserve={`$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === '${job.id}'`}
+    >
       <div class="flex items-start justify-between">
         <div class="flex-1">
           <p class="text-sm font-medium text-gray-900 dark:text-white">
