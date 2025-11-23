@@ -8,6 +8,7 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
  *
  * This middleware performs the following transformations:
  * - Converts relative image URLs to absolute URLs
+ * - Removes tracking/ad images (1x1 pixels, analytics beacons)
  * - Converts relative link URLs to absolute URLs
  * - Removes anchor links (#...) but preserves their text content
  * - Removes non-HTTP links (javascript:, mailto:, etc.) but preserves their text content
@@ -16,6 +17,29 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
  * non-functional links while preserving contextually valuable text content.
  */
 export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
+  // Known tracking/analytics domains and patterns to filter out
+  private readonly trackingPatterns = [
+    "adroll.com",
+    "doubleclick.net",
+    "google-analytics.com",
+    "googletagmanager.com",
+    "analytics.twitter.com",
+    "twitter.com/1/i/adsct",
+    "t.co/1/i/adsct",
+    "bat.bing.com",
+    "pixel.rubiconproject.com",
+    "casalemedia.com",
+    "tremorhub.com",
+    "rlcdn.com",
+    "facebook.com/tr",
+    "linkedin.com/px",
+    "quantserve.com",
+    "scorecardresearch.com",
+    "hotjar.com",
+    "mouseflow.com",
+    "crazyegg.com",
+    "clarity.ms",
+  ];
   async process(context: MiddlewareContext, next: () => Promise<void>): Promise<void> {
     if (!context.dom) {
       logger.debug(
@@ -51,14 +75,40 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
   }
 
   /**
+   * Checks if an image should be kept based on its source URL.
+   * Filters out tracking pixels and analytics beacons.
+   */
+  private shouldKeepImage(src: string): boolean {
+    const srcLower = src.toLowerCase();
+    return !this.trackingPatterns.some((pattern) => srcLower.includes(pattern));
+  }
+
+  /**
    * Normalizes image URLs by converting relative URLs to absolute URLs.
+   * Removes tracking/analytics images.
+   * Preserves data URIs (inline images).
    */
   private normalizeImageUrls($: cheerio.CheerioAPI, baseUrl: string): void {
     $("img").each((_index, element) => {
       const $img = $(element);
       const src = $img.attr("src");
 
-      if (!src) return;
+      if (!src) {
+        // Remove images without src
+        $img.remove();
+        return;
+      }
+
+      // Keep data URIs (inline images) as-is
+      if (src.startsWith("data:")) {
+        return;
+      }
+
+      // Check if this is a tracking image
+      if (!this.shouldKeepImage(src)) {
+        $img.remove();
+        return;
+      }
 
       try {
         // If it's already an absolute URL, leave it unchanged
@@ -70,6 +120,8 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
           $img.attr("src", absoluteUrl);
         } catch (error) {
           logger.debug(`Failed to resolve relative image URL: ${src} - ${error}`);
+          // Remove images we can't resolve
+          $img.remove();
         }
       }
     });

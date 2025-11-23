@@ -582,12 +582,12 @@ export class DocumentStore {
       return escapedTokens[0];
     }
 
-    // Build query: (Exact match of semantic content) OR (Terms ANDed together)
+    // Build query: (Exact match of semantic content) OR (Terms ORed together)
     // Join tokens with space to match the semantic phrase, not the syntactic quotes
     const exactMatch = `"${tokens.join(" ").replace(/"/g, '""')}"`;
-    const termsQuery = escapedTokens.join(" ");
+    const termsQuery = escapedTokens.join(" OR ");
 
-    return `${exactMatch} OR (${termsQuery})`;
+    return `${exactMatch} OR ${termsQuery}`;
   }
 
   /**
