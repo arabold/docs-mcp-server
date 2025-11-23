@@ -99,6 +99,53 @@ Alpine.store("confirmingAction", {
   isDeleting: false,
 });
 
+// Initialize toast store for global notifications
+Alpine.store("toast", {
+  visible: false,
+  message: "",
+  type: "info" as "success" | "error" | "warning" | "info",
+  timeoutId: null as number | null,
+  show(
+    message: string,
+    type: "success" | "error" | "warning" | "info" = "info",
+    duration = 5000,
+  ) {
+    const store = Alpine.store("toast") as {
+      timeoutId: number | null;
+      message: string;
+      type: "success" | "error" | "warning" | "info";
+      visible: boolean;
+      hide: () => void;
+    };
+
+    // Clear any existing timeout
+    if (store.timeoutId !== null) {
+      clearTimeout(store.timeoutId);
+      store.timeoutId = null;
+    }
+
+    store.message = message;
+    store.type = type;
+    store.visible = true;
+
+    // Auto-hide after duration
+    store.timeoutId = window.setTimeout(() => {
+      store.hide();
+    }, duration);
+  },
+  hide() {
+    const store = Alpine.store("toast") as {
+      visible: boolean;
+      timeoutId: number | null;
+    };
+    store.visible = false;
+    if (store.timeoutId !== null) {
+      clearTimeout(store.timeoutId);
+      store.timeoutId = null;
+    }
+  },
+});
+
 Alpine.start();
 
 // Initialize Flowbite components
@@ -189,6 +236,64 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
       );
     } else {
       window.location.reload();
+    }
+  }
+});
+
+// Global error handler for HTMX responses
+document.body.addEventListener("htmx:responseError", (event) => {
+  const detail = (event as CustomEvent).detail;
+  const xhr = detail?.xhr;
+
+  if (!xhr) return;
+
+  let errorMessage = "An error occurred";
+
+  // Try to parse JSON error response
+  try {
+    const contentType = xhr.getResponseHeader("content-type");
+    if (contentType?.includes("application/json")) {
+      const errorData = JSON.parse(xhr.response);
+      errorMessage = errorData.message || errorData.error || errorMessage;
+    } else if (xhr.response && typeof xhr.response === "string") {
+      // If response is plain text, use it directly
+      errorMessage = xhr.response;
+    }
+  } catch (_e) {
+    // If parsing fails, use status text or generic message
+    errorMessage = xhr.statusText || errorMessage;
+  }
+
+  // Show error toast
+  const toastStore = Alpine.store("toast") as {
+    show: (message: string, type: "error") => void;
+  };
+  toastStore.show(errorMessage, "error");
+
+  // Prevent HTMX from swapping the error response into the DOM
+  event.preventDefault();
+});
+
+// Global handler for successful responses that may include HX-Trigger with toast data
+document.body.addEventListener("htmx:afterRequest", (event) => {
+  const detail = (event as CustomEvent).detail;
+  const xhr = detail?.xhr;
+
+  if (!xhr || !xhr.getResponseHeader) return;
+
+  // Check for HX-Trigger header with toast data
+  const hxTrigger = xhr.getResponseHeader("HX-Trigger");
+  if (hxTrigger) {
+    try {
+      const triggers = JSON.parse(hxTrigger);
+      if (triggers.toast) {
+        const toastStore = Alpine.store("toast") as {
+          show: (message: string, type: "success" | "error" | "warning" | "info") => void;
+        };
+        toastStore.show(triggers.toast.message, triggers.toast.type || "info");
+      }
+    } catch (e) {
+      console.debug("Failed to parse HX-Trigger header", e);
     }
   }
 });
