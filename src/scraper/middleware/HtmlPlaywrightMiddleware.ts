@@ -33,6 +33,14 @@ interface ShadowMapping {
 }
 
 /**
+ * Cached resource structure containing body and content type
+ */
+interface CachedResource {
+  body: string;
+  contentType: string;
+}
+
+/**
  * Middleware to process HTML content using Playwright for rendering dynamic content,
  * *if* the scrapeMode option requires it ('playwright' or 'auto').
  * It updates `context.content` with the rendered HTML if Playwright runs.
@@ -48,7 +56,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
   // Static LRU cache shared across all instances for all fetched resources
   // Max 200 entries, each limited in size to prevent caching large resources
-  private static readonly resourceCache = new SimpleMemoryCache<string, string>(
+  private static readonly resourceCache = new SimpleMemoryCache<string, CachedResource>(
     FETCHER_MAX_CACHE_ITEMS,
   );
 
@@ -515,8 +523,8 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
           return route.fulfill({
             status: 200,
-            contentType: "text/html; charset=utf-8",
-            body: cached,
+            contentType: cached.contentType,
+            body: cached.body,
           });
         }
 
@@ -535,7 +543,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
           const contentSizeBytes = Buffer.byteLength(body, "utf8");
           if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
-            HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, body);
+            const contentType =
+              response.headers()["content-type"] || "application/octet-stream";
+            HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
             logger.debug(
               `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
             );
@@ -577,7 +587,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     const cached = HtmlPlaywrightMiddleware.resourceCache.get(resolvedUrl);
     if (cached !== undefined) {
       logger.debug(`✓ Cache hit for frame: ${resolvedUrl}`);
-      return cached;
+      return cached.body;
     }
 
     logger.debug(`Cache miss for frame: ${resolvedUrl}`);
@@ -613,7 +623,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       // Only cache if content is small enough (avoid caching large content pages)
       const contentSizeBytes = Buffer.byteLength(content, "utf8");
       if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
-        HtmlPlaywrightMiddleware.resourceCache.set(resolvedUrl, content);
+        // Frame content is always HTML
+        HtmlPlaywrightMiddleware.resourceCache.set(resolvedUrl, {
+          body: content,
+          contentType: "text/html; charset=utf-8",
+        });
         logger.debug(
           `Cached frame content: ${resolvedUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
         );
@@ -798,8 +812,8 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
             return route.fulfill({
               status: 200,
-              contentType: "text/html; charset=utf-8",
-              body: cached,
+              contentType: cached.contentType,
+              body: cached.body,
             });
           }
 
@@ -818,7 +832,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
             const contentSizeBytes = Buffer.byteLength(body, "utf8");
             if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
-              HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, body);
+              const contentType =
+                response.headers()["content-type"] || "application/octet-stream";
+              HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
               logger.debug(
                 `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
               );

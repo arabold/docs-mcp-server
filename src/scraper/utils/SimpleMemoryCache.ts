@@ -12,6 +12,9 @@ export class SimpleMemoryCache<K, V> {
   private readonly maxSize: number;
 
   constructor(maxSize: number) {
+    if (maxSize <= 0) {
+      throw new Error("maxSize must be positive");
+    }
     this.cache = new Map();
     this.maxSize = maxSize;
   }
@@ -51,9 +54,19 @@ export class SimpleMemoryCache<K, V> {
 
   /**
    * Check if a key exists in the cache.
+   * Marks the key as recently used (moves to end of Map) to maintain LRU semantics.
    */
   has(key: K): boolean {
-    return this.cache.get(key) !== undefined;
+    const exists = this.cache.has(key);
+    if (exists) {
+      // Move to end (mark as recently used) to maintain LRU semantics
+      const value = this.cache.get(key);
+      if (value !== undefined) {
+        this.cache.delete(key);
+        this.cache.set(key, value);
+      }
+    }
+    return exists;
   }
 
   /**
