@@ -1,3 +1,23 @@
+# [1.29.0](https://github.com/arabold/docs-mcp-server/compare/v1.28.0...v1.29.0) (2025-11-23)
+
+
+### Bug Fixes
+
+* enhance caching mechanism with structured resource storage and validation ([0b48aea](https://github.com/arabold/docs-mcp-server/commit/0b48aea1c5a4375efc89a0516894cf550561cf0c))
+* enhance HtmlSanitizerMiddleware with safety net for content removal ([e29da93](https://github.com/arabold/docs-mcp-server/commit/e29da934e399483a7e4f7b3f976b7e0fe37ed5bc)), closes [#256](https://github.com/arabold/docs-mcp-server/issues/256)
+* fixed issues preventing libraries from being deleted when no version exists ([753e108](https://github.com/arabold/docs-mcp-server/commit/753e10875e1396d2228c36b4b5f87491a2c96860))
+* force close all active connections on server shutdown ([f893dd4](https://github.com/arabold/docs-mcp-server/commit/f893dd40a0d8dbed0cfd4439db998b08914b73af))
+* improved confirmation handling for job cancellation and version deletion in Web UI ([c836bcd](https://github.com/arabold/docs-mcp-server/commit/c836bcd917eefd58fd45465203b980817317bc42))
+* update Dockerfile to install Chromium and cleaned up dependencies ([89b7ad5](https://github.com/arabold/docs-mcp-server/commit/89b7ad52a6d83dbe84826ccbbb904d89aaa88c15))
+* update query construction in DocumentStore to use OR for terms ([2440cb7](https://github.com/arabold/docs-mcp-server/commit/2440cb70d2deb4826e04ba5b1b316c52c47a9fcd))
+
+
+### Features
+
+* add Toast component for global notifications and enhance confirmation handling ([0c6cb85](https://github.com/arabold/docs-mcp-server/commit/0c6cb85ac8b96f8e5695fc5872b286afd6bdca9d))
+* implement LRU caching web scraper ([444f2d0](https://github.com/arabold/docs-mcp-server/commit/444f2d05b659d4597298d1e5a8891950b14cb9a4))
+* remove tracking images and handle missing img src attributes ([332bfcd](https://github.com/arabold/docs-mcp-server/commit/332bfcd328de4a586a1f2297e3d74ccefc0de7eb))
+
 # [1.28.0](https://github.com/arabold/docs-mcp-server/compare/v1.27.1...v1.28.0) (2025-11-22)
 
 
