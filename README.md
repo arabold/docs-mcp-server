@@ -1,4 +1,4 @@
-# Docs MCP Server: Your AI's Up-to-Date Documentation Expert
+# Grounded Docs: Your AI's Up-to-Date Documentation Expert
 
 AI coding assistants often struggle with outdated documentation and hallucinations. The **Docs MCP Server** solves this by providing a personal, always-current knowledge base for your AI. It **indexes 3rd party documentation** from various sources (websites, GitHub, npm, PyPI, local files) and offers powerful, version-aware search tools via the Model Context Protocol (MCP).
 
