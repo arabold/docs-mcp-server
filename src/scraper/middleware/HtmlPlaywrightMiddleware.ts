@@ -6,10 +6,15 @@ import {
   type Frame,
   type Page,
 } from "playwright";
-import { DEFAULT_PAGE_TIMEOUT } from "../../utils/config";
+import {
+  DEFAULT_PAGE_TIMEOUT,
+  FETCHER_MAX_CACHE_ITEM_SIZE_BYTES,
+  FETCHER_MAX_CACHE_ITEMS,
+} from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { ScrapeMode } from "../types";
+import { SimpleMemoryCache } from "../utils/SimpleMemoryCache";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 
 /**
@@ -40,6 +45,12 @@ interface ShadowMapping {
  */
 export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   private browser: Browser | null = null;
+
+  // Static LRU cache shared across all instances for all fetched resources
+  // Max 200 entries, each limited in size to prevent caching large resources
+  private static readonly resourceCache = new SimpleMemoryCache<string, string>(
+    FETCHER_MAX_CACHE_ITEMS,
+  );
 
   /**
    * Initializes the Playwright browser instance.
@@ -463,32 +474,121 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   }
 
   /**
+   * Sets up caching route interception for a Playwright page.
+   * This handles:
+   * - Aborting non-essential resources (images, fonts, media)
+   * - Caching GET requests to speed up subsequent loads
+   * - Forwarding custom headers and credentials for same-origin requests
+   *
+   * @param page The Playwright page to set up routing for
+   * @param customHeaders Custom headers to forward with requests
+   * @param credentials Optional credentials for same-origin requests
+   * @param origin The origin for same-origin credential checking
+   */
+  private async setupCachingRouteInterception(
+    page: Page,
+    customHeaders: Record<string, string> = {},
+    credentials?: { username: string; password: string },
+    origin?: string,
+  ): Promise<void> {
+    await page.route("**/*", async (route) => {
+      const reqUrl = route.request().url();
+      const reqOrigin = (() => {
+        try {
+          return new URL(reqUrl).origin;
+        } catch {
+          return null;
+        }
+      })();
+      const resourceType = route.request().resourceType();
+
+      // Abort non-essential resources
+      if (["image", "font", "media"].includes(resourceType)) {
+        return route.abort();
+      }
+
+      // Cache all GET requests to speed up subsequent page loads
+      if (route.request().method() === "GET") {
+        // Check cache first
+        const cached = HtmlPlaywrightMiddleware.resourceCache.get(reqUrl);
+        if (cached !== undefined) {
+          logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
+          return route.fulfill({
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            body: cached,
+          });
+        }
+
+        // Cache miss - fetch and potentially cache the response
+        const headers = mergePlaywrightHeaders(
+          route.request().headers(),
+          customHeaders,
+          credentials,
+          origin,
+          reqOrigin ?? undefined,
+        );
+        const response = await route.fetch({ headers });
+        const body = await response.text();
+
+        // Only cache if content is small enough and response was successful (2xx status)
+        if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
+          const contentSizeBytes = Buffer.byteLength(body, "utf8");
+          if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+            HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, body);
+            logger.debug(
+              `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
+            );
+          } else {
+            logger.debug(
+              `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+            );
+          }
+        }
+
+        return route.fulfill({ response });
+      }
+
+      // Non-GET requests: just forward with headers
+      const headers = mergePlaywrightHeaders(
+        route.request().headers(),
+        customHeaders,
+        credentials,
+        origin,
+        reqOrigin ?? undefined,
+      );
+      return route.continue({ headers });
+    });
+  }
+
+  /**
    * Fetches content from a frame URL by navigating to it in a new page.
+   * Uses LRU cache to avoid re-fetching identical frames across multiple pages.
    *
    * @param parentPage The parent page (used to resolve relative URLs and share context)
    * @param frameUrl The URL of the frame to fetch content from
    * @returns The HTML content of the frame
    */
   private async fetchFrameContent(parentPage: Page, frameUrl: string): Promise<string> {
+    // Resolve relative URLs against the parent page URL
+    const resolvedUrl = new URL(frameUrl, parentPage.url()).href;
+
+    // Check cache first
+    const cached = HtmlPlaywrightMiddleware.resourceCache.get(resolvedUrl);
+    if (cached !== undefined) {
+      logger.debug(`✓ Cache hit for frame: ${resolvedUrl}`);
+      return cached;
+    }
+
+    logger.debug(`Cache miss for frame: ${resolvedUrl}`);
+
     let framePage: Page | null = null;
     try {
-      // Resolve relative URLs against the parent page URL
-      const resolvedUrl = new URL(frameUrl, parentPage.url()).href;
-
       // Create a new page in the same browser context for consistency
       framePage = await parentPage.context().newPage();
 
-      // Use the same route handling as the parent page for consistency
-      await framePage.route("**/*", async (route) => {
-        const resourceType = route.request().resourceType();
-
-        // Abort non-essential resources (but keep stylesheets for content rendering)
-        if (["image", "font", "media"].includes(resourceType)) {
-          return route.abort();
-        }
-
-        return route.continue();
-      });
+      // Set up the same caching route interception as the parent page
+      await this.setupCachingRouteInterception(framePage);
 
       logger.debug(`Fetching frame content from: ${resolvedUrl}`);
 
@@ -508,8 +608,23 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         (el: HTMLElement) => el.innerHTML,
       );
 
+      const content = bodyContent || "";
+
+      // Only cache if content is small enough (avoid caching large content pages)
+      const contentSizeBytes = Buffer.byteLength(content, "utf8");
+      if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+        HtmlPlaywrightMiddleware.resourceCache.set(resolvedUrl, content);
+        logger.debug(
+          `Cached frame content: ${resolvedUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
+        );
+      } else {
+        logger.debug(
+          `Frame content too large to cache: ${resolvedUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+        );
+      }
+
       logger.debug(`Successfully fetched frame content from: ${resolvedUrl}`);
-      return bodyContent || "";
+      return content;
     } catch (error) {
       logger.debug(`Error fetching frame content from ${frameUrl}: ${error}`);
       return "";
@@ -646,9 +761,21 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       // Inject shadow DOM extractor script early
       await this.injectShadowDOMExtractor(page);
 
-      // Block unnecessary resources and inject credentials and custom headers for same-origin requests
+      // Set up route interception with special handling for the initial page load
       await page.route("**/*", async (route) => {
         const reqUrl = route.request().url();
+
+        // Serve the initial HTML for the main page (bypass cache and fetch)
+        if (reqUrl === context.source) {
+          return route.fulfill({
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            body: context.content,
+          });
+        }
+
+        // For all other requests, use the standard caching logic
+        // We need to manually handle the interception since we can't delegate to another route
         const reqOrigin = (() => {
           try {
             return new URL(reqUrl).origin;
@@ -656,20 +783,56 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             return null;
           }
         })();
-        // Serve the initial HTML for the main page
-        if (reqUrl === context.source) {
-          return route.fulfill({
-            status: 200,
-            contentType: "text/html; charset=utf-8",
-            body: context.content, // context.content is always a string in middleware
-          });
-        }
-        // Abort non-essential resources (but keep stylesheets for modern web apps)
         const resourceType = route.request().resourceType();
+
+        // Abort non-essential resources
         if (["image", "font", "media"].includes(resourceType)) {
           return route.abort();
         }
-        // Use helper to merge headers
+
+        // Cache all GET requests to speed up subsequent page loads
+        if (route.request().method() === "GET") {
+          // Check cache first
+          const cached = HtmlPlaywrightMiddleware.resourceCache.get(reqUrl);
+          if (cached !== undefined) {
+            logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
+            return route.fulfill({
+              status: 200,
+              contentType: "text/html; charset=utf-8",
+              body: cached,
+            });
+          }
+
+          // Cache miss - fetch and potentially cache the response
+          const headers = mergePlaywrightHeaders(
+            route.request().headers(),
+            customHeaders,
+            credentials ?? undefined,
+            origin ?? undefined,
+            reqOrigin ?? undefined,
+          );
+          const response = await route.fetch({ headers });
+          const body = await response.text();
+
+          // Only cache if content is small enough and response was successful (2xx status)
+          if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
+            const contentSizeBytes = Buffer.byteLength(body, "utf8");
+            if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+              HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, body);
+              logger.debug(
+                `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
+              );
+            } else {
+              logger.debug(
+                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+              );
+            }
+          }
+
+          return route.fulfill({ response });
+        }
+
+        // Non-GET requests: just forward with headers
         const headers = mergePlaywrightHeaders(
           route.request().headers(),
           customHeaders,

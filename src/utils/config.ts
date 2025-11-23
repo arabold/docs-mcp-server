@@ -39,6 +39,16 @@ export const FETCHER_MAX_RETRIES = 6;
 export const FETCHER_BASE_DELAY = 1000;
 
 /**
+ * Maximum number of cached items in the HTTP fetcher.
+ */
+export const FETCHER_MAX_CACHE_ITEMS = 200; // 200 items
+
+/**
+ * Maximum size in bytes for individual cached responses in the HTTP fetcher.
+ */
+export const FETCHER_MAX_CACHE_ITEM_SIZE_BYTES = 500 * 1024; // 500 KB
+
+/**
  * Default chunk size settings for splitters
  */
 export const SPLITTER_MIN_CHUNK_SIZE = 500;
