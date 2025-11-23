@@ -381,23 +381,8 @@ const ScrapeFormContent = ({
           </button>
         </div>
       </form>
-      {/* Target div for HTMX response */}
+      {/* Target div for HTMX response - now only used for success messages */}
       <div id="job-response" class="mt-2 text-sm"></div>
-
-      {/* Script to handle HTMX error responses */}
-      <script>
-        {`
-          document.addEventListener('htmx:responseError', function(evt) {
-            // Handle error responses from the form submission
-            if (evt.detail.xhr && evt.detail.xhr.response) {
-              const responseDiv = document.getElementById('job-response');
-              if (responseDiv) {
-                responseDiv.innerHTML = evt.detail.xhr.response;
-              }
-            }
-          });
-        `}
-      </script>
     </div>
   );
 };

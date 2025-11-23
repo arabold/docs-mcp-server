@@ -5,6 +5,7 @@
  * and renders placeholders that AlpineJS hydrates at runtime.
  */
 import type { PropsWithChildren } from "@kitajs/html";
+import Toast from "./Toast";
 
 /**
  * Props for the Layout component.
@@ -149,6 +150,9 @@ const Layout = ({
         </style>
       </head>
       <body class="bg-gray-50 dark:bg-gray-900">
+        {/* Toast notification component */}
+        <Toast />
+
         {/* Full-width header with grounded.tools branding */}
         <header
           class="bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700"

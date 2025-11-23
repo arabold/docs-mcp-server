@@ -46,6 +46,10 @@ const VersionDetailsRow = ({
     <div
       id={rowId}
       class="flex justify-between items-center py-1 border-b border-gray-200 dark:border-gray-600 last:border-b-0"
+      data-library-name={libraryName}
+      data-version-param={versionParam}
+      x-data="{ library: $el.dataset.libraryName, version: $el.dataset.versionParam, deleteId: $el.dataset.libraryName + ':' + $el.dataset.versionParam }"
+      x-bind:hx-preserve="$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === deleteId"
     >
       {/* Version Label */}
       <span
@@ -94,17 +98,16 @@ const VersionDetailsRow = ({
           type="button"
           class="ml-2 font-medium rounded-lg text-sm p-1 text-center inline-flex items-center transition-colors duration-150 ease-in-out"
           title="Remove this version"
-          x-data="{}"
-          x-bind:class={`$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}' ? '${confirmingStateClasses}' : '${defaultStateClasses}'`}
-          x-bind:disabled={`$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}' && $store.confirmingAction.isDeleting`}
-          x-on:click={`
-            if ($store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}') {
+          x-bind:class={`$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === deleteId ? '${confirmingStateClasses}' : '${defaultStateClasses}'`}
+          x-bind:disabled="$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === deleteId && $store.confirmingAction.isDeleting"
+          x-on:click="
+            if ($store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === deleteId) {
               $store.confirmingAction.isDeleting = true;
               $el.dispatchEvent(new CustomEvent('confirmed-delete', { bubbles: true }));
             } else {
               if ($store.confirmingAction.timeoutId) { clearTimeout($store.confirmingAction.timeoutId); $store.confirmingAction.timeoutId = null; }
               $store.confirmingAction.type = 'version-delete';
-              $store.confirmingAction.id = '${libraryName}:${versionParam}';
+              $store.confirmingAction.id = deleteId;
               $store.confirmingAction.isDeleting = false;
               $store.confirmingAction.timeoutId = setTimeout(() => {
                 $store.confirmingAction.type = null;
@@ -113,16 +116,14 @@ const VersionDetailsRow = ({
                 $store.confirmingAction.timeoutId = null;
               }, 3000);
             }
-          `}
+          "
           hx-delete={`/web/libraries/${encodeURIComponent(libraryName)}/versions/${encodeURIComponent(versionParam)}`}
           hx-target={`#${rowId}`}
           hx-swap="outerHTML"
           hx-trigger="confirmed-delete"
         >
           {/* Default State: Trash Icon */}
-          <span
-            x-show={`!($store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}' && $store.confirmingAction.isDeleting)`}
-          >
+          <span x-show="!($store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === deleteId && $store.confirmingAction.isDeleting)">
             <svg
               class="w-4 h-4"
               aria-hidden="true"
@@ -143,16 +144,14 @@ const VersionDetailsRow = ({
 
           {/* Confirming State: Text */}
           <span
-            x-show={`$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}' && !$store.confirmingAction.isDeleting`}
+            x-show="$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === deleteId && !$store.confirmingAction.isDeleting"
             class="mx-1"
           >
             Confirm?<span class="sr-only">Confirm delete</span>
           </span>
 
           {/* Deleting State: Spinner Icon */}
-          <span
-            x-show={`$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === '${libraryName}:${versionParam}' && $store.confirmingAction.isDeleting`}
-          >
+          <span x-show="$store.confirmingAction.type === 'version-delete' && $store.confirmingAction.id === deleteId && $store.confirmingAction.isDeleting">
             <LoadingSpinner />
             <span class="sr-only">Loading...</span>
           </span>

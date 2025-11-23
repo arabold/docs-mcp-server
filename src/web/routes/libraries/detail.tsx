@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ListLibrariesTool } from "../../../tools/ListLibrariesTool";
 import { SearchTool } from "../../../tools/SearchTool";
+import Alert from "../../components/Alert";
 import Layout from "../../components/Layout";
 import LibraryDetailCard from "../../components/LibraryDetailCard";
 import LibrarySearchCard from "../../components/LibrarySearchCard";
@@ -110,13 +111,13 @@ export function registerLibraryDetailRoutes(
         return <SearchResultList results={searchResult.results} />;
       } catch (error) {
         server.log.error(error, `Failed to search library ${libraryName}`);
-        // Return error message on catch
+        // Return error message using Alert component
         reply.type("text/html; charset=utf-8");
-        return (
-          <p class="text-red-500 dark:text-red-400 italic">
-            An unexpected error occurred during the search.
-          </p>
-        );
+        const errorMessage =
+          error instanceof Error
+            ? error.message
+            : "An unexpected error occurred during the search.";
+        return <Alert type="error" message={errorMessage} />;
       }
     }
   );

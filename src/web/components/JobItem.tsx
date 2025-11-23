@@ -26,7 +26,13 @@ const JobItem = ({ job }: JobItemProps) => {
       job.status === PipelineJobStatus.RUNNING;
 
   return (
-    <div class="block p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600">
+    <div
+      id={`job-item-${job.id}`}
+      class="block p-3 bg-gray-50 dark:bg-gray-700 rounded-lg border border-gray-200 dark:border-gray-600"
+      data-job-id={job.id}
+      x-data="{ jobId: $el.dataset.jobId }"
+      x-bind:hx-preserve="$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === jobId"
+    >
       <div class="flex items-start justify-between">
         <div class="flex-1">
           <p class="text-sm font-medium text-gray-900 dark:text-white">
@@ -89,11 +95,10 @@ const JobItem = ({ job }: JobItemProps) => {
                 type="button"
                 class="font-medium rounded-lg text-xs p-1 text-center inline-flex items-center transition-colors duration-150 ease-in-out border border-gray-300 bg-white text-red-600 hover:bg-red-50 focus:ring-4 focus:outline-none focus:ring-red-100 dark:border-gray-600 dark:bg-gray-800 dark:text-red-400 dark:hover:bg-gray-700 dark:focus:ring-red-900"
                 title="Stop this job"
-                x-data="{}"
-                x-on:click={`
-                if ($store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === '${job.id}') {
+                x-on:click="
+                if ($store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === jobId) {
                   $store.confirmingAction.isStopping = true;
-                  fetch('/web/jobs/' + '${job.id}' + '/cancel', {
+                  fetch('/web/jobs/' + jobId + '/cancel', {
                     method: 'POST',
                     headers: { 'Accept': 'application/json' },
                   })
@@ -109,7 +114,7 @@ const JobItem = ({ job }: JobItemProps) => {
                 } else {
                   if ($store.confirmingAction.timeoutId) { clearTimeout($store.confirmingAction.timeoutId); $store.confirmingAction.timeoutId = null; }
                   $store.confirmingAction.type = 'job-cancel';
-                  $store.confirmingAction.id = '${job.id}';
+                  $store.confirmingAction.id = jobId;
                   $store.confirmingAction.isStopping = false;
                   $store.confirmingAction.timeoutId = setTimeout(() => {
                     $store.confirmingAction.type = null;
@@ -118,12 +123,10 @@ const JobItem = ({ job }: JobItemProps) => {
                     $store.confirmingAction.timeoutId = null;
                   }, 3000);
                 }
-              `}
-                x-bind:disabled={`$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === '${job.id}' && $store.confirmingAction.isStopping`}
+              "
+                x-bind:disabled="$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === jobId && $store.confirmingAction.isStopping"
               >
-                <span
-                  x-show={`$store.confirmingAction.type !== 'job-cancel' || $store.confirmingAction.id !== '${job.id}' || $store.confirmingAction.isStopping`}
-                >
+                <span x-show="$store.confirmingAction.type !== 'job-cancel' || $store.confirmingAction.id !== jobId || $store.confirmingAction.isStopping">
                   {/* Red Stop Icon */}
                   <svg
                     class="w-4 h-4"
@@ -136,14 +139,12 @@ const JobItem = ({ job }: JobItemProps) => {
                   <span class="sr-only">Stop job</span>
                 </span>
                 <span
-                  x-show={`$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === '${job.id}' && !$store.confirmingAction.isStopping`}
+                  x-show="$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === jobId && !$store.confirmingAction.isStopping"
                   class="px-2"
                 >
                   Cancel?
                 </span>
-                <span
-                  x-show={`$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === '${job.id}' && $store.confirmingAction.isStopping`}
-                >
+                <span x-show="$store.confirmingAction.type === 'job-cancel' && $store.confirmingAction.id === jobId && $store.confirmingAction.isStopping">
                   <LoadingSpinner />
                   <span class="sr-only">Stopping...</span>
                 </span>
