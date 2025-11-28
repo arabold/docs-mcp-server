@@ -14,13 +14,14 @@ interface LibraryListProps {
  */
 const LibraryList = ({ libraries }: LibraryListProps) => {
   return (
-    <>
-      <div class="space-y-2">
-        {libraries.map((library) => (
-          <LibraryItem library={library} />
-        ))}
-      </div>
-    </>
+    <div
+      id="library-list"
+      class="space-y-2 animate-[fadeSlideIn_0.2s_ease-out]"
+    >
+      {libraries.map((library) => (
+        <LibraryItem library={library} />
+      ))}
+    </div>
   );
 };
 

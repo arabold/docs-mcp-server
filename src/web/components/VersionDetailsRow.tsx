@@ -72,7 +72,7 @@ const VersionDetailsRow = ({
           </span>
         </span>
         <span title="Number of indexed snippets">
-          Snippets:{" "}
+          Chunks:{" "}
           <span class="font-semibold" safe>
             {version.counts.documents.toLocaleString()}
           </span>

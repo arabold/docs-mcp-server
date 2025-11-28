@@ -149,7 +149,7 @@ const Layout = ({
           `}
         </style>
       </head>
-      <body class="bg-gray-50 dark:bg-gray-900">
+      <body class="bg-gray-50 dark:bg-gray-900" hx-ext="morph">
         {/* Toast notification component */}
         <Toast />
 

@@ -48,4 +48,35 @@
   button {
     @apply cursor-pointer;
   }
+
+  /* Alpine.js cloak directive - hide until Alpine initializes */
+  [x-cloak] {
+    display: none !important;
+  }
+}
+
+
+/* Custom animation for initial page load elements */
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scroll text animation for long URLs - scrolls left to reveal full text */
+/* Uses calc to scroll exactly: (text width - container width) */
+@keyframes scrollText {
+  0%,
+  10% {
+    transform: translateX(0);
+  }
+  90%,
+  100% {
+    transform: translateX(calc(100cqw - 100%));
+  }
 }

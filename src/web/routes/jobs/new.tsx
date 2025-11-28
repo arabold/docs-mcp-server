@@ -4,9 +4,24 @@ import { ScrapeMode } from "../../../scraper/types";
 import { logger } from "../../../utils/logger";
 import ScrapeForm from "../../components/ScrapeForm";
 import Alert from "../../components/Alert";
-import ScrapeFormContent from "../../components/ScrapeFormContent";
 import { DEFAULT_EXCLUSION_PATTERNS } from "../../../scraper/utils/defaultPatterns";
 import { ValidationError } from "../../../tools/errors";
+
+/**
+ * Button component used both to reveal the scrape form (initial state)
+ * and to collapse the form back to a button after successful submission.
+ */
+const ScrapeFormButton = () => (
+  <button
+    type="button"
+    hx-get="/web/jobs/new"
+    hx-target="#addJobForm"
+    hx-swap="innerHTML"
+    class="w-full flex justify-center py-1.5 px-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-150"
+  >
+    Queue New Scrape Job
+  </button>
+);
 
 /**
  * Registers the API routes for creating new jobs.
@@ -21,6 +36,11 @@ export function registerNewJobRoutes(
   server.get("/web/jobs/new", async () => {
     // Return the wrapper component which includes the container div
     return <ScrapeForm defaultExcludePatterns={DEFAULT_EXCLUSION_PATTERNS} />;
+  });
+
+  // GET /web/jobs/new-button - Return just the button to collapse the form
+  server.get("/web/jobs/new-button", async () => {
+    return <ScrapeFormButton />;
   });
 
   // POST /web/jobs/scrape - Queue a new scrape job
@@ -116,27 +136,17 @@ export function registerNewJobRoutes(
         const result = await scrapeTool.execute(scrapeOptions);
 
         if ("jobId" in result) {
-          // Success: Use Alert component and OOB swap
-          return (
-            <>
-              {/* Main target response */}
-              <Alert
-                type="success"
-                message={
-                  <>
-                    Job queued successfully! ID:{" "}
-                    <span safe>{result.jobId}</span>
-                  </>
-                }
-              />
-              {/* OOB target response - contains only the inner form content */}
-              <div id="scrape-form-container" hx-swap-oob="innerHTML">
-                <ScrapeFormContent
-                  defaultExcludePatterns={DEFAULT_EXCLUSION_PATTERNS}
-                />
-              </div>
-            </>
+          // Success: Collapse form back to button and show toast via HX-Trigger
+          reply.header(
+            "HX-Trigger",
+            JSON.stringify({
+              toast: {
+                message: "Job queued successfully!",
+                type: "success",
+              },
+            })
           );
+          return <ScrapeFormButton />;
         }
 
         // This case shouldn't happen with waitForCompletion: false, but handle defensively

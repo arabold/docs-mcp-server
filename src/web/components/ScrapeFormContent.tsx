@@ -17,13 +17,37 @@ const ScrapeFormContent = ({
   const defaultExcludePatternsText = defaultExcludePatterns?.join("\n") || "";
 
   return (
-    <div class="mt-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-300 dark:border-gray-600">
-      <h3 class="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+    <div class="mt-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-300 dark:border-gray-600 relative animate-[fadeSlideIn_0.2s_ease-out]">
+      {/* Close button */}
+      <button
+        type="button"
+        hx-get="/web/jobs/new-button"
+        hx-target="#addJobForm"
+        hx-swap="innerHTML"
+        class="absolute top-3 right-3 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-150"
+        title="Close"
+      >
+        <svg
+          class="w-5 h-5"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M6 18L18 6M6 6l12 12"
+          />
+        </svg>
+      </button>
+      <h3 class="text-xl font-semibold text-gray-900 dark:text-white mb-2 pr-8">
         Queue New Scrape Job
       </h3>
       <form
         hx-post="/web/jobs/scrape"
-        hx-target="#job-response"
+        hx-target="#addJobForm"
         hx-swap="innerHTML"
         class="space-y-2"
         x-data="{
@@ -125,12 +149,33 @@ const ScrapeFormContent = ({
           />
         </div>
 
-        {/* Consider using Flowbite Accordion here */}
-        <details class="bg-gray-50 dark:bg-gray-900 p-2 rounded-md">
-          <summary class="cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400">
-            Advanced Options
-          </summary>
-          <div class="mt-2 space-y-2" x-data="{ headers: [] }">
+        {/* Advanced Options with slide animation */}
+        <div
+          class="bg-gray-50 dark:bg-gray-900 p-2 rounded-md"
+          x-data="{ open: false, headers: [] }"
+        >
+          <button
+            type="button"
+            class="w-full flex items-center gap-1.5 cursor-pointer text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+            x-on:click="open = !open"
+          >
+            <svg
+              class="w-4 h-4 transform transition-transform duration-200"
+              x-bind:class="{ 'rotate-90': open }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 5l7 7-7 7"
+              />
+            </svg>
+            <span>Advanced Options</span>
+          </button>
+          <div x-show="open" x-cloak x-collapse class="mt-2 space-y-2">
             <div>
               <div class="flex items-center">
                 <label
@@ -370,7 +415,7 @@ const ScrapeFormContent = ({
               </label>
             </div>
           </div>
-        </details>
+        </div>
 
         <div>
           <button

@@ -164,7 +164,7 @@ export function registerEventsRoute(
 
     // Handle errors
     request.raw.on("error", (error) => {
-      // Usually occurs when client disconnects abruptly, not a big deal
+      // This may happen when the client disconnects abruptly, is page is reloaded, etc.
       logger.debug(`SSE connection error: ${error}`);
       cleanup();
       clearInterval(heartbeatInterval);

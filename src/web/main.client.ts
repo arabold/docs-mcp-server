@@ -6,9 +6,11 @@
  */
 import "./styles/main.css";
 
+import collapse from "@alpinejs/collapse";
 import Alpine from "alpinejs";
 import { initFlowbite } from "flowbite";
 import htmx from "htmx.org";
+import "idiomorph/htmx";
 import { EventClient } from "./EventClient";
 import { fallbackReleaseLabel, isVersionNewer } from "./utils/versionCheck";
 
@@ -99,6 +101,9 @@ Alpine.store("confirmingAction", {
   isDeleting: false,
 });
 
+// Register Alpine.js plugins
+Alpine.plugin(collapse);
+
 // Initialize toast store for global notifications
 Alpine.store("toast", {
   visible: false,
@@ -154,27 +159,30 @@ initFlowbite();
 // Add a global event listener for 'job-list-refresh' that uses HTMX to reload the job list
 // This is still useful for manual refresh after actions like clearing jobs
 document.addEventListener("job-list-refresh", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
+  htmx.ajax("get", "/web/jobs", { target: "#job-queue", swap: "morph:innerHTML" });
 });
 
 // Listen for job status changes and trigger job list refresh
 document.addEventListener("job-status-change", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
+  htmx.ajax("get", "/web/jobs", { target: "#job-queue", swap: "morph:innerHTML" });
 });
 
 // Listen for job progress updates and trigger job list refresh
 document.addEventListener("job-progress", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
+  htmx.ajax("get", "/web/jobs", { target: "#job-queue", swap: "morph:innerHTML" });
 });
 
 // Listen for job list changes and trigger job list refresh
 document.addEventListener("job-list-change", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
+  htmx.ajax("get", "/web/jobs", { target: "#job-queue", swap: "morph:innerHTML" });
 });
 
 // Listen for library changes and trigger library list refresh
 document.addEventListener("library-change", () => {
-  htmx.ajax("get", "/web/libraries", "#library-list");
+  htmx.ajax("get", "/web/libraries", {
+    target: "#library-list",
+    swap: "morph:innerHTML",
+  });
 });
 
 // Create and connect the unified event client
