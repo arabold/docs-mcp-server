@@ -18,8 +18,10 @@ export function registerStatsRoute(
 
       let totalChunks = 0;
       let indexedPages = 0;
+      let activeVersions = 0;
 
       for (const lib of libraries) {
+        activeVersions += lib.versions.length;
         for (const version of lib.versions) {
           totalChunks += version.counts.documents;
           indexedPages += version.counts.uniqueUrls;
@@ -33,6 +35,7 @@ export function registerStatsRoute(
         <AnalyticsCards
           totalChunks={totalChunks}
           activeLibraries={activeLibraries}
+          activeVersions={activeVersions}
           indexedPages={indexedPages}
         />
       );

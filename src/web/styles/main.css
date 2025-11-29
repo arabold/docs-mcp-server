@@ -69,7 +69,10 @@
 }
 
 /* Scroll text animation for long URLs - scrolls left to reveal full text */
-/* Uses calc to scroll exactly: (text width - container width) */
+/* translateX uses: min(0px, calc(100cqw - 100%))
+   - 100cqw = container width, 100% = element (text) width
+   - If text is wider than container, result is negative, scrolling text left
+   - min(0px, ...) ensures no scroll when text fits */
 @keyframes scrollText {
   0%,
   10% {
@@ -77,6 +80,6 @@
   }
   90%,
   100% {
-    transform: translateX(calc(100cqw - 100%));
+    transform: translateX(min(0px, calc(100cqw - 100%)));
   }
 }

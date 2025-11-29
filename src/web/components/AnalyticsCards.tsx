@@ -1,6 +1,7 @@
 interface AnalyticsCardsProps {
   totalChunks: number;
   activeLibraries: number;
+  activeVersions: number;
   indexedPages: number;
 }
 
@@ -26,6 +27,7 @@ function formatNumber(num: number): string {
 const AnalyticsCards = ({
   totalChunks,
   activeLibraries,
+  activeVersions,
   indexedPages,
 }: AnalyticsCardsProps) => (
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4 animate-[fadeSlideIn_0.2s_ease-out]">
@@ -48,10 +50,12 @@ const AnalyticsCards = ({
       <div class="flex items-center">
         <div>
           <p class="text-sm font-medium text-gray-500 dark:text-gray-400">
-            Active Libraries
+            Libraries / Versions
           </p>
           <p class="text-xl font-semibold text-gray-900 dark:text-white">
             {activeLibraries}
+            {" / "}
+            {activeVersions}
           </p>
         </div>
       </div>

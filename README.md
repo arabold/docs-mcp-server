@@ -128,9 +128,9 @@ npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/rea
 ### Adding Library Documentation
 
 1. Open the Web Interface at `http://localhost:6280`.
-2. Use the "Queue New Scrape Job" form.
+2. Use the "Add New Documentation" form.
 3. Enter the documentation URL, library name, and (optionally) version.
-4. Click "Queue Job". Monitor progress in the Job Queue.
+4. Click "Start Indexing". Monitor progress in the Job Queue.
 5. Repeat for each library you want indexed.
 
 Once a job completes, the docs are searchable via your AI assistant or the Web UI.

@@ -106,6 +106,7 @@
     "@tailwindcss/postcss": "^4.1.17",
     "@tailwindcss/vite": "^4.1.17",
     "@types/alpinejs": "^3.13.11",
+    "@types/alpinejs__collapse": "~3.13.4",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jsdom": "^27.0.0",
     "@types/lint-staged": "~13.3.0",

@@ -43,7 +43,7 @@ const ScrapeFormContent = ({
         </svg>
       </button>
       <h3 class="text-xl font-semibold text-gray-900 dark:text-white mb-2 pr-8">
-        Queue New Scrape Job
+        Add New Documentation
       </h3>
       <form
         hx-post="/web/jobs/scrape"
@@ -422,7 +422,7 @@ const ScrapeFormContent = ({
             type="submit"
             class="w-full flex justify-center py-1.5 px-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500"
           >
-            Queue Job
+            Start Indexing
           </button>
         </div>
       </form>

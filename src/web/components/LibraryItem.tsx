@@ -36,7 +36,7 @@ const LibraryItem = ({ library }: LibraryItemProps) => {
           <a
             href={latestVersion.sourceUrl}
             target="_blank"
-            class="inline-block whitespace-nowrap hover:underline hover:animate-[scrollText_4s_ease-in-out_forwards]"
+            class="inline-block whitespace-nowrap hover:underline hover:animate-[scrollText_2s_ease-in-out_forwards]"
             title={latestVersion.sourceUrl}
             safe
           >
