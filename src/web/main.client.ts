@@ -6,9 +6,17 @@
  */
 import "./styles/main.css";
 
+import collapse from "@alpinejs/collapse";
 import Alpine from "alpinejs";
+
+// Register Alpine.js plugins before exposing globally
+Alpine.plugin(collapse);
+
+// Expose Alpine globally for Idiomorph and other extensions
+(window as unknown as { Alpine: typeof Alpine }).Alpine = Alpine;
+
 import { initFlowbite } from "flowbite";
-import htmx from "htmx.org";
+import "idiomorph/htmx";
 import { EventClient } from "./EventClient";
 import { fallbackReleaseLabel, isVersionNewer } from "./utils/versionCheck";
 
@@ -91,14 +99,6 @@ document.addEventListener("alpine:init", () => {
   }));
 });
 
-// Ensure Alpine global store for confirmation actions is initialized before Alpine components render
-Alpine.store("confirmingAction", {
-  type: null,
-  id: null,
-  timeoutId: null,
-  isDeleting: false,
-});
-
 // Initialize toast store for global notifications
 Alpine.store("toast", {
   visible: false,
@@ -151,31 +151,9 @@ Alpine.start();
 // Initialize Flowbite components
 initFlowbite();
 
-// Add a global event listener for 'job-list-refresh' that uses HTMX to reload the job list
-// This is still useful for manual refresh after actions like clearing jobs
-document.addEventListener("job-list-refresh", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
-});
-
-// Listen for job status changes and trigger job list refresh
-document.addEventListener("job-status-change", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
-});
-
-// Listen for job progress updates and trigger job list refresh
-document.addEventListener("job-progress", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
-});
-
-// Listen for job list changes and trigger job list refresh
-document.addEventListener("job-list-change", () => {
-  htmx.ajax("get", "/web/jobs", "#job-queue");
-});
-
-// Listen for library changes and trigger library list refresh
-document.addEventListener("library-change", () => {
-  htmx.ajax("get", "/web/libraries", "#library-list");
-});
+// NOTE: job-status-change, job-progress, job-list-change, job-list-refresh, and library-change events
+// are handled by hx-trigger attributes in the HTML templates (index.tsx).
+// Do NOT add duplicate listeners here to avoid double requests and state corruption.
 
 // Create and connect the unified event client
 const eventClient = new EventClient();
@@ -199,44 +177,91 @@ window.addEventListener("beforeunload", () => {
   eventClient.disconnect();
 });
 
-// Add a global event listener for 'version-list-refresh' that reloads the version list container using HTMX
-document.addEventListener("version-list-refresh", (event: Event) => {
-  const customEvent = event as CustomEvent<{ library: string }>;
-  const library = customEvent.detail?.library;
-  if (library) {
-    htmx.ajax(
-      "get",
-      `/web/libraries/${encodeURIComponent(library)}/versions`,
-      "#version-list",
-    );
+// Central confirmation timeout manager
+// Handles timeouts outside of Alpine so they survive DOM refreshes
+const confirmationTimeouts = new Map<string, { timeoutId: number; expiresAt: number }>();
+
+/**
+ * Starts a confirmation timeout for an element.
+ * When timeout expires, it clears the confirming state on the element.
+ */
+function startConfirmationTimeout(elementId: string, duration = 3000) {
+  // Clear any existing timeout for this element
+  clearConfirmationTimeout(elementId);
+
+  const expiresAt = Date.now() + duration;
+  const timeoutId = window.setTimeout(() => {
+    // Timeout fired - clear the state
+    confirmationTimeouts.delete(elementId);
+
+    // Find the element and reset its state
+    const el = document.getElementById(elementId);
+    if (el) {
+      const data = Alpine.$data(el) as { confirming?: boolean } | undefined;
+      if (data) {
+        data.confirming = false;
+      }
+    }
+  }, duration);
+
+  confirmationTimeouts.set(elementId, { timeoutId, expiresAt });
+}
+
+/**
+ * Clears a confirmation timeout for an element.
+ */
+function clearConfirmationTimeout(elementId: string) {
+  const entry = confirmationTimeouts.get(elementId);
+  if (entry) {
+    clearTimeout(entry.timeoutId);
+    confirmationTimeouts.delete(elementId);
+  }
+}
+
+/**
+ * Checks if an element has an active confirmation state.
+ */
+function hasActiveConfirmation(elementId: string): boolean {
+  const entry = confirmationTimeouts.get(elementId);
+  return entry !== undefined && entry.expiresAt > Date.now();
+}
+
+// Expose functions globally for use in Alpine components
+const confirmationManager = {
+  start: startConfirmationTimeout,
+  clear: clearConfirmationTimeout,
+  isActive: hasActiveConfirmation,
+};
+(
+  window as unknown as { confirmationManager: typeof confirmationManager }
+).confirmationManager = confirmationManager;
+
+// Handle Alpine lifecycle during HTMX swaps
+document.body.addEventListener("htmx:beforeSwap", (event) => {
+  const detail = (event as CustomEvent).detail;
+  const target = detail?.target as HTMLElement;
+
+  if (target) {
+    // Destroy Alpine components before HTMX replaces the content
+    Alpine.destroyTree(target);
   }
 });
 
-// Listen for htmx swaps after a version delete and dispatch version-list-refresh with payload
+// Initialize Alpine on new content after HTMX swap
 document.body.addEventListener("htmx:afterSwap", (event) => {
-  // Always re-initialize AlpineJS for swapped-in DOM to fix $store errors
-  if (event.target instanceof HTMLElement) {
-    Alpine.initTree(event.target);
-  }
-
-  // Existing logic for version delete refresh
   const detail = (event as CustomEvent).detail;
-  if (
-    detail?.xhr?.status === 204 &&
-    detail?.requestConfig?.verb === "delete" &&
-    (event.target as HTMLElement)?.id?.startsWith("row-")
-  ) {
-    // Extract library name from the row id: row-<library>-<version>
-    const rowId = (event.target as HTMLElement).id;
-    const match = rowId.match(/^row-([^-]+)-/);
-    const library = match ? match[1] : null;
-    if (library) {
-      document.dispatchEvent(
-        new CustomEvent("version-list-refresh", { detail: { library } }),
-      );
-    } else {
-      window.location.reload();
-    }
+  const target = detail?.target as HTMLElement;
+
+  if (target) {
+    // Restore confirmation state from central manager before Alpine init
+    target.querySelectorAll<HTMLElement>("[x-data][id]").forEach((el) => {
+      if (el.id && hasActiveConfirmation(el.id)) {
+        el.dataset.confirming = "true";
+      }
+    });
+
+    // Initialize Alpine components on the new content
+    Alpine.initTree(target);
   }
 });
 

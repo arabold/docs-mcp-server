@@ -9,7 +9,7 @@ interface ScrapeFormProps {
  * Provides a container div, often used as a target for HTMX OOB swaps.
  */
 const ScrapeForm = ({ defaultExcludePatterns }: ScrapeFormProps) => (
-  <div id="scrape-form-container">
+  <div id="scrape-form-container" class="animate-[fadeSlideIn_0.2s_ease-out]">
     <ScrapeFormContent defaultExcludePatterns={defaultExcludePatterns} />
   </div>
 );

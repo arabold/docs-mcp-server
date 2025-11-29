@@ -23,6 +23,7 @@ import { registerJobListRoutes } from "../web/routes/jobs/list";
 import { registerNewJobRoutes } from "../web/routes/jobs/new";
 import { registerLibraryDetailRoutes } from "../web/routes/libraries/detail";
 import { registerLibrariesRoutes } from "../web/routes/libraries/list";
+import { registerStatsRoute } from "../web/routes/stats";
 
 /**
  * Register web interface routes on a Fastify server instance.
@@ -58,4 +59,5 @@ export async function registerWebService(
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
   registerEventsRoute(server, eventBus);
+  registerStatsRoute(server, docService);
 }

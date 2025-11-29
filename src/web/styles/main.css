@@ -48,4 +48,38 @@
   button {
     @apply cursor-pointer;
   }
+
+  /* Alpine.js cloak directive - hide until Alpine initializes */
+  [x-cloak] {
+    display: none !important;
+  }
+}
+
+
+/* Custom animation for initial page load elements */
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scroll text animation for long URLs - scrolls left to reveal full text */
+/* translateX uses: min(0px, calc(100cqw - 100%))
+   - 100cqw = container width, 100% = element (text) width
+   - If text is wider than container, result is negative, scrolling text left
+   - min(0px, ...) ensures no scroll when text fits */
+@keyframes scrollText {
+  0%,
+  10% {
+    transform: translateX(0);
+  }
+  90%,
+  100% {
+    transform: translateX(min(0px, calc(100cqw - 100%)));
+  }
 }
