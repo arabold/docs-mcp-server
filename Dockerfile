@@ -51,9 +51,9 @@ COPY db db
 # RUN npm ci --omit=dev
 
 # Copy built files from builder
-COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
+COPY --from=builder /app/dist ./dist
 
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data

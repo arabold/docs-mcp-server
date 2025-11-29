@@ -167,7 +167,7 @@ export function setupLogging(options: GlobalOptions, protocol?: "stdio" | "http"
 export function validatePort(portString: string): number {
   const port = Number.parseInt(portString, 10);
   if (Number.isNaN(port) || port < 1 || port > 65535) {
-    throw new Error("❌ Invalid port number");
+    throw new Error("Invalid port number");
   }
   return port;
 }
@@ -179,12 +179,12 @@ export function validateHost(hostString: string): string {
   // Basic validation - allow IPv4, IPv6, and hostnames
   const trimmed = hostString.trim();
   if (!trimmed) {
-    throw new Error("❌ Host cannot be empty");
+    throw new Error("Host cannot be empty");
   }
 
   // Very basic format check - reject obviously invalid values
   if (trimmed.includes(" ") || trimmed.includes("\t") || trimmed.includes("\n")) {
-    throw new Error("❌ Host cannot contain whitespace");
+    throw new Error("Host cannot contain whitespace");
   }
 
   return trimmed;

@@ -31,7 +31,7 @@ describe("Vector Search End-to-End Tests", () => {
   beforeAll(async () => {
     // Skip this test suite if no embedding configuration is available
     if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      console.log("⚠️ Skipping vector search tests - no embedding API key found");
+      console.log("⚠️  Skipping vector search tests - no embedding API key found");
       return;
     }
 
@@ -82,7 +82,7 @@ describe("Vector Search End-to-End Tests", () => {
   it("should scrape local README.md and make it searchable", async () => {
     // Skip if no embedding configuration
     if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      console.log("⚠️ Skipping test - no embedding API key found");
+      console.log("⚠️  Skipping test - no embedding API key found");
       return;
     }
 
@@ -154,7 +154,7 @@ describe("Vector Search End-to-End Tests", () => {
   it("should handle version-specific searches", async () => {
     // Skip if no embedding configuration
     if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      console.log("⚠️ Skipping test - no embedding API key found");
+      console.log("⚠️  Skipping test - no embedding API key found");
       return;
     }
 
@@ -180,7 +180,7 @@ describe("Vector Search End-to-End Tests", () => {
   it("should find semantic similarities beyond exact text matches", async () => {
     // Skip if no embedding configuration
     if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      console.log("⚠️ Skipping test - no embedding API key found");
+      console.log("⚠️  Skipping test - no embedding API key found");
       return;
     }
 
@@ -206,7 +206,7 @@ describe("Vector Search End-to-End Tests", () => {
   it("should handle non-existent library searches gracefully", async () => {
     // Skip if no embedding configuration
     if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      console.log("⚠️ Skipping test - no embedding API key found");
+      console.log("⚠️  Skipping test - no embedding API key found");
       return;
     }
 
@@ -220,7 +220,7 @@ describe("Vector Search End-to-End Tests", () => {
   it("should handle non-existent version searches gracefully", async () => {
     // Skip if no embedding configuration
     if (!process.env.OPENAI_API_KEY && !process.env.GOOGLE_API_KEY) {
-      console.log("⚠️ Skipping test - no embedding API key found");
+      console.log("⚠️  Skipping test - no embedding API key found");
       return;
     }
 

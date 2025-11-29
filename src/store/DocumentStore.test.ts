@@ -992,6 +992,19 @@ describe("DocumentStore - Common Functionality", () => {
     }
   });
 
+  describe("getActiveEmbeddingConfig", () => {
+    it("should return null when no embedding config is provided", async () => {
+      // Create a store without embedding config (FTS-only mode)
+      const ftsOnlyStore = new DocumentStore(":memory:");
+      await ftsOnlyStore.initialize();
+
+      const config = ftsOnlyStore.getActiveEmbeddingConfig();
+      expect(config).toBeNull();
+
+      await ftsOnlyStore.shutdown();
+    });
+  });
+
   describe("Case Sensitivity", () => {
     it("treats version names case-insensitively within a library", async () => {
       const v1 = await store.resolveVersionId("cslib", "1.0.0");

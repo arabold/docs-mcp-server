@@ -31,7 +31,7 @@ describe("Authentication End-to-End Tests", () => {
   beforeAll(async () => {
     // Skip tests if authentication environment variables are not set
     if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-      console.log("⚠️ Skipping authentication tests - DOCS_MCP_AUTH_ISSUER_URL or DOCS_MCP_AUTH_AUDIENCE not found in .env");
+      console.log("⚠️  Skipping authentication tests - DOCS_MCP_AUTH_ISSUER_URL or DOCS_MCP_AUTH_AUDIENCE not found in .env");
       return;
     }
 
@@ -101,7 +101,7 @@ describe("Authentication End-to-End Tests", () => {
     it("should return 401 when accessing protected endpoint without token", async () => {
       // Skip if no auth config
       if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️ Skipping test - authentication not configured");
+        console.log("⚠️  Skipping test - authentication not configured");
         return;
       }
 
@@ -125,7 +125,7 @@ describe("Authentication End-to-End Tests", () => {
     it("should return 401 when accessing protected endpoint with invalid token", async () => {
       // Skip if no auth config
       if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️ Skipping test - authentication not configured");
+        console.log("⚠️  Skipping test - authentication not configured");
         return;
       }
 
@@ -150,7 +150,7 @@ describe("Authentication End-to-End Tests", () => {
     it("should return 401 when accessing protected endpoint with malformed token", async () => {
       // Skip if no auth config
       if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️ Skipping test - authentication not configured");
+        console.log("⚠️  Skipping test - authentication not configured");
         return;
       }
 
@@ -177,7 +177,7 @@ describe("Authentication End-to-End Tests", () => {
     it("should load authentication configuration from environment variables", () => {
       // Skip if no auth config
       if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️ Skipping test - authentication not configured");
+        console.log("⚠️  Skipping test - authentication not configured");
         return;
       }
 
@@ -188,7 +188,7 @@ describe("Authentication End-to-End Tests", () => {
     it("should validate issuer URL format", () => {
       // Skip if no auth config
       if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️ Skipping test - authentication not configured");
+        console.log("⚠️  Skipping test - authentication not configured");
         return;
       }
 
@@ -202,7 +202,7 @@ describe("Authentication End-to-End Tests", () => {
     it("should validate audience format", () => {
       // Skip if no auth config
       if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️ Skipping test - authentication not configured");
+        console.log("⚠️  Skipping test - authentication not configured");
         return;
       }
 
@@ -218,7 +218,7 @@ describe("Authentication End-to-End Tests", () => {
     it("should document how to manually test with valid token", () => {
       // Skip if no auth config
       if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️ Skipping test - authentication not configured");
+        console.log("⚠️  Skipping test - authentication not configured");
         return;
       }
 

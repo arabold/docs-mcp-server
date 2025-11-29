@@ -6,6 +6,7 @@ import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { ScraperOptions } from "../scraper/types";
 import { logger } from "../utils/logger";
+import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import type { IDocumentManagement } from "./trpc/interfaces";
 import type { DataRouter } from "./trpc/router";
 import type {
@@ -116,5 +117,12 @@ export class DocumentManagementClient implements IDocumentManagement {
 
   async storeScraperOptions(versionId: number, options: ScraperOptions): Promise<void> {
     await this.client.storeScraperOptions.mutate({ versionId, options });
+  }
+
+  getActiveEmbeddingConfig(): EmbeddingModelConfig | null {
+    // For remote client, embedding config is not available locally.
+    // The remote server's embedding status cannot be synchronously queried.
+    // Return null to indicate embeddings status is unknown/unavailable.
+    return null;
   }
 }

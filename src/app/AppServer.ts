@@ -10,7 +10,6 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
 import { WebSocketServer } from "ws";
 import { ProxyAuthManager } from "../auth";
-import { resolveEmbeddingContext } from "../cli/utils";
 import type { EventBusService } from "../events";
 import { RemoteEventProxy } from "../events/RemoteEventProxy";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
@@ -18,7 +17,6 @@ import { cleanupMcpService, registerMcpService } from "../services/mcpService";
 import { applyTrpcWebSocketHandler, registerTrpcService } from "../services/trpcService";
 import { registerWebService } from "../services/webService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
-import type { EmbeddingModelConfig } from "../store/embeddings/EmbeddingConfig";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../telemetry";
 import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
@@ -34,7 +32,6 @@ export class AppServer {
   private mcpServer: McpServer | null = null;
   private authManager: ProxyAuthManager | null = null;
   private config: AppServerConfig;
-  private embeddingConfig: EmbeddingModelConfig | null = null;
   private remoteEventProxy: RemoteEventProxy | null = null;
   private wss: WebSocketServer | null = null;
 
@@ -79,16 +76,14 @@ export class AppServer {
   async start(): Promise<FastifyInstance> {
     this.validateConfig();
 
-    // Resolve embedding configuration early for use in startup logging and telemetry
-    this.embeddingConfig = resolveEmbeddingContext();
+    // Get embedding configuration from the document service (source of truth)
+    const embeddingConfig = this.docService.getActiveEmbeddingConfig();
 
     // Initialize telemetry if enabled
     if (this.config.telemetry !== false && shouldEnableTelemetry()) {
       try {
         // Set global application context that will be included in all events
         if (telemetry.isEnabled()) {
-          // Resolve embedding configuration for global context
-
           telemetry.setGlobalContext({
             appVersion: __APP_VERSION__,
             appPlatform: process.platform,
@@ -97,10 +92,10 @@ export class AppServer {
             appAuthEnabled: Boolean(this.config.auth),
             appReadOnly: Boolean(this.config.readOnly),
             // Add embedding configuration to global context
-            ...(this.embeddingConfig && {
-              aiEmbeddingProvider: this.embeddingConfig.provider,
-              aiEmbeddingModel: this.embeddingConfig.model,
-              aiEmbeddingDimensions: this.embeddingConfig.dimensions,
+            ...(embeddingConfig && {
+              aiEmbeddingProvider: embeddingConfig.provider,
+              aiEmbeddingModel: embeddingConfig.model,
+              aiEmbeddingDimensions: embeddingConfig.dimensions,
             }),
           });
 
@@ -498,34 +493,63 @@ export class AppServer {
    * Log startup information showing which services are enabled.
    */
   private logStartupInfo(address: string): void {
-    logger.info(`🚀 AppServer available at ${address}`);
+    // Determine the service mode
+    const isWorkerOnly =
+      this.config.enableWorker &&
+      !this.config.enableWebInterface &&
+      !this.config.enableMcpServer;
+    const isWebOnly =
+      this.config.enableWebInterface &&
+      !this.config.enableWorker &&
+      !this.config.enableMcpServer;
+    const isMcpOnly =
+      this.config.enableMcpServer &&
+      !this.config.enableWebInterface &&
+      !this.config.enableWorker;
+
+    // Determine the main service name
+    let serviceName: string;
+    if (isWorkerOnly) {
+      serviceName = "Worker";
+    } else if (isWebOnly) {
+      serviceName = "Web interface";
+    } else if (isMcpOnly) {
+      serviceName = "MCP server";
+    } else {
+      serviceName = "Grounded Docs";
+    }
+
+    const isCombined = !isWorkerOnly && !isWebOnly && !isMcpOnly;
+
+    logger.info(`🚀 ${serviceName} available at ${address}`);
 
     const enabledServices: string[] = [];
 
-    if (this.config.enableWebInterface) {
+    // Web interface: only show if combined mode
+    if (this.config.enableWebInterface && isCombined) {
       enabledServices.push(`Web interface: ${address}`);
     }
 
+    // MCP endpoints: always show if enabled
     if (this.config.enableMcpServer) {
       enabledServices.push(`MCP endpoints: ${address}/mcp, ${address}/sse`);
     }
 
-    if (this.config.enableApiServer) {
-      enabledServices.push(`API: ${address}/api`);
-    }
-
-    if (this.config.enableWorker) {
-      enabledServices.push("Worker: internal");
-    } else if (this.config.externalWorkerUrl) {
+    // Worker: only show external worker URL (internal is implied)
+    if (!this.config.enableWorker && this.config.externalWorkerUrl) {
       enabledServices.push(`Worker: ${this.config.externalWorkerUrl}`);
     }
 
-    if (this.embeddingConfig) {
-      enabledServices.push(
-        `Embeddings: ${this.embeddingConfig.provider}:${this.embeddingConfig.model}`,
-      );
-    } else {
-      enabledServices.push(`Embeddings: disabled (full text search only)`);
+    // Embeddings: only show if worker is enabled
+    if (this.config.enableWorker) {
+      const embeddingConfig = this.docService.getActiveEmbeddingConfig();
+      if (embeddingConfig) {
+        enabledServices.push(
+          `Embeddings: ${embeddingConfig.provider}:${embeddingConfig.model}`,
+        );
+      } else {
+        enabledServices.push(`Embeddings: disabled (full text search only)`);
+      }
     }
 
     for (const service of enabledServices) {

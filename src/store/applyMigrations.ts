@@ -52,7 +52,7 @@ export async function applyMigrations(db: Database): Promise<void> {
     db.pragma("temp_store = MEMORY"); // Store temporary data in memory
     logger.debug("Applied performance optimizations for migration");
   } catch (_error) {
-    logger.warn("⚠️ Could not apply all performance optimizations for migration");
+    logger.warn("⚠️  Could not apply all performance optimizations for migration");
   }
 
   const overallTransaction = db.transaction(() => {
@@ -125,7 +125,7 @@ export async function applyMigrations(db: Database): Promise<void> {
           db.exec("VACUUM");
           logger.debug("Database vacuum completed successfully");
         } catch (error) {
-          logger.warn(`⚠️ Could not vacuum database after migrations: ${error}`);
+          logger.warn(`⚠️  Could not vacuum database after migrations: ${error}`);
           // Don't fail the migration process if vacuum fails
         }
       } else {
@@ -178,6 +178,6 @@ export async function applyMigrations(db: Database): Promise<void> {
       "Applied production database configuration (WAL mode, autocheckpoint, foreign keys, busy timeout)",
     );
   } catch (_error) {
-    logger.warn("⚠️ Could not apply all production database settings");
+    logger.warn("⚠️  Could not apply all production database settings");
   }
 }

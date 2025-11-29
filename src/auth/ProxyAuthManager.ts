@@ -67,7 +67,7 @@ export class ProxyAuthManager {
 
       if (capabilities.length === 0) {
         logger.warn(
-          "⚠️ No token validation mechanisms available - authentication may fail",
+          "⚠️  No token validation mechanisms available - authentication may fail",
         );
       }
 

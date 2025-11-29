@@ -3,6 +3,7 @@
  * Implemented by the local DocumentManagementService and the remote tRPC client.
  */
 import type { ScraperOptions } from "../../scraper/types";
+import type { EmbeddingModelConfig } from "../embeddings/EmbeddingConfig";
 import type {
   DbVersionWithLibrary,
   FindVersionResult,
@@ -47,4 +48,7 @@ export interface IDocumentManagement {
     maxPages: number,
   ): Promise<void>;
   storeScraperOptions(versionId: number, options: ScraperOptions): Promise<void>;
+
+  // Embedding configuration
+  getActiveEmbeddingConfig(): EmbeddingModelConfig | null;
 }

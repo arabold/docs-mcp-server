@@ -186,7 +186,6 @@ export function createMcpCommand(program: Command): Command {
             if (resolvedProtocol === "stdio") {
               // Direct stdio mode - bypass AppServer entirely
               logger.debug(`Auto-detected stdio protocol (no TTY)`);
-              logger.info("🚀 Starting MCP server (stdio mode)");
 
               await pipeline.start(); // Start pipeline for stdio mode
               const mcpTools = await initializeTools(docService, pipeline);
@@ -203,7 +202,6 @@ export function createMcpCommand(program: Command): Command {
             } else {
               // HTTP mode - use AppServer
               logger.debug(`Auto-detected http protocol (TTY available)`);
-              logger.info("🚀 Starting MCP server (http mode)");
 
               // Configure MCP-only server
               const config = createAppServerConfig({

@@ -69,7 +69,9 @@ describe("AppServer Behavior Tests", () => {
     vi.clearAllMocks();
 
     // Setup mock dependencies
-    mockDocService = {};
+    mockDocService = {
+      getActiveEmbeddingConfig: vi.fn().mockReturnValue(null),
+    };
     mockPipeline = {
       setCallbacks: vi.fn(), // Add mock for setCallbacks method
     };

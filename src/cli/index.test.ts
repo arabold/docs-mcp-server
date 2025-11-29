@@ -5,12 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliProgram } from "./index";
-import {
-  resolveEmbeddingContext,
-  resolveProtocol,
-  validatePort,
-  validateResumeFlag,
-} from "./utils";
+import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
 
 // Mocks for execution tests will be defined below in dedicated describe block
 
@@ -406,6 +401,62 @@ describe("Global option propagation", () => {
     // Clean up
     delete process.env.DOCS_MCP_STORE_PATH;
   }, 10000);
+
+  it("should pass --embedding-model through to document management", async () => {
+    const embeddingModel = "openai:text-embedding-3-large";
+    const resolvedStorePath = "/mocked/resolved/path";
+    mockResolveStorePath.mockReturnValue(resolvedStorePath);
+
+    const { createCliProgram } = await import("./index");
+    const program = createCliProgram();
+
+    // Parse with embedding model flag
+    const _parsePromise = program.parseAsync([
+      "node",
+      "test",
+      "--embedding-model",
+      embeddingModel,
+      "--protocol",
+      "http",
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+      resolvedStorePath,
+      expect.any(Object),
+      expect.objectContaining({
+        provider: "openai",
+        model: "text-embedding-3-large",
+      }),
+    );
+  }, 10000);
+
+  it("should pick up DOCS_MCP_EMBEDDING_MODEL environment variable", async () => {
+    const envModel = "openai:text-embedding-ada-002";
+    const resolvedStorePath = "/mocked/resolved/path";
+    process.env.DOCS_MCP_EMBEDDING_MODEL = envModel;
+    mockResolveStorePath.mockReturnValue(resolvedStorePath);
+
+    const { createCliProgram } = await import("./index");
+    const program = createCliProgram();
+
+    // Run without explicit --embedding-model
+    const _parsePromise = program.parseAsync(["node", "test", "--protocol", "http"]);
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+      resolvedStorePath,
+      expect.any(Object),
+      expect.objectContaining({
+        provider: "openai",
+        model: "text-embedding-ada-002",
+      }),
+    );
+
+    delete process.env.DOCS_MCP_EMBEDDING_MODEL;
+  }, 10000);
 });
 
 describe("CLI Validation Logic", () => {
@@ -479,53 +530,6 @@ describe("CLI Validation Logic", () => {
       expect(() => validateResumeFlag(true, "http://example.com")).toThrow(
         "--resume flag is incompatible with --server-url. External workers handle their own job recovery.",
       );
-    });
-  });
-
-  describe("resolveEmbeddingContext", () => {
-    afterEach(() => {
-      // Clean up environment after each test
-      delete process.env.DOCS_MCP_EMBEDDING_MODEL;
-      delete process.env.OPENAI_API_KEY;
-    });
-
-    it("should return null when no embedding model is configured and no OPENAI_API_KEY", () => {
-      // Ensure no env vars are set
-      delete process.env.DOCS_MCP_EMBEDDING_MODEL;
-      delete process.env.OPENAI_API_KEY;
-      const result = resolveEmbeddingContext();
-      expect(result).toBeNull();
-    });
-
-    it("should return default config when OPENAI_API_KEY is present but no embedding model specified", () => {
-      // Ensure no embedding model env var is set, but OPENAI_API_KEY is present
-      delete process.env.DOCS_MCP_EMBEDDING_MODEL;
-      process.env.OPENAI_API_KEY = "test-key";
-      const result = resolveEmbeddingContext();
-      expect(result).toMatchObject({
-        provider: "openai",
-        model: "text-embedding-3-small", // Default fallback
-      });
-    });
-
-    it("should return config when embedding model is configured via environment", () => {
-      process.env.DOCS_MCP_EMBEDDING_MODEL = "openai:text-embedding-ada-002";
-      // The function now checks for OPENAI_API_KEY when using OpenAI models
-      process.env.OPENAI_API_KEY = "test-key";
-      const result = resolveEmbeddingContext();
-      expect(result).toMatchObject({
-        provider: "openai",
-        model: "text-embedding-3-small",
-      });
-    });
-
-    it("should prioritize CLI args over environment variables", () => {
-      process.env.DOCS_MCP_EMBEDDING_MODEL = "openai:text-embedding-ada-002";
-      const result = resolveEmbeddingContext("openai:text-embedding-3-small");
-      expect(result).toMatchObject({
-        provider: "openai",
-        model: "text-embedding-3-small",
-      });
     });
   });
 });

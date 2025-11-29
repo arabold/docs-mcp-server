@@ -145,7 +145,7 @@ export class BrowserFetcher implements ContentFetcher {
       }
       logger.debug("Browser closed successfully");
     } catch (error) {
-      logger.warn(`⚠️ Error closing browser: ${error}`);
+      logger.warn(`⚠️  Error closing browser: ${error}`);
     }
   }
 }
