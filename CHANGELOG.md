@@ -1,3 +1,13 @@
+# [1.30.0](https://github.com/arabold/docs-mcp-server/compare/v1.29.0...v1.30.0) (2025-11-29)
+
+
+### Features
+
+* fixed embedding configuration and improve startup messaging ([a602e2d](https://github.com/arabold/docs-mcp-server/commit/a602e2d44aa027ee442e895aa1f94ec2e82a60e0))
+* **web:** add analytics stats route and component; enhance UI with animations and new job controls ([a8cb77c](https://github.com/arabold/docs-mcp-server/commit/a8cb77c9ec36e822591558b02c6e9b68c3078458))
+* **web:** add empty state messaging ([bf9d209](https://github.com/arabold/docs-mcp-server/commit/bf9d20926fdedbd04cb65c2b451a3f90e92ee814))
+* **web:** update UI text for scrape job and indexing; enhance confirmation handling in components ([4de71d1](https://github.com/arabold/docs-mcp-server/commit/4de71d11fa8c64952f3b5e1f046c5df3f109f954))
+
 # [1.29.0](https://github.com/arabold/docs-mcp-server/compare/v1.28.0...v1.29.0) (2025-11-23)
 
 
