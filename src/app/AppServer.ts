@@ -508,20 +508,17 @@ export class AppServer {
       !this.config.enableWorker;
 
     // Determine the main service name
-    let serviceName: string;
     if (isWorkerOnly) {
-      serviceName = "Worker";
+      logger.info(`🚀 Worker available at ${address}`);
     } else if (isWebOnly) {
-      serviceName = "Web interface";
+      logger.info(`🚀 Web interface available at ${address}`);
     } else if (isMcpOnly) {
-      serviceName = "MCP server";
+      logger.info(`🚀 MCP server available at ${address}`);
     } else {
-      serviceName = "Grounded Docs";
+      logger.info(`🚀 Grounded Docs available at ${address}`);
     }
 
     const isCombined = !isWorkerOnly && !isWebOnly && !isMcpOnly;
-
-    logger.info(`🚀 ${serviceName} available at ${address}`);
 
     const enabledServices: string[] = [];
 
