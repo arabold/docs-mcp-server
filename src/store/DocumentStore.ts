@@ -67,6 +67,18 @@ export class DocumentStore {
   private modelDimension!: number;
   private readonly embeddingConfig?: EmbeddingModelConfig | null;
   private isVectorSearchEnabled: boolean = false;
+
+  /**
+   * Returns the active embedding configuration if vector search is enabled,
+   * or null if embeddings are disabled (no config provided or credentials unavailable).
+   */
+  getActiveEmbeddingConfig(): EmbeddingModelConfig | null {
+    if (!this.isVectorSearchEnabled || !this.embeddingConfig) {
+      return null;
+    }
+    return this.embeddingConfig;
+  }
+
   private statements!: {
     getById: Database.Statement<[bigint]>;
     // Updated for new schema - documents table now uses page_id
@@ -439,7 +451,7 @@ export class DocumentStore {
     // Check if credentials are available for the provider
     if (!areCredentialsAvailable(config.provider)) {
       logger.warn(
-        `⚠️ No credentials found for ${config.provider} embedding provider. Vector search is disabled.\n` +
+        `⚠️  No credentials found for ${config.provider} embedding provider. Vector search is disabled.\n` +
           `   Only full-text search will be available. To enable vector search, please configure the required\n` +
           `   environment variables for ${config.provider} or choose a different provider.\n` +
           `   See README.md for configuration options or run with --help for more details.`,
@@ -456,8 +468,29 @@ export class DocumentStore {
         this.modelDimension = config.dimensions;
       } else {
         // Fallback: determine the model's actual dimension by embedding a test string
-        const testVector = await this.embeddings.embedQuery("test");
-        this.modelDimension = testVector.length;
+        // Use a timeout to fail fast if the embedding service is unreachable
+        const EMBEDDING_INIT_TIMEOUT_MS = 30_000; // 30 seconds
+
+        const testPromise = this.embeddings.embedQuery("test");
+        let timeoutId: NodeJS.Timeout | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new Error(
+                `Embedding service connection timed out after ${EMBEDDING_INIT_TIMEOUT_MS / 1000} seconds`,
+              ),
+            );
+          }, EMBEDDING_INIT_TIMEOUT_MS);
+        });
+
+        try {
+          const testVector = await Promise.race([testPromise, timeoutPromise]);
+          this.modelDimension = testVector.length;
+        } finally {
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+          }
+        }
 
         // Cache the discovered dimensions for future use
         EmbeddingConfig.setKnownModelDimensions(config.model, this.modelDimension);
@@ -480,7 +513,7 @@ export class DocumentStore {
           error.message.includes("MODEL_NOT_FOUND")
         ) {
           throw new ModelConfigurationError(
-            `❌ Invalid embedding model: ${config.model}\n` +
+            `Invalid embedding model: ${config.model}\n` +
               `   The model "${config.model}" is not available or you don't have access to it.\n` +
               "   See README.md for supported models or run with --help for more details.",
           );
@@ -491,9 +524,26 @@ export class DocumentStore {
           error.message.includes("authentication")
         ) {
           throw new ModelConfigurationError(
-            `❌ Authentication failed for ${config.provider} embedding provider\n` +
+            `Authentication failed for ${config.provider} embedding provider\n` +
               "   Please check your API key configuration.\n" +
               "   See README.md for configuration options or run with --help for more details.",
+          );
+        }
+        // Handle network-related errors (timeout, connection refused, etc.)
+        if (
+          error.message.includes("timed out") ||
+          error.message.includes("ECONNREFUSED") ||
+          error.message.includes("ENOTFOUND") ||
+          error.message.includes("ETIMEDOUT") ||
+          error.message.includes("ECONNRESET") ||
+          error.message.includes("network") ||
+          error.message.includes("fetch failed")
+        ) {
+          throw new ModelConfigurationError(
+            `Failed to connect to ${config.provider} embedding service\n` +
+              `   ${error.message}\n` +
+              `   Please check that the embedding service is running and accessible.\n` +
+              `   If using a local model (e.g., Ollama), ensure the service is started.`,
           );
         }
       }
@@ -834,7 +884,7 @@ export class DocumentStore {
         try {
           parsed = JSON.parse(row.scraper_options) as VersionScraperOptions;
         } catch (e) {
-          logger.warn(`⚠️ Invalid scraper_options JSON for version ${versionId}: ${e}`);
+          logger.warn(`⚠️  Invalid scraper_options JSON for version ${versionId}: ${e}`);
           parsed = {} as VersionScraperOptions;
         }
       }

@@ -73,8 +73,6 @@ export function createWorkerCommand(program: Command): Command {
         const host = validateHost(cmdOptions.host);
 
         try {
-          logger.info(`🚀 Starting external pipeline worker on port ${port}`);
-
           // Ensure browsers are installed for scraping
           ensurePlaywrightBrowsersInstalled();
 

@@ -108,7 +108,7 @@ export function registerEventsRoute(
 
     // Send initial connection message
     reply.raw.write("data: connected\n\n");
-    logger.info("📡 SSE client connected");
+    logger.debug("SSE client connected");
 
     // Subscribe to all event types using a generic handler
     const allEventTypes = [
@@ -157,14 +157,15 @@ export function registerEventsRoute(
 
     // Clean up when client disconnects
     request.raw.on("close", () => {
-      logger.info("📡 SSE client disconnected");
+      logger.debug("SSE client disconnected");
       cleanup();
       clearInterval(heartbeatInterval);
     });
 
     // Handle errors
     request.raw.on("error", (error) => {
-      logger.error(`❌ SSE connection error: ${error}`);
+      // Usually occurs when client disconnects abruptly, not a big deal
+      logger.debug(`SSE connection error: ${error}`);
       cleanup();
       clearInterval(heartbeatInterval);
     });

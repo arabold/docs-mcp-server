@@ -41,14 +41,6 @@ export class DocumentManagementService {
   private readonly pipelines: ContentPipeline[];
   private readonly eventBus: EventBusService;
 
-  /**
-   * Normalizes a version string, converting null or undefined to an empty string
-   * and converting to lowercase.
-   */
-  private normalizeVersion(version?: string | null): string {
-    return (version ?? "").toLowerCase();
-  }
-
   constructor(
     storePath: string,
     eventBus: EventBusService,
@@ -69,6 +61,22 @@ export class DocumentManagementService {
 
     // Initialize content pipelines for different content types including universal TextPipeline fallback
     this.pipelines = PipelineFactory.createStandardPipelines(pipelineConfig);
+  }
+
+  /**
+   * Returns the active embedding configuration if vector search is enabled,
+   * or null if embeddings are disabled.
+   */
+  getActiveEmbeddingConfig(): EmbeddingModelConfig | null {
+    return this.store.getActiveEmbeddingConfig();
+  }
+
+  /**
+   * Normalizes a version string, converting null or undefined to an empty string
+   * and converting to lowercase.
+   */
+  private normalizeVersion(version?: string | null): string {
+    return (version ?? "").toLowerCase();
   }
 
   /**
@@ -388,7 +396,7 @@ export class DocumentManagementService {
     } else {
       // Version not found - check if library exists but is empty (has no versions)
       logger.warn(
-        `⚠️ Version ${library}@${normalizedVersion || "[no version]"} not found`,
+        `⚠️  Version ${library}@${normalizedVersion || "[no version]"} not found`,
       );
 
       const libraryRecord = await this.store.getLibrary(library);

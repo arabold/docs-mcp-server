@@ -41,7 +41,7 @@ export class RemoteEventProxy {
       return;
     }
 
-    logger.info(`📡 Connecting to remote worker at ${this.remoteWorkerUrl}`);
+    logger.debug(`Connecting to remote worker at ${this.remoteWorkerUrl}`);
 
     try {
       // Extract base URL without the /api path for WebSocket connection
@@ -74,7 +74,7 @@ export class RemoteEventProxy {
         {}, // Subscribe to all event types
         {
           onData: (data: { type: EventType; payload: unknown }) => {
-            logger.debug(`📥 Received remote event: ${data.type}`);
+            logger.debug(`Received remote event: ${data.type}`);
             // Re-emit the event on the local event bus
             this.localEventBus.emit(data.type, data.payload as never);
           },
@@ -84,11 +84,11 @@ export class RemoteEventProxy {
             this.scheduleReconnect();
           },
           onStarted: () => {
-            logger.info("✅ Remote event subscription started");
+            logger.debug("Remote event subscription started");
             this.isConnected = true;
           },
           onComplete: () => {
-            logger.info("✅ Remote event subscription completed");
+            logger.debug("Remote event subscription completed");
             this.isConnected = false;
           },
         },

@@ -132,16 +132,20 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
       if (!process.env.OPENAI_API_KEY) {
         throw new MissingCredentialsError("openai", ["OPENAI_API_KEY"]);
       }
+      const timeoutMs = 30_000;
       const config: Partial<OpenAIEmbeddingsParams> & { configuration?: ClientOptions } =
         {
           ...baseConfig,
           modelName: model,
           batchSize: 512, // OpenAI supports large batches
+          timeout: timeoutMs,
         };
       // Add custom base URL if specified
       const baseURL = process.env.OPENAI_API_BASE;
       if (baseURL) {
-        config.configuration = { baseURL };
+        config.configuration = { baseURL, timeout: timeoutMs };
+      } else {
+        config.configuration = { timeout: timeoutMs };
       }
       return new OpenAIEmbeddings(config);
     }

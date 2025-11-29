@@ -118,6 +118,35 @@ describe("DocumentManagementService", () => {
     await docService?.shutdown();
   });
 
+  // --- getActiveEmbeddingConfig Tests ---
+  describe("getActiveEmbeddingConfig", () => {
+    it("should delegate to the underlying store", async () => {
+      const mockConfig = {
+        provider: "openai" as const,
+        model: "text-embedding-3-small",
+        dimensions: 1536,
+        modelSpec: "openai:text-embedding-3-small",
+      };
+      (mockStore as any).getActiveEmbeddingConfig = vi.fn().mockReturnValue(mockConfig);
+
+      await docService.initialize();
+      const config = docService.getActiveEmbeddingConfig();
+
+      expect((mockStore as any).getActiveEmbeddingConfig).toHaveBeenCalled();
+      expect(config).toEqual(mockConfig);
+    });
+
+    it("should return null when store returns null", async () => {
+      (mockStore as any).getActiveEmbeddingConfig = vi.fn().mockReturnValue(null);
+
+      await docService.initialize();
+      const config = docService.getActiveEmbeddingConfig();
+
+      expect((mockStore as any).getActiveEmbeddingConfig).toHaveBeenCalled();
+      expect(config).toBeNull();
+    });
+  });
+
   // --- Pipeline Configuration Tests ---
   describe("Pipeline Configuration", () => {
     beforeEach(() => {

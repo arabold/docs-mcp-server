@@ -128,9 +128,6 @@ export function createWebCommand(program: Command): Command {
             },
           });
 
-          logger.info(
-            `🚀 Starting web interface${serverUrl ? ` connecting to worker at ${serverUrl}` : ""}`,
-          );
           const appServer = await startAppServer(docService, pipeline, eventBus, config);
 
           // Register for graceful shutdown

@@ -150,7 +150,7 @@ export class PipelineManager implements IPipeline {
             parsedScraperOptions = JSON.parse(version.scraper_options);
           } catch (error) {
             logger.warn(
-              `⚠️ Failed to parse scraper options for ${version.library_name}@${version.name || "unversioned"}: ${error}`,
+              `⚠️  Failed to parse scraper options for ${version.library_name}@${version.name || "unversioned"}: ${error}`,
             );
           }
         }
@@ -628,7 +628,7 @@ export class PipelineManager implements IPipeline {
         onJobError: async (internalJob, error, document) => {
           // Log job errors
           logger.warn(
-            `⚠️ Job ${internalJob.id} error ${document ? `on document ${document.url}` : ""}: ${error.message}`,
+            `⚠️  Job ${internalJob.id} error ${document ? `on document ${document.url}` : ""}: ${error.message}`,
           );
         },
       });
@@ -739,7 +739,7 @@ export class PipelineManager implements IPipeline {
         } catch (optionsError) {
           // Log warning but don't fail the job - options storage is not critical
           logger.warn(
-            `⚠️ Failed to store scraper options for job ${job.id}: ${optionsError}`,
+            `⚠️  Failed to store scraper options for job ${job.id}: ${optionsError}`,
           );
         }
       }
