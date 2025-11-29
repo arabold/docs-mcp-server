@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import Layout from "../components/Layout"; // Import the Layout component
+import Layout from "../components/Layout";
 
 /**
  * Registers the root route that serves the main HTML page.
