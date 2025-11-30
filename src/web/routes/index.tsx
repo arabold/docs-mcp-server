@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import AddJobButton from "../components/AddJobButton";
 import Layout from "../components/Layout";
 
 /**
@@ -82,15 +83,7 @@ export function registerIndexRoute(
           <section class="mb-8">
             {/* Button to reveal the scrape form, loaded via HTMX */}
             <div id="addJobForm">
-              <button
-                type="button"
-                hx-get="/web/jobs/new"
-                hx-target="#addJobForm"
-                hx-swap="innerHTML"
-                class="w-full flex justify-center py-1.5 px-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-150"
-              >
-                Add New Documentation
-              </button>
+              <AddJobButton />
             </div>
           </section>
           {/* Indexed Documentation Section */}

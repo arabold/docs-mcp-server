@@ -13,6 +13,7 @@ import { CancelJobTool } from "../tools/CancelJobTool";
 import { ClearCompletedJobsTool } from "../tools/ClearCompletedJobsTool";
 import { ListJobsTool } from "../tools/ListJobsTool";
 import { ListLibrariesTool } from "../tools/ListLibrariesTool";
+import { RefreshVersionTool } from "../tools/RefreshVersionTool";
 import { RemoveTool } from "../tools/RemoveTool";
 import { ScrapeTool } from "../tools/ScrapeTool";
 import { registerEventsRoute } from "../web/routes/events";
@@ -46,14 +47,21 @@ export async function registerWebService(
   const listJobsTool = new ListJobsTool(pipeline);
   const scrapeTool = new ScrapeTool(pipeline);
   const removeTool = new RemoveTool(docService, pipeline);
+  const refreshVersionTool = new RefreshVersionTool(pipeline);
   const searchTool = new SearchTool(docService);
   const cancelJobTool = new CancelJobTool(pipeline);
   const clearCompletedJobsTool = new ClearCompletedJobsTool(pipeline);
 
   // Register all web routes
   registerIndexRoute(server, config);
-  registerLibrariesRoutes(server, listLibrariesTool, removeTool);
-  registerLibraryDetailRoutes(server, listLibrariesTool, searchTool);
+  registerLibrariesRoutes(server, listLibrariesTool, removeTool, refreshVersionTool);
+  registerLibraryDetailRoutes(
+    server,
+    listLibrariesTool,
+    searchTool,
+    scrapeTool,
+    docService,
+  );
   registerJobListRoutes(server, listJobsTool);
   registerNewJobRoutes(server, scrapeTool);
   registerCancelJobRoute(server, cancelJobTool);

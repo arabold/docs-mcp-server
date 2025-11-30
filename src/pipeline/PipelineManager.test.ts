@@ -703,14 +703,14 @@ describe("PipelineManager", () => {
       );
     });
 
-    it("should throw error when refreshing unversioned library with no pages", async () => {
-      // Setup: Mock empty pages array for unversioned library
+    it("should throw error when refreshing latest library with no pages", async () => {
+      // Setup: Mock empty pages array for latest library
       (mockStore.ensureVersion as Mock).mockResolvedValue(888);
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
 
-      // Action & Assertion: Should throw with clear error message including "unversioned"
+      // Action & Assertion: Should throw with clear error message including "latest"
       await expect(manager.enqueueRefreshJob("empty-lib", undefined)).rejects.toThrow(
-        "No pages found for empty-lib@unversioned",
+        "No pages found for empty-lib@latest",
       );
     });
 

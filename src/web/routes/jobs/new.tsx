@@ -2,26 +2,12 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ScrapeTool } from "../../../tools/ScrapeTool";
 import { ScrapeMode } from "../../../scraper/types";
 import { logger } from "../../../utils/logger";
-import ScrapeForm from "../../components/ScrapeForm";
+import AddJobButton from "../../components/AddJobButton";
+import AddVersionButton from "../../components/AddVersionButton";
 import Alert from "../../components/Alert";
+import ScrapeForm from "../../components/ScrapeForm";
 import { DEFAULT_EXCLUSION_PATTERNS } from "../../../scraper/utils/defaultPatterns";
 import { ValidationError } from "../../../tools/errors";
-
-/**
- * Button component used both to reveal the scrape form (initial state)
- * and to collapse the form back to a button after successful submission.
- */
-const ScrapeFormButton = () => (
-  <button
-    type="button"
-    hx-get="/web/jobs/new"
-    hx-target="#addJobForm"
-    hx-swap="innerHTML"
-    class="w-full flex justify-center py-1.5 px-3 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 transition-colors duration-150"
-  >
-    Add New Documentation
-  </button>
-);
 
 /**
  * Registers the API routes for creating new jobs.
@@ -40,7 +26,7 @@ export function registerNewJobRoutes(
 
   // GET /web/jobs/new-button - Return just the button to collapse the form
   server.get("/web/jobs/new-button", async () => {
-    return <ScrapeFormButton />;
+    return <AddJobButton />;
   });
 
   // POST /web/jobs/scrape - Queue a new scrape job
@@ -52,6 +38,7 @@ export function registerNewJobRoutes(
           url: string;
           library: string;
           version?: string;
+          formMode?: "new" | "add-version"; // Hidden field indicating form context
           maxPages?: string;
           maxDepth?: string;
           scope?: "subpages" | "hostname" | "domain";
@@ -108,11 +95,19 @@ export function registerNewJobRoutes(
           return Object.keys(headers).length > 0 ? headers : undefined;
         }
 
+        // Normalize version: treat "latest", empty string, or whitespace-only as null (latest)
+        const normalizedVersion =
+          !body.version ||
+          body.version.trim() === "" ||
+          body.version.trim().toLowerCase() === "latest"
+            ? null
+            : body.version.trim();
+
         // Prepare options for ScrapeTool
         const scrapeOptions = {
           url: body.url,
           library: body.library,
-          version: body.version || null, // Handle empty string as null
+          version: normalizedVersion,
           waitForCompletion: false, // Don't wait in UI
           options: {
             maxPages: body.maxPages
@@ -137,16 +132,21 @@ export function registerNewJobRoutes(
 
         if ("jobId" in result) {
           // Success: Collapse form back to button and show toast via HX-Trigger
+          const versionDisplay = normalizedVersion || "latest";
           reply.header(
             "HX-Trigger",
             JSON.stringify({
               toast: {
-                message: "Job queued successfully!",
+                message: `Indexing started for ${body.library}@${versionDisplay}`,
                 type: "success",
               },
             })
           );
-          return <ScrapeFormButton />;
+          // Return the appropriate button based on the form mode
+          if (body.formMode === "add-version") {
+            return <AddVersionButton libraryName={body.library} />;
+          }
+          return <AddJobButton />;
         }
 
         // This case shouldn't happen with waitForCompletion: false, but handle defensively

@@ -1,10 +1,17 @@
+interface LoadingSpinnerProps {
+  /** Additional Tailwind classes for color and size customization. Defaults to "text-white" */
+  class?: string;
+}
+
 /**
  * Renders an SVG loading spinner icon.
  * Used for indicating loading states in buttons or other elements.
  */
-const LoadingSpinner = () => (
+const LoadingSpinner = ({
+  class: className = "text-white",
+}: LoadingSpinnerProps) => (
   <svg
-    class="animate-spin h-4 w-4 text-white" // Adjusted size to h-4 w-4 to match usage
+    class={`animate-spin h-4 w-4 ${className}`}
     xmlns="http://www.w3.org/2000/svg"
     fill="none"
     viewBox="0 0 24 24"
