@@ -1,3 +1,11 @@
+# [1.31.0](https://github.com/arabold/docs-mcp-server/compare/v1.30.0...v1.31.0) (2025-11-30)
+
+
+### Features
+
+* more consistent version sorting and naming ([800ea66](https://github.com/arabold/docs-mcp-server/commit/800ea663794cf549954c39ceb0c691a3d96641fd))
+* **web:** easily refresh existing versions and add new versions to a library ([c150c7a](https://github.com/arabold/docs-mcp-server/commit/c150c7accb91e5b3a20889d8290a65785ab31ab3))
+
 # [1.30.0](https://github.com/arabold/docs-mcp-server/compare/v1.29.0...v1.30.0) (2025-11-29)
 
 
