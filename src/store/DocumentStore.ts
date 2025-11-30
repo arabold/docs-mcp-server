@@ -1,6 +1,5 @@
 import type { Embeddings } from "@langchain/core/embeddings";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
-import semver from "semver";
 import * as sqliteVec from "sqlite-vec";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import {
@@ -13,6 +12,7 @@ import {
   VECTOR_SEARCH_MULTIPLIER,
 } from "../utils/config";
 import { logger } from "../utils/logger";
+import { compareVersionsDescending } from "../utils/version";
 import { applyMigrations } from "./applyMigrations";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
 import {
@@ -988,26 +988,9 @@ export class DocumentStore {
         });
       }
 
-      // Sort versions within each library: unversioned first, then semantically
+      // Sort versions within each library: descending (latest first), unversioned is "latest"
       for (const versions of libraryMap.values()) {
-        versions.sort((a, b) => {
-          if (a.version === "" && b.version !== "") {
-            return -1; // a (unversioned) comes first
-          }
-          if (a.version !== "" && b.version === "") {
-            return 1; // b (unversioned) comes first
-          }
-          if (a.version === "" && b.version === "") {
-            return 0; // Should not happen with GROUP BY, but handle anyway
-          }
-          // Both are non-empty, use semver compare with fallback to string compare
-          try {
-            return semver.compare(a.version, b.version);
-          } catch (_error) {
-            // Fallback to lexicographic comparison if semver parsing fails
-            return a.version.localeCompare(b.version);
-          }
-        });
+        versions.sort((a, b) => compareVersionsDescending(a.version, b.version));
       }
 
       return libraryMap;

@@ -12,6 +12,7 @@ import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
 import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
+import { sortVersionsDescending } from "../utils/version";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
@@ -234,10 +235,12 @@ export class DocumentManagementService {
 
   /**
    * Returns a list of all available semantic versions for a library.
+   * Sorted in descending order (latest first).
    */
   async listVersions(library: string): Promise<string[]> {
     const versions = await this.store.queryUniqueVersions(library);
-    return versions.filter((v) => semver.valid(v));
+    const validVersions = versions.filter((v) => semver.valid(v));
+    return sortVersionsDescending(validVersions);
   }
 
   /**
@@ -341,7 +344,7 @@ export class DocumentManagementService {
   async removeAllDocuments(library: string, version?: string | null): Promise<void> {
     const normalizedVersion = this.normalizeVersion(version);
     logger.info(
-      `🗑️ Removing all documents from ${library}@${normalizedVersion || "[no version]"} store`,
+      `🗑️ Removing all documents from ${library}@${normalizedVersion || "latest"} store`,
     );
     const count = await this.store.deletePages(library, normalizedVersion);
     logger.info(`🗑️ Deleted ${count} documents`);
@@ -383,7 +386,7 @@ export class DocumentManagementService {
    */
   async removeVersion(library: string, version?: string | null): Promise<void> {
     const normalizedVersion = this.normalizeVersion(version);
-    logger.debug(`Removing version: ${library}@${normalizedVersion || "[no version]"}`);
+    logger.debug(`Removing version: ${library}@${normalizedVersion || "latest"}`);
 
     const result = await this.store.removeVersion(library, normalizedVersion, true);
 
@@ -392,12 +395,10 @@ export class DocumentManagementService {
     if (result.versionDeleted && result.libraryDeleted) {
       logger.info(`🗑️ Completely removed library ${library} (was last version)`);
     } else if (result.versionDeleted) {
-      logger.info(`🗑️ Removed version ${library}@${normalizedVersion || "[no version]"}`);
+      logger.info(`🗑️ Removed version ${library}@${normalizedVersion || "latest"}`);
     } else {
       // Version not found - check if library exists but is empty (has no versions)
-      logger.warn(
-        `⚠️  Version ${library}@${normalizedVersion || "[no version]"} not found`,
-      );
+      logger.warn(`⚠️  Version ${library}@${normalizedVersion || "latest"} not found`);
 
       const libraryRecord = await this.store.getLibrary(library);
       if (libraryRecord) {

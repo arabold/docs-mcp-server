@@ -16,7 +16,8 @@ interface LibraryDetailCardProps {
  * @param props - Component props including the library information.
  */
 const LibraryDetailCard = ({ library }: LibraryDetailCardProps) => {
-  const versions = library.versions?.reverse() || [];
+  // Versions are already sorted descending (latest first) from the API
+  const versions = library.versions || [];
   const latestVersion = versions[0];
   return (
     <div class="block p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-300 dark:border-gray-600 mb-4">

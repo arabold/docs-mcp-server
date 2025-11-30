@@ -55,11 +55,11 @@ export class PipelineWorker {
       if (!scraperOptions.isRefresh) {
         await this.store.removeAllDocuments(library, version);
         logger.info(
-          `💾 Cleared store for ${library}@${version || "[no version]"} before scraping.`,
+          `💾 Cleared store for ${library}@${version || "latest"} before scraping.`,
         );
       } else {
         logger.info(
-          `🔄 Refresh operation - preserving existing data for ${library}@${version || "[no version]"}.`,
+          `🔄 Refresh operation - preserving existing data for ${library}@${version || "latest"}.`,
         );
       }
 
