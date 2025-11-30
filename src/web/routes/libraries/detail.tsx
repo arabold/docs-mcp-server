@@ -150,7 +150,8 @@ export function registerLibraryDetailRoutes(
           return;
         }
 
-        const versions = [...(libraryInfo.versions || [])].reverse();
+        // Versions are already sorted descending (latest first) from the API
+        const versions = libraryInfo.versions || [];
 
         reply.type("text/html; charset=utf-8");
         if (versions.length === 0) {
@@ -220,9 +221,9 @@ export function registerLibraryDetailRoutes(
           return;
         }
 
-        // Get the latest version (versions are sorted, last is latest)
+        // Get the latest version (versions are sorted descending, first is latest)
         const versions = libraryInfo.versions || [];
-        const latestVersion = versions[versions.length - 1];
+        const latestVersion = versions[0];
 
         let initialValues: {
           library: string;

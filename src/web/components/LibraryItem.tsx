@@ -15,7 +15,8 @@ interface LibraryItemProps {
  * @param props - Component props including the library information.
  */
 const LibraryItem = ({ library }: LibraryItemProps) => {
-  const versions = library.versions?.reverse() || [];
+  // Versions are already sorted descending (latest first) from the API
+  const versions = library.versions || [];
   const latestVersion = versions[0];
   return (
     // Use Flowbite Card structure with updated padding and border, and white background

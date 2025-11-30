@@ -340,16 +340,16 @@ describe("DocumentManagementService", () => {
         expect(versions).toEqual([]);
       });
 
-      it("should return an array versions", async () => {
+      it("should return an array versions sorted descending (latest first)", async () => {
         const library = "test-lib";
         mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0", "1.2.0"]); // Fix: Use mockStoreInstance
 
         const versions = await docService.listVersions(library);
-        expect(versions).toEqual(["1.0.0", "1.1.0", "1.2.0"]);
+        expect(versions).toEqual(["1.2.0", "1.1.0", "1.0.0"]);
         expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library); // Fix: Use mockStoreInstance
       });
 
-      it("should filter out empty string and non-semver versions", async () => {
+      it("should filter out empty string and non-semver versions, sorted descending", async () => {
         const library = "test-lib";
         mockStore.queryUniqueVersions.mockResolvedValue([
           // Fix: Use mockStoreInstance
@@ -361,7 +361,7 @@ describe("DocumentManagementService", () => {
         ]);
 
         const versions = await docService.listVersions(library);
-        expect(versions).toEqual(["1.0.0", "2.0.0-beta", "2.0.0"]);
+        expect(versions).toEqual(["2.0.0", "2.0.0-beta", "1.0.0"]);
         expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library); // Fix: Use mockStoreInstance
       });
     });
