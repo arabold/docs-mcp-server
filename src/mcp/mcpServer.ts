@@ -126,7 +126,7 @@ export function createMcpServerInstance(
           .string()
           .trim()
           .optional()
-          .describe("Library version (optional, refreshes unversioned if omitted)."),
+          .describe("Library version (optional, refreshes latest if omitted)."),
       },
       {
         title: "Refresh Library Version",
@@ -425,7 +425,7 @@ ${r.content}\n`,
           .string()
           .trim()
           .optional()
-          .describe("Library version (optional, removes unversioned if omitted)."),
+          .describe("Library version (optional, removes latest if omitted)."),
       },
       {
         title: "Remove Library Documentation",

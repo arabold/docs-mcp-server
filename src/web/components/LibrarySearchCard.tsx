@@ -32,8 +32,8 @@ const LibrarySearchCard = ({ library }: LibrarySearchCardProps) => {
         >
           <option value="">Latest</option> {/* Default to latest */}
           {library.versions.map((version) => (
-            <option value={version.version || "unversioned"} safe>
-              {version.version || "Unversioned"}
+            <option value={version.version || "latest"} safe>
+              {version.version || "Latest"}
             </option>
           ))}
         </select>

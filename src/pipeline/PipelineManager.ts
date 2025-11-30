@@ -123,7 +123,7 @@ export class PipelineManager implements IPipeline {
       for (const version of runningVersions) {
         await this.store.updateVersionStatus(version.id, VersionStatus.QUEUED);
         logger.info(
-          `🔄 Reset interrupted job to QUEUED: ${version.library_name}@${version.name || "unversioned"}`,
+          `🔄 Reset interrupted job to QUEUED: ${version.library_name}@${version.name || "latest"}`,
         );
       }
 
@@ -150,7 +150,7 @@ export class PipelineManager implements IPipeline {
             parsedScraperOptions = JSON.parse(version.scraper_options);
           } catch (error) {
             logger.warn(
-              `⚠️  Failed to parse scraper options for ${version.library_name}@${version.name || "unversioned"}: ${error}`,
+              `⚠️  Failed to parse scraper options for ${version.library_name}@${version.name || "latest"}: ${error}`,
             );
           }
         }
@@ -280,7 +280,7 @@ export class PipelineManager implements IPipeline {
     this.jobMap.set(jobId, job);
     this.jobQueue.push(jobId);
     logger.info(
-      `📝 Job enqueued: ${jobId} for ${library}${normalizedVersion ? `@${normalizedVersion}` : " (unversioned)"}`,
+      `📝 Job enqueued: ${jobId} for ${library}${normalizedVersion ? `@${normalizedVersion}` : " (latest)"}`,
     );
 
     // Update database status to QUEUED
@@ -333,7 +333,7 @@ export class PipelineManager implements IPipeline {
       // or failed. In this case, perform a full re-scrape instead of a refresh.
       if (versionInfo && versionInfo.status !== VersionStatus.COMPLETED) {
         logger.info(
-          `⚠️  Version ${library}@${normalizedVersion || "unversioned"} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
+          `⚠️  Version ${library}@${normalizedVersion || "latest"} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
         );
         return this.enqueueJobWithStoredOptions(library, normalizedVersion);
       }
@@ -350,12 +350,12 @@ export class PipelineManager implements IPipeline {
 
       if (pages.length === 0) {
         throw new Error(
-          `No pages found for ${library}@${normalizedVersion || "unversioned"}. Use scrape_docs to index it first.`,
+          `No pages found for ${library}@${normalizedVersion || "latest"}. Use scrape_docs to index it first.`,
         );
       }
 
       logger.info(
-        `🔄 Preparing refresh job for ${library}@${normalizedVersion || "unversioned"} with ${pages.length} page(s)`,
+        `🔄 Preparing refresh job for ${library}@${normalizedVersion || "latest"} with ${pages.length} page(s)`,
       );
 
       // Build initialQueue from pages with original depth values
@@ -382,7 +382,7 @@ export class PipelineManager implements IPipeline {
 
       // Enqueue as a standard scrape job with the initialQueue
       logger.info(
-        `📝 Enqueueing refresh job for ${library}@${normalizedVersion || "unversioned"}`,
+        `📝 Enqueueing refresh job for ${library}@${normalizedVersion || "latest"}`,
       );
       return this.enqueueScrapeJob(library, normalizedVersion, scraperOptions);
     } catch (error) {
@@ -411,7 +411,7 @@ export class PipelineManager implements IPipeline {
 
       if (!stored) {
         throw new Error(
-          `No stored scraper options found for ${library}@${normalizedVersion || "unversioned"}`,
+          `No stored scraper options found for ${library}@${normalizedVersion || "latest"}`,
         );
       }
 
@@ -426,7 +426,7 @@ export class PipelineManager implements IPipeline {
       };
 
       logger.info(
-        `🔄 Re-indexing ${library}@${normalizedVersion || "unversioned"} with stored options from ${stored.sourceUrl}`,
+        `🔄 Re-indexing ${library}@${normalizedVersion || "latest"} with stored options from ${stored.sourceUrl}`,
       );
 
       return this.enqueueScrapeJob(library, normalizedVersion, completeOptions);

@@ -9,6 +9,7 @@ import { CancelJobTool } from "../tools/CancelJobTool";
 import { ClearCompletedJobsTool } from "../tools/ClearCompletedJobsTool";
 import { ListJobsTool } from "../tools/ListJobsTool";
 import { ListLibrariesTool } from "../tools/ListLibrariesTool";
+import { RefreshVersionTool } from "../tools/RefreshVersionTool";
 import { RemoveTool } from "../tools/RemoveTool";
 import { ScrapeTool } from "../tools/ScrapeTool";
 import { logger } from "../utils/logger";
@@ -49,6 +50,7 @@ export async function startWebServer(
   const searchTool = new SearchTool(docService);
   const cancelJobTool = new CancelJobTool(pipelineManager);
   const clearCompletedJobsTool = new ClearCompletedJobsTool(pipelineManager);
+  const refreshVersionTool = new RefreshVersionTool(pipelineManager);
 
   // Register static file serving
   await server.register(fastifyStatic, {
@@ -64,8 +66,14 @@ export async function startWebServer(
   registerNewJobRoutes(server, scrapeTool);
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
-  registerLibrariesRoutes(server, listLibrariesTool, removeTool);
-  registerLibraryDetailRoutes(server, listLibrariesTool, searchTool);
+  registerLibrariesRoutes(server, listLibrariesTool, removeTool, refreshVersionTool);
+  registerLibraryDetailRoutes(
+    server,
+    listLibrariesTool,
+    searchTool,
+    scrapeTool,
+    docService,
+  );
 
   // Graceful shutdown of services will be handled by the caller (src/index.ts)
 

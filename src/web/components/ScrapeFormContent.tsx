@@ -2,28 +2,90 @@ import { ScrapeMode } from "../../scraper/types";
 import Alert from "./Alert";
 import Tooltip from "./Tooltip";
 
+/**
+ * Initial values for pre-filling the scrape form.
+ * Used when adding a new version to an existing library.
+ */
+export interface ScrapeFormInitialValues {
+  library?: string;
+  url?: string;
+  maxPages?: number;
+  maxDepth?: number;
+  scope?: string;
+  includePatterns?: string;
+  excludePatterns?: string;
+  scrapeMode?: string;
+  headers?: Array<{ name: string; value: string }>;
+  followRedirects?: boolean;
+  ignoreErrors?: boolean;
+}
+
 interface ScrapeFormContentProps {
   defaultExcludePatterns?: string[];
+  /** Initial values for pre-filling the form (used in add-version mode) */
+  initialValues?: ScrapeFormInitialValues;
+  /** Mode of the form: 'new' for new library, 'add-version' for adding version to existing library */
+  mode?: "new" | "add-version";
 }
 
 /**
  * Renders the form fields for queuing a new scrape job.
  * Includes basic fields (URL, Library, Version) and advanced options.
+ * Supports pre-filling values when adding a new version to an existing library.
  */
 const ScrapeFormContent = ({
   defaultExcludePatterns,
+  initialValues,
+  mode = "new",
 }: ScrapeFormContentProps) => {
-  // Format default patterns for display in textarea (one per line)
-  const defaultExcludePatternsText = defaultExcludePatterns?.join("\n") || "";
+  const isAddVersionMode = mode === "add-version";
+
+  // Use initial values or defaults
+  const urlValue = initialValues?.url || "";
+  const libraryValue = initialValues?.library || "";
+  const maxPagesValue = initialValues?.maxPages?.toString() || "";
+  const maxDepthValue = initialValues?.maxDepth?.toString() || "";
+  const scopeValue = initialValues?.scope || "subpages";
+  const includePatternsValue = initialValues?.includePatterns || "";
+  const scrapeModeValue = initialValues?.scrapeMode || ScrapeMode.Auto;
+  const followRedirectsValue = initialValues?.followRedirects ?? true;
+  const ignoreErrorsValue = initialValues?.ignoreErrors ?? true;
+
+  // Format exclude patterns - use initial values if provided, otherwise use defaults
+  const excludePatternsText =
+    initialValues?.excludePatterns !== undefined
+      ? initialValues.excludePatterns
+      : defaultExcludePatterns?.join("\n") || "";
+
+  // Serialize headers for Alpine.js initialization
+  const headersJson = JSON.stringify(initialValues?.headers || []);
+
+  // Determine the close button action based on mode
+  const closeButtonAttrs = isAddVersionMode
+    ? {
+        "hx-get": `/web/libraries/${encodeURIComponent(libraryValue)}/add-version-button`,
+        "hx-target": "#add-version-form-container",
+        "hx-swap": "innerHTML",
+      }
+    : {
+        "hx-get": "/web/jobs/new-button",
+        "hx-target": "#addJobForm",
+        "hx-swap": "innerHTML",
+      };
+
+  // Determine the form target based on mode
+  const formTarget = isAddVersionMode
+    ? "#add-version-form-container"
+    : "#addJobForm";
+
+  const title = isAddVersionMode ? "Add New Version" : "Add New Documentation";
 
   return (
     <div class="mt-4 p-4 bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-300 dark:border-gray-600 relative animate-[fadeSlideIn_0.2s_ease-out]">
       {/* Close button */}
       <button
         type="button"
-        hx-get="/web/jobs/new-button"
-        hx-target="#addJobForm"
-        hx-swap="innerHTML"
+        {...closeButtonAttrs}
         class="absolute top-3 right-3 p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-150"
         title="Close"
       >
@@ -43,27 +105,36 @@ const ScrapeFormContent = ({
         </svg>
       </button>
       <h3 class="text-xl font-semibold text-gray-900 dark:text-white mb-2 pr-8">
-        Add New Documentation
+        {title}
       </h3>
       <form
         hx-post="/web/jobs/scrape"
-        hx-target="#addJobForm"
+        hx-target={formTarget}
         hx-swap="innerHTML"
         class="space-y-2"
+        data-initial-url={urlValue}
+        data-initial-headers={headersJson}
         x-data="{
-        url: '',
-        hasPath: false,
-        headers: [],
-        checkUrlPath() {
-          try {
-            const url = new URL(this.url);
-            this.hasPath = url.pathname !== '/' && url.pathname !== '';
-          } catch (e) {
-            this.hasPath = false;
+          url: '',
+          hasPath: false,
+          headers: [],
+          checkUrlPath() {
+            try {
+              const url = new URL(this.url);
+              this.hasPath = url.pathname !== '/' && url.pathname !== '';
+            } catch (e) {
+              this.hasPath = false;
+            }
           }
-        }
-      }"
+        }"
+        x-init="
+          url = $el.dataset.initialUrl || '';
+          headers = JSON.parse($el.dataset.initialHeaders || '[]');
+          checkUrlPath();
+        "
       >
+        {/* Hidden field to tell backend which button to return on success */}
+        <input type="hidden" name="formMode" value={mode} />
         <div>
           <div class="flex items-center">
             <label
@@ -97,6 +168,7 @@ const ScrapeFormContent = ({
             x-model="url"
             x-on:input="checkUrlPath"
             x-on:paste="$nextTick(() => checkUrlPath())"
+            placeholder="https://docs.example.com/library/"
             class="mt-0.5 block w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           />
           <div
@@ -123,13 +195,24 @@ const ScrapeFormContent = ({
             </label>
             <Tooltip text="The name of the library you're documenting. This will be used when searching." />
           </div>
-          <input
-            type="text"
-            name="library"
-            id="library"
-            required
-            class="mt-0.5 block w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-          />
+          {isAddVersionMode ? (
+            <>
+              <input type="hidden" name="library" value={libraryValue} />
+              <div class="mt-0.5 px-2 py-1 text-sm text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-md border border-gray-300 dark:border-gray-600">
+                <span safe>{libraryValue}</span>
+              </div>
+            </>
+          ) : (
+            <input
+              type="text"
+              name="library"
+              id="library"
+              required
+              value={libraryValue}
+              placeholder="e.g. react, vue, express"
+              class="mt-0.5 block w-full px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+            />
+          )}
         </div>
         <div>
           <div class="flex items-center">
@@ -139,12 +222,13 @@ const ScrapeFormContent = ({
             >
               Version (optional)
             </label>
-            <Tooltip text="Specify the version of the library documentation you're indexing. This allows for version-specific searches." />
+            <Tooltip text="Specify the version of the library documentation you're indexing (e.g. 2.0.0). Leave empty or enter 'latest' to index without a specific version. This allows for version-specific searches." />
           </div>
           <input
             type="text"
             name="version"
             id="version"
+            placeholder="e.g. 2.0.0 or leave empty for latest"
             class="mt-0.5 block w-full max-w-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
           />
         </div>
@@ -152,7 +236,19 @@ const ScrapeFormContent = ({
         {/* Advanced Options with slide animation */}
         <div
           class="bg-gray-50 dark:bg-gray-900 p-2 rounded-md"
-          x-data="{ open: false, headers: [] }"
+          data-should-open={
+            isAddVersionMode &&
+            (maxPagesValue ||
+              maxDepthValue ||
+              scopeValue !== "subpages" ||
+              includePatternsValue ||
+              excludePatternsText ||
+              scrapeModeValue !== ScrapeMode.Auto)
+              ? "true"
+              : "false"
+          }
+          x-data="{ open: false }"
+          x-init="open = $el.dataset.shouldOpen === 'true'"
         >
           <button
             type="button"
@@ -192,6 +288,7 @@ const ScrapeFormContent = ({
                 id="maxPages"
                 min="1"
                 placeholder="1000"
+                value={maxPagesValue}
                 class="mt-0.5 block w-full max-w-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />
             </div>
@@ -211,6 +308,7 @@ const ScrapeFormContent = ({
                 id="maxDepth"
                 min="0"
                 placeholder="3"
+                value={maxDepthValue}
                 class="mt-0.5 block w-full max-w-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />
             </div>
@@ -248,11 +346,15 @@ const ScrapeFormContent = ({
                 id="scope"
                 class="mt-0.5 block w-full max-w-sm pl-2 pr-10 py-1 text-base border border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               >
-                <option value="subpages" selected>
+                <option value="subpages" selected={scopeValue === "subpages"}>
                   Subpages (Default)
                 </option>
-                <option value="hostname">Hostname</option>
-                <option value="domain">Domain</option>
+                <option value="hostname" selected={scopeValue === "hostname"}>
+                  Hostname
+                </option>
+                <option value="domain" selected={scopeValue === "domain"}>
+                  Domain
+                </option>
               </select>
             </div>
             <div>
@@ -271,7 +373,10 @@ const ScrapeFormContent = ({
                 rows="2"
                 placeholder="e.g. docs/* or /api\/v1.*/"
                 class="mt-0.5 block w-full max-w-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              ></textarea>
+                safe
+              >
+                {includePatternsValue}
+              </textarea>
             </div>
             <div>
               <div class="flex items-center">
@@ -290,11 +395,12 @@ const ScrapeFormContent = ({
                 safe
                 class="mt-0.5 block w-full max-w-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white font-mono text-xs"
               >
-                {defaultExcludePatternsText}
+                {excludePatternsText}
               </textarea>
               <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Default patterns are pre-filled. Edit to customize or clear to
-                exclude nothing.
+                {isAddVersionMode
+                  ? "Patterns from previous version. Edit as needed."
+                  : "Default patterns are pre-filled. Edit to customize or clear to exclude nothing."}
               </p>
             </div>
             <div>
@@ -328,11 +434,24 @@ const ScrapeFormContent = ({
                 id="scrapeMode"
                 class="mt-0.5 block w-full max-w-sm pl-2 pr-10 py-1 text-base border border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               >
-                <option value={ScrapeMode.Auto} selected>
+                <option
+                  value={ScrapeMode.Auto}
+                  selected={scrapeModeValue === ScrapeMode.Auto}
+                >
                   Auto (Default)
                 </option>
-                <option value={ScrapeMode.Fetch}>Fetch</option>
-                <option value={ScrapeMode.Playwright}>Playwright</option>
+                <option
+                  value={ScrapeMode.Fetch}
+                  selected={scrapeModeValue === ScrapeMode.Fetch}
+                >
+                  Fetch
+                </option>
+                <option
+                  value={ScrapeMode.Playwright}
+                  selected={scrapeModeValue === ScrapeMode.Playwright}
+                >
+                  Playwright
+                </option>
               </select>
             </div>
             <div>
@@ -389,7 +508,7 @@ const ScrapeFormContent = ({
                 id="followRedirects"
                 name="followRedirects"
                 type="checkbox"
-                checked
+                checked={followRedirectsValue}
                 class="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
               />
               <label
@@ -404,7 +523,7 @@ const ScrapeFormContent = ({
                 id="ignoreErrors"
                 name="ignoreErrors"
                 type="checkbox"
-                checked
+                checked={ignoreErrorsValue}
                 class="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
               />
               <label

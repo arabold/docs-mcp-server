@@ -1,5 +1,6 @@
 import type { LibraryInfo } from "../../tools/ListLibrariesTool";
 import type { VersionSummary } from "../../store/types";
+import AddVersionButton from "./AddVersionButton";
 import VersionDetailsRow from "./VersionDetailsRow";
 
 /**
@@ -11,32 +12,41 @@ interface LibraryDetailCardProps {
 
 /**
  * Renders a card displaying library details and its versions.
- * Uses VersionDetailsRow without the delete button.
+ * Includes Delete and Refresh buttons for each version, and an "Add New Version" button.
  * @param props - Component props including the library information.
  */
 const LibraryDetailCard = ({ library }: LibraryDetailCardProps) => {
   const versions = library.versions?.reverse() || [];
   const latestVersion = versions[0];
   return (
-    // Use Flowbite Card structure with updated padding and border, and white background
     <div class="block p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-300 dark:border-gray-600 mb-4">
-      <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-1">
-        <span safe>{library.name}</span>
-      </h3>
-      {latestVersion?.sourceUrl ? (
-        <div class="text-sm text-gray-500 dark:text-gray-400">
-          <a
-            href={latestVersion.sourceUrl}
-            target="_blank"
-            class="hover:underline"
-            safe
-          >
-            {latestVersion.sourceUrl}
-          </a>
+      <div class="flex justify-between items-start mb-1">
+        <div>
+          <h3 class="text-lg font-medium text-gray-900 dark:text-white">
+            <span safe>{library.name}</span>
+          </h3>
+          {latestVersion?.sourceUrl ? (
+            <div class="text-sm text-gray-500 dark:text-gray-400">
+              <a
+                href={latestVersion.sourceUrl}
+                target="_blank"
+                class="hover:underline"
+                safe
+              >
+                {latestVersion.sourceUrl}
+              </a>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-      {/* Container for version rows */}
-      <div class="mt-2">
+      </div>
+      {/* Container for version rows - auto-refreshes on library-change */}
+      <div
+        class="mt-2"
+        id="version-list"
+        hx-get={`/web/libraries/${encodeURIComponent(library.name)}/versions-list`}
+        hx-trigger="library-change from:body"
+        hx-swap="morph:innerHTML"
+      >
         {versions.length > 0 ? (
           versions.map((v) => {
             const adapted: VersionSummary = {
@@ -55,7 +65,8 @@ const LibraryDetailCard = ({ library }: LibraryDetailCardProps) => {
               <VersionDetailsRow
                 libraryName={library.name}
                 version={adapted}
-                showDelete={false}
+                showDelete={true}
+                showRefresh={true}
               />
             );
           })
@@ -64,6 +75,10 @@ const LibraryDetailCard = ({ library }: LibraryDetailCardProps) => {
             No versions indexed.
           </p>
         )}
+      </div>
+      {/* Add New Version Section */}
+      <div id="add-version-form-container" class="mt-4">
+        <AddVersionButton libraryName={library.name} />
       </div>
     </div>
   );

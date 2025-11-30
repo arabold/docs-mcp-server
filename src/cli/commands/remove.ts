@@ -54,7 +54,7 @@ export function createRemoveCommand(program: Command): Command {
     .description("Remove documents for a specific library and version")
     .option(
       "-v, --version <string>",
-      "Version to remove (optional, removes unversioned if omitted)",
+      "Version to remove (optional, removes latest if omitted)",
     )
     .option(
       "--server-url <url>",
