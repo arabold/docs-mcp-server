@@ -308,16 +308,34 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         return;
       }
 
-      // Wait for the iframe body to load
-      await frame.waitForSelector("body", { timeout: DEFAULT_PAGE_TIMEOUT }).catch(() => {
-        logger.debug(`Timeout waiting for body in iframe ${index + 1}`);
-      });
+      // Wait for the iframe body to load - if this times out, skip the rest of processing
+      try {
+        await frame.waitForSelector("body", { timeout: DEFAULT_PAGE_TIMEOUT });
+      } catch {
+        logger.debug(
+          `Timeout waiting for body in iframe ${index + 1} - skipping content extraction`,
+        );
+        return;
+      }
 
-      // Wait for loading indicators in the iframe to complete
-      await this.waitForLoadingToComplete(frame);
+      // Wait for loading indicators in the iframe to complete (with timeout protection)
+      try {
+        await this.waitForLoadingToComplete(frame);
+      } catch {
+        logger.debug(
+          `Timeout waiting for loading indicators in iframe ${index + 1} - proceeding anyway`,
+        );
+      }
 
-      // Extract and replace iframe content
-      const content = await this.extractIframeContent(frame);
+      // Extract and replace iframe content (with timeout protection)
+      let content: string | null = null;
+      try {
+        content = await this.extractIframeContent(frame);
+      } catch (error) {
+        logger.debug(`Error extracting content from iframe ${index + 1}: ${error}`);
+        return;
+      }
+
       if (content && content.trim().length > 0) {
         await this.replaceIframeWithContent(page, index, content);
         logger.debug(
@@ -329,7 +347,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       logger.debug(`Successfully loaded iframe ${index + 1}: ${src}`);
     } catch (error) {
-      logger.debug(`Error waiting for iframe ${index + 1}: ${error}`);
+      logger.debug(`Error processing iframe ${index + 1}: ${error}`);
     }
   }
 
@@ -536,27 +554,38 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           origin,
           reqOrigin ?? undefined,
         );
-        const response = await route.fetch({ headers });
-        const body = await response.text();
 
-        // Only cache if content is small enough and response was successful (2xx status)
-        if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
-          const contentSizeBytes = Buffer.byteLength(body, "utf8");
-          if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
-            const contentType =
-              response.headers()["content-type"] || "application/octet-stream";
-            HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
-            logger.debug(
-              `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
-            );
-          } else {
-            logger.debug(
-              `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
-            );
+        try {
+          const response = await route.fetch({ headers });
+          const body = await response.text();
+
+          // Only cache if content is small enough and response was successful (2xx status)
+          if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
+            const contentSizeBytes = Buffer.byteLength(body, "utf8");
+            if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+              const contentType =
+                response.headers()["content-type"] || "application/octet-stream";
+              HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
+              logger.debug(
+                `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
+              );
+            } else {
+              logger.debug(
+                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+              );
+            }
           }
-        }
 
-        return route.fulfill({ response });
+          return route.fulfill({ response });
+        } catch (error) {
+          // Handle network errors (DNS, connection refused, timeout, etc.)
+          // Treat these as failed resource requests - abort gracefully
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.debug(
+            `Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`,
+          );
+          return route.abort("failed");
+        }
       }
 
       // Non-GET requests: just forward with headers
@@ -567,7 +596,15 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         origin,
         reqOrigin ?? undefined,
       );
-      return route.continue({ headers });
+
+      try {
+        return await route.continue({ headers });
+      } catch (error) {
+        // Handle network errors for non-GET requests
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.debug(`Network error for ${resourceType} ${reqUrl}: ${errorMessage}`);
+        return route.abort("failed");
+      }
     });
   }
 
@@ -825,27 +862,38 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             origin ?? undefined,
             reqOrigin ?? undefined,
           );
-          const response = await route.fetch({ headers });
-          const body = await response.text();
 
-          // Only cache if content is small enough and response was successful (2xx status)
-          if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
-            const contentSizeBytes = Buffer.byteLength(body, "utf8");
-            if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
-              const contentType =
-                response.headers()["content-type"] || "application/octet-stream";
-              HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
-              logger.debug(
-                `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
-              );
-            } else {
-              logger.debug(
-                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
-              );
+          try {
+            const response = await route.fetch({ headers });
+            const body = await response.text();
+
+            // Only cache if content is small enough and response was successful (2xx status)
+            if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
+              const contentSizeBytes = Buffer.byteLength(body, "utf8");
+              if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+                const contentType =
+                  response.headers()["content-type"] || "application/octet-stream";
+                HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
+                logger.debug(
+                  `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
+                );
+              } else {
+                logger.debug(
+                  `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+                );
+              }
             }
-          }
 
-          return route.fulfill({ response });
+            return route.fulfill({ response });
+          } catch (error) {
+            // Handle network errors (DNS, connection refused, timeout, etc.)
+            // Treat these as failed resource requests - abort gracefully
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.debug(
+              `Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`,
+            );
+            return route.abort("failed");
+          }
         }
 
         // Non-GET requests: just forward with headers
@@ -856,7 +904,15 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           origin ?? undefined,
           reqOrigin ?? undefined,
         );
-        return route.continue({ headers });
+
+        try {
+          return await route.continue({ headers });
+        } catch (error) {
+          // Handle network errors for non-GET requests
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.debug(`Network error for ${resourceType} ${reqUrl}: ${errorMessage}`);
+          return route.abort("failed");
+        }
       });
 
       // Load initial HTML content
