@@ -1,3 +1,10 @@
+## [1.31.1](https://github.com/arabold/docs-mcp-server/compare/v1.31.0...v1.31.1) (2025-12-02)
+
+
+### Bug Fixes
+
+* improve error handling and timeout management in HtmlPlaywrightMiddleware ([c3730d5](https://github.com/arabold/docs-mcp-server/commit/c3730d5a191df6a495d56d0d3281756e289ffb30)), closes [#282](https://github.com/arabold/docs-mcp-server/issues/282)
+
 # [1.31.0](https://github.com/arabold/docs-mcp-server/compare/v1.30.0...v1.31.0) (2025-11-30)
 
 
