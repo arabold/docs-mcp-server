@@ -215,7 +215,6 @@ describe("MCP HTTP server E2E", () => {
 
     // Collect received data including heartbeats
     const receivedData: string[] = [];
-    let connectionClosed = false;
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -249,7 +248,7 @@ describe("MCP HTTP server E2E", () => {
           });
 
           res.on("end", () => {
-            connectionClosed = true;
+            // Connection ended - no action needed, test resolves on heartbeat receipt
           });
 
           res.on("error", (err) => {

@@ -2,7 +2,6 @@
  * Tests for MCP service functionality including SSE heartbeat.
  */
 
-import type { ServerResponse } from "node:http";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
@@ -66,52 +65,8 @@ describe("MCP Service", () => {
   });
 
   describe("SSE Heartbeat", () => {
-    it("should send heartbeat messages at regular intervals", async () => {
-      // Register the MCP service
-      const mcpServer = await registerMcpService(
-        server,
-        mockDocService,
-        mockPipeline,
-        false,
-      );
-
-      // Start the server
-      await server.listen({ port: 0 });
-
-      // Track written data
-      const writtenData: string[] = [];
-      const mockWrite = vi.fn((data: string) => {
-        writtenData.push(data);
-        return true;
-      });
-
-      // Create a mock response that tracks writes
-      const mockResponse = {
-        writeHead: vi.fn(),
-        write: mockWrite,
-        end: vi.fn(),
-        on: vi.fn((event: string, handler: () => void) => {
-          // Store the close handler to call later
-          if (event === "close") {
-            (mockResponse as any)._closeHandler = handler;
-          }
-        }),
-        headersSent: false,
-      } as unknown as ServerResponse;
-
-      // Inject a GET request to /sse
-      const response = await server.inject({
-        method: "GET",
-        url: "/sse",
-      });
-
-      // The inject method doesn't give us the raw response, so we need to test differently
-      // Verify the route was registered
-      expect(response.statusCode).toBeDefined();
-
-      // Cleanup
-      await cleanupMcpService(mcpServer);
-    });
+    // Note: Actual heartbeat message verification is done in the E2E test (test/mcp-http-e2e.test.ts)
+    // which can observe raw SSE stream data. Unit tests here focus on setup and cleanup.
 
     it("should cleanup heartbeat intervals on service cleanup", async () => {
       // Register the MCP service
@@ -178,7 +133,12 @@ describe("MCP Service", () => {
         false,
       );
 
-      // Check that routes are registered (printRoutes uses a tree format)
+      // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.
+      // Routes /messages and /mcp share the "m" prefix, so they appear as:
+      //   └── m
+      //       ├── essages (POST)
+      //       └── cp (POST)
+      // We check for "essages" which is the unique suffix for /messages.
       const routes = server.printRoutes();
       expect(routes).toContain("essages");
 
@@ -193,9 +153,11 @@ describe("MCP Service", () => {
         false,
       );
 
-      // Check that routes are registered (printRoutes uses a tree format)
+      // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.
+      // Routes /messages and /mcp share the "m" prefix, so /mcp appears as "cp" in the tree.
+      // We check for "cp (POST)" which uniquely identifies the /mcp route.
       const routes = server.printRoutes();
-      expect(routes).toContain("cp");
+      expect(routes).toContain("cp (POST)");
 
       await cleanupMcpService(mcpServer);
     });
