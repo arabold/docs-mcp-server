@@ -1,3 +1,15 @@
+# [1.32.0](https://github.com/arabold/docs-mcp-server/compare/v1.31.1...v1.32.0) (2025-12-05)
+
+
+### Bug Fixes
+
+* address PR review comments ([4c976f3](https://github.com/arabold/docs-mcp-server/commit/4c976f37de591027d0a3f58de1be375374aaa1c3))
+
+
+### Features
+
+* add SSE heartbeat mechanism and corresponding tests for MCP service ([920e337](https://github.com/arabold/docs-mcp-server/commit/920e337656102e7c01669db846f45183b43cd8ba)), closes [#285](https://github.com/arabold/docs-mcp-server/issues/285)
+
 ## [1.31.1](https://github.com/arabold/docs-mcp-server/compare/v1.31.0...v1.31.1) (2025-12-02)
 
 
