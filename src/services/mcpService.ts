@@ -43,6 +43,12 @@ export async function registerMcpService(
   // Track SSE transports for cleanup
   const sseTransports: Record<string, SSEServerTransport> = {};
 
+  // Track heartbeat intervals for cleanup
+  const heartbeatIntervals: Record<string, NodeJS.Timeout> = {};
+
+  // Heartbeat interval in milliseconds (30 seconds)
+  const HEARTBEAT_INTERVAL_MS = 30_000;
+
   // SSE endpoint for MCP connections
   server.route({
     method: "GET",
@@ -59,7 +65,27 @@ export async function registerMcpService(
           logger.info(`🔗 MCP client connected: ${transport.sessionId}`);
         }
 
-        reply.raw.on("close", () => {
+        // Start heartbeat to keep connection alive and prevent client timeouts
+        // SSE comments (lines starting with ':') are ignored by clients but keep the connection active
+        const heartbeatInterval = setInterval(() => {
+          try {
+            reply.raw.write(": heartbeat\n\n");
+          } catch {
+            // Connection likely closed, cleanup will happen in close handler
+            clearInterval(heartbeatInterval);
+            delete heartbeatIntervals[transport.sessionId];
+          }
+        }, HEARTBEAT_INTERVAL_MS);
+        heartbeatIntervals[transport.sessionId] = heartbeatInterval;
+
+        // Cleanup function to handle both close and error scenarios
+        const cleanupConnection = () => {
+          const interval = heartbeatIntervals[transport.sessionId];
+          if (interval) {
+            clearInterval(interval);
+            delete heartbeatIntervals[transport.sessionId];
+          }
+
           delete sseTransports[transport.sessionId];
           transport.close();
 
@@ -67,6 +93,14 @@ export async function registerMcpService(
           if (telemetry.isEnabled()) {
             logger.info(`🔗 MCP client disconnected: ${transport.sessionId}`);
           }
+        };
+
+        reply.raw.on("close", cleanupConnection);
+
+        // Handle stream errors (e.g., client disconnects abruptly)
+        reply.raw.on("error", (error) => {
+          logger.debug(`SSE connection error: ${error}`);
+          cleanupConnection();
         });
 
         await mcpServer.connect(transport);
@@ -116,10 +150,16 @@ export async function registerMcpService(
           sessionIdGenerator: undefined,
         });
 
-        reply.raw.on("close", () => {
+        const cleanupRequest = () => {
           logger.debug("Streamable HTTP request closed");
           requestTransport.close();
           requestServer.close(); // Close the per-request server instance
+        };
+
+        reply.raw.on("close", cleanupRequest);
+        reply.raw.on("error", (error) => {
+          logger.debug(`Streamable HTTP connection error: ${error}`);
+          cleanupRequest();
         });
 
         await requestServer.connect(requestTransport);
@@ -137,8 +177,14 @@ export async function registerMcpService(
   (
     mcpServer as unknown as {
       _sseTransports: Record<string, SSEServerTransport>;
+      _heartbeatIntervals: Record<string, NodeJS.Timeout>;
     }
   )._sseTransports = sseTransports;
+  (
+    mcpServer as unknown as {
+      _heartbeatIntervals: Record<string, NodeJS.Timeout>;
+    }
+  )._heartbeatIntervals = heartbeatIntervals;
 
   return mcpServer;
 }
@@ -148,6 +194,18 @@ export async function registerMcpService(
  */
 export async function cleanupMcpService(mcpServer: McpServer): Promise<void> {
   try {
+    // Clear all heartbeat intervals
+    const heartbeatIntervals = (
+      mcpServer as unknown as {
+        _heartbeatIntervals: Record<string, NodeJS.Timeout>;
+      }
+    )._heartbeatIntervals;
+    if (heartbeatIntervals) {
+      for (const interval of Object.values(heartbeatIntervals)) {
+        clearInterval(interval);
+      }
+    }
+
     // Close all SSE transports
     const sseTransports = (
       mcpServer as unknown as {

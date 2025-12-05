@@ -3,11 +3,18 @@
  *
  * This test spawns the MCP server as a child process in HTTP mode,
  * connects via SSE transport, and verifies basic functionality.
+ *
+ * Note: We intentionally use SSEClientTransport (deprecated) to test the /sse endpoint
+ * which is maintained for backwards compatibility with older MCP clients.
+ * The /mcp endpoint uses the newer StreamableHTTPServerTransport.
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import http from "node:http";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+// Using deprecated SSEClientTransport intentionally to test the legacy /sse endpoint
+// eslint-disable-next-line deprecation/deprecation
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -198,4 +205,73 @@ describe("MCP HTTP server E2E", () => {
     await transport.close();
     transport = null;
   }, 30000);
+
+  it("should send SSE heartbeat messages to keep connection alive", async () => {
+    const port = 39125;
+    const serverUrl = await startServer(port);
+
+    // Connect directly to SSE endpoint to observe raw data
+    const sseUrl = new URL("/sse", serverUrl);
+
+    // Collect received data including heartbeats
+    const receivedData: string[] = [];
+    let connectionClosed = false;
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Test timed out waiting for heartbeat"));
+      }, 40000); // Wait up to 40 seconds (heartbeat should come within 30s)
+
+      const req = http.request(
+        {
+          hostname: sseUrl.hostname,
+          port: sseUrl.port,
+          path: sseUrl.pathname,
+          method: "GET",
+          headers: {
+            Accept: "text/event-stream",
+          },
+        },
+        (res) => {
+          res.setEncoding("utf8");
+
+          res.on("data", (chunk: string) => {
+            receivedData.push(chunk);
+
+            // Check if we received a heartbeat comment
+            // SSE comments start with ':'
+            if (chunk.includes(": heartbeat")) {
+              clearTimeout(timeout);
+              // Close the connection once we've verified heartbeat
+              res.destroy();
+              resolve();
+            }
+          });
+
+          res.on("end", () => {
+            connectionClosed = true;
+          });
+
+          res.on("error", (err) => {
+            // Ignore errors from destroying the response
+            if (!err.message.includes("aborted")) {
+              clearTimeout(timeout);
+              reject(err);
+            }
+          });
+        },
+      );
+
+      req.on("error", (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+
+      req.end();
+    });
+
+    // Verify we received some data including the heartbeat
+    expect(receivedData.length).toBeGreaterThan(0);
+    expect(receivedData.some((data) => data.includes(": heartbeat"))).toBe(true);
+  }, 45000);
 });
