@@ -8,6 +8,7 @@
  */
 
 import { SPLITTER_MAX_CHUNK_SIZE } from "../utils";
+import { MinimumChunkSizeError } from "./errors";
 import { TextContentSplitter } from "./splitters/TextContentSplitter";
 import type { Chunk, DocumentSplitter } from "./types";
 
@@ -62,9 +63,6 @@ export class TextDocumentSplitter implements DocumentSplitter {
       // forcefully split the content by character count to ensure we never return chunks
       // that exceed the maximum size. This is a last resort to handle unsplittable content
       // like very long strings without spaces or newlines.
-
-      // Import the error type to check if this is expected
-      const { MinimumChunkSizeError } = await import("./errors");
 
       // For MinimumChunkSizeError or other text splitting errors, forcefully split by character count
       if (!(error instanceof MinimumChunkSizeError) && error instanceof Error) {

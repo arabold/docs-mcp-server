@@ -269,7 +269,9 @@ export class JsonDocumentSplitter implements DocumentSplitter {
 
     const fullContent = `${indent}${serialized}${comma}`;
 
-    // If the serialized content is too large, split it using text splitter
+    // Check if the FINAL formatted content (with indent and comma) exceeds the limit.
+    // If so, we split just the serialized content (without structural formatting) because
+    // the resulting chunks are treated as searchable text blocks, not structural JSON elements.
     if (fullContent.length > SPLITTER_MAX_CHUNK_SIZE) {
       // Use text splitter to break down the large serialized JSON
       // Note: When content is this large, we prioritize searchability over perfect JSON structure.
