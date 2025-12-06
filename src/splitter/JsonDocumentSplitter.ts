@@ -59,7 +59,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
       // Check if we exceeded the maximum number of chunks
       if (chunks.length > this.maxChunks) {
         // Fall back to text-based chunking
-        return this.textFallbackSplitter.splitText(content, _contentType);
+        return this.textFallbackSplitter.splitText(content);
       }
 
       return chunks;
