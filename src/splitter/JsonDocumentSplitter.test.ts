@@ -326,4 +326,236 @@ describe("JsonDocumentSplitter", () => {
       });
     });
   });
+
+  describe("depth limiting", () => {
+    it("should stop chunking at maxDepth and serialize remaining content as text", async () => {
+      const deepJson = {
+        level1: {
+          level2: {
+            level3: {
+              level4: {
+                level5: {
+                  level6: {
+                    deepValue: "this should be serialized as text",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const splitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const chunks = await splitter.splitText(JSON.stringify(deepJson, null, 2));
+
+      // Should have chunks for levels 1-3, then serialize the rest as text
+      const pathDepths = chunks.map((c) => c.section.path.length);
+      const maxPathDepth = Math.max(...pathDepths);
+
+      // Max path depth should not exceed maxDepth + some buffer for structure chunks
+      expect(maxPathDepth).toBeLessThanOrEqual(5);
+
+      // Should find a chunk that contains the deeply nested content serialized as text
+      const textSerializedChunk = chunks.find(
+        (c) =>
+          c.content.includes("level4") &&
+          c.content.includes("level5") &&
+          c.content.includes("level6") &&
+          c.content.includes("deepValue"),
+      );
+      expect(textSerializedChunk).toBeDefined();
+
+      // Verify concatenation still produces valid JSON
+      const concatenated = chunks.map((c) => c.content).join("\n");
+      const parsed = JSON.parse(concatenated);
+      expect(parsed).toEqual(deepJson);
+    });
+
+    it("should handle depth limit with arrays", async () => {
+      const deepArrayJson = {
+        level1: [
+          {
+            level2: [
+              {
+                level3: [
+                  {
+                    level4: [
+                      {
+                        level5: "deep value",
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      const splitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const chunks = await splitter.splitText(JSON.stringify(deepArrayJson, null, 2));
+
+      // Verify that deep content is serialized
+      const hasSerializedDeepContent = chunks.some(
+        (c) => c.content.includes("level4") && c.content.includes("level5"),
+      );
+      expect(hasSerializedDeepContent).toBe(true);
+
+      // Verify concatenation still produces valid JSON
+      const concatenated = chunks.map((c) => c.content).join("\n");
+      const parsed = JSON.parse(concatenated);
+      expect(parsed).toEqual(deepArrayJson);
+    });
+
+    it("should use default maxDepth when not specified", async () => {
+      const { JSON_MAX_NESTING_DEPTH } = await import("../utils/config");
+
+      // Create JSON with depth exceeding the default
+      let deepJson: any = { value: "leaf" };
+      for (let i = 0; i < JSON_MAX_NESTING_DEPTH + 3; i++) {
+        deepJson = { [`level${i}`]: deepJson };
+      }
+
+      const splitter = new JsonDocumentSplitter();
+      const chunks = await splitter.splitText(JSON.stringify(deepJson, null, 2));
+
+      // Should have chunks but not excessive amounts
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunks.length).toBeLessThan(100); // Reasonable upper bound
+
+      // Verify concatenation produces valid JSON
+      const concatenated = chunks.map((c) => c.content).join("\n");
+      const parsed = JSON.parse(concatenated);
+      expect(parsed).toEqual(deepJson);
+    });
+
+    it("should not serialize primitives and shallow structures as text", async () => {
+      const shallowJson = {
+        level1: {
+          level2: {
+            value: "normal value",
+            number: 42,
+            bool: true,
+          },
+        },
+      };
+
+      const splitter = new JsonDocumentSplitter({ maxDepth: 5 });
+      const chunks = await splitter.splitText(JSON.stringify(shallowJson, null, 2));
+
+      // All value chunks should be individual, not serialized together
+      const valueChunk = chunks.find((c) =>
+        c.content.includes('"value": "normal value"'),
+      );
+      expect(valueChunk).toBeDefined();
+      expect(valueChunk?.content).not.toContain("number");
+      expect(valueChunk?.content).not.toContain("bool");
+    });
+  });
+
+  describe("chunk count limiting", () => {
+    it("should fall back to text splitting when maxChunks is exceeded", async () => {
+      // Create a JSON with many properties that will exceed the limit
+      const largeJson: Record<string, any> = {};
+      for (let i = 0; i < 100; i++) {
+        largeJson[`property${i}`] = {
+          subProperty1: `value${i}a`,
+          subProperty2: `value${i}b`,
+          subProperty3: `value${i}c`,
+        };
+      }
+
+      const splitter = new JsonDocumentSplitter({ maxChunks: 50 });
+      const chunks = await splitter.splitText(JSON.stringify(largeJson, null, 2));
+
+      // Should fall back to text splitting, resulting in fewer chunks
+      expect(chunks.length).toBeLessThanOrEqual(100); // Much less than the ~600+ it would create
+
+      // Verify the chunks don't have the fine-grained JSON structure
+      // Text splitter uses level 0 and empty path
+      const hasTextSplitterChunks = chunks.some(
+        (c) => c.section.level === 0 && c.section.path.length === 0,
+      );
+      expect(hasTextSplitterChunks).toBe(true);
+    });
+
+    it("should not fall back when under maxChunks limit", async () => {
+      const moderateJson: Record<string, any> = {};
+      for (let i = 0; i < 10; i++) {
+        moderateJson[`property${i}`] = `value${i}`;
+      }
+
+      const splitter = new JsonDocumentSplitter({ maxChunks: 100 });
+      const chunks = await splitter.splitText(JSON.stringify(moderateJson, null, 2));
+
+      // Should use JSON splitting (level > 0 and non-empty paths)
+      const hasJsonSplitterChunks = chunks.every(
+        (c) => c.section.level > 0 || c.section.path.length > 0,
+      );
+      expect(hasJsonSplitterChunks).toBe(true);
+
+      // Verify concatenation produces valid JSON
+      const concatenated = chunks.map((c) => c.content).join("\n");
+      const parsed = JSON.parse(concatenated);
+      expect(parsed).toEqual(moderateJson);
+    });
+
+    it("should use default maxChunks when not specified", async () => {
+      const { JSON_MAX_CHUNKS } = await import("../utils/config");
+
+      // Create a moderately sized JSON that won't exceed default limit
+      const json: Record<string, string> = {};
+      for (let i = 0; i < 50; i++) {
+        json[`prop${i}`] = `value${i}`;
+      }
+
+      const splitter = new JsonDocumentSplitter();
+      const chunks = await splitter.splitText(JSON.stringify(json, null, 2));
+
+      // Should be well under the default limit
+      expect(chunks.length).toBeLessThan(JSON_MAX_CHUNKS);
+
+      // Should still use JSON splitting
+      const hasJsonSplitterChunks = chunks.some((c) => c.section.path.includes("root"));
+      expect(hasJsonSplitterChunks).toBe(true);
+    });
+  });
+
+  describe("combined depth and chunk limiting", () => {
+    it("should handle both depth and chunk limits together", async () => {
+      // Create JSON that is both deep and wide
+      const complexJson: Record<string, any> = {};
+      for (let i = 0; i < 20; i++) {
+        complexJson[`branch${i}`] = {
+          level1: {
+            level2: {
+              level3: {
+                level4: {
+                  level5: {
+                    deepValue: `value${i}`,
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+
+      const splitter = new JsonDocumentSplitter({ maxDepth: 3, maxChunks: 200 });
+      const chunks = await splitter.splitText(JSON.stringify(complexJson, null, 2));
+
+      // Should limit depth to prevent excessive nesting
+      const pathDepths = chunks.map((c) => c.section.path.length);
+      const maxPathDepth = Math.max(...pathDepths);
+      expect(maxPathDepth).toBeLessThanOrEqual(6); // Some buffer for structure
+
+      // Should have reasonable chunk count (may fall back to text splitting)
+      expect(chunks.length).toBeLessThanOrEqual(250);
+
+      // Verify concatenation produces valid JSON
+      const concatenated = chunks.map((c) => c.content).join("\n");
+      const parsed = JSON.parse(concatenated);
+      expect(parsed).toEqual(complexJson);
+    });
+  });
 });
