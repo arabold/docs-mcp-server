@@ -1024,9 +1024,13 @@ export class DocumentStore {
    * - Single texts that are too large are truncated and retried once
    *
    * @param texts Array of texts to embed
+   * @param isRetry Internal flag to prevent duplicate warning logs
    * @returns Array of embedding vectors
    */
-  private async embedDocumentsWithRetry(texts: string[]): Promise<number[][]> {
+  private async embedDocumentsWithRetry(
+    texts: string[],
+    isRetry = false,
+  ): Promise<number[][]> {
     if (texts.length === 0) {
       return [];
     }
@@ -1043,13 +1047,16 @@ export class DocumentStore {
           const firstHalf = texts.slice(0, midpoint);
           const secondHalf = texts.slice(midpoint);
 
-          logger.warn(
-            `⚠️  Batch of ${texts.length} texts exceeded size limit, splitting into ${firstHalf.length} + ${secondHalf.length}`,
-          );
+          // Only log if this is not already a retry
+          if (!isRetry) {
+            logger.warn(
+              `⚠️  Batch of ${texts.length} texts exceeded size limit, splitting into ${firstHalf.length} + ${secondHalf.length}`,
+            );
+          }
 
           const [firstEmbeddings, secondEmbeddings] = await Promise.all([
-            this.embedDocumentsWithRetry(firstHalf),
-            this.embedDocumentsWithRetry(secondHalf),
+            this.embedDocumentsWithRetry(firstHalf, true),
+            this.embedDocumentsWithRetry(secondHalf, true),
           ]);
 
           return [...firstEmbeddings, ...secondEmbeddings];
@@ -1059,17 +1066,17 @@ export class DocumentStore {
           const midpoint = Math.floor(text.length / 2);
           const firstHalf = text.substring(0, midpoint);
 
-          logger.warn(
-            `⚠️  Single text exceeded embedding size limit (${text.length} chars). Truncating at ${firstHalf.length} chars.`,
-          );
+          // Only log once for the original text
+          if (!isRetry) {
+            logger.warn(
+              `⚠️  Single text exceeded embedding size limit (${text.length} chars).`,
+            );
+          }
 
           try {
-            // Recursively retry with first half only
+            // Recursively retry with first half only (mark as retry to prevent duplicate logs)
             // This preserves the beginning of the text which typically contains the most important context
-            const embedding = await this.embedDocumentsWithRetry([firstHalf]);
-            logger.info(
-              `✓ Using embedding from first half of split text (${firstHalf.length} chars)`,
-            );
+            const embedding = await this.embedDocumentsWithRetry([firstHalf], true);
             return embedding;
           } catch (retryError) {
             // If even split text fails, log error and throw
