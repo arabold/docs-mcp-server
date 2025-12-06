@@ -1069,7 +1069,7 @@ export class DocumentStore {
           // Only log once for the original text
           if (!isRetry) {
             logger.warn(
-              `⚠️  Single text exceeded embedding size limit (${text.length} chars). Truncating at ${firstHalf.length} chars.`,
+              `⚠️  Single text exceeded embedding size limit (${text.length} chars).`,
             );
           }
 
@@ -1077,11 +1077,6 @@ export class DocumentStore {
             // Recursively retry with first half only (mark as retry to prevent duplicate logs)
             // This preserves the beginning of the text which typically contains the most important context
             const embedding = await this.embedDocumentsWithRetry([firstHalf], true);
-            if (!isRetry) {
-              logger.info(
-                `✓ Using embedding from first half of split text (${firstHalf.length} chars)`,
-              );
-            }
             return embedding;
           } catch (retryError) {
             // If even split text fails, log error and throw
