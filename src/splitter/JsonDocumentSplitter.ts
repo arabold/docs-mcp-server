@@ -272,6 +272,9 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     // If the serialized content is too large, split it using text splitter
     if (fullContent.length > SPLITTER_MAX_CHUNK_SIZE) {
       // Use text splitter to break down the large serialized JSON
+      // Note: When content is this large, we prioritize searchability over perfect JSON structure.
+      // The chunks contain the actual data that users can search, with proper metadata (level, path)
+      // to indicate where in the JSON structure this content originated from.
       const textChunks = await this.textFallbackSplitter.splitText(serialized);
 
       // Add each text chunk with the current path information
