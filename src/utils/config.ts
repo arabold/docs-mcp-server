@@ -56,6 +56,21 @@ export const SPLITTER_PREFERRED_CHUNK_SIZE = 1500;
 export const SPLITTER_MAX_CHUNK_SIZE = 5000;
 
 /**
+ * Maximum nesting depth for JSON document chunking.
+ * After this depth, JSON chunking switches to simple recursive text chunking.
+ * Set to 5 to support deeply nested structures like OpenAPI schemas while
+ * preventing excessive chunk generation from pathological cases.
+ */
+export const JSON_MAX_NESTING_DEPTH = 5;
+
+/**
+ * Maximum number of chunks that can be generated from a single JSON file.
+ * If this limit is exceeded, the JSON chunking falls back to text-based chunking.
+ * Set to 1000 to keep chunk counts manageable for documentation search.
+ */
+export const JSON_MAX_CHUNKS = 1000;
+
+/**
  * Maximum number of documents to process in a single batch for embeddings.
  */
 export const EMBEDDING_BATCH_SIZE = 100;

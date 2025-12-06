@@ -8,11 +8,14 @@
  * Algorithm:
  * 1. Create opening structure chunks (braces/brackets)
  * 2. Create individual property/element chunks with proper punctuation
- * 3. Process nested structures recursively
+ * 3. Process nested structures recursively up to maxDepth
  * 4. Maintain proper indentation and hierarchical paths
  * 5. Let GreedySplitter handle size optimization
+ * 6. Fall back to text-based chunking if maxChunks limit is exceeded or maxDepth is reached
  */
 
+import { JSON_MAX_CHUNKS, JSON_MAX_NESTING_DEPTH } from "../utils/config";
+import { TextDocumentSplitter } from "./TextDocumentSplitter";
 import type { Chunk, DocumentSplitter } from "./types";
 
 type JsonValue =
@@ -26,13 +29,23 @@ type JsonValue =
 export interface JsonDocumentSplitterOptions {
   // No size constraints - we create minimal chunks and let GreedySplitter optimize
   preserveFormatting?: boolean;
+  /** Maximum nesting depth for JSON chunking. After this depth, switches to text chunking for nested content. */
+  maxDepth?: number;
+  /** Maximum number of chunks allowed. If exceeded, falls back to text-based chunking. */
+  maxChunks?: number;
 }
 
 export class JsonDocumentSplitter implements DocumentSplitter {
   private preserveFormatting: boolean;
+  private maxDepth: number;
+  private maxChunks: number;
+  private textFallbackSplitter: TextDocumentSplitter;
 
   constructor(options: JsonDocumentSplitterOptions = {}) {
     this.preserveFormatting = options.preserveFormatting ?? true;
+    this.maxDepth = options.maxDepth ?? JSON_MAX_NESTING_DEPTH;
+    this.maxChunks = options.maxChunks ?? JSON_MAX_CHUNKS;
+    this.textFallbackSplitter = new TextDocumentSplitter();
   }
 
   async splitText(content: string, _contentType?: string): Promise<Chunk[]> {
@@ -42,6 +55,12 @@ export class JsonDocumentSplitter implements DocumentSplitter {
 
       // Process the JSON structure recursively, starting with root path
       this.processValue(parsed, ["root"], 1, 0, chunks, true);
+
+      // Check if we exceeded the maximum number of chunks
+      if (chunks.length > this.maxChunks) {
+        // Fall back to text-based chunking
+        return this.textFallbackSplitter.splitText(content);
+      }
 
       return chunks;
     } catch {
@@ -67,6 +86,13 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     chunks: Chunk[],
     isLastItem: boolean,
   ): void {
+    // Check if we've exceeded the maximum depth
+    if (level > this.maxDepth) {
+      // Switch to simple text-based representation for deep nesting
+      this.processValueAsText(value, path, level, indentLevel, chunks, isLastItem);
+      return;
+    }
+
     if (Array.isArray(value)) {
       this.processArray(value, path, level, indentLevel, chunks, isLastItem);
     } else if (value !== null && typeof value === "object") {
@@ -205,5 +231,39 @@ export class JsonDocumentSplitter implements DocumentSplitter {
 
   private getIndent(level: number): string {
     return this.preserveFormatting ? "  ".repeat(level) : "";
+  }
+
+  /**
+   * Process a value that has exceeded the maximum depth limit by serializing it as text.
+   * This prevents excessive chunking of deeply nested structures.
+   */
+  private processValueAsText(
+    value: JsonValue,
+    path: string[],
+    level: number,
+    indentLevel: number,
+    chunks: Chunk[],
+    isLastItem: boolean,
+  ): void {
+    const indent = this.getIndent(indentLevel);
+    const comma = isLastItem ? "" : ",";
+
+    // Serialize the entire value as a single text chunk
+    let serialized: string;
+    if (this.preserveFormatting) {
+      // Use a more efficient approach for indented serialization
+      const lines = JSON.stringify(value, null, 2).split("\n");
+      serialized = lines
+        .map((line, idx) => (idx === 0 ? line : `${indent}${line}`))
+        .join("\n");
+    } else {
+      serialized = JSON.stringify(value);
+    }
+
+    chunks.push({
+      types: ["code"],
+      content: `${indent}${serialized}${comma}`,
+      section: { level, path: [...path] },
+    });
   }
 }
