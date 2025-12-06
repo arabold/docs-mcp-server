@@ -57,18 +57,28 @@ export class TextDocumentSplitter implements DocumentSplitter {
           path: [],
         },
       }));
-    } catch {
-      // If splitting fails (e.g., MinimumChunkSizeError), return single chunk
-      return [
-        {
+    } catch (error) {
+      // If splitting fails due to minimum chunk size error (e.g., a very long word/token),
+      // forcefully split the content by character count to ensure we never return chunks
+      // that exceed the maximum size
+      const chunks: Chunk[] = [];
+      let offset = 0;
+      while (offset < content.length) {
+        const chunkContent = content.substring(
+          offset,
+          offset + this.options.maxChunkSize,
+        );
+        chunks.push({
           types: ["text"] as const,
-          content,
+          content: chunkContent,
           section: {
             level: 0,
             path: [],
           },
-        },
-      ];
+        });
+        offset += this.options.maxChunkSize;
+      }
+      return chunks;
     }
   }
 }

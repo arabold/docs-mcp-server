@@ -64,23 +64,30 @@ describe("TextDocumentSplitter", () => {
   });
 
   describe("error handling", () => {
-    it("should handle MinimumChunkSizeError gracefully", async () => {
+    it("should handle MinimumChunkSizeError gracefully by forcefully splitting", async () => {
       // Create a splitter with very small chunk size
       const splitter = new TextDocumentSplitter({ maxChunkSize: 5 });
       const content = "ThisIsAVeryLongWordThatCannotBeSplit";
 
       const result = await splitter.splitText(content);
 
-      // Should return the full content as a single chunk when splitting fails
-      expect(result).toHaveLength(1);
-      expect(result[0]).toEqual({
-        types: ["text"],
-        content: "ThisIsAVeryLongWordThatCannotBeSplit",
-        section: {
+      // Should split the content into multiple chunks when normal splitting fails
+      // Content is 36 chars, chunk size is 5, so we expect 8 chunks (7*5 + 1)
+      expect(result.length).toBeGreaterThan(1);
+
+      // Verify each chunk respects the max size
+      for (const chunk of result) {
+        expect(chunk.content.length).toBeLessThanOrEqual(5);
+        expect(chunk.types).toEqual(["text"]);
+        expect(chunk.section).toEqual({
           level: 0,
           path: [],
-        },
-      });
+        });
+      }
+
+      // Verify content is preserved when concatenated
+      const reconstructed = result.map((c) => c.content).join("");
+      expect(reconstructed).toBe(content);
     });
   });
 
