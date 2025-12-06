@@ -249,12 +249,16 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     const comma = isLastItem ? "" : ",";
 
     // Serialize the entire value as a single text chunk
-    const serialized = this.preserveFormatting
-      ? JSON.stringify(value, null, 2)
-          .split("\n")
-          .map((line, idx) => (idx === 0 ? line : `${indent}${line}`))
-          .join("\n")
-      : JSON.stringify(value);
+    let serialized: string;
+    if (this.preserveFormatting) {
+      // Use a more efficient approach for indented serialization
+      const lines = JSON.stringify(value, null, 2).split("\n");
+      serialized = lines
+        .map((line, idx) => (idx === 0 ? line : `${indent}${line}`))
+        .join("\n");
+    } else {
+      serialized = JSON.stringify(value);
+    }
 
     chunks.push({
       types: ["code"],
