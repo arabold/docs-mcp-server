@@ -4,6 +4,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLocalDocumentManagement } from "../store";
+import { resolveStorePath } from "../utils/paths";
 import { createCliProgram } from "./index";
 import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
 
@@ -258,7 +260,6 @@ describe("CLI command handler parameters", () => {
   });
 
   it("list command forwards --server-url and uses correct (options, command) signature", async () => {
-    const { createCliProgram } = await import("./index");
     const program = createCliProgram();
     const serverUrl = "http://example.com/api";
 
@@ -266,12 +267,15 @@ describe("CLI command handler parameters", () => {
       program.parseAsync(["node", "test", "list", "--server-url", serverUrl]),
     ).resolves.not.toThrow();
 
-    expect(capturedCreateArgs).toContainEqual({
-      eventBus: expect.any(Object),
-      serverUrl,
-      storePath: expect.any(String),
-      embeddingConfig: undefined,
-    });
+    expect(capturedCreateArgs).toContainEqual(
+      expect.objectContaining({
+        eventBus: expect.any(Object),
+        serverUrl,
+        appConfig: expect.objectContaining({
+          app: expect.objectContaining({ storePath: expect.any(String) }),
+        }),
+      }),
+    );
     expect(listToolExecuteCalled).toBe(true);
   });
 });
@@ -319,9 +323,6 @@ describe("Global option propagation", () => {
     vi.clearAllMocks();
 
     // Get references to the mocked functions
-    const { resolveStorePath } = await import("../utils/paths");
-    const { createLocalDocumentManagement } = await import("../store");
-
     mockResolveStorePath = vi.mocked(resolveStorePath);
     mockCreateLocalDocumentManagement = vi.mocked(createLocalDocumentManagement);
   });
@@ -333,7 +334,6 @@ describe("Global option propagation", () => {
     // Mock the path resolution to return a resolved path
     mockResolveStorePath.mockReturnValue(resolvedStorePath);
 
-    const { createCliProgram } = await import("./index");
     const program = createCliProgram();
 
     // Simulate running the default command with --store-path
@@ -355,11 +355,12 @@ describe("Global option propagation", () => {
 
     // Verify that createLocalDocumentManagement was called with the resolved path
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
-      resolvedStorePath,
       expect.objectContaining({
         emitter: expect.any(Object),
       }), // EventBusService instance
-      null, // embeddingConfig (null in this test)
+      expect.objectContaining({
+        app: expect.objectContaining({ storePath: resolvedStorePath }),
+      }),
     );
 
     // The parseAsync promise will hang since it starts a server, but we've verified our assertions
@@ -376,7 +377,6 @@ describe("Global option propagation", () => {
     // Mock the path resolution
     mockResolveStorePath.mockReturnValue(resolvedStorePath);
 
-    const { createCliProgram } = await import("./index");
     const program = createCliProgram();
 
     // Run default command without explicit --store-path
@@ -391,11 +391,12 @@ describe("Global option propagation", () => {
 
     // Verify that createLocalDocumentManagement was called with the resolved path
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
-      resolvedStorePath,
       expect.objectContaining({
         emitter: expect.any(Object),
       }), // EventBusService instance
-      null, // embeddingConfig (null in this test)
+      expect.objectContaining({
+        app: expect.objectContaining({ storePath: resolvedStorePath }),
+      }),
     );
 
     // Clean up
@@ -407,7 +408,6 @@ describe("Global option propagation", () => {
     const resolvedStorePath = "/mocked/resolved/path";
     mockResolveStorePath.mockReturnValue(resolvedStorePath);
 
-    const { createCliProgram } = await import("./index");
     const program = createCliProgram();
 
     // Parse with embedding model flag
@@ -423,11 +423,12 @@ describe("Global option propagation", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
-      resolvedStorePath,
       expect.any(Object),
       expect.objectContaining({
-        provider: "openai",
-        model: "text-embedding-3-large",
+        app: expect.objectContaining({
+          storePath: resolvedStorePath,
+          embeddingModel,
+        }),
       }),
     );
   }, 10000);
@@ -438,7 +439,6 @@ describe("Global option propagation", () => {
     process.env.DOCS_MCP_EMBEDDING_MODEL = envModel;
     mockResolveStorePath.mockReturnValue(resolvedStorePath);
 
-    const { createCliProgram } = await import("./index");
     const program = createCliProgram();
 
     // Run without explicit --embedding-model
@@ -447,11 +447,12 @@ describe("Global option propagation", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
-      resolvedStorePath,
       expect.any(Object),
       expect.objectContaining({
-        provider: "openai",
-        model: "text-embedding-ada-002",
+        app: expect.objectContaining({
+          storePath: resolvedStorePath,
+          embeddingModel: envModel,
+        }),
       }),
     );
 

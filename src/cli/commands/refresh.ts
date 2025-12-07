@@ -11,6 +11,7 @@ import { createDocumentManagement, type DocumentManagementService } from "../../
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
+import { loadConfig } from "../../utils/config";
 import { getEventBus, getGlobalOptions, resolveEmbeddingContext } from "../utils";
 
 export async function refreshAction(
@@ -31,9 +32,10 @@ export async function refreshAction(
 
   const serverUrl = options.serverUrl;
   const globalOptions = getGlobalOptions(command);
+  const appConfig = loadConfig({ EMBEDDING_MODEL: options.embeddingModel });
 
   // Resolve embedding configuration for local execution (refresh needs embeddings)
-  const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
+  const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
   if (!serverUrl && !embeddingConfig) {
     throw new Error(
       "Embedding configuration is required for local refresh operations. " +
@@ -41,13 +43,14 @@ export async function refreshAction(
     );
   }
 
+  appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
+
   const eventBus = getEventBus(command);
 
   const docService: IDocumentManagement = await createDocumentManagement({
     serverUrl,
-    embeddingConfig,
-    storePath: globalOptions.storePath,
     eventBus,
+    appConfig: appConfig,
   });
   let pipeline: IPipeline | null = null;
 
@@ -78,8 +81,8 @@ export async function refreshAction(
   try {
     const pipelineOptions: PipelineOptions = {
       recoverJobs: false,
-      concurrency: 1,
       serverUrl,
+      appConfig: appConfig,
     };
 
     pipeline = serverUrl

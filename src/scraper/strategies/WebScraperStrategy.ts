@@ -1,3 +1,9 @@
+/**
+ * Web scraper strategy that normalizes URLs, fetches content with automatic
+ * fetcher selection, and routes content through pipelines. Requires resolved
+ * configuration from the entrypoint to avoid implicit config loading.
+ */
+import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
 import { AutoDetectFetcher } from "../fetcher";
@@ -13,14 +19,15 @@ export interface WebScraperStrategyOptions {
 }
 
 export class WebScraperStrategy extends BaseScraperStrategy {
-  private readonly fetcher = new AutoDetectFetcher();
+  private readonly fetcher: AutoDetectFetcher;
   private readonly shouldFollowLinkFn?: (baseUrl: URL, targetUrl: URL) => boolean;
   private readonly pipelines: ContentPipeline[];
 
-  constructor(options: WebScraperStrategyOptions = {}) {
+  constructor(options: WebScraperStrategyOptions = {}, config: AppConfig) {
     super({ urlNormalizerOptions: options.urlNormalizerOptions });
     this.shouldFollowLinkFn = options.shouldFollowLink;
-    this.pipelines = PipelineFactory.createStandardPipelines();
+    this.fetcher = new AutoDetectFetcher(config.scraper);
+    this.pipelines = PipelineFactory.createStandardPipelines(config);
   }
 
   canHandle(url: string): boolean {

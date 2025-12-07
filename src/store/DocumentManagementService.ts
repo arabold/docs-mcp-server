@@ -3,14 +3,12 @@ import Fuse from "fuse.js";
 import semver from "semver";
 import type { EventBusService } from "../events";
 import { EventType } from "../events";
-import {
-  type PipelineConfiguration,
-  PipelineFactory,
-} from "../scraper/pipelines/PipelineFactory";
+import { PipelineFactory } from "../scraper/pipelines/PipelineFactory";
 import type { ContentPipeline } from "../scraper/pipelines/types";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
 import { telemetry } from "../telemetry";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { sortVersionsDescending } from "../utils/version";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
@@ -37,18 +35,19 @@ import type {
  * Uses content-type-specific pipelines for processing and splitting content.
  */
 export class DocumentManagementService {
+  private readonly appConfig: AppConfig;
   private readonly store: DocumentStore;
   private readonly documentRetriever: DocumentRetrieverService;
   private readonly pipelines: ContentPipeline[];
   private readonly eventBus: EventBusService;
 
-  constructor(
-    storePath: string,
-    eventBus: EventBusService,
-    embeddingConfig?: EmbeddingModelConfig | null,
-    pipelineConfig?: PipelineConfiguration,
-  ) {
+  constructor(eventBus: EventBusService, appConfig: AppConfig) {
+    this.appConfig = appConfig;
     this.eventBus = eventBus;
+    const storePath = this.appConfig.app.storePath;
+    if (!storePath) {
+      throw new Error("storePath is required when not using a remote server");
+    }
     // Handle special :memory: case for in-memory databases (primarily for testing)
     const dbPath =
       storePath === ":memory:" ? ":memory:" : path.join(storePath, "documents.db");
@@ -57,11 +56,11 @@ export class DocumentManagementService {
 
     // Directory creation is handled by the centralized path resolution
 
-    this.store = new DocumentStore(dbPath, embeddingConfig);
+    this.store = new DocumentStore(dbPath, this.appConfig);
     this.documentRetriever = new DocumentRetrieverService(this.store);
 
     // Initialize content pipelines for different content types including universal TextPipeline fallback
-    this.pipelines = PipelineFactory.createStandardPipelines(pipelineConfig);
+    this.pipelines = PipelineFactory.createStandardPipelines(this.appConfig);
   }
 
   /**

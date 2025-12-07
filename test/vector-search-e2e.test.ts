@@ -17,6 +17,7 @@ import { createLocalDocumentManagement } from "../src/store";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "../src/store/embeddings/EmbeddingConfig";
 import { EventBusService } from "../src/events";
+import { loadConfig } from "../src/utils/config";
 
 // Load environment variables from .env file
 config();
@@ -27,6 +28,7 @@ describe("Vector Search End-to-End Tests", () => {
   let searchTool: SearchTool;
   let pipeline: any;
   let tempDir: string;
+  const appConfig = loadConfig();
 
   beforeAll(async () => {
     // Skip this test suite if no embedding configuration is available
@@ -49,12 +51,17 @@ describe("Vector Search End-to-End Tests", () => {
       embeddingConfig = EmbeddingConfig.parseEmbeddingConfig("text-embedding-3-small");
     }
 
+    appConfig.app.storePath = tempDir;
+    appConfig.app.embeddingModel = embeddingConfig.modelSpec;
+
     // Initialize DocumentManagementService with temporary directory and embedding config
     const eventBus = new EventBusService();
-    docService = await createLocalDocumentManagement(tempDir, eventBus, embeddingConfig);
+    docService = await createLocalDocumentManagement(eventBus, appConfig);
 
     // Create pipeline for ScrapeTool
-    pipeline = await PipelineFactory.createPipeline(docService, eventBus);
+    pipeline = await PipelineFactory.createPipeline(docService, eventBus, {
+      appConfig: appConfig,
+    });
     await pipeline.start();
 
     // Initialize tools

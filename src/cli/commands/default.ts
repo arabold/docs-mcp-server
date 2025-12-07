@@ -10,7 +10,7 @@ import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import { DEFAULT_HOST, DEFAULT_HTTP_PORT } from "../../utils/config";
+import { loadConfig, SERVER_DEFAULT_PORT, SERVER_HOST } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -18,7 +18,6 @@ import {
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
   parseAuthConfig,
-  resolveEmbeddingContext,
   resolveProtocol,
   validateAuthConfig,
   validateHost,
@@ -39,7 +38,7 @@ export function createDefaultAction(program: Command): Command {
         new Option("--port <number>", "Port for the server")
           .env("DOCS_MCP_PORT")
           .env("PORT")
-          .default(DEFAULT_HTTP_PORT.toString())
+          .default(SERVER_DEFAULT_PORT.toString())
           .argParser((v: string) => {
             const n = Number(v);
             if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -52,7 +51,7 @@ export function createDefaultAction(program: Command): Command {
         new Option("--host <host>", "Host to bind the server to")
           .env("DOCS_MCP_HOST")
           .env("HOST")
-          .default(DEFAULT_HOST)
+          .default(SERVER_HOST)
           .argParser(validateHost),
       )
       .addOption(
@@ -76,13 +75,10 @@ export function createDefaultAction(program: Command): Command {
         )
           .env("DOCS_MCP_AUTH_ENABLED")
           .argParser((value) => {
-            if (value === undefined) {
-              return (
-                process.env.DOCS_MCP_AUTH_ENABLED === "true" ||
-                process.env.DOCS_MCP_AUTH_ENABLED === "1"
-              );
+            if (typeof value === "string") {
+              return value !== "false" && value !== "0";
             }
-            return value;
+            return Boolean(value);
           })
           .default(false),
       )
@@ -133,38 +129,42 @@ export function createDefaultAction(program: Command): Command {
           const port = validatePort(options.port);
           const host = validateHost(options.host);
 
+          const appConfig = loadConfig({
+            SERVER_PROTOCOL: resolvedProtocol,
+            SERVER_DEFAULT_PORT: port,
+            SERVER_HOST: host,
+            AUTH_ENABLED: options.authEnabled,
+            AUTH_ISSUER_URL: options.authIssuerUrl,
+            AUTH_AUDIENCE: options.authAudience,
+            EMBEDDING_MODEL: options.embeddingModel,
+          });
+
+          // Propagate resolved store path from global options into appConfig
+          const globalOptions = program.opts();
+          appConfig.app.storePath = globalOptions.storePath;
+
           // Parse and validate auth configuration
           const authConfig = parseAuthConfig({
-            authEnabled: options.authEnabled,
-            authIssuerUrl: options.authIssuerUrl,
-            authAudience: options.authAudience,
+            authEnabled: appConfig.auth.enabled,
+            authIssuerUrl: appConfig.auth.issuerUrl,
+            authAudience: appConfig.auth.audience,
           });
 
           if (authConfig) {
             validateAuthConfig(authConfig);
-            warnHttpUsage(authConfig, port);
+            warnHttpUsage(authConfig, appConfig.server.ports.default);
           }
-
-          // Get global options from the command itself (default action runs on root command)
-          const globalOptions = program.opts();
 
           // Ensure browsers are installed
           ensurePlaywrightBrowsersInstalled();
 
-          // Resolve embedding configuration for local execution (default action needs embeddings)
-          const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
-
           // Get the global EventBusService
           const eventBus = getEventBus(command);
 
-          const docService = await createLocalDocumentManagement(
-            globalOptions.storePath,
-            eventBus,
-            embeddingConfig,
-          );
+          const docService = await createLocalDocumentManagement(eventBus, appConfig);
           const pipelineOptions: PipelineOptions = {
             recoverJobs: options.resume || false, // Use --resume flag for job recovery
-            concurrency: 3,
+            appConfig: appConfig,
           };
           const pipeline = await PipelineFactory.createPipeline(
             docService,
@@ -177,7 +177,7 @@ export function createDefaultAction(program: Command): Command {
             logger.debug(`Auto-detected stdio protocol (no TTY)`);
 
             await pipeline.start(); // Start pipeline for stdio mode
-            const mcpTools = await initializeTools(docService, pipeline);
+            const mcpTools = await initializeTools(docService, pipeline, appConfig);
             const mcpServer = await startStdioServer(mcpTools, options.readOnly);
 
             // Register for graceful shutdown (stdio mode)
@@ -198,10 +198,11 @@ export function createDefaultAction(program: Command): Command {
               enableMcpServer: true, // Always enable MCP server
               enableApiServer: true, // Enable API (tRPC) in http mode
               enableWorker: true, // Always enable in-process worker for unified server
-              port,
-              host,
+              port: appConfig.server.ports.default,
+              host: appConfig.server.host,
               readOnly: options.readOnly,
               auth: authConfig,
+              telemetry: appConfig.app.telemetryEnabled,
               startupContext: {
                 cliCommand: "default",
                 mcpProtocol: "http",
@@ -213,6 +214,7 @@ export function createDefaultAction(program: Command): Command {
               pipeline,
               eventBus,
               config,
+              appConfig,
             );
 
             // Register for graceful shutdown (http mode)

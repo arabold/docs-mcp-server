@@ -1,7 +1,11 @@
 import { URL } from "node:url";
 import { CancellationError } from "../../pipeline/errors";
 import type { ProgressCallback } from "../../types";
-import { DEFAULT_MAX_PAGES } from "../../utils/config";
+import {
+  SCRAPER_MAX_CONCURRENCY,
+  SCRAPER_MAX_DEPTH,
+  SCRAPER_MAX_PAGES,
+} from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { normalizeUrl, type UrlNormalizerOptions } from "../../utils/url";
 import { FetchStatus } from "../fetcher/types";
@@ -15,10 +19,6 @@ import type {
 } from "../types";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
 import { isInScope } from "../utils/scope";
-
-// Define defaults for optional options
-const DEFAULT_MAX_DEPTH = 3;
-const DEFAULT_CONCURRENCY = 3;
 
 export interface BaseScraperStrategyOptions {
   urlNormalizerOptions?: UrlNormalizerOptions;
@@ -115,7 +115,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add signal
   ): Promise<QueueItem[]> {
-    const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
+    const maxPages = options.maxPages ?? SCRAPER_MAX_PAGES;
     const results = await Promise.all(
       batch.map(async (item) => {
         // Check signal before processing each item in the batch
@@ -123,7 +123,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           throw new CancellationError("Scraping cancelled during batch processing");
         }
         // Resolve default for maxDepth check
-        const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+        const maxDepth = options.maxDepth ?? SCRAPER_MAX_DEPTH;
         if (item.depth > maxDepth) {
           return [];
         }
@@ -325,8 +325,8 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     this.effectiveTotal = queue.length;
 
     // Resolve optional values to defaults using temporary variables
-    const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
-    const maxConcurrency = options.maxConcurrency ?? DEFAULT_CONCURRENCY;
+    const maxPages = options.maxPages ?? SCRAPER_MAX_PAGES;
+    const maxConcurrency = options.maxConcurrency ?? SCRAPER_MAX_CONCURRENCY;
 
     // Unified processing loop for both normal and refresh modes
     while (queue.length > 0 && this.pageCount < maxPages) {

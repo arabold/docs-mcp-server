@@ -11,6 +11,7 @@ import {
   TelemetryService,
   telemetry,
 } from "../telemetry";
+import { loadConfig } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
 import { createDefaultAction } from "./commands/default";
 import { createFetchUrlCommand } from "./commands/fetchUrl";
@@ -53,13 +54,10 @@ export function createCliProgram(): Command {
       new Option("--telemetry", "Enable telemetry collection")
         .env("DOCS_MCP_TELEMETRY")
         .argParser((value) => {
-          if (value === undefined) {
-            return (
-              process.env.DOCS_MCP_TELEMETRY !== "false" &&
-              process.env.DOCS_MCP_TELEMETRY !== "0"
-            );
+          if (typeof value === "string") {
+            return value !== "false" && value !== "0";
           }
-          return value;
+          return Boolean(value);
         })
         .default(true),
     )
@@ -77,16 +75,22 @@ export function createCliProgram(): Command {
   program.hook("preAction", async (thisCommand, actionCommand) => {
     const globalOptions = thisCommand.opts();
 
+    const appConfig = loadConfig({
+      STORE_PATH: globalOptions.storePath,
+      TELEMETRY: globalOptions.telemetry,
+    });
+
     // Resolve store path centrally using the new centralized logic
-    const resolvedStorePath = resolveStorePath(globalOptions.storePath);
+    const resolvedStorePath = resolveStorePath(appConfig.app.storePath);
     globalOptions.storePath = resolvedStorePath;
+    globalOptions.telemetry = appConfig.app.telemetryEnabled;
 
     // Setup logging
     setupLogging(globalOptions);
 
     // Initialize telemetry system with proper configuration
     initTelemetry({
-      enabled: globalOptions.telemetry ?? true,
+      enabled: appConfig.app.telemetryEnabled,
       storePath: resolvedStorePath,
     });
 

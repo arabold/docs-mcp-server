@@ -7,6 +7,7 @@ import { AutoDetectFetcher } from "../../scraper/fetcher";
 import { ScrapeMode } from "../../scraper/types";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
+import { loadConfig } from "../../utils/config";
 import { parseHeaders } from "../utils";
 
 export async function fetchUrlAction(
@@ -22,7 +23,8 @@ export async function fetchUrlAction(
   });
 
   const headers = parseHeaders(options.header);
-  const fetchUrlTool = new FetchUrlTool(new AutoDetectFetcher());
+  const appConfig = loadConfig();
+  const fetchUrlTool = new FetchUrlTool(new AutoDetectFetcher(appConfig.scraper));
 
   const content = await fetchUrlTool.execute({
     url,

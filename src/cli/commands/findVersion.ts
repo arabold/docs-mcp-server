@@ -6,6 +6,7 @@ import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
+import { loadConfig } from "../../utils/config";
 import { getEventBus, getGlobalOptions } from "../utils";
 
 export async function findVersionAction(
@@ -22,15 +23,17 @@ export async function findVersionAction(
 
   const serverUrl = options.serverUrl;
   const globalOptions = getGlobalOptions(command);
+  const appConfig = loadConfig();
+
+  appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
 
   const eventBus = getEventBus(command);
 
   // Find version command doesn't need embeddings - explicitly disable for local execution
   const docService = await createDocumentManagement({
     serverUrl,
-    embeddingConfig: serverUrl ? undefined : null,
-    storePath: globalOptions.storePath,
     eventBus,
+    appConfig: appConfig,
   });
   try {
     const findVersionTool = new FindVersionTool(docService);

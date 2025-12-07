@@ -19,7 +19,7 @@ export class JsonPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
   private readonly splitter: DocumentSplitter;
 
-  constructor(_chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
+  constructor(_chunkSize: number = SPLITTER_PREFERRED_CHUNK_SIZE) {
     super();
     this.middleware = [];
     // Structure-preserving splitter only (no greedy size merging)

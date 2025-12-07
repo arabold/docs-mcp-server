@@ -7,9 +7,9 @@ import {
   type Page,
 } from "playwright";
 import {
-  DEFAULT_PAGE_TIMEOUT,
-  FETCHER_MAX_CACHE_ITEM_SIZE_BYTES,
-  FETCHER_MAX_CACHE_ITEMS,
+  SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES,
+  SCRAPER_FETCHER_MAX_CACHE_ITEMS,
+  SCRAPER_PAGE_TIMEOUT_MS,
 } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
@@ -58,7 +58,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   // Static LRU cache shared across all instances for all fetched resources
   // Max 200 entries, each limited in size to prevent caching large resources
   private static readonly resourceCache = new SimpleMemoryCache<string, CachedResource>(
-    FETCHER_MAX_CACHE_ITEMS,
+    SCRAPER_FETCHER_MAX_CACHE_ITEMS,
   );
 
   /**
@@ -231,7 +231,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             pageOrFrame
               .waitForSelector(selector, {
                 state: "hidden",
-                timeout: DEFAULT_PAGE_TIMEOUT,
+                timeout: SCRAPER_PAGE_TIMEOUT_MS,
               })
               .catch(() => {}),
           );
@@ -303,7 +303,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Wait for the iframe body to load - if this times out, skip the rest of processing
       try {
-        await frame.waitForSelector("body", { timeout: DEFAULT_PAGE_TIMEOUT });
+        await frame.waitForSelector("body", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
       } catch {
         logger.debug(
           `Timeout waiting for body in iframe ${index + 1} - skipping content extraction`,
@@ -555,7 +555,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           // Only cache if content is small enough and response was successful (2xx status)
           if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
             const contentSizeBytes = Buffer.byteLength(body, "utf8");
-            if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+            if (contentSizeBytes <= SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
               const contentType =
                 response.headers()["content-type"] || "application/octet-stream";
               HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
@@ -564,7 +564,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
               );
             } else {
               logger.debug(
-                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
               );
             }
           }
@@ -635,9 +635,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       // Navigate to the frame URL
       await framePage.goto(resolvedUrl, {
         waitUntil: "load",
-        timeout: DEFAULT_PAGE_TIMEOUT,
+        timeout: SCRAPER_PAGE_TIMEOUT_MS,
       });
-      await framePage.waitForSelector("body", { timeout: DEFAULT_PAGE_TIMEOUT });
+      await framePage.waitForSelector("body", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
 
       // Wait for loading indicators to complete
       await this.waitForLoadingToComplete(framePage);
@@ -652,7 +652,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Only cache if content is small enough (avoid caching large content pages)
       const contentSizeBytes = Buffer.byteLength(content, "utf8");
-      if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+      if (contentSizeBytes <= SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
         // Frame content is always HTML
         HtmlPlaywrightMiddleware.resourceCache.set(resolvedUrl, {
           body: content,
@@ -663,7 +663,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         );
       } else {
         logger.debug(
-          `Frame content too large to cache: ${resolvedUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+          `Frame content too large to cache: ${resolvedUrl} (${contentSizeBytes} bytes > ${SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
         );
       }
 
@@ -863,7 +863,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             // Only cache if content is small enough and response was successful (2xx status)
             if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
               const contentSizeBytes = Buffer.byteLength(body, "utf8");
-              if (contentSizeBytes <= FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+              if (contentSizeBytes <= SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
                 const contentType =
                   response.headers()["content-type"] || "application/octet-stream";
                 HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
@@ -872,7 +872,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
                 );
               } else {
                 logger.debug(
-                  `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+                  `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
                 );
               }
             }
@@ -912,11 +912,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       await page.goto(context.source, { waitUntil: "load" });
 
       // Wait for either body (normal HTML) or frameset (frameset documents) to appear
-      await page.waitForSelector("body, frameset", { timeout: DEFAULT_PAGE_TIMEOUT });
+      await page.waitForSelector("body, frameset", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
 
       // Wait for network idle to let dynamic content initialize
       try {
-        await page.waitForLoadState("networkidle", { timeout: DEFAULT_PAGE_TIMEOUT });
+        await page.waitForLoadState("networkidle", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
       } catch {
         logger.debug("Network idle timeout, proceeding anyway");
       }

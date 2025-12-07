@@ -14,6 +14,7 @@ import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { telemetry } from "../telemetry";
+import { type AppConfig, SERVER_HEARTBEAT_INTERVAL_MS } from "../utils/config";
 import { logger } from "../utils/logger";
 
 /**
@@ -23,6 +24,7 @@ import { logger } from "../utils/logger";
  * @param server The Fastify server instance
  * @param docService The document management service
  * @param pipeline The pipeline instance
+ * @param config The resolved configuration from the entrypoint
  * @param readOnly Whether to run in read-only mode
  * @returns The McpServer instance for cleanup
  */
@@ -30,11 +32,12 @@ export async function registerMcpService(
   server: FastifyInstance,
   docService: IDocumentManagement,
   pipeline: IPipeline,
+  config: AppConfig,
   readOnly = false,
   authManager?: ProxyAuthManager,
 ): Promise<McpServer> {
   // Initialize MCP server and tools
-  const mcpTools = await initializeTools(docService, pipeline);
+  const mcpTools = await initializeTools(docService, pipeline, config);
   const mcpServer = createMcpServerInstance(mcpTools, readOnly);
 
   // Setup auth middleware if auth manager is provided
@@ -45,9 +48,6 @@ export async function registerMcpService(
 
   // Track heartbeat intervals for cleanup
   const heartbeatIntervals: Record<string, NodeJS.Timeout> = {};
-
-  // Heartbeat interval in milliseconds (30 seconds)
-  const HEARTBEAT_INTERVAL_MS = 30_000;
 
   // SSE endpoint for MCP connections
   server.route({
@@ -75,7 +75,7 @@ export async function registerMcpService(
             clearInterval(heartbeatInterval);
             delete heartbeatIntervals[transport.sessionId];
           }
-        }, HEARTBEAT_INTERVAL_MS);
+        }, SERVER_HEARTBEAT_INTERVAL_MS);
         heartbeatIntervals[transport.sessionId] = heartbeatInterval;
 
         // Cleanup function to handle both close and error scenarios

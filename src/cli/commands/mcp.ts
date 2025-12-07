@@ -11,7 +11,12 @@ import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import { DEFAULT_HOST, DEFAULT_HTTP_PORT, DEFAULT_PROTOCOL } from "../../utils/config";
+import {
+  loadConfig,
+  SERVER_HOST,
+  SERVER_MCP_PORT,
+  SERVER_PROTOCOL,
+} from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -33,14 +38,14 @@ export function createMcpCommand(program: Command): Command {
       .addOption(
         new Option("--protocol <protocol>", "Protocol for MCP server")
           .env("DOCS_MCP_PROTOCOL")
-          .default(DEFAULT_PROTOCOL)
+          .default(SERVER_PROTOCOL)
           .choices(["auto", "stdio", "http"]),
       )
       .addOption(
         new Option("--port <number>", "Port for the MCP server")
           .env("DOCS_MCP_PORT")
           .env("PORT")
-          .default(DEFAULT_HTTP_PORT.toString())
+          .default(SERVER_MCP_PORT.toString())
           .argParser((v: string) => {
             const n = Number(v);
             if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -53,7 +58,7 @@ export function createMcpCommand(program: Command): Command {
         new Option("--host <host>", "Host to bind the MCP server to")
           .env("DOCS_MCP_HOST")
           .env("HOST")
-          .default(DEFAULT_HOST)
+          .default(SERVER_HOST)
           .argParser(validateHost),
       )
       .addOption(
@@ -79,13 +84,10 @@ export function createMcpCommand(program: Command): Command {
         )
           .env("DOCS_MCP_AUTH_ENABLED")
           .argParser((value) => {
-            if (value === undefined) {
-              return (
-                process.env.DOCS_MCP_AUTH_ENABLED === "true" ||
-                process.env.DOCS_MCP_AUTH_ENABLED === "1"
-              );
+            if (typeof value === "string") {
+              return value !== "false" && value !== "0";
             }
-            return value;
+            return Boolean(value);
           })
           .default(false),
       )
@@ -135,23 +137,33 @@ export function createMcpCommand(program: Command): Command {
             setLogLevel(LogLevel.ERROR); // Force quiet logging in stdio mode
           }
 
+          const appConfig = loadConfig({
+            SERVER_PROTOCOL: resolvedProtocol,
+            SERVER_MCP_PORT: port,
+            SERVER_HOST: host,
+            AUTH_ENABLED: cmdOptions.authEnabled,
+            AUTH_ISSUER_URL: cmdOptions.authIssuerUrl,
+            AUTH_AUDIENCE: cmdOptions.authAudience,
+            EMBEDDING_MODEL: cmdOptions.embeddingModel,
+          });
+
+          const globalOptions = program.opts();
+          appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
+
           // Parse and validate auth configuration
           const authConfig = parseAuthConfig({
-            authEnabled: cmdOptions.authEnabled,
-            authIssuerUrl: cmdOptions.authIssuerUrl,
-            authAudience: cmdOptions.authAudience,
+            authEnabled: appConfig.auth.enabled,
+            authIssuerUrl: appConfig.auth.issuerUrl,
+            authAudience: appConfig.auth.audience,
           });
 
           if (authConfig) {
             validateAuthConfig(authConfig);
           }
 
-          // Get global options from root command (which has resolved storePath in preAction hook)
-          const globalOptions = program.opts();
-
           try {
             // Resolve embedding configuration for local execution
-            const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
+            const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
             if (!serverUrl && !embeddingConfig) {
               logger.error(
                 "❌ Embedding configuration is required for local mode. Configure an embedding provider with CLI options or environment variables.",
@@ -163,14 +175,13 @@ export function createMcpCommand(program: Command): Command {
 
             const docService: IDocumentManagement = await createDocumentManagement({
               serverUrl,
-              embeddingConfig,
-              storePath: globalOptions.storePath,
               eventBus,
+              appConfig: appConfig,
             });
             const pipelineOptions: PipelineOptions = {
               recoverJobs: false, // MCP command doesn't support job recovery
               serverUrl,
-              concurrency: 3,
+              appConfig: appConfig,
             };
             const pipeline = serverUrl
               ? await PipelineFactory.createPipeline(undefined, eventBus, {
@@ -188,7 +199,7 @@ export function createMcpCommand(program: Command): Command {
               logger.debug(`Auto-detected stdio protocol (no TTY)`);
 
               await pipeline.start(); // Start pipeline for stdio mode
-              const mcpTools = await initializeTools(docService, pipeline);
+              const mcpTools = await initializeTools(docService, pipeline, appConfig);
               const mcpServer = await startStdioServer(mcpTools, cmdOptions.readOnly);
 
               // Register for graceful shutdown (stdio mode)
@@ -209,11 +220,12 @@ export function createMcpCommand(program: Command): Command {
                 enableMcpServer: true,
                 enableApiServer: false, // Never enable API in mcp command
                 enableWorker: !serverUrl,
-                port,
-                host,
+                port: appConfig.server.ports.mcp,
+                host: appConfig.server.host,
                 externalWorkerUrl: serverUrl,
                 readOnly: cmdOptions.readOnly,
                 auth: authConfig,
+                telemetry: appConfig.app.telemetryEnabled,
                 startupContext: {
                   cliCommand: "mcp",
                   mcpProtocol: "http",
@@ -225,6 +237,7 @@ export function createMcpCommand(program: Command): Command {
                 pipeline,
                 eventBus,
                 config,
+                appConfig,
               );
 
               // Register for graceful shutdown (http mode)

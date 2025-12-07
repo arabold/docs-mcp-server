@@ -1,6 +1,6 @@
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import { CancellationError } from "../../pipeline/errors";
-import { FETCHER_BASE_DELAY, FETCHER_MAX_RETRIES } from "../../utils/config";
+import type { AppConfig } from "../../utils/config";
 import { ChallengeError, RedirectError, ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
@@ -16,6 +16,8 @@ import {
  * Fetches content from remote sources using HTTP/HTTPS.
  */
 export class HttpFetcher implements ContentFetcher {
+  private readonly maxRetriesDefault: number;
+  private readonly baseDelayDefaultMs: number;
   private readonly retryableStatusCodes = [
     408, // Request Timeout
     429, // Too Many Requests
@@ -39,7 +41,9 @@ export class HttpFetcher implements ContentFetcher {
 
   private fingerprintGenerator: FingerprintGenerator;
 
-  constructor() {
+  constructor(scraperConfig: AppConfig["scraper"]) {
+    this.maxRetriesDefault = scraperConfig.fetcher.maxRetries;
+    this.baseDelayDefaultMs = scraperConfig.fetcher.baseDelayMs;
     this.fingerprintGenerator = new FingerprintGenerator();
   }
 
@@ -52,8 +56,8 @@ export class HttpFetcher implements ContentFetcher {
   }
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
-    const maxRetries = options?.maxRetries ?? FETCHER_MAX_RETRIES;
-    const baseDelay = options?.retryDelay ?? FETCHER_BASE_DELAY;
+    const maxRetries = options?.maxRetries ?? this.maxRetriesDefault;
+    const baseDelay = options?.retryDelay ?? this.baseDelayDefaultMs;
     // Default to following redirects if not specified
     const followRedirects = options?.followRedirects ?? true;
 
@@ -70,10 +74,10 @@ export class HttpFetcher implements ContentFetcher {
 
   private async performFetch(
     source: string,
-    options?: FetchOptions,
-    maxRetries = FETCHER_MAX_RETRIES,
-    baseDelay = FETCHER_BASE_DELAY,
-    followRedirects = true,
+    options: FetchOptions | undefined,
+    maxRetries: number = this.maxRetriesDefault,
+    baseDelay: number = this.baseDelayDefaultMs,
+    followRedirects: boolean = true,
   ): Promise<RawContent> {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {

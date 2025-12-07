@@ -15,8 +15,8 @@
  */
 
 import {
-  JSON_MAX_CHUNKS,
-  JSON_MAX_NESTING_DEPTH,
+  SPLITTER_JSON_MAX_CHUNKS,
+  SPLITTER_JSON_MAX_NESTING_DEPTH,
   SPLITTER_MAX_CHUNK_SIZE,
 } from "../utils/config";
 import { TextDocumentSplitter } from "./TextDocumentSplitter";
@@ -47,8 +47,8 @@ export class JsonDocumentSplitter implements DocumentSplitter {
 
   constructor(options: JsonDocumentSplitterOptions = {}) {
     this.preserveFormatting = options.preserveFormatting ?? true;
-    this.maxDepth = options.maxDepth ?? JSON_MAX_NESTING_DEPTH;
-    this.maxChunks = options.maxChunks ?? JSON_MAX_CHUNKS;
+    this.maxDepth = options.maxDepth ?? SPLITTER_JSON_MAX_NESTING_DEPTH;
+    this.maxChunks = options.maxChunks ?? SPLITTER_JSON_MAX_CHUNKS;
     this.textFallbackSplitter = new TextDocumentSplitter();
   }
 

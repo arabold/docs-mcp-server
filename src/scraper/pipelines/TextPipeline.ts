@@ -24,8 +24,8 @@ export class TextPipeline extends BasePipeline {
   private readonly splitter: GreedySplitter;
 
   constructor(
-    preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize = SPLITTER_MAX_CHUNK_SIZE,
+    preferredChunkSize: number = SPLITTER_PREFERRED_CHUNK_SIZE,
+    maxChunkSize: number = SPLITTER_MAX_CHUNK_SIZE,
   ) {
     super();
     // Text processing uses minimal middleware for maximum compatibility

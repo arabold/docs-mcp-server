@@ -1,4 +1,5 @@
 import type { ScraperOptions } from "../../scraper/types";
+import type { AppConfig } from "../../utils/config";
 import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "../types";
 
 /**
@@ -9,8 +10,8 @@ export interface PipelineOptions {
   recoverJobs?: boolean;
   /** URL of external pipeline server (if using remote pipeline) */
   serverUrl?: string;
-  /** Maximum concurrent jobs */
-  concurrency?: number;
+  /** Resolved configuration to propagate to pipeline components */
+  appConfig: AppConfig;
 }
 
 /**

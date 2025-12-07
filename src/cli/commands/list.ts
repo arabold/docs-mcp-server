@@ -6,6 +6,7 @@ import type { Command } from "commander";
 import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
+import { loadConfig } from "../../utils/config";
 import { formatOutput, getEventBus, getGlobalOptions } from "../utils";
 
 export async function listAction(options: { serverUrl?: string }, command?: Command) {
@@ -16,6 +17,9 @@ export async function listAction(options: { serverUrl?: string }, command?: Comm
 
   const { serverUrl } = options;
   const globalOptions = getGlobalOptions(command);
+  const appConfig = loadConfig();
+
+  appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
 
   const eventBus = getEventBus(command);
 
@@ -23,8 +27,7 @@ export async function listAction(options: { serverUrl?: string }, command?: Comm
   const docService = await createDocumentManagement({
     eventBus,
     serverUrl,
-    embeddingConfig: serverUrl ? undefined : null,
-    storePath: globalOptions.storePath,
+    appConfig: appConfig,
   });
   try {
     const listLibrariesTool = new ListLibrariesTool(docService);

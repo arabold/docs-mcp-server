@@ -1,3 +1,4 @@
+import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
@@ -37,11 +38,12 @@ export interface GitHubTreeResponse {
  * This processor is stateless and contains the core logic from GitHubRepoScraperStrategy.
  */
 export class GitHubRepoProcessor {
-  private readonly httpFetcher = new HttpFetcher();
+  private readonly httpFetcher: HttpFetcher;
   private readonly pipelines: ContentPipeline[];
 
-  constructor() {
-    this.pipelines = PipelineFactory.createStandardPipelines();
+  constructor(config: AppConfig) {
+    this.httpFetcher = new HttpFetcher(config.scraper);
+    this.pipelines = PipelineFactory.createStandardPipelines(config);
   }
 
   /**

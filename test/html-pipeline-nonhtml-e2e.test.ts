@@ -9,12 +9,13 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { FetchUrlTool } from "../src/tools/FetchUrlTool";
 import { AutoDetectFetcher } from "../src/scraper/fetcher/AutoDetectFetcher";
 import { ScrapeMode } from "../src/scraper/types";
+import { loadConfig } from "../src/utils/config";
 
 describe("HTML Pipeline Non-HTML Content Tests", () => {
   let fetchUrlTool: FetchUrlTool;
 
   beforeAll(() => {
-    const autoDetectFetcher = new AutoDetectFetcher();
+    const autoDetectFetcher = new AutoDetectFetcher(loadConfig().scraper);
     fetchUrlTool = new FetchUrlTool(autoDetectFetcher);
   });
 

@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ScrapeTool } from "../../tools";
 
 const pipelineMock = {
   start: vi.fn(async () => {}),
@@ -70,7 +71,6 @@ describe("scrapeAction", () => {
       },
       cmd(),
     );
-    const { ScrapeTool } = await import("../../tools");
     expect(ScrapeTool).toHaveBeenCalledTimes(1);
     expect(pipelineMock.start).toHaveBeenCalledTimes(1);
     expect(pipelineMock.stop).toHaveBeenCalledTimes(1);

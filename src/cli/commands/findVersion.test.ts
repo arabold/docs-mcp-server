@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FindVersionTool } from "../../tools";
 
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
@@ -29,7 +30,6 @@ beforeEach(() => vi.clearAllMocks());
 describe("findVersionAction", () => {
   it("calls FindVersionTool", async () => {
     await findVersionAction("react", { version: "18.x", serverUrl: undefined });
-    const { FindVersionTool } = await import("../../tools");
     expect(FindVersionTool).toHaveBeenCalledTimes(1);
   });
 });

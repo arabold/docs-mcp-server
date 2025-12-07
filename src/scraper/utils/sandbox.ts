@@ -1,5 +1,6 @@
 import { createContext, runInContext } from "node:vm";
 import type { JSDOM } from "jsdom";
+import { SANDBOX_DEFAULT_TIMEOUT_MS } from "../../utils/config";
 import { createJSDOM } from "../../utils/dom";
 import { logger } from "../../utils/logger";
 
@@ -27,8 +28,6 @@ export interface SandboxExecutionResult {
   errors: Error[];
 }
 
-const DEFAULT_TIMEOUT = 5000; // 5 seconds
-
 /**
  * Executes JavaScript found within an HTML string inside a secure JSDOM sandbox.
  * Uses Node.js `vm` module for sandboxing.
@@ -39,7 +38,7 @@ const DEFAULT_TIMEOUT = 5000; // 5 seconds
 export async function executeJsInSandbox(
   options: SandboxExecutionOptions,
 ): Promise<SandboxExecutionResult> {
-  const { html, url, timeout = DEFAULT_TIMEOUT } = options;
+  const { html, url, timeout = SANDBOX_DEFAULT_TIMEOUT_MS } = options;
   const errors: Error[] = [];
   let jsdom: JSDOM | undefined;
 

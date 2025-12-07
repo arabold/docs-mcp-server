@@ -55,30 +55,34 @@ vi.mock("./DocumentStore", () => {
 });
 
 import { EventBusService } from "../events";
+import { loadConfig } from "../utils/config";
 import { getProjectRoot } from "../utils/paths";
 // Import the mocked constructor AFTER vi.mock
 import { DocumentManagementService } from "./DocumentManagementService";
+import { createDocumentManagement, createLocalDocumentManagement } from "./index";
 
 // Mock DocumentRetrieverService (keep existing structure)
-const mockRetriever = {
+const mockRetriever = vi.hoisted(() => ({
   search: vi.fn(),
-};
+}));
 
 vi.mock("./DocumentRetrieverService", () => ({
   DocumentRetrieverService: vi.fn().mockImplementation(() => mockRetriever),
 }));
 
 // Mock DocumentManagementClient for factory tests
-const mockClientInitialize = vi.fn().mockResolvedValue(undefined);
-const MockDocumentManagementClient = vi
-  .fn()
-  .mockImplementation((_url: string) => ({ initialize: mockClientInitialize }));
+const mockClientInitialize = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const MockDocumentManagementClient = vi.hoisted(() =>
+  vi.fn().mockImplementation((_url: string) => ({ initialize: mockClientInitialize })),
+);
 
 vi.mock("./DocumentManagementClient", () => ({
   DocumentManagementClient: MockDocumentManagementClient,
 }));
 
 // --- END MOCKS ---
+
+const appConfig = loadConfig();
 
 describe("DocumentManagementService", () => {
   let docService: DocumentManagementService; // For general tests
@@ -93,6 +97,9 @@ describe("DocumentManagementService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vol.reset(); // Reset memfs
+
+    // Ensure store path is defined for local DocumentManagementService instances
+    appConfig.app.storePath = "/test/store/path";
 
     // --- Create dummy package.json in memfs for getProjectRoot() ---
     // Ensure the calculated project root directory exists in memfs
@@ -110,7 +117,7 @@ describe("DocumentManagementService", () => {
     // Initialize the main service instance used by most tests
     // This will now use memfs for its internal fs calls
     const eventBus = new EventBusService();
-    docService = new DocumentManagementService("/test/store/path", eventBus);
+    docService = new DocumentManagementService(eventBus, appConfig);
   });
 
   afterEach(async () => {
@@ -144,58 +151,6 @@ describe("DocumentManagementService", () => {
 
       expect((mockStore as any).getActiveEmbeddingConfig).toHaveBeenCalled();
       expect(config).toBeNull();
-    });
-  });
-
-  // --- Pipeline Configuration Tests ---
-  describe("Pipeline Configuration", () => {
-    beforeEach(() => {
-      vol.reset(); // Reset memfs volume before each test
-      vi.clearAllMocks(); // Clear other mocks
-    });
-
-    it("should accept pipeline configuration and pass it to factory", () => {
-      const pipelineConfig = {
-        chunkSizes: {
-          preferred: 800,
-          max: 1600,
-        },
-      };
-
-      const eventBus = new EventBusService();
-      const service = new DocumentManagementService(
-        "/test/path",
-        eventBus,
-        null,
-        pipelineConfig,
-      );
-      expect(service).toBeInstanceOf(DocumentManagementService);
-      // Test passes if no errors are thrown during construction
-    });
-
-    it("should work without pipeline configuration", () => {
-      const eventBus = new EventBusService();
-      const service = new DocumentManagementService("/test/path", eventBus);
-      expect(service).toBeInstanceOf(DocumentManagementService);
-      // Test passes if no errors are thrown during construction
-    });
-
-    it("should work with only embedding config provided", () => {
-      const eventBus = new EventBusService();
-      const service = new DocumentManagementService("/test/path", eventBus, null);
-      expect(service).toBeInstanceOf(DocumentManagementService);
-    });
-
-    it("should work with both embedding and pipeline config", () => {
-      const pipelineConfig = { chunkSizes: { preferred: 500 } };
-      const eventBus = new EventBusService();
-      const service = new DocumentManagementService(
-        "/test/path",
-        eventBus,
-        null,
-        pipelineConfig,
-      );
-      expect(service).toBeInstanceOf(DocumentManagementService);
     });
   });
 
@@ -250,10 +205,12 @@ describe("DocumentManagementService", () => {
 
     it("createDocumentManagement() returns initialized local service by default", async () => {
       const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
-      const { createDocumentManagement } = await import("./index");
 
       const eventBus = new EventBusService();
-      const dm = await createDocumentManagement({ storePath: "/test/path", eventBus });
+      const dm = await createDocumentManagement({
+        eventBus,
+        appConfig,
+      });
 
       expect(initSpy).toHaveBeenCalledTimes(1);
       expect(dm).toBeInstanceOf(DocumentManagementService);
@@ -262,11 +219,14 @@ describe("DocumentManagementService", () => {
     });
 
     it("createDocumentManagement({serverUrl}) returns initialized remote client", async () => {
-      const { createDocumentManagement } = await import("./index");
       const url = "http://localhost:8080";
 
       const eventBus = new EventBusService();
-      const dm = await createDocumentManagement({ serverUrl: url, eventBus });
+      const dm = await createDocumentManagement({
+        serverUrl: url,
+        eventBus,
+        appConfig,
+      });
 
       expect(MockDocumentManagementClient).toHaveBeenCalledWith(url);
       expect(mockClientInitialize).toHaveBeenCalledTimes(1);
@@ -276,10 +236,9 @@ describe("DocumentManagementService", () => {
 
     it("createLocalDocumentManagement() returns initialized local service", async () => {
       const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
-      const { createLocalDocumentManagement } = await import("./index");
 
       const eventBus = new EventBusService();
-      const dm = await createLocalDocumentManagement("/test/path", eventBus);
+      const dm = await createLocalDocumentManagement(eventBus, appConfig);
 
       expect(initSpy).toHaveBeenCalledTimes(1);
       expect(dm).toBeInstanceOf(DocumentManagementService);
@@ -1089,12 +1048,7 @@ describe("DocumentManagementService", () => {
     describe("cleanup", () => {
       it("should shutdown without errors", async () => {
         const eventBus = new EventBusService();
-        const service = new DocumentManagementService("/test/path", eventBus, {
-          provider: "openai",
-          model: "text-embedding-ada-002",
-          dimensions: 1536,
-          modelSpec: "openai:text-embedding-ada-002",
-        });
+        const service = new DocumentManagementService(eventBus, appConfig);
 
         // Should complete shutdown without errors
         await expect(service.shutdown()).resolves.not.toThrow();

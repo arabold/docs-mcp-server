@@ -1,3 +1,4 @@
+import { ASSEMBLY_MAX_PARENT_CHAIN_DEPTH } from "../../../utils/config";
 import { logger } from "../../../utils/logger";
 import { MimeTypeUtils } from "../../../utils/mimeTypeUtils";
 import type { DocumentStore } from "../../DocumentStore";
@@ -203,7 +204,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     const chainIds: string[] = [];
     const visited = new Set<string>();
     let currentChunk: DbPageChunk | null = chunk;
-    const maxDepth = 50; // Safety limit to prevent runaway loops
+    const maxDepth = ASSEMBLY_MAX_PARENT_CHAIN_DEPTH; // Safety limit to prevent runaway loops
     let depth = 0;
 
     // Walk up parent chain until we reach the root

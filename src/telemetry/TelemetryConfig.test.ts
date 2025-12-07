@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveStorePath } from "../utils/paths";
 import {
   generateInstallationId,
   shouldEnableTelemetry,
@@ -85,7 +86,6 @@ describe("generateInstallationId", () => {
     const customPath = "/custom/store/path";
 
     // Mock resolveStorePath to return the custom path
-    const { resolveStorePath } = await import("../utils/paths");
     vi.mocked(resolveStorePath).mockReturnValueOnce(customPath);
 
     vi.mocked(fs.existsSync).mockReturnValue(false);

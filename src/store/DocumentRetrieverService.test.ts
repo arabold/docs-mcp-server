@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../utils/config";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import type { DbChunkRank, DbPageChunk } from "./types";
@@ -11,7 +12,8 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockDocumentStore = new DocumentStore("mock_connection_string");
+    const config = loadConfig();
+    mockDocumentStore = new DocumentStore("mock_connection_string", config);
     retrieverService = new DocumentRetrieverService(mockDocumentStore);
   });
 

@@ -19,6 +19,7 @@ import { EventBusService } from "../events/EventBusService";
 import type { ScraperProgressEvent } from "../scraper/types";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import { ListJobsTool } from "../tools/ListJobsTool";
+import { type AppConfig, loadConfig } from "../utils/config";
 import { PipelineManager } from "./PipelineManager";
 import { PipelineWorker } from "./PipelineWorker";
 import type { InternalPipelineJob, PipelineJob, PipelineManagerCallbacks } from "./types";
@@ -35,6 +36,7 @@ describe("PipelineManager", () => {
   let mockWorkerInstance: { executeJob: Mock };
   let manager: PipelineManager;
   let mockCallbacks: PipelineManagerCallbacks;
+  let appConfig: AppConfig;
 
   // Helper to create a minimal test job with required fields
   const createTestJob = (overrides: Partial<PipelineJob> = {}): PipelineJob => ({
@@ -146,12 +148,13 @@ describe("PipelineManager", () => {
     // Create mock EventBusService
     const mockEventBus = new EventBusService();
 
+    appConfig = loadConfig();
+    appConfig.scraper.maxConcurrency = 1;
+
     // Default concurrency of 1 for simpler testing unless overridden
-    manager = new PipelineManager(
-      mockStore as DocumentManagementService,
-      mockEventBus,
-      1, // Default to 1 for easier sequential testing
-    );
+    manager = new PipelineManager(mockStore as DocumentManagementService, mockEventBus, {
+      appConfig: appConfig,
+    });
     manager.setCallbacks(mockCallbacks);
   });
 
@@ -313,11 +316,10 @@ describe("PipelineManager", () => {
 
   it("should run jobs in parallel if concurrency > 1", async () => {
     const mockEventBus = new EventBusService();
-    manager = new PipelineManager(
-      mockStore as DocumentManagementService,
-      mockEventBus,
-      2,
-    );
+    appConfig.scraper.maxConcurrency = 2;
+    manager = new PipelineManager(mockStore as DocumentManagementService, mockEventBus, {
+      appConfig: appConfig,
+    });
     manager.setCallbacks(mockCallbacks);
     const optionsA = { url: "http://a.com", library: "libA", version: "1.0" };
     const optionsB = { url: "http://b.com", library: "libB", version: "1.0" };
@@ -490,10 +492,13 @@ describe("PipelineManager", () => {
       };
 
       const mockEventBus = new EventBusService();
+      appConfig.scraper.maxConcurrency = 1;
       const recoveryManager = new PipelineManager(
         recoveryMockStore as any,
         mockEventBus,
-        1,
+        {
+          appConfig: appConfig,
+        },
       );
       await recoveryManager.start();
 

@@ -96,7 +96,7 @@ The system uses a persistent installation identifier for consistent analytics:
 
 - Creates UUID-based installation identifier stored in `installation.id`
 - Uses `envPaths` standard for cross-platform directory location (`~/.local/share/docs-mcp-server/`)
-- Supports `DOCS_MCP_STORE_PATH` environment variable override for Docker deployments
+- Reads the store path from the shared configuration (YAML/env/CLI), including `DOCS_MCP_STORE_PATH` for containerized deployments
 - Provides consistent identification across application runs without user tracking
 - Falls back to new UUID generation if file is corrupted or missing
 
@@ -268,6 +268,8 @@ The system ensures privacy through essential data sanitization:
 
 ### User Control Mechanisms
 
+Telemetry opt-in/out is part of `appConfig.app.telemetryEnabled` with precedence: defaults → `docs-mcp.config.yaml` (or `DOCS_MCP_CONFIG`) → legacy envs → generic env `DOCS_MCP_<KEY>` → CLI flags for the current run.
+
 **CLI Flags**
 
 - `--no-telemetry`: Disable all telemetry for current session
@@ -276,6 +278,7 @@ The system ensures privacy through essential data sanitization:
 
 - `DOCS_MCP_TELEMETRY=false`: Global disable telemetry collection
 - `DOCS_MCP_STORE_PATH=/custom/path`: Override installation ID storage location (useful for Docker volumes)
+- YAML equivalents: `app.telemetryEnabled: false`, `app.storePath: /custom/path`
 
 **Configuration Integration**
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type AppConfig, loadConfig } from "../../../utils/config";
 import { DocumentStore } from "../../DocumentStore";
 import type { DbChunkMetadata, DbPageChunk } from "../../types";
 import { HierarchicalAssemblyStrategy } from "./HierarchicalAssemblyStrategy";
@@ -6,16 +7,24 @@ import { HierarchicalAssemblyStrategy } from "./HierarchicalAssemblyStrategy";
 describe("HierarchicalAssemblyStrategy", () => {
   let strategy: HierarchicalAssemblyStrategy;
   let documentStore: DocumentStore;
+  let appConfig: AppConfig;
 
   beforeEach(async () => {
+    appConfig = loadConfig();
+
+    // Disable embeddings for this strategy test
+    appConfig.app.embeddingModel = "";
+
     // Use real DocumentStore initialization but disable embeddings (pass null)
-    documentStore = new DocumentStore(":memory:", null);
+    documentStore = new DocumentStore(":memory:", appConfig);
     await documentStore.initialize();
     strategy = new HierarchicalAssemblyStrategy();
   });
 
   afterEach(async () => {
-    await documentStore.shutdown();
+    if (documentStore) {
+      await documentStore.shutdown();
+    }
   });
 
   describe("canHandle", () => {

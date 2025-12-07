@@ -203,6 +203,7 @@ export function createAppServerConfig(options: {
   externalWorkerUrl?: string;
   readOnly?: boolean;
   auth?: AuthConfig;
+  telemetry?: boolean;
   startupContext?: {
     cliCommand?: string;
     mcpProtocol?: "stdio" | "http";
@@ -219,6 +220,7 @@ export function createAppServerConfig(options: {
     externalWorkerUrl: options.externalWorkerUrl,
     readOnly: options.readOnly ?? false,
     auth: options.auth,
+    telemetry: options.telemetry,
     startupContext: options.startupContext,
   };
 }
@@ -372,11 +374,6 @@ export function createEventServices(): {
  * Resolves embedding configuration from the provided model specification.
  * This function centralizes the logic for determining the embedding model.
  *
- * Precedence:
- * 1. Explicitly passed `embeddingModel` parameter.
- * 2. `OPENAI_API_KEY` environment variable (defaults to OpenAI model).
- * 3. No configuration (embeddings disabled).
- *
  * @param embeddingModel The embedding model specification string.
  * @returns Embedding configuration or null if config is unavailable.
  */
@@ -384,21 +381,10 @@ export function resolveEmbeddingContext(
   embeddingModel?: string,
 ): EmbeddingModelConfig | null {
   try {
-    let modelSpec = embeddingModel;
-
-    // If no model is specified, check for OPENAI_API_KEY
-    // to enable OpenAI embeddings by default.
-    if (!modelSpec && process.env.OPENAI_API_KEY) {
-      modelSpec = "text-embedding-3-small"; // Default OpenAI model
-      logger.debug(
-        "Using default OpenAI embedding model due to OPENAI_API_KEY presence.",
-      );
-    }
+    const modelSpec = embeddingModel;
 
     if (!modelSpec) {
-      logger.debug(
-        "No embedding model specified and OPENAI_API_KEY not found. Embeddings are disabled.",
-      );
+      logger.debug("No embedding model specified. Embeddings are disabled.");
       return null;
     }
 

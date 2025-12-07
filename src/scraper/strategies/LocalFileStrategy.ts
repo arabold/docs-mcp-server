@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { FileFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
@@ -19,9 +20,9 @@ export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly fileFetcher = new FileFetcher();
   private readonly pipelines: ContentPipeline[];
 
-  constructor() {
+  constructor(config: AppConfig) {
     super();
-    this.pipelines = PipelineFactory.createStandardPipelines();
+    this.pipelines = PipelineFactory.createStandardPipelines(config);
   }
 
   canHandle(url: string): boolean {
