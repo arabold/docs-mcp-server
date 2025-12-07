@@ -23,8 +23,8 @@ export class SourceCodePipeline extends BasePipeline {
   private readonly splitter: DocumentSplitter;
 
   constructor(
-    _preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize = SPLITTER_MAX_CHUNK_SIZE,
+    _preferredChunkSize: number = SPLITTER_PREFERRED_CHUNK_SIZE,
+    maxChunkSize: number = SPLITTER_MAX_CHUNK_SIZE,
   ) {
     super();
     // Source code processing uses minimal middleware since we preserve raw structure

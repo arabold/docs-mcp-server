@@ -1,6 +1,7 @@
 /** Unit test for fetchUrlAction */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FetchUrlTool } from "../../tools";
 
 vi.mock("../../scraper/fetcher", () => ({
   HttpFetcher: vi.fn().mockImplementation(() => ({})),
@@ -33,7 +34,6 @@ describe("fetchUrlAction", () => {
       scrapeMode: "auto" as any,
       header: [],
     });
-    const { FetchUrlTool } = await import("../../tools");
     expect(FetchUrlTool).toHaveBeenCalledTimes(1);
   });
 });

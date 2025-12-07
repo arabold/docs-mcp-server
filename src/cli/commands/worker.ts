@@ -1,3 +1,4 @@
+import { loadConfig, SERVER_HOST, SERVER_WORKER_PORT } from "../../utils/config";
 /**
  * Worker command - Starts external pipeline worker (HTTP API).
  */
@@ -8,14 +9,12 @@ import { startAppServer } from "../../app";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import { DEFAULT_HOST, DEFAULT_MAX_CONCURRENCY } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
-  resolveEmbeddingContext,
   validateHost,
   validatePort,
 } from "../utils";
@@ -28,7 +27,7 @@ export function createWorkerCommand(program: Command): Command {
       new Option("--port <number>", "Port for worker API")
         .env("DOCS_MCP_PORT")
         .env("PORT")
-        .default("8080")
+        .default(SERVER_WORKER_PORT.toString())
         .argParser((v: string) => {
           const n = Number(v);
           if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -41,7 +40,7 @@ export function createWorkerCommand(program: Command): Command {
       new Option("--host <host>", "Host to bind the worker API to")
         .env("DOCS_MCP_HOST")
         .env("HOST")
-        .default(DEFAULT_HOST)
+        .default(SERVER_HOST)
         .argParser(validateHost),
     )
     .addOption(
@@ -71,28 +70,26 @@ export function createWorkerCommand(program: Command): Command {
 
         const port = validatePort(cmdOptions.port);
         const host = validateHost(cmdOptions.host);
+        const appConfig = loadConfig({
+          SERVER_WORKER_PORT: port,
+          SERVER_HOST: host,
+          EMBEDDING_MODEL: cmdOptions.embeddingModel,
+        });
+
+        const globalOptions = program.opts();
+        appConfig.app.storePath = globalOptions.storePath;
 
         try {
           // Ensure browsers are installed for scraping
           ensurePlaywrightBrowsersInstalled();
 
-          // Resolve embedding configuration for worker (worker needs embeddings for indexing)
-          const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
-
-          // Get global options from root command (which has resolved storePath in preAction hook)
-          const globalOptions = program.opts();
-
           // Get the global EventBusService
           const eventBus = getEventBus(command);
 
-          const docService = await createLocalDocumentManagement(
-            globalOptions.storePath,
-            eventBus,
-            embeddingConfig,
-          );
+          const docService = await createLocalDocumentManagement(eventBus, appConfig);
           const pipelineOptions: PipelineOptions = {
             recoverJobs: cmdOptions.resume, // Use the resume option
-            concurrency: DEFAULT_MAX_CONCURRENCY,
+            appConfig: appConfig,
           };
           const pipeline = await PipelineFactory.createPipeline(
             docService,
@@ -106,14 +103,21 @@ export function createWorkerCommand(program: Command): Command {
             enableMcpServer: false,
             enableApiServer: true,
             enableWorker: true,
-            port,
-            host,
+            port: appConfig.server.ports.worker,
+            host: appConfig.server.host,
+            telemetry: appConfig.app.telemetryEnabled,
             startupContext: {
               cliCommand: "worker",
             },
           });
 
-          const appServer = await startAppServer(docService, pipeline, eventBus, config);
+          const appServer = await startAppServer(
+            docService,
+            pipeline,
+            eventBus,
+            config,
+            appConfig,
+          );
 
           // Register for graceful shutdown
           // Note: pipeline is managed by AppServer, so don't register it globally

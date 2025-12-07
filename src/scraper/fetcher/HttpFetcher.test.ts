@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CancellationError } from "../../pipeline/errors";
+import { loadConfig } from "../../utils/config";
 import { RedirectError, ScraperError } from "../../utils/errors";
 
 vi.mock("axios");
@@ -10,6 +11,9 @@ const mockedAxios = vi.mocked(axios, true);
 
 import { HttpFetcher } from "./HttpFetcher";
 
+const scraperConfig = loadConfig().scraper;
+const createFetcher = () => new HttpFetcher(scraperConfig);
+
 describe("HttpFetcher", () => {
   beforeEach(() => {
     mockedAxios.get.mockReset();
@@ -17,13 +21,13 @@ describe("HttpFetcher", () => {
 
   describe("canFetch", () => {
     it("should return true for HTTP URLs", () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       expect(fetcher.canFetch("http://example.com")).toBe(true);
       expect(fetcher.canFetch("https://example.com")).toBe(true);
     });
 
     it("should return false for non-HTTP URLs", () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       expect(fetcher.canFetch("ftp://example.com")).toBe(false);
       expect(fetcher.canFetch("file:///path/to/file")).toBe(false);
       expect(fetcher.canFetch("mailto:test@example.com")).toBe(false);
@@ -33,7 +37,7 @@ describe("HttpFetcher", () => {
 
   describe("data type handling", () => {
     it("should handle ArrayBuffer response data", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const textContent = "Hello World";
       const arrayBuffer = new TextEncoder().encode(textContent).buffer;
       const mockResponse = {
@@ -47,7 +51,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should handle string response data", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const textContent = "Hello World";
       const mockResponse = {
         data: textContent,
@@ -60,7 +64,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should handle other data types as fallback", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       // Use an array instead of object to avoid Buffer.from() issues
       const arrayData = [1, 2, 3];
       const mockResponse = {
@@ -77,7 +81,7 @@ describe("HttpFetcher", () => {
 
   describe("cancellation", () => {
     it("should throw CancellationError when signal is aborted", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const abortController = new AbortController();
       abortController.abort();
 
@@ -89,7 +93,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should throw CancellationError when axios returns ERR_CANCELED", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       mockedAxios.get.mockRejectedValue({ code: "ERR_CANCELED" });
 
       await expect(fetcher.fetch("https://example.com")).rejects.toBeInstanceOf(
@@ -100,7 +104,7 @@ describe("HttpFetcher", () => {
 
   describe("error handling edge cases", () => {
     it("should handle network errors without response object", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const networkError = new Error("Network Error");
       mockedAxios.get.mockRejectedValue(networkError);
 
@@ -111,7 +115,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should handle redirects without location header when followRedirects is false", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       mockedAxios.get.mockRejectedValue({
         response: {
           status: 301,
@@ -128,7 +132,7 @@ describe("HttpFetcher", () => {
 
   describe("configuration defaults", () => {
     it("should use default max retries when not specified", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       // Mock failure for all attempts - use a retryable error
       mockedAxios.get.mockRejectedValue({ response: { status: 500 } });
 
@@ -139,12 +143,12 @@ describe("HttpFetcher", () => {
         }),
       ).rejects.toThrow(ScraperError);
 
-      // Should call initial attempt + 6 retries (default FETCHER_MAX_RETRIES = 6)
+      // Should call initial attempt + 6 retries (default SCRAPER_FETCHER_MAX_RETRIES = 6)
       expect(mockedAxios.get).toHaveBeenCalledTimes(7);
     });
 
     it("should respect custom maxRetries option", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       mockedAxios.get.mockRejectedValue({ response: { status: 500 } });
 
       await expect(
@@ -159,7 +163,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should pass timeout option to axios", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const mockResponse = {
         data: Buffer.from("test", "utf-8"),
         headers: { "content-type": "text/plain" },
@@ -178,7 +182,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should fetch content successfully", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const htmlContent = "<html><body><h1>Hello</h1></body></html>";
     const mockResponse = {
       data: Buffer.from(htmlContent, "utf-8"), // HttpFetcher expects buffer from axios
@@ -194,7 +198,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should extract charset from content-type header", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const textContent = "abc";
     const mockResponse = {
       data: Buffer.from(textContent, "utf-8"),
@@ -208,7 +212,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should set charset undefined if not present in content-type", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const textContent = "abc";
     const mockResponse = {
       data: Buffer.from(textContent, "utf-8"),
@@ -222,7 +226,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should extract encoding from content-encoding header", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const textContent = "abc";
     const mockResponse = {
       data: Buffer.from(textContent, "utf-8"),
@@ -240,7 +244,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should default mimeType to application/octet-stream if content-type header is missing", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const mockResponse = {
       data: Buffer.from([1, 2, 3]),
       headers: {},
@@ -253,7 +257,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should handle different content types", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const mockResponse = {
       data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
       headers: { "content-type": "image/png" },
@@ -267,7 +271,7 @@ describe("HttpFetcher", () => {
 
   describe("retry logic", () => {
     it("should retry on retryable status codes [408, 429, 500, 502, 503, 504, 525]", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const retryableStatuses = [408, 429, 500, 502, 503, 504, 525];
 
       for (const status of retryableStatuses) {
@@ -289,7 +293,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should not retry on non-retryable status codes [400, 401, 403, 404, 405, 410]", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const nonRetryableStatuses = [400, 401, 403, 405, 410];
 
       for (const status of nonRetryableStatuses) {
@@ -321,7 +325,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should generate fingerprint headers", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const mockResponse = {
       data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
       headers: { "content-type": "text/html" },
@@ -351,7 +355,7 @@ describe("HttpFetcher", () => {
   });
 
   it("should respect custom headers", async () => {
-    const fetcher = new HttpFetcher();
+    const fetcher = createFetcher();
     const mockResponse = {
       data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
       headers: { "content-type": "text/html" },
@@ -377,7 +381,7 @@ describe("HttpFetcher", () => {
 
   describe("redirect handling", () => {
     it("should follow redirects by default", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const mockResponse = {
         data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
         headers: { "content-type": "text/html" },
@@ -399,7 +403,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should follow redirects when followRedirects is true", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const mockResponse = {
         data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
         headers: { "content-type": "text/html" },
@@ -423,7 +427,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should not follow redirects when followRedirects is false", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const mockResponse = {
         data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
         headers: { "content-type": "text/html" },
@@ -447,7 +451,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should throw RedirectError when a redirect is encountered and followRedirects is false", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const redirectError = {
         response: {
           status: 301,
@@ -472,7 +476,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should expose final redirect URL as source (canonical trailing slash + query)", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const original = "https://learn.microsoft.com/en-us/azure/bot-service";
       const finalUrl = `${original}/?view=azure-bot-service-4.0`;
 
@@ -497,7 +501,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should send If-None-Match header when etag is provided", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const mockResponse = {
         data: Buffer.from("content", "utf-8"),
         headers: { "content-type": "text/plain" },
@@ -517,7 +521,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should NOT send If-None-Match header when etag is not provided", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const mockResponse = {
         data: Buffer.from("content", "utf-8"),
         headers: { "content-type": "text/plain" },
@@ -543,7 +547,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should handle 304 responses with status='not_modified', empty content, and no retry", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const etag = '"cached-etag-123"';
 
       // 304 is treated as successful by validateStatus, so axios resolves (not rejects)
@@ -570,7 +574,7 @@ describe("HttpFetcher", () => {
     });
 
     it("should extract etag from response headers (or undefined if missing)", async () => {
-      const fetcher = new HttpFetcher();
+      const fetcher = createFetcher();
       const etag = '"response-etag-456"';
 
       // Test with etag present

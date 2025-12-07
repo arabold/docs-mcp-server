@@ -11,7 +11,7 @@
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import Python from "tree-sitter-python";
 import type { CodeBoundary, LanguageParser, ParseResult, StructuralNode } from "./types";
-import { StructuralNodeType, TREE_SITTER_SIZE_LIMIT } from "./types";
+import { PARSER_TREE_SITTER_SIZE_LIMIT, StructuralNodeType } from "./types";
 
 /**
  * Sets of node types we care about for Python.
@@ -206,12 +206,12 @@ export class PythonParser implements LanguageParser {
     }
 
     // Handle tree-sitter size limit
-    if (source.length > TREE_SITTER_SIZE_LIMIT) {
+    if (source.length > PARSER_TREE_SITTER_SIZE_LIMIT) {
       // For files exceeding the limit, we truncate at a reasonable boundary and return a limited parse
       // Try to find a good truncation point (end of line)
-      let truncatedSource = source.slice(0, TREE_SITTER_SIZE_LIMIT);
+      let truncatedSource = source.slice(0, PARSER_TREE_SITTER_SIZE_LIMIT);
       const lastNewline = truncatedSource.lastIndexOf("\n");
-      if (lastNewline > TREE_SITTER_SIZE_LIMIT * 0.9) {
+      if (lastNewline > PARSER_TREE_SITTER_SIZE_LIMIT * 0.9) {
         // If we can find a newline in the last 10% of the limit, use that
         truncatedSource = source.slice(0, lastNewline + 1);
       }

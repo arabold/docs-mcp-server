@@ -24,8 +24,8 @@ export class MarkdownPipeline extends BasePipeline {
   private readonly greedySplitter: GreedySplitter;
 
   constructor(
-    preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize = SPLITTER_MAX_CHUNK_SIZE,
+    preferredChunkSize: number = SPLITTER_PREFERRED_CHUNK_SIZE,
+    maxChunkSize: number = SPLITTER_MAX_CHUNK_SIZE,
   ) {
     super();
     this.middleware = [

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SPLITTER_MAX_CHUNK_SIZE } from "../utils/config";
+import {
+  SPLITTER_JSON_MAX_CHUNKS,
+  SPLITTER_JSON_MAX_NESTING_DEPTH,
+  SPLITTER_MAX_CHUNK_SIZE,
+} from "../utils/config";
+import { GreedySplitter } from "./GreedySplitter";
 import { JsonDocumentSplitter } from "./JsonDocumentSplitter";
 
 describe("JsonDocumentSplitter", () => {
@@ -262,8 +267,6 @@ describe("JsonDocumentSplitter", () => {
 
   describe("integration with GreedySplitter", () => {
     it("should create chunks that work well with GreedySplitter optimization", async () => {
-      const { GreedySplitter } = await import("./GreedySplitter");
-
       const jsonSplitter = new JsonDocumentSplitter();
       const greedySplitter = new GreedySplitter(jsonSplitter, 500, 1500, 5000);
 
@@ -567,11 +570,9 @@ describe("JsonDocumentSplitter", () => {
     });
 
     it("should use default maxDepth when not specified", async () => {
-      const { JSON_MAX_NESTING_DEPTH } = await import("../utils/config");
-
       // Create JSON with depth exceeding the default
       let deepJson: any = { value: "leaf" };
-      for (let i = 0; i < JSON_MAX_NESTING_DEPTH + 3; i++) {
+      for (let i = 0; i < SPLITTER_JSON_MAX_NESTING_DEPTH + 3; i++) {
         deepJson = { [`level${i}`]: deepJson };
       }
 
@@ -660,8 +661,6 @@ describe("JsonDocumentSplitter", () => {
     });
 
     it("should use default maxChunks when not specified", async () => {
-      const { JSON_MAX_CHUNKS } = await import("../utils/config");
-
       // Create a moderately sized JSON that won't exceed default limit
       const json: Record<string, string> = {};
       for (let i = 0; i < 50; i++) {
@@ -672,7 +671,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await splitter.splitText(JSON.stringify(json, null, 2));
 
       // Should be well under the default limit
-      expect(chunks.length).toBeLessThan(JSON_MAX_CHUNKS);
+      expect(chunks.length).toBeLessThan(SPLITTER_JSON_MAX_CHUNKS);
 
       // Should still use JSON splitting
       const hasJsonSplitterChunks = chunks.some((c) => c.section.path.includes("root"));

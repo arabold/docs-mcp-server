@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
+import { type AppConfig, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
 import type { ScrapeResult, ScraperOptions, ScraperProgressEvent } from "../types";
 import { ScrapeMode } from "../types"; // Import ScrapeMode
@@ -23,9 +24,12 @@ const mockFetchFn = vi.spyOn(HttpFetcher.prototype, "fetch");
 describe("WebScraperStrategy", () => {
   let strategy: WebScraperStrategy;
   let options: ScraperOptions;
+  let appConfig: AppConfig;
 
   beforeEach(() => {
     vi.resetAllMocks(); // Resets calls and implementations on ALL mocks
+
+    appConfig = loadConfig();
 
     // Set default mock behavior for the fetch function for the suite
     mockFetchFn.mockResolvedValue({
@@ -38,7 +42,7 @@ describe("WebScraperStrategy", () => {
     // Create a fresh instance of the strategy for each test
     // It will receive the mocked HttpFetcher via dependency injection (if applicable)
     // or internal instantiation (which will use the mocked module)
-    strategy = new WebScraperStrategy();
+    strategy = new WebScraperStrategy({}, appConfig);
 
     // Setup default options for tests
     options = {
@@ -636,9 +640,12 @@ describe("WebScraperStrategy", () => {
         return targetUrl.pathname.includes("allowed");
       });
 
-      const customStrategy = new WebScraperStrategy({
-        shouldFollowLink: customFilter,
-      });
+      const customStrategy = new WebScraperStrategy(
+        {
+          shouldFollowLink: customFilter,
+        },
+        appConfig,
+      );
 
       mockFetchFn.mockImplementation(async (url: string) => {
         if (url === "https://example.com") {
@@ -1012,7 +1019,7 @@ describe("WebScraperStrategy", () => {
 
   describe("cleanup", () => {
     it("should call close() on all pipelines when cleanup() is called", async () => {
-      const strategy = new WebScraperStrategy();
+      const strategy = new WebScraperStrategy({}, appConfig);
 
       // Spy on the close method of all pipelines
       // @ts-expect-error - pipelines is private, but we need to access it for testing
@@ -1030,7 +1037,7 @@ describe("WebScraperStrategy", () => {
     });
 
     it("should handle cleanup errors gracefully", async () => {
-      const strategy = new WebScraperStrategy();
+      const strategy = new WebScraperStrategy({}, appConfig);
 
       // Mock one pipeline to throw an error during cleanup
       // @ts-expect-error - pipelines is private, but we need to access it for testing
@@ -1043,7 +1050,7 @@ describe("WebScraperStrategy", () => {
     });
 
     it("should be idempotent - multiple cleanup() calls should not error", async () => {
-      const strategy = new WebScraperStrategy();
+      const strategy = new WebScraperStrategy({}, appConfig);
 
       // Multiple calls should not throw
       await expect(strategy.cleanup()).resolves.not.toThrow();
@@ -1060,7 +1067,7 @@ describe("WebScraperStrategy", () => {
         source: "https://example.com",
         status: FetchStatus.SUCCESS,
       });
-      strategy = new WebScraperStrategy();
+      strategy = new WebScraperStrategy({}, appConfig);
       options = {
         url: "https://example.com",
         library: "test",

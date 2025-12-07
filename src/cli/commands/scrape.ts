@@ -13,9 +13,10 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import {
-  DEFAULT_MAX_CONCURRENCY,
-  DEFAULT_MAX_DEPTH,
-  DEFAULT_MAX_PAGES,
+  loadConfig,
+  SCRAPER_MAX_CONCURRENCY,
+  SCRAPER_MAX_DEPTH,
+  SCRAPER_MAX_PAGES,
 } from "../../utils/config";
 import {
   getEventBus,
@@ -44,14 +45,29 @@ export async function scrapeAction(
   },
   command?: Command,
 ) {
+  const requestedMaxPages = Number.parseInt(options.maxPages, 10);
+  const requestedMaxDepth = Number.parseInt(options.maxDepth, 10);
+  const requestedMaxConcurrency = Number.parseInt(options.maxConcurrency, 10);
+
+  const appConfig = loadConfig({
+    SCRAPER_MAX_PAGES: requestedMaxPages,
+    SCRAPER_MAX_DEPTH: requestedMaxDepth,
+    SCRAPER_MAX_CONCURRENCY: requestedMaxConcurrency,
+    EMBEDDING_MODEL: options.embeddingModel,
+  });
+
+  const maxPages = appConfig.scraper.maxPages;
+  const maxDepth = appConfig.scraper.maxDepth;
+  const maxConcurrency = appConfig.scraper.maxConcurrency;
+
   await telemetry.track(TelemetryEvent.CLI_COMMAND, {
     command: "scrape",
     library,
     version: options.version,
     url,
-    maxPages: Number.parseInt(options.maxPages, 10),
-    maxDepth: Number.parseInt(options.maxDepth, 10),
-    maxConcurrency: Number.parseInt(options.maxConcurrency, 10),
+    maxPages,
+    maxDepth,
+    maxConcurrency,
     scope: options.scope,
     scrapeMode: options.scrapeMode,
     followRedirects: options.followRedirects,
@@ -65,7 +81,7 @@ export async function scrapeAction(
   const globalOptions = getGlobalOptions(command);
 
   // Resolve embedding configuration for local execution (scrape needs embeddings)
-  const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
+  const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
   if (!serverUrl && !embeddingConfig) {
     throw new Error(
       "Embedding configuration is required for local scraping. " +
@@ -73,13 +89,14 @@ export async function scrapeAction(
     );
   }
 
+  appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
+
   const eventBus = getEventBus(command);
 
   const docService: IDocumentManagement = await createDocumentManagement({
     serverUrl,
-    embeddingConfig,
-    storePath: globalOptions.storePath,
     eventBus,
+    appConfig: appConfig,
   });
   let pipeline: IPipeline | null = null;
 
@@ -110,8 +127,8 @@ export async function scrapeAction(
   try {
     const pipelineOptions: PipelineOptions = {
       recoverJobs: false,
-      concurrency: 1,
       serverUrl,
+      appConfig: appConfig,
     };
 
     pipeline = serverUrl
@@ -136,9 +153,9 @@ export async function scrapeAction(
       library,
       version: options.version,
       options: {
-        maxPages: Number.parseInt(options.maxPages, 10),
-        maxDepth: Number.parseInt(options.maxDepth, 10),
-        maxConcurrency: Number.parseInt(options.maxConcurrency, 10),
+        maxPages,
+        maxDepth,
+        maxConcurrency,
         ignoreErrors: options.ignoreErrors,
         scope: options.scope as "subpages" | "hostname" | "domain",
         followRedirects: options.followRedirects,
@@ -191,17 +208,17 @@ export function createScrapeCommand(program: Command): Command {
     .option(
       "-p, --max-pages <number>",
       "Maximum pages to scrape",
-      DEFAULT_MAX_PAGES.toString(),
+      SCRAPER_MAX_PAGES.toString(),
     )
     .option(
       "-d, --max-depth <number>",
       "Maximum navigation depth",
-      DEFAULT_MAX_DEPTH.toString(),
+      SCRAPER_MAX_DEPTH.toString(),
     )
     .option(
       "-c, --max-concurrency <number>",
       "Maximum concurrent page requests",
-      DEFAULT_MAX_CONCURRENCY.toString(),
+      SCRAPER_MAX_CONCURRENCY.toString(),
     )
     .option("--ignore-errors", "Ignore errors during scraping", true)
     .option(

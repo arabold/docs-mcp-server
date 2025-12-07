@@ -146,6 +146,70 @@ Once a job completes, the docs are searchable via your AI assistant or the Web U
 
 To stop the server, press `Ctrl+C`.
 
+## Configuration overrides
+
+- You can configure the server with YAML, environment variables, or CLI flags. Per key, the last value wins: defaults → YAML file → legacy envs (e.g., `HOST`, `PORT`, `DOCS_MCP_HOST`, provider secrets) → generic env `DOCS_MCP_<KEY>` → CLI flags.
+- Optional YAML: `docs-mcp.config.yaml` in CWD or set `DOCS_MCP_CONFIG` to a path. Parsing requires the optional `yaml` package (`npm install yaml`).
+- Any config value can be overridden via `DOCS_MCP_<KEY>` (e.g., `DOCS_MCP_SCRAPER_MAX_PAGES`, `DOCS_MCP_SERVER_HOST`, `DOCS_MCP_SPLITTER_JSON_MAX_CHUNKS`).
+
+### YAML configuration file
+
+Place a `docs-mcp.config.yaml` next to where you run the server (or point `DOCS_MCP_CONFIG` to a file) to keep your defaults in one place. CLI flags still win for ad-hoc runs. Example:
+
+```yaml
+server:
+  host: 0.0.0.0
+  port: 6280
+scraper:
+  maxPages: 500
+embeddings:
+  model: text-embedding-3-small
+store:
+  path: /data/docs-mcp
+```
+
+### Command Line Argument Overrides
+
+Set common options via environment variables or CLI flags:
+
+| Environment Variable       | CLI Argument           | Description                                     | Used by Commands          |
+| -------------------------- | ---------------------- | ----------------------------------------------- | ------------------------- |
+| `DOCS_MCP_STORE_PATH`      | `--store-path`         | Custom path for data storage directory          | all                       |
+| `DOCS_MCP_TELEMETRY`       | `--no-telemetry`       | Disable telemetry (`false` to disable)          | all                       |
+| `DOCS_MCP_PROTOCOL`        | `--protocol`           | MCP server protocol (auto, stdio, http)         | default, mcp              |
+| `DOCS_MCP_PORT`            | `--port`               | Server port                                     | default, mcp, web, worker |
+| `DOCS_MCP_WEB_PORT`        | `--port` (web command) | Web interface port (web command only)           | web                       |
+| `PORT`                     | `--port`               | Server port (fallback if DOCS_MCP_PORT not set) | default, mcp, web, worker |
+| `DOCS_MCP_HOST`            | `--host`               | Server host/bind address                        | default, mcp, web, worker |
+| `HOST`                     | `--host`               | Server host (fallback if DOCS_MCP_HOST not set) | default, mcp, web, worker |
+| `DOCS_MCP_EMBEDDING_MODEL` | `--embedding-model`    | Embedding model configuration                   | default, mcp, web, worker |
+| `DOCS_MCP_AUTH_ENABLED`    | `--auth-enabled`       | Enable OAuth2/OIDC authentication               | default, mcp              |
+| `DOCS_MCP_AUTH_ISSUER_URL` | `--auth-issuer-url`    | OAuth2 provider issuer/discovery URL            | default, mcp              |
+| `DOCS_MCP_AUTH_AUDIENCE`   | `--auth-audience`      | JWT audience claim (resource identifier)        | default, mcp              |
+
+Example `docs-mcp.config.yaml`:
+
+```yaml
+server:
+  host: 0.0.0.0
+  port: 6280
+scraper:
+  maxPages: 500
+  maxConcurrency: 8
+  pageTimeoutMs: 30000
+  fetcher:
+    maxRetries: 4
+    baseDelayMs: 750
+splitter:
+  json:
+    maxChunks: 1500
+    maxNestingDepth: 6
+embeddings:
+  vectorDimension: 1536
+db:
+  migrationRetryDelayMs: 500
+```
+
 ## Embedded Server
 
 Run the MCP server directly embedded in your AI assistant without a separate process or web interface. This method provides MCP integration only.
@@ -319,45 +383,9 @@ docker compose up -d
 
 This architecture allows independent scaling of processing (workers) and user interfaces.
 
-## Configuration
+## Embeddings
 
-The Docs MCP Server runs without any configuration and uses full-text search only. To enable vector search for improved results, configure an embedding provider via environment variables.
-
-### Command Line Argument Overrides
-
-Many CLI arguments can be overridden using environment variables. This is useful for Docker deployments, CI/CD pipelines, or setting default values.
-
-| Environment Variable       | CLI Argument           | Description                                     | Used by Commands          |
-| -------------------------- | ---------------------- | ----------------------------------------------- | ------------------------- |
-| `DOCS_MCP_STORE_PATH`      | `--store-path`         | Custom path for data storage directory          | all                       |
-| `DOCS_MCP_TELEMETRY`       | `--no-telemetry`       | Disable telemetry (`false` to disable)          | all                       |
-| `DOCS_MCP_PROTOCOL`        | `--protocol`           | MCP server protocol (auto, stdio, http)         | default, mcp              |
-| `DOCS_MCP_PORT`            | `--port`               | Server port                                     | default, mcp, web, worker |
-| `DOCS_MCP_WEB_PORT`        | `--port` (web command) | Web interface port (web command only)           | web                       |
-| `PORT`                     | `--port`               | Server port (fallback if DOCS_MCP_PORT not set) | default, mcp, web, worker |
-| `DOCS_MCP_HOST`            | `--host`               | Server host/bind address                        | default, mcp, web, worker |
-| `HOST`                     | `--host`               | Server host (fallback if DOCS_MCP_HOST not set) | default, mcp, web, worker |
-| `DOCS_MCP_EMBEDDING_MODEL` | `--embedding-model`    | Embedding model configuration                   | default, mcp, web, worker |
-| `DOCS_MCP_AUTH_ENABLED`    | `--auth-enabled`       | Enable OAuth2/OIDC authentication               | default, mcp              |
-| `DOCS_MCP_AUTH_ISSUER_URL` | `--auth-issuer-url`    | OAuth2 provider issuer/discovery URL            | default, mcp              |
-| `DOCS_MCP_AUTH_AUDIENCE`   | `--auth-audience`      | JWT audience claim (resource identifier)        | default, mcp              |
-
-**Usage Examples:**
-
-```bash
-# Set via environment variables
-export DOCS_MCP_PORT=8080
-export DOCS_MCP_HOST=0.0.0.0
-export DOCS_MCP_EMBEDDING_MODEL=text-embedding-3-small
-npx @arabold/docs-mcp-server@latest
-
-# Override with CLI arguments (takes precedence)
-DOCS_MCP_PORT=8080 npx @arabold/docs-mcp-server@latest --port 9090
-```
-
-### Embedding Provider Configuration
-
-The Docs MCP Server is configured via environment variables. Set these in your shell, Docker, or MCP client config.
+Set the embedding model with YAML (`embeddings.model`), `DOCS_MCP_EMBEDDING_MODEL`, or `--embedding-model`. If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults to `text-embedding-3-small`. Provider credentials use the provider-specific environment variables below.
 
 | Variable                           | Description                                           |
 | ---------------------------------- | ----------------------------------------------------- |

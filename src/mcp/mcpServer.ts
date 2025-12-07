@@ -4,7 +4,7 @@ import { PipelineJobStatus } from "../pipeline/types";
 import { TelemetryEvent, telemetry } from "../telemetry";
 import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
-import { DEFAULT_MAX_DEPTH, DEFAULT_MAX_PAGES } from "../utils/config";
+import { SCRAPER_MAX_DEPTH, SCRAPER_MAX_PAGES } from "../utils/config";
 import { logger } from "../utils/logger";
 import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
@@ -48,13 +48,13 @@ export function createMcpServerInstance(
         maxPages: z
           .number()
           .optional()
-          .default(DEFAULT_MAX_PAGES)
-          .describe(`Maximum number of pages to scrape (default: ${DEFAULT_MAX_PAGES}).`),
+          .default(SCRAPER_MAX_PAGES)
+          .describe(`Maximum number of pages to scrape (default: ${SCRAPER_MAX_PAGES}).`),
         maxDepth: z
           .number()
           .optional()
-          .default(DEFAULT_MAX_DEPTH)
-          .describe(`Maximum navigation depth (default: ${DEFAULT_MAX_DEPTH}).`),
+          .default(SCRAPER_MAX_DEPTH)
+          .describe(`Maximum navigation depth (default: ${SCRAPER_MAX_DEPTH}).`),
         scope: z
           .enum(["subpages", "hostname", "domain"])
           .optional()

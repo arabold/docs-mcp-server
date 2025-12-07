@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
+import { type AppConfig, loadConfig } from "../utils/config";
 import { AppServer } from "./AppServer";
 import type { AppServerConfig } from "./AppServerConfig";
 
@@ -62,11 +63,14 @@ describe("AppServer Behavior Tests", () => {
   let mockPipeline: Partial<IPipeline>;
   let mockMcpServer: Partial<McpServer>;
   let eventBus: EventBusService;
+  let appConfig: AppConfig;
 
   beforeEach(() => {
     eventBus = new EventBusService();
     // Reset all mocks before each test
     vi.clearAllMocks();
+
+    appConfig = loadConfig();
 
     // Setup mock dependencies
     mockDocService = {
@@ -106,6 +110,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await expect(server.start()).rejects.toThrow(
@@ -129,6 +134,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await expect(server.start()).rejects.toThrow(
@@ -151,6 +157,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       expect(() => server.start()).not.toThrow();
@@ -172,6 +179,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       expect(() => server.start()).not.toThrow();
@@ -192,6 +200,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       expect(() => server.start()).not.toThrow();
@@ -214,6 +223,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -241,6 +251,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -274,6 +285,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -282,6 +294,7 @@ describe("AppServer Behavior Tests", () => {
         mockFastify,
         mockDocService,
         mockPipeline,
+        appConfig,
         undefined, // readOnly parameter defaults to false, passed as undefined from config
         undefined, // authManager
       );
@@ -306,6 +319,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -336,6 +350,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -353,6 +368,7 @@ describe("AppServer Behavior Tests", () => {
         mockFastify,
         mockDocService,
         mockPipeline,
+        appConfig,
         undefined, // readOnly parameter defaults to false, passed as undefined from config
         undefined, // authManager
       );
@@ -380,6 +396,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -414,6 +431,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       const fastifyInstance = await server.start();
@@ -440,6 +458,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       const fastifyInstance = await server.start();
@@ -474,6 +493,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       const fastifyInstance = await server.start();
@@ -505,6 +525,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await expect(server.start()).rejects.toThrow("Port already in use");
@@ -529,6 +550,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -554,6 +576,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -582,6 +605,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -608,6 +632,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       const fastifyInstance = await server.start();
@@ -637,6 +662,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();
@@ -660,6 +686,7 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline as IPipeline,
         eventBus,
         config,
+        appConfig,
       );
 
       await server.start();

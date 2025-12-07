@@ -83,7 +83,7 @@ sequenceDiagram
 
 ## Configuration
 
-Authentication is configured by pointing the Docs MCP Server to your external OAuth2/OIDC provider. Configure through CLI arguments, environment variables, or configuration files with the following precedence: CLI flags > environment variables > defaults.
+Authentication settings live in `appConfig.auth` and follow the unified precedence: defaults → `docs-mcp.config.yaml` (or `DOCS_MCP_CONFIG`) → legacy envs → generic env `DOCS_MCP_<KEY>` → CLI flags for the current run.
 
 **Setup Steps**:
 
@@ -108,6 +108,8 @@ export DOCS_MCP_AUTH_ENABLED=true
 export DOCS_MCP_AUTH_ISSUER_URL="https://auth.your-domain.com"
 export DOCS_MCP_AUTH_AUDIENCE="https://mcp.your-domain.com"
 ```
+
+You can also set the same values in `docs-mcp.config.yaml` under `auth.enabled`, `auth.issuerUrl`, and `auth.audience`.
 
 ### Configuration Options
 

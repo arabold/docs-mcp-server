@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SearchTool } from "../../tools";
 
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
@@ -37,7 +38,6 @@ describe("searchAction", () => {
       serverUrl: undefined,
       embeddingModel: "mock-embedding-model",
     });
-    const { SearchTool } = await import("../../tools");
     expect(SearchTool).toHaveBeenCalledTimes(1);
   });
 });

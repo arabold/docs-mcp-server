@@ -9,7 +9,7 @@ import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import { DEFAULT_HOST, DEFAULT_WEB_PORT } from "../../utils/config";
+import { loadConfig, SERVER_HOST, SERVER_WEB_PORT } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -30,7 +30,7 @@ export function createWebCommand(program: Command): Command {
         .env("DOCS_MCP_WEB_PORT")
         .env("DOCS_MCP_PORT")
         .env("PORT")
-        .default(DEFAULT_WEB_PORT.toString())
+        .default(SERVER_WEB_PORT.toString())
         .argParser((v: string) => {
           const n = Number(v);
           if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -43,7 +43,7 @@ export function createWebCommand(program: Command): Command {
       new Option("--host <host>", "Host to bind the web interface to")
         .env("DOCS_MCP_HOST")
         .env("HOST")
-        .default(DEFAULT_HOST)
+        .default(SERVER_HOST)
         .argParser(validateHost),
     )
     .addOption(
@@ -76,12 +76,18 @@ export function createWebCommand(program: Command): Command {
         const port = validatePort(cmdOptions.port);
         const host = validateHost(cmdOptions.host);
         const serverUrl = cmdOptions.serverUrl;
+        const appConfig = loadConfig({
+          SERVER_WEB_PORT: port,
+          SERVER_HOST: host,
+          EMBEDDING_MODEL: cmdOptions.embeddingModel,
+        });
+
+        const globalOptions = getGlobalOptions(command);
+        appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
 
         try {
-          const globalOptions = getGlobalOptions(command);
-
           // Resolve embedding configuration for local execution
-          const embeddingConfig = resolveEmbeddingContext(cmdOptions.embeddingModel);
+          const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
           if (!serverUrl && !embeddingConfig) {
             logger.error(
               "❌ Embedding configuration is required for local mode. Configure an embedding provider with CLI options or environment variables.",
@@ -94,14 +100,13 @@ export function createWebCommand(program: Command): Command {
 
           const docService: IDocumentManagement = await createDocumentManagement({
             serverUrl,
-            embeddingConfig,
-            storePath: globalOptions.storePath,
             eventBus,
+            appConfig: appConfig,
           });
           const pipelineOptions: PipelineOptions = {
             recoverJobs: false, // Web command doesn't support job recovery
             serverUrl,
-            concurrency: 3,
+            appConfig: appConfig,
           };
           const pipeline = serverUrl
             ? await PipelineFactory.createPipeline(undefined, eventBus, {
@@ -120,15 +125,22 @@ export function createWebCommand(program: Command): Command {
             enableMcpServer: false,
             enableApiServer: false,
             enableWorker: !serverUrl,
-            port,
-            host,
+            port: appConfig.server.ports.web,
+            host: appConfig.server.host,
             externalWorkerUrl: serverUrl,
+            telemetry: appConfig.app.telemetryEnabled,
             startupContext: {
               cliCommand: "web",
             },
           });
 
-          const appServer = await startAppServer(docService, pipeline, eventBus, config);
+          const appServer = await startAppServer(
+            docService,
+            pipeline,
+            eventBus,
+            config,
+            appConfig,
+          );
 
           // Register for graceful shutdown
           // Note: pipeline is managed by AppServer, so don't register it globally

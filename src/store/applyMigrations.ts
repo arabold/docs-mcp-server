@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Database } from "better-sqlite3";
-import { MIGRATION_MAX_RETRIES, MIGRATION_RETRY_DELAY_MS } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import { StoreError } from "./errors";
@@ -40,9 +39,18 @@ function getAppliedMigrations(db: Database): Set<string> {
  * It tracks applied migrations in the _schema_migrations table.
  *
  * @param db The better-sqlite3 database instance.
+ * @param options Optional runtime configuration.
  * @throws {StoreError} If any migration fails.
  */
-export async function applyMigrations(db: Database): Promise<void> {
+export async function applyMigrations(
+  db: Database,
+  options?: {
+    maxRetries?: number;
+    retryDelayMs?: number;
+  },
+): Promise<void> {
+  const maxRetries = options?.maxRetries ?? 5;
+  const retryDelayMs = options?.retryDelayMs ?? 300;
   // Apply performance optimizations for large dataset migrations
   try {
     db.pragma("journal_mode = OFF");
@@ -135,17 +143,17 @@ export async function applyMigrations(db: Database): Promise<void> {
       break; // Success
     } catch (error) {
       // biome-ignore lint/suspicious/noExplicitAny: error can be any
-      if ((error as any)?.code === "SQLITE_BUSY" && retries < MIGRATION_MAX_RETRIES) {
+      if ((error as any)?.code === "SQLITE_BUSY" && retries < maxRetries) {
         retries++;
         logger.warn(
-          `⚠️  Migrations busy (SQLITE_BUSY), retrying attempt ${retries}/${MIGRATION_MAX_RETRIES} in ${MIGRATION_RETRY_DELAY_MS}ms...`,
+          `⚠️  Migrations busy (SQLITE_BUSY), retrying attempt ${retries}/${maxRetries} in ${retryDelayMs}ms...`,
         );
-        await new Promise((resolve) => setTimeout(resolve, MIGRATION_RETRY_DELAY_MS));
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
       } else {
         // biome-ignore lint/suspicious/noExplicitAny: error can be any
         if ((error as any)?.code === "SQLITE_BUSY") {
           logger.error(
-            `❌ Migrations still busy after ${MIGRATION_MAX_RETRIES} retries. Giving up: ${error}`,
+            `❌ Migrations still busy after ${maxRetries} retries. Giving up: ${error}`,
           );
         }
         // Ensure StoreError is thrown for consistent handling

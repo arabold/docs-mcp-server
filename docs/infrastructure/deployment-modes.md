@@ -84,16 +84,7 @@ Protocol can be explicitly set via `--protocol stdio|http` flag, bypassing auto-
 
 ## Configuration
 
-### Environment Variables
-
-- `DOCS_MCP_EMBEDDING_MODEL`: Embedding provider configuration
-
-### CLI Arguments
-
-- `--protocol auto|stdio|http`: Protocol selection
-- `--port <number>`: HTTP server port
-- `--server-url <url>`: External worker URL for distributed mode
-- `--resume`: Enable job recovery on startup
+Deployment mode, ports, and embedding settings are resolved through the shared configuration loader (defaults → `docs-mcp.config.yaml` or `DOCS_MCP_CONFIG` → legacy envs → generic env `DOCS_MCP_<KEY>` → CLI flags for the current run). Override with YAML or env keys such as `DOCS_MCP_PROTOCOL`, `DOCS_MCP_PORT`, and `DOCS_MCP_EMBEDDING_MODEL`; use CLI flags like `--protocol`, `--port`, `--server-url`, or `--resume` when you need per-invocation changes.
 
 ## Job Recovery
 

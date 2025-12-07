@@ -3,12 +3,13 @@
  */
 
 import type { SyntaxNode, Tree } from "tree-sitter";
+import { PARSER_TREE_SITTER_SIZE_LIMIT } from "../../../utils/config";
 
 /**
  * Universal tree-sitter parser size limit.
  * Set to 30,000 characters to be safely under the observed 32,767 limit.
  */
-export const TREE_SITTER_SIZE_LIMIT = 30000;
+export { PARSER_TREE_SITTER_SIZE_LIMIT };
 
 export enum StructuralNodeType {
   // Function declarations

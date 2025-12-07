@@ -20,6 +20,7 @@ import { DocumentManagementService } from "../src/store/DocumentManagementServic
 import { EventBusService } from "../src/events";
 import type { StoreSearchResult } from "../src/store/types";
 import { ScraperRegistry } from "../src/scraper";
+import { loadConfig, type AppConfig } from "../src/utils/config";
 
 // Mock file system for file-based tests
 vi.mock("node:fs/promises", () => ({ default: vol.promises }));
@@ -28,20 +29,28 @@ describe("Refresh Pipeline E2E Tests", () => {
   let docService: DocumentManagementService;
   let scraperService: ScraperService;
   let pipelineManager: PipelineManager;
+  let appConfig: AppConfig;
 
   const TEST_BASE_URL = "http://test-docs.example.com";
   const TEST_LIBRARY = "test-lib";
   const TEST_VERSION = "1.0.0";
 
   beforeEach(async () => {
+    appConfig = loadConfig();
+    appConfig.app.storePath = ":memory:";
+    appConfig.app.embeddingModel = ""; // disable embeddings for refresh e2e
     // Initialize in-memory store and services
     // DocumentManagementService creates its own DocumentStore internally
     const eventBus = new EventBusService();
-    docService = new DocumentManagementService(":memory:", eventBus, null);
+    docService = new DocumentManagementService(eventBus, appConfig);
     await docService.initialize();
-    const registry = new ScraperRegistry();
+    const registry = new ScraperRegistry(appConfig);
     scraperService = new ScraperService(registry);
-    pipelineManager = new PipelineManager(docService, eventBus, 3, { recoverJobs: false });
+    appConfig.scraper.maxConcurrency = 3;
+    pipelineManager = new PipelineManager(docService, eventBus, {
+      recoverJobs: false,
+      appConfig: appConfig,
+    });
     await pipelineManager.start();
 
     // Clear any previous nock mocks
