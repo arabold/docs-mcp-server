@@ -102,7 +102,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     } else if (value !== null && typeof value === "object") {
       await this.processObject(value, path, level, indentLevel, chunks, isLastItem);
     } else {
-      this.processPrimitive(value, path, level, indentLevel, chunks, isLastItem);
+      await this.processPrimitive(value, path, level, indentLevel, chunks, isLastItem);
     }
   }
 
@@ -205,34 +205,79 @@ export class JsonDocumentSplitter implements DocumentSplitter {
       // Process the complex value (it handles its own comma)
       await this.processValue(value, path, level, indentLevel, chunks, isLastProperty);
     } else {
-      // For primitive values, create a complete property chunk
+      // For primitive values, create a complete property chunk and ensure it respects max chunk size
       const comma = isLastProperty ? "" : ",";
       const formattedValue = JSON.stringify(value);
-      chunks.push({
-        types: ["code"],
-        content: `${indent}"${key}": ${formattedValue}${comma}`,
-        section: { level, path },
-      });
+      const fullContent = `${indent}"${key}": ${formattedValue}${comma}`;
+
+      if (fullContent.length > SPLITTER_MAX_CHUNK_SIZE) {
+        // Use text splitter for oversized primitive values while keeping property context
+        const textChunks = await this.textFallbackSplitter.splitText(formattedValue);
+
+        // Emit property prefix once, then split value across chunks
+        chunks.push({
+          types: ["code"],
+          content: `${indent}"${key}": `,
+          section: { level, path },
+        });
+
+        textChunks.forEach((textChunk, index) => {
+          const isLastChunk = index === textChunks.length - 1;
+          const content = `${textChunk.content}${isLastChunk ? comma : ""}`;
+          chunks.push({
+            types: ["code"],
+            content,
+            section: { level, path },
+          });
+        });
+      } else {
+        chunks.push({
+          types: ["code"],
+          content: fullContent,
+          section: { level, path },
+        });
+      }
     }
   }
 
-  private processPrimitive(
+  private async processPrimitive(
     value: JsonValue,
     path: string[],
     level: number,
     indentLevel: number,
     chunks: Chunk[],
     isLastItem: boolean,
-  ): void {
+  ): Promise<void> {
     const indent = this.getIndent(indentLevel);
     const comma = isLastItem ? "" : ",";
     const formattedValue = JSON.stringify(value);
 
-    chunks.push({
-      types: ["code"],
-      content: `${indent}${formattedValue}${comma}`,
-      section: { level, path },
-    });
+    const fullContent = `${indent}${formattedValue}${comma}`;
+
+    if (fullContent.length > SPLITTER_MAX_CHUNK_SIZE) {
+      // Use text splitter for oversized primitive values in arrays
+      const textChunks = await this.textFallbackSplitter.splitText(formattedValue);
+
+      textChunks.forEach((textChunk, index) => {
+        const isFirstChunk = index === 0;
+        const isLastChunk = index === textChunks.length - 1;
+        const valueContent = isFirstChunk
+          ? `${indent}${textChunk.content}`
+          : textChunk.content;
+        const content = `${valueContent}${isLastChunk ? comma : ""}`;
+        chunks.push({
+          types: ["code"],
+          content,
+          section: { level, path: [...path] },
+        });
+      });
+    } else {
+      chunks.push({
+        types: ["code"],
+        content: fullContent,
+        section: { level, path },
+      });
+    }
   }
 
   private getIndent(level: number): string {

@@ -104,6 +104,8 @@
 - Unit tests: alongside source files with `.test.ts` suffix
 - E2E tests: in `test/` directory with `*-e2e.test.ts` suffix
 - Run: `npx vite-node <file>`
+- Prefer extending existing unit test files instead of creating new ones
+- Always consider consolidating related or overlapping tests
 
 ### Testing Philosophy
 
