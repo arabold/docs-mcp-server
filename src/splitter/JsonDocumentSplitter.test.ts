@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { SPLITTER_MAX_CHUNK_SIZE } from "../utils/config";
 import { JsonDocumentSplitter } from "./JsonDocumentSplitter";
 
 describe("JsonDocumentSplitter", () => {
@@ -324,6 +325,164 @@ describe("JsonDocumentSplitter", () => {
       optimizedChunks.forEach((chunk) => {
         expect(chunk.content.length).toBeGreaterThan(0);
       });
+    });
+  });
+
+  describe("chunk size limits", () => {
+    it("should respect max chunk size when processing deep nested JSON", async () => {
+      const largeValue = "x".repeat(6000);
+      const deepJson = {
+        level1: {
+          level2: {
+            level3: {
+              level4: {
+                level5: {
+                  level6: {
+                    largeData: largeValue,
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const chunks = await splitter.splitText(JSON.stringify(deepJson, null, 2));
+
+      chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+      });
+    });
+
+    it("should respect max chunk size when exceeding maxChunks limit", async () => {
+      const largeJson: Record<string, unknown> = {};
+      for (let i = 0; i < 100; i++) {
+        largeJson[`property${i}`] = "x".repeat(6000);
+      }
+
+      const limitedSplitter = new JsonDocumentSplitter({ maxChunks: 50 });
+      const chunks = await limitedSplitter.splitText(JSON.stringify(largeJson, null, 2));
+
+      chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+      });
+
+      const hasTextSplitterChunks = chunks.some(
+        (c) => c.section.level === 0 && c.section.path.length === 0,
+      );
+      expect(hasTextSplitterChunks).toBe(true);
+    });
+
+    it("should handle very large single JSON values at max depth", async () => {
+      const veryLargeValue = "y".repeat(15000);
+      const json = {
+        level1: {
+          level2: {
+            level3: {
+              level4: {
+                level5: {
+                  level6: {
+                    hugeData: veryLargeValue,
+                    moreData: "additional data",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
+
+      chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+      });
+
+      expect(chunks.length).toBeGreaterThan(1);
+    });
+
+    it("should handle array with large values at max depth", async () => {
+      const largeValue = "z".repeat(6000);
+      const json = {
+        level1: {
+          level2: {
+            level3: {
+              level4: [largeValue, largeValue, largeValue],
+            },
+          },
+        },
+      };
+
+      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
+
+      chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+      });
+    });
+
+    it("should split oversized primitive properties before hitting max depth", async () => {
+      const largeValue = "x".repeat(6000);
+      const json = {
+        level1: {
+          largeProp: largeValue,
+          smallProp: "ok",
+        },
+      };
+
+      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
+
+      chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+      });
+
+      expect(chunks.length).toBeGreaterThan(4);
+    });
+
+    it("should split oversized primitive array items before hitting max depth", async () => {
+      const largeValue = "y".repeat(6000);
+      const json = {
+        level1: {
+          items: [largeValue, "small"],
+        },
+      };
+
+      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
+
+      chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+      });
+
+      expect(chunks.length).toBeGreaterThan(5);
+    });
+
+    it("should keep small chunks well below the max when not at depth limit", async () => {
+      const json = {
+        config: {
+          database: {
+            host: "localhost",
+            port: 5432,
+            name: "mydb",
+          },
+          cache: {
+            enabled: true,
+            ttl: 3600,
+          },
+        },
+      };
+
+      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 5 });
+      const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
+
+      chunks.forEach((chunk) => {
+        expect(chunk.content.length).toBeLessThan(200);
+      });
+
+      const hasJsonStructure = chunks.some((c) => c.section.level > 0);
+      expect(hasJsonStructure).toBe(true);
     });
   });
 
