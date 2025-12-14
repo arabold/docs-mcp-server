@@ -104,8 +104,6 @@ export function createWorkerCommand(program: Command): Command {
             enableApiServer: true,
             enableWorker: true,
             port: appConfig.server.ports.worker,
-            host: appConfig.server.host,
-            telemetry: appConfig.app.telemetryEnabled,
             startupContext: {
               cliCommand: "worker",
             },

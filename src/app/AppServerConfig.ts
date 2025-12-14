@@ -1,9 +1,9 @@
 /**
- * Configuration interface for the AppServer.
- * Defines which services should be enabled and their configuration options.
+ * Runtime configuration interface for the AppServer.
+ *
+ * AppServerConfig only controls service composition and runtime wiring.
+ * Environment / YAML / default-based settings are sourced from AppConfig.
  */
-
-import type { AuthConfig } from "../auth/types";
 
 export interface AppServerConfig {
   /** Enable web interface routes and static file serving */
@@ -18,23 +18,15 @@ export interface AppServerConfig {
   /** Enable embedded worker for job processing */
   enableWorker: boolean;
 
-  /** Port to run the server on */
+  /**
+   * Port to run the server on.
+   *
+   * AppConfig contains multiple ports; AppServerConfig selects which one to bind.
+   */
   port: number;
-
-  /** Host to bind the server to */
-  host: string;
 
   /** URL of external worker server (if using external worker instead of embedded) */
   externalWorkerUrl?: string;
-
-  /** Whether to run MCP server in read-only mode */
-  readOnly?: boolean;
-
-  /** Optional OAuth2/OIDC authentication configuration for MCP endpoints */
-  auth?: AuthConfig;
-
-  /** Enable telemetry tracking for usage and performance monitoring */
-  telemetry?: boolean;
 
   /** Startup context for telemetry (optional) */
   startupContext?: {

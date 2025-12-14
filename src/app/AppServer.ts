@@ -84,7 +84,7 @@ export class AppServer {
     const embeddingConfig = this.docService.getActiveEmbeddingConfig();
 
     // Initialize telemetry if enabled
-    if (this.serverConfig.telemetry !== false && shouldEnableTelemetry()) {
+    if (this.appConfig.app.telemetryEnabled && shouldEnableTelemetry()) {
       try {
         // Set global application context that will be included in all events
         if (telemetry.isEnabled()) {
@@ -93,8 +93,8 @@ export class AppServer {
             appPlatform: process.platform,
             appNodeVersion: process.version,
             appServicesEnabled: this.getActiveServicesList(),
-            appAuthEnabled: Boolean(this.serverConfig.auth),
-            appReadOnly: Boolean(this.serverConfig.readOnly),
+            appAuthEnabled: Boolean(this.appConfig.auth.enabled),
+            appReadOnly: Boolean(this.appConfig.app.readOnly),
             // Add embedding configuration to global context
             ...(embeddingConfig && {
               aiEmbeddingProvider: embeddingConfig.provider,
@@ -130,7 +130,7 @@ export class AppServer {
     try {
       const address = await this.server.listen({
         port: this.serverConfig.port,
-        host: this.serverConfig.host,
+        host: this.appConfig.server.host,
       });
 
       // Setup WebSocket server for tRPC subscriptions if API server is enabled
@@ -313,7 +313,7 @@ export class AppServer {
     this.setupRemoteEventProxy();
 
     // Initialize authentication if enabled
-    if (this.serverConfig.auth?.enabled) {
+    if (this.appConfig.auth.enabled) {
       await this.initializeAuth();
     }
 
@@ -321,7 +321,7 @@ export class AppServer {
     await this.server.register(formBody);
 
     // Add request logging middleware for OAuth debugging
-    if (this.serverConfig.auth?.enabled) {
+    if (this.appConfig.auth.enabled) {
       this.server.addHook("onRequest", async (request) => {
         if (
           request.url.includes("/oauth") ||
@@ -336,7 +336,7 @@ export class AppServer {
     }
 
     // Add protected resource metadata endpoint for RFC9728 compliance
-    if (this.serverConfig.auth?.enabled && this.authManager) {
+    if (this.appConfig.auth.enabled && this.authManager) {
       await this.setupAuthMetadataEndpoint();
     }
 
@@ -400,7 +400,7 @@ export class AppServer {
       this.docService,
       this.pipeline,
       this.appConfig,
-      this.serverConfig.readOnly,
+      this.appConfig.app.readOnly ? true : undefined,
       this.authManager || undefined,
     );
     logger.debug("MCP server service enabled");
@@ -470,11 +470,22 @@ export class AppServer {
    * Initialize OAuth2/OIDC authentication manager.
    */
   private async initializeAuth(): Promise<void> {
-    if (!this.serverConfig.auth) {
+    if (!this.appConfig.auth.enabled) {
       return;
     }
 
-    this.authManager = new ProxyAuthManager(this.serverConfig.auth);
+    if (!this.appConfig.auth.issuerUrl || !this.appConfig.auth.audience) {
+      throw new Error(
+        "Authentication is enabled but auth.issuerUrl or auth.audience is not configured.",
+      );
+    }
+
+    this.authManager = new ProxyAuthManager({
+      enabled: true,
+      issuerUrl: this.appConfig.auth.issuerUrl,
+      audience: this.appConfig.auth.audience,
+      scopes: ["openid", "profile"],
+    });
     await this.authManager.initialize();
     logger.debug("Proxy auth manager initialized");
   }

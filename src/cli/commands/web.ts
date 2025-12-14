@@ -126,9 +126,7 @@ export function createWebCommand(program: Command): Command {
             enableApiServer: false,
             enableWorker: !serverUrl,
             port: appConfig.server.ports.web,
-            host: appConfig.server.host,
             externalWorkerUrl: serverUrl,
-            telemetry: appConfig.app.telemetryEnabled,
             startupContext: {
               cliCommand: "web",
             },

@@ -10,7 +10,12 @@ import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import { loadConfig, SERVER_DEFAULT_PORT, SERVER_HOST } from "../../utils/config";
+import {
+  loadConfig,
+  READ_ONLY,
+  SERVER_DEFAULT_PORT,
+  SERVER_HOST,
+} from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -136,6 +141,7 @@ export function createDefaultAction(program: Command): Command {
             AUTH_ENABLED: options.authEnabled,
             AUTH_ISSUER_URL: options.authIssuerUrl,
             AUTH_AUDIENCE: options.authAudience,
+            READ_ONLY: options.readOnly,
             EMBEDDING_MODEL: options.embeddingModel,
           });
 
@@ -199,10 +205,6 @@ export function createDefaultAction(program: Command): Command {
               enableApiServer: true, // Enable API (tRPC) in http mode
               enableWorker: true, // Always enable in-process worker for unified server
               port: appConfig.server.ports.default,
-              host: appConfig.server.host,
-              readOnly: options.readOnly,
-              auth: authConfig,
-              telemetry: appConfig.app.telemetryEnabled,
               startupContext: {
                 cliCommand: "default",
                 mcpProtocol: "http",

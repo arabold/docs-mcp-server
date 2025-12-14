@@ -13,6 +13,7 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import {
   loadConfig,
+  READ_ONLY,
   SERVER_HOST,
   SERVER_MCP_PORT,
   SERVER_PROTOCOL,
@@ -144,6 +145,7 @@ export function createMcpCommand(program: Command): Command {
             AUTH_ENABLED: cmdOptions.authEnabled,
             AUTH_ISSUER_URL: cmdOptions.authIssuerUrl,
             AUTH_AUDIENCE: cmdOptions.authAudience,
+            READ_ONLY: cmdOptions.readOnly,
             EMBEDDING_MODEL: cmdOptions.embeddingModel,
           });
 
@@ -221,11 +223,7 @@ export function createMcpCommand(program: Command): Command {
                 enableApiServer: false, // Never enable API in mcp command
                 enableWorker: !serverUrl,
                 port: appConfig.server.ports.mcp,
-                host: appConfig.server.host,
                 externalWorkerUrl: serverUrl,
-                readOnly: cmdOptions.readOnly,
-                auth: authConfig,
-                telemetry: appConfig.app.telemetryEnabled,
                 startupContext: {
                   cliCommand: "mcp",
                   mcpProtocol: "http",

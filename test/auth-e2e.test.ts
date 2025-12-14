@@ -51,6 +51,13 @@ describe("Authentication End-to-End Tests", () => {
     const eventBus = new EventBusService();
     appConfig.app.storePath = tempDir;
     appConfig.app.embeddingModel = ""; // disable embeddings for auth e2e
+
+    // AppServer reads auth settings from AppConfig (source of truth)
+    appConfig.server.host = "localhost";
+    appConfig.auth.enabled = true;
+    appConfig.auth.issuerUrl = process.env.DOCS_MCP_AUTH_ISSUER_URL;
+    appConfig.auth.audience = process.env.DOCS_MCP_AUTH_AUDIENCE;
+
     docService = await createLocalDocumentManagement(eventBus, appConfig); // Use temp dir for test database
     pipeline = await PipelineFactory.createPipeline(docService, eventBus, {
       appConfig: appConfig,
@@ -63,13 +70,6 @@ describe("Authentication End-to-End Tests", () => {
       enableApiServer: false,
       enableWorker: true, // Enable worker for MCP server
       port: serverPort,
-      host: "localhost",
-      auth: {
-        enabled: true,
-        issuerUrl: process.env.DOCS_MCP_AUTH_ISSUER_URL,
-        audience: process.env.DOCS_MCP_AUTH_AUDIENCE,
-        scopes: ["openid", "profile"],
-      },
       startupContext: {
         cliCommand: "test",
         mcpProtocol: "http",

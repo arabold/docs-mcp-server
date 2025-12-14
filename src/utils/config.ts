@@ -77,6 +77,14 @@ const configSchema = defineConfigSchema({
     yamlPaths: [["telemetry", "enabled"]],
     target: ["app", "telemetryEnabled"],
   },
+  /** Read-only mode toggle (primarily affects MCP write / job tools) */
+  READ_ONLY: {
+    defaultValue: false,
+    env: ["DOCS_MCP_READ_ONLY"],
+    parser: parseBooleanish,
+    yamlPaths: [["app", "readOnly"]],
+    target: ["app", "readOnly"],
+  },
   /** Standalone server port (single-process mode) */
   SERVER_DEFAULT_PORT: {
     defaultValue: 6280,
@@ -390,6 +398,7 @@ const defaultValues = Object.fromEntries(
 export const {
   STORE_PATH,
   TELEMETRY,
+  READ_ONLY,
   SERVER_PROTOCOL,
   SERVER_DEFAULT_PORT,
   SERVER_WORKER_PORT,
