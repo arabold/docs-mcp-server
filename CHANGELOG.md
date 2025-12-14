@@ -1,3 +1,18 @@
+# [1.33.0](https://github.com/arabold/docs-mcp-server/compare/v1.32.0...v1.33.0) (2025-12-14)
+
+
+### Bug Fixes
+
+* ensure JSON chunks respect max chunk size limits ([09f4413](https://github.com/arabold/docs-mcp-server/commit/09f4413abc8702344b03ccf6a7e5c45ec4c9f58b))
+* fixed triggers for documents_vec synchronization and add vector persistence tests ([1afea9a](https://github.com/arabold/docs-mcp-server/commit/1afea9a75df25354eb4e204060f79b6f4352461d)), closes [#293](https://github.com/arabold/docs-mcp-server/issues/293)
+* remove incorrect second argument to TextDocumentSplitter.splitText() ([579978c](https://github.com/arabold/docs-mcp-server/commit/579978c8ec1fbb518b9888a52624fe2e761ff05c))
+* respect chunk size limit tests and improve primitive processing in JSON ([4418d0e](https://github.com/arabold/docs-mcp-server/commit/4418d0e5358876d30cf7bc7878fd9ec49b00609c))
+
+
+### Features
+
+* add depth and chunk count limiting to JSON document splitter ([12f04ca](https://github.com/arabold/docs-mcp-server/commit/12f04ca81b2f441e39edbb0ee5f07a24d57d9a74))
+
 # [1.32.0](https://github.com/arabold/docs-mcp-server/compare/v1.31.1...v1.32.0) (2025-12-05)
 
 
