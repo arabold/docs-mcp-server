@@ -3,6 +3,7 @@ import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { VertexAIEmbeddings } from "@langchain/google-vertexai";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { MissingCredentialsError } from "../errors";
 import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
@@ -11,6 +12,11 @@ import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Mock process.env for each test
 const originalEnv = process.env;
+const appConfig = loadConfig();
+const runtimeConfig = {
+  vectorDimension: appConfig.embeddings.vectorDimension,
+  config: appConfig.embeddings,
+};
 
 beforeEach(() => {
   vi.stubGlobal("process", {
@@ -36,7 +42,7 @@ afterEach(() => {
 
 describe("createEmbeddingModel", () => {
   test("should create OpenAI embeddings with just model name (default provider)", () => {
-    const model = createEmbeddingModel("text-embedding-3-small");
+    const model = createEmbeddingModel("text-embedding-3-small", runtimeConfig);
     expect(model).toBeInstanceOf(OpenAIEmbeddings);
     expect(model).toMatchObject({
       modelName: "text-embedding-3-small",
@@ -44,7 +50,7 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should create OpenAI embeddings with explicit provider", () => {
-    const model = createEmbeddingModel("openai:text-embedding-3-small");
+    const model = createEmbeddingModel("openai:text-embedding-3-small", runtimeConfig);
     expect(model).toBeInstanceOf(OpenAIEmbeddings);
     expect(model).toMatchObject({
       modelName: "text-embedding-3-small",
@@ -58,17 +64,18 @@ describe("createEmbeddingModel", () => {
       },
     });
 
-    expect(() => createEmbeddingModel("text-embedding-3-small")).toThrow(
+    expect(() => createEmbeddingModel("text-embedding-3-small", runtimeConfig)).toThrow(
       MissingCredentialsError,
     );
-    expect(() => createEmbeddingModel("openai:text-embedding-3-small")).toThrow(
-      MissingCredentialsError,
-    );
+    expect(() =>
+      createEmbeddingModel("openai:text-embedding-3-small", runtimeConfig),
+    ).toThrow(MissingCredentialsError);
   });
 
   test("should correctly parse model names containing colons or slashes", () => {
     const model = createEmbeddingModel(
       "openai:jeffh/intfloat-multilingual-e5-large-instruct:f16",
+      runtimeConfig,
     );
     expect(model).toBeInstanceOf(OpenAIEmbeddings);
     expect(model).toMatchObject({
@@ -77,7 +84,7 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should create Google Vertex AI embeddings", () => {
-    const model = createEmbeddingModel("vertex:text-embedding-004");
+    const model = createEmbeddingModel("vertex:text-embedding-004", runtimeConfig);
     expect(model).toBeInstanceOf(VertexAIEmbeddings);
     expect(model).toMatchObject({
       model: "text-embedding-004",
@@ -85,7 +92,10 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should create Google Gemini embeddings with MRL truncation enabled", () => {
-    const model = createEmbeddingModel("gemini:gemini-embedding-exp-03-07");
+    const model = createEmbeddingModel(
+      "gemini:gemini-embedding-exp-03-07",
+      runtimeConfig,
+    );
     expect(model).toBeInstanceOf(FixedDimensionEmbeddings);
 
     // The FixedDimensionEmbeddings should wrap a GoogleGenerativeAIEmbeddings instance
@@ -106,9 +116,9 @@ describe("createEmbeddingModel", () => {
       },
     });
 
-    expect(() => createEmbeddingModel("vertex:text-embedding-004")).toThrow(
-      MissingCredentialsError,
-    );
+    expect(() =>
+      createEmbeddingModel("vertex:text-embedding-004", runtimeConfig),
+    ).toThrow(MissingCredentialsError);
   });
 
   test("should throw MissingCredentialsError for Gemini without GOOGLE_API_KEY", () => {
@@ -118,13 +128,13 @@ describe("createEmbeddingModel", () => {
       },
     });
 
-    expect(() => createEmbeddingModel("gemini:gemini-embedding-exp-03-07")).toThrow(
-      MissingCredentialsError,
-    );
+    expect(() =>
+      createEmbeddingModel("gemini:gemini-embedding-exp-03-07", runtimeConfig),
+    ).toThrow(MissingCredentialsError);
   });
 
   test("should create AWS Bedrock embeddings", () => {
-    const model = createEmbeddingModel("aws:amazon.titan-embed-text-v1");
+    const model = createEmbeddingModel("aws:amazon.titan-embed-text-v1", runtimeConfig);
     expect(model).toBeInstanceOf(BedrockEmbeddings);
     expect(model).toMatchObject({
       model: "amazon.titan-embed-text-v1",
@@ -132,7 +142,9 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should throw UnsupportedProviderError for unknown provider", () => {
-    expect(() => createEmbeddingModel("unknown:model")).toThrow(UnsupportedProviderError);
+    expect(() => createEmbeddingModel("unknown:model", runtimeConfig)).toThrow(
+      UnsupportedProviderError,
+    );
   });
 
   test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {
@@ -146,9 +158,9 @@ describe("createEmbeddingModel", () => {
       },
     });
 
-    expect(() => createEmbeddingModel("microsoft:text-embedding-ada-002")).toThrow(
-      MissingCredentialsError,
-    );
+    expect(() =>
+      createEmbeddingModel("microsoft:text-embedding-ada-002", runtimeConfig),
+    ).toThrow(MissingCredentialsError);
   });
 
   test("should throw MissingCredentialsError for AWS Bedrock without required env vars", () => {
@@ -159,9 +171,9 @@ describe("createEmbeddingModel", () => {
       },
     });
 
-    expect(() => createEmbeddingModel("aws:amazon.titan-embed-text-v1")).toThrow(
-      MissingCredentialsError,
-    );
+    expect(() =>
+      createEmbeddingModel("aws:amazon.titan-embed-text-v1", runtimeConfig),
+    ).toThrow(MissingCredentialsError);
   });
 
   test("should create AWS Bedrock embeddings with only AWS_PROFILE set", () => {
@@ -171,7 +183,7 @@ describe("createEmbeddingModel", () => {
         BEDROCK_AWS_REGION: "us-east-1",
       },
     });
-    const model = createEmbeddingModel("aws:amazon.titan-embed-text-v1");
+    const model = createEmbeddingModel("aws:amazon.titan-embed-text-v1", runtimeConfig);
     expect(model).toBeInstanceOf(BedrockEmbeddings);
     expect(model).toMatchObject({
       model: "amazon.titan-embed-text-v1",

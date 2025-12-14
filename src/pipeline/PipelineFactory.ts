@@ -1,6 +1,5 @@
 import type { EventBusService } from "../events/EventBusService";
 import type { DocumentManagementService } from "../store";
-import { DEFAULT_MAX_CONCURRENCY } from "../utils/config";
 import { logger } from "../utils/logger";
 import { PipelineClient } from "./PipelineClient";
 import { PipelineManager } from "./PipelineManager";
@@ -21,7 +20,7 @@ export namespace PipelineFactory {
   export async function createPipeline(
     docService: DocumentManagementService,
     eventBus: EventBusService,
-    options?: Omit<PipelineOptions, "serverUrl">,
+    options: Omit<PipelineOptions, "serverUrl">,
   ): Promise<PipelineManager>;
   // Overload: Remote pipeline client (out-of-process worker)
   export async function createPipeline(
@@ -31,18 +30,14 @@ export namespace PipelineFactory {
   ): Promise<PipelineClient>;
   // Implementation
   export async function createPipeline(
-    docService?: DocumentManagementService,
-    eventBus?: EventBusService,
-    options: PipelineOptions = {},
+    docService: DocumentManagementService | undefined,
+    eventBus: EventBusService | undefined,
+    options: PipelineOptions,
   ): Promise<IPipeline> {
-    const {
-      recoverJobs = false, // Default to false for safety
-      serverUrl,
-      concurrency = DEFAULT_MAX_CONCURRENCY,
-    } = options;
+    const { recoverJobs = false, serverUrl, appConfig } = options;
 
     logger.debug(
-      `Creating pipeline: recoverJobs=${recoverJobs}, serverUrl=${serverUrl || "none"}, concurrency=${concurrency}`,
+      `Creating pipeline: recoverJobs=${recoverJobs}, serverUrl=${serverUrl || "none"}`,
     );
 
     if (serverUrl) {
@@ -61,8 +56,6 @@ export namespace PipelineFactory {
       );
     }
 
-    return new PipelineManager(docService, eventBus, concurrency, {
-      recoverJobs,
-    });
+    return new PipelineManager(docService, eventBus, { recoverJobs, appConfig });
   }
 }

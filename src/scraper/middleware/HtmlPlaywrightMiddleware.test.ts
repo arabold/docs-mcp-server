@@ -19,8 +19,8 @@ import type { MiddlewareContext } from "./types";
 // Suppress logger output during tests
 
 // Mock playwright using factory functions
-vi.mock("playwright", async (importOriginal) =>
-  importOriginal<typeof import("playwright")>(),
+vi.mock("playwright", async () =>
+  vi.importActual<typeof import("playwright")>("playwright"),
 );
 
 import { type Browser, chromium, type Frame, type Page } from "playwright";

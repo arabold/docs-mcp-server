@@ -1,6 +1,7 @@
 import { vol } from "memfs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
+import { loadConfig } from "../../utils/config";
 import type { ScrapeResult, ScraperOptions, ScraperProgressEvent } from "../types";
 import { LocalFileStrategy } from "./LocalFileStrategy";
 
@@ -8,18 +9,20 @@ vi.mock("node:fs/promises", () => ({ default: vol.promises }));
 vi.mock("node:fs");
 
 describe("LocalFileStrategy", () => {
+  const appConfig = loadConfig();
+
   beforeEach(() => {
     vol.reset();
   });
 
   it("should handle file:// URLs", () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     expect(strategy.canHandle("file:///path/to/file.txt")).toBe(true);
     expect(strategy.canHandle("https://example.com")).toBe(false);
   });
 
   it("should process a single file", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///test.md",
       library: "test",
@@ -73,7 +76,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should process a directory with files and a subdirectory", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///testdir",
       library: "test",
@@ -99,7 +102,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should process different file types correctly", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///testdir",
       library: "test",
@@ -180,7 +183,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should detect source code file types with correct MIME types", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///codebase",
       library: "test",
@@ -307,7 +310,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should handle empty files", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///testdir",
       library: "test",
@@ -342,7 +345,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should skip binary/unsupported files and only process supported text files", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///testdir",
       library: "test",
@@ -381,7 +384,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should respect include and exclude patterns for local crawling", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///testdir",
       library: "test",
@@ -410,7 +413,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should process files and folders with spaces in their names (percent-encoded in file:// URL)", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///test%20dir/space%20file.md",
       library: "test",
@@ -442,7 +445,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should decode percent-encoded file paths (spaces as %20) for local crawling", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///test%20dir", // percent-encoded space
       library: "test",
@@ -468,7 +471,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should process JSON files through JsonPipeline", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file:///api-docs.json",
       library: "test-api",
@@ -542,7 +545,7 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should handle malformed file URLs with only two slashes", async () => {
-    const strategy = new LocalFileStrategy();
+    const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
       url: "file://testdir/test.md", // Note: only two slashes (malformed)
       library: "test",
@@ -580,7 +583,7 @@ describe("LocalFileStrategy", () => {
 
   describe("refresh workflow", () => {
     it("should skip processing when file returns NOT_MODIFIED (unchanged)", async () => {
-      const strategy = new LocalFileStrategy();
+      const strategy = new LocalFileStrategy(appConfig);
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testContent = "# Test File\nOriginal content";
 
@@ -649,7 +652,7 @@ describe("LocalFileStrategy", () => {
     });
 
     it("should re-process file when it has been modified", async () => {
-      const strategy = new LocalFileStrategy();
+      const strategy = new LocalFileStrategy(appConfig);
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const originalContent = "# Original\nOriginal content";
       const updatedContent = "# Updated\nNew updated content";
@@ -710,7 +713,7 @@ describe("LocalFileStrategy", () => {
     });
 
     it("should handle deleted files during refresh", async () => {
-      const strategy = new LocalFileStrategy();
+      const strategy = new LocalFileStrategy(appConfig);
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testContent = "# Test File\nContent";
 
@@ -760,7 +763,7 @@ describe("LocalFileStrategy", () => {
     });
 
     it("should discover and process new files in a directory during refresh", async () => {
-      const strategy = new LocalFileStrategy();
+      const strategy = new LocalFileStrategy(appConfig);
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
       // Create initial directory with one file
@@ -813,7 +816,7 @@ describe("LocalFileStrategy", () => {
     });
 
     it("should preserve depth from original scrape during refresh for nested files", async () => {
-      const strategy = new LocalFileStrategy();
+      const strategy = new LocalFileStrategy(appConfig);
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
       vol.fromJSON(

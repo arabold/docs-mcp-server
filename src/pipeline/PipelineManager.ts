@@ -14,7 +14,7 @@ import { ScraperRegistry, ScraperService } from "../scraper";
 import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { VersionStatus } from "../store/types";
-import { DEFAULT_MAX_CONCURRENCY } from "../utils/config";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError } from "./errors";
 import { PipelineWorker } from "./PipelineWorker"; // Import the worker
@@ -35,19 +35,20 @@ export class PipelineManager implements IPipeline {
   private scraperService: ScraperService;
   private shouldRecoverJobs: boolean;
   private eventBus: EventBusService;
+  private appConfig: AppConfig;
 
   constructor(
     store: DocumentManagementService,
     eventBus: EventBusService,
-    concurrency: number = DEFAULT_MAX_CONCURRENCY,
-    options: { recoverJobs?: boolean } = {},
+    options: { recoverJobs?: boolean; appConfig: AppConfig },
   ) {
     this.store = store;
     this.eventBus = eventBus;
-    this.concurrency = concurrency;
+    this.appConfig = options.appConfig;
+    this.concurrency = this.appConfig.scraper.maxConcurrency;
     this.shouldRecoverJobs = options.recoverJobs ?? true; // Default to true for backward compatibility
     // ScraperService needs a registry. We create one internally for the manager.
-    const registry = new ScraperRegistry();
+    const registry = new ScraperRegistry(this.appConfig);
     this.scraperService = new ScraperService(registry);
   }
 

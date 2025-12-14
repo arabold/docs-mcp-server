@@ -19,13 +19,14 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { FetchUrlTool } from "../src/tools/FetchUrlTool";
 import { AutoDetectFetcher } from "../src/scraper/fetcher/AutoDetectFetcher";
 import { ScrapeMode } from "../src/scraper/types";
+import { loadConfig } from "../src/utils/config";
 
 describe("HTML Pipeline Website Tests", () => {
   let fetchUrlTool: FetchUrlTool;
 
   beforeAll(() => {
     // Initialize the FetchUrlTool with AutoDetectFetcher
-    const autoDetectFetcher = new AutoDetectFetcher();
+    const autoDetectFetcher = new AutoDetectFetcher(loadConfig().scraper);
     fetchUrlTool = new FetchUrlTool(autoDetectFetcher);
   });
 

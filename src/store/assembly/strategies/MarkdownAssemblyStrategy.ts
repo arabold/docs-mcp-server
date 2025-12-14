@@ -1,11 +1,12 @@
+import {
+  ASSEMBLY_CHILD_LIMIT,
+  ASSEMBLY_PRECEDING_SIBLINGS_LIMIT,
+  ASSEMBLY_SUBSEQUENT_SIBLINGS_LIMIT,
+} from "../../../utils/config";
 import { MimeTypeUtils } from "../../../utils/mimeTypeUtils";
 import type { DocumentStore } from "../../DocumentStore";
 import type { DbPageChunk } from "../../types";
 import type { ContentAssemblyStrategy } from "../types";
-
-const CHILD_LIMIT = 3;
-const PRECEDING_SIBLINGS_LIMIT = 1;
-const SUBSEQUENT_SIBLINGS_LIMIT = 2;
 
 /**
  * Assembly strategy that preserves the current behavior for markdown and text content.
@@ -113,7 +114,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       library,
       version,
       id,
-      PRECEDING_SIBLINGS_LIMIT,
+      ASSEMBLY_PRECEDING_SIBLINGS_LIMIT,
     );
     for (const sib of precedingSiblings) {
       relatedIds.add(sib.id);
@@ -124,7 +125,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       library,
       version,
       id,
-      CHILD_LIMIT,
+      ASSEMBLY_CHILD_LIMIT,
     );
     for (const child of childChunks) {
       relatedIds.add(child.id);
@@ -135,7 +136,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       library,
       version,
       id,
-      SUBSEQUENT_SIBLINGS_LIMIT,
+      ASSEMBLY_SUBSEQUENT_SIBLINGS_LIMIT,
     );
     for (const sib of subsequentSiblings) {
       relatedIds.add(sib.id);

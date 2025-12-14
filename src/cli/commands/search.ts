@@ -7,6 +7,7 @@ import { Option } from "commander";
 import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
+import { loadConfig } from "../../utils/config";
 import {
   formatOutput,
   getEventBus,
@@ -38,9 +39,12 @@ export async function searchAction(
 
   const serverUrl = options.serverUrl;
   const globalOptions = getGlobalOptions(command);
+  const appConfig = loadConfig({ EMBEDDING_MODEL: options.embeddingModel });
+
+  appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
 
   // Resolve embedding configuration for local execution (search needs embeddings)
-  const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
+  const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
   if (!serverUrl && !embeddingConfig) {
     throw new Error(
       "Embedding configuration is required for local search. " +
@@ -52,9 +56,8 @@ export async function searchAction(
 
   const docService = await createDocumentManagement({
     serverUrl,
-    embeddingConfig,
-    storePath: globalOptions.storePath,
     eventBus,
+    appConfig: appConfig,
   });
 
   try {

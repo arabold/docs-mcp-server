@@ -2,15 +2,7 @@ import type { Embeddings } from "@langchain/core/embeddings";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
-import {
-  EMBEDDING_BATCH_CHARS,
-  EMBEDDING_BATCH_SIZE,
-  SEARCH_OVERFETCH_FACTOR,
-  SEARCH_WEIGHT_FTS,
-  SEARCH_WEIGHT_VEC,
-  SPLITTER_MAX_CHUNK_SIZE,
-  VECTOR_SEARCH_MULTIPLIER,
-} from "../utils/config";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { compareVersionsDescending } from "../utils/version";
 import { applyMigrations } from "./applyMigrations";
@@ -33,7 +25,6 @@ import {
   type DbVersionWithLibrary,
   denormalizeVersionName,
   normalizeVersionName,
-  VECTOR_DIMENSION,
   type VersionScraperOptions,
   type VersionStatus,
 } from "./types";
@@ -61,9 +52,18 @@ interface RankedResult extends RawSearchResult {
  * libraries, enabling version-specific document retrieval and searches.
  */
 export class DocumentStore {
+  private readonly config: AppConfig;
   private readonly db: DatabaseType;
   private embeddings!: Embeddings;
-  private readonly dbDimension: number = VECTOR_DIMENSION;
+  private readonly dbDimension: number;
+  private readonly searchWeightVec: number;
+  private readonly searchWeightFts: number;
+  private readonly searchOverfetchFactor: number;
+  private readonly vectorSearchMultiplier: number;
+  private readonly splitterMaxChunkSize: number;
+  private readonly embeddingBatchSize: number;
+  private readonly embeddingBatchChars: number;
+  private readonly embeddingInitTimeoutMs: number;
   private modelDimension!: number;
   private readonly embeddingConfig?: EmbeddingModelConfig | null;
   private isVectorSearchEnabled: boolean = false;
@@ -137,10 +137,10 @@ export class DocumentStore {
   private calculateRRF(vecRank?: number, ftsRank?: number, k = 60): number {
     let rrf = 0;
     if (vecRank !== undefined) {
-      rrf += SEARCH_WEIGHT_VEC / (k + vecRank);
+      rrf += this.searchWeightVec / (k + vecRank);
     }
     if (ftsRank !== undefined) {
-      rrf += SEARCH_WEIGHT_FTS / (k + ftsRank);
+      rrf += this.searchWeightFts / (k + ftsRank);
     }
     return rrf;
   }
@@ -181,16 +181,42 @@ export class DocumentStore {
     }));
   }
 
-  constructor(dbPath: string, embeddingConfig?: EmbeddingModelConfig | null) {
+  constructor(dbPath: string, appConfig: AppConfig) {
     if (!dbPath) {
       throw new StoreError("Missing required database path");
     }
+    this.config = appConfig;
+    this.dbDimension = this.config.embeddings.vectorDimension;
+    this.searchWeightVec = this.config.search.weightVec;
+    this.searchWeightFts = this.config.search.weightFts;
+    this.searchOverfetchFactor = this.config.search.overfetchFactor;
+    this.vectorSearchMultiplier = this.config.search.vectorMultiplier;
+    this.splitterMaxChunkSize = this.config.splitter.maxChunkSize;
+    this.embeddingBatchSize = this.config.embeddings.batchSize;
+    this.embeddingBatchChars = this.config.embeddings.batchChars;
+    this.embeddingInitTimeoutMs = this.config.embeddings.initTimeoutMs;
 
     // Only establish database connection in constructor
     this.db = new Database(dbPath);
 
     // Store embedding config for later initialization
-    this.embeddingConfig = embeddingConfig;
+    this.embeddingConfig = this.resolveEmbeddingConfig(appConfig.app.embeddingModel);
+  }
+
+  private resolveEmbeddingConfig(modelSpec: string): EmbeddingModelConfig | null {
+    const resolvedSpec = modelSpec;
+    if (!resolvedSpec) {
+      logger.debug("No embedding model specified. Embeddings are disabled.");
+      return null;
+    }
+
+    try {
+      logger.debug(`Resolving embedding configuration for model: ${resolvedSpec}`);
+      return EmbeddingConfig.parseEmbeddingConfig(resolvedSpec);
+    } catch (error) {
+      logger.debug(`Failed to resolve embedding configuration: ${error}`);
+      return null;
+    }
   }
 
   /**
@@ -461,7 +487,10 @@ export class DocumentStore {
 
     // Create embedding model
     try {
-      this.embeddings = createEmbeddingModel(config.modelSpec);
+      this.embeddings = createEmbeddingModel(config.modelSpec, {
+        requestTimeoutMs: this.config.embeddings.requestTimeoutMs,
+        vectorDimension: this.dbDimension,
+      });
 
       // Use known dimensions if available, otherwise detect via test query
       if (config.dimensions !== null) {
@@ -469,18 +498,16 @@ export class DocumentStore {
       } else {
         // Fallback: determine the model's actual dimension by embedding a test string
         // Use a timeout to fail fast if the embedding service is unreachable
-        const EMBEDDING_INIT_TIMEOUT_MS = 30_000; // 30 seconds
-
         const testPromise = this.embeddings.embedQuery("test");
         let timeoutId: NodeJS.Timeout | undefined;
         const timeoutPromise = new Promise<never>((_, reject) => {
           timeoutId = setTimeout(() => {
             reject(
               new Error(
-                `Embedding service connection timed out after ${EMBEDDING_INIT_TIMEOUT_MS / 1000} seconds`,
+                `Embedding service connection timed out after ${this.embeddingInitTimeoutMs / 1000} seconds`,
               ),
             );
-          }, EMBEDDING_INIT_TIMEOUT_MS);
+          }, this.embeddingInitTimeoutMs);
         });
 
         try {
@@ -649,7 +676,10 @@ export class DocumentStore {
       sqliteVec.load(this.db);
 
       // 2. Apply migrations (after extensions are loaded)
-      applyMigrations(this.db);
+      await applyMigrations(this.db, {
+        maxRetries: this.config.db.migrationMaxRetries,
+        retryDelayMs: this.config.db.migrationRetryDelayMs,
+      });
 
       // 3. Initialize prepared statements
       this.prepareStatements();
@@ -1122,15 +1152,15 @@ export class DocumentStore {
         // Validate chunk sizes before creating embeddings
         for (let i = 0; i < texts.length; i++) {
           const textSize = texts[i].length;
-          if (textSize > SPLITTER_MAX_CHUNK_SIZE) {
+          if (textSize > this.splitterMaxChunkSize) {
             logger.warn(
-              `⚠️  Chunk ${i + 1}/${texts.length} exceeds max size: ${textSize} > ${SPLITTER_MAX_CHUNK_SIZE} chars (URL: ${url})`,
+              `⚠️  Chunk ${i + 1}/${texts.length} exceeds max size: ${textSize} > ${this.splitterMaxChunkSize} chars (URL: ${url})`,
             );
           }
         }
 
         // Batch embedding creation to avoid token limit errors
-        const maxBatchChars = EMBEDDING_BATCH_CHARS;
+        const maxBatchChars = this.embeddingBatchChars;
         const rawEmbeddings: number[][] = [];
 
         let currentBatch: string[] = [];
@@ -1157,7 +1187,7 @@ export class DocumentStore {
           currentBatchSize += textSize;
 
           // Also respect the count-based limit for APIs that have per-request item limits
-          if (currentBatch.length >= EMBEDDING_BATCH_SIZE) {
+          if (currentBatch.length >= this.embeddingBatchSize) {
             batchCount++;
             logger.debug(
               `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
@@ -1466,10 +1496,10 @@ export class DocumentStore {
         const embedding = this.padVector(rawEmbedding);
 
         // Apply overfetch factor to both vector and FTS searches for better recall
-        const overfetchLimit = Math.max(1, limit * SEARCH_OVERFETCH_FACTOR);
+        const overfetchLimit = Math.max(1, limit * this.searchOverfetchFactor);
 
         // Use a multiplier to cast a wider net in vector search before final ranking
-        const vectorSearchK = overfetchLimit * VECTOR_SEARCH_MULTIPLIER;
+        const vectorSearchK = overfetchLimit * this.vectorSearchMultiplier;
 
         const stmt = this.db.prepare(`
           WITH vec_distances AS (

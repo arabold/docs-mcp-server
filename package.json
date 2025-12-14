@@ -93,6 +93,7 @@
     "tree-sitter-typescript": "^0.23.2",
     "turndown": "^7.2.2",
     "ws": "^8.18.3",
+    "yaml": "^2.8.2",
     "zod": "^4.1.12"
   },
   "devDependencies": {

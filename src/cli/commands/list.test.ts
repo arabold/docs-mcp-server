@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ListLibrariesTool } from "../../tools";
 
 // Mocks
 vi.mock("../../store", () => ({
@@ -36,7 +37,6 @@ beforeEach(() => {
 describe("listAction", () => {
   it("executes ListLibrariesTool", async () => {
     await expect(listAction({ serverUrl: undefined })).resolves.not.toThrow();
-    const { ListLibrariesTool } = await import("../../tools");
     expect(ListLibrariesTool).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,5 @@
 import { type Browser, chromium, type Page } from "playwright";
+import type { AppConfig } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
@@ -18,8 +19,10 @@ export class BrowserFetcher implements ContentFetcher {
   private browser: Browser | null = null;
   private page: Page | null = null;
   private fingerprintGenerator: FingerprintGenerator;
+  private readonly defaultTimeoutMs: number;
 
-  constructor() {
+  constructor(scraperConfig: AppConfig["scraper"]) {
+    this.defaultTimeoutMs = scraperConfig.browserTimeoutMs;
     this.fingerprintGenerator = new FingerprintGenerator();
   }
 
@@ -41,7 +44,7 @@ export class BrowserFetcher implements ContentFetcher {
       }
 
       // Set timeout
-      const timeout = options?.timeout || 30000;
+      const timeout = options?.timeout || this.defaultTimeoutMs;
 
       // Navigate to the page and wait for it to load
       logger.debug(`Navigating to ${source} with browser...`);
