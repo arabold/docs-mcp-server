@@ -1,3 +1,10 @@
+## [1.33.1](https://github.com/arabold/docs-mcp-server/compare/v1.33.0...v1.33.1) (2025-12-14)
+
+
+### Bug Fixes
+
+* fix Playwright version incompatibility in Docker image ([fbacb28](https://github.com/arabold/docs-mcp-server/commit/fbacb28e1fb86b9d31df43ade7c72c2937147c51))
+
 # [1.33.0](https://github.com/arabold/docs-mcp-server/compare/v1.32.0...v1.33.0) (2025-12-14)
 
 
