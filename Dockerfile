@@ -47,9 +47,6 @@ RUN apt-get update \
 COPY package*.json .
 COPY db db
 
-# Install production dependencies (with native modules built for target platform)
-# RUN npm ci --omit=dev
-
 # Copy built files from builder
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public

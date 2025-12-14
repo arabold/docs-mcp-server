@@ -78,7 +78,7 @@
     "langchain": "^1.0.6",
     "mime": "^4.1.0",
     "minimatch": "^10.1.1",
-    "playwright": "1.56.1",
+    "playwright": "^1.57.0",
     "posthog-node": "^5.13.2",
     "psl": "^1.15.0",
     "remark": "^15.0.1",

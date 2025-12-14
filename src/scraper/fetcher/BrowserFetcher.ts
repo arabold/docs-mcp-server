@@ -103,19 +103,18 @@ export class BrowserFetcher implements ContentFetcher {
     }
   }
 
+  public static async launchBrowser(): Promise<Browser> {
+    return chromium.launch({
+      headless: true,
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
+      args: ["--no-sandbox"],
+    });
+  }
+
   private async ensureBrowserReady(): Promise<void> {
     if (!this.browser) {
       logger.debug("Launching browser...");
-      this.browser = await chromium.launch({
-        headless: true,
-        args: [
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-web-security",
-          "--disable-features=site-per-process",
-        ],
-      });
+      this.browser = await BrowserFetcher.launchBrowser();
     }
 
     if (!this.page) {
