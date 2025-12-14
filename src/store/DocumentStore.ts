@@ -84,7 +84,7 @@ export class DocumentStore {
     // Updated for new schema - documents table now uses page_id
     insertDocument: Database.Statement<[number, string, string, number]>;
     // Updated for new schema - embeddings stored directly in documents table
-    insertEmbedding: Database.Statement<[bigint, string]>;
+    insertEmbedding: Database.Statement<[string, bigint]>;
     // New statement for pages table
     insertPage: Database.Statement<
       [number, string, string, string | null, string | null, string | null, number | null]
@@ -208,7 +208,7 @@ export class DocumentStore {
       insertDocument: this.db.prepare<[number, string, string, number]>(
         "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, ?, ?, ?)",
       ),
-      insertEmbedding: this.db.prepare<[bigint, string]>(
+      insertEmbedding: this.db.prepare<[string, bigint]>(
         "UPDATE documents SET embedding = ? WHERE id = ?",
       ),
       insertPage: this.db.prepare<
@@ -1249,8 +1249,8 @@ export class DocumentStore {
           // Insert into vector table only if vector search is enabled
           if (this.isVectorSearchEnabled && paddedEmbeddings.length > 0) {
             this.statements.insertEmbedding.run(
-              BigInt(rowId),
               JSON.stringify(paddedEmbeddings[docIndex]),
+              BigInt(rowId),
             );
           }
 

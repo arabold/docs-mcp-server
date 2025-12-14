@@ -20,6 +20,31 @@ function readFixture(filename: string): string {
 
 // Define mock handlers for httpbin.org endpoints
 export const handlers = [
+  // OpenAI embeddings mock - returns a zero vector to satisfy embedding calls in tests
+  http.post("https://api.openai.com/v1/embeddings", async ({ request }) => {
+    // OpenAI accepts `input` as either a string or string[]
+    const body = (await request.json()) as { input?: string | string[]; model?: string };
+
+    const inputs = Array.isArray(body?.input)
+      ? body.input
+      : typeof body?.input === "string"
+        ? [body.input]
+        : [];
+
+    const vector = Array(1536).fill(0);
+
+    return HttpResponse.json({
+      data: inputs.map((_, index) => ({
+        object: "embedding",
+        embedding: vector,
+        index,
+      })),
+      model: body?.model ?? "text-embedding-3-small",
+      object: "list",
+      usage: { prompt_tokens: 0, total_tokens: 0 },
+    });
+  }),
+
   // HTML endpoint - returns Moby Dick content
   http.get("https://httpbin.org/html", () => {
     return new HttpResponse(readFixture("html.html"), {
