@@ -327,14 +327,14 @@ const configSchema = defineConfigSchema({
     target: ["search", "weightFts"],
   },
   /** Multiplier to cast a wider net in vector search before final ranking. */
-  VECTOR_SEARCH_MULTIPLIER: {
+  EMBEDDINGS_VECTOR_SEARCH_MULTIPLIER: {
     defaultValue: 10,
     parser: parseIntStrict,
     yamlPaths: [["search", "vectorMultiplier"]],
     target: ["search", "vectorMultiplier"],
   },
   /** Default vector dimension used across the application */
-  VECTOR_DIMENSION: {
+  EMBEDDINGS_VECTOR_DIMENSION: {
     defaultValue: 1536,
     parser: parseIntStrict,
     yamlPaths: [
@@ -344,11 +344,11 @@ const configSchema = defineConfigSchema({
     target: ["embeddings", "vectorDimension"],
   },
   /** Maximum characters fed into tree-sitter parsers to avoid overflow */
-  PARSER_TREE_SITTER_SIZE_LIMIT: {
+  SPLITTER_TREESITTER_SIZE_LIMIT: {
     defaultValue: 30_000,
     parser: parseIntStrict,
-    yamlPaths: [["parser", "treeSitterSizeLimit"]],
-    target: ["parser", "treeSitterSizeLimit"],
+    yamlPaths: [["splitter", "treeSitterSizeLimit"]],
+    target: ["splitter", "treeSitterSizeLimit"],
   },
   /** Safety cap for hierarchical parent-chain traversal */
   ASSEMBLY_MAX_PARENT_CHAIN_DEPTH: {
@@ -387,61 +387,15 @@ const configSchema = defineConfigSchema({
 
 type ConfigKey = keyof typeof configSchema;
 
-type DefaultValues = { [K in ConfigKey]: (typeof configSchema)[K]["defaultValue"] };
-
 export type AppConfig = AppConfigFromSchema<typeof configSchema>;
 
-const defaultValues = Object.fromEntries(
+export const defaults = Object.fromEntries(
   Object.entries(configSchema).map(([key, entry]) => [key, entry.defaultValue]),
-) as DefaultValues;
+) as { [K in ConfigKey]: (typeof configSchema)[K]["defaultValue"] };
 
-export const {
-  STORE_PATH,
-  TELEMETRY,
-  READ_ONLY,
-  SERVER_PROTOCOL,
-  SERVER_DEFAULT_PORT,
-  SERVER_WORKER_PORT,
-  SERVER_MCP_PORT,
-  SERVER_WEB_PORT,
-  SERVER_HOST,
-  EMBEDDING_MODEL,
-  AUTH_ENABLED,
-  AUTH_ISSUER_URL,
-  AUTH_AUDIENCE,
-  SERVER_HEARTBEAT_INTERVAL_MS,
-  SCRAPER_MAX_PAGES,
-  SCRAPER_MAX_DEPTH,
-  SCRAPER_MAX_CONCURRENCY,
-  SCRAPER_PAGE_TIMEOUT_MS,
-  SCRAPER_FETCHER_MAX_RETRIES,
-  SCRAPER_FETCHER_BASE_DELAY_MS,
-  SCRAPER_FETCHER_MAX_CACHE_ITEMS,
-  SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES,
-  SCRAPER_BROWSER_TIMEOUT_MS,
-  SPLITTER_MIN_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-  SPLITTER_MAX_CHUNK_SIZE,
-  SPLITTER_JSON_MAX_NESTING_DEPTH,
-  SPLITTER_JSON_MAX_CHUNKS,
-  EMBEDDING_BATCH_SIZE,
-  EMBEDDING_BATCH_CHARS,
-  EMBEDDING_REQUEST_TIMEOUT_MS,
-  EMBEDDING_INIT_TIMEOUT_MS,
-  DB_MIGRATION_MAX_RETRIES,
-  DB_MIGRATION_RETRY_DELAY_MS,
-  SEARCH_OVERFETCH_FACTOR,
-  SEARCH_WEIGHT_VEC,
-  SEARCH_WEIGHT_FTS,
-  VECTOR_SEARCH_MULTIPLIER,
-  VECTOR_DIMENSION,
-  PARSER_TREE_SITTER_SIZE_LIMIT,
-  ASSEMBLY_MAX_PARENT_CHAIN_DEPTH,
-  ASSEMBLY_CHILD_LIMIT,
-  ASSEMBLY_PRECEDING_SIBLINGS_LIMIT,
-  ASSEMBLY_SUBSEQUENT_SIBLINGS_LIMIT,
-  SANDBOX_DEFAULT_TIMEOUT_MS,
-} = defaultValues;
+// Export individual constants derived from defaults for ease of use across the codebase.
+// These are primarily used as default values for CLI options.
+// Redundant individual exports removed. Use the `defaults` object instead.
 
 const DEFAULT_CONFIG_PATH = "docs-mcp.config.yaml";
 
@@ -452,14 +406,24 @@ const cachedYaml: { path: string | null; values: unknown } = {
 
 let cachedConfig: AppConfig | null = null;
 
+export interface LoadConfigOptions {
+  configPath?: string;
+  searchDir?: string;
+}
+
 export function loadConfig(
   overrides: Partial<Record<ConfigKey, unknown>> = {},
+  options: LoadConfigOptions = {},
 ): AppConfig {
-  if (cachedConfig && Object.keys(overrides).length === 0) {
+  if (
+    cachedConfig &&
+    Object.keys(overrides).length === 0 &&
+    Object.keys(options).length === 0
+  ) {
     return cachedConfig;
   }
 
-  const yamlValues = loadYamlConfig();
+  const yamlValues = loadYamlConfig(options);
   const resolved: Partial<Record<ConfigKey, unknown>> = {};
 
   for (const [key, entry] of Object.entries(configSchema) as [
@@ -525,17 +489,41 @@ function getFirstDefined<T>(values?: (T | undefined)[]): T | undefined {
   return undefined;
 }
 
-function loadYamlConfig(): unknown {
-  const userPath = process.env.DOCS_MCP_CONFIG;
-  const configPath = userPath ?? path.join(process.cwd(), DEFAULT_CONFIG_PATH);
+function loadYamlConfig(options: LoadConfigOptions): unknown {
+  let configPath: string | undefined;
 
-  if (cachedYaml.path === configPath) {
-    return cachedYaml.values;
+  // 1. Explicit path (CLI or Env)
+  if (options.configPath) {
+    configPath = options.configPath;
+  } else if (process.env.DOCS_MCP_CONFIG) {
+    configPath = process.env.DOCS_MCP_CONFIG;
   }
 
-  if (!fs.existsSync(configPath)) {
-    cachedYaml.path = configPath;
-    cachedYaml.values = {};
+  // 2. Search in searchDir (Store Path)
+  if (!configPath && options.searchDir) {
+    const candidates = ["config.yaml", "config.yml"];
+    for (const candidate of candidates) {
+      const p = path.join(options.searchDir, candidate);
+      if (fs.existsSync(p)) {
+        configPath = p;
+        break;
+      }
+    }
+  }
+
+  // 3. Fallback to CWD
+  if (!configPath) {
+    const cwdPath = path.join(process.cwd(), DEFAULT_CONFIG_PATH);
+    if (fs.existsSync(cwdPath)) {
+      configPath = cwdPath;
+    }
+  }
+
+  if (!configPath) {
+    return {};
+  }
+
+  if (cachedYaml.path === configPath) {
     return cachedYaml.values;
   }
 

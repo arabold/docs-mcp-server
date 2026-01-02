@@ -4,8 +4,20 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
+import type { AppConfig } from "../utils/config";
 import { createMcpServerInstance } from "./mcpServer";
 import type { McpServerTools } from "./tools";
+
+// Mock config
+const mockConfig = {
+  app: { readOnly: false },
+  scraper: { maxPages: 100, maxDepth: 3 },
+} as unknown as AppConfig;
+
+const mockReadOnlyConfig = {
+  app: { readOnly: true },
+  scraper: { maxPages: 100, maxDepth: 3 },
+} as unknown as AppConfig;
 
 // Mock tools
 const mockTools: McpServerTools = {
@@ -43,22 +55,12 @@ const mockTools: McpServerTools = {
 
 describe("MCP Server Read-Only Mode", () => {
   it("should create server instance in normal mode", () => {
-    const server = createMcpServerInstance(mockTools, false);
+    const server = createMcpServerInstance(mockTools, mockConfig);
     expect(server).toBeInstanceOf(McpServer);
   });
 
   it("should create server instance in read-only mode", () => {
-    const server = createMcpServerInstance(mockTools, true);
-    expect(server).toBeInstanceOf(McpServer);
-  });
-
-  it("should create server instance with default readOnly false", () => {
-    const server = createMcpServerInstance(mockTools);
-    expect(server).toBeInstanceOf(McpServer);
-  });
-
-  it("should create server instance with readOnly true", () => {
-    const server = createMcpServerInstance(mockTools, true);
+    const server = createMcpServerInstance(mockTools, mockReadOnlyConfig);
     expect(server).toBeInstanceOf(McpServer);
   });
 
@@ -66,7 +68,7 @@ describe("MCP Server Read-Only Mode", () => {
     // This test verifies that the server can be created successfully
     // without advertising prompts capability, which was the root cause
     // of the issue with some MCP clients failing to connect
-    const server = createMcpServerInstance(mockTools, false);
+    const server = createMcpServerInstance(mockTools, mockConfig);
     expect(server).toBeInstanceOf(McpServer);
 
     // Verify the server has the expected name and can be instantiated

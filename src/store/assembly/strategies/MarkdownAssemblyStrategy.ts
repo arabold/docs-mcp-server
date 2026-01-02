@@ -1,8 +1,4 @@
-import {
-  ASSEMBLY_CHILD_LIMIT,
-  ASSEMBLY_PRECEDING_SIBLINGS_LIMIT,
-  ASSEMBLY_SUBSEQUENT_SIBLINGS_LIMIT,
-} from "../../../utils/config";
+import type { AppConfig } from "../../../utils/config";
 import { MimeTypeUtils } from "../../../utils/mimeTypeUtils";
 import type { DocumentStore } from "../../DocumentStore";
 import type { DbPageChunk } from "../../types";
@@ -15,6 +11,8 @@ import type { ContentAssemblyStrategy } from "../types";
  * This strategy is optimized for prose content where broader context enhances understanding.
  */
 export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
+  constructor(private config: AppConfig) {}
+
   /**
    * Determines if this strategy can handle the given content type.
    * Handles markdown, HTML, plain text, and serves as fallback for unknown types.
@@ -47,7 +45,9 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
 
     // Accept as fallback for truly unknown types
     return true;
-  } /**
+  }
+
+  /**
    * Selects chunks using the current context expansion logic.
    * This replicates the existing behavior from DocumentRetrieverService.getRelatedChunkIds().
    */
@@ -99,6 +99,8 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
   ): Promise<Set<string>> {
     const id = doc.id;
     const relatedIds = new Set<string>();
+    const { childLimit, precedingSiblingsLimit, subsequentSiblingsLimit } =
+      this.config.assembly;
 
     // Add the original chunk
     relatedIds.add(id);
@@ -114,7 +116,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       library,
       version,
       id,
-      ASSEMBLY_PRECEDING_SIBLINGS_LIMIT,
+      precedingSiblingsLimit,
     );
     for (const sib of precedingSiblings) {
       relatedIds.add(sib.id);
@@ -125,7 +127,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       library,
       version,
       id,
-      ASSEMBLY_CHILD_LIMIT,
+      childLimit,
     );
     for (const child of childChunks) {
       relatedIds.add(child.id);
@@ -136,7 +138,7 @@ export class MarkdownAssemblyStrategy implements ContentAssemblyStrategy {
       library,
       version,
       id,
-      ASSEMBLY_SUBSEQUENT_SIBLINGS_LIMIT,
+      subsequentSiblingsLimit,
     );
     for (const sib of subsequentSiblings) {
       relatedIds.add(sib.id);

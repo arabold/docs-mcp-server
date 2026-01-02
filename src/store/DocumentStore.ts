@@ -53,6 +53,7 @@ interface RankedResult extends RawSearchResult {
  */
 export class DocumentStore {
   private readonly config: AppConfig;
+
   private readonly db: DatabaseType;
   private embeddings!: Embeddings;
   private readonly dbDimension: number;

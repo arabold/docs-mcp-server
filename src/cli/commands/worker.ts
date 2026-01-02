@@ -1,4 +1,4 @@
-import { loadConfig, SERVER_HOST, SERVER_WORKER_PORT } from "../../utils/config";
+import { defaults, loadConfig } from "../../utils/config";
 /**
  * Worker command - Starts external pipeline worker (HTTP API).
  */
@@ -27,7 +27,7 @@ export function createWorkerCommand(program: Command): Command {
       new Option("--port <number>", "Port for worker API")
         .env("DOCS_MCP_PORT")
         .env("PORT")
-        .default(SERVER_WORKER_PORT.toString())
+        .default(defaults.SERVER_WORKER_PORT.toString())
         .argParser((v: string) => {
           const n = Number(v);
           if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -40,7 +40,7 @@ export function createWorkerCommand(program: Command): Command {
       new Option("--host <host>", "Host to bind the worker API to")
         .env("DOCS_MCP_HOST")
         .env("HOST")
-        .default(SERVER_HOST)
+        .default(defaults.SERVER_HOST)
         .argParser(validateHost),
     )
     .addOption(

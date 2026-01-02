@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig, SPLITTER_PREFERRED_CHUNK_SIZE } from "../../utils/config";
+import { defaults, loadConfig } from "../../utils/config";
 import { HtmlPipeline } from "./HtmlPipeline";
 import { JsonPipeline } from "./JsonPipeline";
 import { MarkdownPipeline } from "./MarkdownPipeline";
@@ -44,7 +44,7 @@ describe("PipelineFactory", () => {
     it("should use constants as defaults", () => {
       const pipelines = PipelineFactory.createStandardPipelines(appConfig);
       expect(pipelines).toHaveLength(5);
-      expect(SPLITTER_PREFERRED_CHUNK_SIZE).toBe(1500);
+      expect(defaults.SPLITTER_PREFERRED_CHUNK_SIZE).toBe(1500);
     });
   });
 });

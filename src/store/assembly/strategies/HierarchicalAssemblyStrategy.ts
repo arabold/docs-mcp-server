@@ -1,4 +1,4 @@
-import { ASSEMBLY_MAX_PARENT_CHAIN_DEPTH } from "../../../utils/config";
+import type { AppConfig } from "../../../utils/config";
 import { logger } from "../../../utils/logger";
 import { MimeTypeUtils } from "../../../utils/mimeTypeUtils";
 import type { DocumentStore } from "../../DocumentStore";
@@ -14,6 +14,8 @@ import type { ContentAssemblyStrategy } from "../types";
  * unrelated content. Simple concatenation leverages splitter concatenation guarantees.
  */
 export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
+  constructor(private config: AppConfig) {}
+
   /**
    * Determines if this strategy can handle the given content type.
    * Handles structured content like source code, JSON, configuration files.
@@ -204,11 +206,11 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     const chainIds: string[] = [];
     const visited = new Set<string>();
     let currentChunk: DbPageChunk | null = chunk;
-    const maxDepth = ASSEMBLY_MAX_PARENT_CHAIN_DEPTH; // Safety limit to prevent runaway loops
+    const { maxParentChainDepth } = this.config.assembly; // Safety limit to prevent runaway loops
     let depth = 0;
 
     // Walk up parent chain until we reach the root
-    while (currentChunk && depth < maxDepth) {
+    while (currentChunk && depth < maxParentChainDepth) {
       const currentId = currentChunk.id;
 
       // Check for circular references
@@ -238,9 +240,9 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       currentChunk = parentChunk;
     }
 
-    if (depth >= maxDepth) {
+    if (depth >= maxParentChainDepth) {
       logger.warn(
-        `Maximum parent chain depth (${maxDepth}) reached for chunk ${chunk.id}`,
+        `Maximum parent chain depth (${maxParentChainDepth}) reached for chunk ${chunk.id}`,
       );
     }
 

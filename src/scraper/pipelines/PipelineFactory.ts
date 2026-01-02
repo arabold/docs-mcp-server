@@ -29,15 +29,12 @@ export class PipelineFactory {
    * @returns Array of content pipelines in processing order
    */
   public static createStandardPipelines(appConfig: AppConfig): ContentPipeline[] {
-    const preferredChunkSize = appConfig.splitter.preferredChunkSize;
-    const maxChunkSize = appConfig.splitter.maxChunkSize;
-
     return [
-      new JsonPipeline(preferredChunkSize),
-      new SourceCodePipeline(preferredChunkSize, maxChunkSize),
-      new HtmlPipeline(preferredChunkSize, maxChunkSize),
-      new MarkdownPipeline(preferredChunkSize, maxChunkSize),
-      new TextPipeline(preferredChunkSize, maxChunkSize), // Universal fallback - must be last
+      new JsonPipeline(appConfig),
+      new SourceCodePipeline(appConfig),
+      new HtmlPipeline(appConfig),
+      new MarkdownPipeline(appConfig),
+      new TextPipeline(appConfig), // Universal fallback - must be last
     ];
   }
 }

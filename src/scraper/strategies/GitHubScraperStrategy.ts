@@ -45,7 +45,7 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
   private readonly repoProcessor: GitHubRepoProcessor;
 
   constructor(config: AppConfig) {
-    super();
+    super(config);
     this.httpFetcher = new HttpFetcher(config.scraper);
     this.wikiProcessor = new GitHubWikiProcessor(config);
     this.repoProcessor = new GitHubRepoProcessor(config);

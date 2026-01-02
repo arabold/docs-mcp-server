@@ -26,8 +26,9 @@ describe("HTML Pipeline Website Tests", () => {
 
   beforeAll(() => {
     // Initialize the FetchUrlTool with AutoDetectFetcher
-    const autoDetectFetcher = new AutoDetectFetcher(loadConfig().scraper);
-    fetchUrlTool = new FetchUrlTool(autoDetectFetcher);
+    const appConfig = loadConfig();
+    const autoDetectFetcher = new AutoDetectFetcher(appConfig.scraper);
+    fetchUrlTool = new FetchUrlTool(autoDetectFetcher, appConfig);
   });
 
   describe("Salesforce Documentation", () => {

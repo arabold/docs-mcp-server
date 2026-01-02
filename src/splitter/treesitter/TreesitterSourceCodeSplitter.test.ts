@@ -3,13 +3,20 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
+import type { SplitterConfig } from "../types";
 import { TreesitterSourceCodeSplitter } from "./TreesitterSourceCodeSplitter";
+
+const mockConfig: SplitterConfig = {
+  minChunkSize: 100,
+  preferredChunkSize: 500,
+  maxChunkSize: 1000,
+};
 
 describe("TreesitterSourceCodeSplitter", () => {
   let splitter: TreesitterSourceCodeSplitter;
 
   beforeEach(() => {
-    splitter = new TreesitterSourceCodeSplitter();
+    splitter = new TreesitterSourceCodeSplitter(mockConfig);
   });
 
   describe("initialization", () => {
@@ -19,7 +26,9 @@ describe("TreesitterSourceCodeSplitter", () => {
 
     it("should accept custom options", () => {
       const customSplitter = new TreesitterSourceCodeSplitter({
-        maxChunkSize: 1000,
+        ...mockConfig,
+        maxChunkSize: 100,
+        treeSitterSizeLimit: 30000,
       });
       expect(customSplitter).toBeDefined();
     });
@@ -565,7 +574,7 @@ export { processUserData };`;
         }
       `;
 
-      const tsSplitter = new TreesitterSourceCodeSplitter();
+      const tsSplitter = new TreesitterSourceCodeSplitter(mockConfig);
       const chunks = await tsSplitter.splitText(tsCode, "text/x-typescript");
 
       const methodChunks = chunks.filter(

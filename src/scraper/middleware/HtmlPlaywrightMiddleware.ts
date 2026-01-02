@@ -1,16 +1,5 @@
-import {
-  type Browser,
-  type BrowserContext,
-  chromium,
-  type ElementHandle,
-  type Frame,
-  type Page,
-} from "playwright";
-import {
-  SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES,
-  SCRAPER_FETCHER_MAX_CACHE_ITEMS,
-  SCRAPER_PAGE_TIMEOUT_MS,
-} from "../../utils/config";
+import type { Browser, BrowserContext, ElementHandle, Frame, Page } from "playwright";
+import { type AppConfig, defaults } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { BrowserFetcher } from "../fetcher";
@@ -54,12 +43,16 @@ interface CachedResource {
  */
 export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   private browser: Browser | null = null;
+  private readonly config: AppConfig["scraper"];
 
-  // Static LRU cache shared across all instances for all fetched resources
-  // Max 200 entries, each limited in size to prevent caching large resources
+  // Static LRU cache for all fetched resources, shared across instances
   private static readonly resourceCache = new SimpleMemoryCache<string, CachedResource>(
-    SCRAPER_FETCHER_MAX_CACHE_ITEMS,
+    defaults.SCRAPER_FETCHER_MAX_CACHE_ITEMS,
   );
+
+  constructor(config: AppConfig["scraper"]) {
+    this.config = config;
+  }
 
   /**
    * Initializes the Playwright browser instance.
@@ -231,7 +224,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             pageOrFrame
               .waitForSelector(selector, {
                 state: "hidden",
-                timeout: SCRAPER_PAGE_TIMEOUT_MS,
+                timeout: this.config.pageTimeoutMs,
               })
               .catch(() => {}),
           );
@@ -303,7 +296,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Wait for the iframe body to load - if this times out, skip the rest of processing
       try {
-        await frame.waitForSelector("body", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
+        await frame.waitForSelector("body", {
+          timeout: this.config.pageTimeoutMs,
+        });
       } catch {
         logger.debug(
           `Timeout waiting for body in iframe ${index + 1} - skipping content extraction`,
@@ -555,7 +550,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           // Only cache if content is small enough and response was successful (2xx status)
           if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
             const contentSizeBytes = Buffer.byteLength(body, "utf8");
-            if (contentSizeBytes <= SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+            if (contentSizeBytes <= this.config.fetcher.maxCacheItemSizeBytes) {
               const contentType =
                 response.headers()["content-type"] || "application/octet-stream";
               HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
@@ -564,7 +559,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
               );
             } else {
               logger.debug(
-                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${this.config.fetcher.maxCacheItemSizeBytes} bytes limit)`,
               );
             }
           }
@@ -635,9 +630,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       // Navigate to the frame URL
       await framePage.goto(resolvedUrl, {
         waitUntil: "load",
-        timeout: SCRAPER_PAGE_TIMEOUT_MS,
+        timeout: this.config.pageTimeoutMs,
       });
-      await framePage.waitForSelector("body", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
+      await framePage.waitForSelector("body", {
+        timeout: this.config.pageTimeoutMs,
+      });
 
       // Wait for loading indicators to complete
       await this.waitForLoadingToComplete(framePage);
@@ -652,18 +649,18 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Only cache if content is small enough (avoid caching large content pages)
       const contentSizeBytes = Buffer.byteLength(content, "utf8");
-      if (contentSizeBytes <= SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+      if (contentSizeBytes <= this.config.fetcher.maxCacheItemSizeBytes) {
         // Frame content is always HTML
         HtmlPlaywrightMiddleware.resourceCache.set(resolvedUrl, {
           body: content,
-          contentType: "text/html; charset=utf-8",
+          contentType: "text/html",
         });
         logger.debug(
           `Cached frame content: ${resolvedUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
         );
       } else {
         logger.debug(
-          `Frame content too large to cache: ${resolvedUrl} (${contentSizeBytes} bytes > ${SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+          `Frame content too large to cache: ${resolvedUrl} (${contentSizeBytes} bytes > ${this.config.fetcher.maxCacheItemSizeBytes} bytes limit)`,
         );
       }
 
@@ -863,7 +860,10 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             // Only cache if content is small enough and response was successful (2xx status)
             if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
               const contentSizeBytes = Buffer.byteLength(body, "utf8");
-              if (contentSizeBytes <= SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES) {
+              const maxCacheItemSizeBytes =
+                this.config?.fetcher?.maxCacheItemSizeBytes ??
+                defaults.SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES;
+              if (contentSizeBytes <= maxCacheItemSizeBytes) {
                 const contentType =
                   response.headers()["content-type"] || "application/octet-stream";
                 HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
@@ -872,7 +872,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
                 );
               } else {
                 logger.debug(
-                  `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES} bytes limit)`,
+                  `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${maxCacheItemSizeBytes} bytes limit)`,
                 );
               }
             }
@@ -912,11 +912,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       await page.goto(context.source, { waitUntil: "load" });
 
       // Wait for either body (normal HTML) or frameset (frameset documents) to appear
-      await page.waitForSelector("body, frameset", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
+      const pageTimeoutMs = this.config.pageTimeoutMs ?? defaults.SCRAPER_PAGE_TIMEOUT_MS;
+      await page.waitForSelector("body, frameset", {
+        timeout: pageTimeoutMs,
+      });
 
       // Wait for network idle to let dynamic content initialize
       try {
-        await page.waitForLoadState("networkidle", { timeout: SCRAPER_PAGE_TIMEOUT_MS });
+        await page.waitForLoadState("networkidle", {
+          timeout: pageTimeoutMs,
+        });
       } catch {
         logger.debug("Network idle timeout, proceeding anyway");
       }

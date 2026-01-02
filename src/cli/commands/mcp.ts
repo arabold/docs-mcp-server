@@ -11,13 +11,7 @@ import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import {
-  loadConfig,
-  READ_ONLY,
-  SERVER_HOST,
-  SERVER_MCP_PORT,
-  SERVER_PROTOCOL,
-} from "../../utils/config";
+import { defaults, loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -39,14 +33,14 @@ export function createMcpCommand(program: Command): Command {
       .addOption(
         new Option("--protocol <protocol>", "Protocol for MCP server")
           .env("DOCS_MCP_PROTOCOL")
-          .default(SERVER_PROTOCOL)
+          .default(defaults.SERVER_PROTOCOL)
           .choices(["auto", "stdio", "http"]),
       )
       .addOption(
         new Option("--port <number>", "Port for the MCP server")
           .env("DOCS_MCP_PORT")
           .env("PORT")
-          .default(SERVER_MCP_PORT.toString())
+          .default(defaults.SERVER_MCP_PORT.toString())
           .argParser((v: string) => {
             const n = Number(v);
             if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -59,7 +53,7 @@ export function createMcpCommand(program: Command): Command {
         new Option("--host <host>", "Host to bind the MCP server to")
           .env("DOCS_MCP_HOST")
           .env("HOST")
-          .default(SERVER_HOST)
+          .default(defaults.SERVER_HOST)
           .argParser(validateHost),
       )
       .addOption(
@@ -202,7 +196,7 @@ export function createMcpCommand(program: Command): Command {
 
               await pipeline.start(); // Start pipeline for stdio mode
               const mcpTools = await initializeTools(docService, pipeline, appConfig);
-              const mcpServer = await startStdioServer(mcpTools, cmdOptions.readOnly);
+              const mcpServer = await startStdioServer(mcpTools, appConfig);
 
               // Register for graceful shutdown (stdio mode)
               registerGlobalServices({

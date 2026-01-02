@@ -14,13 +14,9 @@
  * 6. Fall back to text-based chunking if maxChunks limit is exceeded or maxDepth is reached
  */
 
-import {
-  SPLITTER_JSON_MAX_CHUNKS,
-  SPLITTER_JSON_MAX_NESTING_DEPTH,
-  SPLITTER_MAX_CHUNK_SIZE,
-} from "../utils/config";
+import { defaults } from "../utils/config";
 import { TextDocumentSplitter } from "./TextDocumentSplitter";
-import type { Chunk, DocumentSplitter } from "./types";
+import type { Chunk, DocumentSplitter, SplitterConfig } from "./types";
 
 type JsonValue =
   | string
@@ -30,26 +26,54 @@ type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+/**
+ * Options for the JsonDocumentSplitter
+ */
 export interface JsonDocumentSplitterOptions {
-  // No size constraints - we create minimal chunks and let GreedySplitter optimize
-  preserveFormatting?: boolean;
-  /** Maximum nesting depth for JSON chunking. After this depth, switches to text chunking for nested content. */
+  /**
+   * Maximum depth to traverse in the JSON object.
+   * Defaults to a reasonable limit to prevent stack overflow.
+   */
   maxDepth?: number;
-  /** Maximum number of chunks allowed. If exceeded, falls back to text-based chunking. */
+
+  /**
+   * Maximum number of chunks to generate.
+   * If exceeded, falls back to text splitting.
+   */
   maxChunks?: number;
+
+  preserveFormatting?: boolean;
+
+  /** Maximum size for individual chunks */
+  maxChunkSize?: number;
 }
 
+/**
+ * JsonDocumentSplitter handles splitting of JSON content.
+ * It attempts to preserve the structure of the JSON object while splitting it into chunks.
+ */
 export class JsonDocumentSplitter implements DocumentSplitter {
   private preserveFormatting: boolean;
   private maxDepth: number;
   private maxChunks: number;
+  private maxChunkSize: number;
   private textFallbackSplitter: TextDocumentSplitter;
 
-  constructor(options: JsonDocumentSplitterOptions = {}) {
+  constructor(config: SplitterConfig, options: JsonDocumentSplitterOptions = {}) {
     this.preserveFormatting = options.preserveFormatting ?? true;
-    this.maxDepth = options.maxDepth ?? SPLITTER_JSON_MAX_NESTING_DEPTH;
-    this.maxChunks = options.maxChunks ?? SPLITTER_JSON_MAX_CHUNKS;
-    this.textFallbackSplitter = new TextDocumentSplitter();
+    this.maxDepth =
+      options.maxDepth ??
+      config.json?.maxNestingDepth ??
+      defaults.SPLITTER_JSON_MAX_NESTING_DEPTH;
+    this.maxChunks =
+      options.maxChunks ?? config.json?.maxChunks ?? defaults.SPLITTER_JSON_MAX_CHUNKS;
+    this.maxChunkSize = options.maxChunkSize ?? config.maxChunkSize;
+
+    const textSplitterConfig = { ...config };
+    if (options.maxChunkSize) {
+      textSplitterConfig.maxChunkSize = options.maxChunkSize;
+    }
+    this.textFallbackSplitter = new TextDocumentSplitter(textSplitterConfig);
   }
 
   async splitText(content: string, _contentType?: string): Promise<Chunk[]> {
@@ -210,7 +234,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
       const formattedValue = JSON.stringify(value);
       const fullContent = `${indent}"${key}": ${formattedValue}${comma}`;
 
-      if (fullContent.length > SPLITTER_MAX_CHUNK_SIZE) {
+      if (fullContent.length > this.maxChunkSize) {
         // Use text splitter for oversized primitive values while keeping property context
         const textChunks = await this.textFallbackSplitter.splitText(formattedValue);
 
@@ -254,7 +278,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
 
     const fullContent = `${indent}${formattedValue}${comma}`;
 
-    if (fullContent.length > SPLITTER_MAX_CHUNK_SIZE) {
+    if (fullContent.length > this.maxChunkSize) {
       // Use text splitter for oversized primitive values in arrays
       const textChunks = await this.textFallbackSplitter.splitText(formattedValue);
 
@@ -317,7 +341,7 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     // Check if the FINAL formatted content (with indent and comma) exceeds the limit.
     // If so, we split just the serialized content (without structural formatting) because
     // the resulting chunks are treated as searchable text blocks, not structural JSON elements.
-    if (fullContent.length > SPLITTER_MAX_CHUNK_SIZE) {
+    if (fullContent.length > this.maxChunkSize) {
       // Use text splitter to break down the large serialized JSON
       // Note: When content is this large, we prioritize searchability over perfect JSON structure.
       // The chunks contain the actual data that users can search, with proper metadata (level, path)

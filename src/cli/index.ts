@@ -13,6 +13,7 @@ import {
 } from "../telemetry";
 import { loadConfig } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
+import { createConfigCommand } from "./commands/config";
 import { createDefaultAction } from "./commands/default";
 import { createFetchUrlCommand } from "./commands/fetchUrl";
 import { createFindVersionCommand } from "./commands/findVersion";
@@ -58,14 +59,16 @@ export function createCliProgram(): Command {
             return value !== "false" && value !== "0";
           }
           return Boolean(value);
-        })
-        .default(true),
+        }),
     )
     .addOption(new Option("--no-telemetry", "Disable telemetry collection"))
     .addOption(
       new Option("--store-path <path>", "Custom path for data storage directory").env(
         "DOCS_MCP_STORE_PATH",
       ),
+    )
+    .addOption(
+      new Option("--config <path>", "Path to configuration file").env("DOCS_MCP_CONFIG"),
     )
     .enablePositionalOptions()
     .allowExcessArguments(false)
@@ -75,13 +78,23 @@ export function createCliProgram(): Command {
   program.hook("preAction", async (thisCommand, actionCommand) => {
     const globalOptions = thisCommand.opts();
 
-    const appConfig = loadConfig({
-      STORE_PATH: globalOptions.storePath,
-      TELEMETRY: globalOptions.telemetry,
-    });
+    // Resolve store path early to find config file in the storage directory
+    const resolvedStorePath = resolveStorePath(
+      globalOptions.storePath || process.env.DOCS_MCP_STORE_PATH,
+    );
 
-    // Resolve store path centrally using the new centralized logic
-    const resolvedStorePath = resolveStorePath(appConfig.app.storePath);
+    const appConfig = loadConfig(
+      {
+        STORE_PATH: globalOptions.storePath,
+        TELEMETRY: globalOptions.telemetry,
+      },
+      {
+        configPath: globalOptions.config,
+        searchDir: resolvedStorePath,
+      },
+    );
+
+    // Update global options with resolved values
     globalOptions.storePath = resolvedStorePath;
     globalOptions.telemetry = appConfig.app.telemetryEnabled;
 
@@ -163,6 +176,7 @@ export function createCliProgram(): Command {
   createFindVersionCommand(program);
   createRemoveCommand(program);
   createFetchUrlCommand(program);
+  createConfigCommand(program);
 
   // Set default action for when no subcommand is specified
   createDefaultAction(program);

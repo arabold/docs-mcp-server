@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import type { ScraperOptions } from "../types";
 import { ScrapeMode } from "../types";
 import { TextPipeline } from "./TextPipeline";
 
 describe("TextPipeline", () => {
-  const pipeline = new TextPipeline();
+  const appConfig = loadConfig();
+  const pipeline = new TextPipeline(appConfig);
   const baseOptions: ScraperOptions = {
     url: "http://example.com",
     library: "test-lib",

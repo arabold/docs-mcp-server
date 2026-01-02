@@ -1,11 +1,7 @@
 import { URL } from "node:url";
 import { CancellationError } from "../../pipeline/errors";
 import type { ProgressCallback } from "../../types";
-import {
-  SCRAPER_MAX_CONCURRENCY,
-  SCRAPER_MAX_DEPTH,
-  SCRAPER_MAX_PAGES,
-} from "../../utils/config";
+import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { normalizeUrl, type UrlNormalizerOptions } from "../../utils/url";
 import { FetchStatus } from "../fetcher/types";
@@ -75,8 +71,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   abstract canHandle(url: string): boolean;
 
   protected options: BaseScraperStrategyOptions;
+  protected config: AppConfig;
 
-  constructor(options: BaseScraperStrategyOptions = {}) {
+  constructor(config: AppConfig, options: BaseScraperStrategyOptions = {}) {
+    this.config = config;
     this.options = options;
   }
 
@@ -115,7 +113,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add signal
   ): Promise<QueueItem[]> {
-    const maxPages = options.maxPages ?? SCRAPER_MAX_PAGES;
+    const maxPages = options.maxPages ?? this.config.scraper.maxPages;
     const results = await Promise.all(
       batch.map(async (item) => {
         // Check signal before processing each item in the batch
@@ -123,7 +121,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           throw new CancellationError("Scraping cancelled during batch processing");
         }
         // Resolve default for maxDepth check
-        const maxDepth = options.maxDepth ?? SCRAPER_MAX_DEPTH;
+        const maxDepth = options.maxDepth ?? this.config.scraper.maxDepth;
         if (item.depth > maxDepth) {
           return [];
         }
@@ -324,9 +322,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     this.totalDiscovered = queue.length;
     this.effectiveTotal = queue.length;
 
-    // Resolve optional values to defaults using temporary variables
-    const maxPages = options.maxPages ?? SCRAPER_MAX_PAGES;
-    const maxConcurrency = options.maxConcurrency ?? SCRAPER_MAX_CONCURRENCY;
+    // Resolve optional values to defaults using temporary config lookup
+    // (We'll replace this with proper config merging later)
+    const maxPages = options.maxPages ?? this.config.scraper.maxPages;
+    const maxConcurrency = options.maxConcurrency ?? this.config.scraper.maxConcurrency;
 
     // Unified processing loop for both normal and refresh modes
     while (queue.length > 0 && this.pageCount < maxPages) {

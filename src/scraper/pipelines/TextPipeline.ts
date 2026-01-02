@@ -1,41 +1,37 @@
-import { GreedySplitter } from "../../splitter";
+import { GreedySplitter } from "../../splitter/GreedySplitter";
 import { TextDocumentSplitter } from "../../splitter/TextDocumentSplitter";
-import {
-  SPLITTER_MAX_CHUNK_SIZE,
-  SPLITTER_MIN_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-} from "../../utils/config";
+import type { AppConfig } from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import type { ScraperOptions } from "../types";
 import { convertToString } from "../utils/buffer";
+import { resolveCharset } from "../utils/charset";
 import { BasePipeline } from "./BasePipeline";
 import type { PipelineResult } from "./types";
 
 /**
- * Fallback pipeline for processing text content with basic splitting and size optimization.
- * Handles text-based content types by using TextDocumentSplitter for simple line-based splitting
- * followed by GreedySplitter for universal size optimization. This pipeline uses MIME type filtering
- * and binary detection to ensure it only processes appropriate text content.
+ * TextPipeline - Processes plain text content with size optimization.
  */
 export class TextPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
   private readonly splitter: GreedySplitter;
 
-  constructor(
-    preferredChunkSize: number = SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize: number = SPLITTER_MAX_CHUNK_SIZE,
-  ) {
+  constructor(config: AppConfig) {
     super();
+
+    const preferredChunkSize = config.splitter.preferredChunkSize;
+    const maxChunkSize = config.splitter.maxChunkSize;
+    const minChunkSize = config.splitter.minChunkSize;
+
     // Text processing uses minimal middleware for maximum compatibility
     this.middleware = [];
 
     // Create the two-phase splitting: basic text splitting + size optimization
-    const textSplitter = new TextDocumentSplitter({ maxChunkSize });
+    const textSplitter = new TextDocumentSplitter(config.splitter);
     this.splitter = new GreedySplitter(
       textSplitter,
-      SPLITTER_MIN_CHUNK_SIZE,
+      minChunkSize,
       preferredChunkSize,
       maxChunkSize,
     );

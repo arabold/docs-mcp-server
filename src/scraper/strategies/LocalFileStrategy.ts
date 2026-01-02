@@ -21,7 +21,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly pipelines: ContentPipeline[];
 
   constructor(config: AppConfig) {
-    super();
+    super(config);
     this.pipelines = PipelineFactory.createStandardPipelines(config);
   }
 

@@ -65,7 +65,7 @@ describe("Vector Search End-to-End Tests", () => {
     await pipeline.start();
 
     // Initialize tools
-    scrapeTool = new ScrapeTool(pipeline);
+    scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
     searchTool = new SearchTool(docService);
   }, 30000);
 

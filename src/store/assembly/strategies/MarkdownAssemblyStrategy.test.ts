@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type AppConfig, loadConfig } from "../../../utils/config";
 import type { DocumentStore } from "../../DocumentStore";
 import type { DbPageChunk } from "../../types";
 import { MarkdownAssemblyStrategy } from "./MarkdownAssemblyStrategy";
@@ -113,10 +114,12 @@ const createDocumentUniverse = () => {
 describe("MarkdownAssemblyStrategy", () => {
   let strategy: MarkdownAssemblyStrategy;
   let mockStore: DocumentStore;
+  let config: AppConfig;
   let universe: ReturnType<typeof createDocumentUniverse>;
 
   beforeEach(() => {
-    strategy = new MarkdownAssemblyStrategy();
+    config = loadConfig();
+    strategy = new MarkdownAssemblyStrategy(config);
     mockStore = createMockDocumentStore();
     universe = createDocumentUniverse();
   });

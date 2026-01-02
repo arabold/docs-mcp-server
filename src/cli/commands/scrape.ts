@@ -12,12 +12,7 @@ import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
-import {
-  loadConfig,
-  SCRAPER_MAX_CONCURRENCY,
-  SCRAPER_MAX_DEPTH,
-  SCRAPER_MAX_PAGES,
-} from "../../utils/config";
+import { defaults, loadConfig } from "../../utils/config";
 import {
   getEventBus,
   getGlobalOptions,
@@ -143,7 +138,7 @@ export async function scrapeAction(
         );
 
     await pipeline.start();
-    const scrapeTool = new ScrapeTool(pipeline);
+    const scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
 
     const headers = parseHeaders(options.header);
 
@@ -208,17 +203,17 @@ export function createScrapeCommand(program: Command): Command {
     .option(
       "-p, --max-pages <number>",
       "Maximum pages to scrape",
-      SCRAPER_MAX_PAGES.toString(),
+      defaults.SCRAPER_MAX_PAGES.toString(),
     )
     .option(
       "-d, --max-depth <number>",
       "Maximum navigation depth",
-      SCRAPER_MAX_DEPTH.toString(),
+      defaults.SCRAPER_MAX_DEPTH.toString(),
     )
     .option(
       "-c, --max-concurrency <number>",
       "Maximum concurrent page requests",
-      SCRAPER_MAX_CONCURRENCY.toString(),
+      defaults.SCRAPER_MAX_CONCURRENCY.toString(),
     )
     .option("--ignore-errors", "Ignore errors during scraping", true)
     .option(

@@ -254,9 +254,8 @@ describe("AppServer Behavior Tests", () => {
         mockDocService,
         mockPipeline,
         eventBus,
-        {
-          externalWorkerUrl: undefined,
-        },
+        appConfig,
+        undefined,
       );
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
       expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
@@ -287,7 +286,6 @@ describe("AppServer Behavior Tests", () => {
         mockDocService,
         mockPipeline,
         appConfig,
-        undefined, // readOnly parameter defaults to false, passed as undefined from appConfig
         undefined, // authManager
       );
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
@@ -350,16 +348,14 @@ describe("AppServer Behavior Tests", () => {
         mockDocService,
         mockPipeline,
         eventBus,
-        {
-          externalWorkerUrl: undefined,
-        },
+        appConfig,
+        undefined,
       );
       expect(mockMcpService.registerMcpService).toHaveBeenCalledWith(
         mockFastify,
         mockDocService,
         mockPipeline,
         appConfig,
-        undefined, // readOnly parameter defaults to false, passed as undefined from appConfig
         undefined, // authManager
       );
       expect(mockTrpcService.registerTrpcService).toHaveBeenCalledWith(

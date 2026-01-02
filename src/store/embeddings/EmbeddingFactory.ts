@@ -130,7 +130,7 @@ export function createEmbeddingModel(
   const vectorDimension = runtime?.vectorDimension ?? config?.vectorDimension;
   if (vectorDimension === undefined) {
     throw new ModelConfigurationError(
-      "Embedding vector dimension is required; set DOCS_MCP_EMBEDDING_VECTOR_DIMENSION or embeddings.vectorDimension in config.",
+      "Embedding vector dimension is required; set DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION or embeddings.vectorDimension in config.",
     );
   }
   // Parse provider and model name

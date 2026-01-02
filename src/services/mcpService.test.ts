@@ -78,7 +78,6 @@ describe("MCP Service", () => {
         mockDocService,
         mockPipeline,
         appConfig,
-        false,
       );
 
       // Verify the heartbeat intervals map is attached
@@ -98,7 +97,6 @@ describe("MCP Service", () => {
         mockDocService,
         mockPipeline,
         appConfig,
-        false,
       );
 
       // Verify the transports map is attached
@@ -121,7 +119,6 @@ describe("MCP Service", () => {
         mockDocService,
         mockPipeline,
         appConfig,
-        false,
       );
 
       // Check that routes are registered (printRoutes uses a tree format)
@@ -137,7 +134,6 @@ describe("MCP Service", () => {
         mockDocService,
         mockPipeline,
         appConfig,
-        false,
       );
 
       // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.
@@ -158,7 +154,6 @@ describe("MCP Service", () => {
         mockDocService,
         mockPipeline,
         appConfig,
-        false,
       );
 
       // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.

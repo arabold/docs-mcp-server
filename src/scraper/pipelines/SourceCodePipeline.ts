@@ -1,9 +1,5 @@
 import { TreesitterSourceCodeSplitter } from "../../splitter/treesitter/TreesitterSourceCodeSplitter";
-import type { DocumentSplitter } from "../../splitter/types";
-import {
-  SPLITTER_MAX_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-} from "../../utils/config";
+import type { AppConfig } from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
@@ -20,18 +16,16 @@ import type { PipelineResult } from "./types";
  */
 export class SourceCodePipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
-  private readonly splitter: DocumentSplitter;
+  private readonly splitter: TreesitterSourceCodeSplitter;
 
-  constructor(
-    _preferredChunkSize: number = SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize: number = SPLITTER_MAX_CHUNK_SIZE,
-  ) {
+  constructor(config: AppConfig) {
     super();
+
     // Source code processing uses minimal middleware since we preserve raw structure
     this.middleware = [];
 
     // Semantic, structure-preserving splitter only (no greedy size merging to keep hierarchy intact)
-    this.splitter = new TreesitterSourceCodeSplitter({ maxChunkSize });
+    this.splitter = new TreesitterSourceCodeSplitter(config.splitter);
   }
 
   canProcess(mimeType: string): boolean {

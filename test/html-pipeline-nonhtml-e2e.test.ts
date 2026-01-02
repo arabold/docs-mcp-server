@@ -15,8 +15,9 @@ describe("HTML Pipeline Non-HTML Content Tests", () => {
   let fetchUrlTool: FetchUrlTool;
 
   beforeAll(() => {
-    const autoDetectFetcher = new AutoDetectFetcher(loadConfig().scraper);
-    fetchUrlTool = new FetchUrlTool(autoDetectFetcher);
+    const appConfig = loadConfig();
+    const autoDetectFetcher = new AutoDetectFetcher(appConfig.scraper);
+    fetchUrlTool = new FetchUrlTool(autoDetectFetcher, appConfig);
   });
 
   describe("Plain Text Content", () => {

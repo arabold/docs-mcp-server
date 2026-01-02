@@ -9,7 +9,7 @@ import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createDocumentManagement, type DocumentManagementService } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import { loadConfig, SERVER_HOST, SERVER_WEB_PORT } from "../../utils/config";
+import { defaults, loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -30,7 +30,7 @@ export function createWebCommand(program: Command): Command {
         .env("DOCS_MCP_WEB_PORT")
         .env("DOCS_MCP_PORT")
         .env("PORT")
-        .default(SERVER_WEB_PORT.toString())
+        .default(defaults.SERVER_WEB_PORT.toString())
         .argParser((v: string) => {
           const n = Number(v);
           if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -43,7 +43,7 @@ export function createWebCommand(program: Command): Command {
       new Option("--host <host>", "Host to bind the web interface to")
         .env("DOCS_MCP_HOST")
         .env("HOST")
-        .default(SERVER_HOST)
+        .default(defaults.SERVER_HOST)
         .argParser(validateHost),
     )
     .addOption(

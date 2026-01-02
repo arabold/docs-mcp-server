@@ -5,6 +5,7 @@
  * based on file extensions and MIME types.
  */
 
+import { defaults } from "../../utils/config";
 import { PythonParser } from "./parsers/PythonParser";
 import { TypeScriptParser } from "./parsers/TypeScriptParser";
 import type { LanguageParser } from "./parsers/types";
@@ -13,8 +14,10 @@ export class LanguageParserRegistry {
   private parsers = new Map<string, LanguageParser>();
   private extensionMap = new Map<string, string>();
   private mimeTypeMap = new Map<string, string>();
+  private readonly treeSitterSizeLimit: number;
 
-  constructor() {
+  constructor(treeSitterSizeLimit: number = defaults.SPLITTER_TREESITTER_SIZE_LIMIT) {
+    this.treeSitterSizeLimit = treeSitterSizeLimit;
     this.initializeParsers();
   }
 
@@ -100,12 +103,11 @@ export class LanguageParserRegistry {
     }
   }
 
-  /**
-   * Initialize built-in parsers
-   */
   private initializeParsers(): void {
+    const limit = this.treeSitterSizeLimit;
+
     // Unified TypeScript parser handles the full TS/JS family.
-    const unified = new TypeScriptParser();
+    const unified = new TypeScriptParser(limit);
     this.registerParser(unified); // registers under 'typescript' with all extensions & MIME types
 
     // Create a bound alias object with name 'javascript' so tests expecting parser.name === 'javascript' pass.
@@ -148,7 +150,7 @@ export class LanguageParserRegistry {
     }
 
     // Register Python parser
-    const pythonParser = new PythonParser();
+    const pythonParser = new PythonParser(limit);
     this.registerParser(pythonParser);
   }
 }

@@ -5,20 +5,18 @@ import Layout from "../components/Layout";
 /**
  * Registers the root route that serves the main HTML page.
  * @param server - The Fastify instance.
- * @param config - Optional configuration for the web UI.
+ * @param externalWorkerUrl - Optional URL for external worker service.
  */
 export function registerIndexRoute(
   server: FastifyInstance,
-  config?: { externalWorkerUrl?: string }
+  externalWorkerUrl?: string
 ) {
   server.get("/", async (_, reply) => {
     reply.type("text/html");
 
     // Determine if we're using a remote worker
-    const useRemoteWorker = Boolean(config?.externalWorkerUrl);
-    const trpcUrl = config?.externalWorkerUrl
-      ? `${config.externalWorkerUrl}/api`
-      : undefined;
+    const useRemoteWorker = Boolean(externalWorkerUrl);
+    const trpcUrl = externalWorkerUrl ? `${externalWorkerUrl}/api` : undefined;
 
     // Use the Layout component and define the main content within it
     return (

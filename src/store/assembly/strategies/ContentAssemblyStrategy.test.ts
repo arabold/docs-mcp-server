@@ -4,7 +4,7 @@ import { MarkdownAssemblyStrategy } from "./MarkdownAssemblyStrategy";
 
 describe("ContentAssemblyStrategy canHandle methods", () => {
   describe("MarkdownAssemblyStrategy", () => {
-    const strategy = new MarkdownAssemblyStrategy();
+    const strategy = new MarkdownAssemblyStrategy({} as any);
 
     it("handles markdown content types", () => {
       expect(strategy.canHandle("text/markdown")).toBe(true);
@@ -34,7 +34,7 @@ describe("ContentAssemblyStrategy canHandle methods", () => {
   });
 
   describe("HierarchicalAssemblyStrategy", () => {
-    const strategy = new HierarchicalAssemblyStrategy();
+    const strategy = new HierarchicalAssemblyStrategy({} as any);
 
     it("handles source code content types", () => {
       expect(strategy.canHandle("text/x-typescript")).toBe(true);

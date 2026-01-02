@@ -57,7 +57,7 @@ export class DocumentManagementService {
     // Directory creation is handled by the centralized path resolution
 
     this.store = new DocumentStore(dbPath, this.appConfig);
-    this.documentRetriever = new DocumentRetrieverService(this.store);
+    this.documentRetriever = new DocumentRetrieverService(this.store, this.appConfig);
 
     // Initialize content pipelines for different content types including universal TextPipeline fallback
     this.pipelines = PipelineFactory.createStandardPipelines(this.appConfig);

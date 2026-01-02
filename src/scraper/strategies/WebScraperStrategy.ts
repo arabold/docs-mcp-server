@@ -23,8 +23,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private readonly shouldFollowLinkFn?: (baseUrl: URL, targetUrl: URL) => boolean;
   private readonly pipelines: ContentPipeline[];
 
-  constructor(options: WebScraperStrategyOptions = {}, config: AppConfig) {
-    super({ urlNormalizerOptions: options.urlNormalizerOptions });
+  constructor(config: AppConfig, options: WebScraperStrategyOptions = {}) {
+    super(config, { urlNormalizerOptions: options.urlNormalizerOptions });
     this.shouldFollowLinkFn = options.shouldFollowLink;
     this.fetcher = new AutoDetectFetcher(config.scraper);
     this.pipelines = PipelineFactory.createStandardPipelines(config);

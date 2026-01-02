@@ -24,7 +24,10 @@ export async function fetchUrlAction(
 
   const headers = parseHeaders(options.header);
   const appConfig = loadConfig();
-  const fetchUrlTool = new FetchUrlTool(new AutoDetectFetcher(appConfig.scraper));
+  const fetchUrlTool = new FetchUrlTool(
+    new AutoDetectFetcher(appConfig.scraper),
+    appConfig,
+  );
 
   const content = await fetchUrlTool.execute({
     url,

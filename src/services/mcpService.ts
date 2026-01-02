@@ -14,7 +14,7 @@ import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { telemetry } from "../telemetry";
-import { type AppConfig, SERVER_HEARTBEAT_INTERVAL_MS } from "../utils/config";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 
 /**
@@ -25,7 +25,7 @@ import { logger } from "../utils/logger";
  * @param docService The document management service
  * @param pipeline The pipeline instance
  * @param config The resolved configuration from the entrypoint
- * @param readOnly Whether to run in read-only mode
+ * @param authManager Optional authentication manager
  * @returns The McpServer instance for cleanup
  */
 export async function registerMcpService(
@@ -33,12 +33,11 @@ export async function registerMcpService(
   docService: IDocumentManagement,
   pipeline: IPipeline,
   config: AppConfig,
-  readOnly = false,
   authManager?: ProxyAuthManager,
 ): Promise<McpServer> {
   // Initialize MCP server and tools
   const mcpTools = await initializeTools(docService, pipeline, config);
-  const mcpServer = createMcpServerInstance(mcpTools, readOnly);
+  const mcpServer = createMcpServerInstance(mcpTools, config);
 
   // Setup auth middleware if auth manager is provided
   const authMiddleware = authManager ? createAuthMiddleware(authManager) : null;
@@ -75,7 +74,7 @@ export async function registerMcpService(
             clearInterval(heartbeatInterval);
             delete heartbeatIntervals[transport.sessionId];
           }
-        }, SERVER_HEARTBEAT_INTERVAL_MS);
+        }, config.server.heartbeatMs);
         heartbeatIntervals[transport.sessionId] = heartbeatInterval;
 
         // Cleanup function to handle both close and error scenarios
@@ -145,7 +144,7 @@ export async function registerMcpService(
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         // In stateless mode, create a new instance of server and transport for each request
-        const requestServer = createMcpServerInstance(mcpTools, readOnly);
+        const requestServer = createMcpServerInstance(mcpTools, config);
         const requestTransport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
         });

@@ -12,17 +12,14 @@ export class PyPiScraperStrategy implements ScraperStrategy {
   }
 
   constructor(config: AppConfig) {
-    this.defaultStrategy = new WebScraperStrategy(
-      {
-        urlNormalizerOptions: {
-          ignoreCase: true,
-          removeHash: true,
-          removeTrailingSlash: true,
-          removeQuery: true, // Enable removeQuery for PyPI packages
-        },
+    this.defaultStrategy = new WebScraperStrategy(config, {
+      urlNormalizerOptions: {
+        ignoreCase: true,
+        removeHash: true,
+        removeTrailingSlash: true,
+        removeQuery: true, // Enable removeQuery for PyPI packages
       },
-      config,
-    );
+    });
   }
 
   async scrape(

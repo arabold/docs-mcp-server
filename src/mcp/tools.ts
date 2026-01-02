@@ -52,7 +52,7 @@ export async function initializeTools(
   const tools: McpServerTools = {
     listLibraries: new ListLibrariesTool(docService),
     findVersion: new FindVersionTool(docService),
-    scrape: new ScrapeTool(pipeline),
+    scrape: new ScrapeTool(pipeline, config.scraper),
     refresh: new RefreshVersionTool(pipeline),
     search: new SearchTool(docService),
     listJobs: new ListJobsTool(pipeline),
@@ -60,7 +60,7 @@ export async function initializeTools(
     cancelJob: new CancelJobTool(pipeline),
     // clearCompletedJobs: new ClearCompletedJobsTool(pipeline),
     remove: new RemoveTool(docService, pipeline),
-    fetchUrl: new FetchUrlTool(new AutoDetectFetcher(config.scraper)),
+    fetchUrl: new FetchUrlTool(new AutoDetectFetcher(config.scraper), config),
   };
 
   return tools;

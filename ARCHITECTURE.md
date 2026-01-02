@@ -32,7 +32,7 @@ Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP tr
 
 ## Configuration System
 
-Configuration resolves once per process via `loadConfig` in `src/utils/config.ts` with precedence: defaults → YAML (`docs-mcp.config.yaml` or `DOCS_MCP_CONFIG`) → legacy envs (e.g., `HOST`, `PORT`, provider secrets) → generic `DOCS_MCP_<KEY>` envs → CLI overrides passed to the resolver. The loader shapes values into typed slices (`app`, `server`, `auth`, `scraper`, `splitter`, `embeddings`, `store`, `search`, `assembly`, `parser`, `sandbox`). Entry points (CLI commands, MCP server, web/worker boot) call `loadConfig` once and pass the resulting slices into factories and services instead of reading env vars directly. The resolver caches between calls unless explicit overrides are provided.
+Configuration resolves once per process via `loadConfig` in `src/utils/config.ts` with precedence: defaults → YAML (`docs-mcp.config.yaml` or `DOCS_MCP_CONFIG`) → legacy envs (e.g., `HOST`, `PORT`, provider secrets) → generic `DOCS_MCP_<KEY>` envs → CLI overrides passed to the resolver. The loader shapes values into typed slices (`app`, `server`, `auth`, `scraper`, `splitter`, `embeddings`, `db`, `search`, `assembly`, `sandbox`). Entry points (CLI commands, MCP server, web/worker boot) call `loadConfig` once and pass the resulting slices into factories and services instead of reading env vars directly. The resolver caches between calls unless explicit overrides are provided.
 
 ### Directory Structure
 

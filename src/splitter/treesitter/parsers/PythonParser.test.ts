@@ -9,7 +9,7 @@ describe("PythonParser", () => {
   let parser: PythonParser;
 
   beforeEach(() => {
-    parser = new PythonParser();
+    parser = new PythonParser(30000);
   });
 
   describe("initialization", () => {

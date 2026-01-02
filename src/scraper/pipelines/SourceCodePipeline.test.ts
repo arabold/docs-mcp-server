@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import type { ScraperOptions } from "../types";
 import { ScrapeMode } from "../types";
 import { SourceCodePipeline } from "./SourceCodePipeline";
 
 describe("SourceCodePipeline", () => {
+  const appConfig = loadConfig();
   let pipeline: SourceCodePipeline;
   const baseOptions: ScraperOptions = {
     url: "http://example.com",
@@ -16,7 +18,7 @@ describe("SourceCodePipeline", () => {
   };
 
   beforeEach(() => {
-    pipeline = new SourceCodePipeline();
+    pipeline = new SourceCodePipeline(appConfig);
   });
 
   describe("initialization", () => {
@@ -25,7 +27,9 @@ describe("SourceCodePipeline", () => {
     });
 
     it("should accept custom chunk size", () => {
-      const customPipeline = new SourceCodePipeline(2000);
+      const customConfig = JSON.parse(JSON.stringify(appConfig));
+      customConfig.splitter.maxChunkSize = 2000;
+      const customPipeline = new SourceCodePipeline(customConfig);
       expect(customPipeline).toBeDefined();
     });
   });

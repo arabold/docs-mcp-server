@@ -249,6 +249,7 @@ describe("CLI Command Arguments Matrix", () => {
       "find-version",
       "remove",
       "fetch-url",
+      "config",
     ]);
   });
 });

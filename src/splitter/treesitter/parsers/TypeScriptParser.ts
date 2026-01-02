@@ -12,8 +12,9 @@
 
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
+import { defaults } from "../../../utils/config";
 import type { CodeBoundary, LanguageParser, ParseResult, StructuralNode } from "./types";
-import { PARSER_TREE_SITTER_SIZE_LIMIT, StructuralNodeType } from "./types";
+import { StructuralNodeType } from "./types";
 
 /**
  * Helper: language selection (TS vs TSX).
@@ -161,12 +162,14 @@ function findDocumentationStart(
   for (let i = idx - 1; i >= 0; i--) {
     const s = siblings[i];
     const text = source.slice(s.startIndex, s.endIndex);
+
     if (s.type === "comment") {
       sawComment = true;
       startByte = s.startIndex;
       startLine = s.startPosition.row + 1;
       continue;
     }
+
     if (/^\s*$/.test(text)) {
       if (sawComment) {
         startByte = s.startIndex;
@@ -251,6 +254,9 @@ function extractName(node: SyntaxNode): string {
       const nameNode = node.childForFieldName("name");
       return nameNode?.text || "<variable>";
     }
+    case "import_statement":
+    case "export_statement":
+      return node.text.split("\n")[0].trim();
     default:
       return node.type;
   }
@@ -327,8 +333,6 @@ function classifyBoundaryKind(node: SyntaxNode): {
 }
 
 export class TypeScriptParser implements LanguageParser {
-  readonly name = "typescript";
-
   // Unified extensions: TS + JS
   readonly fileExtensions = [
     ".ts",
@@ -352,6 +356,12 @@ export class TypeScriptParser implements LanguageParser {
     "application/jsx",
   ];
 
+  readonly name = "typescript";
+
+  constructor(
+    private readonly treeSitterSizeLimit: number = defaults.SPLITTER_TREESITTER_SIZE_LIMIT,
+  ) {}
+
   private createParser(source: string): Parser {
     const p = new Parser();
     const lang = detectTSX(source)
@@ -363,12 +373,13 @@ export class TypeScriptParser implements LanguageParser {
 
   parse(source: string): ParseResult {
     // Handle tree-sitter size limit
-    if (source.length > PARSER_TREE_SITTER_SIZE_LIMIT) {
+    const limit = this.treeSitterSizeLimit;
+    if (source.length > limit) {
       // For files exceeding the limit, we truncate at a reasonable boundary and return a limited parse
       // Try to find a good truncation point (end of line)
-      let truncatedSource = source.slice(0, PARSER_TREE_SITTER_SIZE_LIMIT);
+      let truncatedSource = source.slice(0, limit);
       const lastNewline = truncatedSource.lastIndexOf("\n");
-      if (lastNewline > PARSER_TREE_SITTER_SIZE_LIMIT * 0.9) {
+      if (lastNewline > limit * 0.9) {
         // If we can find a newline in the last 10% of the limit, use that
         truncatedSource = source.slice(0, lastNewline + 1);
       }
@@ -593,7 +604,9 @@ export class TypeScriptParser implements LanguageParser {
         ancestor.type === "abstract_class_declaration" ||
         ancestor.type === "namespace_declaration" ||
         ancestor.type === "module_declaration" ||
-        ancestor.type === "internal_module"
+        ancestor.type === "internal_module" ||
+        ancestor.type === "interface_declaration" ||
+        ancestor.type === "enum_declaration"
       ) {
         return false;
       }

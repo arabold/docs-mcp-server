@@ -1,7 +1,4 @@
 import type { ScrapeMode } from "../scraper/types";
-import { VECTOR_DIMENSION } from "../utils/config";
-
-export { VECTOR_DIMENSION };
 
 /**
  * Database page record type matching the pages table schema

@@ -18,7 +18,7 @@ describe("HierarchicalAssemblyStrategy", () => {
     // Use real DocumentStore initialization but disable embeddings (pass null)
     documentStore = new DocumentStore(":memory:", appConfig);
     await documentStore.initialize();
-    strategy = new HierarchicalAssemblyStrategy();
+    strategy = new HierarchicalAssemblyStrategy(appConfig);
   });
 
   afterEach(async () => {

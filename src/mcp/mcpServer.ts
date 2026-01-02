@@ -4,7 +4,7 @@ import { PipelineJobStatus } from "../pipeline/types";
 import { TelemetryEvent, telemetry } from "../telemetry";
 import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
-import { SCRAPER_MAX_DEPTH, SCRAPER_MAX_PAGES } from "../utils/config";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
@@ -12,13 +12,14 @@ import { createError, createResponse } from "./utils";
 /**
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
- * @param readOnly Whether to run in read-only mode (only expose read tools).
+ * @param config The application configuration.
  * @returns A configured McpServer instance.
  */
 export function createMcpServerInstance(
   tools: McpServerTools,
-  readOnly = false,
+  config: AppConfig,
 ): McpServer {
+  const readOnly = config.app.readOnly;
   const server = new McpServer(
     {
       name: "docs-mcp-server",
@@ -48,13 +49,15 @@ export function createMcpServerInstance(
         maxPages: z
           .number()
           .optional()
-          .default(SCRAPER_MAX_PAGES)
-          .describe(`Maximum number of pages to scrape (default: ${SCRAPER_MAX_PAGES}).`),
+          .default(config.scraper.maxPages)
+          .describe(
+            `Maximum number of pages to scrape (default: ${config.scraper.maxPages}).`,
+          ),
         maxDepth: z
           .number()
           .optional()
-          .default(SCRAPER_MAX_DEPTH)
-          .describe(`Maximum navigation depth (default: ${SCRAPER_MAX_DEPTH}).`),
+          .default(config.scraper.maxDepth)
+          .describe(`Maximum navigation depth (default: ${config.scraper.maxDepth}).`),
         scope: z
           .enum(["subpages", "hostname", "domain"])
           .optional()

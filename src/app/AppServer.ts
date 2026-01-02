@@ -384,9 +384,14 @@ export class AppServer {
    * Enable web interface service.
    */
   private async enableWebInterface(): Promise<void> {
-    await registerWebService(this.server, this.docService, this.pipeline, this.eventBus, {
-      externalWorkerUrl: this.serverConfig.externalWorkerUrl,
-    });
+    await registerWebService(
+      this.server,
+      this.docService,
+      this.pipeline,
+      this.eventBus,
+      this.appConfig,
+      this.serverConfig.externalWorkerUrl,
+    );
 
     logger.debug("Web interface service enabled");
   }
@@ -400,7 +405,6 @@ export class AppServer {
       this.docService,
       this.pipeline,
       this.appConfig,
-      this.appConfig.app.readOnly ? true : undefined,
       this.authManager || undefined,
     );
     logger.debug("MCP server service enabled");

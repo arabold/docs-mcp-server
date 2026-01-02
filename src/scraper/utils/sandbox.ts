@@ -1,6 +1,6 @@
 import { createContext, runInContext } from "node:vm";
 import type { JSDOM } from "jsdom";
-import { SANDBOX_DEFAULT_TIMEOUT_MS } from "../../utils/config";
+import { defaults } from "../../utils/config";
 import { createJSDOM } from "../../utils/dom";
 import { logger } from "../../utils/logger";
 
@@ -10,7 +10,7 @@ import { logger } from "../../utils/logger";
 export interface SandboxExecutionOptions {
   /** The source URL to associate with the JSDOM instance. */
   url: string;
-  /** Maximum execution time for all scripts in milliseconds. Defaults to 5000. */
+  /** Maximum execution time for all scripts in milliseconds. Defaults to SANDBOX_DEFAULT_TIMEOUT_MS. */
   timeout?: number;
   /** Initial HTML content. */
   html: string;
@@ -38,7 +38,7 @@ export interface SandboxExecutionResult {
 export async function executeJsInSandbox(
   options: SandboxExecutionOptions,
 ): Promise<SandboxExecutionResult> {
-  const { html, url, timeout = SANDBOX_DEFAULT_TIMEOUT_MS } = options;
+  const { html, url, timeout = defaults.SANDBOX_DEFAULT_TIMEOUT_MS } = options;
   const errors: Error[] = [];
   let jsdom: JSDOM | undefined;
 

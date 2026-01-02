@@ -17,7 +17,7 @@ export class ScraperRegistry {
       new NpmScraperStrategy(config),
       new PyPiScraperStrategy(config),
       new GitHubScraperStrategy(config),
-      new WebScraperStrategy({}, config),
+      new WebScraperStrategy(config, {}),
       new LocalFileStrategy(config),
     ];
   }

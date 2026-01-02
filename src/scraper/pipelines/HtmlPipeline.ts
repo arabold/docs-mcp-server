@@ -1,17 +1,14 @@
-import { GreedySplitter, SemanticMarkdownSplitter } from "../../splitter";
-import {
-  SPLITTER_MAX_CHUNK_SIZE,
-  SPLITTER_MIN_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-} from "../../utils/config";
+import { GreedySplitter } from "../../splitter/GreedySplitter";
+import { SemanticMarkdownSplitter } from "../../splitter/SemanticMarkdownSplitter";
+import type { AppConfig } from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
-import { HtmlSanitizerMiddleware } from "../middleware";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
 import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
 import { HtmlMetadataExtractorMiddleware } from "../middleware/HtmlMetadataExtractorMiddleware";
 import { HtmlNormalizationMiddleware } from "../middleware/HtmlNormalizationMiddleware";
 import { HtmlPlaywrightMiddleware } from "../middleware/HtmlPlaywrightMiddleware";
+import { HtmlSanitizerMiddleware } from "../middleware/HtmlSanitizerMiddleware";
 import { HtmlToMarkdownMiddleware } from "../middleware/HtmlToMarkdownMiddleware";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import type { ScraperOptions } from "../types";
@@ -21,21 +18,22 @@ import { BasePipeline } from "./BasePipeline";
 import type { PipelineResult } from "./types";
 
 /**
- * Pipeline for processing HTML content using middleware and semantic splitting with size optimization.
- * Converts HTML to clean markdown format then uses SemanticMarkdownSplitter for semantic chunking,
- * followed by GreedySplitter for universal size optimization.
+ * HtmlPipeline - Processes HTML content into Markdown chunks.
+ * Uses Playwright for rendering if needed and Cheerio for semantic extraction.
  */
 export class HtmlPipeline extends BasePipeline {
   private readonly playwrightMiddleware: HtmlPlaywrightMiddleware;
   private readonly standardMiddleware: ContentProcessorMiddleware[];
   private readonly greedySplitter: GreedySplitter;
 
-  constructor(
-    preferredChunkSize: number = SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize: number = SPLITTER_MAX_CHUNK_SIZE,
-  ) {
+  constructor(config: AppConfig) {
     super();
-    this.playwrightMiddleware = new HtmlPlaywrightMiddleware();
+
+    const preferredChunkSize = config.splitter.preferredChunkSize;
+    const maxChunkSize = config.splitter.maxChunkSize;
+    const minChunkSize = config.splitter.minChunkSize;
+
+    this.playwrightMiddleware = new HtmlPlaywrightMiddleware(config.scraper);
     this.standardMiddleware = [
       new HtmlCheerioParserMiddleware(),
       new HtmlMetadataExtractorMiddleware(),
@@ -52,7 +50,7 @@ export class HtmlPipeline extends BasePipeline {
     );
     this.greedySplitter = new GreedySplitter(
       semanticSplitter,
-      SPLITTER_MIN_CHUNK_SIZE,
+      minChunkSize,
       preferredChunkSize,
       maxChunkSize,
     );

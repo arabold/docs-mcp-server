@@ -10,12 +10,7 @@ import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import {
-  loadConfig,
-  READ_ONLY,
-  SERVER_DEFAULT_PORT,
-  SERVER_HOST,
-} from "../../utils/config";
+import { defaults, loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import { registerGlobalServices } from "../main";
 import {
@@ -43,7 +38,7 @@ export function createDefaultAction(program: Command): Command {
         new Option("--port <number>", "Port for the server")
           .env("DOCS_MCP_PORT")
           .env("PORT")
-          .default(SERVER_DEFAULT_PORT.toString())
+          .default(defaults.SERVER_DEFAULT_PORT.toString())
           .argParser((v: string) => {
             const n = Number(v);
             if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -56,7 +51,7 @@ export function createDefaultAction(program: Command): Command {
         new Option("--host <host>", "Host to bind the server to")
           .env("DOCS_MCP_HOST")
           .env("HOST")
-          .default(SERVER_HOST)
+          .default(defaults.SERVER_HOST)
           .argParser(validateHost),
       )
       .addOption(
@@ -134,19 +129,26 @@ export function createDefaultAction(program: Command): Command {
           const port = validatePort(options.port);
           const host = validateHost(options.host);
 
-          const appConfig = loadConfig({
-            SERVER_PROTOCOL: resolvedProtocol,
-            SERVER_DEFAULT_PORT: port,
-            SERVER_HOST: host,
-            AUTH_ENABLED: options.authEnabled,
-            AUTH_ISSUER_URL: options.authIssuerUrl,
-            AUTH_AUDIENCE: options.authAudience,
-            READ_ONLY: options.readOnly,
-            EMBEDDING_MODEL: options.embeddingModel,
-          });
+          const globalOptions = program.opts();
+
+          const appConfig = loadConfig(
+            {
+              SERVER_PROTOCOL: resolvedProtocol,
+              SERVER_DEFAULT_PORT: port,
+              SERVER_HOST: host,
+              AUTH_ENABLED: options.authEnabled,
+              AUTH_ISSUER_URL: options.authIssuerUrl,
+              AUTH_AUDIENCE: options.authAudience,
+              READ_ONLY: options.readOnly,
+              EMBEDDING_MODEL: options.embeddingModel,
+            },
+            {
+              configPath: globalOptions.config,
+              searchDir: globalOptions.storePath,
+            },
+          );
 
           // Propagate resolved store path from global options into appConfig
-          const globalOptions = program.opts();
           appConfig.app.storePath = globalOptions.storePath;
 
           // Parse and validate auth configuration
@@ -184,7 +186,7 @@ export function createDefaultAction(program: Command): Command {
 
             await pipeline.start(); // Start pipeline for stdio mode
             const mcpTools = await initializeTools(docService, pipeline, appConfig);
-            const mcpServer = await startStdioServer(mcpTools, options.readOnly);
+            const mcpServer = await startStdioServer(mcpTools, appConfig);
 
             // Register for graceful shutdown (stdio mode)
             registerGlobalServices({

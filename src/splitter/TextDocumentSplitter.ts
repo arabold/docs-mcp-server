@@ -7,18 +7,9 @@
  * or Source Code document splitters.
  */
 
-import { SPLITTER_MAX_CHUNK_SIZE } from "../utils";
 import { MinimumChunkSizeError } from "./errors";
 import { TextContentSplitter } from "./splitters/TextContentSplitter";
-import type { Chunk, DocumentSplitter } from "./types";
-
-/**
- * Configuration options for text document splitting
- */
-export interface TextDocumentSplitterOptions {
-  /** Maximum size for individual chunks */
-  maxChunkSize: number;
-}
+import type { Chunk, DocumentSplitter, SplitterConfig } from "./types";
 
 /**
  * Simple document splitter for plain text files.
@@ -27,16 +18,14 @@ export interface TextDocumentSplitterOptions {
  * Markdown, or Source Code document splitters.
  */
 export class TextDocumentSplitter implements DocumentSplitter {
-  private options: TextDocumentSplitterOptions;
+  private config: SplitterConfig;
   private textSplitter: TextContentSplitter;
 
-  constructor(options: Partial<TextDocumentSplitterOptions> = {}) {
-    this.options = {
-      maxChunkSize: options.maxChunkSize ?? SPLITTER_MAX_CHUNK_SIZE,
-    };
+  constructor(config: SplitterConfig) {
+    this.config = config;
 
     this.textSplitter = new TextContentSplitter({
-      chunkSize: this.options.maxChunkSize,
+      chunkSize: this.config.maxChunkSize,
     });
   }
 
@@ -75,10 +64,7 @@ export class TextDocumentSplitter implements DocumentSplitter {
       const chunks: Chunk[] = [];
       let offset = 0;
       while (offset < content.length) {
-        const chunkContent = content.substring(
-          offset,
-          offset + this.options.maxChunkSize,
-        );
+        const chunkContent = content.substring(offset, offset + this.config.maxChunkSize);
         chunks.push({
           types: ["text"] as const,
           content: chunkContent,
@@ -87,7 +73,7 @@ export class TextDocumentSplitter implements DocumentSplitter {
             path: [],
           },
         });
-        offset += this.options.maxChunkSize;
+        offset += this.config.maxChunkSize;
       }
       return chunks;
     }
