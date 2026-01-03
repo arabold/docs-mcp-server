@@ -38,7 +38,7 @@ export interface SandboxExecutionResult {
 export async function executeJsInSandbox(
   options: SandboxExecutionOptions,
 ): Promise<SandboxExecutionResult> {
-  const { html, url, timeout = defaults.SANDBOX_DEFAULT_TIMEOUT_MS } = options;
+  const { html, url, timeout = defaults.sandbox.defaultTimeoutMs } = options;
   const errors: Error[] = [];
   let jsdom: JSDOM | undefined;
 

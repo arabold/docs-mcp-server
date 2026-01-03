@@ -32,7 +32,11 @@ Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP tr
 
 ## Configuration System
 
-Configuration resolves once per process via `loadConfig` in `src/utils/config.ts` with precedence: defaults → YAML (`docs-mcp.config.yaml` or `DOCS_MCP_CONFIG`) → legacy envs (e.g., `HOST`, `PORT`, provider secrets) → generic `DOCS_MCP_<KEY>` envs → CLI overrides passed to the resolver. The loader shapes values into typed slices (`app`, `server`, `auth`, `scraper`, `splitter`, `embeddings`, `db`, `search`, `assembly`, `sandbox`). Entry points (CLI commands, MCP server, web/worker boot) call `loadConfig` once and pass the resulting slices into factories and services instead of reading env vars directly. The resolver caches between calls unless explicit overrides are provided.
+Configuration resolves once per process via `loadConfig` in `src/utils/config.ts`. The system uses a strict **Zod schema** (`AppConfigSchema`) to validate and merge settings from four layers: Defaults < Config File (`config.yaml`) < Environment Variables < CLI Arguments.
+
+All default values are unified in a single `DEFAULT_CONFIG` source of truth. The loading process ensures that the resulting `AppConfig` object is fully typed and validated before the application starts. 
+
+For detailed options and precedence rules, see [Configuration Concepts](docs/concepts/configuration.md).
 
 ### Directory Structure
 

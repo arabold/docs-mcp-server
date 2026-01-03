@@ -148,67 +148,58 @@ To stop the server, press `Ctrl+C`.
 
 ## Configuration overrides
 
-- You can configure the server with YAML, environment variables, or CLI flags. Per key, the last value wins: defaults → YAML file → legacy envs (e.g., `HOST`, `PORT`, `DOCS_MCP_HOST`, provider secrets) → generic env `DOCS_MCP_<KEY>` → CLI flags.
-- Optional YAML: `docs-mcp.config.yaml` in CWD or set `DOCS_MCP_CONFIG` to a path. Parsing requires the optional `yaml` package (`npm install yaml`).
-- Any config value can be overridden via `DOCS_MCP_<KEY>` (e.g., `DOCS_MCP_SCRAPER_MAX_PAGES`, `DOCS_MCP_SERVER_HOST`, `DOCS_MCP_SPLITTER_JSON_MAX_CHUNKS`).
+- **Configuration Precedence**: Configuration is loaded in the following order (last one wins):
 
-### YAML configuration file
+  > For a complete reference of all configuration options, see the [Configuration Guide](docs/concepts/configuration.md).
 
-Place a `docs-mcp.config.yaml` next to where you run the server (or point `DOCS_MCP_CONFIG` to a file) to keep your defaults in one place. CLI flags still win for ad-hoc runs. Example:
+  1. **Defaults**: Built-in default values.
+  2. **Config File**: `config.json` or `config.yaml` in global store, project root, or current directory.
+  3. **Environment Variables**: Specific `DOCS_MCP_*` variables override file settings.
+  4. **CLI Arguments**: Command-line flags (e.g., `--port`) have the highest priority.
 
-```yaml
-server:
-  host: 0.0.0.0
-  port: 6280
-scraper:
-  maxPages: 500
-embeddings:
-  model: text-embedding-3-small
-store:
-  path: /data/docs-mcp
-```
+### Configuration File
 
-### Command Line Argument Overrides
+You can create a `config.json` or `config.yaml` file to persist your settings. The server searches for this file in:
 
-Set common options via environment variables or CLI flags:
+1. The path specified by `--config`.
+2. The storage directory (default: `~/.docs-mcp-server` or `DOCS_MCP_STORE_PATH`).
+3. The project root directory (if detected).
+4. The current working directory.
 
-| Environment Variable       | CLI Argument           | Description                                     | Used by Commands          |
-| -------------------------- | ---------------------- | ----------------------------------------------- | ------------------------- |
-| `DOCS_MCP_STORE_PATH`      | `--store-path`         | Custom path for data storage directory          | all                       |
-| `DOCS_MCP_TELEMETRY`       | `--no-telemetry`       | Disable telemetry (`false` to disable)          | all                       |
-| `DOCS_MCP_PROTOCOL`        | `--protocol`           | MCP server protocol (auto, stdio, http)         | default, mcp              |
-| `DOCS_MCP_PORT`            | `--port`               | Server port                                     | default, mcp, web, worker |
-| `DOCS_MCP_WEB_PORT`        | `--port` (web command) | Web interface port (web command only)           | web                       |
-| `PORT`                     | `--port`               | Server port (fallback if DOCS_MCP_PORT not set) | default, mcp, web, worker |
-| `DOCS_MCP_HOST`            | `--host`               | Server host/bind address                        | default, mcp, web, worker |
-| `HOST`                     | `--host`               | Server host (fallback if DOCS_MCP_HOST not set) | default, mcp, web, worker |
-| `DOCS_MCP_EMBEDDING_MODEL` | `--embedding-model`    | Embedding model configuration                   | default, mcp, web, worker |
-| `DOCS_MCP_AUTH_ENABLED`    | `--auth-enabled`       | Enable OAuth2/OIDC authentication               | default, mcp              |
-| `DOCS_MCP_AUTH_ISSUER_URL` | `--auth-issuer-url`    | OAuth2 provider issuer/discovery URL            | default, mcp              |
-| `DOCS_MCP_AUTH_AUDIENCE`   | `--auth-audience`      | JWT audience claim (resource identifier)        | default, mcp              |
-
-Example `docs-mcp.config.yaml`:
+**Example `config.yaml`:**
 
 ```yaml
 server:
-  host: 0.0.0.0
-  port: 6280
+  host: "0.0.0.0"
+  ports:
+    mcp: 9000
+    default: 8000
 scraper:
   maxPages: 500
-  maxConcurrency: 8
-  pageTimeoutMs: 30000
-  fetcher:
-    maxRetries: 4
-    baseDelayMs: 750
+  pageTimeoutMs: 10000
 splitter:
-  json:
-    maxChunks: 1500
-    maxNestingDepth: 6
+  maxChunkSize: 2000
 embeddings:
   vectorDimension: 1536
-db:
-  migrationRetryDelayMs: 500
 ```
+
+### Environment Variables
+
+Specific configuration options can be set via environment variables. These override values from the configuration file.
+
+| Environment Variable       | Config Path            | Description                               |
+| -------------------------- | ---------------------- | ----------------------------------------- |
+| `DOCS_MCP_PROTOCOL`        | `server.protocol`      | Server protocol (`auto`, `stdio`, `http`) |
+| `DOCS_MCP_HOST`, `HOST`    | `server.host`          | Host to bind the server to                |
+| `DOCS_MCP_PORT`, `PORT`    | `server.ports.default` | Default server port                       |
+| `DOCS_MCP_WEB_PORT`        | `server.ports.web`     | Web interface port                        |
+| `DOCS_MCP_STORE_PATH`      | `app.storePath`        | Custom storage directory path             |
+| `DOCS_MCP_READ_ONLY`       | `app.readOnly`         | Enable read-only mode                     |
+| `DOCS_MCP_AUTH_ENABLED`    | `auth.enabled`         | Enable authentication                     |
+| `DOCS_MCP_AUTH_ISSUER_URL` | `auth.issuerUrl`       | OIDC Issuer URL                           |
+| `DOCS_MCP_AUTH_AUDIENCE`   | `auth.audience`        | JWT Audience                              |
+| `DOCS_MCP_EMBEDDING_MODEL` | `app.embeddingModel`   | Embedding model string                    |
+| `DOCS_MCP_TELEMETRY`       | `app.telemetryEnabled` | Enable/disable telemetry                  |
 
 ## Embedded Server
 

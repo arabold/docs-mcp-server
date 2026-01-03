@@ -191,7 +191,7 @@ export class PythonParser implements LanguageParser {
   ];
 
   constructor(
-    private readonly treeSitterSizeLimit: number = defaults.SPLITTER_TREESITTER_SIZE_LIMIT,
+    private readonly treeSitterSizeLimit: number = defaults.splitter.treeSitterSizeLimit,
   ) {}
 
   private createParser(): Parser {

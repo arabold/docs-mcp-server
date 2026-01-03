@@ -1,645 +1,484 @@
-/**
- * Configuration defaults, schema metadata, and loader with env/YAML precedence.
- */
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "yaml";
+import { z } from "zod";
+import { getProjectRoot } from "./paths";
 
-type Path = readonly [string, ...string[]];
+// --- Default Global Configuration ---
 
-type ConfigSchemaEntry<T, TTarget extends Path = Path> = {
-  defaultValue: T;
-  env?: string[];
-  parser: (raw: string) => T;
-  yamlPaths?: readonly Path[];
-  target: TTarget;
-};
+export const DEFAULT_CONFIG = {
+  app: {
+    storePath: "",
+    telemetryEnabled: true,
+    readOnly: false,
+    embeddingModel: "text-embedding-3-small",
+  },
+  server: {
+    protocol: "auto",
+    host: "127.0.0.1",
+    ports: {
+      default: 6280,
+      worker: 8080,
+      mcp: 6280,
+      web: 6281,
+    },
+    heartbeatMs: 30_000,
+  },
+  auth: {
+    enabled: false,
+    issuerUrl: "",
+    audience: "",
+  },
+  scraper: {
+    maxPages: 1000,
+    maxDepth: 3,
+    maxConcurrency: 3,
+    pageTimeoutMs: 5000,
+    browserTimeoutMs: 30_000,
+    fetcher: {
+      maxRetries: 6,
+      baseDelayMs: 1000,
+      maxCacheItems: 200,
+      maxCacheItemSizeBytes: 500 * 1024,
+    },
+  },
+  splitter: {
+    minChunkSize: 500,
+    preferredChunkSize: 1500,
+    maxChunkSize: 5000,
+    treeSitterSizeLimit: 30_000,
+    json: {
+      maxNestingDepth: 5,
+      maxChunks: 1000,
+    },
+  },
+  embeddings: {
+    batchSize: 100,
+    batchChars: 50_000,
+    requestTimeoutMs: 30_000,
+    initTimeoutMs: 30_000,
+    vectorDimension: 1536,
+  },
+  db: {
+    migrationMaxRetries: 5,
+    migrationRetryDelayMs: 300,
+  },
+  search: {
+    overfetchFactor: 2,
+    weightVec: 1,
+    weightFts: 1,
+    vectorMultiplier: 10,
+  },
+  sandbox: {
+    defaultTimeoutMs: 5000,
+  },
+  assembly: {
+    maxParentChainDepth: 10,
+    childLimit: 3,
+    precedingSiblingsLimit: 1,
+    subsequentSiblingsLimit: 2,
+  },
+} as const;
 
-type ConfigSchema = Record<string, ConfigSchemaEntry<unknown>>;
+// --- Configuration Schema (Nested) ---
 
-type UnionToIntersection<U> = (U extends unknown ? (k: U) => void : never) extends (
-  k: infer I,
-) => void
-  ? I
-  : never;
-
-type Simplify<T> = { [K in keyof T]: T[K] } & {};
-
-type EnsurePath<Segments extends string[]> = Segments extends [string, ...string[]]
-  ? Segments
-  : never;
-
-type AssignPath<P extends Path, V> = P extends readonly [
-  infer K extends string,
-  ...infer Rest extends string[],
-]
-  ? Rest extends []
-    ? { [Key in K]: V }
-    : { [Key in K]: AssignPath<EnsurePath<Rest>, V> }
-  : never;
-
-type AppConfigFromSchema<S extends ConfigSchema> = Simplify<
-  UnionToIntersection<
-    {
-      [K in keyof S]: S[K] extends ConfigSchemaEntry<infer V, infer P extends Path>
-        ? AssignPath<P, V>
-        : never;
-    }[keyof S]
-  >
->;
-
-function defineConfigSchema<const S extends ConfigSchema>(schema: S): S {
-  return schema;
-}
-
-const configSchema = defineConfigSchema({
-  /** Default protocol for the MCP/server */
-  SERVER_PROTOCOL: {
-    defaultValue: "auto",
-    env: ["DOCS_MCP_PROTOCOL"],
-    parser: parseString,
-    yamlPaths: [["server", "protocol"]],
-    target: ["server", "protocol"],
-  },
-  /** Custom path for data storage directory */
-  STORE_PATH: {
-    defaultValue: "",
-    env: ["DOCS_MCP_STORE_PATH"],
-    parser: parseString,
-    yamlPaths: [["store", "path"]],
-    target: ["app", "storePath"],
-  },
-  /** Telemetry enablement toggle */
-  TELEMETRY: {
-    defaultValue: true,
-    env: ["DOCS_MCP_TELEMETRY"],
-    parser: parseBooleanish,
-    yamlPaths: [["telemetry", "enabled"]],
-    target: ["app", "telemetryEnabled"],
-  },
-  /** Read-only mode toggle (primarily affects MCP write / job tools) */
-  READ_ONLY: {
-    defaultValue: false,
-    env: ["DOCS_MCP_READ_ONLY"],
-    parser: parseBooleanish,
-    yamlPaths: [["app", "readOnly"]],
-    target: ["app", "readOnly"],
-  },
-  /** Standalone server port (single-process mode) */
-  SERVER_DEFAULT_PORT: {
-    defaultValue: 6280,
-    env: ["DOCS_MCP_PORT", "PORT"],
-    parser: parseIntStrict,
-    yamlPaths: [
-      ["server", "port"],
-      ["server", "defaultPort"],
-    ],
-    target: ["server", "ports", "default"],
-  },
-  /** Worker service port (distributed mode) */
-  SERVER_WORKER_PORT: {
-    defaultValue: 8080,
-    env: ["DOCS_MCP_PORT", "PORT"],
-    parser: parseIntStrict,
-    yamlPaths: [["server", "workerPort"]],
-    target: ["server", "ports", "worker"],
-  },
-  /** MCP endpoint port (distributed mode) */
-  SERVER_MCP_PORT: {
-    defaultValue: 6280,
-    env: ["DOCS_MCP_PORT", "PORT"],
-    parser: parseIntStrict,
-    yamlPaths: [["server", "mcpPort"]],
-    target: ["server", "ports", "mcp"],
-  },
-  /** Web UI port (distributed mode) */
-  SERVER_WEB_PORT: {
-    defaultValue: 6281,
-    env: ["DOCS_MCP_WEB_PORT", "DOCS_MCP_PORT", "PORT"],
-    parser: parseIntStrict,
-    yamlPaths: [["server", "webPort"]],
-    target: ["server", "ports", "web"],
-  },
-  /** Default host for server binding */
-  SERVER_HOST: {
-    defaultValue: "127.0.0.1",
-    env: ["DOCS_MCP_HOST", "HOST"],
-    parser: parseString,
-    yamlPaths: [["server", "host"]],
-    target: ["server", "host"],
-  },
-  /** Embedding model configuration */
-  EMBEDDING_MODEL: {
-    defaultValue: "",
-    env: ["DOCS_MCP_EMBEDDING_MODEL"],
-    parser: parseString,
-    yamlPaths: [["embeddings", "model"]],
-    target: ["app", "embeddingModel"],
-  },
-  /** OAuth2/OIDC authentication toggle */
-  AUTH_ENABLED: {
-    defaultValue: false,
-    env: ["DOCS_MCP_AUTH_ENABLED"],
-    parser: parseBooleanish,
-    yamlPaths: [["auth", "enabled"]],
-    target: ["auth", "enabled"],
-  },
-  /** OAuth2/OIDC issuer/discovery URL */
-  AUTH_ISSUER_URL: {
-    defaultValue: "",
-    env: ["DOCS_MCP_AUTH_ISSUER_URL"],
-    parser: parseString,
-    yamlPaths: [["auth", "issuerUrl"]],
-    target: ["auth", "issuerUrl"],
-  },
-  /** OAuth2/OIDC audience */
-  AUTH_AUDIENCE: {
-    defaultValue: "",
-    env: ["DOCS_MCP_AUTH_AUDIENCE"],
-    parser: parseString,
-    yamlPaths: [["auth", "audience"]],
-    target: ["auth", "audience"],
-  },
-  /** Heartbeat interval for long-lived MCP SSE connections */
-  SERVER_HEARTBEAT_INTERVAL_MS: {
-    defaultValue: 30_000,
-    parser: parseIntStrict,
-    yamlPaths: [["server", "heartbeatMs"]],
-    target: ["server", "heartbeatMs"],
-  },
-  /** Maximum number of pages to scrape in a single job */
-  SCRAPER_MAX_PAGES: {
-    defaultValue: 1000,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "maxPages"]],
-    target: ["scraper", "maxPages"],
-  },
-  /** Maximum navigation depth when crawling links */
-  SCRAPER_MAX_DEPTH: {
-    defaultValue: 3,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "maxDepth"]],
-    target: ["scraper", "maxDepth"],
-  },
-  /** Maximum number of concurrent page requests */
-  SCRAPER_MAX_CONCURRENCY: {
-    defaultValue: 3,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "maxConcurrency"]],
-    target: ["scraper", "maxConcurrency"],
-  },
-  /** Default timeout in milliseconds for page operations (e.g., Playwright waitForSelector). */
-  SCRAPER_PAGE_TIMEOUT_MS: {
-    defaultValue: 5000,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "pageTimeoutMs"]],
-    target: ["scraper", "pageTimeoutMs"],
-  },
-  /** Maximum number of retries for HTTP fetcher requests. */
-  SCRAPER_FETCHER_MAX_RETRIES: {
-    defaultValue: 6,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "fetcher", "maxRetries"]],
-    target: ["scraper", "fetcher", "maxRetries"],
-  },
-  /** Base delay in milliseconds for HTTP fetcher retry backoff. */
-  SCRAPER_FETCHER_BASE_DELAY_MS: {
-    defaultValue: 1000,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "fetcher", "baseDelayMs"]],
-    target: ["scraper", "fetcher", "baseDelayMs"],
-  },
-  /** Maximum number of cached items in the HTTP fetcher. */
-  SCRAPER_FETCHER_MAX_CACHE_ITEMS: {
-    defaultValue: 200,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "fetcher", "maxCacheItems"]],
-    target: ["scraper", "fetcher", "maxCacheItems"],
-  },
-  /** Maximum size in bytes for individual cached responses in the HTTP fetcher. */
-  SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES: {
-    defaultValue: 500 * 1024,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "fetcher", "maxCacheItemSizeBytes"]],
-    target: ["scraper", "fetcher", "maxCacheItemSizeBytes"],
-  },
-  /** Default navigation timeout for browser-based fetches */
-  SCRAPER_BROWSER_TIMEOUT_MS: {
-    defaultValue: 30_000,
-    parser: parseIntStrict,
-    yamlPaths: [["scraper", "browserTimeoutMs"]],
-    target: ["scraper", "browserTimeoutMs"],
-  },
-  /** Default chunk size settings for splitters */
-  SPLITTER_MIN_CHUNK_SIZE: {
-    defaultValue: 500,
-    parser: parseIntStrict,
-    yamlPaths: [["splitter", "minChunkSize"]],
-    target: ["splitter", "minChunkSize"],
-  },
-  SPLITTER_PREFERRED_CHUNK_SIZE: {
-    defaultValue: 1500,
-    parser: parseIntStrict,
-    yamlPaths: [["splitter", "preferredChunkSize"]],
-    target: ["splitter", "preferredChunkSize"],
-  },
-  SPLITTER_MAX_CHUNK_SIZE: {
-    defaultValue: 5000,
-    parser: parseIntStrict,
-    yamlPaths: [["splitter", "maxChunkSize"]],
-    target: ["splitter", "maxChunkSize"],
-  },
-  /** Maximum nesting depth for JSON document chunking. */
-  SPLITTER_JSON_MAX_NESTING_DEPTH: {
-    defaultValue: 5,
-    parser: parseIntStrict,
-    yamlPaths: [["splitter", "json", "maxNestingDepth"]],
-    target: ["splitter", "json", "maxNestingDepth"],
-  },
-  /** Maximum number of chunks that can be generated from a single JSON file. */
-  SPLITTER_JSON_MAX_CHUNKS: {
-    defaultValue: 1000,
-    parser: parseIntStrict,
-    yamlPaths: [["splitter", "json", "maxChunks"]],
-    target: ["splitter", "json", "maxChunks"],
-  },
-  /** Maximum number of documents to process in a single batch for embeddings. */
-  EMBEDDING_BATCH_SIZE: {
-    defaultValue: 100,
-    parser: parseIntStrict,
-    yamlPaths: [["embeddings", "batchSize"]],
-    target: ["embeddings", "batchSize"],
-  },
-  /** Maximum total character size for a single embedding batch request. */
-  EMBEDDING_BATCH_CHARS: {
-    defaultValue: 50_000,
-    parser: parseIntStrict,
-    yamlPaths: [["embeddings", "batchChars"]],
-    target: ["embeddings", "batchChars"],
-  },
-  /** Timeout for embedding service requests */
-  EMBEDDING_REQUEST_TIMEOUT_MS: {
-    defaultValue: 30_000,
-    parser: parseIntStrict,
-    yamlPaths: [["embeddings", "requestTimeoutMs"]],
-    target: ["embeddings", "requestTimeoutMs"],
-  },
-  /** Timeout when probing embedding dimensions during initialization */
-  EMBEDDING_INIT_TIMEOUT_MS: {
-    defaultValue: 30_000,
-    parser: parseIntStrict,
-    yamlPaths: [["embeddings", "initTimeoutMs"]],
-    target: ["embeddings", "initTimeoutMs"],
-  },
-  /** Maximum number of retries for database migrations if busy. */
-  DB_MIGRATION_MAX_RETRIES: {
-    defaultValue: 5,
-    parser: parseIntStrict,
-    yamlPaths: [["db", "migrationMaxRetries"]],
-    target: ["db", "migrationMaxRetries"],
-  },
-  /** Delay in milliseconds between migration retry attempts. */
-  DB_MIGRATION_RETRY_DELAY_MS: {
-    defaultValue: 300,
-    parser: parseIntStrict,
-    yamlPaths: [["db", "migrationRetryDelayMs"]],
-    target: ["db", "migrationRetryDelayMs"],
-  },
-  /** Factor to overfetch vector and FTS candidates before applying Reciprocal Rank Fusion. */
-  SEARCH_OVERFETCH_FACTOR: {
-    defaultValue: 2,
-    parser: parseFloatStrict,
-    yamlPaths: [["search", "overfetchFactor"]],
-    target: ["search", "overfetchFactor"],
-  },
-  /** Weight applied to vector search scores in hybrid search ranking. */
-  SEARCH_WEIGHT_VEC: {
-    defaultValue: 1,
-    parser: parseFloatStrict,
-    yamlPaths: [["search", "weightVec"]],
-    target: ["search", "weightVec"],
-  },
-  /** Weight applied to full-text search scores in hybrid search ranking. */
-  SEARCH_WEIGHT_FTS: {
-    defaultValue: 1,
-    parser: parseFloatStrict,
-    yamlPaths: [["search", "weightFts"]],
-    target: ["search", "weightFts"],
-  },
-  /** Multiplier to cast a wider net in vector search before final ranking. */
-  EMBEDDINGS_VECTOR_SEARCH_MULTIPLIER: {
-    defaultValue: 10,
-    parser: parseIntStrict,
-    yamlPaths: [["search", "vectorMultiplier"]],
-    target: ["search", "vectorMultiplier"],
-  },
-  /** Default vector dimension used across the application */
-  EMBEDDINGS_VECTOR_DIMENSION: {
-    defaultValue: 1536,
-    parser: parseIntStrict,
-    yamlPaths: [
-      ["embeddings", "vectorDimension"],
-      ["embeddings", "dimensions"],
-    ],
-    target: ["embeddings", "vectorDimension"],
-  },
-  /** Maximum characters fed into tree-sitter parsers to avoid overflow */
-  SPLITTER_TREESITTER_SIZE_LIMIT: {
-    defaultValue: 30_000,
-    parser: parseIntStrict,
-    yamlPaths: [["splitter", "treeSitterSizeLimit"]],
-    target: ["splitter", "treeSitterSizeLimit"],
-  },
-  /** Safety cap for hierarchical parent-chain traversal */
-  ASSEMBLY_MAX_PARENT_CHAIN_DEPTH: {
-    defaultValue: 50,
-    parser: parseIntStrict,
-    yamlPaths: [["assembly", "maxParentChainDepth"]],
-    target: ["assembly", "maxParentChainDepth"],
-  },
-  /** Context expansion limits for markdown/text assembly */
-  ASSEMBLY_CHILD_LIMIT: {
-    defaultValue: 3,
-    parser: parseIntStrict,
-    yamlPaths: [["assembly", "childLimit"]],
-    target: ["assembly", "childLimit"],
-  },
-  ASSEMBLY_PRECEDING_SIBLINGS_LIMIT: {
-    defaultValue: 1,
-    parser: parseIntStrict,
-    yamlPaths: [["assembly", "precedingSiblingsLimit"]],
-    target: ["assembly", "precedingSiblingsLimit"],
-  },
-  ASSEMBLY_SUBSEQUENT_SIBLINGS_LIMIT: {
-    defaultValue: 2,
-    parser: parseIntStrict,
-    yamlPaths: [["assembly", "subsequentSiblingsLimit"]],
-    target: ["assembly", "subsequentSiblingsLimit"],
-  },
-  /** Default timeout for sandboxed script execution */
-  SANDBOX_DEFAULT_TIMEOUT_MS: {
-    defaultValue: 5000,
-    parser: parseIntStrict,
-    yamlPaths: [["sandbox", "defaultTimeoutMs"]],
-    target: ["sandbox", "defaultTimeoutMs"],
-  },
+export const AppConfigSchema = z.object({
+  app: z
+    .object({
+      storePath: z.string().default(DEFAULT_CONFIG.app.storePath),
+      telemetryEnabled: z.coerce.boolean().default(DEFAULT_CONFIG.app.telemetryEnabled),
+      readOnly: z.coerce.boolean().default(DEFAULT_CONFIG.app.readOnly),
+      embeddingModel: z.string().default(DEFAULT_CONFIG.app.embeddingModel),
+    })
+    .default(DEFAULT_CONFIG.app),
+  server: z
+    .object({
+      protocol: z.string().default(DEFAULT_CONFIG.server.protocol),
+      host: z.string().default(DEFAULT_CONFIG.server.host),
+      ports: z
+        .object({
+          default: z.coerce.number().int().default(DEFAULT_CONFIG.server.ports.default),
+          worker: z.coerce.number().int().default(DEFAULT_CONFIG.server.ports.worker),
+          mcp: z.coerce.number().int().default(DEFAULT_CONFIG.server.ports.mcp),
+          web: z.coerce.number().int().default(DEFAULT_CONFIG.server.ports.web),
+        })
+        .default(DEFAULT_CONFIG.server.ports),
+      heartbeatMs: z.coerce.number().int().default(DEFAULT_CONFIG.server.heartbeatMs),
+    })
+    .default(DEFAULT_CONFIG.server),
+  auth: z
+    .object({
+      enabled: z.coerce.boolean().default(DEFAULT_CONFIG.auth.enabled),
+      issuerUrl: z.string().default(DEFAULT_CONFIG.auth.issuerUrl),
+      audience: z.string().default(DEFAULT_CONFIG.auth.audience),
+    })
+    .default(DEFAULT_CONFIG.auth),
+  scraper: z
+    .object({
+      maxPages: z.coerce.number().int().default(DEFAULT_CONFIG.scraper.maxPages),
+      maxDepth: z.coerce.number().int().default(DEFAULT_CONFIG.scraper.maxDepth),
+      maxConcurrency: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.scraper.maxConcurrency),
+      pageTimeoutMs: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.scraper.pageTimeoutMs),
+      browserTimeoutMs: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.scraper.browserTimeoutMs),
+      fetcher: z
+        .object({
+          maxRetries: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.scraper.fetcher.maxRetries),
+          baseDelayMs: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.scraper.fetcher.baseDelayMs),
+          maxCacheItems: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.scraper.fetcher.maxCacheItems),
+          maxCacheItemSizeBytes: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.scraper.fetcher.maxCacheItemSizeBytes),
+        })
+        .default(DEFAULT_CONFIG.scraper.fetcher),
+    })
+    .default(DEFAULT_CONFIG.scraper),
+  splitter: z
+    .object({
+      minChunkSize: z.coerce.number().int().default(DEFAULT_CONFIG.splitter.minChunkSize),
+      preferredChunkSize: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.splitter.preferredChunkSize),
+      maxChunkSize: z.coerce.number().int().default(DEFAULT_CONFIG.splitter.maxChunkSize),
+      treeSitterSizeLimit: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.splitter.treeSitterSizeLimit),
+      json: z
+        .object({
+          maxNestingDepth: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.splitter.json.maxNestingDepth),
+          maxChunks: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.splitter.json.maxChunks),
+        })
+        .default(DEFAULT_CONFIG.splitter.json),
+    })
+    .default(DEFAULT_CONFIG.splitter),
+  embeddings: z
+    .object({
+      batchSize: z.coerce.number().int().default(DEFAULT_CONFIG.embeddings.batchSize),
+      batchChars: z.coerce.number().int().default(DEFAULT_CONFIG.embeddings.batchChars),
+      requestTimeoutMs: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.embeddings.requestTimeoutMs),
+      initTimeoutMs: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.embeddings.initTimeoutMs),
+      vectorDimension: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.embeddings.vectorDimension),
+    })
+    .default(DEFAULT_CONFIG.embeddings),
+  db: z
+    .object({
+      migrationMaxRetries: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.db.migrationMaxRetries),
+      migrationRetryDelayMs: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.db.migrationRetryDelayMs),
+    })
+    .default(DEFAULT_CONFIG.db),
+  search: z
+    .object({
+      overfetchFactor: z.coerce.number().default(DEFAULT_CONFIG.search.overfetchFactor),
+      weightVec: z.coerce.number().default(DEFAULT_CONFIG.search.weightVec),
+      weightFts: z.coerce.number().default(DEFAULT_CONFIG.search.weightFts),
+      vectorMultiplier: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.search.vectorMultiplier),
+    })
+    .default(DEFAULT_CONFIG.search),
+  sandbox: z
+    .object({
+      defaultTimeoutMs: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.sandbox.defaultTimeoutMs),
+    })
+    .default(DEFAULT_CONFIG.sandbox),
+  assembly: z
+    .object({
+      maxParentChainDepth: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.assembly.maxParentChainDepth),
+      childLimit: z.coerce.number().int().default(DEFAULT_CONFIG.assembly.childLimit),
+      precedingSiblingsLimit: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.assembly.precedingSiblingsLimit),
+      subsequentSiblingsLimit: z.coerce
+        .number()
+        .int()
+        .default(DEFAULT_CONFIG.assembly.subsequentSiblingsLimit),
+    })
+    .default(DEFAULT_CONFIG.assembly),
 });
 
-type ConfigKey = keyof typeof configSchema;
+export type AppConfig = z.infer<typeof AppConfigSchema>;
 
-export type AppConfig = AppConfigFromSchema<typeof configSchema>;
+// Get defaults from the schema
+export const defaults = AppConfigSchema.parse({});
 
-export const defaults = Object.fromEntries(
-  Object.entries(configSchema).map(([key, entry]) => [key, entry.defaultValue]),
-) as { [K in ConfigKey]: (typeof configSchema)[K]["defaultValue"] };
+// --- Mapping Configuration ---
+// Maps flat env vars and CLI args to the nested config structure
 
-// Export individual constants derived from defaults for ease of use across the codebase.
-// These are primarily used as default values for CLI options.
-// Redundant individual exports removed. Use the `defaults` object instead.
+interface ConfigMapping {
+  path: string[]; // Path in AppConfig
+  env?: string[]; // Environment variables
+  cli?: string; // CLI argument name (yargs)
+}
 
-const DEFAULT_CONFIG_PATH = "docs-mcp.config.yaml";
+const configMappings: ConfigMapping[] = [
+  { path: ["server", "protocol"], env: ["DOCS_MCP_PROTOCOL"], cli: "protocol" },
+  { path: ["app", "storePath"], env: ["DOCS_MCP_STORE_PATH"], cli: "storePath" },
+  { path: ["app", "telemetryEnabled"], env: ["DOCS_MCP_TELEMETRY"] }, // Handled via --no-telemetry in CLI usually
+  { path: ["app", "readOnly"], env: ["DOCS_MCP_READ_ONLY"], cli: "readOnly" },
+  // Ports - Special handling for shared env vars is done in mapping logic
+  {
+    path: ["server", "ports", "default"],
+    env: ["DOCS_MCP_PORT", "PORT"],
+    cli: "port",
+  },
+  {
+    path: ["server", "ports", "worker"],
+    env: ["DOCS_MCP_PORT", "PORT"],
+    cli: "port",
+  },
+  {
+    path: ["server", "ports", "mcp"],
+    env: ["DOCS_MCP_PORT", "PORT"],
+    cli: "port",
+  },
+  {
+    path: ["server", "ports", "web"],
+    env: ["DOCS_MCP_WEB_PORT", "DOCS_MCP_PORT", "PORT"],
+    cli: "port",
+  },
+  { path: ["server", "host"], env: ["DOCS_MCP_HOST", "HOST"], cli: "host" },
+  {
+    path: ["app", "embeddingModel"],
+    env: ["DOCS_MCP_EMBEDDING_MODEL"],
+    cli: "embeddingModel",
+  },
+  { path: ["auth", "enabled"], env: ["DOCS_MCP_AUTH_ENABLED"], cli: "authEnabled" },
+  {
+    path: ["auth", "issuerUrl"],
+    env: ["DOCS_MCP_AUTH_ISSUER_URL"],
+    cli: "authIssuerUrl",
+  },
+  {
+    path: ["auth", "audience"],
+    env: ["DOCS_MCP_AUTH_AUDIENCE"],
+    cli: "authAudience",
+  },
+  // Add other mappings as needed for CLI/Env overrides
+];
 
-const cachedYaml: { path: string | null; values: unknown } = {
-  path: null,
-  values: {},
-};
-
-let cachedConfig: AppConfig | null = null;
+// --- Loader Logic ---
 
 export interface LoadConfigOptions {
-  configPath?: string;
-  searchDir?: string;
+  configPath?: string; // Explicit config path
+  searchDir?: string; // Search directory (store path)
 }
 
 export function loadConfig(
-  overrides: Partial<Record<ConfigKey, unknown>> = {},
+  cliArgs: Record<string, unknown> = {},
   options: LoadConfigOptions = {},
 ): AppConfig {
-  if (
-    cachedConfig &&
-    Object.keys(overrides).length === 0 &&
-    Object.keys(options).length === 0
-  ) {
-    return cachedConfig;
+  // 1. Load Config File
+  const fileConfig = loadConfigFile(options, cliArgs.config as string);
+
+  // 2. Map Env Vars and CLI Args to nested structure
+  const envConfig = mapEnvToConfig();
+  const cliConfig = mapCliToConfig(cliArgs);
+
+  // 3. Merge: Defaults (base) < File < Env < CLI
+  // We rely on Zod to apply defaults to the merged result of File < Env < CLI
+  // BUT deep merging is tricky.
+  // Strategy: Start with empty object, deep merge File -> Env -> CLI.
+  // Then parse with Zod, which will fill in defaults for missing keys.
+
+  const mergedInput = deepMerge(
+    fileConfig,
+    deepMerge(envConfig, cliConfig),
+  ) as ConfigObject;
+
+  // Special handling for embedding model fallback
+  if (!getAtPath(mergedInput, ["app", "embeddingModel"]) && process.env.OPENAI_API_KEY) {
+    setAtPath(mergedInput, ["app", "embeddingModel"], "text-embedding-3-small");
   }
 
-  const yamlValues = loadYamlConfig(options);
-  const resolved: Partial<Record<ConfigKey, unknown>> = {};
-
-  for (const [key, entry] of Object.entries(configSchema) as [
-    ConfigKey,
-    ConfigSchemaEntry<unknown>,
-  ][]) {
-    const yamlValue = getYamlValue(key, entry, yamlValues);
-    const legacyEnv = getFirstDefined(entry.env?.map((name) => process.env[name]));
-    const genericEnv = process.env[`DOCS_MCP_${key}`];
-    const raw = getFirstDefined([
-      overrides[key],
-      genericEnv,
-      legacyEnv,
-      yamlValue,
-      entry.defaultValue,
-    ]);
-
-    resolved[key] = coerceValue(raw, entry.parser, key);
-  }
-
-  if (!resolved.EMBEDDING_MODEL && process.env.OPENAI_API_KEY) {
-    resolved.EMBEDDING_MODEL = "text-embedding-3-small";
-  }
-
-  cachedConfig = shapeConfig(resolved as Record<ConfigKey, unknown>);
-  return cachedConfig;
+  return AppConfigSchema.parse(mergedInput);
 }
 
-function shapeConfig(values: Record<ConfigKey, unknown>): AppConfig {
-  const shaped: Record<string, unknown> = {};
+function loadConfigFile(
+  options: LoadConfigOptions,
+  cliConfigPath?: string,
+): Record<string, unknown> {
+  const candidatePaths: string[] = [];
 
-  for (const [key, entry] of Object.entries(configSchema) as [
-    ConfigKey,
-    ConfigSchemaEntry<unknown>,
-  ][]) {
-    setAtPath(shaped, entry.target, values[key]);
+  // 1. Explicit path
+  if (cliConfigPath) candidatePaths.push(cliConfigPath);
+  if (options.configPath) candidatePaths.push(options.configPath);
+  if (process.env.DOCS_MCP_CONFIG) candidatePaths.push(process.env.DOCS_MCP_CONFIG);
+
+  // 2. Storage Directory
+  if (options.searchDir) {
+    candidatePaths.push(path.join(options.searchDir, "config.yaml"));
+    candidatePaths.push(path.join(options.searchDir, "config.yml"));
+    candidatePaths.push(path.join(options.searchDir, "config.json"));
   }
 
-  return shaped as AppConfig;
-}
-
-function coerceValue<T>(
-  value: unknown,
-  parser: (raw: string) => T,
-  key: ConfigKey,
-): T | unknown {
-  if (typeof value === "string") {
-    return parser(value);
-  }
-  if (value === undefined) {
-    throw new Error(`Config value for ${key} resolved to undefined`);
-  }
-  return value as T;
-}
-
-function getFirstDefined<T>(values?: (T | undefined)[]): T | undefined {
-  if (!values) return undefined;
-  for (const value of values) {
-    if (value !== undefined) {
-      return value;
+  // 3. Binary/Project Root
+  try {
+    const projectRoot = getProjectRoot();
+    if (projectRoot) {
+      candidatePaths.push(path.join(projectRoot, "config.yaml"));
+      candidatePaths.push(path.join(projectRoot, "config.yml"));
+      candidatePaths.push(path.join(projectRoot, "config.json"));
     }
-  }
-  return undefined;
-}
-
-function loadYamlConfig(options: LoadConfigOptions): unknown {
-  let configPath: string | undefined;
-
-  // 1. Explicit path (CLI or Env)
-  if (options.configPath) {
-    configPath = options.configPath;
-  } else if (process.env.DOCS_MCP_CONFIG) {
-    configPath = process.env.DOCS_MCP_CONFIG;
+  } catch {
+    // Ignore if project root not found
   }
 
-  // 2. Search in searchDir (Store Path)
-  if (!configPath && options.searchDir) {
-    const candidates = ["config.yaml", "config.yml"];
-    for (const candidate of candidates) {
-      const p = path.join(options.searchDir, candidate);
-      if (fs.existsSync(p)) {
-        configPath = p;
-        break;
-      }
+  // 4. CWD
+  const cwd = process.cwd();
+  candidatePaths.push(path.join(cwd, "config.yaml"));
+  candidatePaths.push(path.join(cwd, "config.yml"));
+  candidatePaths.push(path.join(cwd, "config.json"));
+  candidatePaths.push(path.join(cwd, "docs-mcp.config.yaml")); // Legacy fallback
+
+  for (const p of candidatePaths) {
+    if (fs.existsSync(p)) {
+      return parseConfigFile(p);
     }
   }
 
-  // 3. Fallback to CWD
-  if (!configPath) {
-    const cwdPath = path.join(process.cwd(), DEFAULT_CONFIG_PATH);
-    if (fs.existsSync(cwdPath)) {
-      configPath = cwdPath;
-    }
-  }
+  return {};
+}
 
-  if (!configPath) {
+function parseConfigFile(filePath: string): Record<string, unknown> {
+  const content = fs.readFileSync(filePath, "utf8");
+  try {
+    if (filePath.endsWith(".json")) {
+      return JSON.parse(content);
+    }
+    return yaml.parse(content) || {};
+  } catch (error) {
+    console.warn(`Failed to parse config file ${filePath}: ${error}`);
     return {};
   }
-
-  if (cachedYaml.path === configPath) {
-    return cachedYaml.values;
-  }
-
-  const raw = fs.readFileSync(configPath, "utf8");
-  let parsed: unknown;
-
-  try {
-    parsed = yaml.parse(raw);
-  } catch {
-    try {
-      parsed = JSON.parse(raw);
-    } catch (jsonError) {
-      throw new Error(
-        `Failed to parse config file at ${configPath} as YAML or JSON: ${jsonError instanceof Error ? jsonError.message : String(jsonError)}`,
-      );
-    }
-  }
-
-  cachedYaml.path = configPath;
-  cachedYaml.values = parsed ?? {};
-  return cachedYaml.values;
 }
 
-function getYamlValue(
-  key: ConfigKey,
-  entry: ConfigSchemaEntry<unknown>,
-  yaml: unknown,
-): unknown {
-  if (entry.yamlPaths) {
-    for (const yamlPath of entry.yamlPaths) {
-      if (isRecord(yaml)) {
-        const dottedPath = yamlPath.join(".");
-        if (yaml[dottedPath] !== undefined) {
-          return yaml[dottedPath];
+function mapEnvToConfig(): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  for (const mapping of configMappings) {
+    if (mapping.env) {
+      for (const envVar of mapping.env) {
+        if (process.env[envVar] !== undefined) {
+          setAtPath(config, mapping.path, process.env[envVar]);
+          break; // First match wins
         }
       }
-
-      const value = getAtPath(yaml, yamlPath);
-      if (value !== undefined) {
-        return value;
-      }
     }
   }
-
-  if (isRecord(yaml) && yaml[key] !== undefined) {
-    return yaml[key];
-  }
-
-  return undefined;
+  return config;
 }
 
-function getAtPath(source: unknown, path: readonly string[]): unknown {
-  if (!isRecord(source)) {
-    return undefined;
-  }
-
-  let cursor: unknown = source;
-  for (const segment of path) {
-    if (!isRecord(cursor) || !(segment in cursor)) {
-      return undefined;
+function mapCliToConfig(args: Record<string, unknown>): Record<string, unknown> {
+  const config: Record<string, unknown> = {};
+  for (const mapping of configMappings) {
+    if (mapping.cli && args[mapping.cli] !== undefined) {
+      setAtPath(config, mapping.path, args[mapping.cli]);
     }
-    cursor = cursor[segment];
   }
-  return cursor;
+  return config;
 }
 
-function setAtPath(target: Record<string, unknown>, path: Path, value: unknown): void {
-  let cursor: Record<string, unknown> = target;
-  for (let index = 0; index < path.length; index += 1) {
-    const segment = path[index];
-    const isLeaf = index === path.length - 1;
+// --- Helpers ---
 
-    if (isLeaf) {
-      cursor[segment] = value;
-      return;
+// Helper type for nested objects
+type ConfigObject = Record<string, unknown>;
+
+function setAtPath(obj: ConfigObject, pathArr: string[], value: unknown) {
+  let current = obj;
+  for (let i = 0; i < pathArr.length - 1; i++) {
+    const key = pathArr[i];
+    if (
+      current[key] === undefined ||
+      typeof current[key] !== "object" ||
+      current[key] === null
+    ) {
+      current[key] = {};
     }
+    current = current[key] as ConfigObject;
+  }
+  current[pathArr[pathArr.length - 1]] = value;
+}
 
-    const next = cursor[segment];
-    if (!isRecord(next)) {
-      cursor[segment] = {};
+function getAtPath(obj: ConfigObject, pathArr: string[]): unknown {
+  let current: unknown = obj;
+  for (const key of pathArr) {
+    if (typeof current !== "object" || current === null) return undefined;
+    current = (current as ConfigObject)[key];
+  }
+  return current;
+}
+
+function deepMerge(target: unknown, source: unknown): unknown {
+  if (typeof target !== "object" || target === null) return source;
+  if (typeof source !== "object" || source === null) return target;
+
+  const t = target as ConfigObject;
+  const s = source as ConfigObject;
+  const output = { ...t };
+
+  for (const key of Object.keys(s)) {
+    const sValue = s[key];
+    const tValue = t[key];
+
+    if (
+      typeof sValue === "object" &&
+      sValue !== null &&
+      typeof tValue === "object" &&
+      tValue !== null &&
+      key in t
+    ) {
+      output[key] = deepMerge(tValue, sValue);
+    } else {
+      output[key] = sValue;
     }
-    cursor = cursor[segment] as Record<string, unknown>;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function parseIntStrict(raw: string): number {
-  const value = Number.parseInt(raw, 10);
-  if (Number.isNaN(value)) {
-    throw new Error(`Invalid integer value: ${raw}`);
-  }
-  return value;
-}
-
-function parseFloatStrict(raw: string): number {
-  const value = Number.parseFloat(raw);
-  if (Number.isNaN(value)) {
-    throw new Error(`Invalid number value: ${raw}`);
-  }
-  return value;
-}
-
-function parseString(raw: string): string {
-  return raw;
-}
-
-function parseBooleanish(raw: string): boolean {
-  const normalized = raw.toLowerCase();
-  if (normalized === "false" || normalized === "0" || normalized === "no") {
-    return false;
-  }
-  if (normalized === "true" || normalized === "1" || normalized === "yes") {
-    return true;
-  }
-  return Boolean(normalized);
+  return output;
 }

@@ -6,7 +6,6 @@ import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
 import type { ScraperOptions } from "../types";
 import { convertToString } from "../utils/buffer";
-import { resolveCharset } from "../utils/charset";
 import { BasePipeline } from "./BasePipeline";
 import type { PipelineResult } from "./types";
 

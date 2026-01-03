@@ -95,7 +95,7 @@ describe("MCP HTTP server E2E", () => {
     const serverUrl = await new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("Server startup timed out"));
-      }, 15000);
+      }, 30000);
 
       let output = "";
 

@@ -2,8 +2,7 @@
  * Scrape command - Scrapes and indexes documentation from a URL or local folder.
  */
 
-import type { Command } from "commander";
-import { Option } from "commander";
+import type { Argv } from "yargs";
 import { EventType } from "../../events";
 import { PipelineFactory, PipelineJobStatus, type PipelineOptions } from "../../pipeline";
 import type { IPipeline } from "../../pipeline/trpc/interfaces";
@@ -12,269 +11,323 @@ import { createDocumentManagement } from "../../store";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
-import { defaults, loadConfig } from "../../utils/config";
+import { loadConfig } from "../../utils/config";
 import {
+  type CliContext,
   getEventBus,
-  getGlobalOptions,
   parseHeaders,
   resolveEmbeddingContext,
 } from "../utils";
 
-export async function scrapeAction(
-  library: string,
-  url: string,
-  options: {
-    version?: string;
-    maxPages: string;
-    maxDepth: string;
-    maxConcurrency: string;
-    ignoreErrors: boolean;
-    scope: string;
-    followRedirects: boolean;
-    scrapeMode: ScrapeMode;
-    includePattern: string[];
-    excludePattern: string[];
-    header: string[];
-    embeddingModel?: string;
-    serverUrl?: string;
-  },
-  command?: Command,
-) {
-  const requestedMaxPages = Number.parseInt(options.maxPages, 10);
-  const requestedMaxDepth = Number.parseInt(options.maxDepth, 10);
-  const requestedMaxConcurrency = Number.parseInt(options.maxConcurrency, 10);
-
-  const appConfig = loadConfig({
-    SCRAPER_MAX_PAGES: requestedMaxPages,
-    SCRAPER_MAX_DEPTH: requestedMaxDepth,
-    SCRAPER_MAX_CONCURRENCY: requestedMaxConcurrency,
-    EMBEDDING_MODEL: options.embeddingModel,
-  });
-
-  const maxPages = appConfig.scraper.maxPages;
-  const maxDepth = appConfig.scraper.maxDepth;
-  const maxConcurrency = appConfig.scraper.maxConcurrency;
-
-  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
-    command: "scrape",
-    library,
-    version: options.version,
-    url,
-    maxPages,
-    maxDepth,
-    maxConcurrency,
-    scope: options.scope,
-    scrapeMode: options.scrapeMode,
-    followRedirects: options.followRedirects,
-    hasHeaders: options.header.length > 0,
-    hasIncludePatterns: options.includePattern.length > 0,
-    hasExcludePatterns: options.excludePattern.length > 0,
-    useServerUrl: !!options.serverUrl,
-  });
-
-  const serverUrl = options.serverUrl;
-  const globalOptions = getGlobalOptions(command);
-
-  // Resolve embedding configuration for local execution (scrape needs embeddings)
-  const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
-  if (!serverUrl && !embeddingConfig) {
-    throw new Error(
-      "Embedding configuration is required for local scraping. " +
-        "Please set DOCS_MCP_EMBEDDING_MODEL environment variable or use --server-url for remote execution.",
-    );
-  }
-
-  appConfig.app.storePath = globalOptions.storePath ?? appConfig.app.storePath;
-
-  const eventBus = getEventBus(command);
-
-  const docService: IDocumentManagement = await createDocumentManagement({
-    serverUrl,
-    eventBus,
-    appConfig: appConfig,
-  });
-  let pipeline: IPipeline | null = null;
-
-  // Display initial status
-  console.log("⏳ Initializing scraping job...");
-
-  // Subscribe to event bus for progress updates (only for local pipelines)
-  let unsubscribeProgress: (() => void) | null = null;
-  let unsubscribeStatus: (() => void) | null = null;
-
-  if (!serverUrl) {
-    unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
-      const { job, progress } = event;
-      console.log(
-        `📄 Scraping ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
-      );
-    });
-
-    unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
-      if (event.status === PipelineJobStatus.RUNNING) {
-        console.log(
-          `🚀 Scraping ${event.library}${event.version ? ` v${event.version}` : ""}...`,
-        );
-      }
-    });
-  }
-
-  try {
-    const pipelineOptions: PipelineOptions = {
-      recoverJobs: false,
-      serverUrl,
-      appConfig: appConfig,
-    };
-
-    pipeline = serverUrl
-      ? await PipelineFactory.createPipeline(undefined, eventBus, {
-          serverUrl,
-          ...pipelineOptions,
+export function createScrapeCommand(cli: Argv) {
+  cli.command(
+    "scrape <library> <url>",
+    "Download and index documentation from a URL or local directory",
+    (yargs) => {
+      return yargs
+        .version(false)
+        .positional("library", {
+          type: "string",
+          description: "Library name",
+          demandOption: true,
         })
-      : await PipelineFactory.createPipeline(
-          docService as unknown as never,
-          eventBus,
-          pipelineOptions,
+        .positional("url", {
+          type: "string",
+          description: "URL or file:// path to scrape",
+          demandOption: true,
+        })
+        .option("version", {
+          type: "string",
+          description: "Version of the library (optional)",
+          alias: "v",
+        })
+        .option("max-pages", {
+          type: "number",
+          description: "Maximum pages to scrape",
+          alias: ["p", "maxPages"],
+        })
+        .option("max-depth", {
+          type: "number",
+          description: "Maximum navigation depth",
+          alias: ["d", "maxDepth"],
+        })
+        .option("max-concurrency", {
+          type: "number",
+          description: "Maximum concurrent page requests",
+          alias: ["c", "maxConcurrency"],
+        })
+        .option("ignore-errors", {
+          type: "boolean",
+          description: "Ignore errors during scraping",
+          default: true,
+          alias: "ignoreErrors",
+        })
+        .option("scope", {
+          choices: ["subpages", "hostname", "domain"],
+          description: "Crawling boundary",
+          default: "subpages",
+        })
+        .option("follow-redirects", {
+          type: "boolean",
+          description: "Follow HTTP redirects",
+          default: true,
+          alias: "followRedirects",
+        })
+        .option("no-follow-redirects", {
+          type: "boolean",
+          description: "Disable following HTTP redirects",
+          hidden: true,
+        })
+        .option("scrape-mode", {
+          choices: Object.values(ScrapeMode),
+          description: "HTML processing strategy",
+          default: ScrapeMode.Auto,
+          alias: "scrapeMode",
+        })
+        .option("include-pattern", {
+          type: "string",
+          array: true,
+          description:
+            "Glob or regex pattern for URLs to include (can be specified multiple times). Regex patterns must be wrapped in slashes, e.g. /pattern/.",
+          alias: "includePattern",
+          default: [] as string[],
+        })
+        .option("exclude-pattern", {
+          type: "string",
+          array: true,
+          description:
+            "Glob or regex pattern for URLs to exclude (can be specified multiple times, takes precedence over include). Regex patterns must be wrapped in slashes, e.g. /pattern/.",
+          alias: "excludePattern",
+          default: [] as string[],
+        })
+        .option("header", {
+          type: "string",
+          array: true,
+          description:
+            "Custom HTTP header to send with each request (can be specified multiple times)",
+          default: [] as string[],
+        })
+        .option("embedding-model", {
+          type: "string",
+          description:
+            "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+          alias: "embeddingModel",
+        })
+        .option("server-url", {
+          type: "string",
+          description:
+            "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
+          alias: "serverUrl",
+        })
+        .usage(
+          "$0 scrape <library> <url> [options]\n\n" +
+            "Scrape and index documentation from a URL or local folder.\n\n" +
+            "To scrape local files or folders, use a file:// URL.\n" +
+            "Examples:\n" +
+            "  scrape mylib https://react.dev/reference/react\n" +
+            "  scrape mylib file:///Users/me/docs/index.html\n" +
+            "  scrape mylib file:///Users/me/docs/my-library\n" +
+            "\nNote: For local files/folders, you must use the file:// prefix. If running in Docker, mount the folder and use the container path. See README for details.",
         );
+    },
+    async (argv) => {
+      const library = argv.library as string;
+      const url = argv.url as string;
+      const serverUrl = argv.serverUrl as string | undefined;
 
-    await pipeline.start();
-    const scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
+      const _requestedMaxPages = argv.maxPages as number;
+      const _requestedMaxDepth = argv.maxDepth as number;
+      const _requestedMaxConcurrency = argv.maxConcurrency as number;
+      const _embeddingModelParam = argv.embeddingModel as string | undefined;
 
-    const headers = parseHeaders(options.header);
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string, // resolved globally
+      });
 
-    // Call the tool directly - tracking is now handled inside the tool
-    const result = await scrapeTool.execute({
-      url,
-      library,
-      version: options.version,
-      options: {
+      // Override config with CLI explicit values if they differ from defaults or if we blindly trust CLI overrides here?
+      // loadConfig already processed CLI args into appConfig via mapping?
+      // Wait, mapping in config.ts does NOT include SCRAPER options like maxPages.
+      // So appConfig still has defaults or loaded from file/env if I didn't add them to mapping.
+      // I should check `config.ts` mapping.
+      // I viewed it earlier (Step 108).
+      // `configMappings` has: protocol, storePath, telemetry, readOnly, ports, host, embeddingModel, auth.
+      // It DOES NOT have scraper options mapping.
+      // So `loadConfig(argv)` will not map `argv.maxPages` to `scraper.maxPages`.
+      // The old CLI manually overrode it.
+      // `appConfig.scraper.maxPages = requestedMaxPages;`
+      // But `requestedMaxPages` comes from CLI.
+      // I should do the same: manually update appConfig after load.
+      // OR I can pass overrides to loadConfig via `options`? No, loadConfig(cliArgs) maps mapped keys.
+      // I should update appConfig manually.
+
+      // But wait, `loadConfig` is called with `cliArgs`.
+      // If I want to support ENV vars for Scraper options, I should add them to `config.ts` mapping.
+      // But if I want to just support CLI overrides here:
+      // I'll update appConfig properties from argv.
+
+      // Actually, standard behavior in this app seems to be passing CLI options to AppConfig.
+      // I will manually update appConfig based on argv values here, confusingly.
+      // But Yargs has defaults. If user didn't specify, argv has default.
+      // If file has value, and user didn't specify CLI, we want File value.
+      // But Yargs default overrides file value??
+      // If I set Yargs default, argv always has value. I can't distinguish default vs user input easily without checking `yargs.parsed`.
+      // This is the "Yargs default vs Config File" problem.
+      // The solution is: do NOT set defaults in Yargs for things that can be configured in file.
+      // I set defaults in Yargs for scrape options above: `default: defaults.SCRAPER_MAX_PAGES`.
+      // This means CLI default will ALWAYS override Config File dependent on how I merge.
+      // If I do `appConfig.scraper.maxPages = argv.maxPages`, I overwrite File config with Yargs default.
+      // This breaks "Config File > Default".
+      // To fix this:
+      // 1. Remove defaults from Yargs options for config-backed values.
+      // 2. Use `argv.maxPages ?? appConfig.scraper.maxPages` logic?
+      //    If argv.maxPages is undefined (no CLI), use appConfig (File/Env/Default).
+      //    If argv.maxPages is defined (CLI), use it.
+      //    This is correct.
+      // So I should REMOVE defaults from Yargs for these options.
+      // And use `defaults` only for description or fallback if `appConfig` didn't have it (but appConfig always has it due to Zod).
+      // So: Remove Yargs defaults.
+
+      // Implementation adjustment:
+      // Remove `default: ...` from option definitions.
+      // In handler: `const maxPages = argv.maxPages as number ?? appConfig.scraper.maxPages;`
+      // Wait, `argv.maxPages` will be undefined if not provided.
+
+      // I will update the code content with this fix.
+
+      const maxPages = (argv.maxPages as number) ?? appConfig.scraper.maxPages;
+      const maxDepth = (argv.maxDepth as number) ?? appConfig.scraper.maxDepth;
+      const maxConcurrency =
+        (argv.maxConcurrency as number) ?? appConfig.scraper.maxConcurrency;
+
+      // Update appConfig with effective values
+      appConfig.scraper.maxPages = maxPages;
+      appConfig.scraper.maxDepth = maxDepth;
+      appConfig.scraper.maxConcurrency = maxConcurrency;
+
+      await telemetry.track(TelemetryEvent.CLI_COMMAND, {
+        command: "scrape",
+        library,
+        version: argv.version,
+        url,
         maxPages,
         maxDepth,
         maxConcurrency,
-        ignoreErrors: options.ignoreErrors,
-        scope: options.scope as "subpages" | "hostname" | "domain",
-        followRedirects: options.followRedirects,
-        scrapeMode: options.scrapeMode,
-        includePatterns:
-          Array.isArray(options.includePattern) && options.includePattern.length > 0
-            ? options.includePattern
-            : undefined,
-        excludePatterns:
-          Array.isArray(options.excludePattern) && options.excludePattern.length > 0
-            ? options.excludePattern
-            : undefined,
-        headers: Object.keys(headers).length > 0 ? headers : undefined,
-      },
-    });
+        scope: argv.scope,
+        scrapeMode: argv.scrapeMode,
+        followRedirects: argv.followRedirects,
+        hasHeaders: (argv.header as string[]).length > 0,
+        hasIncludePatterns: (argv.includePattern as string[]).length > 0,
+        hasExcludePatterns: (argv.excludePattern as string[]).length > 0,
+        useServerUrl: !!serverUrl,
+      });
 
-    if ("pagesScraped" in result) {
-      console.log(`✅ Successfully scraped ${result.pagesScraped} pages`);
-    } else {
-      console.log(`✅ Scraping job started with ID: ${result.jobId}`);
-    }
-  } catch (error) {
-    console.error(
-      `❌ Scraping failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    throw error;
-  } finally {
-    // Clean up event listeners
-    if (unsubscribeProgress) unsubscribeProgress();
-    if (unsubscribeStatus) unsubscribeStatus();
+      // Resolve embedding configuration
+      const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
+      if (!serverUrl && !embeddingConfig) {
+        throw new Error(
+          "Embedding configuration is required for local scraping. " +
+            "Please set DOCS_MCP_EMBEDDING_MODEL environment variable or use --server-url for remote execution.",
+        );
+      }
 
-    if (pipeline) await pipeline.stop();
-    await docService.shutdown();
-  }
-}
+      const eventBus = getEventBus(argv as CliContext);
 
-export function createScrapeCommand(program: Command): Command {
-  return program
-    .command("scrape <library> <url>")
-    .description(
-      "Scrape and index documentation from a URL or local folder.\n\n" +
-        "To scrape local files or folders, use a file:// URL.\n" +
-        "Examples:\n" +
-        "  scrape mylib https://react.dev/reference/react\n" +
-        "  scrape mylib file:///Users/me/docs/index.html\n" +
-        "  scrape mylib file:///Users/me/docs/my-library\n" +
-        "\nNote: For local files/folders, you must use the file:// prefix. If running in Docker, mount the folder and use the container path. See README for details.",
-    )
-    .option("-v, --version <string>", "Version of the library (optional)")
-    .option(
-      "-p, --max-pages <number>",
-      "Maximum pages to scrape",
-      defaults.SCRAPER_MAX_PAGES.toString(),
-    )
-    .option(
-      "-d, --max-depth <number>",
-      "Maximum navigation depth",
-      defaults.SCRAPER_MAX_DEPTH.toString(),
-    )
-    .option(
-      "-c, --max-concurrency <number>",
-      "Maximum concurrent page requests",
-      defaults.SCRAPER_MAX_CONCURRENCY.toString(),
-    )
-    .option("--ignore-errors", "Ignore errors during scraping", true)
-    .option(
-      "--scope <scope>",
-      "Crawling boundary: 'subpages' (default), 'hostname', or 'domain'",
-      (value) => {
-        const validScopes = ["subpages", "hostname", "domain"];
-        if (!validScopes.includes(value)) {
-          console.warn(`Warning: Invalid scope '${value}'. Using default 'subpages'.`);
-          return "subpages";
-        }
-        return value;
-      },
-      "subpages",
-    )
-    .option(
-      "--no-follow-redirects",
-      "Disable following HTTP redirects (default: follow redirects)",
-    )
-    .option(
-      "--scrape-mode <mode>",
-      `HTML processing strategy: '${ScrapeMode.Fetch}', '${ScrapeMode.Playwright}', '${ScrapeMode.Auto}' (default)`,
-      (value: string): ScrapeMode => {
-        const validModes = Object.values(ScrapeMode);
-        if (!validModes.includes(value as ScrapeMode)) {
-          console.warn(
-            `Warning: Invalid scrape mode '${value}'. Using default '${ScrapeMode.Auto}'.`,
+      const docService: IDocumentManagement = await createDocumentManagement({
+        serverUrl,
+        eventBus,
+        appConfig: appConfig,
+      });
+      let pipeline: IPipeline | null = null;
+
+      // Display initial status
+      console.log("⏳ Initializing scraping job...");
+
+      // Subscribe to event bus for progress updates (only for local pipelines)
+      let unsubscribeProgress: (() => void) | null = null;
+      let unsubscribeStatus: (() => void) | null = null;
+
+      if (!serverUrl) {
+        unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
+          const { job, progress } = event;
+          console.log(
+            `📄 Scraping ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
           );
-          return ScrapeMode.Auto;
+        });
+
+        unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
+          if (event.status === PipelineJobStatus.RUNNING) {
+            console.log(
+              `🚀 Scraping ${event.library}${event.version ? ` v${event.version}` : ""}...`,
+            );
+          }
+        });
+      }
+
+      try {
+        const pipelineOptions: PipelineOptions = {
+          recoverJobs: false,
+          serverUrl,
+          appConfig: appConfig,
+        };
+
+        pipeline = serverUrl
+          ? await PipelineFactory.createPipeline(undefined, eventBus, {
+              serverUrl,
+              ...pipelineOptions,
+            })
+          : await PipelineFactory.createPipeline(
+              docService as unknown as never,
+              eventBus,
+              pipelineOptions,
+            );
+
+        await pipeline.start();
+        const scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
+
+        const headers = parseHeaders((argv.header as string[]) || []);
+
+        const result = await scrapeTool.execute({
+          url,
+          library,
+          version: argv.version as string | undefined,
+          options: {
+            maxPages,
+            maxDepth,
+            maxConcurrency,
+            ignoreErrors: argv.ignoreErrors as boolean,
+            scope: argv.scope as "subpages" | "hostname" | "domain",
+            followRedirects: argv.followRedirects as boolean,
+            scrapeMode: argv.scrapeMode as ScrapeMode,
+            includePatterns:
+              (argv.includePattern as string[])?.length > 0
+                ? (argv.includePattern as string[])
+                : undefined,
+            excludePatterns:
+              (argv.excludePattern as string[])?.length > 0
+                ? (argv.excludePattern as string[])
+                : undefined,
+            headers: Object.keys(headers).length > 0 ? headers : undefined,
+          },
+        });
+
+        if ("pagesScraped" in result) {
+          console.log(`✅ Successfully scraped ${result.pagesScraped} pages`);
+        } else {
+          console.log(`✅ Scraping job started with ID: ${result.jobId}`);
         }
-        return value as ScrapeMode;
-      },
-      ScrapeMode.Auto,
-    )
-    .option(
-      "--include-pattern <pattern>",
-      "Glob or regex pattern for URLs to include (can be specified multiple times). Regex patterns must be wrapped in slashes, e.g. /pattern/.",
-      (val: string, prev: string[] = []) => prev.concat([val]),
-      [] as string[],
-    )
-    .option(
-      "--exclude-pattern <pattern>",
-      "Glob or regex pattern for URLs to exclude (can be specified multiple times, takes precedence over include). Regex patterns must be wrapped in slashes, e.g. /pattern/.",
-      (val: string, prev: string[] = []) => prev.concat([val]),
-      [] as string[],
-    )
-    .option(
-      "--header <name:value>",
-      "Custom HTTP header to send with each request (can be specified multiple times)",
-      (val: string, prev: string[] = []) => prev.concat([val]),
-      [] as string[],
-    )
-    .addOption(
-      new Option(
-        "--embedding-model <model>",
-        "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
-      ).env("DOCS_MCP_EMBEDDING_MODEL"),
-    )
-    .option(
-      "--server-url <url>",
-      "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
-    )
-    .action(scrapeAction);
+      } catch (error) {
+        console.error(
+          `❌ Scraping failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        throw error;
+      } finally {
+        if (unsubscribeProgress) unsubscribeProgress();
+        if (unsubscribeStatus) unsubscribeStatus();
+
+        if (pipeline) await pipeline.stop();
+        await docService.shutdown();
+      }
+    },
+  );
 }

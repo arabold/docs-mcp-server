@@ -6,12 +6,12 @@ import type { SplitterConfig } from "./types";
 
 describe("JsonDocumentSplitter", () => {
   const mockConfig: SplitterConfig = {
-    minChunkSize: defaults.SPLITTER_MIN_CHUNK_SIZE,
-    preferredChunkSize: defaults.SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize: defaults.SPLITTER_MAX_CHUNK_SIZE,
+    minChunkSize: defaults.splitter.minChunkSize,
+    preferredChunkSize: defaults.splitter.preferredChunkSize,
+    maxChunkSize: defaults.splitter.maxChunkSize,
     json: {
-      maxNestingDepth: defaults.SPLITTER_JSON_MAX_NESTING_DEPTH,
-      maxChunks: defaults.SPLITTER_JSON_MAX_CHUNKS,
+      maxNestingDepth: defaults.splitter.json.maxNestingDepth,
+      maxChunks: defaults.splitter.json.maxChunks,
     },
   };
   const splitter = new JsonDocumentSplitter(mockConfig);
@@ -361,9 +361,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await splitter.splitText(JSON.stringify(deepJson, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(
-          defaults.SPLITTER_MAX_CHUNK_SIZE,
-        );
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
     });
 
@@ -377,9 +375,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await limitedSplitter.splitText(JSON.stringify(largeJson, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(
-          defaults.SPLITTER_MAX_CHUNK_SIZE,
-        );
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       const hasTextSplitterChunks = chunks.some(
@@ -411,9 +407,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(
-          defaults.SPLITTER_MAX_CHUNK_SIZE,
-        );
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       expect(chunks.length).toBeGreaterThan(1);
@@ -435,9 +429,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(
-          defaults.SPLITTER_MAX_CHUNK_SIZE,
-        );
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
     });
 
@@ -454,9 +446,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(
-          defaults.SPLITTER_MAX_CHUNK_SIZE,
-        );
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       expect(chunks.length).toBeGreaterThan(4);
@@ -474,9 +464,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(
-          defaults.SPLITTER_MAX_CHUNK_SIZE,
-        );
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       expect(chunks.length).toBeGreaterThan(5);
@@ -592,7 +580,7 @@ describe("JsonDocumentSplitter", () => {
     it("should use default maxDepth when not specified", async () => {
       // Create JSON with depth exceeding the default
       let deepJson: any = { value: "leaf" };
-      for (let i = 0; i < defaults.SPLITTER_JSON_MAX_NESTING_DEPTH + 3; i++) {
+      for (let i = 0; i < defaults.splitter.json.maxNestingDepth + 3; i++) {
         deepJson = { [`level${i}`]: deepJson };
       }
 
@@ -691,7 +679,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await splitter.splitText(JSON.stringify(json, null, 2));
 
       // Should be well under the default limit
-      expect(chunks.length).toBeLessThan(defaults.SPLITTER_JSON_MAX_CHUNKS);
+      expect(chunks.length).toBeLessThan(defaults.splitter.json.maxChunks);
 
       // Should still use JSON splitting
       const hasJsonSplitterChunks = chunks.some((c) => c.section.path.includes("root"));

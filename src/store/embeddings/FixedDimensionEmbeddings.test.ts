@@ -22,7 +22,7 @@ class MockBaseEmbeddings extends Embeddings {
 }
 
 describe("FixedDimensionEmbeddings", () => {
-  const targetDimension = defaults.EMBEDDINGS_VECTOR_DIMENSION;
+  const targetDimension = defaults.embeddings.vectorDimension;
 
   test("should pass through vectors of correct dimension", async () => {
     const base = new MockBaseEmbeddings(targetDimension);

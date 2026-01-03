@@ -3,24 +3,28 @@
  * Analytics is initialized immediately when imported for proper telemetry across all services.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { AppServer } from "../app";
-import type { IPipeline } from "../pipeline";
 import {
   ModelConfigurationError,
   UnsupportedProviderError,
 } from "../store/embeddings/EmbeddingFactory";
-import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { type TelemetryService, telemetry } from "../telemetry";
+import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
-import { createCliProgram } from "./index";
+import { createCli } from "./index";
 
-// Module-level variables for active services and shutdown state
-let activeAppServer: AppServer | null = null;
-let activeMcpStdioServer: McpServer | null = null;
-let activeDocService: IDocumentManagement | null = null;
-let activePipelineManager: IPipeline | null = null;
-let activeTelemetryService: TelemetryService | null = null;
+// Module-level variables are now in ./services.ts
+import {
+  getActiveAppServer,
+  getActiveDocService,
+  getActiveMcpStdioServer,
+  getActivePipelineManager,
+  getActiveTelemetryService,
+  setActiveAppServer,
+  setActiveDocService,
+  setActiveMcpStdioServer,
+  setActivePipelineManager,
+  setActiveTelemetryService,
+} from "./services";
+
 let isShuttingDown = false;
 
 /**
@@ -33,45 +37,50 @@ const sigintHandler = async (): Promise<void> => {
   logger.debug("Received SIGINT. Shutting down gracefully...");
 
   try {
-    if (activeAppServer) {
+    const appServer = getActiveAppServer();
+    if (appServer) {
       logger.debug("SIGINT: Stopping AppServer...");
-      await activeAppServer.stop();
-      activeAppServer = null;
+      await appServer.stop();
+      setActiveAppServer(null);
       logger.debug("SIGINT: AppServer stopped.");
     }
 
-    if (activeMcpStdioServer) {
+    const mcpServer = getActiveMcpStdioServer();
+    if (mcpServer) {
       logger.debug("SIGINT: Stopping MCP server...");
-      await activeMcpStdioServer.close();
-      activeMcpStdioServer = null;
+      await mcpServer.close();
+      setActiveMcpStdioServer(null);
       logger.debug("SIGINT: MCP server stopped.");
     }
 
     // Shutdown active services
     logger.debug("SIGINT: Shutting down active services...");
     // Only shutdown pipeline if not managed by AppServer (e.g., in stdio mode)
-    if (activePipelineManager && !activeAppServer) {
-      await activePipelineManager.stop();
-      activePipelineManager = null;
+    const pipeline = getActivePipelineManager();
+    if (pipeline && !appServer) {
+      await pipeline.stop();
+      setActivePipelineManager(null);
       logger.debug("SIGINT: PipelineManager stopped.");
     }
 
-    if (activeDocService) {
-      await activeDocService.shutdown();
-      activeDocService = null;
+    const docService = getActiveDocService();
+    if (docService) {
+      await docService.shutdown();
+      setActiveDocService(null);
       logger.debug("SIGINT: DocumentManagementService shut down.");
     }
 
     // Cleanup TelemetryService (removes event listeners)
-    if (activeTelemetryService) {
-      activeTelemetryService.shutdown();
-      activeTelemetryService = null;
+    const telemetryService = getActiveTelemetryService();
+    if (telemetryService) {
+      telemetryService.shutdown();
+      setActiveTelemetryService(null);
       logger.debug("SIGINT: TelemetryService shut down.");
     }
 
     // Analytics shutdown is handled by AppServer.stop() above
     // Only shutdown analytics if no AppServer was running
-    if (!activeAppServer && telemetry.isEnabled()) {
+    if (!appServer && telemetry.isEnabled()) {
       await telemetry.shutdown();
       logger.debug("SIGINT: Analytics shut down.");
     }
@@ -104,23 +113,6 @@ export async function cleanupCliCommand(): Promise<void> {
 }
 
 /**
- * Registers global services for shutdown handling
- */
-export function registerGlobalServices(services: {
-  appServer?: AppServer;
-  mcpStdioServer?: McpServer;
-  docService?: IDocumentManagement;
-  pipeline?: IPipeline;
-  telemetryService?: TelemetryService;
-}): void {
-  if (services.appServer) activeAppServer = services.appServer;
-  if (services.mcpStdioServer) activeMcpStdioServer = services.mcpStdioServer;
-  if (services.docService) activeDocService = services.docService;
-  if (services.pipeline) activePipelineManager = services.pipeline;
-  if (services.telemetryService) activeTelemetryService = services.telemetryService;
-}
-
-/**
  * Main CLI execution function
  */
 export async function runCli(): Promise<void> {
@@ -134,14 +126,17 @@ export async function runCli(): Promise<void> {
   process.on("SIGINT", sigintHandler);
 
   try {
-    const program = createCliProgram();
+    const cli = createCli(process.argv);
 
-    // Track if a command was executed
-    program.hook("preAction", () => {
-      commandExecuted = true;
-    });
+    // Track if a command was executed?? Yargs doesn't have preAction hook on instance easily.
+    // But middleware runs.
+    // We can rely on middleware to set tracking data.
+    // commandExecuted variable was used to trigger cleanupCliCommand at end.
+    // Yargs .parse() resolves when command finishes.
+    // If it resolves, command executed.
+    commandExecuted = true;
 
-    await program.parseAsync(process.argv);
+    await cli.parse();
   } catch (error) {
     // Handle embedding configuration errors with clean, helpful messages
     if (
@@ -160,45 +155,49 @@ export async function runCli(): Promise<void> {
       // Shutdown active services on error
       const shutdownPromises: Promise<void>[] = [];
 
-      if (activeAppServer) {
+      const appServer = getActiveAppServer();
+      if (appServer) {
         shutdownPromises.push(
-          activeAppServer
+          appServer
             .stop()
             .then(() => {
-              activeAppServer = null;
+              setActiveAppServer(null);
             })
             .catch((e) => logger.error(`❌ Error stopping AppServer: ${e}`)),
         );
       }
 
-      if (activeMcpStdioServer) {
+      const mcpServer = getActiveMcpStdioServer();
+      if (mcpServer) {
         shutdownPromises.push(
-          activeMcpStdioServer
+          mcpServer
             .close()
             .then(() => {
-              activeMcpStdioServer = null;
+              setActiveMcpStdioServer(null);
             })
             .catch((e) => logger.error(`❌ Error stopping MCP server: ${e}`)),
         );
       }
 
-      if (activePipelineManager && !activeAppServer) {
+      const pipeline = getActivePipelineManager();
+      if (pipeline && !appServer) {
         shutdownPromises.push(
-          activePipelineManager
+          pipeline
             .stop()
             .then(() => {
-              activePipelineManager = null;
+              setActivePipelineManager(null);
             })
             .catch((e) => logger.error(`❌ Error stopping pipeline: ${e}`)),
         );
       }
 
-      if (activeDocService) {
+      const docService = getActiveDocService();
+      if (docService) {
         shutdownPromises.push(
-          activeDocService
+          docService
             .shutdown()
             .then(() => {
-              activeDocService = null;
+              setActiveDocService(null);
             })
             .catch((e) => logger.error(`❌ Error shutting down doc service: ${e}`)),
         );
@@ -211,7 +210,8 @@ export async function runCli(): Promise<void> {
 
   // This block handles cleanup for CLI commands that completed successfully
   // and were not long-running servers.
-  if (commandExecuted && !activeAppServer) {
+  const appServer = getActiveAppServer();
+  if (commandExecuted && !appServer) {
     await cleanupCliCommand();
   }
 }
@@ -228,29 +228,32 @@ if (import.meta.hot) {
     try {
       const shutdownPromises: Promise<void>[] = [];
 
-      if (activeAppServer) {
+      const appServer = getActiveAppServer();
+      if (appServer) {
         logger.debug("Shutting down AppServer...");
         shutdownPromises.push(
-          activeAppServer.stop().then(() => {
-            activeAppServer = null;
+          appServer.stop().then(() => {
+            setActiveAppServer(null);
             logger.debug("AppServer shut down.");
           }),
         );
       }
 
-      if (activePipelineManager && !activeAppServer) {
+      const pipeline = getActivePipelineManager();
+      if (pipeline && !appServer) {
         shutdownPromises.push(
-          activePipelineManager.stop().then(() => {
-            activePipelineManager = null;
+          pipeline.stop().then(() => {
+            setActivePipelineManager(null);
             logger.debug("PipelineManager stopped.");
           }),
         );
       }
 
-      if (activeDocService) {
+      const docService = getActiveDocService();
+      if (docService) {
         shutdownPromises.push(
-          activeDocService.shutdown().then(() => {
-            activeDocService = null;
+          docService.shutdown().then(() => {
+            setActiveDocService(null);
             logger.debug("DocumentManagementService shut down.");
           }),
         );
@@ -262,7 +265,7 @@ if (import.meta.hot) {
       logger.error(`❌ Error during HMR cleanup: ${hmrError}`);
     } finally {
       // Reset state for the next module instantiation
-      activeAppServer = null;
+      setActiveAppServer(null);
       if (!wasAlreadyShuttingDown) {
         isShuttingDown = false;
       }

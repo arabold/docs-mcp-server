@@ -64,9 +64,11 @@ export class JsonDocumentSplitter implements DocumentSplitter {
     this.maxDepth =
       options.maxDepth ??
       config.json?.maxNestingDepth ??
-      defaults.SPLITTER_JSON_MAX_NESTING_DEPTH;
-    this.maxChunks =
-      options.maxChunks ?? config.json?.maxChunks ?? defaults.SPLITTER_JSON_MAX_CHUNKS;
+      options.maxDepth ??
+      config.json?.maxNestingDepth ??
+      defaults.splitter.json.maxNestingDepth;
+    this.maxChunks = this.maxChunks =
+      options.maxChunks ?? config.json?.maxChunks ?? defaults.splitter.json.maxChunks;
     this.maxChunkSize = options.maxChunkSize ?? config.maxChunkSize;
 
     const textSplitterConfig = { ...config };

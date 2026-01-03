@@ -1,9 +1,9 @@
-/** Unit test for scrapeAction */
+/** Unit test for refresh command */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
-import { ScrapeTool } from "../../tools";
-import { createScrapeCommand } from "./scrape";
+import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
+import { createRefreshCommand } from "./refresh";
 
 const pipelineMock = {
   start: vi.fn(async () => {}),
@@ -13,10 +13,10 @@ const pipelineMock = {
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
-vi.mock("../../tools", () => ({
-  ScrapeTool: vi
+vi.mock("../../tools/RefreshVersionTool", () => ({
+  RefreshVersionTool: vi
     .fn()
-    .mockImplementation(() => ({ execute: vi.fn(async () => ({ jobId: "job-123" })) })),
+    .mockImplementation(() => ({ execute: vi.fn(async () => ({ pagesRefreshed: 5 })) })),
 }));
 vi.mock("../../pipeline", () => ({
   PipelineFactory: {
@@ -40,7 +40,6 @@ vi.mock("../utils", () => ({
     on: vi.fn(),
     emit: vi.fn(),
   })),
-  parseHeaders: vi.fn(() => ({})),
   resolveEmbeddingContext: vi.fn(() => ({ provider: "mock", model: "mock-model" })),
   CliContext: {},
   setupLogging: vi.fn(),
@@ -51,42 +50,45 @@ vi.mock("../../utils/config", async (importOriginal) => {
     ...actual,
     loadConfig: vi.fn(() => ({
       app: { embeddingModel: "mock-model", storePath: "/mock/store" },
-      scraper: { maxPages: 100, maxDepth: 2, maxConcurrency: 1 },
     })),
   };
 });
+// Mock telemetry
+vi.mock("../../telemetry", () => ({
+  telemetry: {
+    track: vi.fn(),
+  },
+  TelemetryEvent: {
+    CLI_COMMAND: "CLI_COMMAND",
+  },
+}));
 
-describe("scrape command", () => {
+describe("refresh command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("starts pipeline and executes ScrapeTool", async () => {
+  it("starts pipeline and executes RefreshVersionTool", async () => {
     const parser = yargs().scriptName("test");
-    createScrapeCommand(parser);
+    createRefreshCommand(parser);
 
-    await parser.parse([
-      "scrape",
-      "react",
-      "https://react.dev",
-      "--max-pages",
-      "1",
-      "--max-depth",
-      "1",
-      "--max-concurrency",
-      "1",
-      "--ignore-errors",
-      "--scope",
-      "subpages",
-      "--follow-redirects",
-      "--scrape-mode",
-      "auto",
-      "--embedding-model",
-      "mock-embedding-model",
-    ]);
+    await parser.parse(`refresh react --version 18.0.0 --embedding-model mock-model`);
 
-    expect(ScrapeTool).toHaveBeenCalledTimes(1);
+    expect(RefreshVersionTool).toHaveBeenCalledTimes(1);
     expect(pipelineMock.start).toHaveBeenCalledTimes(1);
     expect(pipelineMock.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails if embedding model is missing and no server-url", async () => {
+    // Mock resolveEmbeddingContext to return null
+    const utils = await import("../utils");
+    // @ts-expect-error
+    utils.resolveEmbeddingContext.mockReturnValueOnce(null);
+
+    const parser = yargs().scriptName("test");
+    createRefreshCommand(parser);
+
+    // Should fail
+    await expect(parser.parse(`refresh react`)).rejects.toThrow();
   });
 });

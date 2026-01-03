@@ -3,7 +3,6 @@
  */
 
 import type { SyntaxNode, Tree } from "tree-sitter";
-import { defaults } from "../../../utils/config";
 
 /**
  * Universal tree-sitter parser size limit.

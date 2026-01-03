@@ -1,7 +1,6 @@
 import { defineConfig } from "vite";
 import path from "node:path";
 import tailwindcss from '@tailwindcss/vite'
-import packageJson from "./package.json";
 
 // Vite configuration specifically for building frontend assets (CSS, JS)
 export default defineConfig({

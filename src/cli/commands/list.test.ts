@@ -1,8 +1,9 @@
 /** Unit test for listAction */
 
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import yargs from "yargs";
 import { ListLibrariesTool } from "../../tools";
+import { createListCommand } from "./list";
 
 // Mocks
 vi.mock("../../store", () => ({
@@ -22,21 +23,31 @@ vi.mock("../utils", () => ({
     emit: vi.fn(),
   })),
   formatOutput: vi.fn((data) => JSON.stringify(data)),
+  CliContext: {},
 }));
-
-import { listAction } from "./list";
-
-function _cmd() {
-  return new Command();
-}
-
-beforeEach(() => {
-  vi.clearAllMocks();
+vi.mock("../../utils/config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/config")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({
+      app: { storePath: "/mock/store" },
+    })),
+  };
 });
 
-describe("listAction", () => {
+describe("list command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("executes ListLibrariesTool", async () => {
-    await expect(listAction({ serverUrl: undefined })).resolves.not.toThrow();
+    const parser = yargs().scriptName("test");
+    createListCommand(parser);
+
+    await parser.parse("list");
+
     expect(ListLibrariesTool).toHaveBeenCalledTimes(1);
+    const mockInstance = (ListLibrariesTool as any).mock.results[0].value;
+    expect(mockInstance.execute).toHaveBeenCalled();
   });
 });

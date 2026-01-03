@@ -57,12 +57,12 @@
     "@modelcontextprotocol/sdk": "^1.22.0",
     "@trpc/client": "^11.7.1",
     "@trpc/server": "^11.4.4",
+    "@types/yargs": "^17.0.35",
     "alpinejs": "^3.15.2",
     "axios": "^1.13.2",
     "axios-retry": "^4.5.0",
     "better-sqlite3": "^12.4.6",
     "cheerio": "^1.1.2",
-    "commander": "^14.0.2",
     "dompurify": "^3.3.0",
     "dotenv": "^17.2.3",
     "env-paths": "^3.0.0",
@@ -94,7 +94,8 @@
     "turndown": "^7.2.2",
     "ws": "^8.18.3",
     "yaml": "^2.8.2",
-    "zod": "^4.1.12"
+    "yargs": "^18.0.0",
+    "zod": "^4.3.4"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.7",

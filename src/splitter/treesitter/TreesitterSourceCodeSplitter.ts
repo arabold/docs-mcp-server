@@ -16,7 +16,7 @@ export class TreesitterSourceCodeSplitter implements DocumentSplitter {
   constructor(config: SplitterConfig) {
     this.maxChunkSize = config.maxChunkSize;
     const treeSitterSizeLimit =
-      config.treeSitterSizeLimit ?? defaults.SPLITTER_TREESITTER_SIZE_LIMIT;
+      config.treeSitterSizeLimit ?? defaults.splitter.treeSitterSizeLimit;
 
     // Initialize registry and text content splitter
     this.registry = new LanguageParserRegistry(treeSitterSizeLimit);

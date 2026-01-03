@@ -44,7 +44,7 @@ describe("PipelineFactory", () => {
     it("should use constants as defaults", () => {
       const pipelines = PipelineFactory.createStandardPipelines(appConfig);
       expect(pipelines).toHaveLength(5);
-      expect(defaults.SPLITTER_PREFERRED_CHUNK_SIZE).toBe(1500);
+      expect(defaults.splitter.preferredChunkSize).toBe(1500);
     });
   });
 });

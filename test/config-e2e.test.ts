@@ -59,12 +59,12 @@ describe("Configuration Loading E2E", () => {
 
   it("should load default configuration", async () => {
     const config = await runConfigCommand([]);
-    expect(config.app.telemetryEnabled).toBe(true); // Default
+    expect(config.app.telemetryEnabled).toBe(true); // Default is true
   });
 
   it("should load configuration from --config flag", async () => {
     const configPath = path.join(tempDir, "custom-config.yaml");
-    await fs.writeFile(configPath, "telemetry:\n  enabled: false\n");
+    await fs.writeFile(configPath, "app:\n  telemetryEnabled: false\n");
 
     const config = await runConfigCommand(["--config", configPath]);
     expect(config.app.telemetryEnabled).toBe(false);
@@ -72,7 +72,7 @@ describe("Configuration Loading E2E", () => {
 
   it("should load configuration from DOCS_MCP_CONFIG env var", async () => {
     const configPath = path.join(tempDir, "env-config.yaml");
-    await fs.writeFile(configPath, "telemetry:\n  enabled: false\n");
+    await fs.writeFile(configPath, "app:\n  telemetryEnabled: false\n");
 
     const config = await runConfigCommand([], { DOCS_MCP_CONFIG: configPath });
     expect(config.app.telemetryEnabled).toBe(false);
@@ -82,9 +82,105 @@ describe("Configuration Loading E2E", () => {
     const storePath = path.join(tempDir, "store");
     await fs.mkdir(storePath);
     const configPath = path.join(storePath, "config.yaml");
-    await fs.writeFile(configPath, "telemetry:\n  enabled: false\n");
+    await fs.writeFile(configPath, "app:\n  telemetryEnabled: false\n");
 
     const config = await runConfigCommand(["--store-path", storePath]);
     expect(config.app.telemetryEnabled).toBe(false);
+  });
+  describe("Precedence Rules", () => {
+    it("should prioritize --config flag over DOCS_MCP_CONFIG env var", async () => {
+      const flagConfigPath = path.join(tempDir, "flag-config.yaml");
+      await fs.writeFile(flagConfigPath, "app:\n  telemetryEnabled: false\n");
+
+      const envConfigPath = path.join(tempDir, "env-config.yaml");
+      await fs.writeFile(envConfigPath, "app:\n  telemetryEnabled: true\n");
+
+      // Env var points to the "true" config
+      const env = { DOCS_MCP_CONFIG: envConfigPath };
+
+      // CLI flag points to the "false" config. CLI flag should win.
+      const config = await runConfigCommand(["--config", flagConfigPath], env);
+      expect(config.app.telemetryEnabled).toBe(false);
+    });
+
+    it("should prioritize environment variables over config file", async () => {
+      const configPath = path.join(tempDir, "env-override-config.yaml");
+      // Config file says false
+      await fs.writeFile(configPath, "app:\n  telemetryEnabled: false\n");
+
+      // Env var says true
+      const env = { 
+        DOCS_MCP_CONFIG: configPath,
+        DOCS_MCP_TELEMETRY: "true" 
+      };
+
+      const config = await runConfigCommand([], env);
+      expect(config.app.telemetryEnabled).toBe(true);
+    });
+
+    it("should prioritize CLI flags over everything", async () => {
+      const configPath = path.join(tempDir, "all-override-config.yaml");
+      await fs.writeFile(configPath, "app:\n  telemetryEnabled: false\n");
+
+      const env = { DOCS_MCP_TELEMETRY: "false" };
+
+      // CLI flag says true
+      const config = await runConfigCommand(["--config", configPath, "--telemetry"], env);
+      expect(config.app.telemetryEnabled).toBe(true);
+      describe("Validation & Error Handling", () => {
+    it("should fail when specified config file does not exist", async () => {
+      const configPath = path.join(tempDir, "non-existent.yaml");
+      
+      try {
+        await runConfigCommand(["--config", configPath]);
+        expect.fail("Should have thrown error");
+      } catch (err: any) {
+        expect(err.message).toContain("Command failed");
+        expect(err.message).toContain("Config file not found");
+      }
+    });
+
+    it("should fail on malformed YAML", async () => {
+      const configPath = path.join(tempDir, "malformed.yaml");
+      await fs.writeFile(configPath, "app:\n  telemetryEnabled: : bad value\n");
+
+      try {
+        await runConfigCommand(["--config", configPath]);
+        expect.fail("Should have thrown error");
+      } catch (err: any) {
+        expect(err.message).toContain("Command failed");
+        expect(err.message).toContain("Failed to parse config file");
+      }
+    });
+
+    it("should validation invalid configuration types", async () => {
+      const configPath = path.join(tempDir, "invalid-type.yaml");
+      // telemetryEnabled should be boolean
+      await fs.writeFile(configPath, "app:\n  telemetryEnabled: \"not-a-boolean\"\n");
+
+      try {
+        await runConfigCommand(["--config", configPath]);
+        expect.fail("Should have thrown error");
+      } catch (err: any) {
+        expect(err.message).toContain("Command failed");
+        expect(err.message).toContain("Configuration validation failed");
+      }
+    });
+  });
+  describe("Merging Behavior", () => {
+    it("should merge nested partial configuration with defaults", async () => {
+      const configPath = path.join(tempDir, "partial-config.yaml");
+      // Only overriding log level, telemetry should remain default (true)
+      await fs.writeFile(configPath, "logging:\n  level: debug\n");
+
+      const config = await runConfigCommand(["--config", configPath]);
+      
+      // Check overridden value
+      expect(config.logging.level).toBe("debug");
+      // Check default value is preserved
+      expect(config.app.telemetryEnabled).toBe(true);
+    });
+  });
+});
   });
 });

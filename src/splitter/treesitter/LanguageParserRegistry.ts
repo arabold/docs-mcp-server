@@ -16,7 +16,7 @@ export class LanguageParserRegistry {
   private mimeTypeMap = new Map<string, string>();
   private readonly treeSitterSizeLimit: number;
 
-  constructor(treeSitterSizeLimit: number = defaults.SPLITTER_TREESITTER_SIZE_LIMIT) {
+  constructor(treeSitterSizeLimit: number = defaults.splitter.treeSitterSizeLimit) {
     this.treeSitterSizeLimit = treeSitterSizeLimit;
     this.initializeParsers();
   }

@@ -47,7 +47,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
   // Static LRU cache for all fetched resources, shared across instances
   private static readonly resourceCache = new SimpleMemoryCache<string, CachedResource>(
-    defaults.SCRAPER_FETCHER_MAX_CACHE_ITEMS,
+    defaults.scraper.fetcher.maxCacheItems,
   );
 
   constructor(config: AppConfig["scraper"]) {
@@ -862,7 +862,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
               const contentSizeBytes = Buffer.byteLength(body, "utf8");
               const maxCacheItemSizeBytes =
                 this.config?.fetcher?.maxCacheItemSizeBytes ??
-                defaults.SCRAPER_FETCHER_MAX_CACHE_ITEM_SIZE_BYTES;
+                defaults.scraper.fetcher.maxCacheItemSizeBytes;
               if (contentSizeBytes <= maxCacheItemSizeBytes) {
                 const contentType =
                   response.headers()["content-type"] || "application/octet-stream";
@@ -912,7 +912,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       await page.goto(context.source, { waitUntil: "load" });
 
       // Wait for either body (normal HTML) or frameset (frameset documents) to appear
-      const pageTimeoutMs = this.config.pageTimeoutMs ?? defaults.SCRAPER_PAGE_TIMEOUT_MS;
+      const pageTimeoutMs = this.config.pageTimeoutMs ?? defaults.scraper.pageTimeoutMs;
       await page.waitForSelector("body, frameset", {
         timeout: pageTimeoutMs,
       });
