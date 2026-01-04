@@ -57,10 +57,13 @@ Run a standalone server that includes both MCP endpoints and web interface in a 
    ```bash
    docker run --rm \
      -v docs-mcp-data:/data \
+     -v docs-mcp-config:/config \
      -p 6280:6280 \
      ghcr.io/arabold/docs-mcp-server:latest \
      --protocol http --host 0.0.0.0 --port 6280
    ```
+
+   **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
    **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
