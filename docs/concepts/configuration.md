@@ -14,10 +14,10 @@ When any command is executed, the application resolves the configuration in the 
 Configuration values are merged from four layers, with **higher numbers taking precedence**:
 
 1.  **Defaults**: Hardcoded application defaults (lowest priority).
-2.  **Config File**: Settings loaded from a configuration file (`config.yaml` or `config.json`).
-    - **Read-Only (Explicit)**: If you provide a path via `--config` or `DOCS_MCP_CONFIG`, the server treats this file as **read-only**. It will load settings from it but **never** modify it.
-    - **Read-Write (System Default)**: If no explicit config is provided, the server attempts to load from the system default location (e.g., `~/Library/Preferences/docs-mcp-server/config.yaml` on macOS).
-      - **Auto-Update**: When using the system default, the server **automatically updates** the file on startup to include any new configuration keys or default values. This ensures you always have the latest options available.
+2.  **Config File**: Settings loaded from a configuration file.
+    - **Read-Only (Explicit)**: If you provide a path via `--config` or `DOCS_MCP_CONFIG`, the server treats this file as **read-only**. It will load settings from it but **never** modify it. Both `config.yaml` and `config.json` formats are supported.
+    - **Read-Write (System Default)**: If no explicit config is provided, the server loads from the system default location (e.g., `~/Library/Preferences/docs-mcp-server/config.yaml`).
+      - **Auto-Update**: The server **automatically updates** this file on startup with new defaults. **Note**: The system default file is always `config.yaml`.
 3.  **Environment Variables**: Mapped system environment variables (e.g., `DOCS_MCP_PORT`).
 4.  **CLI Arguments**: Flags passed directly to the command (e.g., `--port 8080`). These have the highest priority.
 
