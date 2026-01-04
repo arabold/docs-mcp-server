@@ -12,12 +12,7 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
-import {
-  type CliContext,
-  getEventBus,
-  parseHeaders,
-  resolveEmbeddingContext,
-} from "../utils";
+import { type CliContext, getEventBus, parseHeaders } from "../utils";
 
 export function createScrapeCommand(cli: Argv) {
   cli.command(
@@ -221,15 +216,6 @@ export function createScrapeCommand(cli: Argv) {
         hasExcludePatterns: (argv.excludePattern as string[]).length > 0,
         useServerUrl: !!serverUrl,
       });
-
-      // Resolve embedding configuration
-      const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
-      if (!serverUrl && !embeddingConfig) {
-        throw new Error(
-          "Embedding configuration is required for local scraping. " +
-            "Please set DOCS_MCP_EMBEDDING_MODEL environment variable or use --server-url for remote execution.",
-        );
-      }
 
       const eventBus = getEventBus(argv as CliContext);
 

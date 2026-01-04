@@ -7,12 +7,7 @@ import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
-import {
-  type CliContext,
-  formatOutput,
-  getEventBus,
-  resolveEmbeddingContext,
-} from "../utils";
+import { type CliContext, formatOutput, getEventBus } from "../utils";
 
 export function createSearchCommand(cli: Argv) {
   cli.command(
@@ -89,15 +84,6 @@ export function createSearchCommand(cli: Argv) {
         configPath: argv.config as string,
         searchDir: argv.storePath as string, // resolved globally
       });
-
-      // Resolve embedding configuration for local execution (search needs embeddings)
-      const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
-      if (!serverUrl && !embeddingConfig) {
-        throw new Error(
-          "Embedding configuration is required for local search. " +
-            "Please set DOCS_MCP_EMBEDDING_MODEL environment variable or use --server-url for remote execution.",
-        );
-      }
 
       const eventBus = getEventBus(argv as CliContext);
 

@@ -11,7 +11,7 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
 import { loadConfig } from "../../utils/config";
-import { type CliContext, getEventBus, resolveEmbeddingContext } from "../utils";
+import { type CliContext, getEventBus } from "../utils";
 
 export function createRefreshCommand(cli: Argv) {
   cli.command(
@@ -67,15 +67,6 @@ export function createRefreshCommand(cli: Argv) {
         configPath: argv.config as string,
         searchDir: argv.storePath as string,
       });
-
-      //Resolve embedding configuration for local execution (refresh needs embeddings)
-      const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
-      if (!serverUrl && !embeddingConfig) {
-        throw new Error(
-          "Embedding configuration is required for local refresh operations. " +
-            "Please set DOCS_MCP_EMBEDDING_MODEL environment variable or use --server-url for remote execution.",
-        );
-      }
 
       const eventBus = getEventBus(argv as CliContext);
 

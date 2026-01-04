@@ -78,17 +78,4 @@ describe("refresh command", () => {
     expect(pipelineMock.start).toHaveBeenCalledTimes(1);
     expect(pipelineMock.stop).toHaveBeenCalledTimes(1);
   });
-
-  it("fails if embedding model is missing and no server-url", async () => {
-    // Mock resolveEmbeddingContext to return null
-    const utils = await import("../utils");
-    // @ts-expect-error
-    utils.resolveEmbeddingContext.mockReturnValueOnce(null);
-
-    const parser = yargs().scriptName("test");
-    createRefreshCommand(parser);
-
-    // Should fail
-    await expect(parser.parse(`refresh react`)).rejects.toThrow();
-  });
 });
