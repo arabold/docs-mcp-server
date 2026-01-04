@@ -1,3 +1,18 @@
+# [1.34.0](https://github.com/arabold/docs-mcp-server/compare/v1.33.1...v1.34.0) (2026-01-04)
+
+
+### Bug Fixes
+
+* remove embedding configuration checks and correctly resolve scraper CLI options ([1ea2111](https://github.com/arabold/docs-mcp-server/commit/1ea21113886aeec68e648bd121cb2021db072b38))
+* remove embedding model configuration checks from `refresh`, `scrape`, and `search` CLI commands ([6462d98](https://github.com/arabold/docs-mcp-server/commit/6462d98a4c47988bd23b279f297e06d149d7ba4e))
+
+
+### Features
+
+* add Docker configuration persistence via a dedicated `/config` volume ([546ddee](https://github.com/arabold/docs-mcp-server/commit/546ddee5d21ab6a9257feb5018c92e7f0d9308bf))
+* overhaul configuration loading with improved precedence and auto-creation ([ae12726](https://github.com/arabold/docs-mcp-server/commit/ae127260ab95e95121f52e6d5a104af0c6d8deef))
+* refactor configuration handling and enhance strategy assembly ([d259b58](https://github.com/arabold/docs-mcp-server/commit/d259b58225d074d9f1160452f391e7149403681a))
+
 ## [1.33.1](https://github.com/arabold/docs-mcp-server/compare/v1.33.0...v1.33.1) (2025-12-14)
 
 
