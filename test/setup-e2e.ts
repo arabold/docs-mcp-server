@@ -13,7 +13,19 @@ vi.mock("../src/utils/logger");
 
 // Start mock server before all tests
 beforeAll(() => {
-  server.listen({ onUnhandledRequest: "warn" });
+  server.listen({
+    onUnhandledRequest(request, print) {
+      if (
+        request.url.includes("127.0.0.1") ||
+        request.url.includes("localhost") ||
+        request.url.includes("clerk.accounts.dev") ||
+        request.url.includes("worker.example.com")
+      ) {
+        return;
+      }
+      print.warning();
+    },
+  });
 });
 
 // Reset handlers after each test to ensure test isolation

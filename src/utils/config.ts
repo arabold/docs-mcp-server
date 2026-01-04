@@ -349,9 +349,24 @@ function loadConfigFile(
   const candidatePaths: string[] = [];
 
   // 1. Explicit path
-  if (cliConfigPath) candidatePaths.push(cliConfigPath);
-  if (options.configPath) candidatePaths.push(options.configPath);
-  if (process.env.DOCS_MCP_CONFIG) candidatePaths.push(process.env.DOCS_MCP_CONFIG);
+  if (cliConfigPath) {
+    if (!fs.existsSync(cliConfigPath)) {
+      throw new Error(`Config file not found: ${cliConfigPath}`);
+    }
+    candidatePaths.push(cliConfigPath);
+  }
+  if (options.configPath) {
+    if (!fs.existsSync(options.configPath)) {
+      throw new Error(`Config file not found: ${options.configPath}`);
+    }
+    candidatePaths.push(options.configPath);
+  }
+  if (process.env.DOCS_MCP_CONFIG) {
+    if (!fs.existsSync(process.env.DOCS_MCP_CONFIG)) {
+      throw new Error(`Config file not found: ${process.env.DOCS_MCP_CONFIG}`);
+    }
+    candidatePaths.push(process.env.DOCS_MCP_CONFIG);
+  }
 
   // 2. Storage Directory
   if (options.searchDir) {

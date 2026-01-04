@@ -167,7 +167,7 @@ describe("AppServer Behavior Tests", () => {
         enableApiServer: false,
         enableWorker: false,
         port: 3000,
-        externalWorkerUrl: "http://external-worker:8080",
+        externalWorkerUrl: "http://worker.example.com",
       };
 
       const server = new AppServer(
@@ -470,7 +470,7 @@ describe("AppServer Behavior Tests", () => {
         enableApiServer: false,
         enableWorker: false,
         port: 3000,
-        externalWorkerUrl: "http://external-worker:8080",
+        externalWorkerUrl: "http://worker.example.com",
       };
 
       const server = new AppServer(
@@ -633,7 +633,7 @@ describe("AppServer Behavior Tests", () => {
         enableApiServer: false,
         enableWorker: true,
         port: 3000,
-        externalWorkerUrl: "http://external-worker:8080", // This should be ignored
+        externalWorkerUrl: "http://worker.example.com", // This should be ignored
       };
 
       const server = new AppServer(

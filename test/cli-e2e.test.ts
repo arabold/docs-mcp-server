@@ -1,14 +1,15 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getCliCommand } from "./test-helpers";
 
 describe("CLI E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
-  const entryPoint = path.join(projectRoot, "src", "index.ts");
 
   async function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      const proc = spawn("npx", ["vite-node", entryPoint, ...args], {
+      const { cmd, args: cliArgs } = getCliCommand();
+      const proc = spawn(cmd, [...cliArgs, ...args], {
         cwd: projectRoot,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, VITEST_WORKER_ID: undefined },
@@ -43,9 +44,7 @@ describe("CLI E2E", () => {
     expect(stdout).toContain("list");
   });
 
-  // Temporarily skipped because Yargs version behavior is tricky with .strict() and custom implementation
-  // We'll rely on our find-version command or just manual verification for now if this is flaky
-  it.skip("should show version with --version", async () => {
+  it("should show version with --version", async () => {
     const { code, stdout } = await runCli(["--version"]);
     expect(code).toBe(0);
     // Version is typically printed to stdout

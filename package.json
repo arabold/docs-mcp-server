@@ -33,6 +33,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run src",
+    "pretest:e2e": "npm run build",
     "test:e2e": "vitest run test",
     "test:live": "vitest run --exclude= test/html-pipeline-live-e2e.test.ts",
     "lint": "biome check .",

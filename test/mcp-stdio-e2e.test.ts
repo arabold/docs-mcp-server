@@ -9,6 +9,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getCliCommand } from "./test-helpers";
 
 describe("MCP stdio server E2E", () => {
   let client: Client | null = null;
@@ -52,10 +53,12 @@ describe("MCP stdio server E2E", () => {
     const testEnv = { ...process.env };
     delete testEnv.VITEST_WORKER_ID;
 
+    const { cmd, args } = getCliCommand();
+
     // Create stdio transport which spawns its own process
     transport = new StdioClientTransport({
-      command: "npx",
-      args: ["vite-node", entryPoint],
+      command: cmd,
+      args: args,
       cwd: projectRoot,
       env: {
         ...testEnv,
@@ -105,9 +108,11 @@ describe("MCP stdio server E2E", () => {
     const testEnv = { ...process.env };
     delete testEnv.VITEST_WORKER_ID;
 
+    const { cmd, args } = getCliCommand();
+
     transport = new StdioClientTransport({
-      command: "npx",
-      args: ["vite-node", entryPoint],
+      command: cmd,
+      args: args,
       cwd: projectRoot,
       env: {
         ...testEnv,

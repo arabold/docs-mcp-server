@@ -148,13 +148,11 @@ describe("Vector Search End-to-End Tests", () => {
       limit: 10,
     });
 
-    console.log(`🎯 Broader search found ${broadSearchResult.results.length} results`);
     expect(broadSearchResult.results.length).toBeGreaterThan(0);
     
     // With the vector search multiplier, we should find more diverse results
     broadSearchResult.results.forEach((result, index) => {
       const score = result.score !== null ? result.score.toFixed(4) : 'N/A';
-      console.log(`   ${index + 1}. Score: ${score} - ${result.content.substring(0, 80)}...`);
     });
   }, 60000);
 
@@ -203,7 +201,6 @@ describe("Vector Search End-to-End Tests", () => {
     expect(searchResult.results.length).toBeGreaterThan(0);
 
     // Log results for manual inspection of semantic matching
-    console.log("🧠 Semantic search results:");
     searchResult.results.forEach((result, index) => {
       const score = result.score !== null ? result.score.toFixed(3) : 'N/A';
       console.log(`  ${index + 1}. Score: ${score} - ${result.content.substring(0, 100)}...`);
