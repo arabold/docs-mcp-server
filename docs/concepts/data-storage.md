@@ -225,7 +225,7 @@ Embeddings stored as BLOB in documents table:
 - NULL handling for documents without embeddings
 - Direct storage eliminates need for separate vector table
 
-**Code Reference:** `src/store/types.ts` line 4 (VECTOR_DIMENSION constant)
+**Code Reference:** `src/store/types.ts` line 4 (EMBEDDINGS_VECTOR_DIMENSION constant)
 
 ### EmbeddingFactory
 

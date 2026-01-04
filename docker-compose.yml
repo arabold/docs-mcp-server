@@ -21,6 +21,7 @@ services:
       - .env
     volumes:
       - docs-mcp-data:/data
+      - docs-mcp-config:/config
     healthcheck:
       test: 'node -e ''require("net").connect(8080, "127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))'''
       interval: 5s
@@ -58,6 +59,8 @@ services:
       - "6280:6280"
     env_file:
       - .env
+    volumes:
+      - docs-mcp-config:/config
     depends_on:
       worker:
         condition: service_healthy
@@ -90,6 +93,8 @@ services:
       - "6281:6281"
     env_file:
       - .env
+    volumes:
+      - docs-mcp-config:/config
     depends_on:
       worker:
         condition: service_healthy
@@ -103,3 +108,5 @@ services:
 volumes:
   docs-mcp-data:
     name: docs-mcp-data
+  docs-mcp-config:
+    name: docs-mcp-config

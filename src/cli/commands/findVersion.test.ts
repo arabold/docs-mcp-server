@@ -1,7 +1,9 @@
 /** Unit test for findVersionAction */
 
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import yargs from "yargs";
+import { FindVersionTool } from "../../tools";
+import { createFindVersionCommand } from "./findVersion";
 
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
@@ -17,19 +19,36 @@ vi.mock("../utils", () => ({
     on: vi.fn(),
     emit: vi.fn(),
   })),
+  CliContext: {},
 }));
+vi.mock("../../utils/config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/config")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({
+      app: { storePath: "/mock/store" },
+    })),
+  };
+});
 
-import { findVersionAction } from "./findVersion";
+describe("find-version command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-function _cmd() {
-  return new Command();
-}
-beforeEach(() => vi.clearAllMocks());
-
-describe("findVersionAction", () => {
   it("calls FindVersionTool", async () => {
-    await findVersionAction("react", { version: "18.x", serverUrl: undefined });
-    const { FindVersionTool } = await import("../../tools");
+    const parser = yargs().scriptName("test");
+    createFindVersionCommand(parser);
+
+    await parser.parse("find-version react --version 18.x");
+
     expect(FindVersionTool).toHaveBeenCalledTimes(1);
+    const mockInstance = (FindVersionTool as any).mock.results[0].value;
+    expect(mockInstance.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        library: "react",
+        targetVersion: "18.x",
+      }),
+    );
   });
 });

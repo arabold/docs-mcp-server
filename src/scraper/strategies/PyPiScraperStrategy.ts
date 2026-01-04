@@ -1,4 +1,5 @@
 import type { ProgressCallback } from "../../types";
+import type { AppConfig } from "../../utils/config";
 import type { ScraperOptions, ScraperProgressEvent, ScraperStrategy } from "../types";
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
@@ -10,8 +11,8 @@ export class PyPiScraperStrategy implements ScraperStrategy {
     return ["pypi.org", "www.pypi.org"].includes(hostname);
   }
 
-  constructor() {
-    this.defaultStrategy = new WebScraperStrategy({
+  constructor(config: AppConfig) {
+    this.defaultStrategy = new WebScraperStrategy(config, {
       urlNormalizerOptions: {
         ignoreCase: true,
         removeHash: true,

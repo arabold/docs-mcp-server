@@ -30,6 +30,19 @@ Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP tr
 - LangChain.js for embeddings, Playwright for scraping
 - SQLite with schema migrations
 
+## Configuration System
+
+Configuration resolves once per process via `loadConfig` in `src/utils/config.ts`. The system uses a strict **Zod schema** (`AppConfigSchema`) to validate and merge settings from four layers: Defaults < Config File (`config.yaml`) < Environment Variables < CLI Arguments.
+
+**Loading Logic**:
+
+- **Explicit Config (Read-Only)**: Files loaded via `--config` or `DOCS_MCP_CONFIG` are never modified by the server.
+- **System Default (Read-Write)**: If no explicit config is provided, the server attempts to load from the system default path (e.g., `~/Library/Preferences/docs-mcp-server/config.yaml`). The server automatically updates this file with new defaults on startup.
+
+All default values are unified in a single `DEFAULT_CONFIG` source of truth. The loading process ensures that the resulting `AppConfig` object is fully typed and validated before the application starts.
+
+For detailed options and precedence rules, see [Configuration Concepts](docs/concepts/configuration.md).
+
 ### Directory Structure
 
 ```

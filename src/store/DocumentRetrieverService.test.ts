@@ -1,23 +1,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AppConfig } from "../utils/config";
+import { loadConfig } from "../utils/config";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import type { DbChunkRank, DbPageChunk } from "./types";
 
 vi.mock("./DocumentStore");
 
-describe("DocumentRetrieverService (consolidated logic)", () => {
-  let retrieverService: DocumentRetrieverService;
-  let mockDocumentStore: DocumentStore;
+describe("DocumentRetrieverService", () => {
+  let store: DocumentStore;
+  let service: DocumentRetrieverService;
+  let config: AppConfig;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    mockDocumentStore = new DocumentStore("mock_connection_string");
-    retrieverService = new DocumentRetrieverService(mockDocumentStore);
+    config = loadConfig();
+    store = new DocumentStore(":memory:", config);
+    await store.initialize();
+    service = new DocumentRetrieverService(store, config);
   });
 
   it("should return an empty array when no documents are found", async () => {
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([]);
-    const results = await retrieverService.search("lib", "1.0.0", "query");
+    vi.spyOn(store, "findByContent").mockResolvedValue([]);
+    const results = await service.search("lib", "1.0.0", "query");
     expect(results).toEqual([]);
   });
 
@@ -47,29 +52,22 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([
-      initialResult1,
-      initialResult2,
+    vi.spyOn(store, "findByContent").mockResolvedValue([initialResult1, initialResult2]);
+    vi.spyOn(store, "findParentChunk").mockImplementation(async () => null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockImplementation(async () => []);
+    vi.spyOn(store, "findChildChunks").mockImplementation(async (_lib, _ver, id) =>
+      id === "doc1" ? [doc2] : [],
+    );
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockImplementation(
+      async (_lib, _ver, id) => (id === "doc1" ? [doc2] : []),
+    );
+    const findChunksByIdsSpy = vi.spyOn(store, "findChunksByIds").mockResolvedValue([
+      initialResult1, // doc1 (Chunk A)
+      doc2, // doc2 (Chunk B)
+      initialResult2, // doc3 (Chunk C)
     ]);
-    vi.spyOn(mockDocumentStore, "findParentChunk").mockImplementation(async () => null);
-    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockImplementation(
-      async () => [],
-    );
-    vi.spyOn(mockDocumentStore, "findChildChunks").mockImplementation(
-      async (_lib, _ver, id) => (id === "doc1" ? [doc2] : []),
-    );
-    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockImplementation(
-      async (_lib, _ver, id) => (id === "doc1" ? [doc2] : []),
-    );
-    const findChunksByIdsSpy = vi
-      .spyOn(mockDocumentStore, "findChunksByIds")
-      .mockResolvedValue([
-        initialResult1, // doc1 (Chunk A)
-        doc2, // doc2 (Chunk B)
-        initialResult2, // doc3 (Chunk C)
-      ]);
 
-    const results = await retrieverService.search(library, version, query);
+    const results = await service.search(library, version, query);
 
     expect(findChunksByIdsSpy).toHaveBeenCalledWith(
       library,
@@ -109,16 +107,16 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
-    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parent);
-    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([child]);
-    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findByContent").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(parent);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([child]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
     const findChunksByIdsSpy = vi
-      .spyOn(mockDocumentStore, "findChunksByIds")
+      .spyOn(store, "findChunksByIds")
       .mockResolvedValue([parent, initialResult, child]);
 
-    const results = await retrieverService.search(library, version, query);
+    const results = await service.search(library, version, query);
 
     expect(findChunksByIdsSpy).toHaveBeenCalledWith(
       library,
@@ -153,20 +151,18 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([docA, docB]);
-    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChunksByIds").mockImplementation(
-      async (_lib, _ver, ids) => {
-        if (ids.includes("a1")) return [docA];
-        if (ids.includes("b1")) return [docB];
-        return [];
-      },
-    );
+    vi.spyOn(store, "findByContent").mockResolvedValue([docA, docB]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) => {
+      if (ids.includes("a1")) return [docA];
+      if (ids.includes("b1")) return [docB];
+      return [];
+    });
 
-    const results = await retrieverService.search(library, version, query);
+    const results = await service.search(library, version, query);
 
     expect(results).toEqual([
       {
@@ -194,16 +190,16 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
-    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findByContent").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
     const findChunksByIdsSpy = vi
-      .spyOn(mockDocumentStore, "findChunksByIds")
+      .spyOn(store, "findChunksByIds")
       .mockResolvedValue([initialResult]);
 
-    const results = await retrieverService.search(library, version, query);
+    const results = await service.search(library, version, query);
 
     expect(findChunksByIdsSpy).toHaveBeenCalledWith(
       library,
@@ -232,21 +228,16 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
-    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findByContent").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([initialResult]);
 
-    const results = await retrieverService.search(library, version, query, limit);
+    const results = await service.search(library, version, query, limit);
 
-    expect(mockDocumentStore.findByContent).toHaveBeenCalledWith(
-      library,
-      version,
-      query,
-      limit,
-    );
+    expect(store.findByContent).toHaveBeenCalledWith(library, version, query, limit);
     expect(results).toEqual([
       {
         content: "Main chunk",
@@ -272,14 +263,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
-    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findByContent").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([initialResult]);
 
-    const results = await retrieverService.search(library, version, query);
+    const results = await service.search(library, version, query);
 
     expect(results).toHaveLength(1);
     expect(results[0]).toEqual({
@@ -304,14 +295,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
-    vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([initialResult]);
-    vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-    vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-    vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findByContent").mockResolvedValue([initialResult]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([initialResult]);
 
-    const results = await retrieverService.search(library, version, query);
+    const results = await service.search(library, version, query);
 
     expect(results).toHaveLength(1);
     expect(results[0]).toEqual({
@@ -351,23 +342,16 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         },
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([childResult]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parentChunk);
-      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
-        parentChunk,
-        childResult,
-      ]);
+      vi.spyOn(store, "findByContent").mockResolvedValue([childResult]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(parentChunk);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([parentChunk, childResult]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
-      expect(mockDocumentStore.findParentChunk).toHaveBeenCalledWith(
-        library,
-        version,
-        "child1",
-      );
+      expect(store.findParentChunk).toHaveBeenCalledWith(library, version, "child1");
       expect(results).toEqual([
         {
           url: "https://example.com",
@@ -417,30 +401,28 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         },
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([mainResult]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([
-        precedingSibling,
-      ]);
-      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([
+      vi.spyOn(store, "findByContent").mockResolvedValue([mainResult]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([precedingSibling]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([
         subsequentSibling,
       ]);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([
         precedingSibling,
         mainResult,
         subsequentSibling,
       ]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
-      expect(mockDocumentStore.findPrecedingSiblingChunks).toHaveBeenCalledWith(
+      expect(store.findPrecedingSiblingChunks).toHaveBeenCalledWith(
         library,
         version,
         "main1",
         1,
       );
-      expect(mockDocumentStore.findSubsequentSiblingChunks).toHaveBeenCalledWith(
+      expect(store.findSubsequentSiblingChunks).toHaveBeenCalledWith(
         library,
         version,
         "main1",
@@ -494,25 +476,20 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         },
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([parentResult]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([child1, child2]);
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
+      vi.spyOn(store, "findByContent").mockResolvedValue([parentResult]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([child1, child2]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([
         parentResult,
         child1,
         child2,
       ]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
-      expect(mockDocumentStore.findChildChunks).toHaveBeenCalledWith(
-        library,
-        version,
-        "parent1",
-        3,
-      );
+      expect(store.findChildChunks).toHaveBeenCalledWith(library, version, "parent1", 3);
       expect(results).toEqual([
         {
           url: "https://example.com",
@@ -551,16 +528,16 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         },
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([chunk3, chunk1]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findByContent").mockResolvedValue([chunk3, chunk1]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
 
       // findChunksByIds returns chunks in sort_order (simulating database ORDER BY)
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([chunk1, chunk3]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([chunk1, chunk3]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
       // Should be reassembled in sort_order, not in initial search result order
       expect(results).toEqual([
@@ -634,18 +611,16 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         },
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([mainResult]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(parent);
-      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([
-        precedingSibling,
-      ]);
-      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([
+      vi.spyOn(store, "findByContent").mockResolvedValue([mainResult]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(parent);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([precedingSibling]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([
         subsequentSibling,
       ]);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([child]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([child]);
 
       // Database returns in sort_order
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([
         parent,
         precedingSibling,
         mainResult,
@@ -653,7 +628,7 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         subsequentSibling,
       ]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
       expect(results).toEqual([
         {
@@ -682,14 +657,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         metadata: {},
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([markdownChunk]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([markdownChunk]);
+      vi.spyOn(store, "findByContent").mockResolvedValue([markdownChunk]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([markdownChunk]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
       expect(results).toHaveLength(1);
       expect(results[0]).toEqual({
@@ -714,13 +689,13 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         metadata: {},
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([codeChunk]);
+      vi.spyOn(store, "findByContent").mockResolvedValue([codeChunk]);
       // Mock the hierarchical strategy's fallback behavior since we don't have full hierarchy implementation
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([codeChunk]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([codeChunk]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
       expect(results).toHaveLength(1);
       expect(results[0]).toEqual({
@@ -745,12 +720,12 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         metadata: {},
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([jsonChunk]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([jsonChunk]);
+      vi.spyOn(store, "findByContent").mockResolvedValue([jsonChunk]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([jsonChunk]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
       expect(results).toHaveLength(1);
       expect(results[0]).toEqual({
@@ -775,14 +750,14 @@ describe("DocumentRetrieverService (consolidated logic)", () => {
         metadata: {},
       } as DbPageChunk & DbChunkRank;
 
-      vi.spyOn(mockDocumentStore, "findByContent").mockResolvedValue([unknownChunk]);
-      vi.spyOn(mockDocumentStore, "findParentChunk").mockResolvedValue(null);
-      vi.spyOn(mockDocumentStore, "findPrecedingSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChildChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findSubsequentSiblingChunks").mockResolvedValue([]);
-      vi.spyOn(mockDocumentStore, "findChunksByIds").mockResolvedValue([unknownChunk]);
+      vi.spyOn(store, "findByContent").mockResolvedValue([unknownChunk]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([unknownChunk]);
 
-      const results = await retrieverService.search(library, version, query);
+      const results = await service.search(library, version, query);
 
       expect(results).toHaveLength(1);
       expect(results[0]).toEqual({

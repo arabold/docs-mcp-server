@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { ScrapeMode } from "../types";
 import { HtmlPipeline } from "./HtmlPipeline";
 
 describe("HtmlPipeline charset integration", () => {
+  const appConfig = loadConfig();
   let pipeline: HtmlPipeline;
 
   beforeEach(() => {
-    pipeline = new HtmlPipeline();
+    pipeline = new HtmlPipeline(appConfig);
   });
 
   it("should use meta charset when it differs from HTTP header charset", async () => {

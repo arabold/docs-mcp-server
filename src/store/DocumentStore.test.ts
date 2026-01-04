@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
+import { loadConfig } from "../utils/config";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
 import { VersionStatus } from "./types";
 
 // Mock only the embedding service to generate deterministic embeddings for testing
 // This allows us to test ranking logic while using real SQLite database
-vi.mock("./embeddings/EmbeddingFactory", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./embeddings/EmbeddingFactory")>();
+vi.mock("./embeddings/EmbeddingFactory", async () => {
+  const actual = await vi.importActual<typeof import("./embeddings/EmbeddingFactory")>(
+    "./embeddings/EmbeddingFactory",
+  );
 
   return {
     ...actual,
@@ -63,6 +66,8 @@ vi.mock("./embeddings/EmbeddingFactory", async (importOriginal) => {
   };
 });
 
+const appConfig = loadConfig();
+
 /**
  * Helper function to create minimal ScrapeResult for testing.
  * Converts simplified test data to the ScrapeResult format expected by addDocuments.
@@ -111,8 +116,11 @@ describe("DocumentStore - With Embeddings", () => {
       "openai:text-embedding-3-small",
     );
 
+    // Enable embeddings via appConfig before creating the store
+    appConfig.app.embeddingModel = embeddingConfig.modelSpec;
+
     // Create a fresh in-memory database for each test with explicit config
-    store = new DocumentStore(":memory:", embeddingConfig);
+    store = new DocumentStore(":memory:", appConfig);
     await store.initialize();
   });
 
@@ -876,12 +884,12 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
 
   describe("Initialization without embeddings", () => {
     it("should initialize successfully without embedding credentials", async () => {
-      store = new DocumentStore(":memory:");
+      store = new DocumentStore(":memory:", appConfig);
       await expect(store.initialize()).resolves.not.toThrow();
     });
 
     it("should store documents without vectorization", async () => {
-      store = new DocumentStore(":memory:");
+      store = new DocumentStore(":memory:", appConfig);
       await store.initialize();
 
       await expect(
@@ -905,7 +913,7 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
 
   describe("FTS-only Search", () => {
     beforeEach(async () => {
-      store = new DocumentStore(":memory:");
+      store = new DocumentStore(":memory:", appConfig);
       await store.initialize();
 
       await store.addDocuments(
@@ -982,7 +990,8 @@ describe("DocumentStore - Common Functionality", () => {
     const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
       "openai:text-embedding-3-small",
     );
-    store = new DocumentStore(":memory:", embeddingConfig);
+    appConfig.app.embeddingModel = embeddingConfig.modelSpec;
+    store = new DocumentStore(":memory:", appConfig);
     await store.initialize();
   });
 
@@ -995,7 +1004,8 @@ describe("DocumentStore - Common Functionality", () => {
   describe("getActiveEmbeddingConfig", () => {
     it("should return null when no embedding config is provided", async () => {
       // Create a store without embedding config (FTS-only mode)
-      const ftsOnlyStore = new DocumentStore(":memory:");
+      appConfig.app.embeddingModel = "";
+      const ftsOnlyStore = new DocumentStore(":memory:", appConfig);
       await ftsOnlyStore.initialize();
 
       const config = ftsOnlyStore.getActiveEmbeddingConfig();

@@ -155,7 +155,7 @@
 ### Commits
 
 - Format: Conventional Commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`)
-- Subject: Imperative mood, ≤72 characters
+- Subject: Imperative mood, ≤72 characters. Start with lowercase letter and don't end with period.
 - Body: Separate from subject with blank line
 - Body content: Explain what and why, not how (for non-trivial changes)
 - Reference issues when relevant (e.g., `Closes #123`)

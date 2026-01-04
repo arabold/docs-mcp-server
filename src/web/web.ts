@@ -12,6 +12,7 @@ import { ListLibrariesTool } from "../tools/ListLibrariesTool";
 import { RefreshVersionTool } from "../tools/RefreshVersionTool";
 import { RemoveTool } from "../tools/RemoveTool";
 import { ScrapeTool } from "../tools/ScrapeTool";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import { registerIndexRoute } from "./routes/index";
@@ -34,6 +35,7 @@ export async function startWebServer(
   port: number,
   docService: DocumentManagementService,
   pipelineManager: PipelineManager,
+  config: AppConfig,
 ): Promise<FastifyInstance> {
   const server = Fastify({
     logger: false, // Use our own logger instead
@@ -45,7 +47,7 @@ export async function startWebServer(
   // Instantiate tools using provided services
   const listLibrariesTool = new ListLibrariesTool(docService);
   const listJobsTool = new ListJobsTool(pipelineManager);
-  const scrapeTool = new ScrapeTool(pipelineManager);
+  const scrapeTool = new ScrapeTool(pipelineManager, config.scraper);
   const removeTool = new RemoveTool(docService, pipelineManager);
   const searchTool = new SearchTool(docService);
   const cancelJobTool = new CancelJobTool(pipelineManager);
@@ -63,7 +65,7 @@ export async function startWebServer(
   // Register routes
   registerIndexRoute(server); // Register the root route first
   registerJobListRoutes(server, listJobsTool);
-  registerNewJobRoutes(server, scrapeTool);
+  registerNewJobRoutes(server, scrapeTool, config.scraper);
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
   registerLibrariesRoutes(server, listLibrariesTool, removeTool, refreshVersionTool);

@@ -2,230 +2,191 @@
  * Default command - Starts unified server when no subcommand is specified.
  */
 
-import type { Command } from "commander";
-import { Option } from "commander";
+import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
 import { createLocalDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
-import { DEFAULT_HOST, DEFAULT_HTTP_PORT } from "../../utils/config";
+import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
-import { registerGlobalServices } from "../main";
+import { registerGlobalServices } from "../services";
 import {
+  type CliContext,
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
   parseAuthConfig,
-  resolveEmbeddingContext,
   resolveProtocol,
   validateAuthConfig,
-  validateHost,
-  validatePort,
   warnHttpUsage,
 } from "../utils";
 
-export function createDefaultAction(program: Command): Command {
-  return (
-    program
-      .addOption(
-        new Option("--protocol <protocol>", "Protocol for MCP server")
-          .env("DOCS_MCP_PROTOCOL")
-          .default("auto")
-          .choices(["auto", "stdio", "http"]),
-      )
-      .addOption(
-        new Option("--port <number>", "Port for the server")
-          .env("DOCS_MCP_PORT")
-          .env("PORT")
-          .default(DEFAULT_HTTP_PORT.toString())
-          .argParser((v: string) => {
-            const n = Number(v);
-            if (!Number.isInteger(n) || n < 1 || n > 65535) {
-              throw new Error("Port must be an integer between 1 and 65535");
-            }
-            return String(n);
-          }),
-      )
-      .addOption(
-        new Option("--host <host>", "Host to bind the server to")
-          .env("DOCS_MCP_HOST")
-          .env("HOST")
-          .default(DEFAULT_HOST)
-          .argParser(validateHost),
-      )
-      .addOption(
-        new Option(
-          "--embedding-model <model>",
-          "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
-        ).env("DOCS_MCP_EMBEDDING_MODEL"),
-      )
-      .option("--resume", "Resume interrupted jobs on startup", false)
-      .option("--no-resume", "Do not resume jobs on startup")
-      .option(
-        "--read-only",
-        "Run in read-only mode (only expose read tools, disable write/job tools)",
-        false,
-      )
-      // Auth options
-      .addOption(
-        new Option(
-          "--auth-enabled",
-          "Enable OAuth2/OIDC authentication for MCP endpoints",
-        )
-          .env("DOCS_MCP_AUTH_ENABLED")
-          .argParser((value) => {
-            if (value === undefined) {
-              return (
-                process.env.DOCS_MCP_AUTH_ENABLED === "true" ||
-                process.env.DOCS_MCP_AUTH_ENABLED === "1"
-              );
-            }
-            return value;
+export function createDefaultAction(cli: Argv) {
+  cli.command(
+    ["$0", "server"],
+    "Starts the Docs MCP server (Unified Mode)",
+    (yargs) => {
+      return (
+        yargs
+          .option("protocol", {
+            type: "string",
+            description: "Protocol for MCP server",
+            choices: ["auto", "stdio", "http"],
+            default: "auto",
           })
-          .default(false),
-      )
-      .addOption(
-        new Option(
-          "--auth-issuer-url <url>",
-          "Issuer/discovery URL for OAuth2/OIDC provider",
-        ).env("DOCS_MCP_AUTH_ISSUER_URL"),
-      )
-      .addOption(
-        new Option(
-          "--auth-audience <id>",
-          "JWT audience claim (identifies this protected resource)",
-        ).env("DOCS_MCP_AUTH_AUDIENCE"),
-      )
-      .action(
-        async (
-          options: {
-            protocol: string;
-            port: string;
-            host: string;
-            embeddingModel?: string;
-            resume: boolean;
-            readOnly: boolean;
-            authEnabled?: boolean;
-            authIssuerUrl?: string;
-            authAudience?: string;
+          .option("port", {
+            type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
+            description: "Port for the server",
+          })
+          .option("host", {
+            type: "string",
+            description: "Host to bind the server to",
+          })
+          .option("embedding-model", {
+            type: "string",
+            description:
+              "Embedding model configuration (e.g., 'openai:text-embedding-3-small')",
+            alias: "embeddingModel",
+          })
+          .option("resume", {
+            type: "boolean",
+            description: "Resume interrupted jobs on startup",
+            default: false,
+          })
+          .option("read-only", {
+            type: "boolean",
+            description:
+              "Run in read-only mode (only expose read tools, disable write/job tools)",
+            default: false,
+            alias: "readOnly",
+          })
+          // Auth options
+          .option("auth-enabled", {
+            type: "boolean",
+            description: "Enable OAuth2/OIDC authentication for MCP endpoints",
+            default: false,
+            alias: "authEnabled",
+          })
+          .option("auth-issuer-url", {
+            type: "string",
+            description: "Issuer/discovery URL for OAuth2/OIDC provider",
+            alias: "authIssuerUrl",
+          })
+          .option("auth-audience", {
+            type: "string",
+            description: "JWT audience claim (identifies this protected resource)",
+            alias: "authAudience",
+          })
+      );
+    },
+    async (argv) => {
+      await telemetry.track(TelemetryEvent.CLI_COMMAND, {
+        command: "default",
+        protocol: argv.protocol,
+        port: argv.port,
+        host: argv.host,
+        resume: argv.resume,
+        readOnly: argv.readOnly,
+        authEnabled: !!argv.authEnabled,
+      });
+
+      const resolvedProtocol = resolveProtocol(argv.protocol as string);
+      if (resolvedProtocol === "stdio") {
+        setLogLevel(LogLevel.ERROR);
+      }
+
+      logger.debug("No subcommand specified, starting unified server by default...");
+
+      // Validate inputs if provided, otherwise validation happens after config load?
+      // Old logic validated options.port etc. but yargs parsing might be loose?
+      // Since we don't have defaults in Yargs, argv.port might be undefined.
+      // logic below uses loadConfig which fills defaults.
+      // So validation should happen AFTER loadConfig on the RESULTING config?
+      // OR we validate argv if present?
+      // The old logic validated valid integers.
+      // We will rely on Zod schema validation inside loadConfig.
+
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string,
+      });
+
+      // Propagate resolved store path? loadConfig logic handled it?
+      // loadConfig takes argv, so it mapped `storePath` to `app.storePath`.
+      // But `argv.storePath` was resolved by middleware in index.ts?
+      // Yes. So appConfig has resolved path.
+
+      // Parse and validate auth config
+      const authConfig = parseAuthConfig({
+        authEnabled: appConfig.auth.enabled,
+        authIssuerUrl: appConfig.auth.issuerUrl,
+        authAudience: appConfig.auth.audience,
+      });
+
+      if (authConfig) {
+        validateAuthConfig(authConfig);
+        warnHttpUsage(authConfig, appConfig.server.ports.default);
+      }
+
+      ensurePlaywrightBrowsersInstalled();
+
+      const eventBus = getEventBus(argv as CliContext);
+
+      const docService = await createLocalDocumentManagement(eventBus, appConfig);
+      const pipelineOptions: PipelineOptions = {
+        recoverJobs: (argv.resume as boolean) || false,
+        appConfig: appConfig,
+      };
+      const pipeline = await PipelineFactory.createPipeline(
+        docService,
+        eventBus,
+        pipelineOptions,
+      );
+
+      if (resolvedProtocol === "stdio") {
+        logger.debug(`Auto-detected stdio protocol (no TTY)`);
+        await pipeline.start();
+        const mcpTools = await initializeTools(docService, pipeline, appConfig);
+        const mcpServer = await startStdioServer(mcpTools, appConfig);
+
+        registerGlobalServices({
+          mcpStdioServer: mcpServer,
+          docService,
+          pipeline,
+        });
+
+        await new Promise(() => {});
+      } else {
+        logger.debug(`Auto-detected http protocol (TTY available)`);
+        const config = createAppServerConfig({
+          enableWebInterface: true,
+          enableMcpServer: true,
+          enableApiServer: true,
+          enableWorker: true,
+          port: appConfig.server.ports.default,
+          startupContext: {
+            cliCommand: "default",
+            mcpProtocol: "http",
           },
-          command?: Command,
-        ) => {
-          await telemetry.track(TelemetryEvent.CLI_COMMAND, {
-            command: "default",
-            protocol: options.protocol,
-            port: options.port,
-            host: options.host,
-            resume: options.resume,
-            readOnly: options.readOnly,
-            authEnabled: !!options.authEnabled,
-          });
+        });
 
-          // Resolve protocol and validate flags
-          const resolvedProtocol = resolveProtocol(options.protocol);
-          if (resolvedProtocol === "stdio") {
-            setLogLevel(LogLevel.ERROR); // Force quiet logging in stdio mode
-          }
+        const appServer = await startAppServer(
+          docService,
+          pipeline,
+          eventBus,
+          config,
+          appConfig,
+        );
 
-          logger.debug("No subcommand specified, starting unified server by default...");
-          const port = validatePort(options.port);
-          const host = validateHost(options.host);
+        registerGlobalServices({
+          appServer,
+          docService,
+        });
 
-          // Parse and validate auth configuration
-          const authConfig = parseAuthConfig({
-            authEnabled: options.authEnabled,
-            authIssuerUrl: options.authIssuerUrl,
-            authAudience: options.authAudience,
-          });
-
-          if (authConfig) {
-            validateAuthConfig(authConfig);
-            warnHttpUsage(authConfig, port);
-          }
-
-          // Get global options from the command itself (default action runs on root command)
-          const globalOptions = program.opts();
-
-          // Ensure browsers are installed
-          ensurePlaywrightBrowsersInstalled();
-
-          // Resolve embedding configuration for local execution (default action needs embeddings)
-          const embeddingConfig = resolveEmbeddingContext(options.embeddingModel);
-
-          // Get the global EventBusService
-          const eventBus = getEventBus(command);
-
-          const docService = await createLocalDocumentManagement(
-            globalOptions.storePath,
-            eventBus,
-            embeddingConfig,
-          );
-          const pipelineOptions: PipelineOptions = {
-            recoverJobs: options.resume || false, // Use --resume flag for job recovery
-            concurrency: 3,
-          };
-          const pipeline = await PipelineFactory.createPipeline(
-            docService,
-            eventBus,
-            pipelineOptions,
-          );
-
-          if (resolvedProtocol === "stdio") {
-            // Direct stdio mode - bypass AppServer entirely
-            logger.debug(`Auto-detected stdio protocol (no TTY)`);
-
-            await pipeline.start(); // Start pipeline for stdio mode
-            const mcpTools = await initializeTools(docService, pipeline);
-            const mcpServer = await startStdioServer(mcpTools, options.readOnly);
-
-            // Register for graceful shutdown (stdio mode)
-            registerGlobalServices({
-              mcpStdioServer: mcpServer,
-              docService,
-              pipeline,
-            });
-
-            await new Promise(() => {}); // Keep running forever
-          } else {
-            // HTTP mode - use AppServer
-            logger.debug(`Auto-detected http protocol (TTY available)`);
-
-            // Configure services based on resolved protocol
-            const config = createAppServerConfig({
-              enableWebInterface: true, // Enable web interface in http mode
-              enableMcpServer: true, // Always enable MCP server
-              enableApiServer: true, // Enable API (tRPC) in http mode
-              enableWorker: true, // Always enable in-process worker for unified server
-              port,
-              host,
-              readOnly: options.readOnly,
-              auth: authConfig,
-              startupContext: {
-                cliCommand: "default",
-                mcpProtocol: "http",
-              },
-            });
-
-            const appServer = await startAppServer(
-              docService,
-              pipeline,
-              eventBus,
-              config,
-            );
-
-            // Register for graceful shutdown (http mode)
-            // Note: pipeline is managed by AppServer, so don't register it globally
-            registerGlobalServices({
-              appServer,
-              docService,
-              // pipeline is owned by AppServer - don't register globally to avoid double shutdown
-            });
-
-            await new Promise(() => {}); // Keep running forever
-          }
-        },
-      )
+        await new Promise(() => {}); // Keep running
+      }
+    },
   );
 }

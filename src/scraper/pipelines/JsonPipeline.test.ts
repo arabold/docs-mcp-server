@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { JsonPipeline } from "./JsonPipeline";
 
 describe("JsonPipeline", () => {
-  const pipeline = new JsonPipeline();
+  const config = loadConfig();
+  const pipeline = new JsonPipeline(config);
   const baseOptions = {
     url: "test.json",
     library: "test-lib",
@@ -16,22 +18,22 @@ describe("JsonPipeline", () => {
 
   describe("canProcess", () => {
     it("should accept JSON MIME types", () => {
-      const pipeline = new JsonPipeline();
+      const pipeline = new JsonPipeline(config);
       expect(pipeline.canProcess("application/json")).toBe(true);
     });
 
     it("should accept text/json MIME type", () => {
-      const pipeline = new JsonPipeline();
+      const pipeline = new JsonPipeline(config);
       expect(pipeline.canProcess("text/json")).toBe(true);
     });
 
     it("should reject non-JSON MIME types", () => {
-      const pipeline = new JsonPipeline();
+      const pipeline = new JsonPipeline(config);
       expect(pipeline.canProcess("text/html")).toBe(false);
     });
 
     it("should reject content without MIME type", () => {
-      const pipeline = new JsonPipeline();
+      const pipeline = new JsonPipeline(config);
       expect(pipeline.canProcess("")).toBe(false);
     });
   });

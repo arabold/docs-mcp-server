@@ -1,11 +1,10 @@
 import type { AutoDetectFetcher, RawContent } from "../scraper/fetcher";
-import { HtmlPipeline } from "../scraper/pipelines/HtmlPipeline";
-import { MarkdownPipeline } from "../scraper/pipelines/MarkdownPipeline";
-import { TextPipeline } from "../scraper/pipelines/TextPipeline";
+import { PipelineFactory } from "../scraper/pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../scraper/pipelines/types";
 import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
 import { resolveCharset } from "../scraper/utils/charset";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { ToolError, ValidationError } from "./errors";
 
@@ -57,13 +56,10 @@ export class FetchUrlTool {
    */
   private readonly pipelines: ContentPipeline[];
 
-  constructor(fetcher: AutoDetectFetcher) {
+  constructor(fetcher: AutoDetectFetcher, config: AppConfig) {
     this.fetcher = fetcher;
-    const htmlPipeline = new HtmlPipeline();
-    const markdownPipeline = new MarkdownPipeline();
-    const textPipeline = new TextPipeline();
-    // Order matters: more specific pipelines first, fallback (text) pipeline last
-    this.pipelines = [htmlPipeline, markdownPipeline, textPipeline];
+    // Use the central factory to ensure consistent pipeline configuration across the system
+    this.pipelines = PipelineFactory.createStandardPipelines(config);
   }
 
   /**

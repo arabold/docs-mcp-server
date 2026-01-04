@@ -1,3 +1,10 @@
+/**
+ * Fetcher that routes URLs to HTTP, browser, or file implementations and
+ * retries with a browser when an HTTP challenge is detected. Requires the
+ * resolved scraper configuration to align with entrypoint-provided settings.
+ */
+
+import type { AppConfig } from "../../utils/config";
 import { ChallengeError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { BrowserFetcher } from "./BrowserFetcher";
@@ -13,9 +20,14 @@ import type { ContentFetcher, FetchOptions, RawContent } from "./types";
  * and implement fallback logic themselves.
  */
 export class AutoDetectFetcher implements ContentFetcher {
-  private readonly httpFetcher = new HttpFetcher();
-  private readonly browserFetcher = new BrowserFetcher();
+  private readonly httpFetcher: HttpFetcher;
+  private readonly browserFetcher: BrowserFetcher;
   private readonly fileFetcher = new FileFetcher();
+
+  constructor(scraperConfig: AppConfig["scraper"]) {
+    this.httpFetcher = new HttpFetcher(scraperConfig);
+    this.browserFetcher = new BrowserFetcher(scraperConfig);
+  }
 
   /**
    * Check if this fetcher can handle the given source.

@@ -1,12 +1,15 @@
+import type { AppConfig } from "../utils/config";
 import { createContentAssemblyStrategy } from "./assembly/ContentAssemblyStrategyFactory";
 import type { DocumentStore } from "./DocumentStore";
 import type { DbChunkRank, DbPageChunk, StoreSearchResult } from "./types";
 
 export class DocumentRetrieverService {
   private documentStore: DocumentStore;
+  private config: AppConfig;
 
-  constructor(documentStore: DocumentStore) {
+  constructor(documentStore: DocumentStore, config: AppConfig) {
     this.documentStore = documentStore;
+    this.config = config;
   }
 
   /**
@@ -94,7 +97,7 @@ export class DocumentRetrieverService {
     const maxScore = Math.max(...initialChunks.map((chunk) => chunk.score));
 
     // Create appropriate assembly strategy based on content type
-    const strategy = createContentAssemblyStrategy(mimeType);
+    const strategy = createContentAssemblyStrategy(mimeType, this.config);
 
     // Use strategy to select and assemble chunks
     const selectedChunks = await strategy.selectChunks(

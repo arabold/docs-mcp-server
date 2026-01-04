@@ -1,20 +1,24 @@
 import { describe, expect, it } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher";
 import { ScrapeMode } from "../types";
-import { type PipelineConfiguration, PipelineFactory } from "./PipelineFactory";
+import { PipelineFactory } from "./PipelineFactory";
 
 describe("PipelineFactory Integration", () => {
+  const appConfig = loadConfig();
+
   describe("configuration propagation", () => {
     it("should propagate custom chunk sizes through process method", async () => {
-      // Create pipelines with custom configuration
-      const config: PipelineConfiguration = {
-        chunkSizes: {
-          preferred: 100, // Very small for testing
-          max: 200,
+      const tinyConfig = {
+        ...appConfig,
+        splitter: {
+          ...appConfig.splitter,
+          preferredChunkSize: 100,
+          maxChunkSize: 200,
         },
       };
 
-      const pipelines = PipelineFactory.createStandardPipelines(config);
+      const pipelines = PipelineFactory.createStandardPipelines(tinyConfig);
 
       // Create content that would definitely exceed the custom chunk size
       const longContent =
@@ -53,7 +57,7 @@ describe("PipelineFactory Integration", () => {
     });
 
     it("should use default chunk sizes when no configuration provided", async () => {
-      const pipelines = PipelineFactory.createStandardPipelines();
+      const pipelines = PipelineFactory.createStandardPipelines(appConfig);
 
       // Create moderate content that would fit in default chunks
       const moderateContent = "This is a test sentence. ".repeat(10); // ~250 characters
@@ -85,14 +89,16 @@ describe("PipelineFactory Integration", () => {
     });
 
     it("should handle different pipeline types with custom configuration", async () => {
-      const config: PipelineConfiguration = {
-        chunkSizes: {
-          preferred: 300,
-          max: 600,
+      const mediumConfig = {
+        ...appConfig,
+        splitter: {
+          ...appConfig.splitter,
+          preferredChunkSize: 300,
+          maxChunkSize: 600,
         },
       };
 
-      const pipelines = PipelineFactory.createStandardPipelines(config);
+      const pipelines = PipelineFactory.createStandardPipelines(mediumConfig);
 
       // Test each pipeline
       const testContent = "This is a test content that might be split. ".repeat(10); // ~450 characters
@@ -140,9 +146,16 @@ describe("PipelineFactory Integration", () => {
     // Helper function to find and process content with the first matching pipeline
     async function processContent(content: string, mimeType: string) {
       // Use small chunk sizes to force splitting for test content
-      const pipelines = PipelineFactory.createStandardPipelines({
-        chunkSizes: { preferred: 80, max: 150 },
-      });
+      const smallConfig = {
+        ...appConfig,
+        splitter: {
+          ...appConfig.splitter,
+          preferredChunkSize: 80,
+          maxChunkSize: 150,
+        },
+      };
+
+      const pipelines = PipelineFactory.createStandardPipelines(smallConfig);
 
       const rawContent: RawContent = {
         source: "test",
@@ -372,14 +385,16 @@ Final paragraph here.
     };
 
     it("should respect semantic boundaries even with small chunk sizes", async () => {
-      const config: PipelineConfiguration = {
-        chunkSizes: {
-          preferred: 50, // Very small
-          max: 100,
+      const smallConfig = {
+        ...appConfig,
+        splitter: {
+          ...appConfig.splitter,
+          preferredChunkSize: 50,
+          maxChunkSize: 100,
         },
       };
 
-      const pipelines = PipelineFactory.createStandardPipelines(config);
+      const pipelines = PipelineFactory.createStandardPipelines(smallConfig);
 
       const markdownContent = `
 # Main Title
@@ -421,14 +436,16 @@ More content for section two that also exceeds the small limit.
     });
 
     it("should preserve logical units in code even with large chunk sizes", async () => {
-      const config: PipelineConfiguration = {
-        chunkSizes: {
-          preferred: 2000, // Large
-          max: 4000,
+      const largeConfig = {
+        ...appConfig,
+        splitter: {
+          ...appConfig.splitter,
+          preferredChunkSize: 2000,
+          maxChunkSize: 4000,
         },
       };
 
-      const pipelines = PipelineFactory.createStandardPipelines(config);
+      const pipelines = PipelineFactory.createStandardPipelines(largeConfig);
 
       const codeContent = `
 function small() { return 1; }
@@ -468,14 +485,16 @@ class MyClass {
     });
 
     it("should handle size constraints appropriately across content types", async () => {
-      const config: PipelineConfiguration = {
-        chunkSizes: {
-          preferred: 100,
-          max: 200,
+      const constrainedConfig = {
+        ...appConfig,
+        splitter: {
+          ...appConfig.splitter,
+          preferredChunkSize: 100,
+          maxChunkSize: 200,
         },
       };
 
-      const pipelines = PipelineFactory.createStandardPipelines(config);
+      const pipelines = PipelineFactory.createStandardPipelines(constrainedConfig);
 
       const testCases = [
         { content: "Short text content.", mimeType: "text/plain" },
@@ -524,7 +543,7 @@ class MyClass {
     };
 
     it("should reject unknown MIME types - no pipeline should process them", async () => {
-      const pipelines = PipelineFactory.createStandardPipelines();
+      const pipelines = PipelineFactory.createStandardPipelines(appConfig);
 
       const unknownContent = {
         source: "test.unknown",
@@ -546,7 +565,7 @@ class MyClass {
     });
 
     it("should handle invalid JSON as text content", async () => {
-      const pipelines = PipelineFactory.createStandardPipelines();
+      const pipelines = PipelineFactory.createStandardPipelines(appConfig);
 
       const invalidJsonContent: RawContent = {
         source: "test.json",
@@ -569,7 +588,7 @@ class MyClass {
     });
 
     it("should maintain content integrity across different processing paths", async () => {
-      const pipelines = PipelineFactory.createStandardPipelines();
+      const pipelines = PipelineFactory.createStandardPipelines(appConfig);
 
       const testCases = [
         { content: "<p>HTML content</p>", mimeType: "text/html" },

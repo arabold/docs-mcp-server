@@ -1,3 +1,4 @@
+import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { HttpFetcher } from "../fetcher";
 import { FetchStatus } from "../fetcher/types";
@@ -26,11 +27,12 @@ interface GitHubWikiInfo {
  * This processor is stateless and contains the core logic from GitHubWikiScraperStrategy.
  */
 export class GitHubWikiProcessor {
-  private readonly httpFetcher = new HttpFetcher();
+  private readonly httpFetcher: HttpFetcher;
   private readonly pipelines: ContentPipeline[];
 
-  constructor() {
-    this.pipelines = PipelineFactory.createStandardPipelines();
+  constructor(config: AppConfig) {
+    this.httpFetcher = new HttpFetcher(config.scraper);
+    this.pipelines = PipelineFactory.createStandardPipelines(config);
   }
 
   /**

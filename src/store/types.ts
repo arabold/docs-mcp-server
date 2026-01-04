@@ -1,8 +1,5 @@
 import type { ScrapeMode } from "../scraper/types";
 
-/** Default vector dimension used across the application */
-export const VECTOR_DIMENSION = 1536;
-
 /**
  * Database page record type matching the pages table schema
  */

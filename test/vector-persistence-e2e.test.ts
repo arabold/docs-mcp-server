@@ -58,7 +58,7 @@ describe("Vector persistence", () => {
     });
     await pipeline.start();
 
-    scrapeTool = new ScrapeTool(pipeline);
+    scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
   }, 30000);
 
   afterAll(async () => {

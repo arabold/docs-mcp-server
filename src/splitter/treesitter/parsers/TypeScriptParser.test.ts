@@ -23,7 +23,7 @@ import { describe, expect, it } from "vitest";
 import { TypeScriptParser } from "./TypeScriptParser";
 import { StructuralNodeType } from "./types";
 
-const parser = new TypeScriptParser();
+const parser = new TypeScriptParser(30000);
 
 /**
  * Helper: extract boundaries and map by name for easier assertions.

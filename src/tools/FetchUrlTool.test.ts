@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoDetectFetcher } from "../scraper/fetcher";
 import { ScrapeMode } from "../scraper/types";
+import { loadConfig } from "../utils/config";
 import { ScraperError } from "../utils/errors";
 import { ToolError, ValidationError } from "./errors";
 import { FetchUrlTool, type FetchUrlToolOptions } from "./FetchUrlTool";
@@ -8,6 +9,7 @@ import { FetchUrlTool, type FetchUrlToolOptions } from "./FetchUrlTool";
 // Mock dependencies
 
 describe("FetchUrlTool", () => {
+  const appConfig = loadConfig();
   let mockAutoDetectFetcher: Partial<AutoDetectFetcher>;
   let fetchUrlTool: FetchUrlTool;
 
@@ -22,7 +24,10 @@ describe("FetchUrlTool", () => {
     };
 
     // Create instance of the tool with mock dependencies
-    fetchUrlTool = new FetchUrlTool(mockAutoDetectFetcher as AutoDetectFetcher);
+    fetchUrlTool = new FetchUrlTool(
+      mockAutoDetectFetcher as AutoDetectFetcher,
+      appConfig,
+    );
   });
 
   it("should convert HTML to markdown", async () => {

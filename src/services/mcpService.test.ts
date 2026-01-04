@@ -6,6 +6,7 @@ import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
+import { type AppConfig, loadConfig } from "../utils/config";
 import { cleanupMcpService, registerMcpService } from "./mcpService";
 
 // Mock the dependencies
@@ -49,6 +50,7 @@ describe("MCP Service", () => {
   let server: ReturnType<typeof Fastify>;
   let mockDocService: IDocumentManagement;
   let mockPipeline: IPipeline;
+  let appConfig: AppConfig;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -56,6 +58,7 @@ describe("MCP Service", () => {
 
     mockDocService = {} as IDocumentManagement;
     mockPipeline = {} as IPipeline;
+    appConfig = loadConfig();
   });
 
   afterEach(async () => {
@@ -74,7 +77,7 @@ describe("MCP Service", () => {
         server,
         mockDocService,
         mockPipeline,
-        false,
+        appConfig,
       );
 
       // Verify the heartbeat intervals map is attached
@@ -93,7 +96,7 @@ describe("MCP Service", () => {
         server,
         mockDocService,
         mockPipeline,
-        false,
+        appConfig,
       );
 
       // Verify the transports map is attached
@@ -115,7 +118,7 @@ describe("MCP Service", () => {
         server,
         mockDocService,
         mockPipeline,
-        false,
+        appConfig,
       );
 
       // Check that routes are registered (printRoutes uses a tree format)
@@ -130,7 +133,7 @@ describe("MCP Service", () => {
         server,
         mockDocService,
         mockPipeline,
-        false,
+        appConfig,
       );
 
       // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.
@@ -150,7 +153,7 @@ describe("MCP Service", () => {
         server,
         mockDocService,
         mockPipeline,
-        false,
+        appConfig,
       );
 
       // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.

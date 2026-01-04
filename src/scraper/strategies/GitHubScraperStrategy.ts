@@ -1,5 +1,6 @@
 import mime from "mime";
 import type { ProgressCallback } from "../../types";
+import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { HttpFetcher } from "../fetcher";
 import { FetchStatus } from "../fetcher/types";
@@ -39,9 +40,16 @@ import { GitHubWikiProcessor } from "./GitHubWikiProcessor";
  * - Graceful handling when wikis don't exist or are inaccessible
  */
 export class GitHubScraperStrategy extends BaseScraperStrategy {
-  private readonly httpFetcher = new HttpFetcher();
-  private readonly wikiProcessor = new GitHubWikiProcessor();
-  private readonly repoProcessor = new GitHubRepoProcessor();
+  private readonly httpFetcher: HttpFetcher;
+  private readonly wikiProcessor: GitHubWikiProcessor;
+  private readonly repoProcessor: GitHubRepoProcessor;
+
+  constructor(config: AppConfig) {
+    super(config);
+    this.httpFetcher = new HttpFetcher(config.scraper);
+    this.wikiProcessor = new GitHubWikiProcessor(config);
+    this.repoProcessor = new GitHubRepoProcessor(config);
+  }
 
   canHandle(url: string): boolean {
     // Handle legacy github-file:// protocol URLs (no longer supported)

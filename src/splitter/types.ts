@@ -16,6 +16,20 @@ export interface Chunk {
 }
 
 /**
+ * Configuration for document splitting
+ */
+export interface SplitterConfig {
+  minChunkSize: number;
+  preferredChunkSize: number;
+  maxChunkSize: number;
+  json?: {
+    maxNestingDepth: number;
+    maxChunks: number;
+  };
+  treeSitterSizeLimit?: number;
+}
+
+/**
  * Interface for a splitter that processes markdown content into chunks
  */
 export interface DocumentSplitter {

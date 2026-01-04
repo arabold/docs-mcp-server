@@ -1,5 +1,6 @@
 // Copyright (c) 2025
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
 import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
@@ -10,6 +11,7 @@ import { ScrapeMode, type ScraperOptions } from "../types";
 import { HtmlPipeline } from "./HtmlPipeline";
 
 describe("HtmlPipeline", () => {
+  const appConfig = loadConfig();
   beforeEach(() => {
     // Set up spies without mock implementations to use real middleware
     vi.spyOn(HtmlCheerioParserMiddleware.prototype, "process");
@@ -20,19 +22,19 @@ describe("HtmlPipeline", () => {
   });
 
   it("canProcess returns true for text/html", () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     expect(pipeline.canProcess("text/html")).toBe(true);
     expect(pipeline.canProcess("application/xhtml+xml")).toBe(true);
   });
 
   it("canProcess returns false for non-html", () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     expect(pipeline.canProcess("text/markdown")).toBe(false);
     expect(pipeline.canProcess("")).toBe(false);
   });
 
   it("process decodes Buffer content with UTF-8 charset", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const raw: RawContent = {
       content: Buffer.from("<html><body>abc</body></html>", "utf-8"),
       mimeType: "text/html",
@@ -58,7 +60,7 @@ describe("HtmlPipeline", () => {
       },
     );
 
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     // Create a buffer with ISO-8859-1 encoding (Latin-1)
     // This contains characters that would be encoded differently in UTF-8
     const raw: RawContent = {
@@ -79,7 +81,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("process defaults to UTF-8 when charset is not specified", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const raw: RawContent = {
       content: Buffer.from("<html><body>abc</body></html>", "utf-8"),
       mimeType: "text/html",
@@ -94,7 +96,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("process uses string content directly", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const raw: RawContent = {
       content: "<html><body>abc</body></html>",
       mimeType: "text/html",
@@ -109,7 +111,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("process decodes Buffer content with UTF-16LE BOM", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     // UTF-16LE BOM: 0xFF 0xFE, then 'abc' as UTF-16LE
     const buf = Buffer.from([0xff, 0xfe, 0x61, 0x00, 0x62, 0x00, 0x63, 0x00]);
     const raw: RawContent = {
@@ -124,7 +126,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("process decodes Buffer content with UTF-8 BOM", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     // UTF-8 BOM: 0xEF 0xBB 0xBF, then 'abc'
     const buf = Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x62, 0x63]);
     const raw: RawContent = {
@@ -139,7 +141,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("process decodes Buffer content with Japanese UTF-8 text", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const japanese = "<html><body>こんにちは世界</body></html>"; // "Hello, world" in Japanese
     const raw: RawContent = {
       content: Buffer.from(japanese, "utf-8"),
@@ -153,7 +155,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("process decodes Buffer content with Russian UTF-8 text", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const russian = "<html><body>Привет, мир</body></html>"; // "Hello, world" in Russian
     const raw: RawContent = {
       content: Buffer.from(russian, "utf-8"),
@@ -167,7 +169,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("process calls middleware in order and aggregates results", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const html = `
       <html>
         <head>
@@ -210,7 +212,7 @@ describe("HtmlPipeline", () => {
       },
     );
 
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const raw: RawContent = {
       content: "<html><body>abc</body></html>",
       mimeType: "text/html",
@@ -226,7 +228,7 @@ describe("HtmlPipeline", () => {
     // Reset call counts for all spies
     vi.clearAllMocks();
 
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
 
     // Sample HTML with elements for each middleware to process
     const html = `
@@ -284,7 +286,7 @@ describe("HtmlPipeline", () => {
   });
 
   it("should convert contentType from text/html to text/markdown", async () => {
-    const pipeline = new HtmlPipeline();
+    const pipeline = new HtmlPipeline(appConfig);
     const html = `
       <html>
         <head><title>Mimetype Test</title></head>
@@ -321,7 +323,7 @@ describe("HtmlPipeline", () => {
 
   describe("cleanup", () => {
     it("should call closeBrowser on Playwright middleware when close() is called", async () => {
-      const pipeline = new HtmlPipeline();
+      const pipeline = new HtmlPipeline(appConfig);
 
       // Spy on the closeBrowser method
       const closeBrowserSpy = vi.spyOn(
@@ -335,7 +337,7 @@ describe("HtmlPipeline", () => {
     });
 
     it("should be idempotent - multiple close() calls should not error", async () => {
-      const pipeline = new HtmlPipeline();
+      const pipeline = new HtmlPipeline(appConfig);
 
       // Multiple calls should not throw
       await expect(pipeline.close()).resolves.not.toThrow();
@@ -344,7 +346,7 @@ describe("HtmlPipeline", () => {
     });
 
     it("should call close() even if closeBrowser throws an error", async () => {
-      const pipeline = new HtmlPipeline();
+      const pipeline = new HtmlPipeline(appConfig);
 
       // Mock closeBrowser to throw an error
       vi.spyOn((pipeline as any).playwrightMiddleware, "closeBrowser").mockRejectedValue(

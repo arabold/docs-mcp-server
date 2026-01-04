@@ -2,60 +2,76 @@
  * Find version command - Finds the best matching version for a library.
  */
 
-import type { Command } from "commander";
+import type { Argv } from "yargs";
 import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
-import { getEventBus, getGlobalOptions } from "../utils";
+import { loadConfig } from "../../utils/config";
+import { type CliContext, getEventBus } from "../utils";
 
-export async function findVersionAction(
-  library: string,
-  options: { version?: string; serverUrl?: string },
-  command?: Command,
-) {
-  await telemetry.track(TelemetryEvent.CLI_COMMAND, {
-    command: "find-version",
-    library,
-    version: options.version,
-    useServerUrl: !!options.serverUrl,
-  });
+export function createFindVersionCommand(cli: Argv) {
+  cli.command(
+    "find-version <library>",
+    "Resolve and display the best matching documentation version for a library",
+    (yargs) => {
+      return yargs
+        .version(false)
+        .positional("library", {
+          type: "string",
+          description: "Library name",
+          demandOption: true,
+        })
+        .option("version", {
+          type: "string",
+          description: "Pattern to match (optional, supports ranges)",
+          alias: "v",
+        })
+        .option("server-url", {
+          type: "string",
+          description:
+            "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
+          alias: "serverUrl",
+        });
+    },
+    async (argv) => {
+      await telemetry.track(TelemetryEvent.CLI_COMMAND, {
+        command: "find-version",
+        library: argv.library,
+        version: argv.version,
+        useServerUrl: !!argv.serverUrl,
+      });
 
-  const serverUrl = options.serverUrl;
-  const globalOptions = getGlobalOptions(command);
+      const library = argv.library as string;
+      const version = argv.version as string | undefined;
+      const serverUrl = argv.serverUrl as string | undefined;
 
-  const eventBus = getEventBus(command);
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string, // resolved globally
+      });
 
-  // Find version command doesn't need embeddings - explicitly disable for local execution
-  const docService = await createDocumentManagement({
-    serverUrl,
-    embeddingConfig: serverUrl ? undefined : null,
-    storePath: globalOptions.storePath,
-    eventBus,
-  });
-  try {
-    const findVersionTool = new FindVersionTool(docService);
+      const eventBus = getEventBus(argv as CliContext);
 
-    // Call the tool directly - tracking is now handled inside the tool
-    const versionInfo = await findVersionTool.execute({
-      library,
-      targetVersion: options.version,
-    });
+      // Find version command doesn't need embeddings - explicitly disable for local execution
+      const docService = await createDocumentManagement({
+        serverUrl,
+        eventBus,
+        appConfig: appConfig,
+      });
+      try {
+        const findVersionTool = new FindVersionTool(docService);
 
-    if (!versionInfo) throw new Error("Failed to get version information");
-    console.log(versionInfo);
-  } finally {
-    await docService.shutdown();
-  }
-}
+        // Call the tool directly - tracking is now handled inside the tool
+        const versionInfo = await findVersionTool.execute({
+          library,
+          targetVersion: version,
+        });
 
-export function createFindVersionCommand(program: Command): Command {
-  return program
-    .command("find-version <library>")
-    .description("Find the best matching version for a library")
-    .option("-v, --version <string>", "Pattern to match (optional, supports ranges)")
-    .option(
-      "--server-url <url>",
-      "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
-    )
-    .action(findVersionAction);
+        if (!versionInfo) throw new Error("Failed to get version information");
+        console.log(versionInfo);
+      } finally {
+        await docService.shutdown();
+      }
+    },
+  );
 }

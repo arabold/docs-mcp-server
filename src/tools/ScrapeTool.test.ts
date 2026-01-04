@@ -3,6 +3,7 @@ import { PipelineManager } from "../pipeline/PipelineManager";
 import type { PipelineJob } from "../pipeline/types";
 import { PipelineJobStatus } from "../pipeline/types";
 import { ScrapeMode } from "../scraper/types";
+import { defaults } from "../utils/config";
 import { ScrapeTool, type ScrapeToolOptions } from "./ScrapeTool";
 
 // Mock dependencies
@@ -13,6 +14,7 @@ describe("ScrapeTool", () => {
   let scrapeTool: ScrapeTool;
 
   const MOCK_JOB_ID = "test-job-123";
+  const mockConfig = { scraper: defaults } as any;
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -36,7 +38,10 @@ describe("ScrapeTool", () => {
     (PipelineManager as Mock).mockImplementation(() => mockManagerInstance);
 
     // Pass mockManagerInstance to constructor
-    scrapeTool = new ScrapeTool(mockManagerInstance as PipelineManager);
+    scrapeTool = new ScrapeTool(
+      mockManagerInstance as PipelineManager,
+      mockConfig.scraper,
+    );
     // mockOnProgress initialization removed
     // managerCallbacks reset removed
   });

@@ -5,17 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import { HttpResponse, http } from "msw";
-import { setupServer } from "msw/node";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProxyAuthManager } from "./ProxyAuthManager";
 import type { AuthConfig } from "./types";
 
@@ -35,12 +25,16 @@ vi.mock("jose", () => ({
   jwtVerify: vi.fn(),
 }));
 
-// Setup MSW server for this test file
-const server = setupServer();
+// Import the global server instance instead of creating a new one
+import { server } from "../../test/mock-server";
 
-beforeAll(() => server.listen({ onUnhandledRequest: "bypass" }));
-afterEach(() => server.resetHandlers());
-afterAll(() => server.close());
+// Reset handlers is already handled in setup-e2e.ts, but we want to ensure
+// clean slate for this test suite's specific needs
+beforeEach(() => {
+  // We don't need to listen() as it's already running from global setup
+  // We just reset handlers to remove any specific overrides from previous tests
+  server.resetHandlers();
+});
 
 describe("ProxyAuthManager", () => {
   let authManager: ProxyAuthManager;
@@ -92,6 +86,10 @@ describe("ProxyAuthManager", () => {
           jwks_uri: "https://auth.example.com/.well-known/jwks.json",
           userinfo_endpoint: "https://auth.example.com/oauth/userinfo",
         });
+      }),
+      // Add default userinfo handler (returns 401 by default unless overridden)
+      http.get("https://auth.example.com/oauth/userinfo", () => {
+        return new HttpResponse(null, { status: 401 });
       }),
     );
   });

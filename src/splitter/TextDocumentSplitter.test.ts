@@ -4,23 +4,30 @@
 
 import { describe, expect, it } from "vitest";
 import { TextDocumentSplitter } from "./TextDocumentSplitter";
+import type { SplitterConfig } from "./types";
+
+const mockConfig: SplitterConfig = {
+  minChunkSize: 100,
+  preferredChunkSize: 500,
+  maxChunkSize: 1000,
+};
 
 describe("TextDocumentSplitter", () => {
   describe("basic functionality", () => {
     it("should return empty array for empty content", async () => {
-      const splitter = new TextDocumentSplitter();
+      const splitter = new TextDocumentSplitter(mockConfig);
       const result = await splitter.splitText("");
       expect(result).toEqual([]);
     });
 
     it("should return empty array for whitespace-only content", async () => {
-      const splitter = new TextDocumentSplitter();
+      const splitter = new TextDocumentSplitter(mockConfig);
       const result = await splitter.splitText("   \n\t  \n  ");
       expect(result).toEqual([]);
     });
 
     it("should split simple text into chunks", async () => {
-      const splitter = new TextDocumentSplitter({ maxChunkSize: 50 });
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 50 });
       const content =
         "This is a simple text.\nIt has multiple lines.\nAnd should be split properly.";
 
@@ -46,7 +53,7 @@ describe("TextDocumentSplitter", () => {
     });
 
     it("should handle content that fits in single chunk", async () => {
-      const splitter = new TextDocumentSplitter({ maxChunkSize: 100 });
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 100 });
       const content = "Short text that fits in one chunk.";
 
       const result = await splitter.splitText(content);
@@ -66,7 +73,7 @@ describe("TextDocumentSplitter", () => {
   describe("error handling", () => {
     it("should handle MinimumChunkSizeError gracefully by forcefully splitting", async () => {
       // Create a splitter with very small chunk size
-      const splitter = new TextDocumentSplitter({ maxChunkSize: 5 });
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 5 });
       const content = "ThisIsAVeryLongWordThatCannotBeSplit";
 
       const result = await splitter.splitText(content);
@@ -92,13 +99,8 @@ describe("TextDocumentSplitter", () => {
   });
 
   describe("configuration", () => {
-    it("should use default maxChunkSize when not provided", async () => {
-      const splitter = new TextDocumentSplitter();
-      expect(splitter).toBeInstanceOf(TextDocumentSplitter);
-    });
-
     it("should use custom maxChunkSize when provided", async () => {
-      const splitter = new TextDocumentSplitter({ maxChunkSize: 20 });
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 20 });
       const content =
         "This is a longer text that should be split into multiple smaller chunks.";
 
@@ -116,7 +118,7 @@ describe("TextDocumentSplitter", () => {
 
   describe("content reconstruction", () => {
     it("should allow perfect content reconstruction", async () => {
-      const splitter = new TextDocumentSplitter({ maxChunkSize: 30 });
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 30 });
       const originalContent = "Line 1\nLine 2\n\nParagraph 2\nLast line";
 
       const result = await splitter.splitText(originalContent);
@@ -126,7 +128,7 @@ describe("TextDocumentSplitter", () => {
     });
 
     it("should preserve formatting and whitespace", async () => {
-      const splitter = new TextDocumentSplitter({ maxChunkSize: 50 });
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 50 });
       const content = "  Indented text\n\n  Another indented line  \n\tTab indented\n";
 
       const result = await splitter.splitText(content);
@@ -138,7 +140,7 @@ describe("TextDocumentSplitter", () => {
 
   describe("metadata", () => {
     it("should set correct metadata for each chunk", async () => {
-      const splitter = new TextDocumentSplitter({ maxChunkSize: 20 });
+      const splitter = new TextDocumentSplitter({ ...mockConfig, maxChunkSize: 20 });
       const content = "First chunk. Second chunk. Third chunk.";
 
       const result = await splitter.splitText(content);

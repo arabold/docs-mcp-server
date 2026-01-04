@@ -1,7 +1,9 @@
 /** Unit test for scrapeAction */
 
-import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import yargs from "yargs";
+import { ScrapeTool } from "../../tools";
+import { createScrapeCommand } from "./scrape";
 
 const pipelineMock = {
   start: vi.fn(async () => {}),
@@ -40,37 +42,49 @@ vi.mock("../utils", () => ({
   })),
   parseHeaders: vi.fn(() => ({})),
   resolveEmbeddingContext: vi.fn(() => ({ provider: "mock", model: "mock-model" })),
+  CliContext: {},
+  setupLogging: vi.fn(),
 }));
+vi.mock("../../utils/config", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/config")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({
+      app: { embeddingModel: "mock-model", storePath: "/mock/store" },
+      scraper: { maxPages: 100, maxDepth: 2, maxConcurrency: 1 },
+    })),
+  };
+});
 
-import { scrapeAction } from "./scrape";
+describe("scrape command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-function cmd() {
-  return new Command();
-}
-beforeEach(() => vi.clearAllMocks());
-
-describe("scrapeAction", () => {
   it("starts pipeline and executes ScrapeTool", async () => {
-    await scrapeAction(
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse([
+      "scrape",
       "react",
       "https://react.dev",
-      {
-        maxPages: "1",
-        maxDepth: "1",
-        maxConcurrency: "1",
-        ignoreErrors: true,
-        scope: "subpages",
-        followRedirects: true,
-        scrapeMode: "auto" as any,
-        includePattern: [],
-        excludePattern: [],
-        header: [],
-        serverUrl: undefined,
-        embeddingModel: "mock-embedding-model",
-      },
-      cmd(),
-    );
-    const { ScrapeTool } = await import("../../tools");
+      "--max-pages",
+      "1",
+      "--max-depth",
+      "1",
+      "--max-concurrency",
+      "1",
+      "--ignore-errors",
+      "--scope",
+      "subpages",
+      "--follow-redirects",
+      "--scrape-mode",
+      "auto",
+      "--embedding-model",
+      "mock-embedding-model",
+    ]);
+
     expect(ScrapeTool).toHaveBeenCalledTimes(1);
     expect(pipelineMock.start).toHaveBeenCalledTimes(1);
     expect(pipelineMock.stop).toHaveBeenCalledTimes(1);

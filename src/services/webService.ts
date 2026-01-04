@@ -8,7 +8,6 @@ import type { EventBusService } from "../events/EventBusService";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { SearchTool } from "../tools";
-
 import { CancelJobTool } from "../tools/CancelJobTool";
 import { ClearCompletedJobsTool } from "../tools/ClearCompletedJobsTool";
 import { ListJobsTool } from "../tools/ListJobsTool";
@@ -16,6 +15,7 @@ import { ListLibrariesTool } from "../tools/ListLibrariesTool";
 import { RefreshVersionTool } from "../tools/RefreshVersionTool";
 import { RemoveTool } from "../tools/RemoveTool";
 import { ScrapeTool } from "../tools/ScrapeTool";
+import type { AppConfig } from "../utils/config";
 import { registerEventsRoute } from "../web/routes/events";
 import { registerIndexRoute } from "../web/routes/index";
 import { registerCancelJobRoute } from "../web/routes/jobs/cancel";
@@ -36,7 +36,8 @@ export async function registerWebService(
   docService: IDocumentManagement,
   pipeline: IPipeline,
   eventBus: EventBusService,
-  config?: { externalWorkerUrl?: string },
+  appConfig: AppConfig,
+  externalWorkerUrl?: string,
 ): Promise<void> {
   // Note: Web interface uses direct event tracking without session management
   // This approach provides meaningful analytics without the complexity of per-request sessions
@@ -45,7 +46,7 @@ export async function registerWebService(
   // Instantiate tools for web routes
   const listLibrariesTool = new ListLibrariesTool(docService);
   const listJobsTool = new ListJobsTool(pipeline);
-  const scrapeTool = new ScrapeTool(pipeline);
+  const scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
   const removeTool = new RemoveTool(docService, pipeline);
   const refreshVersionTool = new RefreshVersionTool(pipeline);
   const searchTool = new SearchTool(docService);
@@ -53,7 +54,7 @@ export async function registerWebService(
   const clearCompletedJobsTool = new ClearCompletedJobsTool(pipeline);
 
   // Register all web routes
-  registerIndexRoute(server, config);
+  registerIndexRoute(server, externalWorkerUrl);
   registerLibrariesRoutes(server, listLibrariesTool, removeTool, refreshVersionTool);
   registerLibraryDetailRoutes(
     server,
@@ -63,7 +64,7 @@ export async function registerWebService(
     docService,
   );
   registerJobListRoutes(server, listJobsTool);
-  registerNewJobRoutes(server, scrapeTool);
+  registerNewJobRoutes(server, scrapeTool, appConfig.scraper);
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
   registerEventsRoute(server, eventBus);

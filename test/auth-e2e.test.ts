@@ -16,6 +16,7 @@ import { PipelineFactory } from "../src/pipeline/PipelineFactory";
 import { createAppServerConfig } from "../src/cli/utils";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
 import { EventBusService } from "../src/events";
+import { loadConfig } from "../src/utils/config";
 
 // Load environment variables from .env file
 config();
@@ -27,6 +28,7 @@ describe("Authentication End-to-End Tests", () => {
   let serverPort: number;
   let baseUrl: string;
   let tempDir: string;
+  const appConfig = loadConfig();
 
   beforeAll(async () => {
     // Skip tests if authentication environment variables are not set
@@ -47,8 +49,19 @@ describe("Authentication End-to-End Tests", () => {
 
     // Initialize services with temporary directory
     const eventBus = new EventBusService();
-    docService = await createLocalDocumentManagement(tempDir, eventBus); // Use temp dir for test database
-    pipeline = await PipelineFactory.createPipeline(docService, eventBus);
+    appConfig.app.storePath = tempDir;
+    appConfig.app.embeddingModel = ""; // disable embeddings for auth e2e
+
+    // AppServer reads auth settings from AppConfig (source of truth)
+    appConfig.server.host = "localhost";
+    appConfig.auth.enabled = true;
+    appConfig.auth.issuerUrl = process.env.DOCS_MCP_AUTH_ISSUER_URL;
+    appConfig.auth.audience = process.env.DOCS_MCP_AUTH_AUDIENCE;
+
+    docService = await createLocalDocumentManagement(eventBus, appConfig); // Use temp dir for test database
+    pipeline = await PipelineFactory.createPipeline(docService, eventBus, {
+      appConfig: appConfig,
+    });
 
     // Configure server with authentication enabled
     const config = createAppServerConfig({
@@ -57,13 +70,6 @@ describe("Authentication End-to-End Tests", () => {
       enableApiServer: false,
       enableWorker: true, // Enable worker for MCP server
       port: serverPort,
-      host: "localhost",
-      auth: {
-        enabled: true,
-        issuerUrl: process.env.DOCS_MCP_AUTH_ISSUER_URL,
-        audience: process.env.DOCS_MCP_AUTH_AUDIENCE,
-        scopes: ["openid", "profile"],
-      },
       startupContext: {
         cliCommand: "test",
         mcpProtocol: "http",
@@ -71,7 +77,7 @@ describe("Authentication End-to-End Tests", () => {
     });
 
     // Start the server
-    appServer = await startAppServer(docService, pipeline, eventBus, config);
+    appServer = await startAppServer(docService, pipeline, eventBus, config, appConfig);
     
     // Give the server a moment to start
     await new Promise(resolve => setTimeout(resolve, 1000));

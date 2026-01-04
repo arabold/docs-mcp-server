@@ -8,8 +8,8 @@ import {
   OpenAIEmbeddings,
   type OpenAIEmbeddingsParams,
 } from "@langchain/openai";
+import type { AppConfig } from "../../utils/config";
 import { MissingCredentialsError } from "../errors";
-import { VECTOR_DIMENSION } from "../types";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 /**
@@ -117,7 +117,22 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
  * @throws {UnsupportedProviderError} If an unsupported provider is specified.
  * @throws {ModelConfigurationError} If there's an issue with the model configuration.
  */
-export function createEmbeddingModel(providerAndModel: string): Embeddings {
+export function createEmbeddingModel(
+  providerAndModel: string,
+  runtime?: {
+    requestTimeoutMs?: number;
+    vectorDimension?: number;
+    config?: AppConfig["embeddings"];
+  },
+): Embeddings {
+  const config = runtime?.config;
+  const requestTimeoutMs = runtime?.requestTimeoutMs ?? config?.requestTimeoutMs;
+  const vectorDimension = runtime?.vectorDimension ?? config?.vectorDimension;
+  if (vectorDimension === undefined) {
+    throw new ModelConfigurationError(
+      "Embedding vector dimension is required; set DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION or embeddings.vectorDimension in config.",
+    );
+  }
   // Parse provider and model name
   const [providerOrModel, ...modelNameParts] = providerAndModel.split(":");
   const modelName = modelNameParts.join(":");
@@ -132,21 +147,18 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
       if (!process.env.OPENAI_API_KEY) {
         throw new MissingCredentialsError("openai", ["OPENAI_API_KEY"]);
       }
-      const timeoutMs = 30_000;
       const config: Partial<OpenAIEmbeddingsParams> & { configuration?: ClientOptions } =
         {
           ...baseConfig,
           modelName: model,
           batchSize: 512, // OpenAI supports large batches
-          timeout: timeoutMs,
+          timeout: requestTimeoutMs,
         };
       // Add custom base URL if specified
       const baseURL = process.env.OPENAI_API_BASE;
-      if (baseURL) {
-        config.configuration = { baseURL, timeout: timeoutMs };
-      } else {
-        config.configuration = { timeout: timeoutMs };
-      }
+      config.configuration = baseURL
+        ? { baseURL, timeout: requestTimeoutMs }
+        : { timeout: requestTimeoutMs };
       return new OpenAIEmbeddings(config);
     }
 
@@ -173,7 +185,7 @@ export function createEmbeddingModel(providerAndModel: string): Embeddings {
       });
       return new FixedDimensionEmbeddings(
         baseEmbeddings,
-        VECTOR_DIMENSION,
+        vectorDimension,
         providerAndModel,
         true,
       );

@@ -117,6 +117,22 @@ export const handlers = [
       status: 404,
     });
   }),
+
+  // GitHub raw content mock for html-pipeline-nonhtml-e2e.test.ts
+  http.get(
+    "https://raw.githubusercontent.com/9001/copyparty/hovudstraum/contrib/index.html",
+    () => {
+      return new HttpResponse(
+        "<html><body><h1>copyparty</h1><p>Some html content</p></body></html>",
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "text/plain", // Intentionally text/plain as per test requirement
+          },
+        },
+      );
+    },
+  ),
 ];
 
 // Create and export the mock server

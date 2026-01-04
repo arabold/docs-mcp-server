@@ -13,6 +13,7 @@ export type { AppServerConfig } from "./AppServerConfig";
 import type { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
+import type { AppConfig } from "../utils/config";
 import { AppServer } from "./AppServer";
 import type { AppServerConfig } from "./AppServerConfig";
 
@@ -24,9 +25,16 @@ export async function startAppServer(
   docService: IDocumentManagement,
   pipeline: IPipeline,
   eventBus: EventBusService,
-  config: AppServerConfig,
+  serverConfig: AppServerConfig,
+  appConfig: AppConfig,
 ): Promise<AppServer> {
-  const appServer = new AppServer(docService, pipeline, eventBus, config);
+  const appServer = new AppServer(
+    docService,
+    pipeline,
+    eventBus,
+    serverConfig,
+    appConfig,
+  );
   await appServer.start();
   return appServer;
 }

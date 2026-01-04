@@ -14,6 +14,7 @@ import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { telemetry } from "../telemetry";
+import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 
 /**
@@ -23,19 +24,20 @@ import { logger } from "../utils/logger";
  * @param server The Fastify server instance
  * @param docService The document management service
  * @param pipeline The pipeline instance
- * @param readOnly Whether to run in read-only mode
+ * @param config The resolved configuration from the entrypoint
+ * @param authManager Optional authentication manager
  * @returns The McpServer instance for cleanup
  */
 export async function registerMcpService(
   server: FastifyInstance,
   docService: IDocumentManagement,
   pipeline: IPipeline,
-  readOnly = false,
+  config: AppConfig,
   authManager?: ProxyAuthManager,
 ): Promise<McpServer> {
   // Initialize MCP server and tools
-  const mcpTools = await initializeTools(docService, pipeline);
-  const mcpServer = createMcpServerInstance(mcpTools, readOnly);
+  const mcpTools = await initializeTools(docService, pipeline, config);
+  const mcpServer = createMcpServerInstance(mcpTools, config);
 
   // Setup auth middleware if auth manager is provided
   const authMiddleware = authManager ? createAuthMiddleware(authManager) : null;
@@ -45,9 +47,6 @@ export async function registerMcpService(
 
   // Track heartbeat intervals for cleanup
   const heartbeatIntervals: Record<string, NodeJS.Timeout> = {};
-
-  // Heartbeat interval in milliseconds (30 seconds)
-  const HEARTBEAT_INTERVAL_MS = 30_000;
 
   // SSE endpoint for MCP connections
   server.route({
@@ -75,7 +74,7 @@ export async function registerMcpService(
             clearInterval(heartbeatInterval);
             delete heartbeatIntervals[transport.sessionId];
           }
-        }, HEARTBEAT_INTERVAL_MS);
+        }, config.server.heartbeatMs);
         heartbeatIntervals[transport.sessionId] = heartbeatInterval;
 
         // Cleanup function to handle both close and error scenarios
@@ -145,7 +144,7 @@ export async function registerMcpService(
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         // In stateless mode, create a new instance of server and transport for each request
-        const requestServer = createMcpServerInstance(mcpTools, readOnly);
+        const requestServer = createMcpServerInstance(mcpTools, config);
         const requestTransport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
         });

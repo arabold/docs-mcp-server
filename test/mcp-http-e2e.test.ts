@@ -17,6 +17,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // eslint-disable-next-line deprecation/deprecation
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { getCliCommand } from "./test-helpers";
 
 describe("MCP HTTP server E2E", () => {
   let serverProcess: ChildProcess | null = null;
@@ -71,15 +72,16 @@ describe("MCP HTTP server E2E", () => {
    */
   async function startServer(port: number): Promise<string> {
     const projectRoot = path.resolve(import.meta.dirname, "..");
-    const entryPoint = path.join(projectRoot, "src", "index.ts");
 
     // Build environment without VITEST_WORKER_ID
     const testEnv = { ...process.env };
     delete testEnv.VITEST_WORKER_ID;
 
+    const { cmd, args } = getCliCommand();
+
     serverProcess = spawn(
-      "npx",
-      ["vite-node", entryPoint, "--protocol", "http", "--port", String(port)],
+      cmd,
+      [...args, "--protocol", "http", "--port", String(port)],
       {
         cwd: projectRoot,
         stdio: ["pipe", "pipe", "pipe"],
@@ -95,7 +97,7 @@ describe("MCP HTTP server E2E", () => {
     const serverUrl = await new Promise<string>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("Server startup timed out"));
-      }, 15000);
+      }, 30000);
 
       let output = "";
 

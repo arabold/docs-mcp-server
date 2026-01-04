@@ -4,7 +4,6 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import type { Command } from "commander";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
@@ -19,38 +18,33 @@ import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
 
 /**
- * Extended Command type that includes the global EventBusService instance
+ * Context extended with EventBusService, injected via middleware.
  */
-export interface CommandWithEventBus extends Command {
+export interface CliContext {
   _eventBus?: EventBusService;
+  [key: string]: unknown;
 }
 
 /**
- * Traverses the command hierarchy to find the root command and returns its options.
- * This is useful for accessing global options from within any subcommand.
- * @param command The current command instance.
- * @returns The global options from the root command.
- */
-export function getGlobalOptions(command?: Command): GlobalOptions {
-  let rootCommand = command;
-  while (rootCommand?.parent) {
-    rootCommand = rootCommand.parent;
-  }
-  return rootCommand?.opts() || {};
-}
-
-/**
- * Retrieves the global EventBusService from a command instance.
- * @param command The command instance.
+ * Retrieves the global EventBusService from the arguments context.
+ * @param argv The parsed arguments context.
  * @returns The global EventBusService.
  * @throws Error if EventBusService is not initialized.
  */
-export function getEventBus(command?: Command): EventBusService {
-  const eventBus = (command as CommandWithEventBus)?._eventBus;
+export function getEventBus(argv: CliContext): EventBusService {
+  const eventBus = argv._eventBus;
   if (!eventBus) {
     throw new Error("EventBusService not initialized");
   }
   return eventBus;
+}
+
+/**
+ * Helper to extract GlobalOptions from the argv.
+ * In Yargs, all options are in argv, so we just cast/pick.
+ */
+export function getGlobalOptions(argv: Record<string, unknown>): GlobalOptions {
+  return argv as unknown as GlobalOptions;
 }
 
 /**
@@ -150,7 +144,10 @@ export const formatOutput = (data: unknown): string => JSON.stringify(data, null
 /**
  * Sets up logging based on global options
  */
-export function setupLogging(options: GlobalOptions, protocol?: "stdio" | "http"): void {
+export function setupLogging(
+  options: { silent?: boolean; verbose?: boolean },
+  protocol?: "stdio" | "http",
+): void {
   // Suppress logging in stdio mode (before any logger calls)
   if (protocol === "stdio") {
     setLogLevel(LogLevel.ERROR);
@@ -191,7 +188,10 @@ export function validateHost(hostString: string): string {
 }
 
 /**
- * Creates AppServerConfig based on service requirements
+ * Creates AppServerConfig based on service requirements.
+ *
+ * AppConfig is the source of truth for host/auth/telemetry/read-only settings.
+ * AppServerConfig only selects which services to run and which port to bind to.
  */
 export function createAppServerConfig(options: {
   enableWebInterface?: boolean;
@@ -199,10 +199,7 @@ export function createAppServerConfig(options: {
   enableApiServer?: boolean;
   enableWorker?: boolean;
   port: number;
-  host: string;
   externalWorkerUrl?: string;
-  readOnly?: boolean;
-  auth?: AuthConfig;
   startupContext?: {
     cliCommand?: string;
     mcpProtocol?: "stdio" | "http";
@@ -215,10 +212,7 @@ export function createAppServerConfig(options: {
     enableApiServer: options.enableApiServer ?? false,
     enableWorker: options.enableWorker ?? true,
     port: options.port,
-    host: options.host,
     externalWorkerUrl: options.externalWorkerUrl,
-    readOnly: options.readOnly ?? false,
-    auth: options.auth,
     startupContext: options.startupContext,
   };
 }
@@ -253,7 +247,7 @@ export function parseAuthConfig(options: {
   authIssuerUrl?: string;
   authAudience?: string;
 }): AuthConfig | undefined {
-  // Check if auth is enabled via CLI flag (environment variables handled by commander)
+  // Check if auth is enabled via CLI flag (environment variables handled by commander/yargs)
   if (!options.authEnabled) {
     return undefined;
   }
@@ -372,11 +366,6 @@ export function createEventServices(): {
  * Resolves embedding configuration from the provided model specification.
  * This function centralizes the logic for determining the embedding model.
  *
- * Precedence:
- * 1. Explicitly passed `embeddingModel` parameter.
- * 2. `OPENAI_API_KEY` environment variable (defaults to OpenAI model).
- * 3. No configuration (embeddings disabled).
- *
  * @param embeddingModel The embedding model specification string.
  * @returns Embedding configuration or null if config is unavailable.
  */
@@ -384,21 +373,10 @@ export function resolveEmbeddingContext(
   embeddingModel?: string,
 ): EmbeddingModelConfig | null {
   try {
-    let modelSpec = embeddingModel;
-
-    // If no model is specified, check for OPENAI_API_KEY
-    // to enable OpenAI embeddings by default.
-    if (!modelSpec && process.env.OPENAI_API_KEY) {
-      modelSpec = "text-embedding-3-small"; // Default OpenAI model
-      logger.debug(
-        "Using default OpenAI embedding model due to OPENAI_API_KEY presence.",
-      );
-    }
+    const modelSpec = embeddingModel;
 
     if (!modelSpec) {
-      logger.debug(
-        "No embedding model specified and OPENAI_API_KEY not found. Embeddings are disabled.",
-      );
+      logger.debug("No embedding model specified. Embeddings are disabled.");
       return null;
     }
 

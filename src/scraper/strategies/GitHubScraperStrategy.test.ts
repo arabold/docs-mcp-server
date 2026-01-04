@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus, HttpFetcher } from "../fetcher";
 import type { ScraperOptions } from "../types";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
@@ -11,6 +12,7 @@ const mockHttpFetcher = vi.mocked(HttpFetcher);
 describe("GitHubScraperStrategy", () => {
   let strategy: GitHubScraperStrategy;
   let httpFetcherInstance: any;
+  const appConfig = loadConfig();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -21,7 +23,7 @@ describe("GitHubScraperStrategy", () => {
     };
     mockHttpFetcher.mockImplementation(() => httpFetcherInstance);
 
-    strategy = new GitHubScraperStrategy();
+    strategy = new GitHubScraperStrategy(appConfig);
   });
 
   describe("canHandle", () => {

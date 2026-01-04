@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SPLITTER_PREFERRED_CHUNK_SIZE } from "../../utils/config";
+import { defaults, loadConfig } from "../../utils/config";
 import { HtmlPipeline } from "./HtmlPipeline";
 import { JsonPipeline } from "./JsonPipeline";
 import { MarkdownPipeline } from "./MarkdownPipeline";
@@ -8,9 +8,11 @@ import { SourceCodePipeline } from "./SourceCodePipeline";
 import { TextPipeline } from "./TextPipeline";
 
 describe("PipelineFactory", () => {
+  const appConfig = loadConfig();
+
   describe("createStandardPipelines", () => {
     it("should create all five standard pipelines", () => {
-      const pipelines = PipelineFactory.createStandardPipelines();
+      const pipelines = PipelineFactory.createStandardPipelines(appConfig);
 
       expect(pipelines).toHaveLength(5);
       expect(pipelines[0]).toBeInstanceOf(JsonPipeline);
@@ -21,8 +23,8 @@ describe("PipelineFactory", () => {
     });
 
     it("should create new instances each time", () => {
-      const pipelines1 = PipelineFactory.createStandardPipelines();
-      const pipelines2 = PipelineFactory.createStandardPipelines();
+      const pipelines1 = PipelineFactory.createStandardPipelines(appConfig);
+      const pipelines2 = PipelineFactory.createStandardPipelines(appConfig);
 
       expect(pipelines1[0]).not.toBe(pipelines2[0]);
       expect(pipelines1[1]).not.toBe(pipelines2[1]);
@@ -34,46 +36,15 @@ describe("PipelineFactory", () => {
 
   describe("configuration", () => {
     it("should use default chunk sizes when no configuration provided", () => {
-      const pipelines = PipelineFactory.createStandardPipelines();
+      const pipelines = PipelineFactory.createStandardPipelines(appConfig);
       expect(pipelines).toHaveLength(5);
       // Test passes if no errors are thrown during pipeline creation
     });
 
-    it("should accept custom chunk sizes configuration", () => {
-      const config = {
-        chunkSizes: {
-          preferred: 800,
-          max: 1600,
-        },
-      };
-
-      const pipelines = PipelineFactory.createStandardPipelines(config);
+    it("should use constants as defaults", () => {
+      const pipelines = PipelineFactory.createStandardPipelines(appConfig);
       expect(pipelines).toHaveLength(5);
-      expect(pipelines[0]).toBeInstanceOf(JsonPipeline);
-      expect(pipelines[1]).toBeInstanceOf(SourceCodePipeline);
-      expect(pipelines[2]).toBeInstanceOf(HtmlPipeline);
-      expect(pipelines[3]).toBeInstanceOf(MarkdownPipeline);
-      expect(pipelines[4]).toBeInstanceOf(TextPipeline);
-    });
-
-    it("should use default values when configuration is partially provided", () => {
-      const config = {
-        chunkSizes: {
-          preferred: 800,
-          // max is omitted - should use default
-        },
-      };
-
-      const pipelines = PipelineFactory.createStandardPipelines(config);
-      expect(pipelines).toHaveLength(5);
-      // Test passes if no errors are thrown during pipeline creation
-    });
-
-    it("should use constants as defaults when configuration is undefined", () => {
-      const pipelines = PipelineFactory.createStandardPipelines(undefined);
-      expect(pipelines).toHaveLength(5);
-      // Verify that the default constant is being used implicitly
-      expect(SPLITTER_PREFERRED_CHUNK_SIZE).toBe(1500);
+      expect(defaults.splitter.preferredChunkSize).toBe(1500);
     });
   });
 });

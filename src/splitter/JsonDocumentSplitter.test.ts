@@ -1,9 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { SPLITTER_MAX_CHUNK_SIZE } from "../utils/config";
+import { defaults } from "../utils/config";
+import { GreedySplitter } from "./GreedySplitter";
 import { JsonDocumentSplitter } from "./JsonDocumentSplitter";
+import type { SplitterConfig } from "./types";
 
 describe("JsonDocumentSplitter", () => {
-  const splitter = new JsonDocumentSplitter();
+  const mockConfig: SplitterConfig = {
+    minChunkSize: defaults.splitter.minChunkSize,
+    preferredChunkSize: defaults.splitter.preferredChunkSize,
+    maxChunkSize: defaults.splitter.maxChunkSize,
+    json: {
+      maxNestingDepth: defaults.splitter.json.maxNestingDepth,
+      maxChunks: defaults.splitter.json.maxChunks,
+    },
+  };
+  const splitter = new JsonDocumentSplitter(mockConfig);
 
   describe("concatenation-friendly chunking", () => {
     it("should create building-block chunks that concatenate to valid JSON", async () => {
@@ -250,7 +261,9 @@ describe("JsonDocumentSplitter", () => {
     });
 
     it("should respect preserveFormatting option", async () => {
-      const splitterNoFormat = new JsonDocumentSplitter({ preserveFormatting: false });
+      const splitterNoFormat = new JsonDocumentSplitter(mockConfig, {
+        preserveFormatting: false,
+      });
       const content = '{"test": "value"}';
       const chunks = await splitterNoFormat.splitText(content);
 
@@ -262,9 +275,7 @@ describe("JsonDocumentSplitter", () => {
 
   describe("integration with GreedySplitter", () => {
     it("should create chunks that work well with GreedySplitter optimization", async () => {
-      const { GreedySplitter } = await import("./GreedySplitter");
-
-      const jsonSplitter = new JsonDocumentSplitter();
+      const jsonSplitter = new JsonDocumentSplitter(mockConfig);
       const greedySplitter = new GreedySplitter(jsonSplitter, 500, 1500, 5000);
 
       const complexJson = {
@@ -350,7 +361,7 @@ describe("JsonDocumentSplitter", () => {
       const chunks = await splitter.splitText(JSON.stringify(deepJson, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
     });
 
@@ -360,11 +371,11 @@ describe("JsonDocumentSplitter", () => {
         largeJson[`property${i}`] = "x".repeat(6000);
       }
 
-      const limitedSplitter = new JsonDocumentSplitter({ maxChunks: 50 });
+      const limitedSplitter = new JsonDocumentSplitter(mockConfig, { maxChunks: 50 });
       const chunks = await limitedSplitter.splitText(JSON.stringify(largeJson, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       const hasTextSplitterChunks = chunks.some(
@@ -392,11 +403,11 @@ describe("JsonDocumentSplitter", () => {
         },
       };
 
-      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const limitedSplitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 3 });
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       expect(chunks.length).toBeGreaterThan(1);
@@ -414,11 +425,11 @@ describe("JsonDocumentSplitter", () => {
         },
       };
 
-      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const limitedSplitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 3 });
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
     });
 
@@ -431,11 +442,11 @@ describe("JsonDocumentSplitter", () => {
         },
       };
 
-      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const limitedSplitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 3 });
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       expect(chunks.length).toBeGreaterThan(4);
@@ -449,11 +460,11 @@ describe("JsonDocumentSplitter", () => {
         },
       };
 
-      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const limitedSplitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 3 });
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
-        expect(chunk.content.length).toBeLessThanOrEqual(SPLITTER_MAX_CHUNK_SIZE);
+        expect(chunk.content.length).toBeLessThanOrEqual(defaults.splitter.maxChunkSize);
       });
 
       expect(chunks.length).toBeGreaterThan(5);
@@ -474,7 +485,7 @@ describe("JsonDocumentSplitter", () => {
         },
       };
 
-      const limitedSplitter = new JsonDocumentSplitter({ maxDepth: 5 });
+      const limitedSplitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 5 });
       const chunks = await limitedSplitter.splitText(JSON.stringify(json, null, 2));
 
       chunks.forEach((chunk) => {
@@ -504,7 +515,7 @@ describe("JsonDocumentSplitter", () => {
         },
       };
 
-      const splitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const splitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 3 });
       const chunks = await splitter.splitText(JSON.stringify(deepJson, null, 2));
 
       // Should have chunks for levels 1-3, then serialize the rest as text
@@ -551,7 +562,7 @@ describe("JsonDocumentSplitter", () => {
         ],
       };
 
-      const splitter = new JsonDocumentSplitter({ maxDepth: 3 });
+      const splitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 3 });
       const chunks = await splitter.splitText(JSON.stringify(deepArrayJson, null, 2));
 
       // Verify that deep content is serialized
@@ -567,15 +578,13 @@ describe("JsonDocumentSplitter", () => {
     });
 
     it("should use default maxDepth when not specified", async () => {
-      const { JSON_MAX_NESTING_DEPTH } = await import("../utils/config");
-
       // Create JSON with depth exceeding the default
       let deepJson: any = { value: "leaf" };
-      for (let i = 0; i < JSON_MAX_NESTING_DEPTH + 3; i++) {
+      for (let i = 0; i < defaults.splitter.json.maxNestingDepth + 3; i++) {
         deepJson = { [`level${i}`]: deepJson };
       }
 
-      const splitter = new JsonDocumentSplitter();
+      const splitter = new JsonDocumentSplitter(mockConfig);
       const chunks = await splitter.splitText(JSON.stringify(deepJson, null, 2));
 
       // Should have chunks but not excessive amounts
@@ -599,7 +608,7 @@ describe("JsonDocumentSplitter", () => {
         },
       };
 
-      const splitter = new JsonDocumentSplitter({ maxDepth: 5 });
+      const splitter = new JsonDocumentSplitter(mockConfig, { maxDepth: 5 });
       const chunks = await splitter.splitText(JSON.stringify(shallowJson, null, 2));
 
       // All value chunks should be individual, not serialized together
@@ -624,7 +633,7 @@ describe("JsonDocumentSplitter", () => {
         };
       }
 
-      const splitter = new JsonDocumentSplitter({ maxChunks: 50 });
+      const splitter = new JsonDocumentSplitter(mockConfig, { maxChunks: 50 });
       const chunks = await splitter.splitText(JSON.stringify(largeJson, null, 2));
 
       // Should fall back to text splitting, resulting in fewer chunks
@@ -644,7 +653,7 @@ describe("JsonDocumentSplitter", () => {
         moderateJson[`property${i}`] = `value${i}`;
       }
 
-      const splitter = new JsonDocumentSplitter({ maxChunks: 100 });
+      const splitter = new JsonDocumentSplitter(mockConfig, { maxChunks: 100 });
       const chunks = await splitter.splitText(JSON.stringify(moderateJson, null, 2));
 
       // Should use JSON splitting (level > 0 and non-empty paths)
@@ -660,19 +669,17 @@ describe("JsonDocumentSplitter", () => {
     });
 
     it("should use default maxChunks when not specified", async () => {
-      const { JSON_MAX_CHUNKS } = await import("../utils/config");
-
       // Create a moderately sized JSON that won't exceed default limit
       const json: Record<string, string> = {};
       for (let i = 0; i < 50; i++) {
         json[`prop${i}`] = `value${i}`;
       }
 
-      const splitter = new JsonDocumentSplitter();
+      const splitter = new JsonDocumentSplitter(mockConfig);
       const chunks = await splitter.splitText(JSON.stringify(json, null, 2));
 
       // Should be well under the default limit
-      expect(chunks.length).toBeLessThan(JSON_MAX_CHUNKS);
+      expect(chunks.length).toBeLessThan(defaults.splitter.json.maxChunks);
 
       // Should still use JSON splitting
       const hasJsonSplitterChunks = chunks.some((c) => c.section.path.includes("root"));
@@ -700,7 +707,10 @@ describe("JsonDocumentSplitter", () => {
         };
       }
 
-      const splitter = new JsonDocumentSplitter({ maxDepth: 3, maxChunks: 200 });
+      const splitter = new JsonDocumentSplitter(mockConfig, {
+        maxDepth: 3,
+        maxChunks: 200,
+      });
       const chunks = await splitter.splitText(JSON.stringify(complexJson, null, 2));
 
       // Should limit depth to prevent excessive nesting

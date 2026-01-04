@@ -4,26 +4,32 @@
  */
 
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { EventBusService } from "./events";
+import { PipelineFactory } from "./pipeline/PipelineFactory";
+import { DocumentManagementService } from "./store/DocumentManagementService";
 import { TelemetryEvent } from "./telemetry";
+import { type AppConfig, loadConfig } from "./utils/config";
 
 // Mock external dependencies to prevent actual server startup
-const mockPipelineStart = vi.fn().mockResolvedValue(undefined);
-const mockPipelineStop = vi.fn().mockResolvedValue(undefined);
-const mockPipelineSetCallbacks = vi.fn();
+const mockPipelineStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockPipelineStop = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockPipelineSetCallbacks = vi.hoisted(() => vi.fn());
 
-const mockStartAppServer = vi.fn().mockResolvedValue({
-  stop: vi.fn().mockResolvedValue(undefined),
-});
+const mockStartAppServer = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    stop: vi.fn().mockResolvedValue(undefined),
+  }),
+);
 
-const mockDocServiceInitialize = vi.fn().mockResolvedValue(undefined);
-const mockDocServiceShutdown = vi.fn().mockResolvedValue(undefined);
+const mockDocServiceInitialize = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockDocServiceShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("./app", () => ({
   startAppServer: mockStartAppServer,
 }));
 
 vi.mock("./store/DocumentManagementService", () => ({
-  DocumentManagementService: vi.fn().mockImplementation((_storePath, _eventBus) => ({
+  DocumentManagementService: vi.fn().mockImplementation((_eventBus, _appConfig) => ({
     initialize: mockDocServiceInitialize,
     shutdown: mockDocServiceShutdown,
   })),
@@ -59,12 +65,22 @@ vi.mock("playwright", () => ({
   chromium: { executablePath: vi.fn().mockReturnValue("/mock/chromium") },
 }));
 
+const mockFsExistsSync = vi.hoisted(() => vi.fn().mockReturnValue(false));
+const mockFsReadFileSync = vi.hoisted(() => vi.fn());
+
 vi.mock("node:fs", () => ({
-  existsSync: vi.fn().mockReturnValue(true),
+  default: {
+    existsSync: mockFsExistsSync,
+    readFileSync: mockFsReadFileSync,
+  },
+  existsSync: mockFsExistsSync,
+  readFileSync: mockFsReadFileSync,
 }));
 
 // Suppress console.error in tests
 vi.spyOn(console, "error").mockImplementation(() => {});
+
+const appConfig: AppConfig = loadConfig();
 
 describe("CLI Flag Validation", () => {
   beforeEach(() => {
@@ -151,9 +167,6 @@ describe("Double Initialization Prevention", () => {
   });
 
   it("should NOT start pipeline during initialization in worker mode", async () => {
-    const { PipelineFactory } = await import("./pipeline/PipelineFactory");
-    const { EventBusService } = await import("./events");
-
     // This test validates our critical bug fix:
     // ensurePipelineManagerInitialized should create but NOT start the pipeline
     // Only registerWorkerService should call pipeline.start()
@@ -164,7 +177,7 @@ describe("Double Initialization Prevention", () => {
     await PipelineFactory.createPipeline(
       {} as any, // mock docService
       mockEventBus,
-      { recoverJobs: true, concurrency: 3 },
+      { recoverJobs: true, appConfig: appConfig },
     );
 
     // After createPipeline, the pipeline should NOT have been started yet
@@ -182,39 +195,44 @@ describe("Double Initialization Prevention", () => {
   });
 
   it("should validate pipeline configuration for different modes", async () => {
-    const { PipelineFactory } = await import("./pipeline/PipelineFactory");
-    const { EventBusService } = await import("./events");
-
     // Test that different modes pass correct options to PipelineFactory
     const mockEventBus = new EventBusService();
 
     // Worker mode configuration
     await PipelineFactory.createPipeline({} as any, mockEventBus, {
       recoverJobs: true,
-      concurrency: 3,
+      appConfig: appConfig,
     });
 
     // CLI mode configuration
     await PipelineFactory.createPipeline({} as any, mockEventBus, {
       recoverJobs: false,
-      concurrency: 1,
+      appConfig: appConfig,
     });
 
     // External worker mode configuration (no eventBus needed for remote)
     await PipelineFactory.createPipeline(undefined, mockEventBus, {
       recoverJobs: false,
       serverUrl: "http://localhost:8080/api",
+      appConfig: appConfig,
     });
 
     expect(vi.mocked(PipelineFactory.createPipeline)).toHaveBeenCalledTimes(3);
 
     // Verify different configurations were passed
     const calls = vi.mocked(PipelineFactory.createPipeline).mock.calls;
-    expect(calls[0][2]).toEqual({ recoverJobs: true, concurrency: 3 });
-    expect(calls[1][2]).toEqual({ recoverJobs: false, concurrency: 1 });
+    expect(calls[0][2]).toEqual({
+      recoverJobs: true,
+      appConfig: appConfig,
+    });
+    expect(calls[1][2]).toEqual({
+      recoverJobs: false,
+      appConfig: appConfig,
+    });
     expect(calls[2][2]).toEqual({
       recoverJobs: false,
       serverUrl: "http://localhost:8080/api",
+      appConfig: appConfig,
     });
   });
 });
@@ -235,12 +253,20 @@ describe("Service Configuration Validation", () => {
     };
 
     // Simulate worker command behavior
-    await mockStartAppServer({} as any, {} as any, expectedWorkerConfig);
+    await mockStartAppServer(
+      {} as any,
+      {} as any,
+      {} as any,
+      expectedWorkerConfig,
+      {} as any,
+    );
 
     expect(mockStartAppServer).toHaveBeenCalledWith(
       expect.anything(), // docService
       expect.anything(), // pipeline
+      expect.anything(), // eventBus
       expect.objectContaining(expectedWorkerConfig),
+      expect.anything(), // appConfig
     );
   });
 
@@ -251,21 +277,17 @@ describe("Service Configuration Validation", () => {
     // 3. pipeline.setCallbacks()
     // 4. startAppServer() (which will call pipeline.start() via registerWorkerService)
 
-    const { PipelineFactory } = await import("./pipeline/PipelineFactory");
-    const { DocumentManagementService } = await import(
-      "./store/DocumentManagementService"
-    );
-
     // Simulate the service initialization sequence
-    const { EventBusService } = await import("./events");
     const eventBus = new EventBusService();
-    const docService = new DocumentManagementService("/test/path", eventBus);
+    const docService = new DocumentManagementService(eventBus, appConfig);
     await docService.initialize();
 
-    const pipeline = await PipelineFactory.createPipeline(docService, eventBus, {});
+    const pipeline = await PipelineFactory.createPipeline(docService, eventBus, {
+      appConfig: appConfig,
+    });
     pipeline.setCallbacks({});
 
-    await mockStartAppServer(docService, pipeline, {});
+    await mockStartAppServer(docService, pipeline, eventBus, {}, {} as any);
 
     // Verify initialization was called
     expect(mockDocServiceInitialize).toHaveBeenCalled();

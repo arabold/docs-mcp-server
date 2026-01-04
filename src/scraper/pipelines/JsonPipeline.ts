@@ -1,6 +1,6 @@
 import { JsonDocumentSplitter } from "../../splitter/JsonDocumentSplitter";
 import type { DocumentSplitter } from "../../splitter/types";
-import { SPLITTER_PREFERRED_CHUNK_SIZE } from "../../utils/config";
+import type { AppConfig } from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "../middleware/types";
@@ -19,11 +19,11 @@ export class JsonPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
   private readonly splitter: DocumentSplitter;
 
-  constructor(_chunkSize = SPLITTER_PREFERRED_CHUNK_SIZE) {
+  constructor(config: AppConfig) {
     super();
     this.middleware = [];
     // Structure-preserving splitter only (no greedy size merging)
-    this.splitter = new JsonDocumentSplitter({
+    this.splitter = new JsonDocumentSplitter(config.splitter, {
       preserveFormatting: true,
     });
   }

@@ -1,9 +1,6 @@
-import { GreedySplitter, SemanticMarkdownSplitter } from "../../splitter";
-import {
-  SPLITTER_MAX_CHUNK_SIZE,
-  SPLITTER_MIN_CHUNK_SIZE,
-  SPLITTER_PREFERRED_CHUNK_SIZE,
-} from "../../utils/config";
+import { GreedySplitter } from "../../splitter/GreedySplitter";
+import { SemanticMarkdownSplitter } from "../../splitter/SemanticMarkdownSplitter";
+import type { AppConfig } from "../../utils/config";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import { MarkdownLinkExtractorMiddleware } from "../middleware/MarkdownLinkExtractorMiddleware";
@@ -15,19 +12,19 @@ import { BasePipeline } from "./BasePipeline";
 import type { PipelineResult } from "./types";
 
 /**
- * Pipeline for processing Markdown content using middleware and semantic splitting with size optimization.
- * Uses SemanticMarkdownSplitter for content-type-aware semantic chunking,
- * followed by GreedySplitter for universal size optimization.
+ * MarkdownPipeline - Processes Markdown content using middleware and semantic splitting.
  */
 export class MarkdownPipeline extends BasePipeline {
   private readonly middleware: ContentProcessorMiddleware[];
   private readonly greedySplitter: GreedySplitter;
 
-  constructor(
-    preferredChunkSize = SPLITTER_PREFERRED_CHUNK_SIZE,
-    maxChunkSize = SPLITTER_MAX_CHUNK_SIZE,
-  ) {
+  constructor(config: AppConfig) {
     super();
+
+    const preferredChunkSize = config.splitter.preferredChunkSize;
+    const maxChunkSize = config.splitter.maxChunkSize;
+    const minChunkSize = config.splitter.minChunkSize;
+
     this.middleware = [
       new MarkdownMetadataExtractorMiddleware(),
       new MarkdownLinkExtractorMiddleware(),
@@ -40,7 +37,7 @@ export class MarkdownPipeline extends BasePipeline {
     );
     this.greedySplitter = new GreedySplitter(
       semanticSplitter,
-      SPLITTER_MIN_CHUNK_SIZE,
+      minChunkSize,
       preferredChunkSize,
       maxChunkSize,
     );

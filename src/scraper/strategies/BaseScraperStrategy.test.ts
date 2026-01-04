@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
+import { loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { BaseScraperStrategy } from "./BaseScraperStrategy";
@@ -23,7 +24,7 @@ describe("BaseScraperStrategy", () => {
   let strategy: TestScraperStrategy;
 
   beforeEach(() => {
-    strategy = new TestScraperStrategy();
+    strategy = new TestScraperStrategy(loadConfig());
     strategy.processItem.mockClear();
   });
 
@@ -345,7 +346,7 @@ describe("BaseScraperStrategy", () => {
 
   describe("URL filtering with includePatterns and excludePatterns", () => {
     beforeEach(() => {
-      strategy = new TestScraperStrategy();
+      strategy = new TestScraperStrategy(loadConfig());
       strategy.processItem.mockClear();
     });
 
@@ -589,7 +590,7 @@ describe("BaseScraperStrategy", () => {
 
   describe("Refresh mode with initialQueue", () => {
     beforeEach(() => {
-      strategy = new TestScraperStrategy();
+      strategy = new TestScraperStrategy(loadConfig());
       strategy.processItem.mockClear();
     });
 
@@ -794,7 +795,7 @@ describe("BaseScraperStrategy", () => {
 
   describe("Page counting with different fetch statuses", () => {
     beforeEach(() => {
-      strategy = new TestScraperStrategy();
+      strategy = new TestScraperStrategy(loadConfig());
       strategy.processItem.mockClear();
     });
 
@@ -923,7 +924,7 @@ describe("BaseScraperStrategy", () => {
 
   describe("Progress callbacks with different statuses", () => {
     beforeEach(() => {
-      strategy = new TestScraperStrategy();
+      strategy = new TestScraperStrategy(loadConfig());
       strategy.processItem.mockClear();
     });
 

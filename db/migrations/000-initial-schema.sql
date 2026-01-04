@@ -18,7 +18,7 @@ CREATE INDEX IF NOT EXISTS idx_documents_version_lower ON documents(lower(librar
 
 -- Create Embeddings virtual table
 -- Note: Dimension is hardcoded here based on the value in schema.ts at the time of creation.
--- If VECTOR_DIMENSION changes, a separate migration would be needed to update/recreate this table.
+-- If EMBEDDINGS_VECTOR_DIMENSION changes, a separate migration would be needed to update/recreate this table.
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_vec USING vec0(
   library TEXT NOT NULL,
   version TEXT NOT NULL,

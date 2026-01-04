@@ -19,8 +19,8 @@ import type { MiddlewareContext } from "./types";
 // Suppress logger output during tests
 
 // Mock playwright using factory functions
-vi.mock("playwright", async (importOriginal) =>
-  importOriginal<typeof import("playwright")>(),
+vi.mock("playwright", async () =>
+  vi.importActual<typeof import("playwright")>("playwright"),
 );
 
 import { type Browser, chromium, type Frame, type Page } from "playwright";
@@ -158,7 +158,21 @@ describe("HtmlPlaywrightMiddleware", () => {
   let playwrightMiddleware: HtmlPlaywrightMiddleware;
 
   beforeEach(() => {
-    playwrightMiddleware = new HtmlPlaywrightMiddleware();
+    // Create a mock scraper configuration
+    const mockScraperConfig = {
+      maxPages: 1000,
+      maxDepth: 3,
+      maxConcurrency: 3,
+      pageTimeoutMs: 5000,
+      browserTimeoutMs: 30000,
+      fetcher: {
+        maxRetries: 6,
+        baseDelayMs: 1000,
+        maxCacheItems: 200,
+        maxCacheItemSizeBytes: 500 * 1024,
+      },
+    };
+    playwrightMiddleware = new HtmlPlaywrightMiddleware(mockScraperConfig);
   });
 
   afterEach(async () => {

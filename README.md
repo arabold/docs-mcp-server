@@ -1,5 +1,7 @@
 # Grounded Docs: Your AI's Up-to-Date Documentation Expert
 
+The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
+
 AI coding assistants often struggle with outdated documentation and hallucinations. The **Docs MCP Server** solves this by providing a personal, always-current knowledge base for your AI. It **indexes 3rd party documentation** from various sources (websites, GitHub, npm, PyPI, local files) and offers powerful, version-aware search tools via the Model Context Protocol (MCP).
 
 This enables your AI agent to access the **latest official documentation**, dramatically improving the quality and reliability of generated code and integration details. It's **free**, **open-source**, runs **locally** for privacy, and integrates seamlessly into your development workflow.
@@ -57,10 +59,13 @@ Run a standalone server that includes both MCP endpoints and web interface in a 
    ```bash
    docker run --rm \
      -v docs-mcp-data:/data \
+     -v docs-mcp-config:/config \
      -p 6280:6280 \
      ghcr.io/arabold/docs-mcp-server:latest \
      --protocol http --host 0.0.0.0 --port 6280
    ```
+
+   **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
    **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
@@ -145,6 +150,65 @@ Once a job completes, the docs are searchable via your AI assistant or the Web U
 - Full feature access including web interface
 
 To stop the server, press `Ctrl+C`.
+
+## Configuration overrides
+
+- **Configuration Precedence**: Configuration is loaded in the following order (last one wins):
+
+  > For a complete reference of all configuration options, see the [Configuration Guide](docs/concepts/configuration.md).
+
+  1. **Defaults**: Built-in default values.
+  2. **Config File**: `config.json` or `config.yaml` in global store, project root, or current directory.
+  3. **Environment Variables**: Specific `DOCS_MCP_*` variables override file settings.
+  4. **CLI Arguments**: Command-line flags (e.g., `--port`) have the highest priority.
+
+### Configuration File
+
+You can create a `config.json` or `config.yaml` file to persist your settings. The server searches for this file in:
+
+1. The path specified by `--config` (**Read-Only**).
+2. The path specified by `DOCS_MCP_CONFIG` environment variable (**Read-Only**).
+3. The system default configuration directory (**Read-Write**):
+   - **macOS**: `~/Library/Preferences/docs-mcp-server/config.yaml`
+   - **Linux**: `~/.config/docs-mcp-server/config.yaml` (or defined by `$XDG_CONFIG_HOME`)
+   - **Windows**: `%APPDATA%\docs-mcp-server\config\config.yaml`
+
+> **Note:** On startup, if no explicit configuration file is provided, the server will seek the system default config. If present, it loads it. If missing, it creates it with default values. It will also update it with any new setting keys. If you provide a custom config via `--config` or env var, the server treats it as **Read-Only** and will NOT modify it or write defaults back to it.
+
+**Example `config.yaml`:**
+
+```yaml
+server:
+  host: "0.0.0.0"
+  ports:
+    mcp: 9000
+    default: 8000
+scraper:
+  maxPages: 500
+  pageTimeoutMs: 10000
+splitter:
+  maxChunkSize: 2000
+embeddings:
+  vectorDimension: 1536
+```
+
+### Environment Variables
+
+Specific configuration options can be set via environment variables. These override values from the configuration file.
+
+| Environment Variable       | Config Path            | Description                               |
+| -------------------------- | ---------------------- | ----------------------------------------- |
+| `DOCS_MCP_PROTOCOL`        | `server.protocol`      | Server protocol (`auto`, `stdio`, `http`) |
+| `DOCS_MCP_HOST`, `HOST`    | `server.host`          | Host to bind the server to                |
+| `DOCS_MCP_PORT`, `PORT`    | `server.ports.default` | Default server port                       |
+| `DOCS_MCP_WEB_PORT`        | `server.ports.web`     | Web interface port                        |
+| `DOCS_MCP_STORE_PATH`      | `app.storePath`        | Custom storage directory path             |
+| `DOCS_MCP_READ_ONLY`       | `app.readOnly`         | Enable read-only mode                     |
+| `DOCS_MCP_AUTH_ENABLED`    | `auth.enabled`         | Enable authentication                     |
+| `DOCS_MCP_AUTH_ISSUER_URL` | `auth.issuerUrl`       | OIDC Issuer URL                           |
+| `DOCS_MCP_AUTH_AUDIENCE`   | `auth.audience`        | JWT Audience                              |
+| `DOCS_MCP_EMBEDDING_MODEL` | `app.embeddingModel`   | Embedding model string                    |
+| `DOCS_MCP_TELEMETRY`       | `app.telemetryEnabled` | Enable/disable telemetry                  |
 
 ## Embedded Server
 
@@ -319,45 +383,9 @@ docker compose up -d
 
 This architecture allows independent scaling of processing (workers) and user interfaces.
 
-## Configuration
+## Embeddings
 
-The Docs MCP Server runs without any configuration and uses full-text search only. To enable vector search for improved results, configure an embedding provider via environment variables.
-
-### Command Line Argument Overrides
-
-Many CLI arguments can be overridden using environment variables. This is useful for Docker deployments, CI/CD pipelines, or setting default values.
-
-| Environment Variable       | CLI Argument           | Description                                     | Used by Commands          |
-| -------------------------- | ---------------------- | ----------------------------------------------- | ------------------------- |
-| `DOCS_MCP_STORE_PATH`      | `--store-path`         | Custom path for data storage directory          | all                       |
-| `DOCS_MCP_TELEMETRY`       | `--no-telemetry`       | Disable telemetry (`false` to disable)          | all                       |
-| `DOCS_MCP_PROTOCOL`        | `--protocol`           | MCP server protocol (auto, stdio, http)         | default, mcp              |
-| `DOCS_MCP_PORT`            | `--port`               | Server port                                     | default, mcp, web, worker |
-| `DOCS_MCP_WEB_PORT`        | `--port` (web command) | Web interface port (web command only)           | web                       |
-| `PORT`                     | `--port`               | Server port (fallback if DOCS_MCP_PORT not set) | default, mcp, web, worker |
-| `DOCS_MCP_HOST`            | `--host`               | Server host/bind address                        | default, mcp, web, worker |
-| `HOST`                     | `--host`               | Server host (fallback if DOCS_MCP_HOST not set) | default, mcp, web, worker |
-| `DOCS_MCP_EMBEDDING_MODEL` | `--embedding-model`    | Embedding model configuration                   | default, mcp, web, worker |
-| `DOCS_MCP_AUTH_ENABLED`    | `--auth-enabled`       | Enable OAuth2/OIDC authentication               | default, mcp              |
-| `DOCS_MCP_AUTH_ISSUER_URL` | `--auth-issuer-url`    | OAuth2 provider issuer/discovery URL            | default, mcp              |
-| `DOCS_MCP_AUTH_AUDIENCE`   | `--auth-audience`      | JWT audience claim (resource identifier)        | default, mcp              |
-
-**Usage Examples:**
-
-```bash
-# Set via environment variables
-export DOCS_MCP_PORT=8080
-export DOCS_MCP_HOST=0.0.0.0
-export DOCS_MCP_EMBEDDING_MODEL=text-embedding-3-small
-npx @arabold/docs-mcp-server@latest
-
-# Override with CLI arguments (takes precedence)
-DOCS_MCP_PORT=8080 npx @arabold/docs-mcp-server@latest --port 9090
-```
-
-### Embedding Provider Configuration
-
-The Docs MCP Server is configured via environment variables. Set these in your shell, Docker, or MCP client config.
+Set the embedding model with YAML (`embeddings.model`), `DOCS_MCP_EMBEDDING_MODEL`, or `--embedding-model`. If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults to `text-embedding-3-small`. Provider credentials use the provider-specific environment variables below.
 
 | Variable                           | Description                                           |
 | ---------------------------------- | ----------------------------------------------------- |

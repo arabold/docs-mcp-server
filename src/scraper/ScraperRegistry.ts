@@ -1,5 +1,6 @@
-import { logger } from "../utils";
+import type { AppConfig } from "../utils/config";
 import { ScraperError } from "../utils/errors";
+import { logger } from "../utils/logger";
 import { validateUrl } from "../utils/url";
 import { GitHubScraperStrategy } from "./strategies/GitHubScraperStrategy";
 import { LocalFileStrategy } from "./strategies/LocalFileStrategy";
@@ -11,13 +12,13 @@ import type { ScraperStrategy } from "./types";
 export class ScraperRegistry {
   private strategies: ScraperStrategy[];
 
-  constructor() {
+  constructor(config: AppConfig) {
     this.strategies = [
-      new NpmScraperStrategy(),
-      new PyPiScraperStrategy(),
-      new GitHubScraperStrategy(),
-      new WebScraperStrategy(),
-      new LocalFileStrategy(),
+      new NpmScraperStrategy(config),
+      new PyPiScraperStrategy(config),
+      new GitHubScraperStrategy(config),
+      new WebScraperStrategy(config, {}),
+      new LocalFileStrategy(config),
     ];
   }
 
