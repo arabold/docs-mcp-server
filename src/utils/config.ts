@@ -4,7 +4,6 @@ import envPaths from "env-paths";
 import yaml from "yaml";
 import { z } from "zod";
 import { logger } from "./logger";
-import { getProjectRoot } from "./paths";
 
 // --- Default Global Configuration ---
 

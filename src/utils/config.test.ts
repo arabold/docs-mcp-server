@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CONFIG, loadConfig } from "./config";
+import { loadConfig } from "./config";
 
 // Mock env-paths to return a controlled system path
 vi.mock("env-paths", () => ({
@@ -17,12 +17,9 @@ vi.mock("./paths", () => ({
   getProjectRoot: vi.fn().mockReturnValue(undefined), // Default to undefined to rely on explicit searchDirs
 }));
 
-import { getProjectRoot } from "./paths";
-
 describe("Configuration Loading", () => {
   let tmpDir: string;
   let originalEnv: NodeJS.ProcessEnv;
-  let systemConfigPath: string;
 
   beforeEach(() => {
     // Create temp directory for each test
@@ -75,7 +72,6 @@ describe("Configuration Loading", () => {
     it("should load system defaults and WRITE back when no config provided", () => {
       // Setup: ensure system config path exists
       const systemConfigDir = path.join(tmpDir, "system-config-mock");
-      const systemConfigPath = path.join(systemConfigDir, "config.yaml");
       fs.mkdirSync(systemConfigDir, { recursive: true });
 
       // Mock env-paths to return this temp dir
