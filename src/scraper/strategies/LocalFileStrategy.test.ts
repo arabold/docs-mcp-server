@@ -16,11 +16,6 @@ describe("LocalFileStrategy", () => {
   });
 
   it("should handle file:// URLs", () => {
-    if (!appConfig.scraper) {
-      throw new Error(
-        `DEBUG: appConfig.scraper is missing. Keys: ${Object.keys(appConfig).join(", ")}. Config: ${JSON.stringify(appConfig)}`,
-      );
-    }
     const strategy = new LocalFileStrategy(appConfig);
     expect(strategy.canHandle("file:///path/to/file.txt")).toBe(true);
     expect(strategy.canHandle("https://example.com")).toBe(false);

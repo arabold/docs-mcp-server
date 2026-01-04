@@ -1,3 +1,4 @@
+import type { AppConfig } from "../../utils/config";
 import { ScrapeMode } from "../../scraper/types";
 import Alert from "./Alert";
 import Tooltip from "./Tooltip";
@@ -26,6 +27,8 @@ interface ScrapeFormContentProps {
   initialValues?: ScrapeFormInitialValues;
   /** Mode of the form: 'new' for new library, 'add-version' for adding version to existing library */
   mode?: "new" | "add-version";
+  /** Application configuration for scraper defaults */
+  scraperConfig?: AppConfig["scraper"];
 }
 
 /**
@@ -37,6 +40,7 @@ const ScrapeFormContent = ({
   defaultExcludePatterns,
   initialValues,
   mode = "new",
+  scraperConfig,
 }: ScrapeFormContentProps) => {
   const isAddVersionMode = mode === "add-version";
 
@@ -280,14 +284,16 @@ const ScrapeFormContent = ({
                 >
                   Max Pages
                 </label>
-                <Tooltip text="The maximum number of pages to scrape. Default is 1000. Setting this too high may result in longer processing times." />
+                <Tooltip
+                  text={`The maximum number of pages to scrape. Default is ${scraperConfig?.maxPages ?? 1000}. Setting this too high may result in longer processing times.`}
+                />
               </div>
               <input
                 type="number"
                 name="maxPages"
                 id="maxPages"
                 min="1"
-                placeholder="1000"
+                placeholder={scraperConfig?.maxPages?.toString() || "1000"}
                 value={maxPagesValue}
                 class="mt-0.5 block w-full max-w-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />
@@ -300,14 +306,16 @@ const ScrapeFormContent = ({
                 >
                   Max Depth
                 </label>
-                <Tooltip text="How many links deep the scraper should follow. Default is 3. Higher values capture more content but increase processing time." />
+                <Tooltip
+                  text={`How many links deep the scraper should follow. Default is ${scraperConfig?.maxDepth || 3}. Higher values capture more content but increase processing time.`}
+                />
               </div>
               <input
                 type="number"
                 name="maxDepth"
                 id="maxDepth"
                 min="0"
-                placeholder="3"
+                placeholder={scraperConfig?.maxDepth?.toString() || "3"}
                 value={maxDepthValue}
                 class="mt-0.5 block w-full max-w-sm px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
               />

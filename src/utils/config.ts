@@ -3,6 +3,7 @@ import path from "node:path";
 import envPaths from "env-paths";
 import yaml from "yaml";
 import { z } from "zod";
+import { logger } from "./logger";
 import { getProjectRoot } from "./paths";
 
 // --- Default Global Configuration ---
@@ -320,8 +321,24 @@ export function loadConfig(
   cliArgs: Record<string, unknown> = {},
   options: LoadConfigOptions = {},
 ): AppConfig {
-  // 1. Determine Config File Path
-  const configPath = determineConfigPath(options, cliArgs.config as string);
+  // 1. Determine Config File Path & Mode
+  // Priority: CLI > Options > Env > Default System Path
+  const explicitPath =
+    (cliArgs.config as string) || options.configPath || process.env.DOCS_MCP_CONFIG;
+
+  let configPath: string;
+  let isReadOnlyConfig = false;
+
+  if (explicitPath) {
+    configPath = explicitPath;
+    isReadOnlyConfig = true; // User provided specific config, do not overwrite
+  } else {
+    // Default: strict system config path
+    configPath = path.join(systemPaths.config, "config.yaml");
+    isReadOnlyConfig = false; // Auto-update default config
+  }
+
+  logger.debug(`Using config file: ${configPath}`);
 
   // 2. Load Config File (if exists) or use empty object
   const fileConfig = loadConfigFile(configPath) || {};
@@ -329,11 +346,13 @@ export function loadConfig(
   // 3. Merge Defaults < File
   const baseConfig = deepMerge(defaults, fileConfig) as ConfigObject;
 
-  // 4. Write back to file (Auto-Update)
-  try {
-    saveConfigFile(configPath, baseConfig);
-  } catch (error) {
-    console.warn(`Failed to save config file to ${configPath}: ${error}`);
+  // 4. Write back to file (Auto-Update) - ONLY if using default path
+  if (!isReadOnlyConfig) {
+    try {
+      saveConfigFile(configPath, baseConfig);
+    } catch (error) {
+      console.warn(`Failed to save config file to ${configPath}: ${error}`);
+    }
   }
 
   // 5. Map Env Vars and CLI Args
@@ -352,41 +371,6 @@ export function loadConfig(
   }
 
   return AppConfigSchema.parse(mergedInput);
-}
-
-function determineConfigPath(options: LoadConfigOptions, cliConfigPath?: string): string {
-  // 1. Explicit path (CLI or Options)
-  if (cliConfigPath) return cliConfigPath;
-  if (options.configPath) return options.configPath;
-  if (process.env.DOCS_MCP_CONFIG) return process.env.DOCS_MCP_CONFIG;
-
-  // 2. Search Candidates (in order of preference for *loading*)
-  // We check these locations for an *existing* file.
-  let projectRoot: string | undefined;
-  try {
-    projectRoot = getProjectRoot();
-  } catch {
-    // Ignore error if project root cannot be found (e.g. valid in tests or global install)
-  }
-
-  const searchDirs = [systemPaths.config, projectRoot, process.cwd()].filter(
-    (d): d is string => !!d,
-  );
-
-  for (const dir of searchDirs) {
-    const yamlPath = path.join(dir, "config.yaml");
-    if (fs.existsSync(yamlPath)) return yamlPath;
-
-    const ymlPath = path.join(dir, "config.yml");
-    if (fs.existsSync(ymlPath)) return ymlPath;
-
-    const jsonPath = path.join(dir, "config.json");
-    if (fs.existsSync(jsonPath)) return jsonPath;
-  }
-
-  // 3. Default (if no existing config found)
-  // Use the system config path
-  return path.join(systemPaths.config, "config.yaml");
 }
 
 function loadConfigFile(filePath: string): Record<string, unknown> | null {
@@ -418,6 +402,7 @@ function saveConfigFile(filePath: string, config: Record<string, unknown>): void
     content = yaml.stringify(config);
   }
 
+  logger.debug(`Updating config file at ${filePath}`);
   fs.writeFileSync(filePath, content, "utf8");
 }
 

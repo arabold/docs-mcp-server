@@ -161,16 +161,14 @@ To stop the server, press `Ctrl+C`.
 
 You can create a `config.json` or `config.yaml` file to persist your settings. The server searches for this file in:
 
-1. The path specified by `--config`.
-2. The path specified by `DOCS_MCP_CONFIG` environment variable.
-3. The system default configuration directory:
+1. The path specified by `--config` (**Read-Only**).
+2. The path specified by `DOCS_MCP_CONFIG` environment variable (**Read-Only**).
+3. The system default configuration directory (**Read-Write**):
    - **macOS**: `~/Library/Preferences/docs-mcp-server/config.yaml`
    - **Linux**: `~/.config/docs-mcp-server/config.yaml` (or defined by `$XDG_CONFIG_HOME`)
    - **Windows**: `%APPDATA%\docs-mcp-server\config\config.yaml`
-4. The project root directory (if detected).
-5. The current working directory.
 
-> **Note:** On startup, the server will automatically create or update the configuration file in one of these locations (preferring the system default if no other file is found) to ensure it contains all available settings.
+> **Note:** On startup, if no explicit configuration file is provided, the server will seek the system default config. If present, it loads it. If missing, it creates it with default values. It will also update it with any new setting keys. If you provide a custom config via `--config` or env var, the server treats it as **Read-Only** and will NOT modify it or write defaults back to it.
 
 **Example `config.yaml`:**
 

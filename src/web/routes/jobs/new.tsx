@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ScrapeTool } from "../../../tools/ScrapeTool";
 import { ScrapeMode } from "../../../scraper/types";
+import type { AppConfig } from "../../../utils/config";
 import { logger } from "../../../utils/logger";
 import AddJobButton from "../../components/AddJobButton";
 import AddVersionButton from "../../components/AddVersionButton";
@@ -16,12 +17,18 @@ import { ValidationError } from "../../../tools/errors";
  */
 export function registerNewJobRoutes(
   server: FastifyInstance,
-  scrapeTool: ScrapeTool
+  scrapeTool: ScrapeTool,
+  scraperConfig: AppConfig["scraper"]
 ) {
   // GET /web/jobs/new - Return the form component wrapped in its container
   server.get("/web/jobs/new", async () => {
     // Return the wrapper component which includes the container div
-    return <ScrapeForm defaultExcludePatterns={DEFAULT_EXCLUSION_PATTERNS} />;
+    return (
+      <ScrapeForm
+        defaultExcludePatterns={DEFAULT_EXCLUSION_PATTERNS}
+        scraperConfig={scraperConfig}
+      />
+    );
   });
 
   // GET /web/jobs/new-button - Return just the button to collapse the form

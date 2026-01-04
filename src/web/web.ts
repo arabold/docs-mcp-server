@@ -65,7 +65,7 @@ export async function startWebServer(
   // Register routes
   registerIndexRoute(server); // Register the root route first
   registerJobListRoutes(server, listJobsTool);
-  registerNewJobRoutes(server, scrapeTool);
+  registerNewJobRoutes(server, scrapeTool, config.scraper);
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
   registerLibrariesRoutes(server, listLibrariesTool, removeTool, refreshVersionTool);

@@ -64,7 +64,7 @@ export async function registerWebService(
     docService,
   );
   registerJobListRoutes(server, listJobsTool);
-  registerNewJobRoutes(server, scrapeTool);
+  registerNewJobRoutes(server, scrapeTool, appConfig.scraper);
   registerCancelJobRoute(server, cancelJobTool);
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
   registerEventsRoute(server, eventBus);
