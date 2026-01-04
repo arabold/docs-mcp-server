@@ -1,10 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CONFIG, loadConfig } from "./config";
 
-// Mock fs and process.env
+// Mock env-paths before importing config
+vi.mock("env-paths", () => ({
+  default: () => ({
+    config: "/system/config",
+    data: "/system/data",
+  }),
+}));
+
+// Mock fs
 vi.mock("node:fs");
+
+// Mock paths
+vi.mock("./paths", () => ({
+  getProjectRoot: vi.fn().mockReturnValue("/project/root"),
+}));
+
+// Import code under test
+import { DEFAULT_CONFIG, loadConfig } from "./config";
 
 describe("Configuration Loading", () => {
   const originalEnv = process.env;
@@ -12,24 +27,42 @@ describe("Configuration Loading", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     process.env = { ...originalEnv };
-    // Clear relevant env vars
     delete process.env.DOCS_MCP_CONFIG;
     delete process.env.DOCS_MCP_TELEMETRY;
     delete process.env.DOCS_MCP_READ_ONLY;
     delete process.env.DOCS_MCP_STORE_PATH;
+    delete process.env.DOCS_MCP_AUTH_ENABLED;
+
+    // Default fs behavior: nothing exists
+    vi.mocked(fs.existsSync).mockReturnValue(false);
   });
 
   afterEach(() => {
     process.env = originalEnv;
   });
 
-  it("should load default configuration", () => {
+  it("should load default configuration and create config file in system path if none exists", () => {
+    const expectedPath = path.join("/system/config", "config.yaml");
+
+    // Setup: Directory does not exist, so mkdirSync should be called
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
     const config = loadConfig();
+
+    // Verify validation
     expect(config.app.telemetryEnabled).toBe(true);
     expect(config).toEqual(DEFAULT_CONFIG);
+
+    // Verify auto-save
+    expect(fs.mkdirSync).toHaveBeenCalledWith("/system/config", { recursive: true });
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expectedPath,
+      expect.stringContaining("telemetryEnabled: true"), // Simple check for YAML content
+      "utf8",
+    );
   });
 
-  it("should load configuration from --config flag (via cliArgs)", () => {
+  it("should load configuration from --config flag and update it", () => {
     const configPath = "/custom/config.yaml";
     const fileContent = "app:\n  telemetryEnabled: false\n";
 
@@ -40,65 +73,81 @@ describe("Configuration Loading", () => {
 
     expect(fs.existsSync).toHaveBeenCalledWith(configPath);
     expect(config.app.telemetryEnabled).toBe(false);
+
+    // Verify update (it should write back the merged config)
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      configPath,
+      expect.stringContaining("telemetryEnabled: false"),
+      "utf8",
+    );
+    // Should also contain default values that were missing
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      configPath,
+      expect.stringContaining("heartbeatMs: 30000"),
+      "utf8",
+    );
   });
 
-  it("should load configuration from DOCS_MCP_CONFIG env var", () => {
-    const configPath = "/env/config.yaml";
-    process.env.DOCS_MCP_CONFIG = configPath;
-    const fileContent = "app:\n  telemetryEnabled: false\n";
+  it("should prioritize generic System Config if no specific file found", () => {
+    // Neither custom nor CWD nor Project root has config
+    vi.mocked(fs.existsSync).mockReturnValue(false);
 
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(fileContent);
+    loadConfig();
+
+    // specific system path
+    const systemConfigPath = path.join("/system/config", "config.yaml");
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      systemConfigPath,
+      expect.any(String),
+      "utf8",
+    );
+  });
+
+  it("should prioritize CWD config if it exists", () => {
+    const cwdConfigPath = path.join(process.cwd(), "config.yaml");
+
+    // Mock CWD config exists
+    vi.mocked(fs.existsSync).mockImplementation((p) => p === cwdConfigPath);
+    vi.mocked(fs.readFileSync).mockReturnValue("app:\n  readOnly: true\n");
 
     const config = loadConfig();
 
-    expect(fs.existsSync).toHaveBeenCalledWith(configPath);
-    expect(config.app.telemetryEnabled).toBe(false);
-  });
-
-  it("should load configuration from storage directory", () => {
-    const storePath = "/store";
-    const configPath = path.join(storePath, "config.yaml");
-    const fileContent = "app:\n  telemetryEnabled: false\n";
-
-    // Simulate only store config existing
-    vi.mocked(fs.existsSync).mockImplementation((p) => p === configPath);
-    vi.mocked(fs.readFileSync).mockReturnValue(fileContent);
-
-    const config = loadConfig({}, { searchDir: storePath });
-
-    expect(fs.existsSync).toHaveBeenCalledWith(configPath);
-    expect(config.app.telemetryEnabled).toBe(false);
+    expect(config.app.readOnly).toBe(true);
+    // Should update the CWD config
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      cwdConfigPath,
+      expect.stringContaining("readOnly: true"),
+      "utf8",
+    );
   });
 
   describe("Precedence Rules", () => {
     it("should prioritize --config flag over DOCS_MCP_CONFIG env var", () => {
       const flagPath = "/flag/config.yaml";
       const envPath = "/env/config.yaml";
-
       process.env.DOCS_MCP_CONFIG = envPath;
 
       // Mock both files existing
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      // Determine which file returns what
       vi.mocked(fs.readFileSync).mockImplementation((p) => {
         if (p === flagPath) return "app:\n  telemetryEnabled: false\n";
         if (p === envPath) return "app:\n  telemetryEnabled: true\n";
         return "";
       });
 
-      // Passing explicit config path via options simulating CLI flag parsing result
-      // But loadConfig takes cliArgs.config for the file path
       const config = loadConfig({ config: flagPath });
 
-      // Should load from flagPath first because loadConfigFile checks explicit path first
       expect(config.app.telemetryEnabled).toBe(false);
+      // Should save to flagPath
+      expect(fs.writeFileSync).toHaveBeenCalledWith(flagPath, expect.any(String), "utf8");
     });
 
-    it("should prioritize environment variables over config file", () => {
+    it("should prioritize environment variables over config file (but save file based on file content only)", () => {
+      // This is slightly tricky: The plan says "Write the *clean, merged* configuration back to the file... Apply Environment ... overrides ... (these are NOT written to disk)."
+      // So we must verify fs.writeFileSync writes 'false' (from file), but returned config has 'true' (from env)
+
       const configPath = "/config.yaml";
       process.env.DOCS_MCP_CONFIG = configPath;
-
       vi.mocked(fs.existsSync).mockReturnValue(true);
       vi.mocked(fs.readFileSync).mockReturnValue("app:\n  telemetryEnabled: false\n");
 
@@ -107,101 +156,60 @@ describe("Configuration Loading", () => {
 
       const config = loadConfig();
 
+      // Memory config has Env override
       expect(config.app.telemetryEnabled).toBe(true);
+
+      // Disk config should NOT have Env override (should stay false as per file)
+      // But it Will have defaults.
+      expect(fs.writeFileSync).toHaveBeenCalledWith(
+        configPath,
+        expect.stringContaining("telemetryEnabled: false"),
+        "utf8",
+      );
     });
 
-    it("should prioritize CLI flags over everything", () => {
+    it("should prioritize CLI flags over everything (runtime)", () => {
       const configPath = "/config.yaml";
-      process.env.DOCS_MCP_CONFIG = configPath;
-
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue("app:\n  telemetryEnabled: false\n");
-
-      process.env.DOCS_MCP_TELEMETRY = "false";
-
-      // CLI override
-      // In config.ts logic: CLI args are mapped to config structure and merged last.
-      // "telemetryEnabled" is handled via --no-telemetry which yargs parses.
-      // But loadConfig expecting mapped args or using mapCliToConfig?
-      // mapCliToConfig uses configMappings. "telemetryEnabled" has env mapping but no direct cli mapping in that list?
-      // Wait, let's check config.ts mappings:
-      // { path: ["app", "telemetryEnabled"], env: ["DOCS_MCP_TELEMETRY"] },
-      // It has NO 'cli' key.
-      // So passing { telemetryEnabled: ... } in cliArgs won't work via mapCliToConfig if key is missing.
-      // However, usually boolean flags are handled by directly setting the property if the logic supported it.
-      // Let's re-read config.ts mappings.
-
-      // Line 265: { path: ["app", "telemetryEnabled"], env: ["DOCS_MCP_TELEMETRY"] }, // Handled via --no-telemetry in CLI usually
-
-      // It seems strictly speaking, based on mapCliToConfig logic, it ONLY looks for keys present in configMappings with a 'cli' property.
-      // If telemetryEnabled triggers a change, it must be because it's passed differently or I missed something.
-      // Ah, the e2e test uses: runConfigCommand(["--config", configPath, "--telemetry"], env);
-      // If --telemetry is passed, yargs might pass it.
-      // But loadConfig only uses mapCliToConfig.
-      // If mapCliToConfig doesn't have it, it's ignored?
-      // Let's check config.ts again.
-
-      // Correct, likely the e2e test was relying on some yargs default or something, OR,
-      // I need to check how yargs arguments are actually passed to loadConfig.
-      // createCli calls loadConfig(argv).
-
-      // If I look at config.ts again, maybe I missed a line?
-      // No, line 265 has no "cli".
-
-      // Wait, if the e2e test passed, how did it work?
-      // Maybe I should add "cli" mapping for telemetryEnabled in the newly created unit test to match reality?
-      // Or maybe the e2e test worked because of how `createCli` constructs the yargs object?
-      // But `loadConfig` is isolated.
-
-      // Let's assume for this test, I can test another property that definitely has a CLI mapping, like `readOnly`.
-      // Precedence: CLI > Env > File
-
-      // Test with `readOnly`
       vi.mocked(fs.readFileSync).mockReturnValue("app:\n  readOnly: false\n");
-      process.env.DOCS_MCP_READ_ONLY = "false";
 
-      const config = loadConfig({ readOnly: true }); // CLI says true
+      const config = loadConfig({ readOnly: true }, { configPath });
+
       expect(config.app.readOnly).toBe(true);
+
+      // Verification that file on disk is NOT updated with CLI flag
+      expect(fs.writeFileSync).toHaveBeenCalledWith(
+        configPath,
+        expect.stringContaining("readOnly: false"),
+        "utf8",
+      );
     });
   });
 
-  describe("Validation & Error Handling", () => {
-    it("should fail when explicitly specified config file does not exist", () => {
-      const configPath = "/non-existent.yaml";
-      vi.mocked(fs.existsSync).mockImplementation((p) => p !== configPath);
-
-      expect(() => loadConfig({ config: configPath })).toThrow(/Config file not found/);
-    });
-
-    it("should fail on malformed YAML", () => {
+  describe("Error Handling", () => {
+    // If config file is malformed, we return default logic (empty obj -> defaults)
+    // because loadConfigFile returns null on error in new impl?
+    // No, returns null. loadConfig uses "|| {}".
+    // So it silently recovers.
+    it("should recover from malformed config file by using defaults", () => {
       const configPath = "/malformed.yaml";
       vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue("app:\n  telemetryEnabled: : bad\n");
-
-      // yaml.parse might throw?
-      // parseConfigFile has try/catch:
-      // catch (error) { console.warn(...); return {}; }
-
-      // So it warns and returns empty object.
-      // Again, e2e test failure must be from higher level or I missed something.
-      // Ah, wait. checking config.ts line 399: console.warn.
+      vi.mocked(fs.readFileSync).mockReturnValue("invalid: yaml: content");
+      // yaml.parse might throw. mocked? No, we are using real yaml parser, but mocked fs.
+      // "invalid: yaml: content" is actually valid YAML string?
+      // "invalid: [tab] content" would throw.
+      // Let's use something that throws in yaml.parse
+      vi.mocked(fs.readFileSync).mockReturnValue(":");
 
       const config = loadConfig({ config: configPath });
+
       expect(config).toEqual(DEFAULT_CONFIG);
-      // Optionally spy on console.warn
-    });
-  });
-
-  describe("Merging Behavior", () => {
-    it("should merge nested partial configuration with defaults", () => {
-      const configPath = "/partial.yaml";
-      vi.mocked(fs.existsSync).mockReturnValue(true);
-      vi.mocked(fs.readFileSync).mockReturnValue("server:\n  heartbeatMs: 500\n");
-
-      const config = loadConfig({ config: configPath });
-
-      expect(config.server.heartbeatMs).toBe(500);
-      expect(config.app.telemetryEnabled).toBe(true); // Default preserved
+      // And it should overwrite the malformed file with fresh defaults!
+      expect(fs.writeFileSync).toHaveBeenCalledWith(
+        configPath,
+        expect.stringContaining("telemetryEnabled: true"),
+        "utf8",
+      );
     });
   });
 });

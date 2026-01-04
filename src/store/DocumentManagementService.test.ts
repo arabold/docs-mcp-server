@@ -12,11 +12,17 @@ vi.mock("../utils/paths", () => ({
 }));
 
 // Mock env-paths using mockImplementation
-const mockEnvPaths = { data: "/mock/env/path/data" };
-const mockEnvPathsFn = vi.fn().mockReturnValue(mockEnvPaths); // Keep the spy/implementation separate
+const mockEnvPaths = {
+  data: "/mock/env/path/data",
+  config: "/mock/env/path/config",
+};
+const mockEnvPathsFn = vi.fn().mockReturnValue(mockEnvPaths);
+
 vi.mock("env-paths", () => ({
-  // Mock with a placeholder function initially
-  default: vi.fn(),
+  default: vi.fn(() => ({
+    data: "/mock/env/path/data",
+    config: "/mock/env/path/config",
+  })),
 }));
 
 import envPaths from "env-paths";

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import envPaths from "env-paths";
 import yaml from "yaml";
 import { z } from "zod";
 import { getProjectRoot } from "./paths";
@@ -312,25 +313,36 @@ export interface LoadConfigOptions {
   searchDir?: string; // Search directory (store path)
 }
 
+// System-specific paths
+const systemPaths = envPaths("docs-mcp-server", { suffix: "" });
+
 export function loadConfig(
   cliArgs: Record<string, unknown> = {},
   options: LoadConfigOptions = {},
 ): AppConfig {
-  // 1. Load Config File
-  const fileConfig = loadConfigFile(options, cliArgs.config as string);
+  // 1. Determine Config File Path
+  const configPath = determineConfigPath(options, cliArgs.config as string);
 
-  // 2. Map Env Vars and CLI Args to nested structure
+  // 2. Load Config File (if exists) or use empty object
+  const fileConfig = loadConfigFile(configPath) || {};
+
+  // 3. Merge Defaults < File
+  const baseConfig = deepMerge(defaults, fileConfig) as ConfigObject;
+
+  // 4. Write back to file (Auto-Update)
+  try {
+    saveConfigFile(configPath, baseConfig);
+  } catch (error) {
+    console.warn(`Failed to save config file to ${configPath}: ${error}`);
+  }
+
+  // 5. Map Env Vars and CLI Args
   const envConfig = mapEnvToConfig();
   const cliConfig = mapCliToConfig(cliArgs);
 
-  // 3. Merge: Defaults (base) < File < Env < CLI
-  // We rely on Zod to apply defaults to the merged result of File < Env < CLI
-  // BUT deep merging is tricky.
-  // Strategy: Start with empty object, deep merge File -> Env -> CLI.
-  // Then parse with Zod, which will fill in defaults for missing keys.
-
+  // 6. Merge: Base < Env < CLI
   const mergedInput = deepMerge(
-    fileConfig,
+    baseConfig,
     deepMerge(envConfig, cliConfig),
   ) as ConfigObject;
 
@@ -342,78 +354,71 @@ export function loadConfig(
   return AppConfigSchema.parse(mergedInput);
 }
 
-function loadConfigFile(
-  options: LoadConfigOptions,
-  cliConfigPath?: string,
-): Record<string, unknown> {
-  const candidatePaths: string[] = [];
+function determineConfigPath(options: LoadConfigOptions, cliConfigPath?: string): string {
+  // 1. Explicit path (CLI or Options)
+  if (cliConfigPath) return cliConfigPath;
+  if (options.configPath) return options.configPath;
+  if (process.env.DOCS_MCP_CONFIG) return process.env.DOCS_MCP_CONFIG;
 
-  // 1. Explicit path
-  if (cliConfigPath) {
-    if (!fs.existsSync(cliConfigPath)) {
-      throw new Error(`Config file not found: ${cliConfigPath}`);
-    }
-    candidatePaths.push(cliConfigPath);
-  }
-  if (options.configPath) {
-    if (!fs.existsSync(options.configPath)) {
-      throw new Error(`Config file not found: ${options.configPath}`);
-    }
-    candidatePaths.push(options.configPath);
-  }
-  if (process.env.DOCS_MCP_CONFIG) {
-    if (!fs.existsSync(process.env.DOCS_MCP_CONFIG)) {
-      throw new Error(`Config file not found: ${process.env.DOCS_MCP_CONFIG}`);
-    }
-    candidatePaths.push(process.env.DOCS_MCP_CONFIG);
-  }
-
-  // 2. Storage Directory
-  if (options.searchDir) {
-    candidatePaths.push(path.join(options.searchDir, "config.yaml"));
-    candidatePaths.push(path.join(options.searchDir, "config.yml"));
-    candidatePaths.push(path.join(options.searchDir, "config.json"));
-  }
-
-  // 3. Binary/Project Root
+  // 2. Search Candidates (in order of preference for *loading*)
+  // We check these locations for an *existing* file.
+  let projectRoot: string | undefined;
   try {
-    const projectRoot = getProjectRoot();
-    if (projectRoot) {
-      candidatePaths.push(path.join(projectRoot, "config.yaml"));
-      candidatePaths.push(path.join(projectRoot, "config.yml"));
-      candidatePaths.push(path.join(projectRoot, "config.json"));
-    }
+    projectRoot = getProjectRoot();
   } catch {
-    // Ignore if project root not found
+    // Ignore error if project root cannot be found (e.g. valid in tests or global install)
   }
 
-  // 4. CWD
-  const cwd = process.cwd();
-  candidatePaths.push(path.join(cwd, "config.yaml"));
-  candidatePaths.push(path.join(cwd, "config.yml"));
-  candidatePaths.push(path.join(cwd, "config.json"));
-  candidatePaths.push(path.join(cwd, "docs-mcp.config.yaml")); // Legacy fallback
+  const searchDirs = [systemPaths.config, projectRoot, process.cwd()].filter(
+    (d): d is string => !!d,
+  );
 
-  for (const p of candidatePaths) {
-    if (fs.existsSync(p)) {
-      return parseConfigFile(p);
-    }
+  for (const dir of searchDirs) {
+    const yamlPath = path.join(dir, "config.yaml");
+    if (fs.existsSync(yamlPath)) return yamlPath;
+
+    const ymlPath = path.join(dir, "config.yml");
+    if (fs.existsSync(ymlPath)) return ymlPath;
+
+    const jsonPath = path.join(dir, "config.json");
+    if (fs.existsSync(jsonPath)) return jsonPath;
   }
 
-  return {};
+  // 3. Default (if no existing config found)
+  // Use the system config path
+  return path.join(systemPaths.config, "config.yaml");
 }
 
-function parseConfigFile(filePath: string): Record<string, unknown> {
-  const content = fs.readFileSync(filePath, "utf8");
+function loadConfigFile(filePath: string): Record<string, unknown> | null {
+  if (!fs.existsSync(filePath)) return null;
+
   try {
+    const content = fs.readFileSync(filePath, "utf8");
     if (filePath.endsWith(".json")) {
       return JSON.parse(content);
     }
     return yaml.parse(content) || {};
   } catch (error) {
     console.warn(`Failed to parse config file ${filePath}: ${error}`);
-    return {};
+    return null;
   }
+}
+
+function saveConfigFile(filePath: string, config: Record<string, unknown>): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  let content: string;
+  if (filePath.endsWith(".json")) {
+    content = JSON.stringify(config, null, 2);
+  } else {
+    // Default to YAML
+    content = yaml.stringify(config);
+  }
+
+  fs.writeFileSync(filePath, content, "utf8");
 }
 
 function mapEnvToConfig(): Record<string, unknown> {

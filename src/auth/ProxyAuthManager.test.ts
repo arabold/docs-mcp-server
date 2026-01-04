@@ -5,7 +5,7 @@
 import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import { HttpResponse, http } from "msw";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProxyAuthManager } from "./ProxyAuthManager";
 import type { AuthConfig } from "./types";
 

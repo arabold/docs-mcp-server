@@ -15,11 +15,16 @@ Configuration values are merged from four layers, with **higher numbers taking p
 
 1.  **Defaults**: Hardcoded application defaults (lowest priority).
 2.  **Config File**: Settings loaded from a configuration file (`config.yaml` or `config.json`).
-    *   The file is searched for in the following order:
-        1.  Path specified by `--config` CLI flag.
-        2.  Path specified by `DOCS_MCP_CONFIG` environment variable.
-        3.  The global storage directory (`~/.docs-mcp-server/config.yaml`).
-        4.  The current working directory (`./config.yaml`).
+    - The file is searched for in the following order:
+      1.  Path specified by `--config` CLI flag.
+      2.  Path specified by `DOCS_MCP_CONFIG` environment variable.
+      3.  The system default configuration directory (managed by `env-paths`):
+          - **macOS**: `~/Library/Preferences/docs-mcp-server/config.yaml`
+          - **Linux**: `~/.config/docs-mcp-server/config.yaml` (or `$XDG_CONFIG_HOME`)
+          - **Windows**: `%APPDATA%\docs-mcp-server\config\config.yaml`
+      4.  The project root directory (`./config.yaml` if detected).
+      5.  The current working directory (`./config.yaml`).
+    - **Auto-Update**: On startup, the server automatically writes the current configuration back to the loaded file (or the system default file if none exists). This ensures your config file always contains the latest available options and defaults.
 3.  **Environment Variables**: Mapped system environment variables (e.g., `DOCS_MCP_PORT`).
 4.  **CLI Arguments**: Flags passed directly to the command (e.g., `--port 8080`). These have the highest priority.
 
@@ -30,72 +35,79 @@ Configuration values are merged from four layers, with **higher numbers taking p
 The configuration is structured into logical sections.
 
 ### App (`app`)
+
 General application settings.
 
-| Option | Env Var | CLI Flag | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `storePath` | `DOCS_MCP_STORE_PATH` | `--store-path` | `~/.docs-mcp-server` | Directory for storing databases and logs. |
-| `telemetryEnabled` | `DOCS_MCP_TELEMETRY` | `--telemetry` | `true` | Enable anonymous usage telemetry. |
-| `readOnly` | `DOCS_MCP_READ_ONLY` | `--read-only` | `false` | Prevent modification of data (scraping/indexing). |
-| `embeddingModel` | `DOCS_MCP_EMBEDDING_MODEL` | `--embedding-model` | `text-embedding-3-small` | Model to use for vector embeddings. |
+| Option             | Env Var                    | CLI Flag            | Default                  | Description                                       |
+| :----------------- | :------------------------- | :------------------ | :----------------------- | :------------------------------------------------ |
+| `storePath`        | `DOCS_MCP_STORE_PATH`      | `--store-path`      | `~/.docs-mcp-server`     | Directory for storing databases and logs.         |
+| `telemetryEnabled` | `DOCS_MCP_TELEMETRY`       | `--telemetry`       | `true`                   | Enable anonymous usage telemetry.                 |
+| `readOnly`         | `DOCS_MCP_READ_ONLY`       | `--read-only`       | `false`                  | Prevent modification of data (scraping/indexing). |
+| `embeddingModel`   | `DOCS_MCP_EMBEDDING_MODEL` | `--embedding-model` | `text-embedding-3-small` | Model to use for vector embeddings.               |
 
 ### Server (`server`)
+
 Settings for the API and MCP servers.
 
-| Option | Env Var | CLI Flag | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `protocol` | `DOCS_MCP_PROTOCOL` | `--protocol` | `auto` | Server protocol (`stdio`, `http`, or `auto`). |
-| `host` | `DOCS_MCP_HOST` | `--host` | `127.0.0.1` | Host interface to bind to. |
-| `heartbeatMs` | - | - | `30000` | MCP protocol heartbeat interval (ms). |
-| `ports.default` | `DOCS_MCP_PORT` | `--port` | `6280` | Default port for the main server. |
-| `ports.worker` | - | - | `8080` | Port for the background worker service. |
-| `ports.mcp` | - | - | `6280` | Port for the specific MCP interface. |
-| `ports.web` | `DOCS_MCP_WEB_PORT` | - | `6281` | Port for the web dashboard. |
+| Option          | Env Var             | CLI Flag     | Default     | Description                                   |
+| :-------------- | :------------------ | :----------- | :---------- | :-------------------------------------------- |
+| `protocol`      | `DOCS_MCP_PROTOCOL` | `--protocol` | `auto`      | Server protocol (`stdio`, `http`, or `auto`). |
+| `host`          | `DOCS_MCP_HOST`     | `--host`     | `127.0.0.1` | Host interface to bind to.                    |
+| `heartbeatMs`   | -                   | -            | `30000`     | MCP protocol heartbeat interval (ms).         |
+| `ports.default` | `DOCS_MCP_PORT`     | `--port`     | `6280`      | Default port for the main server.             |
+| `ports.worker`  | -                   | -            | `8080`      | Port for the background worker service.       |
+| `ports.mcp`     | -                   | -            | `6280`      | Port for the specific MCP interface.          |
+| `ports.web`     | `DOCS_MCP_WEB_PORT` | -            | `6281`      | Port for the web dashboard.                   |
 
 ### Authentication (`auth`)
+
 Security settings for the HTTP server.
 
-| Option | Env Var | CLI Flag | Default | Description |
-| :--- | :--- | :--- | :--- | :--- |
-| `enabled` | `DOCS_MCP_AUTH_ENABLED` | `--auth-enabled` | `false` | Enable JWT authentication. |
-| `issuerUrl` | `DOCS_MCP_AUTH_ISSUER_URL` | `--auth-issuer-url` | - | OIDC Issuer URL (e.g., Clerk, Auth0). |
-| `audience` | `DOCS_MCP_AUTH_AUDIENCE` | `--auth-audience` | - | Expected JWT audience claim. |
+| Option      | Env Var                    | CLI Flag            | Default | Description                           |
+| :---------- | :------------------------- | :------------------ | :------ | :------------------------------------ |
+| `enabled`   | `DOCS_MCP_AUTH_ENABLED`    | `--auth-enabled`    | `false` | Enable JWT authentication.            |
+| `issuerUrl` | `DOCS_MCP_AUTH_ISSUER_URL` | `--auth-issuer-url` | -       | OIDC Issuer URL (e.g., Clerk, Auth0). |
+| `audience`  | `DOCS_MCP_AUTH_AUDIENCE`   | `--auth-audience`   | -       | Expected JWT audience claim.          |
 
 ### Scraper (`scraper`)
+
 Settings controlling the web scraping behavior.
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `maxPages` | `1000` | Maximum number of pages to crawl per job. |
-| `maxDepth` | `3` | Maximum link depth to traverse. |
-| `maxConcurrency` | `3` | Number of concurrent page fetches. |
-| `pageTimeoutMs` | `5000` | Timeout for a single page load. |
-| `browserTimeoutMs` | `30000` | Timeout for the browser instance. |
-| `fetcher.maxRetries` | `6` | Number of retries for failed requests. |
-| `fetcher.baseDelayMs` | `1000` | Initial delay for exponential backoff. |
+| Option                | Default | Description                               |
+| :-------------------- | :------ | :---------------------------------------- |
+| `maxPages`            | `1000`  | Maximum number of pages to crawl per job. |
+| `maxDepth`            | `3`     | Maximum link depth to traverse.           |
+| `maxConcurrency`      | `3`     | Number of concurrent page fetches.        |
+| `pageTimeoutMs`       | `5000`  | Timeout for a single page load.           |
+| `browserTimeoutMs`    | `30000` | Timeout for the browser instance.         |
+| `fetcher.maxRetries`  | `6`     | Number of retries for failed requests.    |
+| `fetcher.baseDelayMs` | `1000`  | Initial delay for exponential backoff.    |
 
-*Note: Scraper settings are often overridden per-job via CLI arguments.*
+_Note: Scraper settings are often overridden per-job via CLI arguments._
 
 ### Splitter (`splitter`)
+
 Settings for chunking text for vector search.
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `minChunkSize` | `500` | Minimum characters per chunk. |
-| `preferredChunkSize` | `1500` | Target characters per chunk. |
-| `maxChunkSize` | `5000` | Maximum characters per chunk. |
+| Option               | Default | Description                   |
+| :------------------- | :------ | :---------------------------- |
+| `minChunkSize`       | `500`   | Minimum characters per chunk. |
+| `preferredChunkSize` | `1500`  | Target characters per chunk.  |
+| `maxChunkSize`       | `5000`  | Maximum characters per chunk. |
 
 ### Embeddings (`embeddings`)
+
 Settings for the vector embedding generation.
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `batchSize` | `100` | Number of chunks to embed in one request. |
-| `vectorDimension` | `1536` | Dimension of the vector space (must match model). |
+| Option            | Default | Description                                       |
+| :---------------- | :------ | :------------------------------------------------ |
+| `batchSize`       | `100`   | Number of chunks to embed in one request.         |
+| `vectorDimension` | `1536`  | Dimension of the vector space (must match model). |
 
 ### Database (`db`)
+
 Internal database settings.
 
-| Option | Default | Description |
-| :--- | :--- | :--- |
-| `migrationMaxRetries` | `5` | Retries for database migrations on startup. |
+| Option                | Default | Description                                 |
+| :-------------------- | :------ | :------------------------------------------ |
+| `migrationMaxRetries` | `5`     | Retries for database migrations on startup. |
