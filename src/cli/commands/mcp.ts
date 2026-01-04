@@ -130,16 +130,7 @@ export function createMcpCommand(cli: Argv) {
       }
 
       try {
-        // Resolve embedding configuration for local execution
-        const embeddingConfig = resolveEmbeddingContext(appConfig.app.embeddingModel);
         const serverUrl = argv.serverUrl as string | undefined;
-
-        if (!serverUrl && !embeddingConfig) {
-          logger.error(
-            "❌ Embedding configuration is required for local mode. Configure an embedding provider with CLI options or environment variables.",
-          );
-          process.exit(1);
-        }
 
         const eventBus = getEventBus(argv as CliContext);
 

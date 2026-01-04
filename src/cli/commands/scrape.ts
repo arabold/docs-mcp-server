@@ -130,65 +130,10 @@ export function createScrapeCommand(cli: Argv) {
       const url = argv.url as string;
       const serverUrl = argv.serverUrl as string | undefined;
 
-      const _requestedMaxPages = argv.maxPages as number;
-      const _requestedMaxDepth = argv.maxDepth as number;
-      const _requestedMaxConcurrency = argv.maxConcurrency as number;
-      const _embeddingModelParam = argv.embeddingModel as string | undefined;
-
       const appConfig = loadConfig(argv, {
         configPath: argv.config as string,
         searchDir: argv.storePath as string, // resolved globally
       });
-
-      // Override config with CLI explicit values if they differ from defaults or if we blindly trust CLI overrides here?
-      // loadConfig already processed CLI args into appConfig via mapping?
-      // Wait, mapping in config.ts does NOT include SCRAPER options like maxPages.
-      // So appConfig still has defaults or loaded from file/env if I didn't add them to mapping.
-      // I should check `config.ts` mapping.
-      // I viewed it earlier (Step 108).
-      // `configMappings` has: protocol, storePath, telemetry, readOnly, ports, host, embeddingModel, auth.
-      // It DOES NOT have scraper options mapping.
-      // So `loadConfig(argv)` will not map `argv.maxPages` to `scraper.maxPages`.
-      // The old CLI manually overrode it.
-      // `appConfig.scraper.maxPages = requestedMaxPages;`
-      // But `requestedMaxPages` comes from CLI.
-      // I should do the same: manually update appConfig after load.
-      // OR I can pass overrides to loadConfig via `options`? No, loadConfig(cliArgs) maps mapped keys.
-      // I should update appConfig manually.
-
-      // But wait, `loadConfig` is called with `cliArgs`.
-      // If I want to support ENV vars for Scraper options, I should add them to `config.ts` mapping.
-      // But if I want to just support CLI overrides here:
-      // I'll update appConfig properties from argv.
-
-      // Actually, standard behavior in this app seems to be passing CLI options to AppConfig.
-      // I will manually update appConfig based on argv values here, confusingly.
-      // But Yargs has defaults. If user didn't specify, argv has default.
-      // If file has value, and user didn't specify CLI, we want File value.
-      // But Yargs default overrides file value??
-      // If I set Yargs default, argv always has value. I can't distinguish default vs user input easily without checking `yargs.parsed`.
-      // This is the "Yargs default vs Config File" problem.
-      // The solution is: do NOT set defaults in Yargs for things that can be configured in file.
-      // I set defaults in Yargs for scrape options above: `default: defaults.SCRAPER_MAX_PAGES`.
-      // This means CLI default will ALWAYS override Config File dependent on how I merge.
-      // If I do `appConfig.scraper.maxPages = argv.maxPages`, I overwrite File config with Yargs default.
-      // This breaks "Config File > Default".
-      // To fix this:
-      // 1. Remove defaults from Yargs options for config-backed values.
-      // 2. Use `argv.maxPages ?? appConfig.scraper.maxPages` logic?
-      //    If argv.maxPages is undefined (no CLI), use appConfig (File/Env/Default).
-      //    If argv.maxPages is defined (CLI), use it.
-      //    This is correct.
-      // So I should REMOVE defaults from Yargs for these options.
-      // And use `defaults` only for description or fallback if `appConfig` didn't have it (but appConfig always has it due to Zod).
-      // So: Remove Yargs defaults.
-
-      // Implementation adjustment:
-      // Remove `default: ...` from option definitions.
-      // In handler: `const maxPages = argv.maxPages as number ?? appConfig.scraper.maxPages;`
-      // Wait, `argv.maxPages` will be undefined if not provided.
-
-      // I will update the code content with this fix.
 
       const maxPages = (argv.maxPages as number) ?? appConfig.scraper.maxPages;
       const maxDepth = (argv.maxDepth as number) ?? appConfig.scraper.maxDepth;
