@@ -40,6 +40,9 @@
   --font-brand: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
+/* Force dark mode based on the 'dark' class on HTML element */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer components {
   a {
     @apply underline-offset-4;

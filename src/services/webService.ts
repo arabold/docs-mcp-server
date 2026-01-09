@@ -69,4 +69,20 @@ export async function registerWebService(
   registerClearCompletedJobsRoute(server, clearCompletedJobsTool);
   registerEventsRoute(server, eventBus);
   registerStatsRoute(server, docService);
+
+  // Register clean JSON API for VS Code extension (Global Search)
+  // This uses the existing SearchTool but exposes it via a simple GET endpoint
+  server.get<{ Querystring: { q: string } }>("/api/search", async (request, reply) => {
+    const query = request.query.q;
+    if (!query) return reply.status(400).send({ error: "Missing query" });
+    try {
+      // Execute global search (library=undefined)
+      const result = await searchTool.execute({ query, limit: 5, library: "" });
+      // SearchTool returns { results: [...] }
+      return result;
+    } catch (e) {
+      server.log.error(e);
+      return reply.status(500).send({ error: "Internal Server Error" });
+    }
+  });
 }

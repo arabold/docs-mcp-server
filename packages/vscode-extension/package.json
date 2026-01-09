@@ -1,0 +1,92 @@
+{
+  "name": "docs-mcp-extension",
+  "displayName": "Grounded Docs MCP Server",
+  "description": "VS Code extension for the Grounded Docs MCP Server - Intelligent documentation search and indexing.",
+  "version": "0.0.1",
+  "publisher": "grounded-tools",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "AI",
+    "Machine Learning"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arabold/docs-mcp-server.git"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onCommand:docs.openDashboard",
+    "onChatParticipant:docs.chatParticipant"
+  ],
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "docs-mcp-server",
+        "name": "Docs MCP Server"
+      }
+    ],
+    "commands": [
+      {
+        "command": "docs.openDashboard",
+        "title": "Docs: Open Dashboard",
+        "category": "Docs MCP"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "docs.chatParticipant",
+        "name": "docs",
+        "fullName": "Docs Agent",
+        "description": "Ask questions about documentation",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "search",
+            "description": "Search documentation directly"
+          },
+          {
+            "name": "ask",
+            "description": "Ask a question based on documentation"
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Docs MCP Server",
+      "properties": {
+        "docs-mcp-server.storePath": {
+          "type": "string",
+          "description": "Custom path for data storage directory",
+          "default": ""
+        },
+        "docs-mcp-server.port": {
+          "type": "number",
+          "description": "Port to run the server on (0 for random)",
+          "default": 0
+        },
+        "docs-mcp-server.runtimePath": {
+          "type": "string",
+          "description": "Absolute path to the Node.js executable. Leave empty to use 'node' from PATH.",
+          "default": ""
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run copy:server && npm run compile",
+    "copy:server": "mkdir -p server && cp ../../package.json server/ && cp ../../package-lock.json server/ && cp -r ../../dist/* server/ && cp -r ../../db server/ && cp -r ../../public server/",
+    "compile": "tsc -b",
+    "watch": "tsc -b -w",
+    "package": "vsce package",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.96.0",
+    "typescript": "^5.0.0",
+    "@biomejs/biome": "^2.3.7",
+    "vsce": "^2.15.0"
+  }
+}

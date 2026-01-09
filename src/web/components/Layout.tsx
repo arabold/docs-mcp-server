@@ -180,7 +180,7 @@ const Layout = ({
                   href="/"
                   class="text-lg font-semibold text-gray-900 dark:text-white hover:text-primary-500 dark:hover:text-primary-400 transition-colors font-brand"
                 >
-                  Docs MCP Server
+                  Grounded Docs
                 </a>
                 {versionString ? (
                   <span
@@ -239,7 +239,7 @@ const Layout = ({
                   href="/"
                   class="text-lg font-semibold text-gray-900 dark:text-white hover:text-primary-500 dark:hover:text-primary-400 transition-colors font-brand"
                 >
-                  Docs MCP Server
+                  Grounded Docs
                 </a>
                 {versionString ? (
                   <span
@@ -289,6 +289,31 @@ const Layout = ({
 
         {/* Bundled JS (includes Flowbite, HTMX, AlpineJS, and initialization) */}
         <script type="module" src="/assets/main.js"></script>
+
+        {/* VS Code Theme Integration */}
+        <script>
+          {`
+            window.addEventListener('message', (event) => {
+              if (event.data && event.data.type === 'theme') {
+                const { mode, vars } = event.data;
+                const html = document.documentElement;
+                
+                if (mode === 'dark') {
+                  html.classList.add('dark');
+                } else {
+                  html.classList.remove('dark');
+                }
+
+                // Apply dynamic VS Code variables
+                if (vars) {
+                  for (const [key, value] of Object.entries(vars)) {
+                    html.style.setProperty(key, value);
+                  }
+                }
+              }
+            });
+          `}
+        </script>
       </body>
     </html>
   );
