@@ -1,22 +1,23 @@
-# Tasks: Add ZIP Support
+# Tasks: Add Archive Support
 
 - [ ] Install dependencies <!-- id: 1 -->
-    - `npm install yauzl`
-    - `npm install -D @types/yauzl`
-- [ ] Create ZIP utility module `src/utils/zip.ts` <!-- id: 2 -->
-    - Function to check if file is ZIP (header/extension).
-    - Async wrapper around `yauzl` for Promise-based extraction/listing.
-    - Ensure robust stream handling and error propagation.
+    - `npm install yauzl tar`
+    - `npm install -D @types/yauzl @types/tar`
+- [ ] Create Archive utility module `src/utils/archive.ts` <!-- id: 2 -->
+    - Define `ArchiveAdapter` interface.
+    - Implement `ZipAdapter` using `yauzl`.
+    - Implement `TarAdapter` using `tar`.
+    - Create factory function to detect format and return correct adapter.
 - [ ] Update `LocalFileStrategy` <!-- id: 3 -->
-    - Modify `processItem` to handle ZIP files as directories.
-    - Implement "Virtual Path" resolution (detecting ZIP parent).
-    - Implement reading content from ZIP entries.
+    - Modify `processItem` to handle archive files as directories.
+    - Implement "Virtual Path" resolution (detecting archive parent).
+    - Use `ArchiveAdapter` to list and read content.
 - [ ] Update `WebScraperStrategy` <!-- id: 4 -->
-    - Detect Root URL as ZIP.
-    - Download Root ZIP to temp file.
-    - Process temp ZIP using Local file logic.
-    - Ensure non-root ZIP links are ignored.
+    - Detect Root URL as Archive (ZIP/TAR/GZ).
+    - Download Root Archive to temp file.
+    - Process temp Archive using Local file logic.
+    - Ensure non-root archive links are ignored.
 - [ ] Add Tests <!-- id: 5 -->
-    - Unit tests for `src/utils/zip.ts`.
-    - Integration test for `LocalFileStrategy` with a mock ZIP.
-    - Integration test for `WebScraperStrategy` with a mock ZIP response.
+    - Unit tests for `src/utils/archive.ts` (adapters).
+    - Integration test for `LocalFileStrategy` with mock ZIP and TAR files.
+    - Integration test for `WebScraperStrategy` with mock archive responses.

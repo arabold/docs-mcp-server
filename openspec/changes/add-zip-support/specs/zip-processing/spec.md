@@ -2,47 +2,35 @@
 
 ## ADDED Requirements
 
-### Requirement: Local ZIP Directory Traversal
-The system MUST treat local ZIP archives as directories when encountered during file scraping. It MUST list the contents of the ZIP and allow processing of supported file types within it.
+### Requirement: Local Archive Directory Traversal
+The system MUST treat local archives (ZIP, TAR, TGZ) as directories when encountered during file scraping. It MUST list the contents of the archive and allow processing of supported file types within it.
 
 #### Scenario: Scraping a local ZIP file
-Given a local file `archive.zip` containing `doc.md` and `image.png`
+Given a local file `archive.zip` containing `doc.md`
 When the scraper processes `file:///path/to/archive.zip`
 Then it should identify `archive.zip` as a directory
-And it should produce a link to `doc.md` (e.g., `file:///path/to/archive.zip/doc.md`)
-And it should produce a link to `image.png`
-And it should process `doc.md` content
+And it should produce a link to `doc.md`
 
-#### Scenario: Recursive ZIP discovery
-Given a local directory `/data` containing `project.zip`
-When the scraper processes `file:///data`
-Then it should identify `project.zip` as a subdirectory
-And it should traverse into `project.zip` to find contained files
+#### Scenario: Scraping a local TAR.GZ file
+Given a local file `data.tar.gz` containing `readme.txt`
+When the scraper processes `file:///path/to/data.tar.gz`
+Then it should identify `data.tar.gz` as a directory
+And it should produce a link to `readme.txt`
 
-### Requirement: Web Root ZIP Processing
-The system MUST support a ZIP file URL as a valid Root URL for the Web Scraper. It MUST download the ZIP and process its contents.
+### Requirement: Web Root Archive Processing
+The system MUST support an archive file URL (ZIP, TAR, TGZ) as a valid Root URL for the Web Scraper. It MUST download the archive and process its contents.
 
-#### Scenario: Scraping a Web ZIP Root
-Given a URL `https://example.com/docs.zip`
+#### Scenario: Scraping a Web Archive Root
+Given a URL `https://example.com/docs.tgz`
 When the scraper is started with this URL
-Then it should download `docs.zip`
-And it should process the contents of the ZIP file
-And the URLs of the contents should be valid `file://` or `http://` references (implementation detail: likely temp file paths)
+Then it should download `docs.tgz`
+And it should process the contents of the archive file
 
-### Requirement: Web Nested ZIP Exclusion
-The system MUST NOT process ZIP files found as links within a web page, treating them as binary/ignored content.
+### Requirement: Web Nested Archive Exclusion
+The system MUST NOT process archive files found as links within a web page.
 
-#### Scenario: Ignoring ZIP links on web pages
-Given a web page `https://example.com/index.html` linking to `download.zip`
-When the scraper crawls `index.html`
-Then it should NOT follow the link to `download.zip` for extraction
-And it should NOT attempt to crawl inside `download.zip`
+#### Scenario: Ignoring archive links on web pages
+Given a web page linking to `backup.tar.gz`
+When the scraper crawls the page
+Then it should NOT follow the link to `backup.tar.gz`
 
-### Requirement: GitHub ZIP Exclusion
-The system MUST NOT process ZIP files found within GitHub repositories.
-
-#### Scenario: Ignoring ZIP files in GitHub
-Given a GitHub repository containing `archive.zip`
-When the scraper indexes the repository
-Then it should NOT include `archive.zip` in the discovered files list
-And it should NOT attempt to crawl inside `archive.zip`
