@@ -7,6 +7,7 @@
  */
 
 import type { AppConfig } from "../../utils/config";
+import { DocumentPipeline } from "./DocumentPipeline";
 import { HtmlPipeline } from "./HtmlPipeline";
 import { JsonPipeline } from "./JsonPipeline";
 import { MarkdownPipeline } from "./MarkdownPipeline";
@@ -22,7 +23,7 @@ import type { ContentPipeline } from "./types";
 export class PipelineFactory {
   /**
    * Creates the standard set of content pipelines used by all scraper strategies.
-   * Includes HTML, Markdown, JSON, source code, and text processing capabilities.
+   * Includes HTML, Markdown, JSON, source code, document, and text processing capabilities.
    * Each pipeline now handles both preprocessing and content-specific splitting.
    * TextPipeline is placed last as the universal fallback for unknown content types.
    *
@@ -32,6 +33,7 @@ export class PipelineFactory {
     return [
       new JsonPipeline(appConfig),
       new SourceCodePipeline(appConfig),
+      new DocumentPipeline(appConfig), // PDF, Office docs, Jupyter notebooks
       new HtmlPipeline(appConfig),
       new MarkdownPipeline(appConfig),
       new TextPipeline(appConfig), // Universal fallback - must be last

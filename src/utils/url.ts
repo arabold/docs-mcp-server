@@ -25,8 +25,12 @@ export function normalizeUrl(
     const parsedUrl = new URL(url);
     const finalOptions = { ...defaultNormalizerOptions, ...options };
 
-    // Create a new URL to ensure proper structure
-    const normalized = new URL(parsedUrl.origin + parsedUrl.pathname);
+    // Clone the URL to modify it safely
+    const normalized = new URL(url);
+
+    // Reset search and hash for the normalized base
+    normalized.search = "";
+    normalized.hash = "";
 
     // Remove index files first, before handling trailing slashes
     if (finalOptions.removeIndex) {
@@ -45,14 +49,17 @@ export function normalizeUrl(
     const preservedHash = !finalOptions.removeHash ? parsedUrl.hash : "";
     const preservedSearch = !finalOptions.removeQuery ? parsedUrl.search : "";
 
-    // Construct final URL string in correct order (query before hash)
-    let result = normalized.origin + normalized.pathname;
-    if (preservedSearch) {
-      result += preservedSearch;
+    // Construct final URL string
+    // Use href to get the full string, but we need to re-assemble if we want query/hash specific control
+    // Easier: use the modified normalized object
+    if (!finalOptions.removeQuery) {
+      normalized.search = preservedSearch;
     }
-    if (preservedHash) {
-      result += preservedHash;
+    if (!finalOptions.removeHash) {
+      normalized.hash = preservedHash;
     }
+
+    let result = normalized.href;
 
     // Apply case normalization if configured
     if (finalOptions.ignoreCase) {

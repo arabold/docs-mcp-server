@@ -60,6 +60,28 @@ describe("URL normalization", () => {
     });
   });
 
+  describe("file URLs", () => {
+    it("should normalize file URLs", () => {
+      // Note: On some platforms/Node versions, file:// host is empty, on others it might be parsed differently.
+      // But standard file:// URL has empty host.
+      const url = "file:///Users/username/Docs/Index.html";
+      expect(normalizeUrl(url)).toBe("file:///users/username/docs");
+    });
+
+    it("should handle file URLs with spaces", () => {
+      const url = "file:///Users/User%20Name/My%20Docs/";
+      expect(normalizeUrl(url)).toBe("file:///users/user%20name/my%20docs");
+    });
+
+    it("should handle file URLs with query strings (rare but valid)", () => {
+      const url = "file:///path/to/file?query=1";
+      expect(normalizeUrl(url, { removeQuery: false })).toBe(
+        "file:///path/to/file?query=1",
+      );
+      expect(normalizeUrl(url, { removeQuery: true })).toBe("file:///path/to/file");
+    });
+  });
+
   describe("edge cases", () => {
     it("should handle invalid URLs gracefully", () => {
       const invalidUrl = "not-a-url";

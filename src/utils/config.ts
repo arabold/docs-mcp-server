@@ -79,6 +79,9 @@ export const DEFAULT_CONFIG = {
     precedingSiblingsLimit: 1,
     subsequentSiblingsLimit: 2,
   },
+  document: {
+    maxSize: 10 * 1024 * 1024, // 10MB max size for PDF/Office documents
+  },
 } as const;
 
 // --- Configuration Schema (Nested) ---
@@ -244,6 +247,11 @@ export const AppConfigSchema = z.object({
         .default(DEFAULT_CONFIG.assembly.subsequentSiblingsLimit),
     })
     .default(DEFAULT_CONFIG.assembly),
+  document: z
+    .object({
+      maxSize: z.coerce.number().int().default(DEFAULT_CONFIG.document.maxSize),
+    })
+    .default(DEFAULT_CONFIG.document),
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;

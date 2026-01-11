@@ -63,8 +63,27 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       const contents = await fs.readdir(filePath);
       // Only return links that pass shouldProcessUrl
       const links = contents
-        .map((name) => `file://${path.join(filePath, name)}`)
-        .filter((url) => this.shouldProcessUrl(url, options));
+        .map((name) => {
+          // Construct valid file URL using URL class to ensure proper encoding and structure
+          const url = new URL(`file://${path.join(filePath, name)}`);
+          // Ensure we always have file:/// format (empty host)
+          if (url.hostname !== "") {
+            url.pathname = `/${url.hostname}${url.pathname}`;
+            url.hostname = "";
+          }
+          return url.href;
+        })
+        .filter((url) => {
+          const allowed = this.shouldProcessUrl(url, options);
+          if (!allowed) {
+            logger.debug(`Skipping out-of-scope link: ${url}`);
+          }
+          return allowed;
+        });
+
+      logger.debug(
+        `Found ${links.length} files in ${filePath} (from ${contents.length} entries)`,
+      );
       return { url: item.url, links, status: FetchStatus.SUCCESS };
     }
 
