@@ -15,7 +15,6 @@ import {
   type CliContext,
   createAppServerConfig,
   getEventBus,
-  resolveEmbeddingContext,
   validateHost,
   validatePort,
 } from "../utils";
