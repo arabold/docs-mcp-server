@@ -179,6 +179,17 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     expect(context.title).toBe("12345");
   });
 
+  it("should fallback to H1 if frontmatter title is empty or whitespace", async () => {
+    const middleware = new MarkdownMetadataExtractorMiddleware();
+    const markdown = '---\ntitle: "   "\n---\n# Backup Title';
+    const context = createMockContext(markdown);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(context.title).toBe("Backup Title");
+  });
+
   it("should handle malformed frontmatter gracefully", async () => {
     const middleware = new MarkdownMetadataExtractorMiddleware();
     // Invalid YAML (indentation error or similar that gray-matter might catch or ignore)

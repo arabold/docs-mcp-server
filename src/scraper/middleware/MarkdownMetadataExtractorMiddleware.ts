@@ -31,7 +31,7 @@ export class MarkdownMetadataExtractorMiddleware implements ContentProcessorMidd
         );
       }
 
-      if (frontmatterTitle) {
+      if (frontmatterTitle && frontmatterTitle.length > 0) {
         title = frontmatterTitle;
       } else {
         // 2. Fallback: Extract first H1 heading

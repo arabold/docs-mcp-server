@@ -21,16 +21,6 @@
     - The rest of the markdown (body) is passed to the existing `markdownToHtml` -> `splitIntoSections` pipeline.
     - The frontmatter chunk is prepended to the list of chunks.
 
-## Data Structures
-
-### `SectionContentType`
-Update `src/splitter/types.ts`:
-```typescript
-export type SectionContentType = "text" | "code" | "table" | "heading" | "structural" | "frontmatter";
-```
-
-### `Chunk`
-No structural changes to `Chunk`, but `types` array will now can contain `"frontmatter"`.
 
 ## Dependencies
 - **`gray-matter`**: Adopt this library for robust frontmatter parsing. It handles edge cases (like `---` in code blocks) better than regex and is the industry standard.
@@ -46,7 +36,7 @@ export type SectionContentType = "text" | "code" | "table" | "heading" | "struct
 
 ### `Chunk`
 No structural changes to `Chunk`, but:
-- `types` array will now can contain `"frontmatter"`.
+- `types` array can now contain `"frontmatter"`.
 - **Optimization**: We should consider storing the parsed frontmatter object in `chunk.metadata` (if `Chunk` interface supports it or if we extend it) to avoid downstream re-parsing. For now, we stick to the raw content in the chunk body, but ensure the extractor attaches the title to the context.
 
 ## Error Handling

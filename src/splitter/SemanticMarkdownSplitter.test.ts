@@ -515,32 +515,11 @@ invalid: : yaml
 
     const result = await splitter.splitText(markdown);
 
-    // If gray-matter fails to parse, it might throw or return empty data.
-    // Our code checks Object.keys(file.data).length > 0.
-    // If it fails to parse valid keys, it might return empty data.
-
-    // In this case, we expect NO frontmatter chunk, and the content to be part of the text.
-    // Note: if gray-matter parses it but returns empty data, we proceed with file.content which is just the body?
-    // No, if data is empty, we use original markdown (via catch or just falling through).
-    // Actually, if Object.keys(file.data).length === 0, we assume no frontmatter.
-    // But gray-matter might strip the --- block even if data is empty?
-    // "If the front-matter is not valid YAML, the data object will be empty."
-    // So we need to ensure we don't lose the content.
-    // In my implementation:
-    // if (Object.keys(file.data).length > 0) { ... process frontmatter ... contentToProcess = file.content }
-    // else { contentToProcess = markdown } (implicit because contentToProcess init to markdown)
-
-    // So the frontmatter block will remain in the markdown and be processed as text/hr.
-
-    // However, remark might treat --- as <hr>.
-
+    // Invalid frontmatter must not be treated as a frontmatter chunk.
     const frontmatterChunks = result.filter((c) => c.types.includes("frontmatter"));
     expect(frontmatterChunks).toHaveLength(0);
 
-    // The content should be preserved (likely as text or hr).
-    // remark converts --- to <hr> usually, which turndown converts back to ---?
-    // Or maybe text.
-
+    // The invalid frontmatter content should still be preserved in the output.
     const combinedContent = result.map((c) => c.content).join("\n");
     expect(combinedContent).toContain("invalid");
   });
