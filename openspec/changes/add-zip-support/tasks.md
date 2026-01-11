@@ -1,0 +1,21 @@
+# Tasks: Add ZIP Support
+
+- [ ] Install dependencies <!-- id: 1 -->
+    - `npm install adm-zip`
+    - `npm install -D @types/adm-zip`
+- [ ] Create ZIP utility module `src/utils/zip.ts` <!-- id: 2 -->
+    - Function to check if file is ZIP (header/extension).
+    - Wrapper around `adm-zip` for safe extraction/listing.
+- [ ] Update `LocalFileStrategy` <!-- id: 3 -->
+    - Modify `processItem` to handle ZIP files as directories.
+    - Implement "Virtual Path" resolution (detecting ZIP parent).
+    - Implement reading content from ZIP entries.
+- [ ] Update `WebScraperStrategy` <!-- id: 4 -->
+    - Detect Root URL as ZIP.
+    - Download Root ZIP to temp file.
+    - Process temp ZIP using Local file logic.
+    - Ensure non-root ZIP links are ignored.
+- [ ] Add Tests <!-- id: 5 -->
+    - Unit tests for `src/utils/zip.ts`.
+    - Integration test for `LocalFileStrategy` with a mock ZIP.
+    - Integration test for `WebScraperStrategy` with a mock ZIP response.
