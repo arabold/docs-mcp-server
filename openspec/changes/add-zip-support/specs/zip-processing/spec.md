@@ -37,3 +37,12 @@ Given a web page `https://example.com/index.html` linking to `download.zip`
 When the scraper crawls `index.html`
 Then it should NOT follow the link to `download.zip` for extraction
 And it should NOT attempt to crawl inside `download.zip`
+
+### Requirement: GitHub ZIP Exclusion
+The system MUST NOT process ZIP files found within GitHub repositories.
+
+#### Scenario: Ignoring ZIP files in GitHub
+Given a GitHub repository containing `archive.zip`
+When the scraper indexes the repository
+Then it should NOT include `archive.zip` in the discovered files list
+And it should NOT attempt to crawl inside `archive.zip`
