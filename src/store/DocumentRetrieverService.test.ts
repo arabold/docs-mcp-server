@@ -36,6 +36,7 @@ describe("DocumentRetrieverService", () => {
       content: "Chunk A",
       url: "url",
       score: 0.9,
+      sort_order: 1,
       metadata: {},
     } as DbPageChunk & DbChunkRank;
     const initialResult2 = {
@@ -43,16 +44,19 @@ describe("DocumentRetrieverService", () => {
       content: "Chunk C",
       url: "url",
       score: 0.8,
+      sort_order: 3,
       metadata: {},
     } as DbPageChunk & DbChunkRank;
     const doc2 = {
       id: "doc2",
       content: "Chunk B",
       url: "url",
+      sort_order: 2,
       metadata: {},
     } as DbPageChunk & DbChunkRank;
 
     vi.spyOn(store, "findByContent").mockResolvedValue([initialResult1, initialResult2]);
+
     vi.spyOn(store, "findParentChunk").mockImplementation(async () => null);
     vi.spyOn(store, "findPrecedingSiblingChunks").mockImplementation(async () => []);
     vi.spyOn(store, "findChildChunks").mockImplementation(async (_lib, _ver, id) =>
@@ -166,14 +170,14 @@ describe("DocumentRetrieverService", () => {
 
     expect(results).toEqual([
       {
-        content: "A1",
-        url: "urlA",
-        score: 0.8,
-      },
-      {
         content: "B1",
         url: "urlB",
         score: 0.9,
+      },
+      {
+        content: "A1",
+        url: "urlA",
+        score: 0.8,
       },
     ]);
   });
@@ -511,6 +515,7 @@ describe("DocumentRetrieverService", () => {
         content: "Third chunk",
         url: "https://example.com",
         score: 0.6,
+        sort_order: 3,
         metadata: {
           path: ["Section C"],
           level: 1,
@@ -522,6 +527,7 @@ describe("DocumentRetrieverService", () => {
         content: "First chunk",
         url: "https://example.com",
         score: 0.8,
+        sort_order: 1,
         metadata: {
           path: ["Section A"],
           level: 1,
@@ -766,6 +772,161 @@ describe("DocumentRetrieverService", () => {
         score: 0.9,
         mimeType: undefined,
       });
+    });
+  });
+
+  describe("Smart Chunking (Distance-based Clustering)", () => {
+    it("should split distant chunks from the same URL into separate results", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Two chunks from same URL but far apart
+      const chunk1 = {
+        id: "chunk1",
+        content: "First chunk",
+        url: "https://example.com/doc",
+        score: 0.9,
+        sort_order: 10,
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
+
+      const chunk2 = {
+        id: "chunk2",
+        content: "Second chunk",
+        url: "https://example.com/doc",
+        score: 0.8,
+        sort_order: 100, // Distance = 90 > maxChunkDistance (3)
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
+
+      vi.spyOn(store, "findByContent").mockResolvedValue([chunk1, chunk2]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+
+      // Mock findChunksByIds to return the specific chunk requested
+      vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) => {
+        if (ids.includes("chunk1")) return [chunk1];
+        if (ids.includes("chunk2")) return [chunk2];
+        return [];
+      });
+
+      const results = await service.search(library, version, query);
+
+      expect(results).toHaveLength(2);
+      // Results should be separate
+      expect(results).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ content: "First chunk", score: 0.9 }),
+          expect.objectContaining({ content: "Second chunk", score: 0.8 }),
+        ]),
+      );
+    });
+
+    it("should merge close chunks from the same URL", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Two chunks from same URL and close together
+      const chunk1 = {
+        id: "chunk1",
+        content: "First chunk",
+        url: "https://example.com/doc",
+        score: 0.9,
+        sort_order: 10,
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
+
+      const chunk2 = {
+        id: "chunk2",
+        content: "Second chunk",
+        url: "https://example.com/doc",
+        score: 0.8,
+        sort_order: 12, // Distance = 2 <= maxChunkDistance (3)
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
+
+      vi.spyOn(store, "findByContent").mockResolvedValue([chunk1, chunk2]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+
+      // When merged, findChunksByIds is called with both IDs.
+      // It should return them sorted by sort_order.
+      vi.spyOn(store, "findChunksByIds").mockResolvedValue([chunk1, chunk2]);
+
+      const results = await service.search(library, version, query);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual(
+        expect.objectContaining({
+          content: "First chunk\n\nSecond chunk",
+          score: 0.9, // Should take the max score
+        }),
+      );
+    });
+
+    it("should sort final results by score", async () => {
+      const library = "lib";
+      const version = "1.0.0";
+      const query = "test";
+
+      // Three chunks:
+      // A: score 0.5 (low)
+      // B: score 0.9 (high) - separate from A
+      // C: score 0.7 (medium) - different URL
+
+      const chunkA = {
+        id: "chunkA",
+        content: "Chunk A",
+        url: "https://example.com/doc1",
+        score: 0.5,
+        sort_order: 10,
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
+
+      const chunkB = {
+        id: "chunkB",
+        content: "Chunk B",
+        url: "https://example.com/doc1",
+        score: 0.9,
+        sort_order: 100, // Far from A
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
+
+      const chunkC = {
+        id: "chunkC",
+        content: "Chunk C",
+        url: "https://example.com/doc2",
+        score: 0.7,
+        sort_order: 5,
+        metadata: {},
+      } as DbPageChunk & DbChunkRank;
+
+      vi.spyOn(store, "findByContent").mockResolvedValue([chunkA, chunkB, chunkC]);
+      vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+      vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+      vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+
+      vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) => {
+        if (ids.includes("chunkA")) return [chunkA];
+        if (ids.includes("chunkB")) return [chunkB];
+        if (ids.includes("chunkC")) return [chunkC];
+        return [];
+      });
+
+      const results = await service.search(library, version, query);
+
+      expect(results).toHaveLength(3);
+      // Order should be B (0.9), then C (0.7), then A (0.5)
+      expect(results[0].content).toBe("Chunk B");
+      expect(results[1].content).toBe("Chunk C");
+      expect(results[2].content).toBe("Chunk A");
     });
   });
 });
