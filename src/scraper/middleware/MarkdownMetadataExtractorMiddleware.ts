@@ -20,8 +20,9 @@ export class MarkdownMetadataExtractorMiddleware implements ContentProcessorMidd
       // 1. Try to extract title from YAML frontmatter
       try {
         const file = matter(context.content);
-        if (file.data && typeof file.data.title === "string") {
-          frontmatterTitle = file.data.title.trim();
+        if (file.data && file.data.title !== undefined && file.data.title !== null) {
+          // Convert to string to handle numeric titles (e.g. title: 2024)
+          frontmatterTitle = String(file.data.title).trim();
         }
       } catch (err) {
         // Log warning but continue - don't crash the pipeline for bad frontmatter

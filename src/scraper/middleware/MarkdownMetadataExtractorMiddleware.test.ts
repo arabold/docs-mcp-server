@@ -168,15 +168,15 @@ describe("MarkdownMetadataExtractorMiddleware", () => {
     expect(context.title).toBe("Backup Title");
   });
 
-  it("should fallback to H1 if frontmatter title is not a string", async () => {
+  it("should handle numeric titles in frontmatter", async () => {
     const middleware = new MarkdownMetadataExtractorMiddleware();
-    const markdown = "---\ntitle: 123\n---\n# Backup Title";
+    const markdown = "---\ntitle: 12345\n---\n# Backup Title";
     const context = createMockContext(markdown);
     const next = vi.fn().mockResolvedValue(undefined);
 
     await middleware.process(context, next);
 
-    expect(context.title).toBe("Backup Title");
+    expect(context.title).toBe("12345");
   });
 
   it("should handle malformed frontmatter gracefully", async () => {
