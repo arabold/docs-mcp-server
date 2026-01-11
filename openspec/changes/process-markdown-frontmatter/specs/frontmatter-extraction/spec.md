@@ -11,6 +11,9 @@ When a Markdown document contains YAML frontmatter with a `title` field, the sys
 #### Scenario: Fallback to H1
 When a Markdown document does not contain YAML frontmatter or the frontmatter lacks a `title` field, the system MUST continue to use the first H1 heading as the document title.
 
+#### Scenario: Malformed Frontmatter
+When the frontmatter YAML is invalid (syntax error), the system MUST gracefully recover by ignoring the frontmatter for metadata purposes and falling back to H1 extraction. It MUST NOT throw an exception that halts processing.
+
 ### Requirement: Semantic Markdown Splitting
 The system MUST split Markdown documents into semantic chunks, preserving structure and content types.
 

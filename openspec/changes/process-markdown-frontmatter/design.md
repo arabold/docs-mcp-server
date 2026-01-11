@@ -33,13 +33,26 @@ export type SectionContentType = "text" | "code" | "table" | "heading" | "struct
 No structural changes to `Chunk`, but `types` array will now can contain `"frontmatter"`.
 
 ## Dependencies
-- `js-yaml` (or similar) will be needed to parse the YAML frontmatter safely.
-- `gray-matter` is a common choice but adding a heavy dependency might be overkill if we just need simple parsing. However, `js-yaml` is robust.
-- Since we are in a Node environment, we can likely use a lightweight parser or regex if the requirements are simple, but `js-yaml` is safer.
-- **Decision**: Use `yaml` (npm package) or just regex for extraction if we only need the raw block for the chunk.
-- **Refinement**:
-  - For `MarkdownMetadataExtractorMiddleware`: We need to *parse* it to get the title.
-  - For `SemanticMarkdownSplitter`: We just need to *extract* the raw text block to create a chunk.
+- **`gray-matter`**: Adopt this library for robust frontmatter parsing. It handles edge cases (like `---` in code blocks) better than regex and is the industry standard.
+- It uses `js-yaml` internally (or similar) but abstracts the splitting logic safely.
+
+## Data Structures
+
+### `SectionContentType`
+Update `src/splitter/types.ts`:
+```typescript
+export type SectionContentType = "text" | "code" | "table" | "heading" | "structural" | "frontmatter";
+```
+
+### `Chunk`
+No structural changes to `Chunk`, but:
+- `types` array will now can contain `"frontmatter"`.
+- **Optimization**: We should consider storing the parsed frontmatter object in `chunk.metadata` (if `Chunk` interface supports it or if we extend it) to avoid downstream re-parsing. For now, we stick to the raw content in the chunk body, but ensure the extractor attaches the title to the context.
+
+## Error Handling
+- **Malformed YAML**: Parsing MUST NOT crash the application.
+  - **Middleware**: If parsing fails, log a warning and fallback to standard H1 title extraction.
+  - **Splitter**: If parsing fails, treat the content as plain text (do not create a frontmatter chunk, or create a text chunk).
 
 ## Trade-offs
 - **Splitting Strategy**: Separating frontmatter before HTML conversion avoids `remark` messing it up (e.g. turning it into a `<hr>`).
