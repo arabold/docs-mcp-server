@@ -83,9 +83,13 @@ export class GitHubRepoProcessor {
 
     const rawContent = await this.httpFetcher.fetch(rawUrl, { signal, etag });
 
-    // Override GitHub's generic 'text/plain' MIME type with file extension-based detection
+    // Override GitHub's generic 'text/plain' or 'application/octet-stream' MIME type with file extension-based detection
     const detectedMimeType = MimeTypeUtils.detectMimeTypeFromPath(filePath);
-    if (detectedMimeType && rawContent.mimeType === "text/plain") {
+    if (
+      detectedMimeType &&
+      (rawContent.mimeType === "text/plain" ||
+        rawContent.mimeType === "application/octet-stream")
+    ) {
       return {
         ...rawContent,
         mimeType: detectedMimeType,
