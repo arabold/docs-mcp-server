@@ -7,7 +7,7 @@ Enable the scraper to process ZIP archives as if they were directories. This inc
 Users often need to ingest documentation or codebases distributed as ZIP archives. Currently, the scraper ignores these files or treats them as binary blobs. By expanding ZIP files and treating them as directories, we can apply existing scraping logic (include/exclude patterns, file processing) to the archived content.
 
 ## Proposed Changes
-1.  **Dependency**: Add `adm-zip` for ZIP handling.
+1.  **Dependency**: Add `yauzl` (Yet Another Unzip Library) for non-blocking, stream-based ZIP handling. This replaces `adm-zip` to avoid blocking the event loop on large files.
 2.  **LocalFileStrategy**: Enhance to detect ZIP files.
     -   If a file is a ZIP, list its contents as if it were a directory.
     -   Support "virtual" file paths into ZIP archives (e.g., `file:///path/to/archive.zip/inner/doc.md`).

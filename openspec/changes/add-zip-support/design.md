@@ -8,32 +8,34 @@ The core logic for traversing ZIPs will reside in or be used by `LocalFileStrate
 #### Virtual Path Resolution
 When `LocalFileStrategy` receives a URL (e.g., `file:///path/to/data.zip/docs/readme.md`):
 1.  It attempts to `fs.stat` the path.
-2.  If `fs.stat` fails (ENOENT), it traverses up the path hierarchy to find the longest existing prefix that is a file.
+2.  If `fs.stat` fails (ENOENT), it traverses up the path hierarchy to find the longest existing prefix that is a **file** (explicitly checking `stats.isFile()`).
 3.  If found (e.g., `/path/to/data.zip`), it checks if the file is a valid ZIP archive (magic bytes or extension).
 4.  If valid, it treats the remainder of the path (`docs/readme.md`) as an entry within the ZIP.
 
 #### Directory Listing
 When processing a ZIP file (or a directory within a ZIP):
-1.  List all entries in the ZIP.
-2.  Filter entries that match the current "directory" prefix.
-3.  Return them as `file://` URLs.
+1.  Open the ZIP archive using `yauzl` (lazy load).
+2.  Iterate through entries to build a virtual directory listing.
+3.  Filter entries that match the current "directory" prefix.
+4.  Return them as `file://` URLs.
 
 #### Content Reading
 When reading a file within a ZIP:
-1.  Open the ZIP archive.
-2.  Extract the specific entry buffer.
-3.  Return `RawContent` with appropriate MIME type detection.
+1.  Open the ZIP archive with `yauzl`.
+2.  Locate the specific entry.
+3.  Open a read stream for the entry and buffer the content (or pipe to processing).
+4.  Return `RawContent` with appropriate MIME type detection.
 
 ### 2. Web ZIP Handling (WebScraperStrategy)
 `WebScraperStrategy` needs to identify when the **Root URL** is a ZIP file.
 
 1.  **Detection**: Check URL extension (`.zip`) or perform a `HEAD` request to check `Content-Type: application/zip`.
-2.  **Download**: Stream the response to a temporary file (e.g., using `tmp` or `os.tmpdir()`).
+2.  **Download**: Stream the response to a temporary file (e.g., using `os.tmpdir()`).
 3.  **Handoff**:
     -   Once downloaded, the strategy delegates to the **Local Processing Logic**.
     -   This could be done by instantiating `LocalFileStrategy` with the temp file path.
     -   Or by recursively calling `processItem` with a `file://` URL pointing to the temp file.
-4.  **Cleanup**: Ensure the temporary file is deleted after scraping is complete.
+4.  **Cleanup**: Use `try/finally` blocks to ensure the temporary file is deleted after scraping is complete or if an error occurs.
 
 ### 3. Exclusions/Inclusions
 Since we map ZIP contents to standard file paths/URLs, existing `glob` patterns for include/exclude will work naturally.

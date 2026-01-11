@@ -1,11 +1,12 @@
 # Tasks: Add ZIP Support
 
 - [ ] Install dependencies <!-- id: 1 -->
-    - `npm install adm-zip`
-    - `npm install -D @types/adm-zip`
+    - `npm install yauzl`
+    - `npm install -D @types/yauzl`
 - [ ] Create ZIP utility module `src/utils/zip.ts` <!-- id: 2 -->
     - Function to check if file is ZIP (header/extension).
-    - Wrapper around `adm-zip` for safe extraction/listing.
+    - Async wrapper around `yauzl` for Promise-based extraction/listing.
+    - Ensure robust stream handling and error propagation.
 - [ ] Update `LocalFileStrategy` <!-- id: 3 -->
     - Modify `processItem` to handle ZIP files as directories.
     - Implement "Virtual Path" resolution (detecting ZIP parent).
