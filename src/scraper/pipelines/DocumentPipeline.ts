@@ -147,17 +147,21 @@ export class DocumentPipeline extends BasePipeline {
   private extractExtension(source: string): string | null {
     try {
       const url = new URL(source);
-      const pathname = url.pathname;
-      const lastDot = pathname.lastIndexOf(".");
-      if (lastDot > 0) {
-        return pathname.substring(lastDot + 1).toLowerCase();
-      }
+      return this.getExtensionFromPath(url.pathname);
     } catch {
       // Not a URL, try as file path
-      const lastDot = source.lastIndexOf(".");
-      if (lastDot > 0) {
-        return source.substring(lastDot + 1).toLowerCase();
-      }
+      return this.getExtensionFromPath(source);
+    }
+  }
+
+  private getExtensionFromPath(pathStr: string): string | null {
+    const lastSlash = pathStr.lastIndexOf("/");
+    const filename = lastSlash >= 0 ? pathStr.substring(lastSlash + 1) : pathStr;
+    const lastDot = filename.lastIndexOf(".");
+
+    // Ensure dot is not the first char (hidden file) and exists
+    if (lastDot > 0) {
+      return filename.substring(lastDot + 1).toLowerCase();
     }
     return null;
   }
