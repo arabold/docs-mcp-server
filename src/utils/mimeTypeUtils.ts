@@ -119,6 +119,45 @@ export class MimeTypeUtils {
   }
 
   /**
+   * Checks if a MIME type represents PDF content.
+   */
+  public static isPdf(mimeType: string): boolean {
+    return mimeType === "application/pdf";
+  }
+
+  /**
+   * Checks if a MIME type represents an Office document (DOCX, XLSX, PPTX).
+   */
+  public static isOfficeDocument(mimeType: string): boolean {
+    return (
+      mimeType ===
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      mimeType === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      mimeType ===
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    );
+  }
+
+  /**
+   * Checks if a MIME type represents a Jupyter Notebook.
+   */
+  public static isJupyterNotebook(mimeType: string): boolean {
+    return mimeType === "application/x-ipynb+json";
+  }
+
+  /**
+   * Checks if a MIME type represents a document that can be processed
+   * by the DocumentPipeline (PDF, Office docs, Jupyter notebooks).
+   */
+  public static isSupportedDocument(mimeType: string): boolean {
+    return (
+      MimeTypeUtils.isPdf(mimeType) ||
+      MimeTypeUtils.isOfficeDocument(mimeType) ||
+      MimeTypeUtils.isJupyterNotebook(mimeType)
+    );
+  }
+
+  /**
    * Checks if a MIME type represents source code that should be wrapped in code blocks.
    */
   public static isSourceCode(mimeType: string): boolean {

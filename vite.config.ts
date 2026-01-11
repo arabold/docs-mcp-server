@@ -85,6 +85,6 @@ export default defineConfig({
     // Exclude live e2e tests by default (they can be run manually)
     exclude: ["test/**/*-live-e2e.test.ts"],
     // Use the e2e setup which includes both logger mock and mock server
-    setupFiles: ["test/setup-e2e.ts"],
+    setupFiles: ["test/setup-env.ts", "test/setup-e2e.ts"],
   },
 });

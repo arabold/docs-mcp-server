@@ -18,7 +18,6 @@ import {
   createAppServerConfig,
   getEventBus,
   parseAuthConfig,
-  resolveEmbeddingContext,
   resolveProtocol,
   validateAuthConfig,
   validatePort,

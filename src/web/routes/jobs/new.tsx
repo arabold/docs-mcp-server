@@ -77,7 +77,8 @@ export function registerNewJobRoutes(
 
         // Parse includePatterns and excludePatterns from textarea input
         function parsePatterns(input?: string): string[] | undefined {
-          if (!input) return undefined;
+          if (input === undefined) return undefined;
+          if (input.trim() === "") return [];
           return input
             .split(/\n|,/)
             .map((s) => s.trim())

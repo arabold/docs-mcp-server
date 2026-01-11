@@ -270,8 +270,14 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       ".log",
     ];
 
+    // Document extensions supported by DocumentPipeline
+    const documentExtensions = [".pdf", ".docx", ".xlsx", ".pptx", ".ipynb"];
+
     const pathLower = path.toLowerCase();
     const hasTextExtension = textExtensions.some((ext) => pathLower.endsWith(ext));
+    const hasDocumentExtension = documentExtensions.some((ext) =>
+      pathLower.endsWith(ext),
+    );
     const hasCompoundExtension =
       pathLower.includes(".env.") ||
       pathLower.endsWith(".env") ||
@@ -313,7 +319,12 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     });
 
     // If file passes known checks, include it
-    if (hasTextExtension || hasCompoundExtension || isCommonTextFile) {
+    if (
+      hasTextExtension ||
+      hasDocumentExtension ||
+      hasCompoundExtension ||
+      isCommonTextFile
+    ) {
       return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
     }
 

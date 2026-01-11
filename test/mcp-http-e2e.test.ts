@@ -16,10 +16,25 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // Using deprecated SSEClientTransport intentionally to test the legacy /sse endpoint
 // eslint-disable-next-line deprecation/deprecation
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { getCliCommand } from "./test-helpers";
 
 describe("MCP HTTP server E2E", () => {
+  // Handle unhandled rejections that might occur during client shutdown
+  // (e.g. AbortError from pending fetches)
+  const unhandledRejectionHandler = (reason: unknown) => {
+    // Ignore all errors during shutdown in this test file
+    // The shutdown test intentionally triggers aborts/closures
+  };
+
+  beforeAll(() => {
+    process.on("unhandledRejection", unhandledRejectionHandler);
+  });
+
+  afterAll(() => {
+    process.off("unhandledRejection", unhandledRejectionHandler);
+  });
+
   let serverProcess: ChildProcess | null = null;
   let client: Client | null = null;
   let transport: SSEClientTransport | null = null;
@@ -200,11 +215,19 @@ describe("MCP HTTP server E2E", () => {
     expect(toolsResult.tools.length).toBeGreaterThan(0);
 
     // Close the client
-    await client.close();
+    try {
+      await client.close();
+    } catch {
+      // Ignore all errors during shutdown
+    }
     client = null;
 
     // Close the transport
-    await transport.close();
+    try {
+      await transport.close();
+    } catch {
+      // Ignore all errors during shutdown
+    }
     transport = null;
   }, 30000);
 
