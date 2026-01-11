@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { logger } from "../../utils/logger";
 import { TarAdapter } from "./TarAdapter";
 import type { ArchiveAdapter } from "./types";
 import { ZipAdapter } from "./ZipAdapter";
@@ -23,11 +24,12 @@ export async function getArchiveAdapter(
   // We could add magic byte check here later.
 
   // Quick magic byte check for reliability
+  const BUFFER_SIZE = 262; // Tar header is 512, Zip is small. 262 covers ustar at 257+5
   let handle: fs.FileHandle | null = null;
   try {
     handle = await fs.open(filePath, "r");
-    const buffer = Buffer.alloc(262); // Tar header is 512, Zip is small
-    const { bytesRead } = await handle.read(buffer, 0, 262, 0);
+    const buffer = Buffer.alloc(BUFFER_SIZE);
+    const { bytesRead } = await handle.read(buffer, 0, BUFFER_SIZE, 0);
 
     if (bytesRead < 2) return null;
 
@@ -42,14 +44,15 @@ export async function getArchiveAdapter(
     }
 
     // TAR: ustar at offset 257 usually
-    if (bytesRead >= 262) {
+    if (bytesRead >= BUFFER_SIZE) {
       const magic = buffer.subarray(257, 262).toString();
       if (magic === "ustar") {
         return new TarAdapter(filePath);
       }
     }
-  } catch {
+  } catch (error) {
     // If file read fails, we can't process
+    logger.debug(`Failed to check magic bytes for ${filePath}: ${error}`);
     return null;
   } finally {
     if (handle) await handle.close();

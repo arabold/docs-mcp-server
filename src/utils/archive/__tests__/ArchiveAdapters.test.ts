@@ -38,26 +38,36 @@ describe("TarAdapter (Integration)", () => {
 
   it("should list entries", async () => {
     const adapter = new TarAdapter(tarPath);
-    const entries = [];
-    for await (const entry of adapter.listEntries()) {
-      entries.push(entry);
+    try {
+      const entries = [];
+      for await (const entry of adapter.listEntries()) {
+        entries.push(entry);
+      }
+
+      expect(entries.length).toBeGreaterThanOrEqual(2);
+      const file1 = entries.find(
+        (e) => e.path === "file1.txt" || e.path === "./file1.txt",
+      );
+      expect(file1).toBeDefined();
+      expect(file1?.type).toBe("file");
+
+      const file2 = entries.find((e) => e.path.includes("file2.txt"));
+      expect(file2).toBeDefined();
+    } finally {
+      await adapter.close();
     }
-
-    expect(entries.length).toBeGreaterThanOrEqual(2);
-    const file1 = entries.find((e) => e.path === "file1.txt" || e.path === "./file1.txt");
-    expect(file1).toBeDefined();
-    expect(file1?.type).toBe("file");
-
-    const file2 = entries.find((e) => e.path.includes("file2.txt"));
-    expect(file2).toBeDefined();
   });
 
   it("should get content", async () => {
     const adapter = new TarAdapter(tarPath);
-    const content = await adapter.getContent("file1.txt");
-    expect(content.toString()).toBe("content1");
+    try {
+      const content = await adapter.getContent("file1.txt");
+      expect(content.toString()).toBe("content1");
 
-    const content2 = await adapter.getContent("subdir/file2.txt");
-    expect(content2.toString()).toBe("content2");
+      const content2 = await adapter.getContent("subdir/file2.txt");
+      expect(content2.toString()).toBe("content2");
+    } finally {
+      await adapter.close();
+    }
   });
 });
