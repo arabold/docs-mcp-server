@@ -1,7 +1,13 @@
 /**
  * Types of content within a document section
  */
-export type SectionContentType = "text" | "code" | "table" | "heading" | "structural";
+export type SectionContentType =
+  | "text"
+  | "code"
+  | "table"
+  | "heading"
+  | "structural"
+  | "frontmatter";
 
 /**
  * Final output chunk after processing and size-based splitting

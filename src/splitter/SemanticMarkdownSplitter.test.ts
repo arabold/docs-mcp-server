@@ -480,4 +480,68 @@ This JSON shows the package structure.
     expect(chunks[0].content).toContain(textContent);
     expect(chunks[0].section.path).toEqual([]);
   });
+
+  it("should extract YAML frontmatter into a separate chunk", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+title: My Doc
+tags: [one, two]
+---
+# Main Content`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.length).toBeGreaterThan(1);
+    expect(result[0].types).toEqual(["frontmatter"]);
+    expect(result[0].content).toContain("title: My Doc");
+    expect(result[0].content).toContain("tags: [one, two]");
+    // Should include delimiters
+    expect(result[0].content).toMatch(/^---\n[\s\S]*\n---$/);
+
+    expect(result[1].types).toEqual(["heading"]);
+    expect(result[1].content).toBe("# Main Content");
+  });
+
+  it("should ignore malformed frontmatter and treat it as text", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    // Malformed because no closing delimiter or invalid yaml structure that gray-matter rejects?
+    // gray-matter is very permissive. It requires --- on the first line.
+    // If we have --- but invalid yaml inside, gray-matter might still extract it but data might be empty?
+    // If data is empty, we skip frontmatter chunk creation.
+    const markdown = `---
+invalid: : yaml
+---
+# Main Content`;
+
+    const result = await splitter.splitText(markdown);
+
+    // If gray-matter fails to parse, it might throw or return empty data.
+    // Our code checks Object.keys(file.data).length > 0.
+    // If it fails to parse valid keys, it might return empty data.
+
+    // In this case, we expect NO frontmatter chunk, and the content to be part of the text.
+    // Note: if gray-matter parses it but returns empty data, we proceed with file.content which is just the body?
+    // No, if data is empty, we use original markdown (via catch or just falling through).
+    // Actually, if Object.keys(file.data).length === 0, we assume no frontmatter.
+    // But gray-matter might strip the --- block even if data is empty?
+    // "If the front-matter is not valid YAML, the data object will be empty."
+    // So we need to ensure we don't lose the content.
+    // In my implementation:
+    // if (Object.keys(file.data).length > 0) { ... process frontmatter ... contentToProcess = file.content }
+    // else { contentToProcess = markdown } (implicit because contentToProcess init to markdown)
+
+    // So the frontmatter block will remain in the markdown and be processed as text/hr.
+
+    // However, remark might treat --- as <hr>.
+
+    const frontmatterChunks = result.filter((c) => c.types.includes("frontmatter"));
+    expect(frontmatterChunks).toHaveLength(0);
+
+    // The content should be preserved (likely as text or hr).
+    // remark converts --- to <hr> usually, which turndown converts back to ---?
+    // Or maybe text.
+
+    const combinedContent = result.map((c) => c.content).join("\n");
+    expect(combinedContent).toContain("invalid");
+  });
 });
