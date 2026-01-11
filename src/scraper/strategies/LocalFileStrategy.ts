@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import mime from "mime";
-import { ArchiveFactory, type ArchiveAdapter } from "../../utils/archive";
+import { type ArchiveAdapter, getArchiveAdapter } from "../../utils/archive";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { FileFetcher } from "../fetcher";
@@ -74,7 +74,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     }
 
     // Handle physical directory
-    if (stats && stats.isDirectory()) {
+    if (stats?.isDirectory()) {
       const contents = await fs.readdir(filePath);
       // Only return links that pass shouldProcessUrl
       const links = contents
@@ -103,10 +103,11 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     }
 
     // Check if the file itself is an archive (Root Archive)
-    if (stats && stats.isFile()) {
-      const adapter = await ArchiveFactory.getAdapter(filePath);
+    if (stats?.isFile()) {
+      const adapter = await getArchiveAdapter(filePath);
       if (adapter) {
         logger.info(`📦 Detected archive file: ${filePath}`);
+
         try {
           const links: string[] = [];
           for await (const entry of adapter.listEntries()) {
@@ -165,9 +166,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
    * Resolves a path that might be inside an archive.
    * Returns the archive path and the inner path if found.
    */
-  private async resolveVirtualPath(
-    fullPath: string,
-  ): Promise<{
+  private async resolveVirtualPath(fullPath: string): Promise<{
     archive: string | null;
     inner: string | null;
     adapter: ArchiveAdapter | null;
@@ -184,7 +183,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         const stats = await fs.stat(currentPath);
         if (stats.isFile()) {
           // Found a file part of the path. Check if it is an archive.
-          const adapter = await ArchiveFactory.getAdapter(currentPath);
+          const adapter = await getArchiveAdapter(currentPath);
           if (adapter) {
             // We return the OPEN adapter to avoid reopening it
             const inner = fullPath
@@ -198,7 +197,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         // because we started from a full path that didn't exist (ENOENT), and walked up.
         // If we hit a real directory or real file that isn't an archive, we stop.
         return { archive: null, inner: null, adapter: null };
-      } catch (e) {
+      } catch (_e) {
         // Path segment doesn't exist, go up
         currentPath = dirname;
       }
@@ -217,6 +216,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     try {
       const contentBuffer = await adapter.getContent(innerPath);
+
       // Detect mime type based on inner filename
       const mimeType = mime.getType(innerPath) || "application/octet-stream";
 
@@ -248,7 +248,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
   }
 
   private async processContent(
-    url: string,
+    _url: string,
     displayPath: string,
     rawContent: RawContent,
     options: ScraperOptions,

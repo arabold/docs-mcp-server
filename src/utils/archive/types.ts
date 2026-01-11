@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import { Readable } from "node:stream";
+import type { Readable } from "node:stream";
 
 export interface ArchiveEntry {
   path: string;

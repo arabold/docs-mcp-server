@@ -3,12 +3,9 @@
  * fetcher selection, and routes content through pipelines. Requires resolved
  * configuration from the entrypoint to avoid implicit config loading.
  */
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import stream from "node:stream/promises";
-import { ArchiveFactory } from "../../utils/archive";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
@@ -228,35 +225,29 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     // Track file immediately so we can clean it up if write fails or later
     this.tempFiles.push(tempFile);
 
-    try {
-      await fsPromises.writeFile(tempFile, buffer);
+    await fsPromises.writeFile(tempFile, buffer);
 
-      // Delegate to LocalFileStrategy
-      const localUrl = `file://${tempFile}`;
-      const localItem = { ...item, url: localUrl };
+    // Delegate to LocalFileStrategy
+    const localUrl = `file://${tempFile}`;
+    const localItem = { ...item, url: localUrl };
 
-      const result = await this.localFileStrategy.processItem(localItem, options, signal);
+    const result = await this.localFileStrategy.processItem(localItem, options, signal);
 
-      // We need to fix up the links to point back to something meaningful?
-      // If we process a zip, we get file:///tmp/.../file.txt
-      // These links are only useful if we continue to treat them as local files for this session.
-      // But `WebScraper` expects http links usually?
-      // Actually, if we return file:// links, the queue might try to fetch them.
-      // `WebScraperStrategy` handles http/https. `LocalFileStrategy` handles file://.
-      // If we return file:// links, the scraper will need to route them to `LocalFileStrategy`.
-      // The `ScraperService` uses `ScraperRegistry` to pick strategy.
-      // So file:// links will work!
+    // We need to fix up the links to point back to something meaningful?
+    // If we process a zip, we get file:///tmp/.../file.txt
+    // These links are only useful if we continue to treat them as local files for this session.
+    // But `WebScraper` expects http links usually?
+    // Actually, if we return file:// links, the queue might try to fetch them.
+    // `WebScraperStrategy` handles http/https. `LocalFileStrategy` handles file://.
+    // If we return file:// links, the scraper will need to route them to `LocalFileStrategy`.
+    // The `ScraperService` uses `ScraperRegistry` to pick strategy.
+    // So file:// links will work!
 
-      return {
-        ...result,
-        url: item.url, // Keep original URL as the source of this item
-        // links are file://...
-      };
-    } catch (err) {
-      // If write or processing fails, we bubble up.
-      // Cleanup happens via this.tempFiles in cleanup()
-      throw err;
-    }
+    return {
+      ...result,
+      url: item.url, // Keep original URL as the source of this item
+      // links are file://...
+    };
   }
 
   /**

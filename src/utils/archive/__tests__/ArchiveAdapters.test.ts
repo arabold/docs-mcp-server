@@ -1,11 +1,11 @@
-import path from "node:path";
-import * as tar from "tar";
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import { TarAdapter } from "../TarAdapter";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import * as tar from "tar";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { TarAdapter } from "../TarAdapter";
 
-const TEMP_DIR = path.join(os.tmpdir(), "archive-tests-" + Date.now());
+const TEMP_DIR = path.join(os.tmpdir(), `archive-tests-${Date.now()}`);
 
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR);
