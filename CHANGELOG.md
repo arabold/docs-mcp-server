@@ -1,3 +1,16 @@
+# [1.35.0](https://github.com/arabold/docs-mcp-server/compare/v1.34.0...v1.35.0) (2026-01-11)
+
+
+### Bug Fixes
+
+* **pipeline:** improve file extension extraction robustness ([c5283d4](https://github.com/arabold/docs-mcp-server/commit/c5283d4c04967d63312767f768edfdfeb1f72b39))
+* **web:** render supported documents as HTML and fix exclude patterns ([4e56b4a](https://github.com/arabold/docs-mcp-server/commit/4e56b4ad12b0682a68ca86400679d6602b47d47f))
+
+
+### Features
+
+* **scraper:** support PDF, Office, and Jupyter documents ([a74646b](https://github.com/arabold/docs-mcp-server/commit/a74646bbc369a44cc479e1254610d856e850d4ca))
+
 # [1.34.0](https://github.com/arabold/docs-mcp-server/compare/v1.33.1...v1.34.0) (2026-01-04)
 
 
