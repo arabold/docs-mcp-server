@@ -249,6 +249,7 @@ export const AppConfigSchema = z.object({
       maxChunkDistance: z.coerce
         .number()
         .int()
+        .min(0)
         .default(DEFAULT_CONFIG.assembly.maxChunkDistance),
     })
     .default(DEFAULT_CONFIG.assembly),

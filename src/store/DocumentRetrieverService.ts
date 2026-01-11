@@ -131,6 +131,9 @@ export class DocumentRetrieverService {
   /**
    * Clusters chunks based on their sort_order distance.
    * Chunks within maxChunkDistance of each other are grouped together.
+   *
+   * @param chunks The list of chunks to cluster (must be from the same URL).
+   * @returns An array of chunk clusters, where each cluster is an array of chunks.
    */
   private clusterChunksByDistance(
     chunks: (DbPageChunk & DbChunkRank)[],
@@ -138,11 +141,17 @@ export class DocumentRetrieverService {
     if (chunks.length === 0) return [];
     if (chunks.length === 1) return [chunks];
 
-    // Sort chunks by sort_order
-    const sortedChunks = [...chunks].sort((a, b) => a.sort_order - b.sort_order);
+    // Sort chunks by sort_order, then by id for deterministic stability
+    const sortedChunks = [...chunks].sort((a, b) => {
+      const diff = a.sort_order - b.sort_order;
+      if (diff !== 0) return diff;
+      return a.id.localeCompare(b.id);
+    });
+
     const clusters: (DbPageChunk & DbChunkRank)[][] = [];
     let currentCluster: (DbPageChunk & DbChunkRank)[] = [sortedChunks[0]];
-    const { maxChunkDistance } = this.config.assembly;
+    // Ensure maxChunkDistance is non-negative
+    const maxChunkDistance = Math.max(0, this.config.assembly.maxChunkDistance);
 
     for (let i = 1; i < sortedChunks.length; i++) {
       const currentChunk = sortedChunks[i];

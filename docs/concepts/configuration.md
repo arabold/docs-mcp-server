@@ -109,10 +109,10 @@ Internal database settings.
 
 Settings for reassembling search results.
 
-| Option                    | Default | Description                                                                            |
-| :------------------------ | :------ | :------------------------------------------------------------------------------------- |
-| `maxChunkDistance`        | `3`     | Maximum distance (in chunks) to merge content. Distinct chunks further apart are split. |
-| `maxParentChainDepth`     | `10`    | Maximum depth for parent context traversal.                                            |
+| Option                    | Default | Description                                                                                                      |
+| :------------------------ | :------ | :--------------------------------------------------------------------------------------------------------------- |
+| `maxChunkDistance`        | `3`     | Maximum sort_order difference to merge chunks; larger differences keep chunks separate (usually per-chunk = 1). |
+| `maxParentChainDepth`     | `10`    | Maximum depth for parent context traversal.                                                                      |
 | `childLimit`              | `3`     | Maximum number of child chunks to include.                                             |
 | `precedingSiblingsLimit`  | `1`     | Number of preceding sibling chunks to include.                                         |
 | `subsequentSiblingsLimit` | `2`     | Number of subsequent sibling chunks to include.                                        |
