@@ -51,122 +51,147 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     let archiveAdapter: ArchiveAdapter | null = null;
 
     try {
-      stats = await fs.stat(filePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        // File not found, check if it's a virtual path inside an archive
-        const resolved = await this.resolveVirtualPath(filePath);
-        if (resolved.archive && resolved.inner && resolved.adapter) {
-          archivePath = resolved.archive;
-          innerPath = resolved.inner;
-          archiveAdapter = resolved.adapter;
+      try {
+        stats = await fs.stat(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          // File not found, check if it's a virtual path inside an archive
+          const resolved = await this.resolveVirtualPath(filePath);
+          if (resolved.archive && resolved.inner && resolved.adapter) {
+            archivePath = resolved.archive;
+            innerPath = resolved.inner;
+            archiveAdapter = resolved.adapter;
+          } else {
+            logger.info(`✓ File deleted or not available: ${filePath}`);
+            return {
+              url: item.url,
+              links: [],
+              status: FetchStatus.NOT_FOUND,
+            };
+          }
         } else {
-          logger.info(`✓ File deleted or not available: ${filePath}`);
+          throw error;
+        }
+      }
+
+      // Handle physical directory
+      if (stats?.isDirectory()) {
+        const contents = await fs.readdir(filePath);
+        // Only return links that pass shouldProcessUrl
+        const links = contents
+          .map((name) => {
+            // Construct valid file URL using URL class to ensure proper encoding and structure
+            const url = new URL(
+              `file://${path.join(filePath, name).replace(/\\/g, "/")}`,
+            );
+            // Ensure we always have file:/// format (empty host)
+            if (url.hostname !== "") {
+              url.pathname = `/${url.hostname}${url.pathname}`;
+              url.hostname = "";
+            }
+            return url.href;
+          })
+          .filter((url) => {
+            const allowed = this.shouldProcessUrl(url, options);
+            if (!allowed) {
+              logger.debug(`Skipping out-of-scope link: ${url}`);
+            }
+            return allowed;
+          });
+
+        logger.debug(
+          `Found ${links.length} files in ${filePath} (from ${contents.length} entries)`,
+        );
+        return { url: item.url, links, status: FetchStatus.SUCCESS };
+      }
+
+      // Check if the file itself is an archive (Root Archive)
+      if (stats?.isFile()) {
+        const adapter = await getArchiveAdapter(filePath);
+        if (adapter) {
+          logger.info(`📦 Detected archive file: ${filePath}`);
+          try {
+            const links: string[] = [];
+            for await (const entry of adapter.listEntries()) {
+              // Validate entry path to prevent Zip Slip
+              if (entry.path.includes("..")) {
+                logger.warn(`⚠️  Skipping unsafe archive entry path: ${entry.path}`);
+                continue;
+              }
+
+              // Create virtual URL: file:///path/to/archive.zip/entry/path
+              // Ensure entry path doesn't start with / to avoid double slash issues
+              const entryPath = entry.path.replace(/^\//, "");
+
+              // Normalize windows separators if any in entry path (rare in standard zips but possible in display)
+              const fullVirtualPath = path.join(filePath, entryPath).replace(/\\/g, "/");
+              const virtualUrl = new URL(`file://${fullVirtualPath}`);
+              if (virtualUrl.hostname !== "") {
+                virtualUrl.pathname = `/${virtualUrl.hostname}${virtualUrl.pathname}`;
+                virtualUrl.hostname = "";
+              }
+
+              if (this.shouldProcessUrl(virtualUrl.href, options)) {
+                links.push(virtualUrl.href);
+              }
+            }
+            logger.debug(`Found ${links.length} entries in archive ${filePath}`);
+            return { url: item.url, links, status: FetchStatus.SUCCESS };
+          } catch (err) {
+            logger.error(`❌ Failed to list archive ${filePath}: ${err}`);
+            // Treat as binary file or fail?
+            // If listing fails, maybe just fall through to standard processing (which will likely ignore it)
+          } finally {
+            await adapter.close();
+          }
+        }
+      }
+
+      // Handle Virtual Archive Path (inner file)
+      if (archivePath && innerPath && archiveAdapter) {
+        // Validate inner path for Zip Slip
+        if (innerPath.includes("..")) {
+          logger.warn(`⚠️  Detected unsafe virtual path traversal: ${innerPath}`);
           return {
             url: item.url,
             links: [],
             status: FetchStatus.NOT_FOUND,
           };
         }
-      } else {
-        throw error;
+        return await this.processArchiveEntry(
+          item,
+          archivePath,
+          innerPath,
+          archiveAdapter,
+          options,
+        );
+      }
+
+      const rawContent: RawContent = await this.fileFetcher.fetch(item.url, {
+        etag: item.etag,
+      });
+
+      // Handle NOT_MODIFIED status (file hasn't changed)
+      if (rawContent.status === FetchStatus.NOT_MODIFIED) {
+        logger.debug(`✓ File unchanged: ${filePath}`);
+        return { url: rawContent.source, links: [], status: FetchStatus.NOT_MODIFIED };
+      }
+
+      return await this.processContent(item.url, filePath, rawContent, options);
+    } finally {
+      if (archiveAdapter) {
+        await archiveAdapter.close();
       }
     }
-
-    // Handle physical directory
-    if (stats?.isDirectory()) {
-      const contents = await fs.readdir(filePath);
-      // Only return links that pass shouldProcessUrl
-      const links = contents
-        .map((name) => {
-          // Construct valid file URL using URL class to ensure proper encoding and structure
-          const url = new URL(`file://${path.join(filePath, name).replace(/\\/g, "/")}`);
-          // Ensure we always have file:/// format (empty host)
-          if (url.hostname !== "") {
-            url.pathname = `/${url.hostname}${url.pathname}`;
-            url.hostname = "";
-          }
-          return url.href;
-        })
-        .filter((url) => {
-          const allowed = this.shouldProcessUrl(url, options);
-          if (!allowed) {
-            logger.debug(`Skipping out-of-scope link: ${url}`);
-          }
-          return allowed;
-        });
-
-      logger.debug(
-        `Found ${links.length} files in ${filePath} (from ${contents.length} entries)`,
-      );
-      return { url: item.url, links, status: FetchStatus.SUCCESS };
-    }
-
-    // Check if the file itself is an archive (Root Archive)
-    if (stats?.isFile()) {
-      const adapter = await getArchiveAdapter(filePath);
-      if (adapter) {
-        logger.info(`📦 Detected archive file: ${filePath}`);
-
-        try {
-          const links: string[] = [];
-          for await (const entry of adapter.listEntries()) {
-            // Create virtual URL: file:///path/to/archive.zip/entry/path
-            // Ensure entry path doesn't start with / to avoid double slash issues
-            const entryPath = entry.path.replace(/^\//, "");
-            // Normalize windows separators if any in entry path (rare in standard zips but possible in display)
-            const fullVirtualPath = path.join(filePath, entryPath).replace(/\\/g, "/");
-            const virtualUrl = new URL(`file://${fullVirtualPath}`);
-            if (virtualUrl.hostname !== "") {
-              virtualUrl.pathname = `/${virtualUrl.hostname}${virtualUrl.pathname}`;
-              virtualUrl.hostname = "";
-            }
-
-            if (this.shouldProcessUrl(virtualUrl.href, options)) {
-              links.push(virtualUrl.href);
-            }
-          }
-          logger.debug(`Found ${links.length} entries in archive ${filePath}`);
-          return { url: item.url, links, status: FetchStatus.SUCCESS };
-        } catch (err) {
-          logger.error(`❌ Failed to list archive ${filePath}: ${err}`);
-          // Treat as binary file or fail?
-          // If listing fails, maybe just fall through to standard processing (which will likely ignore it)
-        } finally {
-          await adapter.close();
-        }
-      }
-    }
-
-    // Handle Virtual Archive Path (inner file)
-    if (archivePath && innerPath && archiveAdapter) {
-      return this.processArchiveEntry(
-        item,
-        archivePath,
-        innerPath,
-        archiveAdapter,
-        options,
-      );
-    }
-
-    const rawContent: RawContent = await this.fileFetcher.fetch(item.url, {
-      etag: item.etag,
-    });
-
-    // Handle NOT_MODIFIED status (file hasn't changed)
-    if (rawContent.status === FetchStatus.NOT_MODIFIED) {
-      logger.debug(`✓ File unchanged: ${filePath}`);
-      return { url: rawContent.source, links: [], status: FetchStatus.NOT_MODIFIED };
-    }
-
-    return this.processContent(item.url, filePath, rawContent, options);
   }
 
   /**
    * Resolves a path that might be inside an archive.
    * Returns the archive path and the inner path if found.
    */
-  private async resolveVirtualPath(fullPath: string): Promise<{
+  private async resolveVirtualPath(
+    fullPath: string,
+  ): Promise<{
     archive: string | null;
     inner: string | null;
     adapter: ArchiveAdapter | null;
@@ -216,7 +241,6 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     try {
       const contentBuffer = await adapter.getContent(innerPath);
-
       // Detect mime type based on inner filename
       const mimeType = mime.getType(innerPath) || "application/octet-stream";
 
@@ -243,7 +267,17 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         status: FetchStatus.NOT_FOUND,
       };
     } finally {
-      await adapter.close();
+      // The adapter is closed in the main processItem finally block if it came from resolveVirtualPath
+      // But if we throw here, it bubbles up to that finally block.
+      // Wait, processArchiveEntry is called from processItem which has the finally block.
+      // So we SHOULD NOT close it here if we want to follow the pattern that the caller owns it?
+      // Actually, resolveVirtualPath hands off ownership to processItem scope.
+      // processItem's finally block closes it.
+      // So we should remove this finally block here to avoid double close (though close should be idempotent).
+      // However, `archiveAdapter` variable in `processItem` holds the reference.
+      // If `processArchiveEntry` throws, `processItem` catches? No, it awaits.
+      // So `processItem` finally block will run.
+      // So removing `finally { await adapter.close() }` here is correct because the caller handles it.
     }
   }
 

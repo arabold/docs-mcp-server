@@ -12,6 +12,7 @@ export class TarAdapter implements ArchiveAdapter {
 
   async *listEntries(): AsyncGenerator<ArchiveEntry> {
     const fileStream = fs.createReadStream(this.filePath);
+    // @ts-ignore - types for tar are sometimes tricky with esm/cjs interop
     const parseStream = new tar.Parser();
 
     fileStream.pipe(parseStream);
@@ -35,9 +36,14 @@ export class TarAdapter implements ArchiveAdapter {
 
     parseStream.on("end", () => entryStream.push(null));
     parseStream.on("error", (err: Error) => entryStream.destroy(err));
+    fileStream.on("error", (err: Error) => entryStream.destroy(err));
 
-    for await (const entry of entryStream) {
-      yield entry as ArchiveEntry;
+    try {
+      for await (const entry of entryStream) {
+        yield entry as ArchiveEntry;
+      }
+    } finally {
+      fileStream.destroy();
     }
   }
 
@@ -53,6 +59,7 @@ export class TarAdapter implements ArchiveAdapter {
   async getStream(path: string): Promise<Readable> {
     return new Promise((resolve, reject) => {
       const fileStream = fs.createReadStream(this.filePath);
+      // @ts-ignore
       const parseStream = new tar.Parser();
       let found = false;
 
@@ -81,8 +88,17 @@ export class TarAdapter implements ArchiveAdapter {
         if (!found) reject(new Error(`File not found in tar: ${path}`));
       });
 
-      parseStream.on("error", reject);
-      fileStream.on("error", reject);
+      parseStream.on("error", (err: Error) => {
+        fileStream.destroy();
+        reject(err);
+      });
+      fileStream.on("error", (err: Error) => {
+        // parseStream.destroy() might not exist on all versions or types,
+        // but fileStream is the source.
+        // @ts-ignore
+        if (typeof parseStream.destroy === "function") parseStream.destroy();
+        reject(err);
+      });
 
       fileStream.pipe(parseStream);
     });
