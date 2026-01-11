@@ -23,7 +23,8 @@ interface SearchResultItemProps {
  */
 const SearchResultItem = async ({ result }: SearchResultItemProps) => {
   const isMarkdown = result.mimeType
-    ? MimeTypeUtils.isMarkdown(result.mimeType)
+    ? MimeTypeUtils.isMarkdown(result.mimeType) ||
+      MimeTypeUtils.isSupportedDocument(result.mimeType)
     : true; // Default to true if mimeType is undefined (backward compatibility)
 
   // Create JSDOM instance and initialize DOMPurify (used for both markdown and non-markdown content)
