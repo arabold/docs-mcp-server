@@ -225,9 +225,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       `scraper-${Date.now()}-${path.basename(new URL(item.url).pathname)}`,
     );
 
+    // Track file immediately so we can clean it up if write fails or later
+    this.tempFiles.push(tempFile);
+
     try {
       await fsPromises.writeFile(tempFile, buffer);
-      this.tempFiles.push(tempFile);
 
       // Delegate to LocalFileStrategy
       const localUrl = `file://${tempFile}`;
@@ -250,10 +252,10 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         url: item.url, // Keep original URL as the source of this item
         // links are file://...
       };
-    } finally {
-      // We can't delete the temp file yet if we returned links pointing to it!
-      // We must keep it until the scrape is done.
-      // We added it to `this.tempFiles` and will clean up in `cleanup()`.
+    } catch (err) {
+      // If write or processing fails, we bubble up.
+      // Cleanup happens via this.tempFiles in cleanup()
+      throw err;
     }
   }
 

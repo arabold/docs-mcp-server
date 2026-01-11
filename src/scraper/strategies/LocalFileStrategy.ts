@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import mime from "mime";
-import { ArchiveFactory } from "../../utils/archive";
+import { ArchiveFactory, type ArchiveAdapter } from "../../utils/archive";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { FileFetcher } from "../fetcher";
@@ -48,16 +48,18 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     let stats: Awaited<ReturnType<typeof fs.stat>> | null = null;
     let archivePath: string | null = null;
     let innerPath: string | null = null;
+    let archiveAdapter: ArchiveAdapter | null = null;
 
     try {
       stats = await fs.stat(filePath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         // File not found, check if it's a virtual path inside an archive
-        const { archive, inner } = await this.resolveVirtualPath(filePath);
-        if (archive && inner) {
-          archivePath = archive;
-          innerPath = inner;
+        const resolved = await this.resolveVirtualPath(filePath);
+        if (resolved.archive && resolved.inner && resolved.adapter) {
+          archivePath = resolved.archive;
+          innerPath = resolved.inner;
+          archiveAdapter = resolved.adapter;
         } else {
           logger.info(`✓ File deleted or not available: ${filePath}`);
           return {
@@ -78,7 +80,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       const links = contents
         .map((name) => {
           // Construct valid file URL using URL class to ensure proper encoding and structure
-          const url = new URL(`file://${path.join(filePath, name)}`);
+          const url = new URL(`file://${path.join(filePath, name).replace(/\\/g, "/")}`);
           // Ensure we always have file:/// format (empty host)
           if (url.hostname !== "") {
             url.pathname = `/${url.hostname}${url.pathname}`;
@@ -111,7 +113,9 @@ export class LocalFileStrategy extends BaseScraperStrategy {
             // Create virtual URL: file:///path/to/archive.zip/entry/path
             // Ensure entry path doesn't start with / to avoid double slash issues
             const entryPath = entry.path.replace(/^\//, "");
-            const virtualUrl = new URL(`file://${path.join(filePath, entryPath)}`);
+            // Normalize windows separators if any in entry path (rare in standard zips but possible in display)
+            const fullVirtualPath = path.join(filePath, entryPath).replace(/\\/g, "/");
+            const virtualUrl = new URL(`file://${fullVirtualPath}`);
             if (virtualUrl.hostname !== "") {
               virtualUrl.pathname = `/${virtualUrl.hostname}${virtualUrl.pathname}`;
               virtualUrl.hostname = "";
@@ -121,21 +125,27 @@ export class LocalFileStrategy extends BaseScraperStrategy {
               links.push(virtualUrl.href);
             }
           }
-          await adapter.close();
           logger.debug(`Found ${links.length} entries in archive ${filePath}`);
           return { url: item.url, links, status: FetchStatus.SUCCESS };
         } catch (err) {
           logger.error(`❌ Failed to list archive ${filePath}: ${err}`);
-          await adapter.close();
           // Treat as binary file or fail?
           // If listing fails, maybe just fall through to standard processing (which will likely ignore it)
+        } finally {
+          await adapter.close();
         }
       }
     }
 
     // Handle Virtual Archive Path (inner file)
-    if (archivePath && innerPath) {
-      return this.processArchiveEntry(item, archivePath, innerPath, options);
+    if (archivePath && innerPath && archiveAdapter) {
+      return this.processArchiveEntry(
+        item,
+        archivePath,
+        innerPath,
+        archiveAdapter,
+        options,
+      );
     }
 
     const rawContent: RawContent = await this.fileFetcher.fetch(item.url, {
@@ -157,11 +167,18 @@ export class LocalFileStrategy extends BaseScraperStrategy {
    */
   private async resolveVirtualPath(
     fullPath: string,
-  ): Promise<{ archive: string | null; inner: string | null }> {
+  ): Promise<{
+    archive: string | null;
+    inner: string | null;
+    adapter: ArchiveAdapter | null;
+  }> {
     let currentPath = fullPath;
-    while (currentPath !== "/" && currentPath !== ".") {
+    while (
+      currentPath !== "/" &&
+      currentPath !== "." &&
+      path.dirname(currentPath) !== currentPath
+    ) {
       const dirname = path.dirname(currentPath);
-      if (dirname === currentPath) break; // Reached root
 
       try {
         const stats = await fs.stat(currentPath);
@@ -169,32 +186,34 @@ export class LocalFileStrategy extends BaseScraperStrategy {
           // Found a file part of the path. Check if it is an archive.
           const adapter = await ArchiveFactory.getAdapter(currentPath);
           if (adapter) {
-            await adapter.close();
-            const inner = fullPath.substring(currentPath.length).replace(/^\/+/, "");
-            return { archive: currentPath, inner };
+            // We return the OPEN adapter to avoid reopening it
+            const inner = fullPath
+              .substring(currentPath.length)
+              .replace(/^\/+/, "")
+              .replace(/^\\+/, "");
+            return { archive: currentPath, inner, adapter };
           }
         }
         // If it exists and is not an archive (or is a dir), then the path is just wrong/missing
-        return { archive: null, inner: null };
+        // because we started from a full path that didn't exist (ENOENT), and walked up.
+        // If we hit a real directory or real file that isn't an archive, we stop.
+        return { archive: null, inner: null, adapter: null };
       } catch (e) {
         // Path segment doesn't exist, go up
         currentPath = dirname;
       }
     }
-    return { archive: null, inner: null };
+    return { archive: null, inner: null, adapter: null };
   }
 
   private async processArchiveEntry(
     item: QueueItem,
     archivePath: string,
     innerPath: string,
+    adapter: ArchiveAdapter,
     options: ScraperOptions,
   ): Promise<ProcessItemResult> {
     logger.debug(`Reading archive entry: ${innerPath} inside ${archivePath}`);
-    const adapter = await ArchiveFactory.getAdapter(archivePath);
-    if (!adapter) {
-      throw new Error(`Failed to open archive: ${archivePath}`);
-    }
 
     try {
       const contentBuffer = await adapter.getContent(innerPath);

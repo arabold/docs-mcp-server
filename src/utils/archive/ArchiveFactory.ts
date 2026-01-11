@@ -22,11 +22,11 @@ export class ArchiveFactory {
     // We could add magic byte check here later.
 
     // Quick magic byte check for reliability
+    let handle: fs.FileHandle | null = null;
     try {
-      const handle = await fs.open(filePath, "r");
+      handle = await fs.open(filePath, "r");
       const buffer = Buffer.alloc(262); // Tar header is 512, Zip is small
       const { bytesRead } = await handle.read(buffer, 0, 262, 0);
-      await handle.close();
 
       if (bytesRead < 2) return null;
 
@@ -50,6 +50,8 @@ export class ArchiveFactory {
     } catch {
       // If file read fails, we can't process
       return null;
+    } finally {
+      if (handle) await handle.close();
     }
 
     return null;
