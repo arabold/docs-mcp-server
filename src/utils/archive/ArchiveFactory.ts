@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { TarAdapter } from "./TarAdapter";
-import { ZipAdapter } from "./ZipAdapter";
 import type { ArchiveAdapter } from "./types";
+import { ZipAdapter } from "./ZipAdapter";
 
 export async function getArchiveAdapter(
   filePath: string,
