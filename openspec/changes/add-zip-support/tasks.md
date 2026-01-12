@@ -1,0 +1,23 @@
+# Tasks: Add Archive Support
+
+- [x] Install dependencies <!-- id: 1 -->
+    - `npm install yauzl tar`
+    - `npm install -D @types/yauzl @types/tar`
+- [x] Create Archive utility module `src/utils/archive.ts` <!-- id: 2 -->
+    - Define `ArchiveAdapter` interface.
+    - Implement `ZipAdapter` using `yauzl`.
+    - Implement `TarAdapter` using `tar`.
+    - Create factory function to detect format and return correct adapter.
+- [x] Update `LocalFileStrategy` <!-- id: 3 -->
+    - Modify `processItem` to handle archive files as directories.
+    - Implement "Virtual Path" resolution (detecting archive parent).
+    - Use `ArchiveAdapter` to list and read content.
+- [x] Update `WebScraperStrategy` <!-- id: 4 -->
+    - Detect Root URL as Archive (ZIP/TAR/GZ).
+    - Download Root Archive to temp file.
+    - Process temp Archive using Local file logic.
+    - Ensure non-root archive links are ignored.
+- [x] Add Tests <!-- id: 5 -->
+    - Unit tests for `src/utils/archive.ts` (adapters).
+    - Integration test for `LocalFileStrategy` with mock ZIP and TAR files.
+    - Integration test for `WebScraperStrategy` with mock archive responses.

@@ -3,6 +3,9 @@
  * fetcher selection, and routes content through pipelines. Requires resolved
  * configuration from the entrypoint to avoid implicit config loading.
  */
+import fsPromises from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import type { UrlNormalizerOptions } from "../../utils/url";
@@ -12,6 +15,7 @@ import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem, ScraperOptions } from "../types";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
+import { LocalFileStrategy } from "./LocalFileStrategy";
 
 export interface WebScraperStrategyOptions {
   urlNormalizerOptions?: UrlNormalizerOptions;
@@ -22,12 +26,15 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private readonly fetcher: AutoDetectFetcher;
   private readonly shouldFollowLinkFn?: (baseUrl: URL, targetUrl: URL) => boolean;
   private readonly pipelines: ContentPipeline[];
+  private readonly localFileStrategy: LocalFileStrategy;
+  private tempFiles: string[] = [];
 
   constructor(config: AppConfig, options: WebScraperStrategyOptions = {}) {
     super(config, { urlNormalizerOptions: options.urlNormalizerOptions });
     this.shouldFollowLinkFn = options.shouldFollowLink;
     this.fetcher = new AutoDetectFetcher(config.scraper);
     this.pipelines = PipelineFactory.createStandardPipelines(config);
+    this.localFileStrategy = new LocalFileStrategy(config);
   }
 
   canHandle(url: string): boolean {
@@ -60,6 +67,14 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       // Log when processing with ETag for conditional requests
       if (item.etag) {
         logger.debug(`Processing ${url} with stored ETag: ${item.etag}`);
+      }
+
+      // Check for Archive Root URL (only if depth 0)
+      if (item.depth === 0) {
+        const isArchive = /\.(zip|tar|gz|tgz)$/i.test(new URL(url).pathname);
+        if (isArchive) {
+          return this.processRootArchive(item, options, signal);
+        }
       }
 
       // Define fetch options, passing signal, followRedirects, headers, and etag
@@ -100,6 +115,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       }
 
       if (!processed) {
+        // If content type is unsupported (e.g. binary/archive encountered during crawl), we just skip
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for URL ${url}. Skipping processing.`,
         );
@@ -132,6 +148,12 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         processed.links?.filter((link) => {
           try {
             const targetUrl = new URL(link);
+
+            // Check for archive links during crawl - ignore them
+            if (/\.(zip|tar|gz|tgz)$/i.test(targetUrl.pathname)) {
+              return false;
+            }
+
             // Use the base class's shouldProcessUrl which handles scope + include/exclude patterns
             if (!this.shouldProcessUrl(targetUrl.href, options)) {
               return false;
@@ -163,13 +185,80 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     }
   }
 
+  private async processRootArchive(
+    item: QueueItem,
+    options: ScraperOptions,
+    signal?: AbortSignal,
+  ): Promise<ProcessItemResult> {
+    logger.info(`📦 Downloading root archive: ${item.url}`);
+
+    // We need to stream the download to a temp file
+    // Since fetcher.fetch returns a buffer (usually), we might want to bypass it or use it if small enough?
+    // But archives can be huge. fetcher.fetch currently loads into memory.
+    // For now, let's assume we can use fetcher but warn about memory, OR implement stream download here.
+    // Our fetcher abstraction returns RawContent with Buffer.
+    // If we want to stream, we might need to access the underlying axios/fetch stream.
+    // `AutoDetectFetcher` doesn't expose stream easily.
+    // Ideally we refactor fetcher to support streams, but that's out of scope.
+    // So we will use fetcher and write buffer to temp file.
+    // LIMITATION: Large archives will hit memory limits.
+
+    const rawContent = await this.fetcher.fetch(item.url, {
+      signal,
+      headers: options.headers,
+    });
+
+    if (rawContent.status !== FetchStatus.SUCCESS) {
+      return { url: rawContent.source, links: [], status: rawContent.status };
+    }
+
+    const buffer = Buffer.isBuffer(rawContent.content)
+      ? rawContent.content
+      : Buffer.from(rawContent.content);
+
+    const tempDir = os.tmpdir();
+    const tempFile = path.join(
+      tempDir,
+      `scraper-${Date.now()}-${path.basename(new URL(item.url).pathname)}`,
+    );
+
+    // Track file immediately so we can clean it up if write fails or later
+    this.tempFiles.push(tempFile);
+
+    await fsPromises.writeFile(tempFile, buffer);
+
+    // Delegate to LocalFileStrategy
+    const localUrl = `file://${tempFile}`;
+    const localItem = { ...item, url: localUrl };
+
+    const result = await this.localFileStrategy.processItem(localItem, options, signal);
+
+    // We need to fix up the links to point back to something meaningful?
+    // If we process a zip, we get file:///tmp/.../file.txt
+    // These links are only useful if we continue to treat them as local files for this session.
+    // But `WebScraper` expects http links usually?
+    // Actually, if we return file:// links, the queue might try to fetch them.
+    // `WebScraperStrategy` handles http/https. `LocalFileStrategy` handles file://.
+    // If we return file:// links, the scraper will need to route them to `LocalFileStrategy`.
+    // The `ScraperService` uses `ScraperRegistry` to pick strategy.
+    // So file:// links will work!
+
+    return {
+      ...result,
+      url: item.url, // Keep original URL as the source of this item
+      // links are file://...
+    };
+  }
+
   /**
    * Cleanup resources used by this strategy, specifically the pipeline browser instances and fetcher.
    */
   async cleanup(): Promise<void> {
     await Promise.allSettled([
       ...this.pipelines.map((pipeline) => pipeline.close()),
+      this.localFileStrategy.cleanup(),
       this.fetcher.close(),
+      ...this.tempFiles.map((file) => fsPromises.unlink(file).catch(() => {})),
     ]);
   }
 }
