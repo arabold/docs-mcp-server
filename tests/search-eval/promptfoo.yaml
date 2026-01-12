@@ -1,0 +1,58 @@
+prompts: [ "{{query}}" ]
+
+providers:
+  - id: exec:./run-provider.sh
+    label: Local Search Engine
+
+defaultTest:
+  assert:
+    # 1. Relevance: Does the search result answer the user's query?
+    - type: model-graded-closedqa
+      value: "The search results must contain a direct answer or relevant documentation for the query."
+      provider: openai:gpt-4o-mini
+      rubric: |
+        Score 1 (Irrelevant): The results talk about completely different topics.
+        Score 5 (Relevant): The results contain the exact API signature, usage example, or explanation requested.
+
+    # 2. Compactness: Signal-to-Noise Ratio
+    - type: llm-rubric
+      value: "The search results are concise and high-density."
+      provider: openai:gpt-4o-mini
+      rubric: |
+        Score 1 (Verbose): More than 80% of the text is irrelevant boilerplate, navigation links, or unrelated code.
+        Score 5 (Compact): The text is focused almost entirely on the answer.
+
+    # 3. Contextual Integrity: Code blocks are not cut off
+    - type: javascript
+      value: |
+        // output is provided as a global variable
+        const openBlocks = (output.match(/```/g) || []).length;
+        // Even number of ``` means blocks are closed
+        return openBlocks % 2 === 0;
+      label: "code-integrity"
+
+    # 4. Ranking: Expected URL is in Top 3
+    # We use the 'metadata' we attached in the provider script
+    - type: javascript
+      value: |
+        // Robustly handle metadata
+        let results = [];
+        if (typeof providerOutput !== 'undefined' && providerOutput.metadata) {
+          results = providerOutput.metadata.results;
+        } else {
+           // Fallback: try to parse output if it looks like the raw JSON
+           try {
+             const parsed = JSON.parse(output);
+             if (parsed.metadata) results = parsed.metadata.results;
+           } catch(e) {}
+        }
+        
+        const expectedUrl = context.vars.expectedUrl;
+        if (!expectedUrl || !results || results.length === 0) return true; // Skip
+
+        const foundIndex = results.findIndex(r => r.url === expectedUrl);
+        // Pass if found in top 3 (index 0, 1, 2)
+        return foundIndex !== -1 && foundIndex < 3;
+      label: "ranking-top-3"
+
+tests: dataset.yaml
