@@ -480,4 +480,47 @@ This JSON shows the package structure.
     expect(chunks[0].content).toContain(textContent);
     expect(chunks[0].section.path).toEqual([]);
   });
+
+  it("should extract YAML frontmatter into a separate chunk", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+title: My Doc
+tags: [one, two]
+---
+# Main Content`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.length).toBeGreaterThan(1);
+    expect(result[0].types).toEqual(["frontmatter"]);
+    expect(result[0].content).toContain("title: My Doc");
+    expect(result[0].content).toContain("tags: [one, two]");
+    // Should include delimiters
+    expect(result[0].content).toMatch(/^---\n[\s\S]*\n---$/);
+
+    expect(result[1].types).toEqual(["heading"]);
+    expect(result[1].content).toBe("# Main Content");
+  });
+
+  it("should ignore malformed frontmatter and treat it as text", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    // Malformed because no closing delimiter or invalid yaml structure that gray-matter rejects?
+    // gray-matter is very permissive. It requires --- on the first line.
+    // If we have --- but invalid yaml inside, gray-matter might still extract it but data might be empty?
+    // If data is empty, we skip frontmatter chunk creation.
+    const markdown = `---
+invalid: : yaml
+---
+# Main Content`;
+
+    const result = await splitter.splitText(markdown);
+
+    // Invalid frontmatter must not be treated as a frontmatter chunk.
+    const frontmatterChunks = result.filter((c) => c.types.includes("frontmatter"));
+    expect(frontmatterChunks).toHaveLength(0);
+
+    // The invalid frontmatter content should still be preserved in the output.
+    const combinedContent = result.map((c) => c.content).join("\n");
+    expect(combinedContent).toContain("invalid");
+  });
 });

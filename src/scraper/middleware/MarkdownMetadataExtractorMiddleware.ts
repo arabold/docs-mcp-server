@@ -1,7 +1,10 @@
+import matter from "gray-matter";
+import { logger } from "../../utils/logger";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 
 /**
- * Middleware to extract the title (first H1 heading) from Markdown content.
+ * Middleware to extract the title from Markdown content.
+ * Prioritizes YAML frontmatter 'title' field, falls back to first H1 heading.
  */
 export class MarkdownMetadataExtractorMiddleware implements ContentProcessorMiddleware {
   /**
@@ -12,10 +15,32 @@ export class MarkdownMetadataExtractorMiddleware implements ContentProcessorMidd
   async process(context: MiddlewareContext, next: () => Promise<void>): Promise<void> {
     try {
       let title = "Untitled";
-      const match = context.content.match(/^#\s+(.*)$/m);
-      if (match?.[1]) {
-        title = match[1].trim();
+      let frontmatterTitle: string | undefined;
+
+      // 1. Try to extract title from YAML frontmatter
+      try {
+        const file = matter(context.content);
+        if (file.data && file.data.title !== undefined && file.data.title !== null) {
+          // Convert to string to handle numeric titles (e.g. title: 2024)
+          frontmatterTitle = String(file.data.title).trim();
+        }
+      } catch (err) {
+        // Log warning but continue - don't crash the pipeline for bad frontmatter
+        logger.warn(
+          `Failed to parse markdown frontmatter: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
+
+      if (frontmatterTitle && frontmatterTitle.length > 0) {
+        title = frontmatterTitle;
+      } else {
+        // 2. Fallback: Extract first H1 heading
+        const match = context.content.match(/^#\s+(.*)$/m);
+        if (match?.[1]) {
+          title = match[1].trim();
+        }
+      }
+
       context.title = title;
     } catch (error) {
       context.errors.push(

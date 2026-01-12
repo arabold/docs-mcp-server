@@ -1,4 +1,5 @@
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import matter from "gray-matter";
 import remarkGfm from "remark-gfm";
 import remarkHtml from "remark-html";
 import remarkParse from "remark-parse";
@@ -105,11 +106,46 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     // Note: JSON content is now handled by dedicated JsonDocumentSplitter in JsonPipeline
     // This splitter focuses on markdown, HTML, and plain text content
 
+    let contentToProcess = markdown;
+    let frontmatterChunk: Chunk | null = null;
+
+    try {
+      // Check for frontmatter
+      const file = matter(markdown);
+      if (Object.keys(file.data).length > 0) {
+        // Reconstruct the frontmatter block
+        // file.matter contains the raw content between the delimiters
+        const rawFrontmatter = `---\n${file.matter}\n---`;
+
+        frontmatterChunk = {
+          types: ["frontmatter"],
+          content: rawFrontmatter,
+          section: {
+            level: 0,
+            path: [],
+          },
+        };
+
+        contentToProcess = file.content;
+      }
+    } catch (err) {
+      // Log warning but continue with original content if parsing fails
+      logger.warn(
+        `Failed to parse frontmatter in splitter: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     // For markdown, HTML, or plain text, process normally
-    const html = await this.markdownToHtml(markdown);
+    const html = await this.markdownToHtml(contentToProcess);
     const dom = await this.parseHtml(html);
     const sections = await this.splitIntoSections(dom);
-    return this.splitSectionContent(sections);
+    const chunks = await this.splitSectionContent(sections);
+
+    if (frontmatterChunk) {
+      chunks.unshift(frontmatterChunk);
+    }
+
+    return chunks;
   }
 
   /**
