@@ -37,7 +37,7 @@ async function main() {
           // Might be part of the query if it's a valid JSON but not our context
           break;
         }
-      } catch (e) {
+      } catch (_e) {
         // Not valid JSON, stop removing
         break;
       }
@@ -83,7 +83,7 @@ async function main() {
     // 5. Verify Library Exists (Fast Fail)
     try {
       await docService.validateLibraryExists(library);
-    } catch (e) {
+    } catch (_e) {
       console.error(`Error: Library '${library}' not found. Please index it first.`);
       process.exit(1);
     }
@@ -115,7 +115,7 @@ async function main() {
       results: results.map((r) => ({
         url: r.url,
         score: r.score ?? 0,
-        title: r.content.slice(0, 50) + "...", // simplified title if needed
+        title: `${r.content.slice(0, 50)}...`, // simplified title if needed
       })),
     };
 
