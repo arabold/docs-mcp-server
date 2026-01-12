@@ -52,6 +52,12 @@ export interface ScrapeToolOptions {
      * Keys are header names, values are header values.
      */
     headers?: Record<string, string>;
+    /**
+     * If true, clears existing documents for the library version before scraping.
+     * If false, appends to the existing documents.
+     * @default true
+     */
+    clean?: boolean;
   };
   /** If false, returns jobId immediately without waiting. Defaults to true. */
   waitForCompletion?: boolean;
@@ -144,6 +150,7 @@ export class ScrapeTool {
       includePatterns: scraperOptions?.includePatterns,
       excludePatterns: scraperOptions?.excludePatterns,
       headers: scraperOptions?.headers, // <-- propagate headers
+      clean: scraperOptions?.clean, // <-- propagate clean option
     });
 
     // Conditionally wait for completion

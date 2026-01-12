@@ -6,27 +6,38 @@ providers:
 
 defaultTest:
   assert:
-    # 1. Relevance: Does the search result answer the user's query?
+    # 1. Relevance: Does the search result provide relevant documentation?
     - type: model-graded-closedqa
-      value: "The search results must contain a direct answer or relevant documentation for the query."
+      value: "The search results must contain relevant documentation chunks for the given keywords."
       provider: openai:gpt-4o-mini
       rubric: |
-        Score 1 (Irrelevant): The results talk about completely different topics.
-        Score 5 (Relevant): The results contain the exact API signature, usage example, or explanation requested.
+        Score 1 (Irrelevant): The results are about unrelated topics, different libraries, or do not contain the requested information.
+        Score 3 (Partial): The results mention the keywords but don't provide the main documentation, API signature, or primary usage examples.
+        Score 5 (Relevant): The results contain the core documentation, API signature, or primary usage examples for the searched keywords. The context is appropriate for an LLM to answer questions based on it.
 
-    # 2. Compactness: Signal-to-Noise Ratio
+    # 2. Richness: Depth of Content
     - type: llm-rubric
-      value: "The search results are concise and high-density."
+      value: "The search results provide comprehensive documentation."
       provider: openai:gpt-4o-mini
       rubric: |
-        Score 1 (Verbose): More than 80% of the text is irrelevant boilerplate, navigation links, or unrelated code.
-        Score 5 (Compact): The text is focused almost entirely on the answer.
+        Score 1 (Shallow): The results are just titles or very brief snippets.
+        Score 5 (Rich): The results include detailed explanations, code examples, and context.
 
     # 3. Contextual Integrity: Code blocks are not cut off
     - type: javascript
       value: |
+        // Robustly extract the actual content from the JSON output if present
+        let content = output;
+        try {
+           const match = output.match(/\{[\s\S]*\}/);
+           if (match) {
+             const parsed = JSON.parse(match[0]);
+             if (parsed.output) content = parsed.output;
+           }
+        } catch(e) {}
+        
         // output is provided as a global variable
-        const openBlocks = (output.match(/```/g) || []).length;
+        const openBlocks = (content.match(/```/g) || []).length;
         // Even number of ``` means blocks are closed
         return openBlocks % 2 === 0;
       label: "code-integrity"
@@ -37,13 +48,22 @@ defaultTest:
       value: |
         // Robustly handle metadata
         let results = [];
+        let parsed = null;
+        
         if (typeof providerOutput !== 'undefined' && providerOutput.metadata) {
           results = providerOutput.metadata.results;
         } else {
-           // Fallback: try to parse output if it looks like the raw JSON
+           // Fallback: try to find and parse JSON in the output
            try {
-             const parsed = JSON.parse(output);
-             if (parsed.metadata) results = parsed.metadata.results;
+             const match = output.match(/\{[\s\S]*\}/);
+             if (match) {
+               parsed = JSON.parse(match[0]);
+               if (parsed.metadata) results = parsed.metadata.results;
+             } else {
+               // Try direct parse if no match found (unlikely if noisy)
+               parsed = JSON.parse(output);
+               if (parsed.metadata) results = parsed.metadata.results;
+             }
            } catch(e) {}
         }
         

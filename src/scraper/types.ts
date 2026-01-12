@@ -113,6 +113,12 @@ export interface ScraperOptions {
    * @default false
    */
   isRefresh?: boolean;
+  /**
+   * If true, clears existing documents for the library version before scraping.
+   * If false, appends to the existing documents.
+   * @default true
+   */
+  clean?: boolean;
 }
 
 /**

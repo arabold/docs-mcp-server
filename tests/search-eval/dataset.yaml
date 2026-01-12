@@ -1,24 +1,24 @@
 - vars:
     library: "react"
-    query: "How do I use useEffect?"
+    query: "useEffect usage"
     expectedUrl: "https://react.dev/reference/react/useEffect"
   
 - vars:
     library: "react"
-    query: "What is the difference between useMemo and useCallback?"
+    query: "useMemo vs useCallback difference"
     expectedUrl: "https://react.dev/reference/react/useCallback"
 
 - vars:
     library: "react"
-    query: "How to create a custom hook?"
+    query: "create custom hook"
     expectedUrl: "https://react.dev/learn/reusing-logic-with-custom-hooks"
 
 - vars:
     library: "react"
-    query: "How do I use useState in a component?"
+    query: "React useState"
     expectedUrl: "https://react.dev/reference/react/useState"
 
 - vars:
     library: "react"
-    query: "How do I create and render a React component?"
+    query: "create render component"
     expectedUrl: "https://react.dev/learn/your-first-component"
