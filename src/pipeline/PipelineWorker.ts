@@ -51,16 +51,17 @@ export class PipelineWorker {
 
     try {
       // Clear existing documents for this library/version before scraping
-      // Skip this step for refresh operations to preserve existing data
-      if (!scraperOptions.isRefresh) {
+      // Skip this step for refresh operations or if clean is explicitly false
+      if (!scraperOptions.isRefresh && scraperOptions.clean !== false) {
         await this.store.removeAllDocuments(library, version);
         logger.info(
           `💾 Cleared store for ${library}@${version || "latest"} before scraping.`,
         );
       } else {
-        logger.info(
-          `🔄 Refresh operation - preserving existing data for ${library}@${version || "latest"}.`,
-        );
+        const message = scraperOptions.isRefresh
+          ? `🔄 Refresh operation - preserving existing data for ${library}@${version || "latest"}.`
+          : `💾 Appending to store for ${library}@${version || "latest"} (clean=false).`;
+        logger.info(message);
       }
 
       // --- Core Job Logic ---

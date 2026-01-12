@@ -7,7 +7,7 @@ import { LogLevel, setLogLevel } from "../utils/logger";
 
 async function main() {
   // Silence logs to prevent pollution of stdout (JSON output)
-  setLogLevel(LogLevel.WARN);
+  setLogLevel(LogLevel.ERROR);
 
   // DEBUG: Print args
   // console.error("ARGV:", JSON.stringify(process.argv));

@@ -114,6 +114,11 @@ export function createScrapeCommand(cli: Argv) {
             "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
           alias: "serverUrl",
         })
+        .option("clean", {
+          type: "boolean",
+          description: "Clear existing documents before scraping",
+          default: true,
+        })
         .usage(
           "$0 scrape <library> <url> [options]\n\n" +
             "Scrape and index documentation from a URL or local folder.\n\n" +
@@ -239,6 +244,7 @@ export function createScrapeCommand(cli: Argv) {
                 ? (argv.excludePattern as string[])
                 : undefined,
             headers: Object.keys(headers).length > 0 ? headers : undefined,
+            clean: argv.clean as boolean,
           },
         });
 
