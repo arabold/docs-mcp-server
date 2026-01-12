@@ -14,12 +14,16 @@ export class ZipAdapter implements ArchiveAdapter {
     if (this.zipfile) return this.zipfile;
 
     return new Promise((resolve, reject) => {
-      yauzl.open(this.filePath, { lazyEntries: true }, (err, zipfile) => {
-        if (err) return reject(err);
-        if (!zipfile) return reject(new Error("Failed to open zip file"));
-        this.zipfile = zipfile;
-        resolve(zipfile);
-      });
+      yauzl.open(
+        this.filePath,
+        { lazyEntries: true, autoClose: false },
+        (err, zipfile) => {
+          if (err) return reject(err);
+          if (!zipfile) return reject(new Error("Failed to open zip file"));
+          this.zipfile = zipfile;
+          resolve(zipfile);
+        },
+      );
     });
   }
 

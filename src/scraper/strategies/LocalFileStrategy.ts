@@ -238,10 +238,10 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     options: ScraperOptions,
   ): Promise<ProcessItemResult> {
     logger.debug(`Reading archive entry: ${innerPath} inside ${archivePath}`);
-    // console.log(`DEBUG: reading inner path: '${innerPath}' from archive '${archivePath}'`);
 
     try {
       const contentBuffer = await adapter.getContent(innerPath);
+
       // Detect mime type based on inner filename
       const mimeType = mime.getType(innerPath) || "application/octet-stream";
 
@@ -264,7 +264,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       logger.warn(
         `⚠️  Failed to read archive entry "${innerPath}" from archive "${archivePath}": ${err}`,
       );
-      // console.log(err);
+      console.error(`DEBUG ERROR: ${err}`); // Force output to console
       return {
         url: item.url,
         links: [],
