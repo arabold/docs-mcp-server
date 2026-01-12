@@ -78,6 +78,7 @@ export const DEFAULT_CONFIG = {
     childLimit: 3,
     precedingSiblingsLimit: 1,
     subsequentSiblingsLimit: 2,
+    maxChunkDistance: 3,
   },
   document: {
     maxSize: 10 * 1024 * 1024, // 10MB max size for PDF/Office documents
@@ -245,6 +246,11 @@ export const AppConfigSchema = z.object({
         .number()
         .int()
         .default(DEFAULT_CONFIG.assembly.subsequentSiblingsLimit),
+      maxChunkDistance: z.coerce
+        .number()
+        .int()
+        .min(0)
+        .default(DEFAULT_CONFIG.assembly.maxChunkDistance),
     })
     .default(DEFAULT_CONFIG.assembly),
   document: z

@@ -104,3 +104,16 @@ Internal database settings.
 | Option                | Default | Description                                 |
 | :-------------------- | :------ | :------------------------------------------ |
 | `migrationMaxRetries` | `5`     | Retries for database migrations on startup. |
+
+### Assembly (`assembly`)
+
+Settings for reassembling search results.
+
+| Option                    | Default | Description                                                                                                      |
+| :------------------------ | :------ | :--------------------------------------------------------------------------------------------------------------- |
+| `maxChunkDistance`        | `3`     | Maximum sort_order difference to merge chunks; larger differences keep chunks separate (usually per-chunk = 1). |
+| `maxParentChainDepth`     | `10`    | Maximum depth for parent context traversal.                                                                      |
+| `childLimit`              | `3`     | Maximum number of child chunks to include.                                             |
+| `precedingSiblingsLimit`  | `1`     | Number of preceding sibling chunks to include.                                         |
+| `subsequentSiblingsLimit` | `2`     | Number of subsequent sibling chunks to include.                                        |
+

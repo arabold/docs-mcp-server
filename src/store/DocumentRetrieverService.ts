@@ -46,14 +46,25 @@ export class DocumentRetrieverService {
     // Process each URL group with appropriate strategy
     const results: StoreSearchResult[] = [];
     for (const [url, urlResults] of resultsByUrl.entries()) {
-      const result = await this.processUrlGroup(
-        library,
-        normalizedVersion,
-        url,
-        urlResults,
-      );
-      results.push(result);
+      // Cluster chunks based on distance
+      const clusters = this.clusterChunksByDistance(urlResults);
+
+      // Process each cluster as a separate result
+      for (const cluster of clusters) {
+        const result = await this.processUrlGroup(
+          library,
+          normalizedVersion,
+          url,
+          cluster,
+        );
+        results.push(result);
+      }
     }
+
+    // Sort all results by score descending
+    // This ensures that if a highly relevant chunk was split from a less relevant one,
+    // the highly relevant one appears first in the final list.
+    results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
     return results;
   }
@@ -115,5 +126,53 @@ export class DocumentRetrieverService {
       score: maxScore,
       mimeType,
     };
+  }
+
+  /**
+   * Clusters chunks based on their sort_order distance.
+   * Chunks within maxChunkDistance of each other are grouped together.
+   *
+   * @param chunks The list of chunks to cluster (must be from the same URL).
+   * @returns An array of chunk clusters, where each cluster is an array of chunks.
+   */
+  private clusterChunksByDistance(
+    chunks: (DbPageChunk & DbChunkRank)[],
+  ): (DbPageChunk & DbChunkRank)[][] {
+    if (chunks.length === 0) return [];
+    if (chunks.length === 1) return [chunks];
+
+    // Sort chunks by sort_order, then by id for deterministic stability
+    const sortedChunks = [...chunks].sort((a, b) => {
+      const diff = a.sort_order - b.sort_order;
+      if (diff !== 0) return diff;
+      return a.id.localeCompare(b.id);
+    });
+
+    const clusters: (DbPageChunk & DbChunkRank)[][] = [];
+    let currentCluster: (DbPageChunk & DbChunkRank)[] = [sortedChunks[0]];
+    // Ensure maxChunkDistance is non-negative
+    const maxChunkDistance = Math.max(0, this.config.assembly.maxChunkDistance);
+
+    for (let i = 1; i < sortedChunks.length; i++) {
+      const currentChunk = sortedChunks[i];
+      const previousChunk = sortedChunks[i - 1];
+
+      // Check distance between current and previous chunk
+      const distance = currentChunk.sort_order - previousChunk.sort_order;
+
+      if (distance <= maxChunkDistance) {
+        // Close enough - add to current cluster
+        currentCluster.push(currentChunk);
+      } else {
+        // Too far - start new cluster
+        clusters.push(currentCluster);
+        currentCluster = [currentChunk];
+      }
+    }
+
+    // Add the last cluster
+    clusters.push(currentCluster);
+
+    return clusters;
   }
 }

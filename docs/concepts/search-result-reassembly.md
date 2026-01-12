@@ -61,7 +61,8 @@ graph TD
     K --> L[Group by URL]
     L --> M[Deduplicate IDs]
     M --> N[Fetch by IDs<br/>Ordered by sort_order]
-    N --> O[Join with double newlines]
+    N --> CL[Cluster by Distance]
+    CL --> O[Join with double newlines]
     O --> P[Final Reassembled Result]
 
     style A fill:#e1f5fe
@@ -87,7 +88,8 @@ The reassembly process follows these key steps:
 2. **Context Expansion**: For each result, find related chunks using hierarchical relationships
 3. **URL Grouping**: Combine chunks from the same document and deduplicate chunk IDs
 4. **Ordered Retrieval**: Fetch all related chunks ordered by their original document position (`sort_order`)
-5. **Content Assembly**: Join chunk content with double newlines and preserve highest relevance scores
+5. **Distance Clustering**: Split chunks into separate groups if they are too far apart (controlled by `maxChunkDistance`)
+6. **Content Assembly**: Join chunk content with double newlines and preserve highest relevance scores
 
 ## Reassembly Examples
 
