@@ -54,8 +54,10 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       try {
         stats = await fs.stat(filePath);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          // File not found, check if it's a virtual path inside an archive
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          // File not found or path component is not a directory (maybe archive traversal)
+          // Check if it's a virtual path inside an archive
           const resolved = await this.resolveVirtualPath(filePath);
           if (resolved.archive && resolved.inner && resolved.adapter) {
             archivePath = resolved.archive;
@@ -189,9 +191,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
    * Resolves a path that might be inside an archive.
    * Returns the archive path and the inner path if found.
    */
-  private async resolveVirtualPath(
-    fullPath: string,
-  ): Promise<{
+  private async resolveVirtualPath(fullPath: string): Promise<{
     archive: string | null;
     inner: string | null;
     adapter: ArchiveAdapter | null;
@@ -238,6 +238,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     options: ScraperOptions,
   ): Promise<ProcessItemResult> {
     logger.debug(`Reading archive entry: ${innerPath} inside ${archivePath}`);
+    // console.log(`DEBUG: reading inner path: '${innerPath}' from archive '${archivePath}'`);
 
     try {
       const contentBuffer = await adapter.getContent(innerPath);
@@ -260,24 +261,15 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         options,
       );
     } catch (err) {
-      logger.warn(`⚠️  Failed to read archive entry ${innerPath}: ${err}`);
+      logger.warn(
+        `⚠️  Failed to read archive entry "${innerPath}" from archive "${archivePath}": ${err}`,
+      );
+      // console.log(err);
       return {
         url: item.url,
         links: [],
         status: FetchStatus.NOT_FOUND,
       };
-    } finally {
-      // The adapter is closed in the main processItem finally block if it came from resolveVirtualPath
-      // But if we throw here, it bubbles up to that finally block.
-      // Wait, processArchiveEntry is called from processItem which has the finally block.
-      // So we SHOULD NOT close it here if we want to follow the pattern that the caller owns it?
-      // Actually, resolveVirtualPath hands off ownership to processItem scope.
-      // processItem's finally block closes it.
-      // So we should remove this finally block here to avoid double close (though close should be idempotent).
-      // However, `archiveAdapter` variable in `processItem` holds the reference.
-      // If `processArchiveEntry` throws, `processItem` catches? No, it awaits.
-      // So `processItem` finally block will run.
-      // So removing `finally { await adapter.close() }` here is correct because the caller handles it.
     }
   }
 
