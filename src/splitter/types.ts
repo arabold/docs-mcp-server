@@ -7,7 +7,10 @@ export type SectionContentType =
   | "table"
   | "heading"
   | "structural"
-  | "frontmatter";
+  | "frontmatter"
+  | "list"
+  | "blockquote"
+  | "media";
 
 /**
  * Final output chunk after processing and size-based splitting

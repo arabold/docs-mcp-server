@@ -523,4 +523,115 @@ invalid: : yaml
     const combinedContent = result.map((c) => c.content).join("\n");
     expect(combinedContent).toContain("invalid");
   });
+
+  it("should detect and split lists", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `
+# List Section
+
+- Item 1
+- Item 2
+- Item 3
+`;
+    const result = await splitter.splitText(markdown);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].types).toEqual(["heading"]);
+    expect(result[1].types).toEqual(["list"]);
+    // Turndown might add extra spaces for alignment
+    expect(result[1].content).toMatch(/- +Item 1/);
+    expect(result[1].content).toMatch(/- +Item 2/);
+  });
+
+  it("should split long lists", async () => {
+    const splitter = new SemanticMarkdownSplitter(50, 5000);
+    const markdown = `
+# Long List
+
+- This is item 1 which is long enough to cause a split hopefully
+- This is item 2 which is also long enough
+`;
+    const result = await splitter.splitText(markdown);
+
+    // Header + List items split
+    expect(result.length).toBeGreaterThan(2);
+    expect(result[0].types).toEqual(["heading"]);
+
+    // Check list chunks
+    const listChunks = result.slice(1);
+    expect(listChunks.every((c) => c.types.includes("list"))).toBe(true);
+    // Should be split
+    expect(listChunks.length).toBeGreaterThan(1);
+  });
+
+  it("should detect blockquotes", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `
+> This is a blockquote.
+> It spans multiple lines.
+`;
+    const result = await splitter.splitText(markdown);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].types).toEqual(["blockquote"]);
+    expect(result[0].content).toContain("> This is a blockquote.");
+  });
+
+  it("should detect images", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `
+![Alt text](http://example.com/image.png)
+`;
+    const result = await splitter.splitText(markdown);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].types).toEqual(["media"]);
+    expect(result[0].content).toContain("![Alt text]");
+  });
+
+  it("should handle horizontal rules as separators", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `
+Paragraph 1.
+
+---
+
+Paragraph 2.
+`;
+    const result = await splitter.splitText(markdown);
+
+    // Should have 2 text chunks. HR itself is ignored but causes separation.
+    // If they were merged, it would be 1 chunk (if small enough).
+    // But since they are separate paragraphs/elements, they are likely separate chunks anyway.
+    // However, we want to verify they are identified as separate 'text' chunks.
+    expect(result).toHaveLength(2);
+    expect(result[0].types).toEqual(["text"]);
+    expect(result[0].content).toBe("Paragraph 1.");
+    expect(result[1].types).toEqual(["text"]);
+    expect(result[1].content).toBe("Paragraph 2.");
+  });
+
+  it("should handle mixed content types", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `
+# Mixed
+
+Text paragraph.
+
+- List item 1
+- List item 2
+
+> Blockquote
+
+![Image](src)
+`;
+    const result = await splitter.splitText(markdown);
+
+    expect(result).toHaveLength(5);
+    expect(result[0].types).toEqual(["heading"]);
+    expect(result[1].types).toEqual(["text"]);
+    expect(result[2].types).toEqual(["list"]);
+    expect(result[3].types).toEqual(["blockquote"]);
+    expect(result[4].types).toEqual(["media"]);
+  });
 });
