@@ -5,6 +5,26 @@ import yaml from "yaml";
 import { z } from "zod";
 import { logger } from "./logger";
 
+/**
+ * Custom zod schema for boolean values that properly handles string representations.
+ * Unlike z.coerce.boolean() which treats any non-empty string as true,
+ * this schema correctly parses "false", "0", "no", "off" as false.
+ */
+const envBoolean = z
+  .union([z.boolean(), z.string()])
+  .transform((val) => {
+    if (typeof val === "boolean") return val;
+    const lower = val.toLowerCase().trim();
+    return (
+      lower !== "false" &&
+      lower !== "0" &&
+      lower !== "no" &&
+      lower !== "off" &&
+      lower !== ""
+    );
+  })
+  .pipe(z.boolean());
+
 // --- Default Global Configuration ---
 
 export const DEFAULT_CONFIG = {
@@ -91,8 +111,8 @@ export const AppConfigSchema = z.object({
   app: z
     .object({
       storePath: z.string().default(DEFAULT_CONFIG.app.storePath),
-      telemetryEnabled: z.coerce.boolean().default(DEFAULT_CONFIG.app.telemetryEnabled),
-      readOnly: z.coerce.boolean().default(DEFAULT_CONFIG.app.readOnly),
+      telemetryEnabled: envBoolean.default(DEFAULT_CONFIG.app.telemetryEnabled),
+      readOnly: envBoolean.default(DEFAULT_CONFIG.app.readOnly),
       embeddingModel: z.string().default(DEFAULT_CONFIG.app.embeddingModel),
     })
     .default(DEFAULT_CONFIG.app),
@@ -113,7 +133,7 @@ export const AppConfigSchema = z.object({
     .default(DEFAULT_CONFIG.server),
   auth: z
     .object({
-      enabled: z.coerce.boolean().default(DEFAULT_CONFIG.auth.enabled),
+      enabled: envBoolean.default(DEFAULT_CONFIG.auth.enabled),
       issuerUrl: z.string().default(DEFAULT_CONFIG.auth.issuerUrl),
       audience: z.string().default(DEFAULT_CONFIG.auth.audience),
     })
