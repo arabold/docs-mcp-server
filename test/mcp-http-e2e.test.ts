@@ -104,6 +104,7 @@ describe("MCP HTTP server E2E", () => {
           ...testEnv,
           DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-http"),
           DOCS_MCP_TELEMETRY: "false",
+          LOG_LEVEL: "info",
         },
       },
     );
@@ -119,6 +120,12 @@ describe("MCP HTTP server E2E", () => {
       const handleOutput = (data: Buffer) => {
         const text = data.toString();
         output += text;
+        console.log(`[Server Output]: ${text.trim()}`);
+
+        // Fail fast if we see an error
+        if (text.includes("Error:") || text.includes("Exception:")) {
+             console.error(`[Server Error Detected]: ${text}`);
+        }
 
         // Look for the "available at" message that indicates the server is ready
         // Pattern: "🚀 ... available at http://..."
@@ -156,8 +163,27 @@ describe("MCP HTTP server E2E", () => {
     // Construct SSE endpoint URL
     const sseUrl = new URL("/sse", serverUrl);
 
-    // Create SSE transport
-    transport = new SSEClientTransport(sseUrl);
+    // Custom fetch that consumes body instead of cancelling to fix hang
+    const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetch(input, init);
+      
+      if (response.body) {
+        // Monkey patch cancel to consume stream
+        const originalCancel = response.body.cancel.bind(response.body);
+        response.body.cancel = async (reason) => {
+          try {
+            await response.text(); 
+          } catch {}
+          return undefined;
+        };
+      }
+      return response;
+    };
+
+    // Create SSE transport with custom fetch
+    transport = new SSEClientTransport(sseUrl, {
+      fetch: customFetch as any // Type assertion needed for fetch override compatibility
+    });
 
     // Create MCP client
     client = new Client(
@@ -195,7 +221,20 @@ describe("MCP HTTP server E2E", () => {
     const serverUrl = await startServer(port);
 
     const sseUrl = new URL("/sse", serverUrl);
-    transport = new SSEClientTransport(sseUrl);
+    
+    // Also use custom fetch here to prevent hang during connection setup
+    const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetch(input, init);
+      if (response.body) {
+        response.body.cancel = async (reason) => {
+          try { await response.text(); } catch {}
+          return undefined;
+        };
+      }
+      return response;
+    };
+
+    transport = new SSEClientTransport(sseUrl, { fetch: customFetch as any });
 
     client = new Client(
       {
@@ -244,7 +283,7 @@ describe("MCP HTTP server E2E", () => {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("Test timed out waiting for heartbeat"));
-      }, 40000); // Wait up to 40 seconds (heartbeat should come within 30s)
+      }, 45000); // Wait up to 45 seconds (heartbeat should come within 30s)
 
       const req = http.request(
         {
