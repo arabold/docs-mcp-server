@@ -176,6 +176,7 @@ export function createMcpCommand(cli: Argv) {
             enableWorker: !serverUrl,
             port: appConfig.server.ports.mcp,
             externalWorkerUrl: serverUrl,
+            showLogo: argv.logo as boolean,
             startupContext: {
               cliCommand: "mcp",
               mcpProtocol: "http",

@@ -97,6 +97,7 @@ export function createWebCommand(cli: Argv) {
           enableWorker: !serverUrl,
           port: appConfig.server.ports.web,
           externalWorkerUrl: serverUrl,
+          showLogo: argv.logo as boolean,
           startupContext: {
             cliCommand: "web",
           },
