@@ -52,6 +52,7 @@ services:
         "6280",
         "--server-url",
         "http://worker:8080/api",
+        "--no-logo",
       ]
     container_name: docs-mcp-server
     restart: unless-stopped
@@ -86,6 +87,7 @@ services:
         "6281",
         "--server-url",
         "http://worker:8080/api",
+        "--no-logo",
       ]
     container_name: docs-mcp-web
     restart: unless-stopped

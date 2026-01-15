@@ -200,6 +200,7 @@ export function createAppServerConfig(options: {
   enableWorker?: boolean;
   port: number;
   externalWorkerUrl?: string;
+  showLogo?: boolean;
   startupContext?: {
     cliCommand?: string;
     mcpProtocol?: "stdio" | "http";
@@ -213,6 +214,7 @@ export function createAppServerConfig(options: {
     enableWorker: options.enableWorker ?? true,
     port: options.port,
     externalWorkerUrl: options.externalWorkerUrl,
+    showLogo: options.showLogo ?? true,
     startupContext: options.startupContext,
   };
 }

@@ -76,6 +76,11 @@ export function createCli(argv: string[]): Argv {
       type: "string",
       description: "Path to configuration file",
     })
+    .option("logo", {
+      type: "boolean",
+      description: "Show ASCII art logo on startup",
+      default: true,
+    })
     // Middleware for Global Setup (similar to preAction)
     .middleware(async (argv) => {
       // 0. Validate Options

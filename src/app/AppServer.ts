@@ -20,6 +20,7 @@ import { registerWorkerService, stopWorkerService } from "../services/workerServ
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../telemetry";
 import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
+import { printBanner } from "../utils/banner";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
@@ -513,6 +514,11 @@ export class AppServer {
    * Log startup information showing which services are enabled.
    */
   private logStartupInfo(address: string): void {
+    // Print the ASCII art banner if enabled
+    if (this.serverConfig.showLogo !== false) {
+      printBanner();
+    }
+
     // Determine the service mode
     const isWorkerOnly =
       this.serverConfig.enableWorker &&

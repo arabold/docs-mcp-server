@@ -28,6 +28,9 @@ export interface AppServerConfig {
   /** URL of external worker server (if using external worker instead of embedded) */
   externalWorkerUrl?: string;
 
+  /** Show ASCII art logo on startup (default: true) */
+  showLogo?: boolean;
+
   /** Startup context for telemetry (optional) */
   startupContext?: {
     /** CLI command that started the server (if applicable) */
