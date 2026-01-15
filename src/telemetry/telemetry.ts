@@ -179,18 +179,18 @@ export function initTelemetry(options: { enabled: boolean; storePath?: string })
   telemetryInstance = Telemetry.create();
 }
 
-// Export a proxy object that caches the telemetry instance after first access
+// Export a proxy object that always delegates to the current telemetry instance.
+// This ensures configuration changes (like disabling telemetry via initTelemetry)
+// are always reflected, avoiding stale cached state.
 export const telemetry = new Proxy({} as Telemetry, {
-  get(target, prop) {
-    // Cache the telemetry instance on first property access
-    if (!target.isEnabled) {
-      const instance = getTelemetryInstance();
-      // Copy all methods and properties to the target for future direct access
-      Object.setPrototypeOf(target, Object.getPrototypeOf(instance));
-      Object.assign(target, instance);
-    }
+  get(_target, prop) {
+    const instance = getTelemetryInstance();
+    const value = instance[prop as keyof Telemetry];
 
-    // Forward the property access to the cached instance
-    return target[prop as keyof Telemetry];
+    // Bind methods to the instance to preserve 'this' context
+    if (typeof value === "function") {
+      return value.bind(instance);
+    }
+    return value;
   },
 });

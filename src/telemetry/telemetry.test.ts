@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TelemetryConfig } from "./TelemetryConfig";
-import { Telemetry, TelemetryEvent } from "./telemetry";
+import { initTelemetry, Telemetry, TelemetryEvent, telemetry } from "./telemetry";
 
 // Set the global __POSTHOG_API_KEY__ for testing
 (global as any).__POSTHOG_API_KEY__ = "test-api-key";
@@ -172,5 +172,69 @@ describe("Telemetry", () => {
     it("should return enabled state", () => {
       expect(telemetry.isEnabled()).toBe(true);
     });
+  });
+});
+
+/**
+ * Tests for the telemetry proxy and initTelemetry() behavior.
+ * These tests verify that the global `telemetry` proxy correctly reflects
+ * configuration changes made via initTelemetry().
+ *
+ * This specifically tests the fix for GitHub issue #306 where disabling
+ * telemetry via DOCS_MCP_TELEMETRY=false was not working because the proxy
+ * was caching a stale enabled instance.
+ */
+describe("telemetry proxy", () => {
+  // We need to reset module state between tests to ensure isolation.
+  // The telemetryInstance is module-level state that persists.
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    // Reset the telemetry instance by calling initTelemetry with enabled: true
+    // to restore default state for other tests
+    const mockConfig = {
+      isEnabled: vi.fn(() => true),
+      setEnabled: vi.fn(),
+    };
+    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
+    initTelemetry({ enabled: true });
+  });
+
+  it("should reflect disabled state after initTelemetry({ enabled: false })", () => {
+    // First, configure mock to return enabled = false when checked
+    const mockConfig = {
+      isEnabled: vi.fn(() => false),
+      setEnabled: vi.fn(),
+    };
+    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
+
+    // Call initTelemetry to create a new disabled instance
+    initTelemetry({ enabled: false });
+
+    // The proxy should now reflect the disabled state
+    expect(telemetry.isEnabled()).toBe(false);
+    expect(mockConfig.setEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("should not track events when disabled via initTelemetry", () => {
+    // First, configure mock to return enabled = false
+    const mockConfig = {
+      isEnabled: vi.fn(() => false),
+      setEnabled: vi.fn(),
+    };
+    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
+
+    // Call initTelemetry to create a new disabled instance
+    initTelemetry({ enabled: false });
+
+    // Access the telemetry proxy and try to track - should not throw
+    // and should not actually track anything
+    telemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+
+    // If we got here without errors, the proxy is working correctly
+    expect(telemetry.isEnabled()).toBe(false);
   });
 });
