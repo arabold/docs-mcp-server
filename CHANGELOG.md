@@ -1,3 +1,32 @@
+# [1.36.0](https://github.com/arabold/docs-mcp-server/compare/v1.35.0...v1.36.0) (2026-01-15)
+
+
+### Bug Fixes
+
+* address code review feedback ([8a6a590](https://github.com/arabold/docs-mcp-server/commit/8a6a5909b60699ceebb55657468cc603e76bb082))
+* address review comments (leaks, path normalization, optimization) ([aeba25f](https://github.com/arabold/docs-mcp-server/commit/aeba25f412e7b679680468b853daaa709bb00f42))
+* address security (zip slip) and resource leaks from PR comments ([2f9bea1](https://github.com/arabold/docs-mcp-server/commit/2f9bea1fbc66abe69a1bf9912dc6b2de3b141de7))
+* **config:** properly parse boolean env vars like 'false' ([5094c53](https://github.com/arabold/docs-mcp-server/commit/5094c5319b2c96994835fdf81c3a9b93256b42ff))
+* prevent yauzl from auto-closing fd ([8fdb8e2](https://github.com/arabold/docs-mcp-server/commit/8fdb8e208def04c8a588d1d495e112a85ba20802))
+* remove unused ts-expect-error directives ([690daca](https://github.com/arabold/docs-mcp-server/commit/690dacaa71809a861410e7c4c9e3a5be4b4f0da5))
+* resolve all linter errors (biome) ([373748f](https://github.com/arabold/docs-mcp-server/commit/373748f3724e3b41e3f7b88c3d48f0c838b81aef))
+* resolve syntax error in LocalFileStrategy ([96a88b5](https://github.com/arabold/docs-mcp-server/commit/96a88b594ac11f260e695af2383c6c6601a3c786))
+* **scraper:** correctly detect mime type for binary files from github ([4063df3](https://github.com/arabold/docs-mcp-server/commit/4063df3b6c779b620577bef9a875fca58987e4ec))
+* **telemetry:** respect disabled state from initTelemetry ([af85411](https://github.com/arabold/docs-mcp-server/commit/af85411982253e2e6e75ea390d96763a126e246e)), closes [#306](https://github.com/arabold/docs-mcp-server/issues/306)
+
+
+### Features
+
+* add search quality evaluation pipeline ([47bce31](https://github.com/arabold/docs-mcp-server/commit/47bce31898c516166446db81b691e6298ce6ca05))
+* **docs:** add proposal for markdown frontmatter processing (ref [#99](https://github.com/arabold/docs-mcp-server/issues/99)) ([609235c](https://github.com/arabold/docs-mcp-server/commit/609235c51b8007d77994b5ac5122c0c5a9577b87))
+* **docs:** implement markdown frontmatter support (ref [#99](https://github.com/arabold/docs-mcp-server/issues/99)) ([a9f6033](https://github.com/arabold/docs-mcp-server/commit/a9f60331d69ffbf3a902e4d7fa283f9428e735bb))
+* **docs:** implement markdown frontmatter support (ref [#99](https://github.com/arabold/docs-mcp-server/issues/99)) ([a06a61d](https://github.com/arabold/docs-mcp-server/commit/a06a61d72d55186a9190b8b156fa18655d03c721))
+* implement smart chunking for search results ([31376c9](https://github.com/arabold/docs-mcp-server/commit/31376c99c2fa74ad871ed4f60f4180ea3ad7729a))
+* **scraper:** add zip file support proposal ([ab9b73e](https://github.com/arabold/docs-mcp-server/commit/ab9b73e42695cdef25a8daf6964b0e055d4beed9)), closes [#276](https://github.com/arabold/docs-mcp-server/issues/276)
+* **scraper:** implement zip and tar archive support ([fee9693](https://github.com/arabold/docs-mcp-server/commit/fee969325d06ec1bbed7a9a28586a0e1fecee3e0))
+* **splitter:** enhance markdown chunking with list support ([104f076](https://github.com/arabold/docs-mcp-server/commit/104f0769722877de0cbbf11ea273c8669e5613bc))
+* **tests:** improve search evaluation with keyword queries and robust rubrics ([83cf652](https://github.com/arabold/docs-mcp-server/commit/83cf652d4f3309f141a2778d0846fc53fa113d5c))
+
 # [1.35.0](https://github.com/arabold/docs-mcp-server/compare/v1.34.0...v1.35.0) (2026-01-11)
 
 
