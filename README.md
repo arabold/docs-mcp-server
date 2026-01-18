@@ -21,6 +21,23 @@ docker run --rm \
 
 Open **[http://localhost:6280](http://localhost:6280)** to start adding documentation.
 
+### Connect to Claude Desktop
+
+Add this to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "docs-mcp-server": {
+      "type": "sse",
+      "url": "http://localhost:6280/sse"
+    }
+  }
+}
+```
+
+See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo) and other setup options.
+
 ---
 
 ## 📚 Documentation
