@@ -13,7 +13,8 @@ The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
 -   💡 **Reduces Hallucinations:** Grounds LLMs in real documentation.
 -   🔒 **Private & Local:** Runs entirely on your machine; your code never leaves your network.
 -   🧩 **Broad Compatibility:** Works with any MCP-compatible client (Claude, Cline, etc.).
--   🛠️ **Flexible:** Supports local files, websites, and GitHub repositories.
+-   📁 **Multiple Sources:** Index websites, GitHub repositories, local folders, and zip archives.
+-   📄 **Rich File Support:** Processes HTML, Markdown, PDF, Word (.docx), Excel, PowerPoint, and source code.
 
 ---
 
