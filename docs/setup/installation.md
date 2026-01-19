@@ -6,36 +6,34 @@ This guide covers the various ways to install and run the Docs MCP Server.
 
 The easiest way to get started is using the standalone server, which includes both the MCP endpoints and the web interface in a single process.
 
-### Option 1: Docker (Preferred)
+### Option 1: Node.js (npx)
 
-Running via Docker ensures you have all dependencies without polluting your host system.
-
-1.  **Start the server:**
-
-    ```bash
-    docker run --rm \
-      -v docs-mcp-data:/data \
-      -v docs-mcp-config:/config \
-      -p 6280:6280 \
-      ghcr.io/arabold/docs-mcp-server:latest \
-      --protocol http --host 0.0.0.0 --port 6280
-    ```
-
-    **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
-
-    **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
-
-### Option 2: Node.js (npx)
-
-If you have Node.js 20.x or later installed, you can run the server directly:
+If you have Node.js 20.x or later installed, you can run the server directly with a single command:
 
 ```bash
 npx @arabold/docs-mcp-server@latest
 ```
 
-This runs the server on port 6280 by default.
+This runs the server on port 6280 by default. Open **[http://localhost:6280](http://localhost:6280)** to access the web interface.
 
 **Optional:** Prefix with `OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
+
+### Option 2: Docker
+
+Running via Docker ensures you have all dependencies without polluting your host system.
+
+```bash
+docker run --rm \
+  -v docs-mcp-data:/data \
+  -v docs-mcp-config:/config \
+  -p 6280:6280 \
+  ghcr.io/arabold/docs-mcp-server:latest \
+  --protocol http --host 0.0.0.0 --port 6280
+```
+
+**Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
+
+**Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
 ---
 
