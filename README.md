@@ -6,6 +6,17 @@ The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
 
 ![Docs MCP Server Web Interface](docs/docs-mcp-server.png)
 
+## ✨ Why Docs MCP Server?
+
+-   ✅ **Up-to-Date Context:** Fetches documentation directly from official sources on demand.
+-   🎯 **Version-Specific:** Queries target the exact library versions in your project.
+-   💡 **Reduces Hallucinations:** Grounds LLMs in real documentation.
+-   🔒 **Private & Local:** Runs entirely on your machine; your code never leaves your network.
+-   🧩 **Broad Compatibility:** Works with any MCP-compatible client (Claude, Cline, etc.).
+-   🛠️ **Flexible:** Supports local files, websites, and GitHub repositories.
+
+---
+
 ## 🚀 Quick Start
 
 **1. Start the server** (requires Node.js 20+):
@@ -62,15 +73,6 @@ docker run --rm \
 -   **[Architecture](ARCHITECTURE.md)**: Deep dive into the system design.
 
 ---
-
-## ✨ Why Docs MCP Server?
-
--   ✅ **Up-to-Date Context:** Fetches documentation directly from official sources on demand.
--   🎯 **Version-Specific:** Queries target the exact library versions in your project.
--   💡 **Reduces Hallucinations:** Grounds LLMs in real documentation.
--   🔒 **Private & Local:** Runs entirely on your machine; your code never leaves your network.
--   🧩 **Broad Compatibility:** Works with any MCP-compatible client (Claude, Cline, etc.).
--   🛠️ **Flexible:** Supports local files, websites, and GitHub repositories.
 
 ## 🤝 Contributing
 
