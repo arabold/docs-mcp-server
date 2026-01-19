@@ -8,22 +8,15 @@ The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
 
 ## 🚀 Quick Start
 
-Get running in seconds with Docker (Recommended):
+**1. Start the server** (requires Node.js 20+):
 
 ```bash
-docker run --rm \
-  -v docs-mcp-data:/data \
-  -v docs-mcp-config:/config \
-  -p 6280:6280 \
-  ghcr.io/arabold/docs-mcp-server:latest \
-  --protocol http --host 0.0.0.0 --port 6280
+npx @arabold/docs-mcp-server@latest
 ```
 
-Open **[http://localhost:6280](http://localhost:6280)** to start adding documentation.
+**2. Open the Web UI** at **[http://localhost:6280](http://localhost:6280)** to add documentation.
 
-### Connect to Claude Desktop
-
-Add this to your `claude_desktop_config.json`:
+**3. Connect your AI client** by adding this to your MCP settings (e.g., `claude_desktop_config.json`):
 
 ```json
 {
@@ -37,6 +30,20 @@ Add this to your `claude_desktop_config.json`:
 ```
 
 See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo) and other setup options.
+
+<details>
+<summary>Alternative: Run with Docker</summary>
+
+```bash
+docker run --rm \
+  -v docs-mcp-data:/data \
+  -v docs-mcp-config:/config \
+  -p 6280:6280 \
+  ghcr.io/arabold/docs-mcp-server:latest \
+  --protocol http --host 0.0.0.0 --port 6280
+```
+
+</details>
 
 ---
 
