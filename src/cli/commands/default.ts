@@ -166,6 +166,7 @@ export function createDefaultAction(cli: Argv) {
           enableApiServer: true,
           enableWorker: true,
           port: appConfig.server.ports.default,
+          showLogo: argv.logo as boolean,
           startupContext: {
             cliCommand: "default",
             mcpProtocol: "http",

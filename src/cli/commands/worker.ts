@@ -92,6 +92,7 @@ export function createWorkerCommand(cli: Argv) {
           enableApiServer: true,
           enableWorker: true,
           port: appConfig.server.ports.worker,
+          showLogo: argv.logo as boolean,
           startupContext: {
             cliCommand: "worker",
           },
