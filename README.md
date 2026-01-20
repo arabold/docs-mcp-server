@@ -1,12 +1,12 @@
 # Grounded Docs: Your AI's Up-to-Date Documentation Expert
 
-The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
-
 **Docs MCP Server** solves the problem of AI hallucinations and outdated knowledge by providing a personal, always-current documentation index for your AI coding assistant. It fetches official docs from websites, GitHub, npm, PyPI, and local files, allowing your AI to query the exact version you are using.
 
 ![Docs MCP Server Web Interface](docs/docs-mcp-server.png)
 
-## ✨ Why Docs MCP Server?
+## ✨ Why Grounded Docs MCP Server?
+
+The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
 
 -   ✅ **Up-to-Date Context:** Fetches documentation directly from official sources on demand.
 -   🎯 **Version-Specific:** Queries target the exact library versions in your project.
