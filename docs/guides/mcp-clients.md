@@ -1,81 +1,310 @@
 # Connecting MCP Clients
 
-The Docs MCP Server is designed to work with any client that supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/).
+The Docs MCP Server is compatible with any client that supports the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/). Below are configuration instructions for popular AI assistants and IDEs.
 
-## Connection Types
+## General Configuration
 
--   **SSE (Server-Sent Events):** The standard for HTTP-based connections.
--   **Stdio:** Direct process communication (used for Embedded Server).
+Most clients support two connection modes:
+1.  **Remote/HTTP**: Connects to a running server instance (e.g., via Docker).
+    *   **SSE URL**: `http://localhost:6280/sse`
+    *   **HTTP URL**: `http://localhost:6280/mcp` (Streamable HTTP)
+2.  **Local/Stdio**: Spawns the server process directly.
+    *   **Command**: `npx`
+    *   **Args**: `["-y", "@arabold/docs-mcp-server@latest"]`
 
-## 🤖 Claude Desktop / Generic MCP Clients
+---
 
-Add the following configuration to your MCP settings file (typically `claude_desktop_config.json` or similar).
+## 🤖 Desktop Apps
 
-### Connecting to a Standalone Server
+### Claude Desktop
+Edit your configuration file:
+*   **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+*   **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 
-If you are running the server separately (via Docker or npx on port 6280):
-
+**Remote (Recommended if running Docker):**
 ```json
 {
   "mcpServers": {
-    "docs-mcp-server": {
+    "docs": {
       "type": "sse",
-      "url": "http://localhost:6280/sse",
-      "disabled": false,
-      "autoApprove": []
+      "url": "http://localhost:6280/sse"
     }
   }
 }
 ```
 
-### Running as a Subprocess (Embedded)
+**Local (Embedded):**
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
 
-If you want the client to manage the server process:
+### Cursor
+1. Go to **Settings** → **Cursor Settings** → **MCP**.
+2. Click **Add new MCP server**.
+
+**Remote:**
+*   **Type**: SSE
+*   **URL**: `http://localhost:6280/sse`
+
+**Local:**
+*   **Type**: stdio
+*   **Command**: `npx -y @arabold/docs-mcp-server@latest`
+
+### Windsurf
+Open your Windsurf MCP configuration:
+*   **macOS**: `~/.windsurf/mcp.json`
+*   **Windows**: `%APPDATA%\Windsurf\mcp.json`
 
 ```json
 {
   "mcpServers": {
-    "docs-mcp-server": {
+    "docs": {
       "command": "npx",
-      "args": ["@arabold/docs-mcp-server@latest"],
-      "disabled": false,
-      "autoApprove": []
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
   }
 }
 ```
 
-## 💻 VS Code (Cline, Roo, etc.)
-
-For VS Code extensions that support MCP:
-
-1.  Open your extension settings.
-2.  Locate the **MCP Servers** configuration section.
-3.  Add the server configuration.
-
-**Example for HTTP/SSE:**
+### Zed
+Add to your Zed `settings.json`:
 
 ```json
-"docs-mcp-server": {
-  "type": "sse",
-  "url": "http://localhost:6280/sse"
+{
+  "context_servers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
 }
 ```
 
-**Example for Stdio (Embedded):**
+### LM Studio
+Go to **Program** → **Install** → **Edit mcp.json**:
 
 ```json
-"docs-mcp-server": {
-  "command": "npx",
-  "args": ["@arabold/docs-mcp-server@latest"]
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
 }
 ```
 
-## 🔌 Alternative Connection: Streamable HTTP
+---
 
-Some clients may support a streamable HTTP endpoint instead of SSE:
+## 💻 VS Code Extensions
+
+### Cline
+1. Open **Cline**.
+2. Click the **MCP Servers** icon.
+3. Choose **Remote Servers** (if running Docker) or **Local Servers**.
+
+**Remote:**
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "url": "http://localhost:6280/mcp",
+      "type": "streamableHttp"
+    }
+  }
+}
+```
+
+**Local:**
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+### Roo Code
+Edit your Roo Code MCP config:
 
 ```json
-"type": "http",
-"url": "http://localhost:6280/mcp"
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+### Continue.dev
+Edit `~/.continue/config.json`:
+
+```json
+{
+  "mcpServers": [
+    {
+      "name": "docs",
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  ]
+}
+```
+
+### Trae
+See [Trae documentation](https://docs.trae.ai/ide/model-context-protocol) for details.
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+---
+
+## 🛠️ CLI Tools
+
+### Claude Code
+```bash
+# Current project
+claude mcp add docs -- npx -y @arabold/docs-mcp-server@latest
+
+# Global (all projects)
+claude mcp add --scope user docs -- npx -y @arabold/docs-mcp-server@latest
+```
+
+### Opencode
+```json
+{
+  "mcp": {
+    "docs": {
+      "type": "local",
+      "command": ["npx", "-y", "@arabold/docs-mcp-server@latest"],
+      "enabled": true
+    }
+  }
+}
+```
+
+### Gemini CLI
+Open `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+### Amazon Q Developer CLI
+See [Amazon Q Developer docs](https://docs.aws.amazon.com/amazonq/latest/qdeveloper-ug/command-line-mcp-configuration.html).
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+### Copilot CLI
+Open `~/.copilot/mcp-config.json`:
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+---
+
+## ☁️ Other Integrations
+
+### JetBrains AI Assistant
+1. Go to **Settings** → **Tools** → **AI Assistant** → **Model Context Protocol**.
+2. Click **+ Add**.
+3. Select **As JSON**:
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+### Visual Studio 2022
+See [Microsoft Docs](https://learn.microsoft.com/visualstudio/ide/mcp-servers).
+
+```json
+{
+  "servers": {
+    "docs": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+    }
+  }
+}
+```
+
+### Smithery
+To install via Smithery:
+
+```bash
+npx -y @smithery/cli@latest install @arabold/docs-mcp-server --client <CLIENT_NAME>
+```
+
+---
+
+## 🐋 Docker Configuration
+
+If you prefer using Docker for the client connection:
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "docs-mcp-data:/data",
+        "ghcr.io/arabold/docs-mcp-server:latest"
+      ]
+    }
+  }
+}
 ```

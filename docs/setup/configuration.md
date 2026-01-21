@@ -92,6 +92,8 @@ Settings for chunking text for vector search.
 
 Settings for the vector embedding generation.
 
+> **Detailed Guide:** See [Embedding Model Configuration](../guides/embedding-models.md) for provider-specific setup (OpenAI, Ollama, Gemini, etc.).
+
 | Option            | Default | Description                                       |
 | :---------------- | :------ | :------------------------------------------------ |
 | `batchSize`       | `100`   | Number of chunks to embed in one request.         |

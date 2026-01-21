@@ -57,6 +57,18 @@ docker run --rm \
 
 </details>
 
+### 🧠 Configure Embedding Model (Recommended)
+
+Using an embedding model is **optional** but dramatically improves search quality by enabling semantic vector search.
+
+**Example: Enable OpenAI Embeddings**
+
+```bash
+OPENAI_API_KEY="sk-proj-..." npx @arabold/docs-mcp-server@latest
+```
+
+See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ollama**, **Gemini**, **Azure**, and others.
+
 ---
 
 ## 📚 Documentation
@@ -66,6 +78,7 @@ docker run --rm \
 -   **[Connecting Clients](docs/guides/mcp-clients.md)**: How to connect Claude, VS Code (Cline/Roo), and other MCP clients.
 -   **[Basic Usage](docs/guides/basic-usage.md)**: Using the Web UI, CLI, and scraping local files.
 -   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.
+-   **[Embedding Models](docs/guides/embedding-models.md)**: Configure OpenAI, Ollama, Gemini, and other providers.
 
 ### Key Concepts & Architecture
 -   **[Deployment Modes](docs/infrastructure/deployment-modes.md)**: Standalone vs. Distributed (Docker Compose).
