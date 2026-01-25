@@ -54,7 +54,7 @@ Run local models compatible with the OpenAI API format.
 ```bash
 OPENAI_API_KEY="ollama" \
 OPENAI_API_BASE="http://localhost:11434/v1" \
-DOCS_MCP_EMBEDDING_MODEL="nomic-embed-text" \
+DOCS_MCP_EMBEDDING_MODEL="openai:nomic-embed-text" \
 npx @arabold/docs-mcp-server@latest
 ```
 
