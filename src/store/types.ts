@@ -245,7 +245,11 @@ export function isValidStatusTransition(
   // Define valid transitions for each status
   const validTransitions: Record<VersionStatus, VersionStatus[]> = {
     [VersionStatus.NOT_INDEXED]: [VersionStatus.QUEUED],
-    [VersionStatus.QUEUED]: [VersionStatus.RUNNING, VersionStatus.CANCELLED],
+    [VersionStatus.QUEUED]: [
+      VersionStatus.RUNNING,
+      VersionStatus.CANCELLED,
+      VersionStatus.FAILED,
+    ],
     [VersionStatus.RUNNING]: [
       VersionStatus.COMPLETED,
       VersionStatus.FAILED,
