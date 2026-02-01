@@ -235,40 +235,6 @@ export interface FindVersionResult {
 }
 
 /**
- * Validates if a status transition is allowed.
- * Prevents invalid state changes and ensures data consistency.
- */
-export function isValidStatusTransition(
-  currentStatus: VersionStatus,
-  newStatus: VersionStatus,
-): boolean {
-  // Define valid transitions for each status
-  const validTransitions: Record<VersionStatus, VersionStatus[]> = {
-    [VersionStatus.NOT_INDEXED]: [VersionStatus.QUEUED],
-    [VersionStatus.QUEUED]: [
-      VersionStatus.RUNNING,
-      VersionStatus.CANCELLED,
-      VersionStatus.FAILED,
-    ],
-    [VersionStatus.RUNNING]: [
-      VersionStatus.COMPLETED,
-      VersionStatus.FAILED,
-      VersionStatus.CANCELLED,
-    ],
-    [VersionStatus.COMPLETED]: [VersionStatus.UPDATING],
-    [VersionStatus.UPDATING]: [VersionStatus.RUNNING, VersionStatus.CANCELLED],
-    [VersionStatus.FAILED]: [
-      VersionStatus.QUEUED, // Allow retry
-    ],
-    [VersionStatus.CANCELLED]: [
-      VersionStatus.QUEUED, // Allow retry
-    ],
-  };
-
-  return validTransitions[currentStatus]?.includes(newStatus) ?? false;
-}
-
-/**
  * Gets a human-readable description of a version status.
  */
 export function getStatusDescription(status: VersionStatus): string {
