@@ -94,7 +94,7 @@ describe("ScraperService", () => {
     );
   });
 
-  it("should throw error if no strategy found", async () => {
+  it("should throw error when registry rejects unknown URLs", async () => {
     const service = new ScraperService(mockRegistry as unknown as ScraperRegistry);
     const options: ScraperOptions = {
       url: "unknown://example.com",
@@ -105,11 +105,13 @@ describe("ScraperService", () => {
     };
     const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
 
-    mockRegistry.getStrategy.mockReturnValue(null);
+    mockRegistry.getStrategy.mockImplementation(() => {
+      throw new ScraperError(`No strategy found for URL: ${options.url}`, false);
+    });
 
     await expect(service.scrape(options, progressCallback)).rejects.toThrow(ScraperError);
     await expect(service.scrape(options, progressCallback)).rejects.toThrow(
-      "No scraper strategy found for URL: unknown://example.com",
+      `No strategy found for URL: ${options.url}`,
     );
   });
 

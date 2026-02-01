@@ -28,9 +28,6 @@ export class ScraperService {
   ): Promise<void> {
     // Get a fresh strategy instance for this scrape (factory pattern)
     const strategy = this.registry.getStrategy(options.url);
-    if (!strategy) {
-      throw new ScraperError(`No scraper strategy found for URL: ${options.url}`, false);
-    }
 
     let scrapeError: Error | null = null;
     let cleanupErrorToThrow: Error | null = null;
