@@ -1,6 +1,7 @@
 import mime from "mime";
 import type { ProgressCallback } from "../../types";
 import type { AppConfig } from "../../utils/config";
+import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { HttpFetcher } from "../fetcher";
 import { FetchStatus } from "../fetcher/types";
@@ -14,6 +15,7 @@ import type {
 } from "./GitHubRepoProcessor";
 import { GitHubRepoProcessor } from "./GitHubRepoProcessor";
 import { GitHubWikiProcessor } from "./GitHubWikiProcessor";
+import { resolveGitHubAuth } from "./github-auth";
 
 /**
  * GitHubScraperStrategy is a discovery strategy that orchestrates the scraping of both
@@ -43,6 +45,8 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
   private readonly httpFetcher: HttpFetcher;
   private readonly wikiProcessor: GitHubWikiProcessor;
   private readonly repoProcessor: GitHubRepoProcessor;
+  private resolvedAuthHeaders?: Record<string, string>;
+  private resolvedAuthKey?: string;
 
   constructor(config: AppConfig) {
     super(config);
@@ -127,11 +131,36 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     return { owner, repo };
   }
 
+  private buildAuthCacheKey(explicitHeaders?: Record<string, string>): string {
+    const normalizedHeaders = explicitHeaders
+      ? Object.keys(explicitHeaders)
+          .sort()
+          .map((key) => [key, explicitHeaders[key]])
+      : [];
+    const envKey = `${process.env.GITHUB_TOKEN ?? ""}|${process.env.GH_TOKEN ?? ""}`;
+    return JSON.stringify({ headers: normalizedHeaders, env: envKey });
+  }
+
+  private async getResolvedAuthHeaders(
+    explicitHeaders?: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const cacheKey = this.buildAuthCacheKey(explicitHeaders);
+    if (this.resolvedAuthHeaders && this.resolvedAuthKey === cacheKey) {
+      return this.resolvedAuthHeaders;
+    }
+
+    const resolved = await resolveGitHubAuth(explicitHeaders);
+    this.resolvedAuthHeaders = resolved;
+    this.resolvedAuthKey = cacheKey;
+    return resolved;
+  }
+
   /**
    * Fetches the repository tree structure from GitHub API.
    */
   private async fetchRepositoryTree(
     repoInfo: GitHubRepoInfo,
+    headers?: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<{ tree: GitHubTreeResponse; resolvedBranch: string }> {
     const { owner, repo, branch } = repoInfo;
@@ -139,21 +168,64 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     // If no branch specified, fetch the default branch first
     let targetBranch = branch;
     if (!targetBranch) {
-      try {
-        const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
-        logger.debug(`Fetching repository info: ${repoUrl}`);
+      const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
+      logger.debug(`Fetching repository info: ${repoUrl}`);
 
-        const repoContent = await this.httpFetcher.fetch(repoUrl, { signal });
+      let repoContent: Awaited<ReturnType<typeof this.httpFetcher.fetch>>;
+      try {
+        repoContent = await this.httpFetcher.fetch(repoUrl, { signal, headers });
+      } catch (error) {
+        // Convert HTTP auth errors to user-friendly messages
+        if (error instanceof ScraperError) {
+          if (error.message.includes("401")) {
+            throw new ScraperError(
+              `GitHub authentication failed for "${owner}/${repo}". Your token is invalid or expired. Please check your GITHUB_TOKEN or GH_TOKEN environment variable.`,
+              false,
+              error,
+            );
+          }
+          if (error.message.includes("403")) {
+            throw new ScraperError(
+              `GitHub access denied for "${owner}/${repo}". Your token may lack the required permissions, or you may be rate-limited. Please check your GITHUB_TOKEN or GH_TOKEN.`,
+              false,
+              error,
+            );
+          }
+        }
+        throw error;
+      }
+
+      // Check for NOT_FOUND status before parsing - repo is inaccessible (private or doesn't exist)
+      if (repoContent.status === FetchStatus.NOT_FOUND) {
+        throw new ScraperError(
+          `Repository "${owner}/${repo}" not found or not accessible. For private repositories, set the GITHUB_TOKEN environment variable.`,
+          false,
+        );
+      }
+
+      // Try to parse the response to get the default branch
+      try {
         const content =
           typeof repoContent.content === "string"
             ? repoContent.content
             : repoContent.content.toString("utf-8");
-        const repoData = JSON.parse(content) as { default_branch: string };
-        targetBranch = repoData.default_branch;
-
-        logger.debug(`Using default branch: ${targetBranch}`);
-      } catch (error) {
-        logger.warn(`⚠️  Could not fetch default branch, using 'main': ${error}`);
+        const repoData = JSON.parse(content) as { default_branch?: string };
+        const defaultBranch =
+          typeof repoData.default_branch === "string"
+            ? repoData.default_branch.trim()
+            : "";
+        if (!defaultBranch) {
+          logger.warn(
+            `⚠️  Repository info missing default_branch for ${owner}/${repo}, using 'main'`,
+          );
+          targetBranch = "main";
+        } else {
+          targetBranch = defaultBranch;
+          logger.debug(`Using default branch: ${targetBranch}`);
+        }
+      } catch (parseError) {
+        // Only fall back to "main" for JSON parse errors (e.g., unexpected API response format)
+        logger.warn(`⚠️  Could not parse repository info, using 'main': ${parseError}`);
         targetBranch = "main";
       }
     }
@@ -161,12 +233,54 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${targetBranch}?recursive=1`;
     logger.debug(`Fetching repository tree: ${treeUrl}`);
 
-    const rawContent = await this.httpFetcher.fetch(treeUrl, { signal });
+    let rawContent: Awaited<ReturnType<typeof this.httpFetcher.fetch>>;
+    try {
+      rawContent = await this.httpFetcher.fetch(treeUrl, { signal, headers });
+    } catch (error) {
+      // Convert HTTP auth errors to user-friendly messages
+      if (error instanceof ScraperError) {
+        if (error.message.includes("401")) {
+          throw new ScraperError(
+            `GitHub authentication failed for "${owner}/${repo}". Your token is invalid or expired. Please check your GITHUB_TOKEN or GH_TOKEN environment variable.`,
+            false,
+            error,
+          );
+        }
+        if (error.message.includes("403")) {
+          throw new ScraperError(
+            `GitHub access denied for "${owner}/${repo}". Your token may lack the required permissions, or you may be rate-limited. Please check your GITHUB_TOKEN or GH_TOKEN.`,
+            false,
+            error,
+          );
+        }
+      }
+      throw error;
+    }
+
+    // Check for NOT_FOUND status before parsing - this indicates repo is inaccessible
+    if (rawContent.status === FetchStatus.NOT_FOUND) {
+      throw new ScraperError(
+        `Repository "${owner}/${repo}" not found or not accessible. For private repositories, set the GITHUB_TOKEN environment variable.`,
+        false,
+      );
+    }
+
     const content =
       typeof rawContent.content === "string"
         ? rawContent.content
         : rawContent.content.toString("utf-8");
-    const treeData = JSON.parse(content) as GitHubTreeResponse;
+
+    // Parse JSON with proper error handling
+    let treeData: GitHubTreeResponse;
+    try {
+      treeData = JSON.parse(content) as GitHubTreeResponse;
+    } catch (parseError) {
+      throw new ScraperError(
+        `Failed to parse GitHub API response for "${owner}/${repo}". The repository may be inaccessible or the API returned an unexpected response.`,
+        false,
+        parseError instanceof Error ? parseError : undefined,
+      );
+    }
 
     if (treeData.truncated) {
       logger.warn(
@@ -377,12 +491,14 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       };
     }
 
+    const headers = await this.getResolvedAuthHeaders(options.headers);
+
     // Delegate to wiki processor for wiki URLs
     // Use precise pattern matching: /owner/repo/wiki or /owner/repo/wiki/
     try {
       const parsedUrl = new URL(item.url);
       if (/^\/[^/]+\/[^/]+\/wiki($|\/)/.test(parsedUrl.pathname)) {
-        return await this.wikiProcessor.process(item, options, signal);
+        return await this.wikiProcessor.process(item, options, headers, signal);
       }
     } catch {
       // If URL parsing fails, fall through to other handlers
@@ -423,7 +539,11 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       logger.debug(`Discovered wiki URL: ${wikiUrl}`);
 
       // 3. Discover all files in the repository
-      const { tree, resolvedBranch } = await this.fetchRepositoryTree(repoInfo, signal);
+      const { tree, resolvedBranch } = await this.fetchRepositoryTree(
+        repoInfo,
+        headers,
+        signal,
+      );
 
       const fileItems = tree.tree
         .filter((treeItem) => this.isWithinSubPath(treeItem.path, repoInfo.subPath))
@@ -456,7 +576,7 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       const parsedUrl = new URL(item.url);
       if (/^\/[^/]+\/[^/]+\/blob\//.test(parsedUrl.pathname)) {
         logger.debug(`Processing HTTPS blob URL at depth ${item.depth}: ${item.url}`);
-        return await this.repoProcessor.process(item, options, signal);
+        return await this.repoProcessor.process(item, options, headers, signal);
       }
     } catch (error) {
       logger.warn(`⚠️  Failed to parse blob URL ${item.url}: ${error}`);
@@ -478,10 +598,17 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       throw new Error("URL must be a GitHub URL");
     }
 
+    await this.getResolvedAuthHeaders(options.headers);
+
     // Use the base class implementation which handles initialQueue properly
     // The processItem method will discover all wiki and repo file URLs
     // The base scraper will automatically deduplicate URLs from initialQueue
-    await super.scrape(options, progressCallback, signal);
+    try {
+      await super.scrape(options, progressCallback, signal);
+    } finally {
+      this.resolvedAuthHeaders = undefined;
+      this.resolvedAuthKey = undefined;
+    }
   }
 
   async cleanup(): Promise<void> {

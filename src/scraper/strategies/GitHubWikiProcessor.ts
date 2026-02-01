@@ -86,6 +86,7 @@ export class GitHubWikiProcessor {
   async process(
     item: QueueItem,
     options: ScraperOptions,
+    headers?: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<ProcessItemResult> {
     const currentUrl = item.url;
@@ -95,6 +96,7 @@ export class GitHubWikiProcessor {
       const rawContent = await this.httpFetcher.fetch(currentUrl, {
         signal,
         etag: item.etag,
+        headers,
       });
 
       // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
