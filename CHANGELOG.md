@@ -1,3 +1,16 @@
+# [1.37.0](https://github.com/arabold/docs-mcp-server/compare/v1.36.0...v1.37.0) (2026-02-01)
+
+
+### Bug Fixes
+
+* **mcp:** isolate SSE sessions with per-connection server instances ([bca3475](https://github.com/arabold/docs-mcp-server/commit/bca3475c23187eba7ae44522e37f225a85afff15)), closes [#312](https://github.com/arabold/docs-mcp-server/issues/312)
+* **test:** update tests to match current implementation and content ([f3896ad](https://github.com/arabold/docs-mcp-server/commit/f3896ad082926b75c88b06aca915da858ff70f6e))
+
+
+### Features
+
+* **cli:** add ascii art banner on server startup ([ac9e9de](https://github.com/arabold/docs-mcp-server/commit/ac9e9de057b6a4034d3c3d54df97a0821d3bf18b))
+
 # [1.36.0](https://github.com/arabold/docs-mcp-server/compare/v1.35.0...v1.36.0) (2026-01-15)
 
 
