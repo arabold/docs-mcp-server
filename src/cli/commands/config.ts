@@ -122,13 +122,39 @@ export function createConfigCommand(cli: Argv) {
               return;
             }
 
+            // Check if path points to an object (non-leaf) - prevent overwriting objects with scalars
+            const config = loadConfig(argv, {
+              configPath: argv.config as string,
+              searchDir: argv.storePath as string,
+            });
+            const currentValue = getConfigValue(config, path);
+            if (
+              currentValue !== undefined &&
+              currentValue !== null &&
+              typeof currentValue === "object" &&
+              !Array.isArray(currentValue)
+            ) {
+              console.error(
+                `Error: Config path '${path}' refers to an object. Use a more specific leaf path to set a scalar value.`,
+              );
+              console.error(
+                "Hint: Run 'docs-mcp-server config' to inspect the current structure.",
+              );
+              process.exitCode = 1;
+              return;
+            }
+
             try {
               const savedPath = setConfigValue(path, value);
               const parsedValue = parseConfigValue(value);
               console.log(`Updated ${path} = ${JSON.stringify(parsedValue)}`);
               console.log(`Saved to: ${savedPath}`);
             } catch (error) {
-              console.error(`Error: Failed to save configuration: ${error}`);
+              console.error(
+                `Error: Failed to save configuration: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              );
               process.exitCode = 1;
             }
           },

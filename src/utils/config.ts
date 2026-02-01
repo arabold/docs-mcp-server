@@ -458,8 +458,7 @@ function mapEnvToConfig(): Record<string, unknown> {
   }
 
   // 2. Apply auto-generated env vars (takes precedence over explicit mappings)
-  const allPaths = collectLeafPaths(DEFAULT_CONFIG);
-  for (const pathArr of allPaths) {
+  for (const pathArr of ALL_CONFIG_LEAF_PATHS) {
     const envVar = pathToEnvVar(pathArr);
     if (process.env[envVar] !== undefined) {
       setAtPath(config, pathArr, process.env[envVar]);
@@ -515,6 +514,9 @@ export function collectLeafPaths(obj: object, prefix: string[] = []): string[][]
   }
   return paths;
 }
+
+// Cache leaf paths at module init since DEFAULT_CONFIG is constant
+const ALL_CONFIG_LEAF_PATHS = collectLeafPaths(DEFAULT_CONFIG);
 
 function setAtPath(obj: ConfigObject, pathArr: string[], value: unknown) {
   let current = obj;
@@ -608,6 +610,7 @@ export function parseConfigValue(value: string): unknown {
 /**
  * Set a config value and persist to file.
  * Returns the path to the config file that was updated.
+ * Validates the updated config against the schema before saving.
  */
 export function setConfigValue(path: string, value: string): string {
   const configPath = getDefaultConfigPath();
@@ -615,8 +618,19 @@ export function setConfigValue(path: string, value: string): string {
   const pathArr = path.split(".");
   const parsedValue = parseConfigValue(value);
 
-  setAtPath(fileConfig, pathArr, parsedValue);
-  saveConfigFile(configPath, fileConfig);
+  // Apply change to a copy so we can validate before persisting
+  const updatedConfig = JSON.parse(JSON.stringify(fileConfig));
+  setAtPath(updatedConfig, pathArr, parsedValue);
+
+  // Validate against schema before saving
+  try {
+    AppConfigSchema.parse(updatedConfig);
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid config value for "${path}": ${errorMsg}`);
+  }
+
+  saveConfigFile(configPath, updatedConfig);
 
   return configPath;
 }
