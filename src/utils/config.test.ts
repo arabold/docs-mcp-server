@@ -2,7 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "./config";
+import {
+  camelToUpperSnake,
+  collectLeafPaths,
+  getConfigValue,
+  isValidConfigPath,
+  loadConfig,
+  parseConfigValue,
+  pathToEnvVar,
+} from "./config";
 
 // Mock env-paths to return a controlled system path
 vi.mock("env-paths", () => ({
@@ -188,5 +196,167 @@ describe("Configuration Loading", () => {
       const content = fs.readFileSync(configPath, "utf8");
       expect(content).toBe(":");
     });
+  });
+});
+
+describe("Environment Variable Helpers", () => {
+  describe("camelToUpperSnake", () => {
+    it("converts simple camelCase", () => {
+      expect(camelToUpperSnake("maxSize")).toBe("MAX_SIZE");
+    });
+
+    it("converts multiple humps", () => {
+      expect(camelToUpperSnake("maxNestingDepth")).toBe("MAX_NESTING_DEPTH");
+    });
+
+    it("handles already uppercase", () => {
+      expect(camelToUpperSnake("URL")).toBe("URL");
+    });
+
+    it("handles lowercase", () => {
+      expect(camelToUpperSnake("host")).toBe("HOST");
+    });
+  });
+
+  describe("pathToEnvVar", () => {
+    it("converts simple path", () => {
+      expect(pathToEnvVar(["scraper", "maxPages"])).toBe("DOCS_MCP_SCRAPER_MAX_PAGES");
+    });
+
+    it("converts deeply nested path", () => {
+      expect(pathToEnvVar(["scraper", "document", "maxSize"])).toBe(
+        "DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE",
+      );
+    });
+
+    it("converts path with camelCase segments", () => {
+      expect(pathToEnvVar(["splitter", "json", "maxNestingDepth"])).toBe(
+        "DOCS_MCP_SPLITTER_JSON_MAX_NESTING_DEPTH",
+      );
+    });
+  });
+
+  describe("collectLeafPaths", () => {
+    it("collects leaf paths from nested object", () => {
+      const obj = {
+        a: 1,
+        b: {
+          c: 2,
+          d: { e: 3 },
+        },
+      };
+      const paths = collectLeafPaths(obj);
+      expect(paths).toContainEqual(["a"]);
+      expect(paths).toContainEqual(["b", "c"]);
+      expect(paths).toContainEqual(["b", "d", "e"]);
+      expect(paths).toHaveLength(3);
+    });
+
+    it("handles empty object", () => {
+      expect(collectLeafPaths({})).toEqual([]);
+    });
+  });
+});
+
+describe("Config CLI Helpers", () => {
+  describe("isValidConfigPath", () => {
+    it("returns true for valid paths", () => {
+      expect(isValidConfigPath("scraper.maxPages")).toBe(true);
+      expect(isValidConfigPath("scraper.document.maxSize")).toBe(true);
+      expect(isValidConfigPath("app.telemetryEnabled")).toBe(true);
+    });
+
+    it("returns false for invalid paths", () => {
+      expect(isValidConfigPath("invalid.path")).toBe(false);
+      expect(isValidConfigPath("scraper.nonexistent")).toBe(false);
+    });
+  });
+
+  describe("getConfigValue", () => {
+    const mockConfig = {
+      scraper: {
+        maxPages: 1000,
+        document: { maxSize: 10485760 },
+      },
+      app: { telemetryEnabled: true },
+    };
+
+    it("gets scalar value", () => {
+      expect(getConfigValue(mockConfig as any, "scraper.maxPages")).toBe(1000);
+    });
+
+    it("gets nested object", () => {
+      expect(getConfigValue(mockConfig as any, "scraper.document")).toEqual({
+        maxSize: 10485760,
+      });
+    });
+
+    it("returns undefined for invalid path", () => {
+      expect(getConfigValue(mockConfig as any, "invalid.path")).toBeUndefined();
+    });
+  });
+
+  describe("parseConfigValue", () => {
+    it("parses integers", () => {
+      expect(parseConfigValue("1000")).toBe(1000);
+      expect(parseConfigValue("0")).toBe(0);
+    });
+
+    it("parses floats", () => {
+      expect(parseConfigValue("3.14")).toBe(3.14);
+    });
+
+    it("parses booleans", () => {
+      expect(parseConfigValue("true")).toBe(true);
+      expect(parseConfigValue("false")).toBe(false);
+      expect(parseConfigValue("TRUE")).toBe(true);
+      expect(parseConfigValue("FALSE")).toBe(false);
+    });
+
+    it("returns strings for non-numeric/non-boolean", () => {
+      expect(parseConfigValue("hello")).toBe("hello");
+      expect(parseConfigValue("text-embedding-3-small")).toBe("text-embedding-3-small");
+    });
+
+    it("returns empty string as string", () => {
+      expect(parseConfigValue("")).toBe("");
+    });
+  });
+});
+
+describe("Auto-generated Environment Variable Overrides", () => {
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("applies auto-generated env var override", () => {
+    process.env.DOCS_MCP_SCRAPER_MAX_PAGES = "500";
+
+    const config = loadConfig({}, {});
+
+    expect(config.scraper.maxPages).toBe(500);
+  });
+
+  it("auto-generated env var takes precedence over explicit alias", () => {
+    process.env.PORT = "3000";
+    process.env.DOCS_MCP_SERVER_PORTS_DEFAULT = "4000";
+
+    const config = loadConfig({}, {});
+
+    expect(config.server.ports.default).toBe(4000);
+  });
+
+  it("applies deeply nested env var", () => {
+    process.env.DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE = "52428800";
+
+    const config = loadConfig({}, {});
+
+    expect(config.scraper.document.maxSize).toBe(52428800);
   });
 });

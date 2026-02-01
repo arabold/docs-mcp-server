@@ -190,7 +190,7 @@ describe("DocumentPipeline", () => {
       // Create a small config with 100 byte limit
       const smallConfig = {
         ...appConfig,
-        document: { maxSize: 100 },
+        scraper: { ...appConfig.scraper, document: { maxSize: 100 } },
       };
       const smallPipeline = new DocumentPipeline(smallConfig);
 

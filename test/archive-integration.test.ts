@@ -36,6 +36,9 @@ describe("LocalFileStrategy - Archive Integration", () => {
         timeout: 10000,
         userAgent: "test-bot",
         allowedDomains: [],
+        document: {
+            maxSize: 1024 * 1024,
+        },
       },
       splitter: {
           maxChunkSize: 1000,
@@ -43,9 +46,6 @@ describe("LocalFileStrategy - Archive Integration", () => {
               maxNestingDepth: 10,
           }
       },
-      document: {
-          maxSize: 1024 * 1024,
-      }
     } as unknown as AppConfig;
     strategy = new LocalFileStrategy(config);
   });
