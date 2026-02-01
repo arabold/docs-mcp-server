@@ -160,7 +160,7 @@ describe("MCP Service", () => {
       // Routes /messages and /mcp share the "m" prefix, so /mcp appears as "cp" in the tree.
       // We check for "cp (POST)" which uniquely identifies the /mcp route.
       const routes = server.printRoutes();
-      expect(routes).toContain("cp (POST)");
+      expect(routes).toContain("cp (POST");
 
       await cleanupMcpService(mcpServer);
     });

@@ -116,7 +116,7 @@ describe("Vector Search End-to-End Tests", () => {
 
     // Step 3: Search for a specific string from the README
     console.log("🔍 Searching for specific content...");
-    const searchQuery = "preserves logical boundaries, keeps code and tables intact";
+    const searchQuery = "Fetches documentation directly from official sources";
     const searchResult = await searchTool.execute({
       library: "test-library",
       version: "1.0.0",
@@ -131,7 +131,7 @@ describe("Vector Search End-to-End Tests", () => {
 
     // Verify that at least one result contains the expected content
     const hasExpectedContent = searchResult.results.some(result => 
-      result.content.toLowerCase().includes("preserves logical boundaries")
+      result.content.toLowerCase().includes("fetches documentation directly")
     );
     expect(hasExpectedContent).toBe(true);
 
