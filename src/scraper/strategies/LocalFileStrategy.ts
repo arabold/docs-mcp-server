@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import mime from "mime";
 import { type ArchiveAdapter, getArchiveAdapter } from "../../utils/archive";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FileFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
@@ -242,8 +242,9 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     try {
       const contentBuffer = await adapter.getContent(innerPath);
 
-      // Detect mime type based on inner filename
-      const mimeType = mime.getType(innerPath) || "application/octet-stream";
+      // Detect mime type based on inner filename using MimeTypeUtils for consistent detection
+      const mimeType =
+        MimeTypeUtils.detectMimeTypeFromPath(innerPath) || "application/octet-stream";
 
       const rawContent: RawContent = {
         source: item.url,

@@ -126,6 +126,7 @@ export class LanguageParserRegistry {
       // Narrow advertised extensions/mime types for the alias (informational only).
       fileExtensions: [".js", ".jsx", ".mjs", ".cjs"],
       mimeTypes: [
+        "text/x-jsx", // Output by MimeTypeUtils.detectMimeTypeFromPath
         "text/javascript",
         "application/javascript",
         "text/jsx",
@@ -140,6 +141,7 @@ export class LanguageParserRegistry {
       this.extensionMap.set(ext.toLowerCase(), "javascript");
     }
     const jsMimes = [
+      "text/x-jsx", // Output by MimeTypeUtils.detectMimeTypeFromPath
       "text/javascript",
       "application/javascript",
       "text/jsx",

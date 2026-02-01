@@ -346,6 +346,11 @@ export class TypeScriptParser implements LanguageParser {
   ];
 
   readonly mimeTypes = [
+    // text/x-* variants (output by MimeTypeUtils.detectMimeTypeFromPath)
+    "text/x-typescript",
+    "text/x-tsx",
+    "text/x-jsx",
+    // Standard variants
     "text/typescript",
     "application/typescript",
     "text/tsx",

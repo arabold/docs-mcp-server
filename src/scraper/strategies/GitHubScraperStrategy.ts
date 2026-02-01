@@ -1,8 +1,8 @@
-import mime from "mime";
 import type { ProgressCallback } from "../../types";
 import type { AppConfig } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
+import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
 import { FetchStatus } from "../fetcher/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
@@ -442,8 +442,8 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
     }
 
-    // Fallback: check if unknown extension has text/* MIME type
-    const mimeType = mime.getType(path);
+    // Fallback: check if unknown extension has text/* MIME type using MimeTypeUtils
+    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(path);
     if (mimeType?.startsWith("text/")) {
       logger.debug(`Including file with text MIME type: ${path} (${mimeType})`);
       return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
