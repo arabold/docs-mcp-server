@@ -239,6 +239,11 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             })
             .filter((item) => item !== null);
         } catch (error) {
+          // Never ignore errors for the root URL (depth 0) - if it fails, the job should fail
+          // There's no point in "successfully" completing with 0 documents
+          if (item.depth === 0) {
+            throw error;
+          }
           if (options.ignoreErrors) {
             logger.error(`❌ Failed to process ${item.url}: ${error}`);
             return [];

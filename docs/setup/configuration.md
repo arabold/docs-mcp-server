@@ -78,6 +78,24 @@ Settings controlling the web scraping behavior.
 
 _Note: Scraper settings are often overridden per-job via CLI arguments._
 
+### GitHub Authentication
+
+Environment variables for authenticating with GitHub when scraping private repositories.
+
+| Env Var        | Description                                                                                       |
+| :------------- | :------------------------------------------------------------------------------------------------ |
+| `GITHUB_TOKEN` | GitHub personal access token or fine-grained token. Used for private repo access and higher rate limits. |
+| `GH_TOKEN`     | Alternative to `GITHUB_TOKEN`. Used if `GITHUB_TOKEN` is not set.                                 |
+
+**Authentication Resolution Order:**
+
+1. Explicit `Authorization` header passed in scraper options
+2. `GITHUB_TOKEN` environment variable
+3. `GH_TOKEN` environment variable
+4. Local `gh` CLI authentication (via `gh auth token`)
+
+If no authentication is available, public repositories are still accessible but with lower rate limits (60 requests/hour vs 5,000 authenticated).
+
 ### Splitter (`splitter`)
 
 Settings for chunking text for vector search.

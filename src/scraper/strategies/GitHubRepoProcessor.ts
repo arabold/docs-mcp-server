@@ -76,12 +76,13 @@ export class GitHubRepoProcessor {
     repoInfo: GitHubRepoInfo,
     filePath: string,
     etag?: string | null,
+    headers?: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<RawContent> {
     const { owner, repo, branch } = repoInfo;
     const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${filePath}`;
 
-    const rawContent = await this.httpFetcher.fetch(rawUrl, { signal, etag });
+    const rawContent = await this.httpFetcher.fetch(rawUrl, { signal, etag, headers });
 
     // Override GitHub's generic 'text/plain' or 'application/octet-stream' MIME type with file extension-based detection
     const detectedMimeType = MimeTypeUtils.detectMimeTypeFromPath(filePath);
@@ -105,6 +106,7 @@ export class GitHubRepoProcessor {
   async process(
     item: QueueItem,
     options: ScraperOptions,
+    headers?: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<ProcessItemResult> {
     // Parse the HTTPS blob URL to extract repository info and file path
@@ -116,6 +118,7 @@ export class GitHubRepoProcessor {
       { owner, repo, branch },
       filePath,
       item.etag,
+      headers,
       signal,
     );
 
