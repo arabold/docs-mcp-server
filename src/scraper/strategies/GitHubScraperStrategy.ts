@@ -45,6 +45,8 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
   private readonly httpFetcher: HttpFetcher;
   private readonly wikiProcessor: GitHubWikiProcessor;
   private readonly repoProcessor: GitHubRepoProcessor;
+  private resolvedAuthHeaders?: Record<string, string>;
+  private resolvedAuthKey?: string;
 
   constructor(config: AppConfig) {
     super(config);
@@ -129,6 +131,30 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     return { owner, repo };
   }
 
+  private buildAuthCacheKey(explicitHeaders?: Record<string, string>): string {
+    const normalizedHeaders = explicitHeaders
+      ? Object.keys(explicitHeaders)
+          .sort()
+          .map((key) => [key, explicitHeaders[key]])
+      : [];
+    const envKey = `${process.env.GITHUB_TOKEN ?? ""}|${process.env.GH_TOKEN ?? ""}`;
+    return JSON.stringify({ headers: normalizedHeaders, env: envKey });
+  }
+
+  private async getResolvedAuthHeaders(
+    explicitHeaders?: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const cacheKey = this.buildAuthCacheKey(explicitHeaders);
+    if (this.resolvedAuthHeaders && this.resolvedAuthKey === cacheKey) {
+      return this.resolvedAuthHeaders;
+    }
+
+    const resolved = await resolveGitHubAuth(explicitHeaders);
+    this.resolvedAuthHeaders = resolved;
+    this.resolvedAuthKey = cacheKey;
+    return resolved;
+  }
+
   /**
    * Fetches the repository tree structure from GitHub API.
    */
@@ -183,9 +209,20 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
           typeof repoContent.content === "string"
             ? repoContent.content
             : repoContent.content.toString("utf-8");
-        const repoData = JSON.parse(content) as { default_branch: string };
-        targetBranch = repoData.default_branch;
-        logger.debug(`Using default branch: ${targetBranch}`);
+        const repoData = JSON.parse(content) as { default_branch?: string };
+        const defaultBranch =
+          typeof repoData.default_branch === "string"
+            ? repoData.default_branch.trim()
+            : "";
+        if (!defaultBranch) {
+          logger.warn(
+            `⚠️  Repository info missing default_branch for ${owner}/${repo}, using 'main'`,
+          );
+          targetBranch = "main";
+        } else {
+          targetBranch = defaultBranch;
+          logger.debug(`Using default branch: ${targetBranch}`);
+        }
       } catch (parseError) {
         // Only fall back to "main" for JSON parse errors (e.g., unexpected API response format)
         logger.warn(`⚠️  Could not parse repository info, using 'main': ${parseError}`);
@@ -454,8 +491,7 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       };
     }
 
-    // Resolve GitHub authentication once at the start
-    const headers = await resolveGitHubAuth(options.headers);
+    const headers = await this.getResolvedAuthHeaders(options.headers);
 
     // Delegate to wiki processor for wiki URLs
     // Use precise pattern matching: /owner/repo/wiki or /owner/repo/wiki/
@@ -562,10 +598,17 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       throw new Error("URL must be a GitHub URL");
     }
 
+    await this.getResolvedAuthHeaders(options.headers);
+
     // Use the base class implementation which handles initialQueue properly
     // The processItem method will discover all wiki and repo file URLs
     // The base scraper will automatically deduplicate URLs from initialQueue
-    await super.scrape(options, progressCallback, signal);
+    try {
+      await super.scrape(options, progressCallback, signal);
+    } finally {
+      this.resolvedAuthHeaders = undefined;
+      this.resolvedAuthKey = undefined;
+    }
   }
 
   async cleanup(): Promise<void> {

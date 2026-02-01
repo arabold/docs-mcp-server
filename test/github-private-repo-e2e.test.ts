@@ -51,6 +51,7 @@ describe("GitHub Private Repository E2E Tests", () => {
     tempDir = mkdtempSync(path.join(tmpdir(), "github-private-repo-e2e-test-"));
 
     appConfig.app.storePath = tempDir;
+    appConfig.app.embeddingModel = "";
 
     // Initialize services
     const eventBus = new EventBusService();

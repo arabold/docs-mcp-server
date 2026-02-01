@@ -456,6 +456,49 @@ describe("GitHubScraperStrategy", () => {
       await expect(strategy.processItem(item, options)).rejects.toThrow(/GITHUB_TOKEN/);
     });
 
+    it("should fall back to main when default branch is missing", async () => {
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
+          return Promise.resolve({
+            content: JSON.stringify({}),
+            mimeType: "application/json",
+            source: url,
+            charset: "utf-8",
+            status: FetchStatus.SUCCESS,
+          });
+        }
+        if (url.includes("/git/trees/main")) {
+          return Promise.resolve({
+            content: JSON.stringify({
+              sha: "tree123",
+              url: "https://api.github.com/repos/owner/repo/git/trees/tree123",
+              tree: [],
+              truncated: false,
+            }),
+            mimeType: "application/json",
+            source: url,
+            charset: "utf-8",
+            status: FetchStatus.SUCCESS,
+          });
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      const result = await strategy.processItem(item, options);
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(httpFetcherInstance.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/git/trees/main"),
+        expect.any(Object),
+      );
+    });
+
     it("should throw user-friendly error when tree API returns NOT_FOUND", async () => {
       // Mock repo info succeeds but tree API returns NOT_FOUND
       httpFetcherInstance.fetch.mockImplementation((url: string) => {
@@ -551,6 +594,19 @@ describe("GitHubScraperStrategy", () => {
         expect(call[1]).toHaveProperty("headers");
         expect(call[1].headers).toHaveProperty("Authorization", "Bearer test-token");
       }
+    });
+
+    it("should resolve GitHub auth once per scrape", async () => {
+      const resolveSpy = vi.spyOn(await import("./github-auth"), "resolveGitHubAuth");
+      const optionsWithHeaders = {
+        ...options,
+        headers: { Authorization: "Bearer test-token" },
+      };
+
+      await strategy.scrape(optionsWithHeaders, vi.fn());
+
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+      resolveSpy.mockRestore();
     });
 
     it("should throw user-friendly error when authentication fails (401)", async () => {
