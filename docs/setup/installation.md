@@ -8,7 +8,7 @@ The easiest way to get started is using the standalone server, which includes bo
 
 ### Option 1: Node.js (npx)
 
-If you have Node.js 20.x or later installed, you can run the server directly with a single command:
+If you have Node.js 22.x installed (recommended for local development), you can run the server directly with a single command. Use `nvm use 22` and run `npm rebuild` if you recently changed Node versions:
 
 ```bash
 npx @arabold/docs-mcp-server@latest
