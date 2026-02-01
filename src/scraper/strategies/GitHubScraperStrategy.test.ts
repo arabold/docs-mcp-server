@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
+import { ScraperError } from "../../utils/errors";
 import { FetchStatus, HttpFetcher } from "../fetcher";
 import type { ScraperOptions } from "../types";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
@@ -424,6 +425,246 @@ describe("GitHubScraperStrategy", () => {
       const item2 = { url: "github-file://src/index.js", depth: 2 };
       const result2 = await strategy.processItem(item2, options);
       expect(result2.status).toBe(FetchStatus.NOT_FOUND);
+    });
+
+    it("should throw user-friendly error when repository info fetch returns NOT_FOUND", async () => {
+      // Mock repo info API returning NOT_FOUND (private repo without auth)
+      // This tests the bug fix where we detect inaccessible repos early
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
+          return Promise.resolve({
+            content: Buffer.from(""),
+            mimeType: "application/json",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          });
+        }
+        // Tree API should not be called if repo info fails
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.NOT_FOUND,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /Repository "owner\/repo" not found or not accessible/,
+      );
+      await expect(strategy.processItem(item, options)).rejects.toThrow(/GITHUB_TOKEN/);
+    });
+
+    it("should fall back to main when default branch is missing", async () => {
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
+          return Promise.resolve({
+            content: JSON.stringify({}),
+            mimeType: "application/json",
+            source: url,
+            charset: "utf-8",
+            status: FetchStatus.SUCCESS,
+          });
+        }
+        if (url.includes("/git/trees/main")) {
+          return Promise.resolve({
+            content: JSON.stringify({
+              sha: "tree123",
+              url: "https://api.github.com/repos/owner/repo/git/trees/tree123",
+              tree: [],
+              truncated: false,
+            }),
+            mimeType: "application/json",
+            source: url,
+            charset: "utf-8",
+            status: FetchStatus.SUCCESS,
+          });
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      const result = await strategy.processItem(item, options);
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(httpFetcherInstance.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("/git/trees/main"),
+        expect.any(Object),
+      );
+    });
+
+    it("should throw user-friendly error when tree API returns NOT_FOUND", async () => {
+      // Mock repo info succeeds but tree API returns NOT_FOUND
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
+          return Promise.resolve({
+            content: JSON.stringify({ default_branch: "main" }),
+            mimeType: "application/json",
+            source: url,
+            charset: "utf-8",
+            status: FetchStatus.SUCCESS,
+          });
+        }
+        if (url.includes("/git/trees/")) {
+          return Promise.resolve({
+            content: Buffer.from(""),
+            mimeType: "application/json",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          });
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.NOT_FOUND,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /Repository "owner\/repo" not found or not accessible/,
+      );
+      await expect(strategy.processItem(item, options)).rejects.toThrow(/GITHUB_TOKEN/);
+    });
+
+    it("should throw user-friendly error when JSON parsing fails", async () => {
+      // Mock tree API returning invalid JSON
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
+          return Promise.resolve({
+            content: JSON.stringify({ default_branch: "main" }),
+            mimeType: "application/json",
+            source: url,
+            charset: "utf-8",
+            status: FetchStatus.SUCCESS,
+          });
+        }
+        if (url.includes("/git/trees/")) {
+          return Promise.resolve({
+            content: "not valid json {{{",
+            mimeType: "application/json",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          });
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /Failed to parse GitHub API response/,
+      );
+    });
+
+    it("should pass headers to httpFetcher.fetch calls", async () => {
+      const optionsWithHeaders = {
+        ...options,
+        headers: { Authorization: "Bearer test-token" },
+      };
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      await strategy.processItem(item, optionsWithHeaders);
+
+      // Verify headers were passed to the fetch calls
+      const fetchCalls = httpFetcherInstance.fetch.mock.calls;
+      expect(fetchCalls.length).toBeGreaterThan(0);
+
+      // Check that at least one API call includes the headers
+      const apiCalls = fetchCalls.filter((call: unknown[]) =>
+        (call[0] as string).includes("api.github.com"),
+      );
+      expect(apiCalls.length).toBeGreaterThan(0);
+
+      // The headers should be passed in the options object
+      for (const call of apiCalls) {
+        expect(call[1]).toHaveProperty("headers");
+        expect(call[1].headers).toHaveProperty("Authorization", "Bearer test-token");
+      }
+    });
+
+    it("should resolve GitHub auth once per scrape", async () => {
+      const resolveSpy = vi.spyOn(await import("./github-auth"), "resolveGitHubAuth");
+      const optionsWithHeaders = {
+        ...options,
+        headers: { Authorization: "Bearer test-token" },
+      };
+
+      await strategy.scrape(optionsWithHeaders, vi.fn());
+
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+      resolveSpy.mockRestore();
+    });
+
+    it("should throw user-friendly error when authentication fails (401)", async () => {
+      // Mock repo info API throwing 401 error (invalid/expired token)
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/")) {
+          return Promise.reject(
+            new ScraperError(
+              "Failed to fetch https://api.github.com/repos/owner/repo after 1 attempts: Request failed with status code 401",
+              true,
+            ),
+          );
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /GitHub authentication failed/,
+      );
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /invalid or expired/,
+      );
+    });
+
+    it("should throw user-friendly error when access is denied (403)", async () => {
+      // Mock repo info API throwing 403 error (forbidden/rate-limited)
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/")) {
+          return Promise.reject(
+            new ScraperError(
+              "Failed to fetch https://api.github.com/repos/owner/repo after 1 attempts: Request failed with status code 403",
+              true,
+            ),
+          );
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /GitHub access denied/,
+      );
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /permissions|rate-limited/,
+      );
     });
   });
 });

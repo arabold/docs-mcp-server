@@ -22,8 +22,8 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 ## Repository Context
 
 - **Repository**: `arabold/docs-mcp-server`
-- **Core Stack**: Node.js 22.x, TypeScript, Vite, AlpineJS, TailwindCSS, SQLite (better-sqlite3)
-  - **Node Version**: Always use **Node.js v22** for local development and builds, even if `package.json` allows older versions.
+- **Core Stack**: Node.js 24.x, TypeScript, Vite, AlpineJS, TailwindCSS, SQLite (better-sqlite3)
+  - **Node Version**: Always use **Node.js v24** for local development and builds, even if `package.json` allows older versions.
 - **Tooling**: Biome (lint/format), Vitest (test), Husky (pre-commit)
 - **Critical Documentation**:
   - 📖 **Read `README.md`** first for project structure, setup, and configuration details.
@@ -116,7 +116,7 @@ Strictly enforced by `commitlint`. Commits will fail if format is incorrect.
   - **E2E**: Place system-wide end-to-end tests in `test/*-e2e.test.ts`.
 
 ### Best Practices
-- **Environment**: Node 22. Use `test/setup-env.ts` for polyfills.
+- **Environment**: Node 24. Use `test/setup-env.ts` for polyfills.
 - **Isolation**: Each test should check **one** behavior.
 - **Performance**: Keep unit tests <100ms.
 - **Mocks**: Use `vi.mock()` sparingly; prefer real dependencies where feasible.

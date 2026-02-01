@@ -20,7 +20,7 @@ The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
 
 ## 🚀 Quick Start
 
-**1. Start the server** (requires Node.js 20+):
+**1. Start the server** (requires Node.js 24+):
 
 ```bash
 npx @arabold/docs-mcp-server@latest

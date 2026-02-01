@@ -45,6 +45,9 @@ export async function registerMcpService(
   // Track SSE transports for cleanup
   const sseTransports: Record<string, SSEServerTransport> = {};
 
+  // Track SSE server instances for cleanup
+  const sseServers: Record<string, McpServer> = {};
+
   // Track heartbeat intervals for cleanup
   const heartbeatIntervals: Record<string, NodeJS.Timeout> = {};
 
@@ -58,6 +61,9 @@ export async function registerMcpService(
         // Handle SSE connection using raw response
         const transport = new SSEServerTransport("/messages", reply.raw);
         sseTransports[transport.sessionId] = transport;
+
+        const sessionServer = createMcpServerInstance(mcpTools, config);
+        sseServers[transport.sessionId] = sessionServer;
 
         // Log client connection (simple connection tracking without sessions)
         if (telemetry.isEnabled()) {
@@ -85,6 +91,14 @@ export async function registerMcpService(
             delete heartbeatIntervals[transport.sessionId];
           }
 
+          const serverToClose = sseServers[transport.sessionId];
+          if (serverToClose) {
+            delete sseServers[transport.sessionId];
+            void serverToClose.close().catch((error) => {
+              logger.error(`❌ Failed to close SSE server instance: ${error}`);
+            });
+          }
+
           delete sseTransports[transport.sessionId];
           transport.close();
 
@@ -102,7 +116,7 @@ export async function registerMcpService(
           cleanupConnection();
         });
 
-        await mcpServer.connect(transport);
+        await sessionServer.connect(transport);
       } catch (error) {
         logger.error(`❌ Error in SSE endpoint: ${error}`);
         reply.code(500).send({
@@ -172,13 +186,28 @@ export async function registerMcpService(
     },
   });
 
+  server.route({
+    method: "GET",
+    url: "/mcp",
+    preHandler: authMiddleware ? [authMiddleware] : undefined,
+    handler: async (_request: FastifyRequest, reply: FastifyReply) => {
+      reply.code(405).header("Allow", "POST").send();
+    },
+  });
+
   // Store reference to SSE transports on the server instance for cleanup
   (
     mcpServer as unknown as {
       _sseTransports: Record<string, SSEServerTransport>;
+      _sseServers: Record<string, McpServer>;
       _heartbeatIntervals: Record<string, NodeJS.Timeout>;
     }
   )._sseTransports = sseTransports;
+  (
+    mcpServer as unknown as {
+      _sseServers: Record<string, McpServer>;
+    }
+  )._sseServers = sseServers;
   (
     mcpServer as unknown as {
       _heartbeatIntervals: Record<string, NodeJS.Timeout>;
@@ -214,6 +243,17 @@ export async function cleanupMcpService(mcpServer: McpServer): Promise<void> {
     if (sseTransports) {
       for (const transport of Object.values(sseTransports)) {
         await transport.close();
+      }
+    }
+
+    const sseServers = (
+      mcpServer as unknown as {
+        _sseServers: Record<string, McpServer>;
+      }
+    )._sseServers;
+    if (sseServers) {
+      for (const server of Object.values(sseServers)) {
+        await server.close();
       }
     }
 

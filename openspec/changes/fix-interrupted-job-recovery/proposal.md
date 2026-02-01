@@ -22,4 +22,4 @@ Additionally, the current `recoverPendingJobs()` implementation (when `recoverJo
 - Affected code:
   - `src/pipeline/PipelineManager.ts` - add `markInterruptedJobsAsFailed()`, refactor `recoverPendingJobs()`
   - `src/pipeline/PipelineManager.test.ts` - add tests for both recovery modes
-  - `src/store/types.ts` - update `isValidStatusTransition()` to allow `QUEUED → FAILED`
+  - `src/store/types.ts` - remove unused `isValidStatusTransition()` helper

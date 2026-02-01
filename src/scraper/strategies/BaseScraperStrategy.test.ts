@@ -102,24 +102,61 @@ describe("BaseScraperStrategy", () => {
     expect(strategy.processItem).toHaveBeenCalledTimes(2);
   });
 
-  it("should ignore errors when ignoreErrors is true", async () => {
+  it("should always throw errors at depth 0 even when ignoreErrors is true", async () => {
+    // Root URL errors should never be ignored - the job is invalid if the starting point fails
     const options: ScraperOptions = {
       url: "https://example.com/",
       library: "test",
       version: "1.0.0",
       maxPages: 1,
       maxDepth: 1,
-      ignoreErrors: true,
+      ignoreErrors: true, // Even with this set to true...
     };
     const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
-    const error = new Error("Test error");
+    const error = new Error("Root URL failed");
 
     strategy.processItem.mockRejectedValue(error);
 
+    // ...errors at depth 0 should still throw
+    await expect(strategy.scrape(options, progressCallback)).rejects.toThrowError(
+      "Root URL failed",
+    );
+    expect(strategy.processItem).toHaveBeenCalledTimes(1);
+  });
+
+  it("should ignore errors at depth > 0 when ignoreErrors is true", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 10,
+      maxDepth: 2,
+      ignoreErrors: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+    const error = new Error("Child page error");
+
+    // First call (depth 0) succeeds and returns a link
+    // Second call (depth 1) fails
+    strategy.processItem
+      .mockResolvedValueOnce({
+        url: "https://example.com/",
+        links: ["https://example.com/page1"],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: "Test",
+          textContent: "Test content",
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+      })
+      .mockRejectedValueOnce(error);
+
+    // Should complete without throwing because error is at depth > 0
     await strategy.scrape(options, progressCallback);
 
-    expect(strategy.processItem).toHaveBeenCalledTimes(1);
-    expect(progressCallback).not.toHaveBeenCalled();
+    expect(strategy.processItem).toHaveBeenCalledTimes(2);
   });
 
   it("should throw errors when ignoreErrors is false", async () => {

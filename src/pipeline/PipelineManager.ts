@@ -102,7 +102,8 @@ export class PipelineManager implements IPipeline {
     if (this.shouldRecoverJobs) {
       await this.recoverPendingJobs();
     } else {
-      logger.debug("Job recovery disabled for this PipelineManager instance");
+      // Mark any interrupted jobs as failed so users can manually retry
+      await this.markInterruptedJobsAsFailed();
     }
 
     this._processQueue().catch((error) => {
@@ -112,88 +113,78 @@ export class PipelineManager implements IPipeline {
 
   /**
    * Recovers pending jobs from the database after server restart.
-   * Finds versions with RUNNING status and resets them to QUEUED for re-processing.
-   * Also loads all QUEUED versions back into the pipeline queue.
+   * Uses enqueueRefreshJob() to properly continue interrupted jobs,
+   * leveraging existing pages and ETags when available.
    */
   async recoverPendingJobs(): Promise<void> {
     try {
-      // Reset RUNNING jobs to QUEUED (they were interrupted by server restart)
-      const runningVersions = await this.store.getVersionsByStatus([
+      // Find all interrupted jobs (RUNNING + QUEUED)
+      const interruptedVersions = await this.store.getVersionsByStatus([
         VersionStatus.RUNNING,
+        VersionStatus.QUEUED,
       ]);
-      for (const version of runningVersions) {
-        await this.store.updateVersionStatus(version.id, VersionStatus.QUEUED);
-        logger.info(
-          `🔄 Reset interrupted job to QUEUED: ${version.library_name}@${version.name || "latest"}`,
-        );
-      }
 
-      // Load all QUEUED versions back into pipeline
-      const queuedVersions = await this.store.getVersionsByStatus([VersionStatus.QUEUED]);
-      for (const version of queuedVersions) {
-        // Create complete job with all database state restored
-        const jobId = uuidv4();
-        const abortController = new AbortController();
-        let resolveCompletion!: () => void;
-        let rejectCompletion!: (reason?: unknown) => void;
-
-        const completionPromise = new Promise<void>((resolve, reject) => {
-          resolveCompletion = resolve;
-          rejectCompletion = reject;
-        });
-        // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
-        completionPromise.catch(() => {});
-
-        // Parse stored scraper options
-        let parsedScraperOptions = null;
-        if (version.scraper_options) {
-          try {
-            parsedScraperOptions = JSON.parse(version.scraper_options);
-          } catch (error) {
-            logger.warn(
-              `⚠️  Failed to parse scraper options for ${version.library_name}@${version.name || "latest"}: ${error}`,
-            );
-          }
-        }
-
-        const job: InternalPipelineJob = {
-          id: jobId,
-          library: version.library_name,
-          version: version.name || "",
-          status: PipelineJobStatus.QUEUED,
-          progress: null,
-          error: null,
-          createdAt: new Date(version.created_at),
-          // For recovered QUEUED jobs, startedAt must be null to reflect queued state.
-          startedAt: null,
-          finishedAt: null,
-          abortController,
-          completionPromise,
-          resolveCompletion,
-          rejectCompletion,
-
-          // Database fields (single source of truth)
-          versionId: version.id,
-          versionStatus: version.status,
-          progressPages: version.progress_pages,
-          progressMaxPages: version.progress_max_pages,
-          errorMessage: version.error_message,
-          updatedAt: new Date(version.updated_at),
-          sourceUrl: version.source_url,
-          scraperOptions: parsedScraperOptions,
-        };
-
-        this.jobMap.set(jobId, job);
-        this.jobQueue.push(jobId);
-      }
-
-      if (queuedVersions.length > 0) {
-        logger.info(`📥 Recovered ${queuedVersions.length} pending job(s) from database`);
-      } else {
+      if (interruptedVersions.length === 0) {
         logger.debug("No pending jobs to recover from database");
+        return;
+      }
+
+      logger.info(
+        `📥 Recovering ${interruptedVersions.length} pending job(s) from database`,
+      );
+
+      for (const version of interruptedVersions) {
+        const versionLabel = `${version.library_name}@${version.name || "latest"}`;
+        try {
+          // Use enqueueRefreshJob for recovery - it handles:
+          // - Completed versions: incremental refresh with ETags
+          // - Incomplete versions: falls back to enqueueJobWithStoredOptions()
+          await this.enqueueRefreshJob(version.library_name, version.name);
+          logger.info(`🔄 Recovering job: ${versionLabel}`);
+        } catch (error) {
+          // If recovery fails (e.g., no stored options), mark as failed
+          const errorMessage = `Recovery failed: ${error instanceof Error ? error.message : String(error)}`;
+          await this.store.updateVersionStatus(
+            version.id,
+            VersionStatus.FAILED,
+            errorMessage,
+          );
+          logger.warn(`⚠️  Failed to recover job ${versionLabel}: ${error}`);
+        }
       }
     } catch (error) {
       logger.error(`❌ Failed to recover pending jobs: ${error}`);
+    }
+  }
+
+  /**
+   * Marks all interrupted jobs (RUNNING/QUEUED) as FAILED.
+   * Called when recoverJobs is false to allow users to manually retry via UI.
+   */
+  async markInterruptedJobsAsFailed(): Promise<void> {
+    try {
+      const interruptedVersions = await this.store.getVersionsByStatus([
+        VersionStatus.RUNNING,
+        VersionStatus.QUEUED,
+      ]);
+
+      if (interruptedVersions.length === 0) {
+        logger.debug("No interrupted jobs to mark as failed");
+        return;
+      }
+
+      for (const version of interruptedVersions) {
+        await this.store.updateVersionStatus(
+          version.id,
+          VersionStatus.FAILED,
+          "Job interrupted",
+        );
+        logger.info(
+          `❌ Marked interrupted job as failed: ${version.library_name}@${version.name || "latest"}`,
+        );
+      }
+    } catch (error) {
+      logger.error(`❌ Failed to mark interrupted jobs as failed: ${error}`);
     }
   }
 
