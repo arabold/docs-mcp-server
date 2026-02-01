@@ -35,6 +35,29 @@ docker run --rm \
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
+### Configure Your Client
+
+Once the server is running (on port 6280), you need to tell your AI client where to find it.
+
+**Example: Cursor / VS Code**
+
+Add this to your MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "docs": {
+      "type": "sse",
+      "url": "http://localhost:6280/sse"
+    }
+  }
+}
+```
+
+See **[Connecting MCP Clients](../guides/mcp-clients.md)** for instructions for **Claude**, **Cline**, **Zed**, and others.
+
+**Optional:** To improve search quality, see **[Embedding Models](../guides/embedding-models.md)** to configure OpenAI, Ollama, or other providers.
+
 ---
 
 ## 🔌 Embedded Server
