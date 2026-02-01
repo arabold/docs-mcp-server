@@ -25,7 +25,7 @@ Edit your configuration file:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "type": "sse",
       "url": "http://localhost:6280/sse"
     }
@@ -37,7 +37,7 @@ Edit your configuration file:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -50,8 +50,8 @@ Edit your configuration file:
 2. Click **Add new MCP server**.
 
 **Remote:**
-*   **Type**: SSE
-*   **URL**: `http://localhost:6280/sse`
+*   **Type**: SSE (or streamableHttp)
+*   **URL**: `http://localhost:6280/mcp` (for streamableHttp) or `http://localhost:6280/sse`
 
 **Local:**
 *   **Type**: stdio
@@ -65,7 +65,7 @@ Open your Windsurf MCP configuration:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -79,7 +79,7 @@ Add to your Zed `settings.json`:
 ```json
 {
   "context_servers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -93,7 +93,7 @@ Go to **Program** → **Install** → **Edit mcp.json**:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -114,7 +114,7 @@ Go to **Program** → **Install** → **Edit mcp.json**:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "url": "http://localhost:6280/mcp",
       "type": "streamableHttp"
     }
@@ -126,7 +126,7 @@ Go to **Program** → **Install** → **Edit mcp.json**:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -140,7 +140,7 @@ Edit your Roo Code MCP config:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -155,7 +155,7 @@ Edit `~/.continue/config.json`:
 {
   "mcpServers": [
     {
-      "name": "docs",
+      "name": "docs-mcp-server",
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -169,7 +169,7 @@ See [Trae documentation](https://docs.trae.ai/ide/model-context-protocol) for de
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -184,17 +184,17 @@ See [Trae documentation](https://docs.trae.ai/ide/model-context-protocol) for de
 ### Claude Code
 ```bash
 # Current project
-claude mcp add docs -- npx -y @arabold/docs-mcp-server@latest
+claude mcp add docs-mcp-server -- npx -y @arabold/docs-mcp-server@latest
 
 # Global (all projects)
-claude mcp add --scope user docs -- npx -y @arabold/docs-mcp-server@latest
+claude mcp add --scope user docs-mcp-server -- npx -y @arabold/docs-mcp-server@latest
 ```
 
 ### Opencode
 ```json
 {
   "mcp": {
-    "docs": {
+    "docs-mcp-server": {
       "type": "local",
       "command": ["npx", "-y", "@arabold/docs-mcp-server@latest"],
       "enabled": true
@@ -209,7 +209,7 @@ Open `~/.gemini/settings.json`:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -223,7 +223,7 @@ See [Amazon Q Developer docs](https://docs.aws.amazon.com/amazonq/latest/qdevelo
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -237,7 +237,7 @@ Open `~/.copilot/mcp-config.json`:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "type": "local",
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
@@ -258,7 +258,7 @@ Open `~/.copilot/mcp-config.json`:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
     }
@@ -272,7 +272,7 @@ See [Microsoft Docs](https://learn.microsoft.com/visualstudio/ide/mcp-servers).
 ```json
 {
   "servers": {
-    "docs": {
+    "docs-mcp-server": {
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@arabold/docs-mcp-server@latest"]
@@ -297,7 +297,7 @@ If you prefer using Docker for the client connection:
 ```json
 {
   "mcpServers": {
-    "docs": {
+    "docs-mcp-server": {
       "command": "docker",
       "args": [
         "run", "-i", "--rm",

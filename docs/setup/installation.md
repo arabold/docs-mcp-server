@@ -39,16 +39,16 @@ docker run --rm \
 
 Once the server is running (on port 6280), you need to tell your AI client where to find it.
 
-**Example: Cursor / VS Code**
+**Example: Cursor**
 
 Add this to your MCP settings:
 
 ```json
 {
   "mcpServers": {
-    "docs": {
-      "type": "sse",
-      "url": "http://localhost:6280/sse"
+    "docs-mcp-server": {
+      "type": "streamableHttp",
+      "url": "http://localhost:6280/mcp"
     }
   }
 }
