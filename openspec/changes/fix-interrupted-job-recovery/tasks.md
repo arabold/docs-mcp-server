@@ -5,7 +5,7 @@
 
 ## 2. Implementation
 
-- [x] 2.1 Update `isValidStatusTransition()` in `src/store/types.ts` to allow `QUEUED → FAILED`
+- [x] 2.1 Remove unused `isValidStatusTransition()` helper in `src/store/types.ts`
 - [x] 2.2 Add `markInterruptedJobsAsFailed()` method to PipelineManager
 - [x] 2.3 Call `markInterruptedJobsAsFailed()` in `start()` when `recoverJobs: false`
 - [x] 2.4 Refactor `recoverPendingJobs()` to use `enqueueRefreshJob()` for recovery
