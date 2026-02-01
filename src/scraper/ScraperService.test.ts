@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../types";
 import { ScraperError } from "../utils/errors";
 import type { ScraperRegistry } from "./ScraperRegistry";
@@ -14,7 +14,14 @@ describe("ScraperService", () => {
   // Mock strategy
   const mockStrategy = {
     scrape: vi.fn(),
+    cleanup: vi.fn(),
   };
+
+  beforeEach(() => {
+    mockRegistry.getStrategy.mockReset();
+    mockStrategy.scrape.mockReset();
+    mockStrategy.cleanup.mockReset();
+  });
 
   it("should use registry to get correct strategy", async () => {
     const service = new ScraperService(mockRegistry as unknown as ScraperRegistry);
@@ -141,6 +148,7 @@ describe("ScraperService", () => {
     // Mock a strategy that would handle JSON files
     const jsonStrategy = {
       scrape: vi.fn().mockResolvedValue(undefined),
+      cleanup: vi.fn(),
     };
 
     mockRegistry.getStrategy.mockReturnValue(jsonStrategy);
@@ -153,5 +161,45 @@ describe("ScraperService", () => {
       progressCallback,
       undefined,
     );
+    expect(jsonStrategy.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("should cleanup strategy after successful scrape", async () => {
+    const service = new ScraperService(mockRegistry as unknown as ScraperRegistry);
+    const options: ScraperOptions = {
+      url: "https://example.com",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 1,
+    };
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
+
+    mockStrategy.scrape.mockResolvedValue(undefined);
+    mockRegistry.getStrategy.mockReturnValue(mockStrategy);
+
+    await service.scrape(options, progressCallback);
+
+    expect(mockStrategy.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("should cleanup strategy after failed scrape", async () => {
+    const service = new ScraperService(mockRegistry as unknown as ScraperRegistry);
+    const options: ScraperOptions = {
+      url: "https://example.com",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 1,
+    };
+    const progressCallback: ProgressCallback<ScraperProgressEvent> = vi.fn();
+
+    mockStrategy.scrape.mockRejectedValue(new Error("Strategy error"));
+    mockRegistry.getStrategy.mockReturnValue(mockStrategy);
+
+    await expect(service.scrape(options, progressCallback)).rejects.toThrow(
+      "Strategy error",
+    );
+    expect(mockStrategy.cleanup).toHaveBeenCalledOnce();
   });
 });

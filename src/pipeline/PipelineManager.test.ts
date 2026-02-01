@@ -554,38 +554,6 @@ describe("PipelineManager", () => {
   });
 
   describe("cleanup functionality", () => {
-    it("should call cleanup on scraper service when stopped", async () => {
-      // Access the actual scraperService and spy on its cleanup method
-      const scraperService = (manager as any).scraperService;
-      const cleanupSpy = vi.spyOn(scraperService, "cleanup").mockResolvedValue(undefined);
-
-      // Start the manager
-      await manager.start();
-
-      // Call stop
-      await manager.stop();
-
-      // Verify cleanup was called on scraper service
-      expect(cleanupSpy).toHaveBeenCalled();
-    });
-
-    it("should handle cleanup errors gracefully during stop", async () => {
-      // Access the actual scraperService and spy on its cleanup method to throw error
-      const scraperService = (manager as any).scraperService;
-      const cleanupSpy = vi
-        .spyOn(scraperService, "cleanup")
-        .mockRejectedValue(new Error("Cleanup failed"));
-
-      // Start the manager
-      await manager.start();
-
-      // Stop should throw if cleanup fails
-      await expect(manager.stop()).rejects.toThrow("Cleanup failed");
-
-      // Verify cleanup was attempted
-      expect(cleanupSpy).toHaveBeenCalled();
-    });
-
     it("should stop accepting new jobs after stop is called", async () => {
       // Start the manager
       await manager.start();
@@ -616,19 +584,6 @@ describe("PipelineManager", () => {
 
       // Should be able to call stop multiple times without issues
       await expect(manager.stop()).resolves.toBeUndefined();
-    });
-
-    it("should ensure resource cleanup chain is properly invoked", async () => {
-      // Access the actual scraperService and spy on its cleanup method
-      const scraperService = (manager as any).scraperService;
-      const cleanupSpy = vi.spyOn(scraperService, "cleanup").mockResolvedValue(undefined);
-
-      // Start and stop the manager
-      await manager.start();
-      await manager.stop();
-
-      // Verify the cleanup chain was invoked
-      expect(cleanupSpy).toHaveBeenCalledTimes(1);
     });
   });
 

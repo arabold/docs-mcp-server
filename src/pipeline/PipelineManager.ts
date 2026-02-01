@@ -210,8 +210,8 @@ export class PipelineManager implements IPipeline {
     this.isRunning = false;
     logger.debug("PipelineManager stopping. No new jobs will be started.");
 
-    // Cleanup scraper service to prevent resource leaks
-    await this.scraperService.cleanup();
+    // Note: Strategy cleanup now happens per-scrape in ScraperService.scrape()
+    // No cleanup call needed here since strategies are not cached.
 
     // Note: Does not automatically cancel active jobs.
   }
