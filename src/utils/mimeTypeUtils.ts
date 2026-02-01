@@ -189,42 +189,140 @@ export class MimeTypeUtils {
   public static detectMimeTypeFromPath(filePath: string): string | null {
     const extension = filePath.toLowerCase().split(".").pop();
 
-    // Handle common source code extensions that mime package gets wrong or doesn't know
+    // Handle common source code extensions that mime package gets wrong or doesn't know.
+    // See openspec/changes/refactor-mime-type-detection/design.md for full documentation.
     const customMimeTypes: Record<string, string> = {
+      // JavaScript/TypeScript family
       ts: "text/x-typescript",
       tsx: "text/x-tsx",
+      mts: "text/x-typescript", // TypeScript ES modules
+      cts: "text/x-typescript", // TypeScript CommonJS modules
       js: "text/javascript",
       jsx: "text/x-jsx",
       cjs: "text/javascript", // CommonJS modules
       mjs: "text/javascript", // ES modules
+
+      // Python family
       py: "text/x-python",
       pyw: "text/x-python",
       pyi: "text/x-python",
+      pyx: "text/x-cython", // Cython
+      pxd: "text/x-cython", // Cython
+
+      // Systems languages
       go: "text/x-go",
       rs: "text/x-rust",
-      kt: "text/x-kotlin",
-      scala: "text/x-scala",
-      swift: "text/x-swift",
-      rb: "text/x-ruby",
-      php: "text/x-php",
-      cs: "text/x-csharp",
+      c: "text/x-csrc",
+      h: "text/x-chdr",
       cpp: "text/x-c++src",
       cxx: "text/x-c++src",
       cc: "text/x-c++src",
       hpp: "text/x-c++hdr",
       hxx: "text/x-c++hdr",
-      h: "text/x-chdr",
-      c: "text/x-csrc",
+      zig: "text/x-zig",
+      nim: "text/x-nim",
+      v: "text/x-v",
+      cr: "text/x-crystal",
+
+      // JVM languages
+      kt: "text/x-kotlin",
+      kts: "text/x-kotlin", // Kotlin script
+      scala: "text/x-scala",
+      groovy: "text/x-groovy",
+      gradle: "text/x-gradle",
+
+      // Apple/Mobile
+      swift: "text/x-swift",
+      dart: "text/x-dart",
+
+      // Scripting languages
+      rb: "text/x-ruby",
+      rake: "text/x-ruby", // Rakefile
+      php: "text/x-php",
+      lua: "text/x-lua",
+      pl: "text/x-perl",
+      pm: "text/x-perl",
+      r: "text/x-r", // Also handles .R since extension is lowercased
+
+      // Functional languages
+      hs: "text/x-haskell",
+      lhs: "text/x-haskell", // Literate Haskell
+      elm: "text/x-elm",
+      erl: "text/x-erlang",
+      ex: "text/x-elixir",
+      exs: "text/x-elixir",
+      clj: "text/x-clojure",
+      cljs: "text/x-clojure",
+      cljc: "text/x-clojure",
+      jl: "text/x-julia",
+
+      // .NET
+      cs: "text/x-csharp",
+
+      // Web3/Smart contracts
+      sol: "text/x-solidity",
+      move: "text/x-move",
+      cairo: "text/x-cairo",
+
+      // Modern web frameworks
+      vue: "text/x-vue",
+      svelte: "text/x-svelte",
+      astro: "text/x-astro",
+
+      // Shell scripting
       sh: "text/x-shellscript",
       bash: "text/x-shellscript",
       zsh: "text/x-shellscript",
       fish: "text/x-shellscript",
       ps1: "text/x-powershell",
+
+      // Documentation formats
+      rst: "text/x-rst", // reStructuredText
+      adoc: "text/x-asciidoc",
+      asciidoc: "text/x-asciidoc",
+      textile: "text/x-textile",
+      org: "text/x-org", // Org-mode
+      pod: "text/x-pod", // Perl documentation
+      rdoc: "text/x-rdoc", // Ruby documentation
+      wiki: "text/x-wiki",
+      rmd: "text/x-rmarkdown", // R Markdown
+
+      // Configuration files
+      toml: "text/x-toml",
+      ini: "text/x-ini",
+      cfg: "text/x-ini",
+      conf: "text/x-conf",
+      properties: "text/x-properties",
+      env: "text/x-dotenv",
+
+      // Build systems
+      dockerfile: "text/x-dockerfile",
+      containerfile: "text/x-dockerfile",
+      makefile: "text/x-makefile",
+      cmake: "text/x-cmake",
+      bazel: "text/x-bazel",
+      bzl: "text/x-bazel",
+      buck: "text/x-buck",
+
+      // Infrastructure as Code
+      tf: "text/x-terraform",
+      tfvars: "text/x-terraform",
+      hcl: "text/x-hcl",
+
+      // Data/Query languages
       sql: "text/x-sql",
       graphql: "text/x-graphql",
       gql: "text/x-graphql",
+
+      // Schema/API definitions
       proto: "text/x-proto",
-      dockerfile: "text/x-dockerfile",
+      prisma: "text/x-prisma",
+      thrift: "text/x-thrift",
+      avro: "text/x-avro",
+
+      // TeX/LaTeX
+      tex: "text/x-tex",
+      latex: "text/x-latex",
     };
 
     if (extension && customMimeTypes[extension]) {
@@ -250,9 +348,19 @@ export class MimeTypeUtils {
       return null;
     }
 
-    // Map problematic MIME types to correct ones
+    // Map problematic MIME types to correct ones.
+    // These are defense-in-depth for external MIME types (e.g., HTTP Content-Type headers).
+    // Extensions are checked first in customMimeTypes, so these mostly apply to external sources.
     const mimeTypeNormalization: Record<string, string> = {
-      "application/node": "text/javascript", // .cjs files are detected as this
+      "application/node": "text/javascript", // .cjs files
+      "video/mp2t": "text/x-typescript", // .ts/.mts files (MPEG-2 transport stream conflict)
+      "application/rls-services+xml": "text/x-rust", // .rs files
+      "application/vnd.lotus-organizer": "text/x-org", // .org files (Lotus Organizer conflict)
+      "application/vnd.dart": "text/x-dart", // .dart files
+      "application/x-perl": "text/x-perl", // .pl/.pm files
+      "application/x-tex": "text/x-tex", // .tex files
+      "application/x-latex": "text/x-latex", // .latex files
+      "application/toml": "text/x-toml", // .toml files
     };
 
     return mimeTypeNormalization[mimeType] || mimeType;
@@ -266,6 +374,7 @@ export class MimeTypeUtils {
    */
   public static extractLanguageFromMimeType(mimeType: string): string {
     const mimeToLanguage: Record<string, string> = {
+      // JavaScript/TypeScript
       "text/x-typescript": "typescript",
       "text/typescript": "typescript",
       "application/typescript": "typescript",
@@ -274,22 +383,99 @@ export class MimeTypeUtils {
       "application/javascript": "javascript",
       "application/x-javascript": "javascript",
       "text/x-jsx": "jsx",
+
+      // Python
       "text/x-python": "python",
-      "text/x-java": "java",
+      "text/x-cython": "cython",
+
+      // Systems languages
       "text/x-c": "c",
       "text/x-csrc": "c",
       "text/x-chdr": "c",
       "text/x-c++": "cpp",
       "text/x-c++src": "cpp",
       "text/x-c++hdr": "cpp",
-      "text/x-csharp": "csharp",
       "text/x-go": "go",
       "text/x-rust": "rust",
-      "text/x-php": "php",
-      "text/x-ruby": "ruby",
-      "text/x-swift": "swift",
+      "text/x-zig": "zig",
+      "text/x-nim": "nim",
+      "text/x-v": "v",
+      "text/x-crystal": "crystal",
+
+      // JVM languages
+      "text/x-java": "java",
       "text/x-kotlin": "kotlin",
       "text/x-scala": "scala",
+      "text/x-groovy": "groovy",
+      "text/x-gradle": "groovy",
+
+      // Apple/Mobile
+      "text/x-swift": "swift",
+      "text/x-dart": "dart",
+
+      // .NET
+      "text/x-csharp": "csharp",
+
+      // Scripting languages
+      "text/x-ruby": "ruby",
+      "text/x-php": "php",
+      "text/x-lua": "lua",
+      "text/x-perl": "perl",
+      "text/x-r": "r",
+
+      // Functional languages
+      "text/x-haskell": "haskell",
+      "text/x-elm": "elm",
+      "text/x-erlang": "erlang",
+      "text/x-elixir": "elixir",
+      "text/x-clojure": "clojure",
+      "text/x-julia": "julia",
+
+      // Web3/Smart contracts
+      "text/x-solidity": "solidity",
+      "text/x-move": "move",
+      "text/x-cairo": "cairo",
+
+      // Modern web frameworks
+      "text/x-vue": "vue",
+      "text/x-svelte": "svelte",
+      "text/x-astro": "astro",
+
+      // Shell
+      "text/x-sh": "bash",
+      "text/x-shellscript": "bash",
+      "application/x-sh": "bash",
+      "text/x-powershell": "powershell",
+
+      // Documentation formats
+      "text/x-rst": "rst",
+      "text/x-asciidoc": "asciidoc",
+      "text/x-textile": "textile",
+      "text/x-org": "org",
+      "text/x-pod": "pod",
+      "text/x-rdoc": "rdoc",
+      "text/x-wiki": "wiki",
+      "text/x-rmarkdown": "rmarkdown",
+
+      // Configuration files
+      "text/x-toml": "toml",
+      "text/x-ini": "ini",
+      "text/x-conf": "conf",
+      "text/x-properties": "properties",
+      "text/x-dotenv": "dotenv",
+
+      // Build systems
+      "text/x-dockerfile": "dockerfile",
+      "text/x-makefile": "makefile",
+      "text/x-cmake": "cmake",
+      "text/x-bazel": "bazel",
+      "text/x-buck": "buck",
+
+      // Infrastructure as Code
+      "text/x-terraform": "hcl",
+      "text/x-hcl": "hcl",
+
+      // Data formats
       "text/x-yaml": "yaml",
       "application/x-yaml": "yaml",
       "application/yaml": "yaml",
@@ -299,13 +485,17 @@ export class MimeTypeUtils {
       "text/xml": "xml",
       "application/xml": "xml",
       "text/x-sql": "sql",
-      "text/x-sh": "bash",
-      "text/x-shellscript": "bash",
-      "application/x-sh": "bash",
-      "text/x-powershell": "powershell",
       "text/x-graphql": "graphql",
+
+      // Schema/API definitions
       "text/x-proto": "protobuf",
-      "text/x-dockerfile": "dockerfile",
+      "text/x-prisma": "prisma",
+      "text/x-thrift": "thrift",
+      "text/x-avro": "avro",
+
+      // TeX/LaTeX
+      "text/x-tex": "tex",
+      "text/x-latex": "latex",
     };
 
     return mimeToLanguage[mimeType] || "";
