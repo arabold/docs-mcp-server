@@ -38,6 +38,8 @@ describe("MCP HTTP server E2E", () => {
   let serverProcess: ChildProcess | null = null;
   let client: Client | null = null;
   let transport: SSEClientTransport | null = null;
+  const extraClients: Client[] = [];
+  const extraTransports: SSEClientTransport[] = [];
 
   afterEach(async () => {
     // Clean up client connection
@@ -58,6 +60,22 @@ describe("MCP HTTP server E2E", () => {
         // Ignore errors during cleanup
       }
       transport = null;
+    }
+
+    for (const extraClient of extraClients.splice(0, extraClients.length)) {
+      try {
+        await extraClient.close();
+      } catch {
+        // Ignore errors during cleanup
+      }
+    }
+
+    for (const extraTransport of extraTransports.splice(0, extraTransports.length)) {
+      try {
+        await extraTransport.close();
+      } catch {
+        // Ignore errors during cleanup
+      }
     }
 
     // Kill server process if still running
@@ -155,6 +173,27 @@ describe("MCP HTTP server E2E", () => {
     return serverUrl;
   }
 
+  const createSseTransport = (sseUrl: URL) => {
+    const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetch(input, init);
+
+      if (response.body) {
+        response.body.cancel = async (reason) => {
+          try {
+            await response.text();
+          } catch {}
+          return undefined;
+        };
+      }
+
+      return response;
+    };
+
+    return new SSEClientTransport(sseUrl, {
+      fetch: customFetch as any,
+    });
+  };
+
   it("should start HTTP server, respond to initialize, and list tools", async () => {
     // Use a high port to avoid conflicts
     const port = 39123;
@@ -163,27 +202,7 @@ describe("MCP HTTP server E2E", () => {
     // Construct SSE endpoint URL
     const sseUrl = new URL("/sse", serverUrl);
 
-    // Custom fetch that consumes body instead of cancelling to fix hang
-    const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const response = await fetch(input, init);
-      
-      if (response.body) {
-        // Monkey patch cancel to consume stream
-        const originalCancel = response.body.cancel.bind(response.body);
-        response.body.cancel = async (reason) => {
-          try {
-            await response.text(); 
-          } catch {}
-          return undefined;
-        };
-      }
-      return response;
-    };
-
-    // Create SSE transport with custom fetch
-    transport = new SSEClientTransport(sseUrl, {
-      fetch: customFetch as any // Type assertion needed for fetch override compatibility
-    });
+    transport = createSseTransport(sseUrl);
 
     // Create MCP client
     client = new Client(
@@ -221,20 +240,7 @@ describe("MCP HTTP server E2E", () => {
     const serverUrl = await startServer(port);
 
     const sseUrl = new URL("/sse", serverUrl);
-    
-    // Also use custom fetch here to prevent hang during connection setup
-    const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-      const response = await fetch(input, init);
-      if (response.body) {
-        response.body.cancel = async (reason) => {
-          try { await response.text(); } catch {}
-          return undefined;
-        };
-      }
-      return response;
-    };
-
-    transport = new SSEClientTransport(sseUrl, { fetch: customFetch as any });
+    transport = createSseTransport(sseUrl);
 
     client = new Client(
       {
@@ -337,4 +343,78 @@ describe("MCP HTTP server E2E", () => {
     expect(receivedData.length).toBeGreaterThan(0);
     expect(receivedData.some((data) => data.includes(": heartbeat"))).toBe(true);
   }, 45000);
+
+  it("should handle concurrent SSE clients with overlapping message IDs", async () => {
+    const port = 39126;
+    const serverUrl = await startServer(port);
+    const sseUrl = new URL("/sse", serverUrl);
+
+    const firstTransport = createSseTransport(sseUrl);
+    const secondTransport = createSseTransport(sseUrl);
+    extraTransports.push(firstTransport, secondTransport);
+
+    const firstClient = new Client(
+      {
+        name: "test-client-1",
+        version: "1.0.0",
+      },
+      {
+        capabilities: {},
+      },
+    );
+    const secondClient = new Client(
+      {
+        name: "test-client-2",
+        version: "1.0.0",
+      },
+      {
+        capabilities: {},
+      },
+    );
+    extraClients.push(firstClient, secondClient);
+
+    await Promise.all([
+      firstClient.connect(firstTransport),
+      secondClient.connect(secondTransport),
+    ]);
+
+    const [firstTools, secondTools] = await Promise.all([
+      firstClient.listTools(),
+      secondClient.listTools(),
+    ]);
+
+    expect(firstTools.tools.length).toBeGreaterThan(0);
+    expect(secondTools.tools.length).toBeGreaterThan(0);
+  }, 30000);
+
+  it("should list and read resources via SSE", async () => {
+    const port = 39127;
+    const serverUrl = await startServer(port);
+    const sseUrl = new URL("/sse", serverUrl);
+
+    transport = createSseTransport(sseUrl);
+    client = new Client(
+      {
+        name: "test-client",
+        version: "1.0.0",
+      },
+      {
+        capabilities: {},
+      },
+    );
+
+    await client.connect(transport);
+
+    const resourcesResult = await client.listResources();
+    expect(resourcesResult.resources.length).toBeGreaterThan(0);
+
+    const resource = resourcesResult.resources.find((item) => item.uri.startsWith("docs://libraries"));
+    expect(resource).toBeDefined();
+
+    const resourceResponse = await client.readResource({
+      uri: resource?.uri ?? "docs://libraries",
+    });
+
+    expect(Array.isArray(resourceResponse.contents)).toBe(true);
+  }, 30000);
 });
