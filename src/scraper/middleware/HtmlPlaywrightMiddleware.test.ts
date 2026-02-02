@@ -171,6 +171,9 @@ describe("HtmlPlaywrightMiddleware", () => {
         maxCacheItems: 200,
         maxCacheItemSizeBytes: 500 * 1024,
       },
+      document: {
+        maxSize: 10 * 1024 * 1024,
+      },
     };
     playwrightMiddleware = new HtmlPlaywrightMiddleware(mockScraperConfig);
   });

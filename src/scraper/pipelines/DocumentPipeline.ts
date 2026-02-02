@@ -33,7 +33,7 @@ export class DocumentPipeline extends BasePipeline {
   constructor(config: AppConfig) {
     super();
     this.markitdown = new MarkItDown();
-    this.maxSize = config.document.maxSize;
+    this.maxSize = config.scraper.document.maxSize;
 
     const semanticSplitter = new SemanticMarkdownSplitter(
       config.splitter.preferredChunkSize,

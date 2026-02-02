@@ -62,6 +62,9 @@ export const DEFAULT_CONFIG = {
       maxCacheItems: 200,
       maxCacheItemSizeBytes: 500 * 1024,
     },
+    document: {
+      maxSize: 10 * 1024 * 1024, // 10MB max size for PDF/Office documents
+    },
   },
   splitter: {
     minChunkSize: 500,
@@ -99,9 +102,6 @@ export const DEFAULT_CONFIG = {
     precedingSiblingsLimit: 1,
     subsequentSiblingsLimit: 2,
     maxChunkDistance: 3,
-  },
-  document: {
-    maxSize: 10 * 1024 * 1024, // 10MB max size for PDF/Office documents
   },
 } as const;
 
@@ -174,6 +174,14 @@ export const AppConfigSchema = z.object({
             .default(DEFAULT_CONFIG.scraper.fetcher.maxCacheItemSizeBytes),
         })
         .default(DEFAULT_CONFIG.scraper.fetcher),
+      document: z
+        .object({
+          maxSize: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.scraper.document.maxSize),
+        })
+        .default(DEFAULT_CONFIG.scraper.document),
     })
     .default(DEFAULT_CONFIG.scraper),
   splitter: z
@@ -273,11 +281,6 @@ export const AppConfigSchema = z.object({
         .default(DEFAULT_CONFIG.assembly.maxChunkDistance),
     })
     .default(DEFAULT_CONFIG.assembly),
-  document: z
-    .object({
-      maxSize: z.coerce.number().int().default(DEFAULT_CONFIG.document.maxSize),
-    })
-    .default(DEFAULT_CONFIG.document),
 });
 
 export type AppConfig = z.infer<typeof AppConfigSchema>;
@@ -441,6 +444,8 @@ function saveConfigFile(filePath: string, config: Record<string, unknown>): void
 
 function mapEnvToConfig(): Record<string, unknown> {
   const config: Record<string, unknown> = {};
+
+  // 1. Apply explicit mappings first (for aliases like PORT, HOST)
   for (const mapping of configMappings) {
     if (mapping.env) {
       for (const envVar of mapping.env) {
@@ -451,6 +456,15 @@ function mapEnvToConfig(): Record<string, unknown> {
       }
     }
   }
+
+  // 2. Apply auto-generated env vars (takes precedence over explicit mappings)
+  for (const pathArr of ALL_CONFIG_LEAF_PATHS) {
+    const envVar = pathToEnvVar(pathArr);
+    if (process.env[envVar] !== undefined) {
+      setAtPath(config, pathArr, process.env[envVar]);
+    }
+  }
+
   return config;
 }
 
@@ -468,6 +482,41 @@ function mapCliToConfig(args: Record<string, unknown>): Record<string, unknown> 
 
 // Helper type for nested objects
 type ConfigObject = Record<string, unknown>;
+
+/**
+ * Convert camelCase to UPPER_SNAKE_CASE
+ * Example: "maxSize" → "MAX_SIZE", "maxNestingDepth" → "MAX_NESTING_DEPTH"
+ */
+export function camelToUpperSnake(str: string): string {
+  return str.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase();
+}
+
+/**
+ * Convert config path to environment variable name
+ * Example: ["scraper", "document", "maxSize"] → "DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE"
+ */
+export function pathToEnvVar(pathArr: string[]): string {
+  return `DOCS_MCP_${pathArr.map(camelToUpperSnake).join("_")}`;
+}
+
+/**
+ * Recursively collect all leaf paths from a config object
+ */
+export function collectLeafPaths(obj: object, prefix: string[] = []): string[][] {
+  const paths: string[][] = [];
+  for (const [key, value] of Object.entries(obj)) {
+    const currentPath = [...prefix, key];
+    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+      paths.push(...collectLeafPaths(value, currentPath));
+    } else {
+      paths.push(currentPath);
+    }
+  }
+  return paths;
+}
+
+// Cache leaf paths at module init since DEFAULT_CONFIG is constant
+const ALL_CONFIG_LEAF_PATHS = collectLeafPaths(DEFAULT_CONFIG);
 
 function setAtPath(obj: ConfigObject, pathArr: string[], value: unknown) {
   let current = obj;
@@ -519,4 +568,76 @@ function deepMerge(target: unknown, source: unknown): unknown {
     }
   }
   return output;
+}
+
+// --- CLI Helper Functions ---
+
+/**
+ * Check if a config path is valid by verifying it exists in DEFAULT_CONFIG
+ */
+export function isValidConfigPath(path: string): boolean {
+  const pathArr = path.split(".");
+  return getAtPath(DEFAULT_CONFIG as ConfigObject, pathArr) !== undefined;
+}
+
+/**
+ * Get a config value by dot-separated path
+ */
+export function getConfigValue(config: AppConfig, path: string): unknown {
+  const pathArr = path.split(".");
+  return getAtPath(config as unknown as ConfigObject, pathArr);
+}
+
+/**
+ * Parse a string value to the appropriate type (number, boolean, or string)
+ */
+export function parseConfigValue(value: string): unknown {
+  // Try number first
+  const num = Number(value);
+  if (!Number.isNaN(num) && value.trim() !== "") {
+    return num;
+  }
+
+  // Try boolean
+  const lower = value.toLowerCase();
+  if (lower === "true") return true;
+  if (lower === "false") return false;
+
+  // Default to string
+  return value;
+}
+
+/**
+ * Set a config value and persist to file.
+ * Returns the path to the config file that was updated.
+ * Validates the updated config against the schema before saving.
+ */
+export function setConfigValue(path: string, value: string): string {
+  const configPath = getDefaultConfigPath();
+  const fileConfig = loadConfigFile(configPath) || {};
+  const pathArr = path.split(".");
+  const parsedValue = parseConfigValue(value);
+
+  // Apply change to a copy so we can validate before persisting
+  const updatedConfig = JSON.parse(JSON.stringify(fileConfig));
+  setAtPath(updatedConfig, pathArr, parsedValue);
+
+  // Validate against schema before saving
+  try {
+    AppConfigSchema.parse(updatedConfig);
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Invalid config value for "${path}": ${errorMsg}`);
+  }
+
+  saveConfigFile(configPath, updatedConfig);
+
+  return configPath;
+}
+
+/**
+ * Get the default system config path
+ */
+export function getDefaultConfigPath(): string {
+  return path.join(systemPaths.config, "config.yaml");
 }
