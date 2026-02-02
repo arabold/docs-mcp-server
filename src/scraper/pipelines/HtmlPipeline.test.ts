@@ -345,7 +345,7 @@ describe("HtmlPipeline", () => {
       await expect(pipeline.close()).resolves.not.toThrow();
     });
 
-    it("should call close() even if closeBrowser throws an error", async () => {
+    it("should not throw even if closeBrowser encounters an error", async () => {
       const pipeline = new HtmlPipeline(appConfig);
 
       // Mock closeBrowser to throw an error
@@ -353,8 +353,8 @@ describe("HtmlPipeline", () => {
         new Error("Browser cleanup failed"),
       );
 
-      // close() should still complete (error should be handled internally or thrown)
-      await expect(pipeline.close()).rejects.toThrow("Browser cleanup failed");
+      // close() should handle the error gracefully and not throw
+      await expect(pipeline.close()).resolves.not.toThrow();
     });
   });
 });

@@ -73,12 +73,21 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   /**
    * Closes the Playwright browser instance if it exists.
    * Should be called during application shutdown.
+   * Attempts to close even if the browser is disconnected to ensure proper cleanup of zombie processes.
    */
   async closeBrowser(): Promise<void> {
-    if (this.browser?.isConnected()) {
-      logger.debug("Closing Playwright browser instance...");
-      await this.browser.close();
-      this.browser = null;
+    if (this.browser) {
+      try {
+        logger.debug("Closing Playwright browser instance...");
+        // Always attempt to close, even if disconnected, to reap zombie processes
+        await this.browser.close();
+      } catch (error) {
+        // Log error but don't throw - cleanup should be non-fatal
+        logger.warn(`⚠️  Error closing Playwright browser: ${error}`);
+      } finally {
+        // Always set to null to allow fresh browser on next request
+        this.browser = null;
+      }
     }
   }
 
