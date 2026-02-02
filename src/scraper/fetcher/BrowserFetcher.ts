@@ -133,21 +133,32 @@ export class BrowserFetcher implements ContentFetcher {
   }
 
   /**
-   * Close the browser and clean up resources
+   * Close the browser and clean up resources.
+   * Always attempts cleanup even if browser is disconnected to reap zombie processes.
    */
   async close(): Promise<void> {
-    try {
-      if (this.page) {
+    // Close page first
+    if (this.page) {
+      try {
         await this.page.close();
+      } catch (error) {
+        logger.warn(`⚠️  Error closing browser page: ${error}`);
+      } finally {
         this.page = null;
       }
-      if (this.browser) {
+    }
+
+    // Then close browser
+    if (this.browser) {
+      try {
         await this.browser.close();
+      } catch (error) {
+        logger.warn(`⚠️  Error closing browser: ${error}`);
+      } finally {
         this.browser = null;
       }
-      logger.debug("Browser closed successfully");
-    } catch (error) {
-      logger.warn(`⚠️  Error closing browser: ${error}`);
     }
+
+    logger.debug("Browser closed successfully");
   }
 }

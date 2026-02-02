@@ -1,6 +1,7 @@
 import { GreedySplitter } from "../../splitter/GreedySplitter";
 import { SemanticMarkdownSplitter } from "../../splitter/SemanticMarkdownSplitter";
 import type { AppConfig } from "../../utils/config";
+import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
@@ -110,9 +111,17 @@ export class HtmlPipeline extends BasePipeline {
 
   /**
    * Cleanup resources used by this pipeline, specifically the Playwright browser instance.
+   * Errors during cleanup are logged but not propagated to ensure graceful shutdown.
    */
   public async close(): Promise<void> {
     await super.close(); // Call base class close (no-op by default)
-    await this.playwrightMiddleware.closeBrowser();
+    try {
+      await this.playwrightMiddleware.closeBrowser();
+    } catch (error) {
+      // Log error but don't throw - cleanup should be best-effort
+      // The closeBrowser method already handles errors internally, but
+      // this provides an additional safety layer for unexpected failures
+      logger.warn(`⚠️  Error during browser cleanup: ${error}`);
+    }
   }
 }
