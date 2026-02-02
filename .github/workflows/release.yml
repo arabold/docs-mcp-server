@@ -28,7 +28,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "24.x" # Match engines requirement in package.json
+          node-version: "22.x" # Match engines requirement in package.json
           registry-url: "https://registry.npmjs.org" # Specify npm registry
           cache: "npm"
 

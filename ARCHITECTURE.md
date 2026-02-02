@@ -24,7 +24,7 @@ Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP tr
 
 ### Technology Stack
 
-- Node.js 24.x, TypeScript, Vite build system
+- Node.js 22.x, TypeScript, Vite build system
 - Vitest for testing
 - HTMX, AlpineJS, TailwindCSS for web interface
 - LangChain.js for embeddings, Playwright for scraping
