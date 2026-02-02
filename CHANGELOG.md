@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/arabold/docs-mcp-server/compare/v2.0.0...v2.0.1) (2026-02-02)
+
+
+### Bug Fixes
+
+* reverted back to Node v22 due to build issues with tree-sitter ([cc44b0b](https://github.com/arabold/docs-mcp-server/commit/cc44b0b0e29b6e296b5b6b3cb57b8bd0dc31b9f3))
+
 # [2.0.0](https://github.com/arabold/docs-mcp-server/compare/v1.37.0...v2.0.0) (2026-02-02)
 
 
