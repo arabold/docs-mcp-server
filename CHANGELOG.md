@@ -1,3 +1,29 @@
+# [2.0.0](https://github.com/arabold/docs-mcp-server/compare/v1.37.0...v2.0.0) (2026-02-02)
+
+
+### Bug Fixes
+
+* **config:** address Copilot review comments ([7d4d272](https://github.com/arabold/docs-mcp-server/commit/7d4d272657ddbe205e1eabeb35d12664638bf8f9))
+* **mime:** add comprehensive MIME type mappings for text files ([0a5ae8c](https://github.com/arabold/docs-mcp-server/commit/0a5ae8c912c736bae26686d82aa3b75c62712916)), closes [#311](https://github.com/arabold/docs-mcp-server/issues/311)
+* **pipeline:** handle interrupted job recovery on startup ([23bc920](https://github.com/arabold/docs-mcp-server/commit/23bc920b5af4b997a15957dcccff3f2512bd2cdb)), closes [#317](https://github.com/arabold/docs-mcp-server/issues/317)
+* **scraper:** cache github auth and harden default branch ([db5c811](https://github.com/arabold/docs-mcp-server/commit/db5c81128146d20814192fe19d8a5438a15da39d))
+* **scraper:** ensure browser.close() always reaps zombie processes ([e51023f](https://github.com/arabold/docs-mcp-server/commit/e51023fa3a49522dd7bb008c1c7970426d48b640))
+* **scraper:** isolate strategy state per scrape ([093c740](https://github.com/arabold/docs-mcp-server/commit/093c740e3411e39294dfb4b6533b3923ae04e07a))
+* **scraper:** remove unreachable registry guard ([c75c2e8](https://github.com/arabold/docs-mcp-server/commit/c75c2e80088615be68835981c2d59f7e5d049621))
+* **treesitter:** align MIME types with MimeTypeUtils output ([1e1d6e2](https://github.com/arabold/docs-mcp-server/commit/1e1d6e256e618d8fb76e2b0849edbcb47cab8450))
+
+
+### Features
+
+* **config:** add generic env var support and CLI config commands ([31d8447](https://github.com/arabold/docs-mcp-server/commit/31d8447ac37bfa34603b5a1f44a38f532c1a11b2)), closes [#319](https://github.com/arabold/docs-mcp-server/issues/319)
+* **scraper:** add github auth and root error handling ([99563c7](https://github.com/arabold/docs-mcp-server/commit/99563c7ed1aae1fe634ec2b858b49dbffa718dac))
+
+
+### BREAKING CHANGES
+
+* **config:** document.maxSize has moved to scraper.document.maxSize.
+Update your config files accordingly.
+
 # [1.37.0](https://github.com/arabold/docs-mcp-server/compare/v1.36.0...v1.37.0) (2026-02-01)
 
 
