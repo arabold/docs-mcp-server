@@ -1,3 +1,11 @@
+## [2.0.2](https://github.com/arabold/docs-mcp-server/compare/v2.0.1...v2.0.2) (2026-02-03)
+
+
+### Bug Fixes
+
+* address PR review feedback ([bee5de2](https://github.com/arabold/docs-mcp-server/commit/bee5de2aa27b6402180a3c41895f1b62578fb9af))
+* **scraper:** improve file extension detection for complex URLs ([d873eff](https://github.com/arabold/docs-mcp-server/commit/d873effa2ac46062d83c18432f153a57cf39cd2e))
+
 ## [2.0.1](https://github.com/arabold/docs-mcp-server/compare/v2.0.0...v2.0.1) (2026-02-02)
 
 
