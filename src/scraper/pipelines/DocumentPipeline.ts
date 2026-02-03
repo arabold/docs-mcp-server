@@ -15,6 +15,7 @@
  */
 
 import { MarkItDown } from "markitdown-ts";
+import mime from "mime";
 import { GreedySplitter } from "../../splitter/GreedySplitter";
 import { SemanticMarkdownSplitter } from "../../splitter/SemanticMarkdownSplitter";
 import type { AppConfig } from "../../utils/config";
@@ -177,34 +178,27 @@ export class DocumentPipeline extends BasePipeline {
       return null;
     }
 
-    // Map known document MIME types to extensions
-    const mimeToExtension: Record<string, string> = {
-      "application/pdf": "pdf",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
-      "application/x-ipynb+json": "ipynb",
-    };
-
-    return mimeToExtension[mimeType] || null;
+    return mime.getExtension(mimeType);
   }
 
   /**
    * Parses file extension from URL path or file path.
-   * Strips query parameters and hash fragments before parsing.
-   * Looks for ALL extensions in the path and returns the last one.
+   * Strips query parameters and hash fragments, then extracts extension from the last path segment (filename).
    */
   private getExtensionFromPath(pathStr: string): string | null {
     // Remove query parameters and hash fragments
     const cleanPath = pathStr.split("?")[0].split("#")[0];
 
-    // Find ALL extensions in the path (handles cases like "/path/file.pdf/something")
-    const extensionMatches = cleanPath.match(/\.([a-z0-9]+)/gi);
+    // Extract the filename (last segment after final slash)
+    const lastSlash = cleanPath.lastIndexOf("/");
+    const filename = lastSlash >= 0 ? cleanPath.substring(lastSlash + 1) : cleanPath;
 
-    if (extensionMatches && extensionMatches.length > 0) {
-      // Return the last extension found (most likely to be the actual file extension)
-      const lastExtension = extensionMatches[extensionMatches.length - 1];
-      return lastExtension.substring(1).toLowerCase(); // Remove the leading dot
+    // Find extension in filename
+    const lastDot = filename.lastIndexOf(".");
+
+    // Ensure dot is not the first char (hidden file) and exists
+    if (lastDot > 0) {
+      return filename.substring(lastDot + 1).toLowerCase();
     }
 
     return null;
