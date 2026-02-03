@@ -205,17 +205,121 @@ describe("DocumentPipeline", () => {
       expect(result.chunks).toHaveLength(0);
     });
 
-    it("should handle missing file extension gracefully", async () => {
+    it("should handle missing file extension gracefully by using MIME type", async () => {
       const content = loadFixture("sample.pdf");
       const rawContent: RawContent = {
         content,
         mimeType: "application/pdf",
+        source: "file:///no-extension", // No extension in URL
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      // Should succeed because MIME type detection works even without extension
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should handle URL with query parameters", async () => {
+      const content = loadFixture("sample.pdf");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/pdf",
+        source:
+          "https://example.com/documents/file.pdf/59569026-c221-12db-de3f-98becb9a67af?t=1767868182094",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      // Should succeed using MIME type detection
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should handle PDF with extension in middle of URL path", async () => {
+      const content = loadFixture("sample.pdf");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/pdf",
+        source: "https://example.com/docs/file.pdf/some-hash-id/download",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      // Should succeed using MIME type detection
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should handle URL with hash fragment", async () => {
+      const content = loadFixture("sample.pdf");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/pdf",
+        source: "https://example.com/documents/report.pdf#section-1",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      // Should succeed using MIME type detection
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should extract extension from URL when MIME type is generic (query params)", async () => {
+      const content = loadFixture("sample.pdf");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/octet-stream", // Generic MIME type
+        source: "https://example.com/documents/report.pdf?version=2",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      // Should succeed using URL parsing fallback
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should extract extension from URL when MIME type is generic (hash fragment)", async () => {
+      const content = loadFixture("sample.pdf");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/octet-stream", // Generic MIME type
+        source: "https://example.com/files/document.pdf#page-3",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      // Should succeed using URL parsing fallback
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should fail when both MIME type and extension are unavailable", async () => {
+      const content = loadFixture("sample.pdf");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/octet-stream", // Generic MIME type
         source: "file:///no-extension", // No extension
         status: FetchStatus.SUCCESS,
       };
 
       const result = await pipeline.process(rawContent, baseOptions);
 
+      // Should fail because neither MIME type nor extension are useful
       expect(result.errors).toHaveLength(1);
       expect(result.errors![0].message).toContain("file extension");
     });

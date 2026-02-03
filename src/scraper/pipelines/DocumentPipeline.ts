@@ -15,6 +15,7 @@
  */
 
 import { MarkItDown } from "markitdown-ts";
+import mime from "mime";
 import { GreedySplitter } from "../../splitter/GreedySplitter";
 import { SemanticMarkdownSplitter } from "../../splitter/SemanticMarkdownSplitter";
 import type { AppConfig } from "../../utils/config";
@@ -74,10 +75,12 @@ export class DocumentPipeline extends BasePipeline {
       };
     }
 
-    // Extract file extension from source URL/path
-    const extension = this.extractExtension(rawContent.source);
+    // Extract file extension from MIME type or source URL/path
+    const extension = this.extractExtension(rawContent.source, rawContent.mimeType);
     if (!extension) {
-      logger.warn(`Could not determine file extension: ${rawContent.source}`);
+      logger.warn(
+        `Could not determine file extension for ${rawContent.source} (MIME type: ${rawContent.mimeType})`,
+      );
       return {
         title: null,
         contentType: rawContent.mimeType,
@@ -144,7 +147,20 @@ export class DocumentPipeline extends BasePipeline {
     }
   }
 
-  private extractExtension(source: string): string | null {
+  /**
+   * Extracts file extension, trying multiple strategies:
+   * 1. Use MIME type from rawContent (most reliable, from Content-Type header)
+   * 2. Parse extension from URL/path
+   */
+  private extractExtension(source: string, mimeType: string): string | null {
+    // Strategy 1: Try to get extension from MIME type (Content-Type header)
+    // This is the most reliable method as it comes directly from the server
+    const extensionFromMime = this.getExtensionFromMimeType(mimeType);
+    if (extensionFromMime) {
+      return extensionFromMime;
+    }
+
+    // Strategy 2: Fall back to URL parsing
     try {
       const url = new URL(source);
       return this.getExtensionFromPath(url.pathname);
@@ -154,15 +170,37 @@ export class DocumentPipeline extends BasePipeline {
     }
   }
 
+  /**
+   * Gets file extension from MIME type using the mime package.
+   */
+  private getExtensionFromMimeType(mimeType: string): string | null {
+    if (!mimeType || mimeType === "application/octet-stream") {
+      return null;
+    }
+
+    return mime.getExtension(mimeType);
+  }
+
+  /**
+   * Parses file extension from URL path or file path.
+   * Strips query parameters and hash fragments, then extracts extension from the last path segment (filename).
+   */
   private getExtensionFromPath(pathStr: string): string | null {
-    const lastSlash = pathStr.lastIndexOf("/");
-    const filename = lastSlash >= 0 ? pathStr.substring(lastSlash + 1) : pathStr;
+    // Remove query parameters and hash fragments
+    const cleanPath = pathStr.split("?")[0].split("#")[0];
+
+    // Extract the filename (last segment after final slash)
+    const lastSlash = cleanPath.lastIndexOf("/");
+    const filename = lastSlash >= 0 ? cleanPath.substring(lastSlash + 1) : cleanPath;
+
+    // Find extension in filename
     const lastDot = filename.lastIndexOf(".");
 
     // Ensure dot is not the first char (hidden file) and exists
     if (lastDot > 0) {
       return filename.substring(lastDot + 1).toLowerCase();
     }
+
     return null;
   }
 
