@@ -682,10 +682,13 @@ export class DocumentStore {
         retryDelayMs: this.config.db.migrationRetryDelayMs,
       });
 
-      // 3. Initialize prepared statements
+      // 3. Create vector table at runtime with configurable dimension (migration 012 drops it for us to recreate)
+      this.ensureVectorTable();
+
+      // 4. Initialize prepared statements
       this.prepareStatements();
 
-      // 4. Initialize embeddings client (await to catch errors)
+      // 5. Initialize embeddings client (await to catch errors)
       await this.initializeEmbeddings();
     } catch (error) {
       // Re-throw StoreError, ModelConfigurationError, and UnsupportedProviderError directly
@@ -705,6 +708,52 @@ export class DocumentStore {
    */
   async shutdown(): Promise<void> {
     this.db.close();
+  }
+
+  /**
+   * Creates or reconciles the documents_vec virtual table with configurable dimension.
+   * Called after migrations; migration 012 drops the table so we recreate it from config here.
+   * Idempotent: if the table already exists with the same dimension, no-op; if dimension
+   * changed in config, drops and recreates so any embedding provider (e.g. 1536 or 3584) works.
+   */
+  private ensureVectorTable(): void {
+    const dim = this.config.embeddings.vectorDimension;
+    if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
+      throw new StoreError(
+        `Invalid embeddings.vectorDimension: ${dim}. Must be a positive integer.`,
+      );
+    }
+
+    const existingSql = this.db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec';",
+      )
+      .get() as { sql: string } | undefined;
+
+    if (existingSql) {
+      const match = existingSql.sql.match(/embedding\s+FLOAT\s*\[\s*(\d+)\s*]/i);
+      const existingDim = match ? Number(match[1]) : null;
+      if (existingDim === dim) {
+        return;
+      }
+      this.db.exec("DROP TABLE documents_vec;");
+    }
+
+    this.db.exec(`
+      CREATE VIRTUAL TABLE documents_vec USING vec0(
+        library_id INTEGER NOT NULL,
+        version_id INTEGER NOT NULL,
+        embedding FLOAT[${dim}]
+      );
+    `);
+    this.db.exec(`
+      INSERT OR REPLACE INTO documents_vec (rowid, library_id, version_id, embedding)
+      SELECT d.id, v.library_id, v.id, json_extract(d.embedding, '$')
+      FROM documents d
+      JOIN pages p ON d.page_id = p.id
+      JOIN versions v ON p.version_id = v.id
+      WHERE d.embedding IS NOT NULL;
+    `);
   }
 
   /**
