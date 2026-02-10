@@ -515,6 +515,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     origin?: string,
   ): Promise<void> {
     await page.route("**/*", async (route) => {
+      // Check if route is already handled to prevent race conditions
+      if (route.request().failure()) {
+        logger.debug(`Route already handled, skipping: ${route.request().url()}`);
+        return;
+      }
+
       const reqUrl = route.request().url();
       const reqOrigin = (() => {
         try {
@@ -527,7 +533,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Abort non-essential resources
       if (["image", "font", "media"].includes(resourceType)) {
-        return route.abort();
+        try {
+          return await route.abort();
+        } catch (_error) {
+          logger.debug(`Route already handled (abort): ${reqUrl}`);
+          return;
+        }
       }
 
       // Cache all GET requests to speed up subsequent page loads
@@ -536,11 +547,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         const cached = HtmlPlaywrightMiddleware.resourceCache.get(reqUrl);
         if (cached !== undefined) {
           logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
-          return route.fulfill({
-            status: 200,
-            contentType: cached.contentType,
-            body: cached.body,
-          });
+          try {
+            return await route.fulfill({
+              status: 200,
+              contentType: cached.contentType,
+              body: cached.body,
+            });
+          } catch (_error) {
+            logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
+            return;
+          }
         }
 
         // Cache miss - fetch and potentially cache the response
@@ -573,7 +589,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             }
           }
 
-          return route.fulfill({ response });
+          try {
+            return await route.fulfill({ response });
+          } catch (_error) {
+            logger.debug(`Route already handled (fulfill): ${reqUrl}`);
+            return;
+          }
         } catch (error) {
           // Handle network errors (DNS, connection refused, timeout, etc.)
           // Treat these as failed resource requests - abort gracefully
@@ -581,7 +602,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           logger.debug(
             `Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`,
           );
-          return route.abort("failed");
+          try {
+            return await route.abort("failed");
+          } catch (_abortError) {
+            logger.debug(`Route already handled (abort after error): ${reqUrl}`);
+            return;
+          }
         }
       }
 
@@ -600,7 +626,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         // Handle network errors for non-GET requests
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.debug(`Network error for ${resourceType} ${reqUrl}: ${errorMessage}`);
-        return route.abort("failed");
+        try {
+          return await route.abort("failed");
+        } catch (_abortError) {
+          logger.debug(`Route already handled (continue/abort): ${reqUrl}`);
+          return;
+        }
       }
     });
   }
@@ -813,15 +844,26 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Set up route interception with special handling for the initial page load
       await page.route("**/*", async (route) => {
+        // Check if route is already handled to prevent race conditions
+        if (route.request().failure()) {
+          logger.debug(`Route already handled, skipping: ${route.request().url()}`);
+          return;
+        }
+
         const reqUrl = route.request().url();
 
         // Serve the initial HTML for the main page (bypass cache and fetch)
         if (reqUrl === context.source) {
-          return route.fulfill({
-            status: 200,
-            contentType: "text/html; charset=utf-8",
-            body: context.content,
-          });
+          try {
+            return await route.fulfill({
+              status: 200,
+              contentType: "text/html; charset=utf-8",
+              body: context.content,
+            });
+          } catch (_error) {
+            logger.debug(`Route already handled (initial page): ${reqUrl}`);
+            return;
+          }
         }
 
         // For all other requests, use the standard caching logic
@@ -837,7 +879,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
         // Abort non-essential resources
         if (["image", "font", "media"].includes(resourceType)) {
-          return route.abort();
+          try {
+            return await route.abort();
+          } catch (_error) {
+            logger.debug(`Route already handled (abort): ${reqUrl}`);
+            return;
+          }
         }
 
         // Cache all GET requests to speed up subsequent page loads
@@ -846,11 +893,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           const cached = HtmlPlaywrightMiddleware.resourceCache.get(reqUrl);
           if (cached !== undefined) {
             logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
-            return route.fulfill({
-              status: 200,
-              contentType: cached.contentType,
-              body: cached.body,
-            });
+            try {
+              return await route.fulfill({
+                status: 200,
+                contentType: cached.contentType,
+                body: cached.body,
+              });
+            } catch (_error) {
+              logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
+              return;
+            }
           }
 
           // Cache miss - fetch and potentially cache the response
@@ -886,7 +938,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
               }
             }
 
-            return route.fulfill({ response });
+            try {
+              return await route.fulfill({ response });
+            } catch (_error) {
+              logger.debug(`Route already handled (fulfill): ${reqUrl}`);
+              return;
+            }
           } catch (error) {
             // Handle network errors (DNS, connection refused, timeout, etc.)
             // Treat these as failed resource requests - abort gracefully
@@ -894,7 +951,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             logger.debug(
               `Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`,
             );
-            return route.abort("failed");
+            try {
+              return await route.abort("failed");
+            } catch (_abortError) {
+              logger.debug(`Route already handled (abort after error): ${reqUrl}`);
+              return;
+            }
           }
         }
 
@@ -913,7 +975,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           // Handle network errors for non-GET requests
           const errorMessage = error instanceof Error ? error.message : String(error);
           logger.debug(`Network error for ${resourceType} ${reqUrl}: ${errorMessage}`);
-          return route.abort("failed");
+          try {
+            return await route.abort("failed");
+          } catch (_abortError) {
+            logger.debug(`Route already handled (continue/abort): ${reqUrl}`);
+            return;
+          }
         }
       });
 
