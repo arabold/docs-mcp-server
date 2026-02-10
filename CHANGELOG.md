@@ -1,3 +1,10 @@
+## [2.0.3](https://github.com/arabold/docs-mcp-server/compare/v2.0.2...v2.0.3) (2026-02-10)
+
+
+### Bug Fixes
+
+* relax engines constraint from exact Node 22.0.0 to >=22 ([9c05bcc](https://github.com/arabold/docs-mcp-server/commit/9c05bcc21087686d2e0d27654ee87a03ef7dbc49)), closes [#331](https://github.com/arabold/docs-mcp-server/issues/331)
+
 ## [2.0.2](https://github.com/arabold/docs-mcp-server/compare/v2.0.1...v2.0.2) (2026-02-03)
 
 
