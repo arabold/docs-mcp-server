@@ -508,6 +508,17 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    * @param credentials Optional credentials for same-origin requests
    * @param origin The origin for same-origin credential checking
    */
+  /**
+   * Checks if an error is a Playwright "Route is already handled" error.
+   * This specific error occurs when multiple handlers attempt to handle the same route.
+   */
+  private isRouteAlreadyHandledError(error: unknown): boolean {
+    if (error instanceof Error) {
+      return error.message.includes("Route is already handled");
+    }
+    return false;
+  }
+
   private async setupCachingRouteInterception(
     page: Page,
     customHeaders: Record<string, string> = {},
@@ -515,12 +526,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     origin?: string,
   ): Promise<void> {
     await page.route("**/*", async (route) => {
-      // Check if route is already handled to prevent race conditions
-      if (route.request().failure()) {
-        logger.debug(`Route already handled, skipping: ${route.request().url()}`);
-        return;
-      }
-
       const reqUrl = route.request().url();
       const reqOrigin = (() => {
         try {
@@ -535,9 +540,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       if (["image", "font", "media"].includes(resourceType)) {
         try {
           return await route.abort();
-        } catch (_error) {
-          logger.debug(`Route already handled (abort): ${reqUrl}`);
-          return;
+        } catch (error) {
+          if (this.isRouteAlreadyHandledError(error)) {
+            logger.debug(`Route already handled (abort): ${reqUrl}`);
+            return;
+          }
+          // Re-throw other errors (page closed, invalid state, etc.)
+          throw error;
         }
       }
 
@@ -553,9 +562,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
               contentType: cached.contentType,
               body: cached.body,
             });
-          } catch (_error) {
-            logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
-            return;
+          } catch (error) {
+            if (this.isRouteAlreadyHandledError(error)) {
+              logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
+              return;
+            }
+            // Re-throw other errors (bad response/options, closed page, etc.)
+            throw error;
           }
         }
 
@@ -591,9 +604,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
           try {
             return await route.fulfill({ response });
-          } catch (_error) {
-            logger.debug(`Route already handled (fulfill): ${reqUrl}`);
-            return;
+          } catch (error) {
+            if (this.isRouteAlreadyHandledError(error)) {
+              logger.debug(`Route already handled (fulfill): ${reqUrl}`);
+              return;
+            }
+            // Re-throw other errors (bad response/options, closed page, etc.)
+            throw error;
           }
         } catch (error) {
           // Handle network errors (DNS, connection refused, timeout, etc.)
@@ -604,9 +621,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           );
           try {
             return await route.abort("failed");
-          } catch (_abortError) {
-            logger.debug(`Route already handled (abort after error): ${reqUrl}`);
-            return;
+          } catch (abortError) {
+            if (this.isRouteAlreadyHandledError(abortError)) {
+              logger.debug(`Route already handled (abort after error): ${reqUrl}`);
+              return;
+            }
+            // Re-throw other errors
+            throw abortError;
           }
         }
       }
@@ -623,14 +644,24 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       try {
         return await route.continue({ headers });
       } catch (error) {
-        // Handle network errors for non-GET requests
+        // If route was already handled, return silently
+        if (this.isRouteAlreadyHandledError(error)) {
+          logger.debug(`Route already handled (continue): ${reqUrl}`);
+          return;
+        }
+        
+        // For other errors (network issues, closed page, etc.), try to abort
         const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.debug(`Network error for ${resourceType} ${reqUrl}: ${errorMessage}`);
+        logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
         try {
           return await route.abort("failed");
-        } catch (_abortError) {
-          logger.debug(`Route already handled (continue/abort): ${reqUrl}`);
-          return;
+        } catch (abortError) {
+          if (this.isRouteAlreadyHandledError(abortError)) {
+            logger.debug(`Route already handled (abort after continue error): ${reqUrl}`);
+            return;
+          }
+          // Re-throw other errors
+          throw abortError;
         }
       }
     });
@@ -844,12 +875,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Set up route interception with special handling for the initial page load
       await page.route("**/*", async (route) => {
-        // Check if route is already handled to prevent race conditions
-        if (route.request().failure()) {
-          logger.debug(`Route already handled, skipping: ${route.request().url()}`);
-          return;
-        }
-
         const reqUrl = route.request().url();
 
         // Serve the initial HTML for the main page (bypass cache and fetch)
@@ -860,9 +885,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
               contentType: "text/html; charset=utf-8",
               body: context.content,
             });
-          } catch (_error) {
-            logger.debug(`Route already handled (initial page): ${reqUrl}`);
-            return;
+          } catch (error) {
+            if (this.isRouteAlreadyHandledError(error)) {
+              logger.debug(`Route already handled (initial page): ${reqUrl}`);
+              return;
+            }
+            // Re-throw other errors
+            throw error;
           }
         }
 
@@ -881,9 +910,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         if (["image", "font", "media"].includes(resourceType)) {
           try {
             return await route.abort();
-          } catch (_error) {
-            logger.debug(`Route already handled (abort): ${reqUrl}`);
-            return;
+          } catch (error) {
+            if (this.isRouteAlreadyHandledError(error)) {
+              logger.debug(`Route already handled (abort): ${reqUrl}`);
+              return;
+            }
+            // Re-throw other errors
+            throw error;
           }
         }
 
@@ -899,9 +932,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
                 contentType: cached.contentType,
                 body: cached.body,
               });
-            } catch (_error) {
-              logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
-              return;
+            } catch (error) {
+              if (this.isRouteAlreadyHandledError(error)) {
+                logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
+                return;
+              }
+              // Re-throw other errors
+              throw error;
             }
           }
 
@@ -940,9 +977,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
             try {
               return await route.fulfill({ response });
-            } catch (_error) {
-              logger.debug(`Route already handled (fulfill): ${reqUrl}`);
-              return;
+            } catch (error) {
+              if (this.isRouteAlreadyHandledError(error)) {
+                logger.debug(`Route already handled (fulfill): ${reqUrl}`);
+                return;
+              }
+              // Re-throw other errors
+              throw error;
             }
           } catch (error) {
             // Handle network errors (DNS, connection refused, timeout, etc.)
@@ -953,9 +994,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             );
             try {
               return await route.abort("failed");
-            } catch (_abortError) {
-              logger.debug(`Route already handled (abort after error): ${reqUrl}`);
-              return;
+            } catch (abortError) {
+              if (this.isRouteAlreadyHandledError(abortError)) {
+                logger.debug(`Route already handled (abort after error): ${reqUrl}`);
+                return;
+              }
+              // Re-throw other errors
+              throw abortError;
             }
           }
         }
@@ -972,14 +1017,24 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         try {
           return await route.continue({ headers });
         } catch (error) {
-          // Handle network errors for non-GET requests
+          // If route was already handled, return silently
+          if (this.isRouteAlreadyHandledError(error)) {
+            logger.debug(`Route already handled (continue): ${reqUrl}`);
+            return;
+          }
+          
+          // For other errors (network issues, closed page, etc.), try to abort
           const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.debug(`Network error for ${resourceType} ${reqUrl}: ${errorMessage}`);
+          logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
           try {
             return await route.abort("failed");
-          } catch (_abortError) {
-            logger.debug(`Route already handled (continue/abort): ${reqUrl}`);
-            return;
+          } catch (abortError) {
+            if (this.isRouteAlreadyHandledError(abortError)) {
+              logger.debug(`Route already handled (abort after continue error): ${reqUrl}`);
+              return;
+            }
+            // Re-throw other errors
+            throw abortError;
           }
         }
       });
