@@ -649,7 +649,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           logger.debug(`Route already handled (continue): ${reqUrl}`);
           return;
         }
-        
+
         // For other errors (network issues, closed page, etc.), try to abort
         const errorMessage = error instanceof Error ? error.message : String(error);
         logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
@@ -1022,7 +1022,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             logger.debug(`Route already handled (continue): ${reqUrl}`);
             return;
           }
-          
+
           // For other errors (network issues, closed page, etc.), try to abort
           const errorMessage = error instanceof Error ? error.message : String(error);
           logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
@@ -1030,7 +1030,9 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
             return await route.abort("failed");
           } catch (abortError) {
             if (this.isRouteAlreadyHandledError(abortError)) {
-              logger.debug(`Route already handled (abort after continue error): ${reqUrl}`);
+              logger.debug(
+                `Route already handled (abort after continue error): ${reqUrl}`,
+              );
               return;
             }
             // Re-throw other errors
