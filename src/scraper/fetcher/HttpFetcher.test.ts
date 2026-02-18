@@ -133,8 +133,8 @@ describe("HttpFetcher", () => {
   describe("configuration defaults", () => {
     it("should use default max retries when not specified", async () => {
       const fetcher = createFetcher();
-      // Mock failure for all attempts - use a retryable error
-      mockedAxios.get.mockRejectedValue({ response: { status: 500 } });
+      // Mock failure for all attempts - use a retryable error (503)
+      mockedAxios.get.mockRejectedValue({ response: { status: 503 } });
 
       await expect(
         fetcher.fetch("https://example.com", {
@@ -149,7 +149,7 @@ describe("HttpFetcher", () => {
 
     it("should respect custom maxRetries option", async () => {
       const fetcher = createFetcher();
-      mockedAxios.get.mockRejectedValue({ response: { status: 500 } });
+      mockedAxios.get.mockRejectedValue({ response: { status: 503 } });
 
       await expect(
         fetcher.fetch("https://example.com", {
@@ -270,13 +270,54 @@ describe("HttpFetcher", () => {
   });
 
   describe("retry logic", () => {
-    it("should retry on retryable status codes [408, 429, 500, 502, 503, 504, 525]", async () => {
+    it("should retry on retryable status codes [408, 429, 502, 503, 504]", async () => {
       const fetcher = createFetcher();
-      const retryableStatuses = [408, 429, 500, 502, 503, 504, 525];
+      const retryableStatuses = [408, 429, 502, 503, 504];
 
       for (const status of retryableStatuses) {
         mockedAxios.get.mockReset();
         mockedAxios.get.mockRejectedValueOnce({ response: { status } });
+        mockedAxios.get.mockResolvedValueOnce({
+          data: Buffer.from("success", "utf-8"),
+          headers: { "content-type": "text/plain" },
+        });
+
+        const result = await fetcher.fetch("https://example.com", {
+          maxRetries: 1,
+          retryDelay: 1,
+        });
+
+        expect(result.content).toEqual(Buffer.from("success", "utf-8"));
+        expect(mockedAxios.get).toHaveBeenCalledTimes(2); // Initial + 1 retry
+      }
+    });
+
+    it("should not retry on permanent errors (500, 525)", async () => {
+      const fetcher = createFetcher();
+      const permanentStatuses = [500, 525];
+
+      for (const status of permanentStatuses) {
+        mockedAxios.get.mockReset();
+        mockedAxios.get.mockRejectedValue({ response: { status } });
+
+        await expect(
+          fetcher.fetch("https://example.com", {
+            maxRetries: 2,
+            retryDelay: 1,
+          }),
+        ).rejects.toThrow(ScraperError);
+
+        expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries
+      }
+    });
+
+    it("should retry on transient network errors (ETIMEDOUT, ECONNRESET, ECONNREFUSED)", async () => {
+      const fetcher = createFetcher();
+      const retryableCodes = ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED"];
+
+      for (const code of retryableCodes) {
+        mockedAxios.get.mockReset();
+        mockedAxios.get.mockRejectedValueOnce({ code });
         mockedAxios.get.mockResolvedValueOnce({
           data: Buffer.from("success", "utf-8"),
           headers: { "content-type": "text/plain" },

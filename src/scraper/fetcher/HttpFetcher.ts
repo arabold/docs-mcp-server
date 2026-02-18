@@ -18,26 +18,17 @@ import {
 export class HttpFetcher implements ContentFetcher {
   private readonly maxRetriesDefault: number;
   private readonly baseDelayDefaultMs: number;
+  /** Only transient/recoverable HTTP status codes are retried. Permanent errors (4xx except 408/429, 500, other 5xx) fail fast. */
   private readonly retryableStatusCodes = [
     408, // Request Timeout
-    429, // Too Many Requests
-    500, // Internal Server Error
+    429, // Too Many Requests (rate limiting)
     502, // Bad Gateway
     503, // Service Unavailable
     504, // Gateway Timeout
-    525, // SSL Handshake Failed (Cloudflare specific)
   ];
 
-  private readonly nonRetryableErrorCodes = [
-    "ENOTFOUND", // DNS resolution failed - domain doesn't exist
-    "ECONNREFUSED", // Connection refused - service not running
-    "ENOENT", // No such file or directory
-    "EACCES", // Permission denied
-    "EINVAL", // Invalid argument
-    "EMFILE", // Too many open files
-    "ENFILE", // File table overflow
-    "EPERM", // Operation not permitted
-  ];
+  /** Network error codes that are transient and worth retrying. */
+  private readonly retryableErrorCodes = ["ETIMEDOUT", "ECONNRESET", "ECONNREFUSED"];
 
   private fingerprintGenerator: FingerprintGenerator;
 
@@ -53,6 +44,20 @@ export class HttpFetcher implements ContentFetcher {
 
   private async delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Returns true only for transient/recoverable errors that are worth retrying.
+   * Permanent errors (4xx except 408/429, 500, other 5xx) and unknown network errors are not retried.
+   */
+  private shouldRetry(status: number | undefined, code: string | undefined): boolean {
+    if (status !== undefined) {
+      return this.retryableStatusCodes.includes(status);
+    }
+    if (code) {
+      return this.retryableErrorCodes.includes(code);
+    }
+    return false;
   }
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
@@ -240,11 +245,7 @@ export class HttpFetcher implements ContentFetcher {
           }
         }
 
-        if (
-          attempt < maxRetries &&
-          (status === undefined || this.retryableStatusCodes.includes(status)) &&
-          !this.nonRetryableErrorCodes.includes(code ?? "")
-        ) {
+        if (attempt < maxRetries && this.shouldRetry(status, code ?? undefined)) {
           const delay = baseDelay * 2 ** attempt;
           logger.warn(
             `⚠️  Attempt ${attempt + 1}/${
@@ -255,7 +256,11 @@ export class HttpFetcher implements ContentFetcher {
           continue;
         }
 
-        // Not a 5xx error or max retries reached
+        if (attempt < maxRetries && (status !== undefined || code)) {
+          logger.warn(`Permanent error, not retrying: ${status ?? code} (${source})`);
+        }
+
+        // Permanent error or max retries reached
         throw new ScraperError(
           `Failed to fetch ${source} after ${
             attempt + 1
