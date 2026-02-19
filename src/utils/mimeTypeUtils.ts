@@ -48,7 +48,12 @@ export class MimeTypeUtils {
    * Checks if a MIME type represents Markdown content.
    */
   public static isMarkdown(mimeType: string): boolean {
-    return mimeType === "text/markdown" || mimeType === "text/x-markdown";
+    return (
+      mimeType === "text/markdown" ||
+      mimeType === "text/x-markdown" ||
+      mimeType === "text/mdx" ||
+      mimeType === "text/x-gfm"
+    );
   }
 
   /**
@@ -126,7 +131,7 @@ export class MimeTypeUtils {
   }
 
   /**
-   * Checks if a MIME type represents an Office document (DOCX, XLSX, PPTX).
+   * Checks if a MIME type represents a modern Office document (DOCX, XLSX, PPTX).
    */
   public static isOfficeDocument(mimeType: string): boolean {
     return (
@@ -139,6 +144,44 @@ export class MimeTypeUtils {
   }
 
   /**
+   * Checks if a MIME type represents a legacy Office document (DOC, XLS, PPT).
+   */
+  public static isLegacyOfficeDocument(mimeType: string): boolean {
+    return (
+      mimeType === "application/msword" ||
+      mimeType === "application/vnd.ms-excel" ||
+      mimeType === "application/vnd.ms-powerpoint"
+    );
+  }
+
+  /**
+   * Checks if a MIME type represents an OpenDocument format (ODT, ODS, ODP).
+   */
+  public static isOpenDocument(mimeType: string): boolean {
+    return (
+      mimeType === "application/vnd.oasis.opendocument.text" ||
+      mimeType === "application/vnd.oasis.opendocument.spreadsheet" ||
+      mimeType === "application/vnd.oasis.opendocument.presentation"
+    );
+  }
+
+  /**
+   * Checks if a MIME type represents RTF content.
+   */
+  public static isRtf(mimeType: string): boolean {
+    return mimeType === "application/rtf" || mimeType === "text/rtf";
+  }
+
+  /**
+   * Checks if a MIME type represents an eBook format (EPUB, FB2).
+   */
+  public static isEbook(mimeType: string): boolean {
+    return (
+      mimeType === "application/epub+zip" || mimeType === "application/x-fictionbook+xml"
+    );
+  }
+
+  /**
    * Checks if a MIME type represents a Jupyter Notebook.
    */
   public static isJupyterNotebook(mimeType: string): boolean {
@@ -147,12 +190,17 @@ export class MimeTypeUtils {
 
   /**
    * Checks if a MIME type represents a document that can be processed
-   * by the DocumentPipeline (PDF, Office docs, Jupyter notebooks).
+   * by the DocumentPipeline (PDF, Office docs, OpenDocument, RTF, eBooks,
+   * Jupyter notebooks).
    */
   public static isSupportedDocument(mimeType: string): boolean {
     return (
       MimeTypeUtils.isPdf(mimeType) ||
       MimeTypeUtils.isOfficeDocument(mimeType) ||
+      MimeTypeUtils.isLegacyOfficeDocument(mimeType) ||
+      MimeTypeUtils.isOpenDocument(mimeType) ||
+      MimeTypeUtils.isRtf(mimeType) ||
+      MimeTypeUtils.isEbook(mimeType) ||
       MimeTypeUtils.isJupyterNotebook(mimeType)
     );
   }
@@ -180,14 +228,20 @@ export class MimeTypeUtils {
   }
 
   /**
-   * Detects MIME type from file path, with special handling for common source code extensions
-   * that the mime package doesn't handle well or gets wrong.
+   * Detects MIME type from file path or URL, with special handling for common source code
+   * extensions that the mime package doesn't handle well or gets wrong.
    *
-   * @param filePath - The file path to detect MIME type for
+   * Query parameters and hash fragments are stripped before extension detection, so URLs
+   * like `https://cdn.example.com/report.pdf?token=abc#page=1` are handled correctly.
+   *
+   * @param filePath - The file path or URL to detect MIME type for
    * @returns The detected MIME type or null if unknown
    */
   public static detectMimeTypeFromPath(filePath: string): string | null {
-    const extension = filePath.toLowerCase().split(".").pop();
+    // Strip query parameters and hash fragments that may be present in URLs
+    // (e.g., "report.pdf?token=abc" or "doc.html#section")
+    const cleanPath = filePath.split("?")[0].split("#")[0];
+    const extension = cleanPath.toLowerCase().split(".").pop();
 
     // Handle common source code extensions that mime package gets wrong or doesn't know.
     // See openspec/changes/refactor-mime-type-detection/design.md for full documentation.
@@ -277,6 +331,15 @@ export class MimeTypeUtils {
       ps1: "text/x-powershell",
 
       // Documentation formats
+      markdown: "text/markdown",
+      mdx: "text/mdx",
+      gfm: "text/x-gfm",
+      mkd: "text/markdown",
+      mkdn: "text/markdown",
+      mkdown: "text/markdown",
+      mdown: "text/markdown",
+      mdwn: "text/markdown",
+      ronn: "text/markdown",
       rst: "text/x-rst", // reStructuredText
       adoc: "text/x-asciidoc",
       asciidoc: "text/x-asciidoc",
@@ -323,6 +386,17 @@ export class MimeTypeUtils {
       // TeX/LaTeX
       tex: "text/x-tex",
       latex: "text/x-latex",
+
+      // Document formats (ensure correct detection for DocumentPipeline)
+      doc: "application/msword",
+      xls: "application/vnd.ms-excel",
+      ppt: "application/vnd.ms-powerpoint",
+      odt: "application/vnd.oasis.opendocument.text",
+      ods: "application/vnd.oasis.opendocument.spreadsheet",
+      odp: "application/vnd.oasis.opendocument.presentation",
+      rtf: "application/rtf",
+      epub: "application/epub+zip",
+      fb2: "application/x-fictionbook+xml",
     };
 
     if (extension && customMimeTypes[extension]) {
@@ -330,7 +404,7 @@ export class MimeTypeUtils {
     }
 
     // Fall back to the mime package for other types
-    const detectedType = mime.getType(filePath);
+    const detectedType = mime.getType(cleanPath);
 
     // Normalize problematic MIME types that the mime package gets wrong
     return MimeTypeUtils.normalizeMimeType(detectedType);
@@ -441,6 +515,12 @@ export class MimeTypeUtils {
       "text/x-svelte": "svelte",
       "text/x-astro": "astro",
 
+      // Stylesheets
+      "text/css": "css",
+      "text/x-scss": "scss",
+      "text/x-sass": "sass",
+      "text/less": "less",
+
       // Shell
       "text/x-sh": "bash",
       "text/x-shellscript": "bash",
@@ -477,6 +557,7 @@ export class MimeTypeUtils {
 
       // Data formats
       "text/x-yaml": "yaml",
+      "text/yaml": "yaml",
       "application/x-yaml": "yaml",
       "application/yaml": "yaml",
       "text/x-json": "json",

@@ -110,6 +110,8 @@ describe("MimeTypeUtils", () => {
     it("should correctly identify Markdown", () => {
       expect(MimeTypeUtils.isMarkdown("text/markdown")).toBe(true);
       expect(MimeTypeUtils.isMarkdown("text/x-markdown")).toBe(true);
+      expect(MimeTypeUtils.isMarkdown("text/mdx")).toBe(true);
+      expect(MimeTypeUtils.isMarkdown("text/x-gfm")).toBe(true);
       expect(MimeTypeUtils.isMarkdown("text/plain")).toBe(false);
     });
 
@@ -130,6 +132,108 @@ describe("MimeTypeUtils", () => {
       expect(MimeTypeUtils.isSourceCode("text/x-typescript")).toBe(true);
       expect(MimeTypeUtils.isSourceCode("text/x-python")).toBe(true);
       expect(MimeTypeUtils.isSourceCode("text/plain")).toBe(false);
+    });
+  });
+
+  describe("document format detection", () => {
+    it("should identify modern Office documents", () => {
+      expect(
+        MimeTypeUtils.isOfficeDocument(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+      ).toBe(true);
+      expect(
+        MimeTypeUtils.isOfficeDocument(
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+      ).toBe(true);
+      expect(
+        MimeTypeUtils.isOfficeDocument(
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ),
+      ).toBe(true);
+      expect(MimeTypeUtils.isOfficeDocument("application/msword")).toBe(false);
+    });
+
+    it("should identify legacy Office documents", () => {
+      expect(MimeTypeUtils.isLegacyOfficeDocument("application/msword")).toBe(true);
+      expect(MimeTypeUtils.isLegacyOfficeDocument("application/vnd.ms-excel")).toBe(true);
+      expect(MimeTypeUtils.isLegacyOfficeDocument("application/vnd.ms-powerpoint")).toBe(
+        true,
+      );
+      expect(
+        MimeTypeUtils.isLegacyOfficeDocument(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+      ).toBe(false);
+    });
+
+    it("should identify OpenDocument formats", () => {
+      expect(
+        MimeTypeUtils.isOpenDocument("application/vnd.oasis.opendocument.text"),
+      ).toBe(true);
+      expect(
+        MimeTypeUtils.isOpenDocument("application/vnd.oasis.opendocument.spreadsheet"),
+      ).toBe(true);
+      expect(
+        MimeTypeUtils.isOpenDocument("application/vnd.oasis.opendocument.presentation"),
+      ).toBe(true);
+      expect(MimeTypeUtils.isOpenDocument("application/pdf")).toBe(false);
+    });
+
+    it("should identify RTF", () => {
+      expect(MimeTypeUtils.isRtf("application/rtf")).toBe(true);
+      expect(MimeTypeUtils.isRtf("text/rtf")).toBe(true);
+      expect(MimeTypeUtils.isRtf("text/plain")).toBe(false);
+    });
+
+    it("should identify eBook formats", () => {
+      expect(MimeTypeUtils.isEbook("application/epub+zip")).toBe(true);
+      expect(MimeTypeUtils.isEbook("application/x-fictionbook+xml")).toBe(true);
+      expect(MimeTypeUtils.isEbook("application/pdf")).toBe(false);
+    });
+
+    it("should identify all supported document types via isSupportedDocument", () => {
+      // PDF
+      expect(MimeTypeUtils.isSupportedDocument("application/pdf")).toBe(true);
+      // Modern Office
+      expect(
+        MimeTypeUtils.isSupportedDocument(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+      ).toBe(true);
+      // Legacy Office
+      expect(MimeTypeUtils.isSupportedDocument("application/msword")).toBe(true);
+      expect(MimeTypeUtils.isSupportedDocument("application/vnd.ms-excel")).toBe(true);
+      expect(MimeTypeUtils.isSupportedDocument("application/vnd.ms-powerpoint")).toBe(
+        true,
+      );
+      // OpenDocument
+      expect(
+        MimeTypeUtils.isSupportedDocument("application/vnd.oasis.opendocument.text"),
+      ).toBe(true);
+      expect(
+        MimeTypeUtils.isSupportedDocument(
+          "application/vnd.oasis.opendocument.spreadsheet",
+        ),
+      ).toBe(true);
+      expect(
+        MimeTypeUtils.isSupportedDocument(
+          "application/vnd.oasis.opendocument.presentation",
+        ),
+      ).toBe(true);
+      // RTF
+      expect(MimeTypeUtils.isSupportedDocument("application/rtf")).toBe(true);
+      // eBooks
+      expect(MimeTypeUtils.isSupportedDocument("application/epub+zip")).toBe(true);
+      expect(MimeTypeUtils.isSupportedDocument("application/x-fictionbook+xml")).toBe(
+        true,
+      );
+      // Jupyter
+      expect(MimeTypeUtils.isSupportedDocument("application/x-ipynb+json")).toBe(true);
+      // Not supported
+      expect(MimeTypeUtils.isSupportedDocument("text/html")).toBe(false);
+      expect(MimeTypeUtils.isSupportedDocument("application/json")).toBe(false);
     });
   });
 
@@ -320,6 +424,84 @@ describe("MimeTypeUtils", () => {
         expect(MimeTypeUtils.detectMimeTypeFromPath("document.tex")).toBe("text/x-tex");
         expect(MimeTypeUtils.detectMimeTypeFromPath("document.latex")).toBe(
           "text/x-latex",
+        );
+      });
+    });
+
+    describe("document formats", () => {
+      it("should detect legacy Office formats", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.doc")).toBe(
+          "application/msword",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.xls")).toBe(
+          "application/vnd.ms-excel",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.ppt")).toBe(
+          "application/vnd.ms-powerpoint",
+        );
+      });
+
+      it("should detect OpenDocument formats", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.odt")).toBe(
+          "application/vnd.oasis.opendocument.text",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.ods")).toBe(
+          "application/vnd.oasis.opendocument.spreadsheet",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.odp")).toBe(
+          "application/vnd.oasis.opendocument.presentation",
+        );
+      });
+
+      it("should detect RTF files", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.rtf")).toBe("application/rtf");
+      });
+
+      it("should detect eBook formats", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("book.epub")).toBe(
+          "application/epub+zip",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("book.fb2")).toBe(
+          "application/x-fictionbook+xml",
+        );
+      });
+    });
+
+    describe("URL query parameters and hash fragments", () => {
+      it("should strip query parameters before detecting MIME type", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("report.pdf?token=abc123")).toBe(
+          "application/pdf",
+        );
+        expect(
+          MimeTypeUtils.detectMimeTypeFromPath(
+            "https://s3.amazonaws.com/bucket/report.docx?X-Amz-Signature=abc",
+          ),
+        ).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      });
+
+      it("should strip hash fragments before detecting MIME type", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("document.pdf#page=5")).toBe(
+          "application/pdf",
+        );
+      });
+
+      it("should strip both query parameters and hash fragments", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("file.xlsx?v=2#sheet=1")).toBe(
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        );
+      });
+
+      it("should handle CDN URLs with query parameters", () => {
+        expect(
+          MimeTypeUtils.detectMimeTypeFromPath(
+            "https://cdn.example.com/files/report.pdf?t=1767868182094",
+          ),
+        ).toBe("application/pdf");
+      });
+
+      it("should handle source code files in URLs with query params", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("src/main.ts?ref=abc123")).toBe(
+          "text/x-typescript",
         );
       });
     });

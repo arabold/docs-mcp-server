@@ -57,7 +57,6 @@ describe("SourceCodePipeline", () => {
         "image/png",
         "video/mp4",
         "application/pdf",
-        "text/css",
         "text/x-unknown", // Unknown language should be rejected
       ];
 

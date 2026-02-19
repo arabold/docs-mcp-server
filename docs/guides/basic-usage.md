@@ -48,8 +48,8 @@ npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/rea
 You can index documentation from your local filesystem using `file://` URLs. This works in both the Web UI and CLI.
 
 ### Requirements
--   Files must be text-based (HTML, Markdown, JS, TS, etc.).
--   Binary files (PDF, images) are ignored.
+-   Supports text files (HTML, Markdown, source code, etc.) and documents (PDF, Word, Excel, PowerPoint, and more). See [Supported Formats](../concepts/supported-formats.md) for the full list.
+-   Unsupported binary files (images, videos, executables) are skipped.
 -   **Docker Users:** You must mount the local directory into the container first.
 
 ### Examples

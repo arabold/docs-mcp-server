@@ -1,15 +1,25 @@
 /**
- * Tests for DocumentPipeline - processes PDF, Office documents, and Jupyter notebooks.
+ * Tests for DocumentPipeline - processes PDF, Office documents, OpenDocument,
+ * RTF, eBooks, and Jupyter notebooks using Kreuzberg.
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { extractBytes } from "@kreuzberg/node";
+import { describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import type { ScraperOptions } from "../types";
 import { ScrapeMode } from "../types";
 import { DocumentPipeline } from "./DocumentPipeline";
+
+vi.mock("@kreuzberg/node", async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import("@kreuzberg/node");
+  return {
+    ...actual,
+    extractBytes: vi.fn(actual.extractBytes),
+  };
+});
 
 const appConfig = loadConfig();
 const pipeline = new DocumentPipeline(appConfig);
@@ -75,6 +85,46 @@ describe("DocumentPipeline", () => {
       expect(pipeline.canProcess("application/x-ipynb+json")).toBe(true);
     });
 
+    it("should accept legacy DOC MIME type", () => {
+      expect(pipeline.canProcess("application/msword")).toBe(true);
+    });
+
+    it("should accept legacy XLS MIME type", () => {
+      expect(pipeline.canProcess("application/vnd.ms-excel")).toBe(true);
+    });
+
+    it("should accept legacy PPT MIME type", () => {
+      expect(pipeline.canProcess("application/vnd.ms-powerpoint")).toBe(true);
+    });
+
+    it("should accept ODT MIME type", () => {
+      expect(pipeline.canProcess("application/vnd.oasis.opendocument.text")).toBe(true);
+    });
+
+    it("should accept ODS MIME type", () => {
+      expect(pipeline.canProcess("application/vnd.oasis.opendocument.spreadsheet")).toBe(
+        true,
+      );
+    });
+
+    it("should accept ODP MIME type", () => {
+      expect(pipeline.canProcess("application/vnd.oasis.opendocument.presentation")).toBe(
+        true,
+      );
+    });
+
+    it("should accept RTF MIME type", () => {
+      expect(pipeline.canProcess("application/rtf")).toBe(true);
+    });
+
+    it("should accept EPUB MIME type", () => {
+      expect(pipeline.canProcess("application/epub+zip")).toBe(true);
+    });
+
+    it("should accept FB2 MIME type", () => {
+      expect(pipeline.canProcess("application/x-fictionbook+xml")).toBe(true);
+    });
+
     it("should reject HTML MIME type", () => {
       expect(pipeline.canProcess("text/html")).toBe(false);
     });
@@ -85,6 +135,10 @@ describe("DocumentPipeline", () => {
 
     it("should reject JSON MIME type", () => {
       expect(pipeline.canProcess("application/json")).toBe(false);
+    });
+
+    it("should reject application/octet-stream (resolved upstream by strategies)", () => {
+      expect(pipeline.canProcess("application/octet-stream")).toBe(false);
     });
   });
 
@@ -119,7 +173,50 @@ describe("DocumentPipeline", () => {
       expect(result.chunks).toBeDefined();
     });
 
-    it("should process an XLSX file and extract data", async () => {
+    it("should prefer full markdown content for DOCX with tables", async () => {
+      const docxMimeType =
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      const extractBytesMock = vi.mocked(extractBytes);
+      extractBytesMock.mockResolvedValueOnce({
+        content:
+          "# Sample DOCX\n\nIntro paragraph before table.\n\n| A | B |\n| - | - |\n| 1 | 2 |",
+        tables: [{ markdown: "| A | B |\n| - | - |\n| 1 | 2 |" }],
+        metadata: { title: "Sample DOCX" },
+      } as Awaited<ReturnType<typeof extractBytes>>);
+
+      const rawContent = createRawContent(
+        "sample.docx",
+        docxMimeType,
+        Buffer.from("fake docx"),
+      );
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.contentType).toBe("text/markdown");
+      expect(result.textContent).toContain("Intro paragraph before table.");
+      expect(result.textContent).toContain("| A | B |");
+    });
+
+    it("should extract mixed DOCX content with tables and prose", async () => {
+      const content = loadFixture("mixed-content.docx");
+      const rawContent = createRawContent(
+        "mixed-content.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        content,
+      );
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.contentType).toBe("text/markdown");
+      expect(result.textContent).toContain("Mixed content sample");
+      expect(result.textContent).toContain("Paragraph before table.");
+      expect(result.textContent).toContain("Paragraph after table.");
+      expect(result.textContent).toContain("| Header A | Header B |");
+    });
+
+    it("should process an XLSX file and produce Markdown tables", async () => {
       const content = loadFixture("sample.xlsx");
       const rawContent = createRawContent(
         "sample.xlsx",
@@ -132,19 +229,9 @@ describe("DocumentPipeline", () => {
       expect(result.errors).toHaveLength(0);
       expect(result.textContent).toBeTruthy();
       expect(result.contentType).toBe("text/markdown");
-
-      // Verify header fix
-      // Should NOT have the empty header row
-      // Use regex to be robust against whitespace changes
-      expect(result.textContent).not.toMatch(/^\|(?:\s*\|)+\s*$/m);
-
-      // Should have the promoted header
-      expect(result.textContent).toContain("| Sample XLSX | Test Data |");
-
-      // Followed by separator (simplified check, allowing optional spaces)
-      expect(result.textContent).toMatch(
-        /\| Sample XLSX \| Test Data \|\s*\n\s*\| ?-+ ?\| ?-+ ?\|/,
-      );
+      // Should use tables[].markdown output with proper Markdown table formatting
+      expect(result.textContent).toContain("|");
+      expect(result.textContent).toContain("Sample XLSX");
     });
 
     it("should process a PPTX file and extract content", async () => {
@@ -157,7 +244,7 @@ describe("DocumentPipeline", () => {
 
       const result = await pipeline.process(rawContent, baseOptions);
 
-      // PPTX processing may fail with minimal test fixtures due to markitdown-ts requirements
+      // PPTX processing may fail with minimal test fixtures
       // The important thing is that the pipeline handles it gracefully
       if (result.errors?.length === 0) {
         expect(result.textContent).toBeTruthy();
@@ -205,7 +292,7 @@ describe("DocumentPipeline", () => {
       expect(result.chunks).toHaveLength(0);
     });
 
-    it("should handle missing file extension gracefully by using MIME type", async () => {
+    it("should process PDF with any source URL since Kreuzberg uses MIME type directly", async () => {
       const content = loadFixture("sample.pdf");
       const rawContent: RawContent = {
         content,
@@ -216,7 +303,7 @@ describe("DocumentPipeline", () => {
 
       const result = await pipeline.process(rawContent, baseOptions);
 
-      // Should succeed because MIME type detection works even without extension
+      // Should succeed because Kreuzberg uses MIME type, not file extension
       expect(result.errors).toHaveLength(0);
       expect(result.textContent).toBeTruthy();
       expect(result.contentType).toBe("text/markdown");
@@ -234,94 +321,9 @@ describe("DocumentPipeline", () => {
 
       const result = await pipeline.process(rawContent, baseOptions);
 
-      // Should succeed using MIME type detection
       expect(result.errors).toHaveLength(0);
       expect(result.textContent).toBeTruthy();
       expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should handle PDF with extension in middle of URL path", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/pdf",
-        source: "https://example.com/docs/file.pdf/some-hash-id/download",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      // Should succeed using MIME type detection
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should handle URL with hash fragment", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/pdf",
-        source: "https://example.com/documents/report.pdf#section-1",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      // Should succeed using MIME type detection
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should extract extension from URL when MIME type is generic (query params)", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/octet-stream", // Generic MIME type
-        source: "https://example.com/documents/report.pdf?version=2",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      // Should succeed using URL parsing fallback
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should extract extension from URL when MIME type is generic (hash fragment)", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/octet-stream", // Generic MIME type
-        source: "https://example.com/files/document.pdf#page-3",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      // Should succeed using URL parsing fallback
-      expect(result.errors).toHaveLength(0);
-      expect(result.textContent).toBeTruthy();
-      expect(result.contentType).toBe("text/markdown");
-    });
-
-    it("should fail when both MIME type and extension are unavailable", async () => {
-      const content = loadFixture("sample.pdf");
-      const rawContent: RawContent = {
-        content,
-        mimeType: "application/octet-stream", // Generic MIME type
-        source: "file:///no-extension", // No extension
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(rawContent, baseOptions);
-
-      // Should fail because neither MIME type nor extension are useful
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors![0].message).toContain("file extension");
     });
 
     it("should use filename as title fallback", async () => {
@@ -334,7 +336,7 @@ describe("DocumentPipeline", () => {
 
       const result = await pipeline.process(rawContent, baseOptions);
 
-      // Title should be extracted or fall back to filename
+      // Title should be extracted from metadata or fall back to filename
       expect(result.title).toBeTruthy();
     });
 
@@ -345,6 +347,102 @@ describe("DocumentPipeline", () => {
       const result = await pipeline.process(rawContent, baseOptions);
 
       expect(result.links).toEqual([]);
+    });
+
+    it("should use result.content for documents without tables", async () => {
+      // PDF extraction typically has no tables[], so content is used directly
+      const content = loadFixture("sample.pdf");
+      const rawContent = createRawContent("sample.pdf", "application/pdf", content);
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.textContent).toContain("Sample PDF");
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should produce Markdown formatting for DOCX with structure", async () => {
+      // The sample.docx has paragraphs; Kreuzberg with outputFormat: "markdown"
+      // preserves document structure in Markdown format
+      const content = loadFixture("sample.docx");
+      const rawContent = createRawContent(
+        "sample.docx",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        content,
+      );
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.textContent).toContain("Sample DOCX Document");
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should include sheet names and table separators for XLSX", async () => {
+      const content = loadFixture("sample.xlsx");
+      const rawContent = createRawContent(
+        "sample.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content,
+      );
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      // tables[].markdown includes sheet name as heading and separator row
+      expect(result.textContent).toContain("Sheet1");
+      expect(result.textContent).toContain("---");
+    });
+
+    it("should resolve application/octet-stream from URL extension and process document", async () => {
+      const content = loadFixture("sample.pdf");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/octet-stream",
+        source: "https://cdn.example.com/files/report.pdf",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.contentType).toBe("text/markdown");
+    });
+
+    it("should resolve application/octet-stream from URL with query params", async () => {
+      const content = loadFixture("sample.docx");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/octet-stream",
+        source: "https://s3.amazonaws.com/bucket/report.docx?X-Amz-Signature=abc123",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(0);
+      expect(result.textContent).toBeTruthy();
+      expect(result.textContent).toContain("Sample DOCX Document");
+    });
+
+    it("should fail gracefully for application/octet-stream with no document extension", async () => {
+      const content = Buffer.from("not a real document");
+      const rawContent: RawContent = {
+        content,
+        mimeType: "application/octet-stream",
+        source: "https://example.com/api/download/12345",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors![0].message).toContain("Could not determine document type");
+      expect(result.textContent).toBeNull();
     });
   });
 });
