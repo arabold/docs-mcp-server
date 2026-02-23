@@ -22,16 +22,17 @@ const LibraryDetailCard = ({ library }: LibraryDetailCardProps) => {
   return (
     <div class="block p-4 bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-300 dark:border-gray-600 mb-4">
       <div class="flex justify-between items-start mb-1">
-        <div>
+        <div class="min-w-0">
           <h3 class="text-lg font-medium text-gray-900 dark:text-white">
             <span safe>{library.name}</span>
           </h3>
           {latestVersion?.sourceUrl ? (
-            <div class="text-sm text-gray-500 dark:text-gray-400">
+            <div class="text-sm text-gray-500 dark:text-gray-400 truncate">
               <a
                 href={latestVersion.sourceUrl}
                 target="_blank"
                 class="hover:underline"
+                title={latestVersion.sourceUrl}
                 safe
               >
                 {latestVersion.sourceUrl}
