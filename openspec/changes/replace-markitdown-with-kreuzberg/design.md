@@ -34,11 +34,11 @@ This change introduces a new external dependency (`@kreuzberg/node`) and replace
 - `extractFile()` (file path-based): Rejected because the pipeline works with in-memory buffers, not file paths. Writing to temp files would add I/O overhead and complexity.
 - `extractBytesSync()` (synchronous): Rejected because async is preferred to avoid blocking the event loop during large document processing.
 
-### Decision 2: Request Markdown output and prefer structured tables
+### Decision 2: Request Markdown output with MIME-type-specific table handling
 
-**What:** Pass `{ outputFormat: "markdown" }` in `ExtractionConfig` to request Markdown-formatted output from Kreuzberg. When `result.tables` is non-empty, concatenate `tables[].markdown` as the extracted content instead of using `result.content`.
+**What:** Pass `{ outputFormat: "markdown" }` in `ExtractionConfig` to request Markdown-formatted output from Kreuzberg. For spreadsheet MIME types (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `application/vnd.ms-excel`, `application/vnd.oasis.opendocument.spreadsheet`), prefer `tables[].markdown` over `result.content` when tables are present. For all other document types, always use `result.content`.
 
-**Why:** The project's processing pipeline is Markdown-first: HTML is converted to Markdown, then split with `SemanticMarkdownSplitter`. Document extraction should follow the same pattern. Kreuzberg's `outputFormat: "markdown"` produces Markdown headings, bold, italic, and lists for DOCX/PPTX. However, for spreadsheet-type documents (XLSX, XLS, ODS), the `content` field remains flat text even with `outputFormat: "markdown"` -- the only way to get proper Markdown tables is from `tables[].markdown`, which includes sheet names as `##` headings and properly formatted Markdown table syntax. Using `tables[].markdown` when available produces significantly better output for tabular data.
+**Why:** The project's processing pipeline is Markdown-first: HTML is converted to Markdown, then split with `SemanticMarkdownSplitter`. Document extraction should follow the same pattern. Kreuzberg's `outputFormat: "markdown"` produces Markdown headings, bold, italic, and lists for DOCX/PPTX. However, for spreadsheet-type documents (XLSX, XLS, ODS), the `content` field remains flat text even with `outputFormat: "markdown"` -- the only way to get proper Markdown tables is from `tables[].markdown`, which includes sheet names as `##` headings and properly formatted Markdown table syntax. Other document types (DOCX, PDF, PPTX) may also populate `tables[]`, but their `content` field is richer and already includes inline tables alongside headings, lists, and formatting. Using `tables[].markdown` for non-spreadsheet formats would discard this surrounding context.
 
 **Behavior by format:**
 | Format | `content` with `outputFormat: "markdown"` | `tables[].markdown` | Preferred source |
@@ -46,12 +46,12 @@ This change introduces a new external dependency (`@kreuzberg/node`) and replace
 | DOCX | Full Markdown (headings, bold, italic, lists, inline tables) | Populated if document contains tables | `content` (already includes tables) |
 | XLSX/XLS/ODS | Flat text (space-separated cells) | Sheet-named Markdown tables | `tables[].markdown` |
 | PPTX/PPT/ODP | Markdown headings per slide | Empty | `content` |
-| PDF | Plain text (Markdown benefits minimal) | Populated if PDF contains tables | `tables[].markdown` when present |
+| PDF | Plain text (Markdown benefits minimal) | Populated if PDF contains tables | `content` (richer context than tables alone) |
 
 **Alternatives considered:**
 - Always using `result.content`: Rejected because spreadsheet content would be flat text without structure, losing table formatting that is critical for semantic splitting.
 - Always using `tables[].markdown`: Rejected because DOCX `content` is richer (includes headings, lists, bold/italic) while `tables[].markdown` only contains table data.
-- Format-specific branching: Rejected in favor of the generic rule "prefer tables when available" which works correctly across all formats without MIME-type-specific logic.
+- Generic "prefer tables when available" rule: Initially considered but rejected after testing showed that DOCX and PDF `content` includes inline tables alongside richer context (headings, lists, formatting). MIME-type-specific branching correctly limits table preference to spreadsheets where `content` is genuinely inferior.
 
 ### Decision 3: Use Kreuzberg's metadata for title extraction
 

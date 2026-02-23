@@ -18,7 +18,7 @@ To support multiple formats (ZIP, TAR, TAR.GZ), we will implement an adapter pat
 When `LocalFileStrategy` receives a URL (e.g., `file:///path/to/data.tar.gz/docs/readme.md`):
 1.  It attempts to `fs.stat` the path.
 2.  If `fs.stat` fails (ENOENT), it traverses up the path hierarchy to find the longest existing prefix that is a **file** (explicitly checking `stats.isFile()`).
-3.  If found (e.g., `/path/to/data.tar.gz`), it checks if the file is a supported archive (magic bytes or extension).
+3.  If found (e.g., `/path/to/data.tar.gz`), it checks if the file is a supported archive (extension-based detection).
 4.  If valid, it instantiates the appropriate `ArchiveAdapter` and treats the remainder of the path (`docs/readme.md`) as an entry within the archive.
 
 #### Directory Listing

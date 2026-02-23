@@ -34,7 +34,7 @@ Archives are supported as input for both local file scraping (`file://` URLs) an
 **Code Reference:**
 - `src/utils/archive/ZipAdapter.ts` - ZIP extraction
 - `src/utils/archive/TarAdapter.ts` - TAR/gzip extraction
-- `src/utils/archive/ArchiveFactory.ts` - Format detection (extension + magic bytes)
+- `src/utils/archive/ArchiveFactory.ts` - Format detection (extension-based)
 - `src/scraper/strategies/LocalFileStrategy.ts` - Archive entry enumeration and processing
 
 ## Documents
