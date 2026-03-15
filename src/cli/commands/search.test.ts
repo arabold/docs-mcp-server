@@ -5,6 +5,8 @@ import yargs from "yargs";
 import { SearchTool } from "../../tools";
 import { createSearchCommand } from "./search";
 
+const stdoutWriteMock = vi.fn();
+
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
@@ -20,7 +22,6 @@ vi.mock("../utils", () => ({
     emit: vi.fn(),
   })),
   resolveEmbeddingContext: vi.fn(() => ({ provider: "mock", model: "mock-model" })),
-  formatOutput: vi.fn((data) => JSON.stringify(data)),
   CliContext: {},
 }));
 // Mock loadConfig to avoid Zod issues during tests if any, or ensuring defaults
@@ -38,6 +39,8 @@ vi.mock("../../utils/config", async (importOriginal) => {
 describe("search command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stdoutWriteMock.mockReset();
+    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
   });
 
   it("invokes SearchTool with parameters", async () => {
@@ -57,5 +60,15 @@ describe("search command", () => {
         exactMatch: false,
       }),
     );
+    expect(stdoutWriteMock).toHaveBeenCalledWith("[]\n");
+  });
+
+  it("renders YAML when requested globally", async () => {
+    const parser = yargs().scriptName("test");
+    createSearchCommand(parser);
+
+    await parser.parse("search react hooks --output yaml");
+
+    expect(stdoutWriteMock).toHaveBeenCalledWith("[]\n");
   });
 });

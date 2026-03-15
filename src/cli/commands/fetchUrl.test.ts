@@ -5,6 +5,8 @@ import yargs from "yargs";
 import { FetchUrlTool } from "../../tools";
 import { createFetchUrlCommand } from "./fetchUrl";
 
+const stdoutWriteMock = vi.fn();
+
 vi.mock("../../scraper/fetcher", () => ({
   HttpFetcher: vi.fn().mockImplementation(() => ({})),
   FileFetcher: vi.fn().mockImplementation(() => ({})),
@@ -37,6 +39,8 @@ vi.mock("../../utils/config", async (importOriginal) => {
 describe("fetch-url command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stdoutWriteMock.mockReset();
+    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
   });
 
   it("executes FetchUrlTool", async () => {
@@ -53,5 +57,6 @@ describe("fetch-url command", () => {
         scrapeMode: "auto",
       }),
     );
+    expect(stdoutWriteMock).toHaveBeenCalledWith("# md\n");
   });
 });

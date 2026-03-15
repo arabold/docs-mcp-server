@@ -5,6 +5,8 @@ import yargs from "yargs";
 import { FindVersionTool } from "../../tools";
 import { createFindVersionCommand } from "./findVersion";
 
+const stdoutWriteMock = vi.fn();
+
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
@@ -34,6 +36,8 @@ vi.mock("../../utils/config", async (importOriginal) => {
 describe("find-version command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stdoutWriteMock.mockReset();
+    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
   });
 
   it("calls FindVersionTool", async () => {
@@ -49,6 +53,9 @@ describe("find-version command", () => {
         library: "react",
         targetVersion: "18.x",
       }),
+    );
+    expect(stdoutWriteMock).toHaveBeenCalledWith(
+      expect.stringContaining('"version": "1.0.0"'),
     );
   });
 });

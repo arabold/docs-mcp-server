@@ -3,6 +3,7 @@ process.setSourceMapsEnabled(true);
 
 import "dotenv/config";
 import { sanitizeEnvironment } from "./utils/env";
+import { logger } from "./utils/logger";
 
 sanitizeEnvironment();
 
@@ -16,6 +17,6 @@ ensurePlaywrightBrowsersInstalled();
 
 // Run the CLI
 runCli().catch((error) => {
-  console.error(`🔥 Fatal error in main execution: ${error}`);
+  logger.error(`🔥 Fatal error in main execution: ${error}`);
   process.exit(1);
 });

@@ -7,6 +7,7 @@ import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FindVersionTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
+import { renderStructuredOutput } from "../output";
 import { type CliContext, getEventBus } from "../utils";
 
 export function createFindVersionCommand(cli: Argv) {
@@ -68,7 +69,7 @@ export function createFindVersionCommand(cli: Argv) {
         });
 
         if (!versionInfo) throw new Error("Failed to get version information");
-        console.log(versionInfo);
+        renderStructuredOutput(versionInfo, argv);
       } finally {
         await docService.shutdown();
       }

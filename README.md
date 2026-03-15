@@ -36,7 +36,41 @@ See **[Supported Formats](docs/concepts/supported-formats.md)** for the complete
 
 ## 🚀 Quick Start
 
-**1. Start the server** (requires Node.js 22+):
+### CLI First
+
+For agents and scripts, the CLI is usually the simplest way to use Grounded Docs.
+
+**1. Index documentation** (requires Node.js 22+):
+
+```bash
+npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
+```
+
+**2. Query the index:**
+
+```bash
+npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output toon
+```
+
+**3. Fetch a single page as Markdown:**
+
+```bash
+npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+```
+
+### Output Behavior
+
+- Structured commands default to clean JSON on stdout in non-interactive runs.
+- Use `--output json|yaml|toon` to pick a structured format.
+- Plain-text commands such as `fetch-url` keep their text payload on stdout.
+- Diagnostics go through the shared logger and are kept off stdout in non-interactive runs.
+- Use `--quiet` to suppress non-error diagnostics or `--verbose` to enable debug output.
+
+### MCP Server
+
+If you want a long-running MCP endpoint for Claude, Cline, Copilot, Gemini CLI, or other MCP clients:
+
+**1. Start the server:**
 
 ```bash
 npx @arabold/docs-mcp-server@latest

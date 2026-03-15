@@ -11,6 +11,7 @@ import { createLocalDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import { applyGlobalCliOutputMode } from "../output";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
@@ -95,6 +96,11 @@ export function createDefaultAction(cli: Argv) {
       const resolvedProtocol = resolveProtocol(argv.protocol as string);
       if (resolvedProtocol === "stdio") {
         setLogLevel(LogLevel.ERROR);
+      } else {
+        applyGlobalCliOutputMode({
+          verbose: argv.verbose as boolean,
+          quiet: argv.quiet as boolean,
+        });
       }
 
       logger.debug("No subcommand specified, starting unified server by default...");

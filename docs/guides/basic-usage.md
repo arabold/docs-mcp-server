@@ -43,6 +43,15 @@ npx @arabold/docs-mcp-server@latest search react "useState hook"
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 ```
 
+### CLI Output Modes
+
+- Structured commands such as `list`, `search`, and `find-version` write machine-friendly data to stdout.
+- In non-interactive runs, structured output defaults to JSON.
+- Use `--output yaml` or `--output toon` to switch formats for structured commands.
+- Plain-text commands such as `fetch-url` keep their text payload on stdout.
+- Use `--quiet` to suppress non-error diagnostics or `--verbose` to enable debug logging.
+- In non-interactive runs, diagnostics stay off stdout so agents and scripts can parse results safely.
+
 ## 📂 Scraping Local Files
 
 You can index documentation from your local filesystem using `file://` URLs. This works in both the Web UI and CLI.

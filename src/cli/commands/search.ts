@@ -7,7 +7,8 @@ import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
-import { type CliContext, formatOutput, getEventBus } from "../utils";
+import { renderStructuredOutput } from "../output";
+import { type CliContext, getEventBus } from "../utils";
 
 export function createSearchCommand(cli: Argv) {
   cli.command(
@@ -105,7 +106,7 @@ export function createSearchCommand(cli: Argv) {
           exactMatch: argv.exactMatch as boolean,
         });
 
-        console.log(formatOutput(result.results));
+        renderStructuredOutput(result.results, argv);
       } finally {
         await docService.shutdown();
       }

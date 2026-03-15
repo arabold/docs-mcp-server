@@ -5,6 +5,8 @@ import yargs from "yargs";
 import { ListLibrariesTool } from "../../tools";
 import { createListCommand } from "./list";
 
+const stdoutWriteMock = vi.fn();
+
 // Mocks
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({
@@ -22,7 +24,6 @@ vi.mock("../utils", () => ({
     on: vi.fn(),
     emit: vi.fn(),
   })),
-  formatOutput: vi.fn((data) => JSON.stringify(data)),
   CliContext: {},
 }));
 vi.mock("../../utils/config", async (importOriginal) => {
@@ -38,6 +39,8 @@ vi.mock("../../utils/config", async (importOriginal) => {
 describe("list command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stdoutWriteMock.mockReset();
+    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
   });
 
   it("executes ListLibrariesTool", async () => {
@@ -49,5 +52,6 @@ describe("list command", () => {
     expect(ListLibrariesTool).toHaveBeenCalledTimes(1);
     const mockInstance = (ListLibrariesTool as any).mock.results[0].value;
     expect(mockInstance.execute).toHaveBeenCalled();
+    expect(stdoutWriteMock).toHaveBeenCalledWith("[]\n");
   });
 });

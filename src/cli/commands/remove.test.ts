@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { createRemoveCommand } from "./remove";
 
+const stdoutWriteMock = vi.fn();
+
 const removeFn = vi.fn(async () => {});
 vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({
@@ -33,6 +35,8 @@ vi.mock("../../utils/config", async (importOriginal) => {
 describe("remove command", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    stdoutWriteMock.mockReset();
+    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
   });
 
   it("calls removeAllDocuments", async () => {
@@ -42,5 +46,6 @@ describe("remove command", () => {
     await parser.parse("remove react --version 18.0.0");
 
     expect(removeFn).toHaveBeenCalledWith("react", "18.0.0");
+    expect(stdoutWriteMock).toHaveBeenCalledWith("Successfully removed react@18.0.0.\n");
   });
 });

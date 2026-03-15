@@ -20,21 +20,36 @@ const LOG_LEVEL_MAP: Record<string, LogLevel> = {
   DEBUG: LogLevel.DEBUG,
 };
 
+function suppressLogsInTests(): boolean {
+  return !!process.env.VITEST_WORKER_ID && process.env.ENABLE_TEST_LOGS !== "1";
+}
+
+function writeToStderr(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
+
 /**
  * Gets the log level from environment variable or returns default.
  */
-function getLogLevelFromEnv(): LogLevel {
+export function getLogLevelFromEnv(): LogLevel | null {
   const envLevel = process.env.LOG_LEVEL?.toUpperCase();
-  return envLevel && envLevel in LOG_LEVEL_MAP ? LOG_LEVEL_MAP[envLevel] : LogLevel.INFO;
+  return envLevel && envLevel in LOG_LEVEL_MAP ? LOG_LEVEL_MAP[envLevel] : null;
 }
 
-let currentLogLevel: LogLevel = getLogLevelFromEnv();
+let currentLogLevel: LogLevel = getLogLevelFromEnv() ?? LogLevel.INFO;
 
 /**
  * Sets the current logging level for the application.
  */
 export function setLogLevel(level: LogLevel): void {
   currentLogLevel = level;
+}
+
+/**
+ * Returns the current logging level for the application.
+ */
+export function getLogLevel(): LogLevel {
+  return currentLogLevel;
 }
 
 /**
@@ -46,8 +61,8 @@ export const logger = {
    * @param message - The message to log.
    */
   debug: (message: string) => {
-    if (currentLogLevel >= LogLevel.DEBUG && !process.env.VITEST_WORKER_ID) {
-      console.debug(message);
+    if (currentLogLevel >= LogLevel.DEBUG && !suppressLogsInTests()) {
+      writeToStderr(message);
     }
   },
   /**
@@ -55,8 +70,8 @@ export const logger = {
    * @param message - The message to log.
    */
   info: (message: string) => {
-    if (currentLogLevel >= LogLevel.INFO && !process.env.VITEST_WORKER_ID) {
-      console.log(message); // Using console.log for INFO
+    if (currentLogLevel >= LogLevel.INFO && !suppressLogsInTests()) {
+      writeToStderr(message);
     }
   },
   /**
@@ -64,8 +79,8 @@ export const logger = {
    * @param message - The message to log.
    */
   warn: (message: string) => {
-    if (currentLogLevel >= LogLevel.WARN && !process.env.VITEST_WORKER_ID) {
-      console.warn(message);
+    if (currentLogLevel >= LogLevel.WARN && !suppressLogsInTests()) {
+      writeToStderr(message);
     }
   },
   /**
@@ -73,8 +88,8 @@ export const logger = {
    * @param message - The message to log.
    */
   error: (message: string) => {
-    if (currentLogLevel >= LogLevel.ERROR && !process.env.VITEST_WORKER_ID) {
-      console.error(message);
+    if (currentLogLevel >= LogLevel.ERROR && !suppressLogsInTests()) {
+      writeToStderr(message);
     }
   },
 };
