@@ -24,8 +24,12 @@ function suppressLogsInTests(): boolean {
   return !!process.env.VITEST_WORKER_ID && process.env.ENABLE_TEST_LOGS !== "1";
 }
 
+function isInteractiveSession(): boolean {
+  return !!process.stdout.isTTY && !!process.stderr.isTTY;
+}
+
 function writeToStderr(message: string): void {
-  process.stderr.write(`${message}\n`);
+  process.stderr.write(message.endsWith("\n") ? message : `${message}\n`);
 }
 
 /**
@@ -36,7 +40,8 @@ export function getLogLevelFromEnv(): LogLevel | null {
   return envLevel && envLevel in LOG_LEVEL_MAP ? LOG_LEVEL_MAP[envLevel] : null;
 }
 
-let currentLogLevel: LogLevel = getLogLevelFromEnv() ?? LogLevel.INFO;
+let currentLogLevel: LogLevel =
+  getLogLevelFromEnv() ?? (isInteractiveSession() ? LogLevel.INFO : LogLevel.ERROR);
 
 /**
  * Sets the current logging level for the application.

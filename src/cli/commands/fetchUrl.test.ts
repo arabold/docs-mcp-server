@@ -1,6 +1,6 @@
 /** Unit test for fetchUrlAction */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { FetchUrlTool } from "../../tools";
 import { createFetchUrlCommand } from "./fetchUrl";
@@ -37,10 +37,18 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("fetch-url command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
     stdoutWriteMock.mockReset();
-    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
   });
 
   it("executes FetchUrlTool", async () => {

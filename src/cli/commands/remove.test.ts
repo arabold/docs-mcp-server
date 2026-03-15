@@ -1,6 +1,6 @@
 /** Unit test for removeAction */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { createRemoveCommand } from "./remove";
 
@@ -33,10 +33,18 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("remove command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
     stdoutWriteMock.mockReset();
-    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
   });
 
   it("calls removeAllDocuments", async () => {

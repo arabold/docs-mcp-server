@@ -1,6 +1,6 @@
 /** Unit test for listAction */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { ListLibrariesTool } from "../../tools";
 import { createListCommand } from "./list";
@@ -37,10 +37,18 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("list command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
     stdoutWriteMock.mockReset();
-    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
   });
 
   it("executes ListLibrariesTool", async () => {

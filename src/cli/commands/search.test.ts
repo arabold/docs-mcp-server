@@ -1,6 +1,6 @@
 /** Unit test for searchAction */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { SearchTool } from "../../tools";
 import { createSearchCommand } from "./search";
@@ -37,10 +37,18 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("search command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
     stdoutWriteMock.mockReset();
-    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
   });
 
   it("invokes SearchTool with parameters", async () => {

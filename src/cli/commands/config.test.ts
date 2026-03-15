@@ -33,18 +33,25 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("config command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+  let loggerErrorSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
     stdoutWriteMock.mockReset();
     process.env.ENABLE_TEST_LOGS = "1";
-    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
-    vi.spyOn(logger, "error").mockImplementation(() => {});
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+    loggerErrorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     process.exitCode = undefined;
   });
 
   afterEach(() => {
     delete process.env.ENABLE_TEST_LOGS;
     process.exitCode = undefined;
+    stdoutWriteSpy.mockRestore();
+    loggerErrorSpy.mockRestore();
   });
 
   describe("config (no subcommand)", () => {

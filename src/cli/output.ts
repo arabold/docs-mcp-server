@@ -1,7 +1,7 @@
 import { encode as encodeToToon } from "@toon-format/toon";
 import yaml from "yaml";
 import type { Argv } from "yargs";
-import { LogLevel, logger, setLogLevel } from "../utils/logger";
+import { getLogLevelFromEnv, LogLevel, logger, setLogLevel } from "../utils/logger";
 
 export type OutputFormat = "json" | "yaml" | "toon";
 export type OutputKind = "structured" | "text";
@@ -12,18 +12,6 @@ export interface HasOutputOption {
 }
 
 type PrimitiveValue = boolean | null | number | string;
-
-const LOG_LEVEL_MAP: Record<string, LogLevel> = {
-  ERROR: LogLevel.ERROR,
-  WARN: LogLevel.WARN,
-  INFO: LogLevel.INFO,
-  DEBUG: LogLevel.DEBUG,
-};
-
-function getEnvLogLevel(): LogLevel | null {
-  const envLevel = process.env.LOG_LEVEL?.toUpperCase();
-  return envLevel && envLevel in LOG_LEVEL_MAP ? LOG_LEVEL_MAP[envLevel] : null;
-}
 
 export function isInteractiveOutput(): boolean {
   return !!process.stdout.isTTY && !!process.stderr.isTTY;
@@ -77,13 +65,13 @@ export function applyGlobalCliOutputMode(options: {
   quiet?: boolean;
 }): void {
   const interactive = isInteractiveOutput();
-  const envLogLevel = getEnvLogLevel();
+  const envLogLevel = getLogLevelFromEnv();
 
   if (options.verbose) {
     setLogLevel(LogLevel.DEBUG);
   } else if (options.quiet) {
     setLogLevel(LogLevel.ERROR);
-  } else if (envLogLevel !== null) {
+  } else if (envLogLevel !== null && envLogLevel !== undefined) {
     setLogLevel(envLogLevel);
   } else if (interactive) {
     setLogLevel(LogLevel.INFO);

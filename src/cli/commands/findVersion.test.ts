@@ -1,6 +1,6 @@
 /** Unit test for findVersionAction */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { FindVersionTool } from "../../tools";
 import { createFindVersionCommand } from "./findVersion";
@@ -34,10 +34,18 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("find-version command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
     stdoutWriteMock.mockReset();
-    vi.spyOn(process.stdout, "write").mockImplementation(stdoutWriteMock as any);
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
   });
 
   it("calls FindVersionTool", async () => {

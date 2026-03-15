@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as loggerModule from "../utils/logger";
 import {
   applyGlobalCliOutputMode,
@@ -8,11 +8,33 @@ import {
   renderTextOutput,
 } from "./output";
 
+const stdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const stderrIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stderr, "isTTY");
+
+function restoreDescriptor(
+  target: object,
+  key: PropertyKey,
+  descriptor: PropertyDescriptor | undefined,
+): void {
+  if (descriptor) {
+    Object.defineProperty(target, key, descriptor);
+    return;
+  }
+
+  Reflect.deleteProperty(target, key);
+}
+
 describe("CLI output helpers", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     delete process.env.LOG_LEVEL;
     delete process.env.ENABLE_TEST_LOGS;
+  });
+
+  afterEach(() => {
+    restoreDescriptor(process.stdout, "isTTY", stdoutIsTTYDescriptor);
+    restoreDescriptor(process.stderr, "isTTY", stderrIsTTYDescriptor);
+    vi.restoreAllMocks();
   });
 
   it("defaults to error log level in non-interactive mode", () => {
