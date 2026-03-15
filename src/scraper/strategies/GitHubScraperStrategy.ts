@@ -17,6 +17,212 @@ import { GitHubRepoProcessor } from "./GitHubRepoProcessor";
 import { GitHubWikiProcessor } from "./GitHubWikiProcessor";
 import { resolveGitHubAuth } from "./github-auth";
 
+/** Text-based file extensions recognized for GitHub repository scraping. */
+const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
+  // Markup
+  ".md",
+  ".markdown",
+  ".mdx",
+  ".gfm",
+  ".mkd",
+  ".mkdn",
+  ".mkdown",
+  ".mdown",
+  ".mdwn",
+  ".ronn",
+  ".txt",
+  ".rst",
+  ".adoc",
+  ".asciidoc",
+  ".textile",
+  ".org",
+  ".pod",
+  ".rdoc",
+  ".wiki",
+  ".rmd",
+  // Web
+  ".html",
+  ".htm",
+  ".xml",
+  ".xhtml",
+  // Stylesheets
+  ".css",
+  ".scss",
+  ".sass",
+  ".less",
+  // JavaScript/TypeScript
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  // Python
+  ".py",
+  ".pyw",
+  ".pyi",
+  ".pyx",
+  ".pxd",
+  // JVM
+  ".java",
+  ".kt",
+  ".kts",
+  ".scala",
+  ".groovy",
+  ".gradle",
+  // .NET
+  ".cs",
+  // Systems
+  ".c",
+  ".cpp",
+  ".cc",
+  ".cxx",
+  ".h",
+  ".hpp",
+  ".hxx",
+  ".go",
+  ".rs",
+  ".zig",
+  ".nim",
+  ".v",
+  ".cr",
+  // Apple/Mobile
+  ".swift",
+  ".dart",
+  ".m",
+  ".mm",
+  // Scripting
+  ".rb",
+  ".rake",
+  ".php",
+  ".lua",
+  ".pl",
+  ".pm",
+  ".r",
+  // Functional
+  ".hs",
+  ".lhs",
+  ".elm",
+  ".erl",
+  ".ex",
+  ".exs",
+  ".clj",
+  ".cljs",
+  ".cljc",
+  ".jl",
+  // Web3
+  ".sol",
+  ".move",
+  ".cairo",
+  // Web Frameworks
+  ".vue",
+  ".svelte",
+  ".astro",
+  // Shell
+  ".sh",
+  ".bash",
+  ".zsh",
+  ".fish",
+  ".ps1",
+  ".bat",
+  ".cmd",
+  // Data
+  ".json",
+  ".yaml",
+  ".yml",
+  ".csv",
+  ".tsv",
+  ".sql",
+  ".graphql",
+  ".gql",
+  // Config
+  ".toml",
+  ".ini",
+  ".cfg",
+  ".conf",
+  ".properties",
+  ".env",
+  ".gitignore",
+  ".dockerignore",
+  ".gitattributes",
+  ".editorconfig",
+  // Build Systems
+  ".pom",
+  ".sbt",
+  ".maven",
+  ".cmake",
+  ".make",
+  ".dockerfile",
+  ".containerfile",
+  ".makefile",
+  ".bazel",
+  ".bzl",
+  ".buck",
+  // IaC
+  ".tf",
+  ".tfvars",
+  ".hcl",
+  // Package managers
+  ".mod",
+  ".sum",
+  // Schema/API
+  ".proto",
+  ".prisma",
+  ".thrift",
+  ".avro",
+  // TeX
+  ".tex",
+  ".latex",
+  // Other
+  ".log",
+]);
+
+/** Document extensions supported by DocumentPipeline. */
+const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".pdf",
+  ".docx",
+  ".xlsx",
+  ".pptx",
+  ".ipynb",
+  ".doc",
+  ".xls",
+  ".ppt",
+  ".odt",
+  ".ods",
+  ".odp",
+  ".rtf",
+  ".epub",
+  ".fb2",
+]);
+
+/** Well-known filenames (case-insensitive) that are typically text-based. */
+const COMMON_TEXT_FILES: readonly string[] = [
+  "readme",
+  "license",
+  "changelog",
+  "contributing",
+  "authors",
+  "maintainers",
+  "dockerfile",
+  "makefile",
+  "rakefile",
+  "gemfile",
+  "podfile",
+  "cartfile",
+  "brewfile",
+  "procfile",
+  "vagrantfile",
+  "gulpfile",
+  "gruntfile",
+  ".prettierrc",
+  ".eslintrc",
+  ".babelrc",
+  ".nvmrc",
+  ".npmrc",
+];
+
 /**
  * GitHubScraperStrategy is a discovery strategy that orchestrates the scraping of both
  * GitHub repository code and wiki pages. When given a GitHub repository URL, it will:
@@ -299,138 +505,27 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       return false;
     }
 
-    const path = item.path;
+    const filePath = item.path;
+    const pathLower = filePath.toLowerCase();
 
-    // Whitelist of text-based file extensions
-    const textExtensions = [
-      ".md",
-      ".mdx",
-      ".txt",
-      ".rst",
-      ".adoc",
-      ".asciidoc",
-      ".html",
-      ".htm",
-      ".xml",
-      ".css",
-      ".scss",
-      ".sass",
-      ".less",
-      ".js",
-      ".jsx",
-      ".ts",
-      ".tsx",
-      ".py",
-      ".java",
-      ".c",
-      ".cpp",
-      ".cc",
-      ".cxx",
-      ".h",
-      ".hpp",
-      ".cs",
-      ".go",
-      ".rs",
-      ".rb",
-      ".php",
-      ".swift",
-      ".kt",
-      ".scala",
-      ".clj",
-      ".cljs",
-      ".hs",
-      ".elm",
-      ".dart",
-      ".r",
-      ".m",
-      ".mm",
-      ".sh",
-      ".bash",
-      ".zsh",
-      ".fish",
-      ".ps1",
-      ".bat",
-      ".cmd",
-      ".json",
-      ".yaml",
-      ".yml",
-      ".toml",
-      ".ini",
-      ".cfg",
-      ".conf",
-      ".properties",
-      ".env",
-      ".gitignore",
-      ".dockerignore",
-      ".gitattributes",
-      ".editorconfig",
-      ".gradle",
-      ".pom",
-      ".sbt",
-      ".maven",
-      ".cmake",
-      ".make",
-      ".dockerfile",
-      ".mod",
-      ".sum",
-      ".sql",
-      ".graphql",
-      ".gql",
-      ".proto",
-      ".thrift",
-      ".avro",
-      ".csv",
-      ".tsv",
-      ".log",
-    ];
+    // Extract extension for Set-based lookup
+    const lastDot = pathLower.lastIndexOf(".");
+    const ext = lastDot !== -1 ? pathLower.slice(lastDot) : "";
 
-    // Document extensions supported by DocumentPipeline
-    const documentExtensions = [".pdf", ".docx", ".xlsx", ".pptx", ".ipynb"];
-
-    const pathLower = path.toLowerCase();
-    const hasTextExtension = textExtensions.some((ext) => pathLower.endsWith(ext));
-    const hasDocumentExtension = documentExtensions.some((ext) =>
-      pathLower.endsWith(ext),
-    );
+    const hasTextExtension = ext !== "" && TEXT_EXTENSIONS.has(ext);
+    const hasDocumentExtension = ext !== "" && DOCUMENT_EXTENSIONS.has(ext);
     const hasCompoundExtension =
       pathLower.includes(".env.") ||
       pathLower.endsWith(".env") ||
       pathLower.includes(".config.") ||
       pathLower.includes(".lock");
 
-    const fileName = path.split("/").pop() || "";
+    const fileName = filePath.split("/").pop() || "";
     const fileNameLower = fileName.toLowerCase();
-    const commonTextFiles = [
-      "readme",
-      "license",
-      "changelog",
-      "contributing",
-      "authors",
-      "maintainers",
-      "dockerfile",
-      "makefile",
-      "rakefile",
-      "gemfile",
-      "podfile",
-      "cartfile",
-      "brewfile",
-      "procfile",
-      "vagrantfile",
-      "gulpfile",
-      "gruntfile",
-      ".prettierrc",
-      ".eslintrc",
-      ".babelrc",
-      ".nvmrc",
-      ".npmrc",
-    ];
 
-    const isCommonTextFile = commonTextFiles.some((name) => {
-      if (name.startsWith(".")) {
-        return fileNameLower === name || fileNameLower.startsWith(`${name}.`);
-      }
-      return fileNameLower === name || fileNameLower.startsWith(`${name}.`);
-    });
+    const isCommonTextFile = COMMON_TEXT_FILES.some(
+      (name) => fileNameLower === name || fileNameLower.startsWith(`${name}.`),
+    );
 
     // If file passes known checks, include it
     if (
@@ -439,14 +534,14 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       hasCompoundExtension ||
       isCommonTextFile
     ) {
-      return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
+      return shouldIncludeUrl(filePath, options.includePatterns, options.excludePatterns);
     }
 
     // Fallback: check if unknown extension has text/* MIME type using MimeTypeUtils
-    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(path);
+    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(filePath);
     if (mimeType?.startsWith("text/")) {
-      logger.debug(`Including file with text MIME type: ${path} (${mimeType})`);
-      return shouldIncludeUrl(path, options.includePatterns, options.excludePatterns);
+      logger.debug(`Including file with text MIME type: ${filePath} (${mimeType})`);
+      return shouldIncludeUrl(filePath, options.includePatterns, options.excludePatterns);
     }
 
     // Not a text file

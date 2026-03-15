@@ -33,7 +33,7 @@ export class PipelineFactory {
     return [
       new JsonPipeline(appConfig),
       new SourceCodePipeline(appConfig),
-      new DocumentPipeline(appConfig), // PDF, Office docs, Jupyter notebooks
+      new DocumentPipeline(appConfig), // PDF, Office docs, OpenDocument, RTF, eBooks, Jupyter notebooks
       new HtmlPipeline(appConfig),
       new MarkdownPipeline(appConfig),
       new TextPipeline(appConfig), // Universal fallback - must be last

@@ -14,7 +14,23 @@ The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
 -   🔒 **Private & Local:** Runs entirely on your machine; your code never leaves your network.
 -   🧩 **Broad Compatibility:** Works with any MCP-compatible client (Claude, Cline, etc.).
 -   📁 **Multiple Sources:** Index websites, GitHub repositories, local folders, and zip archives.
--   📄 **Rich File Support:** Processes HTML, Markdown, PDF, Word (.docx), Excel, PowerPoint, and source code.
+-   📄 **Rich File Support:** Processes HTML, Markdown, PDF, Office documents (Word, Excel, PowerPoint), OpenDocument, RTF, EPUB, Jupyter Notebooks, and [90+ source code languages](docs/concepts/supported-formats.md).
+
+---
+
+## 📄 Supported Formats
+
+| Category | Formats |
+|----------|---------|
+| **Documents** | PDF, Word (.docx/.doc), Excel (.xlsx/.xls), PowerPoint (.pptx/.ppt), OpenDocument (.odt/.ods/.odp), RTF, EPUB, FictionBook, Jupyter Notebooks |
+| **Archives** | ZIP, TAR, gzipped TAR (contents are extracted and processed individually) |
+| **Web** | HTML, XHTML |
+| **Markup** | Markdown, MDX, reStructuredText, AsciiDoc, Org Mode, Textile, R Markdown |
+| **Source Code** | TypeScript, JavaScript, Python, Go, Rust, C/C++, Java, Kotlin, Ruby, PHP, Swift, C#, and [many more](docs/concepts/supported-formats.md#source-code) |
+| **Data** | JSON, YAML, TOML, CSV, XML, SQL, GraphQL, Protocol Buffers |
+| **Config** | Dockerfile, Makefile, Terraform/HCL, INI, dotenv, Bazel |
+
+See **[Supported Formats](docs/concepts/supported-formats.md)** for the complete reference including MIME types and processing details.
 
 ---
 
@@ -78,6 +94,7 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 -   **[Connecting Clients](docs/guides/mcp-clients.md)**: How to connect Claude, VS Code (Cline/Roo), and other MCP clients.
 -   **[Basic Usage](docs/guides/basic-usage.md)**: Using the Web UI, CLI, and scraping local files.
 -   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.
+-   **[Supported Formats](docs/concepts/supported-formats.md)**: Complete file format and MIME type reference.
 -   **[Embedding Models](docs/guides/embedding-models.md)**: Configure OpenAI, Ollama, Gemini, and other providers.
 
 ### Key Concepts & Architecture
