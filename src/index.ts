@@ -2,8 +2,14 @@
 process.setSourceMapsEnabled(true);
 
 import "dotenv/config";
-import { runCli } from "./cli/main";
-import { ensurePlaywrightBrowsersInstalled } from "./cli/utils";
+import { sanitizeEnvironment } from "./utils/env";
+
+sanitizeEnvironment();
+
+const [{ runCli }, { ensurePlaywrightBrowsersInstalled }] = await Promise.all([
+  import("./cli/main"),
+  import("./cli/utils"),
+]);
 
 // Ensure Playwright browsers are installed
 ensurePlaywrightBrowsersInstalled();

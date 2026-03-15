@@ -278,4 +278,50 @@ describe("EmbeddingConfig", () => {
       expect(result.modelSpec).toBe("provider:");
     });
   });
+
+  describe("Docker Compose quoted values (GH-353)", () => {
+    it("should strip surrounding double quotes from model spec", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse('"openai:nomic-embed-text"');
+
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("nomic-embed-text");
+      expect(result.modelSpec).toBe("openai:nomic-embed-text");
+    });
+
+    it("should strip surrounding single quotes from model spec", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse("'openai:nomic-embed-text'");
+
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("nomic-embed-text");
+      expect(result.modelSpec).toBe("openai:nomic-embed-text");
+    });
+
+    it("should strip quotes from model-only spec (no provider prefix)", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse('"nomic-embed-text"');
+
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("nomic-embed-text");
+      expect(result.modelSpec).toBe("nomic-embed-text");
+    });
+
+    it("should trim whitespace around quoted values", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse('  "openai:nomic-embed-text"  ');
+
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("nomic-embed-text");
+    });
+
+    it("should handle quoted known model and return correct dimensions", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse('"openai:text-embedding-3-small"');
+
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("text-embedding-3-small");
+      expect(result.dimensions).toBe(1536);
+    });
+  });
 });
