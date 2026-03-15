@@ -100,9 +100,11 @@ export class DocumentRetrieverService {
     url: string,
     initialChunks: (DbPageChunk & DbChunkRank)[],
   ): Promise<StoreSearchResult> {
-    // Extract mimeType from the first document's content_type (page-level field)
-    // Convert null to undefined for consistency
+    // Extract processed and source MIME types from page-level fields.
+    // Convert null to undefined for consistency.
     const mimeType = initialChunks.length > 0 ? initialChunks[0].content_type : undefined;
+    const sourceMimeType =
+      initialChunks.length > 0 ? initialChunks[0].source_content_type : undefined;
 
     // Find the maximum score from the initial results
     const maxScore = Math.max(...initialChunks.map((chunk) => chunk.score));
@@ -125,6 +127,7 @@ export class DocumentRetrieverService {
       content,
       score: maxScore,
       mimeType,
+      sourceMimeType,
     };
   }
 

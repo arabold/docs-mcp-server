@@ -173,6 +173,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         url: rawContent.source,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
+        sourceContentType: rawContent.mimeType,
         contentType: processed.contentType || rawContent.mimeType,
         content: processed,
         links: filteredLinks,

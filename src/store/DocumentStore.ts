@@ -33,6 +33,7 @@ interface RawSearchResult extends DbChunk {
   // Page fields joined from pages table
   url?: string;
   title?: string;
+  source_content_type?: string;
   content_type?: string;
   // Search scoring fields
   vec_score?: number;
@@ -88,7 +89,16 @@ export class DocumentStore {
     insertEmbedding: Database.Statement<[string, bigint]>;
     // New statement for pages table
     insertPage: Database.Statement<
-      [number, string, string, string | null, string | null, string | null, number | null]
+      [
+        number,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        number | null,
+      ]
     >;
     getPageId: Database.Statement<[number, string]>;
     deleteDocuments: Database.Statement<[string, string]>;
@@ -226,7 +236,7 @@ export class DocumentStore {
   private prepareStatements(): void {
     const statements = {
       getById: this.db.prepare<[bigint]>(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type 
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type 
          FROM documents d
          JOIN pages p ON d.page_id = p.id
          WHERE d.id = ?`,
@@ -246,10 +256,11 @@ export class DocumentStore {
           string | null,
           string | null,
           string | null,
+          string | null,
           number | null,
         ]
       >(
-        "INSERT INTO pages (version_id, url, title, etag, last_modified, content_type, depth) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth",
+        "INSERT INTO pages (version_id, url, title, etag, last_modified, source_content_type, content_type, depth) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, source_content_type = excluded.source_content_type, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth",
       ),
       getPageId: this.db.prepare<[number, string]>(
         "SELECT id FROM pages WHERE version_id = ? AND url = ?",
@@ -342,7 +353,7 @@ export class DocumentStore {
       getChildChunks: this.db.prepare<
         [string, string, string, number, string, bigint, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -358,7 +369,7 @@ export class DocumentStore {
       getPrecedingSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -373,7 +384,7 @@ export class DocumentStore {
       getSubsequentSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -386,7 +397,7 @@ export class DocumentStore {
         LIMIT ?
       `),
       getParentChunk: this.db.prepare<[string, string, string, string, bigint]>(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -1234,7 +1245,8 @@ export class DocumentStore {
       // Insert documents in a transaction
       const transaction = this.db.transaction(() => {
         // Extract content type from metadata if available
-        const contentType = result.contentType || null;
+        const sourceContentType = result.sourceContentType || result.contentType || null;
+        const contentType = result.contentType || result.sourceContentType || null;
 
         // Extract etag from document metadata if available
         const etag = result.etag || null;
@@ -1249,6 +1261,7 @@ export class DocumentStore {
           title || "",
           etag,
           lastModified,
+          sourceContentType,
           contentType,
           depth,
         );
@@ -1542,6 +1555,7 @@ export class DocumentStore {
             d.metadata,
             p.url as url,
             p.title as title,
+            p.source_content_type as source_content_type,
             p.content_type as content_type,
             COALESCE(1 / (1 + v.vec_distance), 0) as vec_score,
             COALESCE(-MIN(f.fts_score, 0), 0) as fts_score
@@ -1580,6 +1594,7 @@ export class DocumentStore {
             ...row,
             url: row.url || "", // Ensure url is never undefined
             title: row.title || null,
+            source_content_type: row.source_content_type || null,
             content_type: row.content_type || null,
           };
           // Add search scores as additional properties (not in metadata)
@@ -1598,6 +1613,7 @@ export class DocumentStore {
             d.metadata,
             p.url as url,
             p.title as title,
+            p.source_content_type as source_content_type,
             p.content_type as content_type,
             bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
           FROM documents_fts f
@@ -1629,6 +1645,7 @@ export class DocumentStore {
             ...row,
             url: row.url || "", // Ensure url is never undefined
             title: row.title || null,
+            source_content_type: row.source_content_type || null,
             content_type: row.content_type || null,
           };
           // Add search scores as additional properties (not in metadata)
@@ -1808,7 +1825,7 @@ export class DocumentStore {
       // Use parameterized query for variable number of IDs
       const placeholders = ids.map(() => "?").join(",");
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id
@@ -1840,7 +1857,7 @@ export class DocumentStore {
     try {
       const normalizedVersion = version.toLowerCase();
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id

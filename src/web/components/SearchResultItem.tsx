@@ -69,9 +69,9 @@ const SearchResultItem = async ({ result }: SearchResultItemProps) => {
         >
           {result.url}
         </a>
-        {result.mimeType ? (
+        {result.sourceMimeType || result.mimeType ? (
           <span class="text-xs opacity-75 font-mono" safe>
-            {result.mimeType}
+            {result.sourceMimeType || result.mimeType}
           </span>
         ) : null}
       </div>

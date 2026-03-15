@@ -54,6 +54,7 @@ describe("LocalFileStrategy", () => {
       pageId: undefined,
       result: {
         textContent: "# Test\n\nThis is a test file.",
+        sourceContentType: "text/markdown",
         contentType: "text/markdown",
         url: "file:///test.md",
         title: "Test",
@@ -138,6 +139,7 @@ describe("LocalFileStrategy", () => {
         totalDiscovered: 4,
         result: expect.objectContaining({
           textContent: "# File 1",
+          sourceContentType: "text/markdown",
           contentType: "text/markdown",
           url: "file:///testdir/file1.md",
           title: "File 1",
@@ -156,7 +158,8 @@ describe("LocalFileStrategy", () => {
         totalDiscovered: 4,
         result: expect.objectContaining({
           textContent: expect.stringContaining("# File 2"),
-          contentType: "text/html",
+          sourceContentType: "text/html",
+          contentType: "text/markdown",
           url: "file:///testdir/file2.html",
           title: "File 2 Title",
         } satisfies Partial<ScrapeResult>),
@@ -174,6 +177,7 @@ describe("LocalFileStrategy", () => {
         totalDiscovered: 4,
         result: expect.objectContaining({
           textContent: "File 3",
+          sourceContentType: "text/plain",
           contentType: "text/plain",
           url: "file:///testdir/file3.txt",
           title: "file3.txt",
