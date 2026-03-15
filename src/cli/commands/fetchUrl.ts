@@ -8,6 +8,7 @@ import { ScrapeMode } from "../../scraper/types";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
+import { renderTextOutput } from "../output";
 import { parseHeaders } from "../utils";
 
 export function createFetchUrlCommand(cli: Argv) {
@@ -76,7 +77,7 @@ export function createFetchUrlCommand(cli: Argv) {
         headers: Object.keys(headers).length > 0 ? headers : undefined,
       });
 
-      console.log(content);
+      renderTextOutput(content);
     },
   );
 }

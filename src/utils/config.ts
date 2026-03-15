@@ -388,7 +388,7 @@ export function loadConfig(
     try {
       saveConfigFile(configPath, baseConfig);
     } catch (error) {
-      console.warn(`Failed to save config file to ${configPath}: ${error}`);
+      logger.warn(`Failed to save config file to ${configPath}: ${error}`);
     }
   }
 
@@ -420,7 +420,7 @@ function loadConfigFile(filePath: string): Record<string, unknown> | null {
     }
     return yaml.parse(content) || {};
   } catch (error) {
-    console.warn(`Failed to parse config file ${filePath}: ${error}`);
+    logger.warn(`Failed to parse config file ${filePath}: ${error}`);
     return null;
   }
 }

@@ -7,6 +7,7 @@
     "docs-mcp-server": "dist/index.js"
   },
   "license": "MIT",
+  "author": "grounded.tools",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/arabold/docs-mcp-server.git"
@@ -58,6 +59,7 @@
     "@langchain/openai": "^1.2.13",
     "@langchain/textsplitters": "^1.0.1",
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@toon-format/toon": "^2.1.0",
     "@trpc/client": "^11.13.4",
     "@trpc/server": "^11.4.4",
     "@types/yargs": "^17.0.35",

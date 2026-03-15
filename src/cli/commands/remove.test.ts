@@ -1,8 +1,10 @@
 /** Unit test for removeAction */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { createRemoveCommand } from "./remove";
+
+const stdoutWriteMock = vi.fn();
 
 const removeFn = vi.fn(async () => {});
 vi.mock("../../store", () => ({
@@ -31,8 +33,18 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("remove command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
+    stdoutWriteMock.mockReset();
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
   });
 
   it("calls removeAllDocuments", async () => {
@@ -42,5 +54,6 @@ describe("remove command", () => {
     await parser.parse("remove react --version 18.0.0");
 
     expect(removeFn).toHaveBeenCalledWith("react", "18.0.0");
+    expect(stdoutWriteMock).toHaveBeenCalledWith("Successfully removed react@18.0.0.\n");
   });
 });

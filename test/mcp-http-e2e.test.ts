@@ -11,6 +11,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 // Using deprecated SSEClientTransport intentionally to test the legacy /sse endpoint
@@ -173,6 +174,31 @@ describe("MCP HTTP server E2E", () => {
     return serverUrl;
   }
 
+  async function getAvailablePort(): Promise<number> {
+    return await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          server.close();
+          reject(new Error("Failed to resolve an available port"));
+          return;
+        }
+
+        const { port } = address;
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+
+          resolve(port);
+        });
+      });
+      server.on("error", reject);
+    });
+  }
+
   const createSseTransport = (sseUrl: URL) => {
     const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await fetch(input, init);
@@ -195,8 +221,7 @@ describe("MCP HTTP server E2E", () => {
   };
 
   it("should start HTTP server, respond to initialize, and list tools", async () => {
-    // Use a high port to avoid conflicts
-    const port = 39123;
+    const port = await getAvailablePort();
     const serverUrl = await startServer(port);
 
     // Construct SSE endpoint URL
@@ -236,7 +261,7 @@ describe("MCP HTTP server E2E", () => {
   }, 30000);
 
   it("should handle shutdown gracefully", async () => {
-    const port = 39124;
+    const port = await getAvailablePort();
     const serverUrl = await startServer(port);
 
     const sseUrl = new URL("/sse", serverUrl);
@@ -277,7 +302,7 @@ describe("MCP HTTP server E2E", () => {
   }, 30000);
 
   it("should send SSE heartbeat messages to keep connection alive", async () => {
-    const port = 39125;
+    const port = await getAvailablePort();
     const serverUrl = await startServer(port);
 
     // Connect directly to SSE endpoint to observe raw data
@@ -345,7 +370,7 @@ describe("MCP HTTP server E2E", () => {
   }, 45000);
 
   it("should handle concurrent SSE clients with overlapping message IDs", async () => {
-    const port = 39126;
+    const port = await getAvailablePort();
     const serverUrl = await startServer(port);
     const sseUrl = new URL("/sse", serverUrl);
 
@@ -388,7 +413,7 @@ describe("MCP HTTP server E2E", () => {
   }, 30000);
 
   it("should list and read resources via SSE", async () => {
-    const port = 39127;
+    const port = await getAvailablePort();
     const serverUrl = await startServer(port);
     const sseUrl = new URL("/sse", serverUrl);
 

@@ -12,6 +12,7 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import { applyGlobalCliOutputMode } from "../output";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
@@ -104,6 +105,11 @@ export function createMcpCommand(cli: Argv) {
       const resolvedProtocol = resolveProtocol(argv.protocol as string);
       if (resolvedProtocol === "stdio") {
         setLogLevel(LogLevel.ERROR);
+      } else {
+        applyGlobalCliOutputMode({
+          verbose: argv.verbose as boolean,
+          quiet: argv.quiet as boolean,
+        });
       }
 
       const appConfig = loadConfig(argv, {

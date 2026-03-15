@@ -2,7 +2,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { logger } from "../../utils/logger";
 import { createConfigCommand } from "./config";
+
+const stdoutWriteMock = vi.fn();
 
 vi.mock("../../utils/config", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../utils/config")>();
@@ -30,18 +33,25 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("config command", () => {
-  let consoleSpy: ReturnType<typeof vi.spyOn>;
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutWriteSpy: { mockRestore: () => void };
+  let loggerErrorSpy: { mockRestore: () => void };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    stdoutWriteMock.mockReset();
+    process.env.ENABLE_TEST_LOGS = "1";
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+    loggerErrorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     process.exitCode = undefined;
   });
 
   afterEach(() => {
+    delete process.env.ENABLE_TEST_LOGS;
     process.exitCode = undefined;
+    stdoutWriteSpy.mockRestore();
+    loggerErrorSpy.mockRestore();
   });
 
   describe("config (no subcommand)", () => {
@@ -51,16 +61,27 @@ describe("config command", () => {
 
       await parser.parse("config");
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('"scraper"'));
+      expect(stdoutWriteMock).toHaveBeenCalledWith(expect.stringContaining('"scraper"'));
     });
 
     it("prints configuration as YAML with --yaml flag", async () => {
       const parser = yargs().scriptName("test");
       createConfigCommand(parser);
 
-      await parser.parse("config --yaml");
+      await parser.parse("config --output yaml");
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("scraper:"));
+      expect(stdoutWriteMock).toHaveBeenCalledWith(expect.stringContaining("scraper:"));
+    });
+
+    it("prints configuration as TOON with --output toon", async () => {
+      const parser = yargs().scriptName("test");
+      createConfigCommand(parser);
+
+      await parser.parse("config --output toon");
+
+      expect(stdoutWriteMock).toHaveBeenCalledWith(
+        expect.stringContaining("maxPages: 1000"),
+      );
     });
   });
 
@@ -71,7 +92,7 @@ describe("config command", () => {
 
       await parser.parse("config get scraper.maxPages");
 
-      expect(consoleSpy).toHaveBeenCalledWith("1000");
+      expect(stdoutWriteMock).toHaveBeenCalledWith("1000\n");
     });
 
     it("gets an object value as JSON", async () => {
@@ -80,7 +101,9 @@ describe("config command", () => {
 
       await parser.parse("config get scraper.fetcher");
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('"maxRetries"'));
+      expect(stdoutWriteMock).toHaveBeenCalledWith(
+        expect.stringContaining('"maxRetries"'),
+      );
     });
 
     it("errors on invalid path", async () => {
@@ -89,7 +112,7 @@ describe("config command", () => {
 
       await parser.parse("config get invalid.path");
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining("Invalid config path"),
       );
       expect(process.exitCode).toBe(1);
@@ -99,9 +122,22 @@ describe("config command", () => {
       const parser = yargs().scriptName("test");
       createConfigCommand(parser);
 
-      await parser.parse("config get scraper.fetcher --yaml");
+      await parser.parse("config get scraper.fetcher --output yaml");
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("maxRetries:"));
+      expect(stdoutWriteMock).toHaveBeenCalledWith(
+        expect.stringContaining("maxRetries:"),
+      );
+    });
+
+    it("outputs TOON with --output toon", async () => {
+      const parser = yargs().scriptName("test");
+      createConfigCommand(parser);
+
+      await parser.parse("config get scraper.fetcher --output toon");
+
+      expect(stdoutWriteMock).toHaveBeenCalledWith(
+        expect.stringContaining("maxRetries: 6"),
+      );
     });
   });
 
@@ -112,7 +148,7 @@ describe("config command", () => {
 
       await parser.parse("config set scraper.maxPages 500");
 
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(stdoutWriteMock).toHaveBeenCalledWith(
         expect.stringContaining("Updated scraper.maxPages"),
       );
     });
@@ -123,7 +159,7 @@ describe("config command", () => {
 
       await parser.parse("config set invalid.path value");
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining("Invalid config path"),
       );
       expect(process.exitCode).toBe(1);
@@ -135,7 +171,7 @@ describe("config command", () => {
 
       await parser.parse("config set scraper.maxPages 500 --config /some/path.yaml");
 
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect(logger.error).toHaveBeenCalledWith(
         expect.stringContaining("Cannot modify configuration"),
       );
       expect(process.exitCode).toBe(1);

@@ -6,6 +6,8 @@ import type { Argv } from "yargs";
 import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
+import { logger } from "../../utils/logger";
+import { renderTextOutput } from "../output";
 import { type CliContext, getEventBus } from "../utils";
 
 export function createRemoveCommand(cli: Argv) {
@@ -61,11 +63,12 @@ export function createRemoveCommand(cli: Argv) {
         // Call the document service directly - we could convert this to use RemoveTool if needed
         await docService.removeAllDocuments(library, version);
 
-        console.log(`✅ Successfully removed ${library}${version ? `@${version}` : ""}.`);
+        renderTextOutput(
+          `Successfully removed ${library}${version ? `@${version}` : ""}.`,
+        );
       } catch (error) {
-        console.error(
-          `❌ Failed to remove ${library}${version ? `@${version}` : ""}:`,
-          error instanceof Error ? error.message : String(error),
+        logger.error(
+          `❌ Failed to remove ${library}${version ? `@${version}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
         );
         throw error;
       } finally {

@@ -12,6 +12,7 @@ import {
   pathToEnvVar,
 } from "./config";
 import { normalizeEnvValue } from "./env";
+import { logger } from "./logger";
 
 // Mock env-paths to return a controlled system path
 vi.mock("env-paths", () => ({
@@ -105,7 +106,7 @@ describe("Configuration Loading", () => {
       // For the "default" case, we accept that it tries to write to `/system/config-mock`
       // and logs a warning (which we can suppress or inspect).
 
-      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
       const config = loadConfig({}, {}); // No args -> Default System Path
 
@@ -113,10 +114,10 @@ describe("Configuration Loading", () => {
       // It should try to save.
       // We can check if `fs.writeFileSync` was called if we spy on it, but we are using real FS.
       // Since it fails to write to `/system/...`, it logs a warning.
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("Failed to save config file"),
       );
-      consoleSpy.mockRestore();
+      warnSpy.mockRestore();
     });
 
     it("should load explicit config from --config and NOT write back", () => {
