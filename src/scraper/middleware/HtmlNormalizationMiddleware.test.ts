@@ -280,6 +280,68 @@ describe("HtmlNormalizationMiddleware", () => {
       expect($(links[0]).attr("href")).toBe("https://example.com/::invalid::url");
       expect($("a")).toHaveLength(1);
     });
+
+    it("should simplify single div wrappers inside links", async () => {
+      const context = createContext(`
+        <a href="/reference/react/useDeferredValue">
+          <div><span>Previous</span><span>useDeferredValue</span></div>
+        </a>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      const linkHtml = $("a").html()?.trim();
+
+      expect(linkHtml).toBe("<span>Previous</span> <span>useDeferredValue</span>");
+    });
+
+    it("should simplify single paragraph wrappers inside links", async () => {
+      const context = createContext(`
+        <a href="/docs"><p>Read docs</p></a>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      expect($("a").html()).toBe("Read docs");
+    });
+
+    it("should preserve inline formatting while simplifying link wrappers", async () => {
+      const context = createContext(`
+        <a href="/docs"><div><strong>Bold</strong> and <em>italic</em></div></a>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      expect($("a strong")).toHaveLength(1);
+      expect($("a em")).toHaveLength(1);
+      expect($("a").html()).toBe("<strong>Bold</strong> and <em>italic</em>");
+    });
+
+    it("should preserve image wrappers inside links", async () => {
+      const context = createContext(`
+        <a href="/image"><div><img src="hero.png" alt="Hero"></div></a>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      expect($("a > div > img")).toHaveLength(1);
+    });
+
+    it("should preserve multiple block wrappers inside links", async () => {
+      const context = createContext(`
+        <a href="/two"><div>One</div><div>Two</div></a>
+      `);
+
+      await middleware.process(context, async () => {});
+
+      const $ = context.dom!;
+      expect($("a > div")).toHaveLength(2);
+      expect($("a").text()).toBe("OneTwo");
+    });
   });
 
   describe("tracking image removal", () => {
