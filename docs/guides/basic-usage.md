@@ -52,6 +52,10 @@ npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/rea
 - Use `--quiet` to suppress non-error diagnostics or `--verbose` to enable debug logging.
 - In non-interactive runs, diagnostics stay off stdout so agents and scripts can parse results safely.
 
+### Agent Skills
+
+For AI coding assistants, the [`skills/`](../../skills/) directory provides detailed [Agent Skills](https://agentskills.io) covering documentation search, index management, and URL fetching.
+
 ## 📂 Scraping Local Files
 
 You can index documentation from your local filesystem using `file://` URLs. This works in both the Web UI and CLI.

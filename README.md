@@ -49,7 +49,7 @@ npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/rea
 **2. Query the index:**
 
 ```bash
-npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output toon
+npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
 ```
 
 **3. Fetch a single page as Markdown:**
@@ -65,6 +65,10 @@ npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/
 - Plain-text commands such as `fetch-url` keep their text payload on stdout.
 - Diagnostics go through the shared logger and are kept off stdout in non-interactive runs.
 - Use `--quiet` to suppress non-error diagnostics or `--verbose` to enable debug output.
+
+### Agent Skills
+
+The [`skills/`](skills/) directory contains [Agent Skills](https://agentskills.io) that teach AI coding assistants how to use the CLI — covering documentation search, index management, and URL fetching.
 
 ### MCP Server
 
