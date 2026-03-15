@@ -168,7 +168,7 @@ describe("DocumentPipeline", () => {
 
       expect(result.errors).toHaveLength(0);
       expect(result.textContent).toBeTruthy();
-      expect(result.textContent).toContain("Sample DOCX Document");
+      expect(result.textContent).toContain("Demonstration of DOCX support in calibre");
       expect(result.contentType).toBe("text/markdown");
       expect(result.chunks).toBeDefined();
     });
@@ -231,7 +231,7 @@ describe("DocumentPipeline", () => {
       expect(result.contentType).toBe("text/markdown");
       // Should use tables[].markdown output with proper Markdown table formatting
       expect(result.textContent).toContain("|");
-      expect(result.textContent).toContain("Sample XLSX");
+      expect(result.textContent).toContain("| --- | --- |");
     });
 
     it("should process a PPTX file and extract content", async () => {
@@ -358,7 +358,7 @@ describe("DocumentPipeline", () => {
 
       expect(result.errors).toHaveLength(0);
       expect(result.textContent).toBeTruthy();
-      expect(result.textContent).toContain("Sample PDF");
+      expect(result.textContent).toContain("Avian Carriers");
       expect(result.contentType).toBe("text/markdown");
     });
 
@@ -376,7 +376,7 @@ describe("DocumentPipeline", () => {
 
       expect(result.errors).toHaveLength(0);
       expect(result.textContent).toBeTruthy();
-      expect(result.textContent).toContain("Sample DOCX Document");
+      expect(result.textContent).toContain("Demonstration of DOCX support in calibre");
       expect(result.contentType).toBe("text/markdown");
     });
 
@@ -426,7 +426,7 @@ describe("DocumentPipeline", () => {
 
       expect(result.errors).toHaveLength(0);
       expect(result.textContent).toBeTruthy();
-      expect(result.textContent).toContain("Sample DOCX Document");
+      expect(result.textContent).toContain("Demonstration of DOCX support in calibre");
     });
 
     it("should fail gracefully for application/octet-stream with no document extension", async () => {
