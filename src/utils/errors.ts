@@ -12,34 +12,9 @@ class ScraperError extends Error {
   }
 }
 
-class NetworkError extends ScraperError {
-  constructor(
-    message: string,
-    public readonly statusCode?: number,
-    cause?: Error,
-  ) {
-    super(message, true, cause);
-  }
-}
-
-class RateLimitError extends ScraperError {
-  constructor(
-    message: string,
-    public readonly retryAfter?: number,
-  ) {
-    super(message, true);
-  }
-}
-
 class InvalidUrlError extends ScraperError {
   constructor(url: string, cause?: Error) {
     super(`Invalid URL: ${url}`, false, cause);
-  }
-}
-
-class ParsingError extends ScraperError {
-  constructor(message: string, cause?: Error) {
-    super(`Failed to parse content: ${message}`, false, cause);
   }
 }
 
@@ -69,12 +44,4 @@ class ChallengeError extends ScraperError {
   }
 }
 
-export {
-  ScraperError,
-  NetworkError,
-  RateLimitError,
-  InvalidUrlError,
-  ParsingError,
-  RedirectError,
-  ChallengeError,
-};
+export { ScraperError, InvalidUrlError, RedirectError, ChallengeError };
