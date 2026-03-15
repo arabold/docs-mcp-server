@@ -4,7 +4,6 @@ import type { Argv } from "yargs";
 import { getLogLevelFromEnv, LogLevel, logger, setLogLevel } from "../utils/logger";
 
 export type OutputFormat = "json" | "yaml" | "toon";
-export type OutputKind = "structured" | "text";
 
 export interface HasOutputOption {
   [key: string]: unknown;
@@ -17,16 +16,13 @@ export function isInteractiveOutput(): boolean {
   return !!process.stdout.isTTY && !!process.stderr.isTTY;
 }
 
-export function resolveOutputFormat(
-  argv: HasOutputOption,
-  _kind: OutputKind,
-): OutputFormat {
+export function resolveOutputFormat(argv: HasOutputOption): OutputFormat {
   const requestedFormat = argv.output as OutputFormat | undefined;
   if (requestedFormat) {
     return requestedFormat;
   }
 
-  return isInteractiveOutput() || _kind === "text" ? "json" : "json";
+  return "json";
 }
 
 export function formatStructuredOutput(value: unknown, format: OutputFormat): string {
@@ -42,7 +38,7 @@ export function formatStructuredOutput(value: unknown, format: OutputFormat): st
 }
 
 export function renderStructuredOutput(value: unknown, argv: HasOutputOption): void {
-  const format = resolveOutputFormat(argv, "structured");
+  const format = resolveOutputFormat(argv);
   process.stdout.write(`${formatStructuredOutput(value, format)}\n`);
 }
 

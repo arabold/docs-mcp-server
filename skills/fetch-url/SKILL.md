@@ -65,12 +65,14 @@ npx @arabold/docs-mcp-server@latest fetch-url https://example.com/old-page --no-
 
 ## Output
 
-The command writes the converted Markdown text directly to **stdout**. There is
-no `--output` format flag because the result is already plain text, not
-structured data.
+The command writes the converted Markdown text directly to **stdout**. The
+global `--output` flag is accepted but has no effect because the result is
+already plain text, not structured data.
 
-Diagnostics and errors go to **stderr** and are suppressed in non-interactive
-sessions (or when `--quiet` is set).
+Diagnostics and errors go to **stderr** and are suppressed by default in
+non-interactive sessions. Use `--verbose` (or set `LOG_LEVEL=INFO`) to
+re-enable them. Use `--quiet` to suppress all non-error diagnostics
+regardless of session type.
 
 ## Tips
 

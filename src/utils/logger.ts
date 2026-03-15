@@ -33,7 +33,9 @@ function writeToStderr(message: string): void {
 }
 
 /**
- * Gets the log level from environment variable or returns default.
+ * Gets the log level from the `LOG_LEVEL` environment variable.
+ * Returns the matching {@link LogLevel} value, or `null` if the variable
+ * is unset or contains an unrecognised value.
  */
 export function getLogLevelFromEnv(): LogLevel | null {
   const envLevel = process.env.LOG_LEVEL?.toUpperCase();
@@ -89,7 +91,8 @@ export const logger = {
     }
   },
   /**
-   * Logs an error message if the current log level is ERROR or higher (always logs).
+   * Logs an error message if the current log level is ERROR or higher.
+   * Suppressed during test runs unless `ENABLE_TEST_LOGS=1` is set.
    * @param message - The message to log.
    */
   error: (message: string) => {

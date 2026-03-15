@@ -127,11 +127,12 @@ This is destructive and cannot be undone. Re-run `scrape` to re-index.
 ## Output behaviour
 
 All three commands write plain-text status messages to **stdout** and
-diagnostics to **stderr**. There is no `--output` format flag for these commands
-because their output is not structured data.
+diagnostics to **stderr**. The global `--output` flag is accepted but has no
+effect because the output is plain text, not structured data.
 
-Use `--quiet` to suppress progress and info messages, or `--verbose` to see
-detailed debug output.
+In non-interactive sessions, diagnostics are suppressed by default. Use
+`--verbose` (or set `LOG_LEVEL=INFO`) to re-enable them. Use `--quiet` to
+suppress all non-error diagnostics regardless of session type.
 
 ## Typical workflow
 

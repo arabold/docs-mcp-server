@@ -110,8 +110,9 @@ Returns the resolved version string and library metadata.
 ## Interpreting output
 
 All three commands emit structured data to **stdout**. Diagnostics and progress
-messages go to **stderr** and are suppressed automatically in non-interactive
-sessions (or when `--quiet` is set).
+messages go to **stderr** and are suppressed by default in non-interactive
+sessions. Use `--verbose` (or set `LOG_LEVEL=INFO`) to re-enable them.
+Use `--quiet` to suppress all non-error diagnostics regardless of session type.
 
 To capture results programmatically, parse stdout as JSON (the default) or
 request `--output yaml` for a more readable format.
