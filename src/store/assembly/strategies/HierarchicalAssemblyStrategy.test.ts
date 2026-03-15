@@ -59,6 +59,7 @@ describe("HierarchicalAssemblyStrategy", () => {
       await documentStore.addDocuments("test-hierarchy", "1.0", 0, {
         url: "Deep.ts",
         title: "Deep TypeScript File",
+        sourceContentType: "text/typescript",
         contentType: "text/typescript",
         textContent: "",
         chunks: [
@@ -135,6 +136,7 @@ describe("HierarchicalAssemblyStrategy", () => {
       await documentStore.addDocuments("test-gaps", "1.0", 0, {
         url: "GapTest.ts",
         title: "Gap Test TypeScript File",
+        sourceContentType: "text/typescript",
         contentType: "text/typescript",
         textContent: "",
         chunks: [
@@ -200,6 +202,7 @@ describe("HierarchicalAssemblyStrategy", () => {
       await documentStore.addDocuments("test-promotion", "1.0", 0, {
         url: "applyMigrations.ts",
         title: "Apply Migrations TypeScript File",
+        sourceContentType: "text/typescript",
         contentType: "text/typescript",
         textContent: "",
         chunks: [
@@ -271,6 +274,7 @@ describe("HierarchicalAssemblyStrategy", () => {
         "User Service TypeScript File",
         null,
         null,
+        "text/typescript",
         "text/typescript",
         0, // depth
       );
@@ -392,6 +396,7 @@ describe("HierarchicalAssemblyStrategy", () => {
         null,
         null,
         "text/typescript",
+        "text/typescript",
         0, // depth
       );
       const pageAId = pageAResult.lastInsertRowid as number;
@@ -403,6 +408,7 @@ describe("HierarchicalAssemblyStrategy", () => {
         "File B TypeScript File",
         null,
         null,
+        "text/typescript",
         "text/typescript",
         0, // depth
       );

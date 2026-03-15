@@ -96,6 +96,7 @@ describe("PipelineManager", () => {
     result: {
       url: `https://example.com/page-${pagesScraped}`,
       title: `Page ${pagesScraped}`,
+      sourceContentType: "text/html",
       contentType: "text/html",
       textContent: "",
       links: [],

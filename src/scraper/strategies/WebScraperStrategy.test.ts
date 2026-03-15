@@ -568,6 +568,8 @@ describe("WebScraperStrategy", () => {
       expect(docCall![0].result?.textContent).toContain(
         "This is already markdown content.",
       );
+      expect(docCall![0].result?.sourceContentType).toBe("text/markdown");
+      expect(docCall![0].result?.contentType).toBe("text/markdown");
     });
 
     it("should skip unsupported content types", async () => {

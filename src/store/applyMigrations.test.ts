@@ -71,6 +71,7 @@ describe("Database Migrations", () => {
         "title",
         "etag",
         "last_modified",
+        "source_content_type",
         "content_type",
         "created_at",
       ]),
@@ -187,8 +188,8 @@ describe("Database Migrations", () => {
 
     // Insert test pages first
     const insertPage = db.prepare(`
-      INSERT INTO pages (version_id, url, title, etag, last_modified, content_type)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO pages (version_id, url, title, etag, last_modified, source_content_type, content_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
 
     const page1Id = insertPage.run(
@@ -197,6 +198,7 @@ describe("Database Migrations", () => {
       "AI Basics",
       null,
       null,
+      "text/html",
       "text/html",
     ).lastInsertRowid as number;
 
@@ -207,6 +209,7 @@ describe("Database Migrations", () => {
       null,
       null,
       "text/html",
+      "text/html",
     ).lastInsertRowid as number;
 
     const page3Id = insertPage.run(
@@ -215,6 +218,7 @@ describe("Database Migrations", () => {
       "Cooking Guide",
       null,
       null,
+      "text/html",
       "text/html",
     ).lastInsertRowid as number;
 
