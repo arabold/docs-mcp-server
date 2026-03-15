@@ -28,7 +28,7 @@ The single `content_type` column cannot represent both the original source forma
 
 ### Decision 1: Two Columns on `pages` -- `source_content_type` and `content_type`
 
-**What:** Rename the existing `content_type` column to `source_content_type` (stores the original MIME type from the fetcher, e.g., `text/html`, `application/pdf`, `text/x-typescript`). Add a new `content_type` column (stores the post-processing MIME type from the pipeline, e.g., `text/markdown` for converted HTML/PDF, `text/x-typescript` for source code which passes through unchanged).
+**What:** Add `source_content_type` alongside the existing `content_type` column. `source_content_type` stores the original MIME type from the fetcher (e.g., `text/html`, `application/pdf`, `text/x-typescript`). `content_type` continues to store the post-processing MIME type from the pipeline (e.g., `text/markdown` for converted HTML/PDF, `text/x-typescript` for source code which passes through unchanged).
 
 **Why:**
 - `source_content_type` is immutable -- it reflects what was fetched, regardless of pipeline changes between versions.

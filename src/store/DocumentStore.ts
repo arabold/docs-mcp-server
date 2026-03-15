@@ -32,9 +32,9 @@ import {
 interface RawSearchResult extends DbChunk {
   // Page fields joined from pages table
   url?: string;
-  title?: string;
-  source_content_type?: string;
-  content_type?: string;
+  title?: string | null;
+  source_content_type?: string | null;
+  content_type?: string | null;
   // Search scoring fields
   vec_score?: number;
   fts_score?: number;

@@ -102,9 +102,12 @@ export class DocumentRetrieverService {
   ): Promise<StoreSearchResult> {
     // Extract processed and source MIME types from page-level fields.
     // Convert null to undefined for consistency.
-    const mimeType = initialChunks.length > 0 ? initialChunks[0].content_type : undefined;
+    const mimeType =
+      initialChunks.length > 0 ? (initialChunks[0].content_type ?? undefined) : undefined;
     const sourceMimeType =
-      initialChunks.length > 0 ? initialChunks[0].source_content_type : undefined;
+      initialChunks.length > 0
+        ? (initialChunks[0].source_content_type ?? undefined)
+        : undefined;
 
     // Find the maximum score from the initial results
     const maxScore = Math.max(...initialChunks.map((chunk) => chunk.score));

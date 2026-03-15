@@ -10,8 +10,8 @@ The `pages.content_type` column currently stores inconsistent values depending o
 
 ## What Changes
 
-- **BREAKING**: Rename `pages.content_type` to `pages.source_content_type` to store the original MIME type of the fetched resource (e.g., `text/html`, `application/pdf`, `text/x-typescript`).
-- Add new column `pages.content_type` to store the post-processing MIME type (e.g., `text/markdown` after HTML-to-markdown conversion, or the original type if unchanged).
+- Add `pages.source_content_type` to store the original MIME type of the fetched resource (e.g., `text/html`, `application/pdf`, `text/x-typescript`).
+- Keep `pages.content_type` as the post-processing MIME type (e.g., `text/markdown` after HTML-to-markdown conversion, or the original type if unchanged).
 - Fix all three scraper strategies to consistently populate both values.
 - Update downstream consumers (assembly strategy, web UI, search API) to use the appropriate field.
 - Update documentation to clearly define the semantics of each column.
