@@ -17,6 +17,8 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
  * non-functional links while preserving contextually valuable text content.
  */
 export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
+  private readonly presentationalAnchorWrapperTags = new Set(["div", "p"]);
+
   // Known tracking/analytics domains and patterns to filter out
   private readonly trackingPatterns = [
     "adroll.com",
@@ -60,6 +62,9 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
 
       // Normalize and clean links
       this.normalizeLinks($, baseUrl);
+
+      // Simplify purely presentational wrappers inside links before markdown conversion
+      this.simplifyAnchorContent($);
 
       logger.debug(`Successfully normalized HTML content for ${context.source}`);
     } catch (error) {
@@ -173,6 +178,105 @@ export class HtmlNormalizationMiddleware implements ContentProcessorMiddleware {
         }
       }
     });
+  }
+
+  /**
+   * Removes single presentational block wrappers inside anchors so Turndown does not
+   * emit multi-line link labels for layout-only structures.
+   */
+  private simplifyAnchorContent($: cheerio.CheerioAPI): void {
+    $("a").each((_index, element) => {
+      const $link = $(element);
+      let simplified = true;
+
+      while (simplified) {
+        simplified = false;
+
+        const significantChildren = $link
+          .contents()
+          .toArray()
+          .filter((node) => node.type !== "text" || (node.data || "").trim().length > 0);
+
+        if (significantChildren.length !== 1) {
+          continue;
+        }
+
+        const wrapperNode = significantChildren[0];
+        if (wrapperNode.type !== "tag") {
+          continue;
+        }
+
+        const tagName = wrapperNode.tagName.toLowerCase();
+        if (!this.presentationalAnchorWrapperTags.has(tagName)) {
+          continue;
+        }
+
+        const $wrapper = $(wrapperNode);
+        if (this.hasProtectedDescendants($wrapper)) {
+          continue;
+        }
+
+        this.insertSpacesBetweenSiblingTextFragments($, $wrapper);
+        $wrapper.replaceWith($wrapper.contents());
+        simplified = true;
+      }
+    });
+  }
+
+  private hasProtectedDescendants($element: cheerio.Cheerio<AnyNode>): boolean {
+    return $element.find("img, pre, table, ul, ol, li, blockquote").length > 0;
+  }
+
+  private insertSpacesBetweenSiblingTextFragments(
+    $: cheerio.CheerioAPI,
+    $element: cheerio.Cheerio<AnyNode>,
+  ): void {
+    const children = $element.contents().toArray();
+
+    for (let index = 1; index < children.length; index++) {
+      const previousNode = children[index - 1];
+      const currentNode = children[index];
+
+      if (
+        !this.nodeHasVisibleText($, previousNode) ||
+        !this.nodeHasVisibleText($, currentNode)
+      ) {
+        continue;
+      }
+
+      if (this.hasWhitespaceBoundary($, previousNode, currentNode)) {
+        continue;
+      }
+
+      $(currentNode).before(" ");
+    }
+  }
+
+  private nodeHasVisibleText($: cheerio.CheerioAPI, node: AnyNode): boolean {
+    if (node.type === "text") {
+      return (node.data || "").trim().length > 0;
+    }
+
+    return $(node).text().trim().length > 0;
+  }
+
+  private hasWhitespaceBoundary(
+    $: cheerio.CheerioAPI,
+    previousNode: AnyNode,
+    currentNode: AnyNode,
+  ): boolean {
+    const previousText = this.getNodeText($, previousNode);
+    const currentText = this.getNodeText($, currentNode);
+
+    return /\s$/.test(previousText) || /^\s/.test(currentText);
+  }
+
+  private getNodeText($: cheerio.CheerioAPI, node: AnyNode): string {
+    if (node.type === "text") {
+      return node.data || "";
+    }
+
+    return $(node).text();
   }
 
   /**
