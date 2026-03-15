@@ -111,6 +111,11 @@ export const handlers = [
     });
   }),
 
+  // Non-existent domain simulation
+  http.get("https://this-domain-definitely-does-not-exist-12345.com", () => {
+    return HttpResponse.error();
+  }),
+
   // 404 endpoint
   http.get("https://httpbin.org/status/404", () => {
     return new HttpResponse("Not Found", {

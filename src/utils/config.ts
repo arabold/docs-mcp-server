@@ -3,6 +3,7 @@ import path from "node:path";
 import envPaths from "env-paths";
 import yaml from "yaml";
 import { z } from "zod";
+import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
 
 /**
@@ -450,7 +451,11 @@ function mapEnvToConfig(): Record<string, unknown> {
     if (mapping.env) {
       for (const envVar of mapping.env) {
         if (process.env[envVar] !== undefined) {
-          setAtPath(config, mapping.path, process.env[envVar]);
+          setAtPath(
+            config,
+            mapping.path,
+            normalizeEnvValue(process.env[envVar] as string),
+          );
           break; // First match wins
         }
       }
@@ -461,7 +466,7 @@ function mapEnvToConfig(): Record<string, unknown> {
   for (const pathArr of ALL_CONFIG_LEAF_PATHS) {
     const envVar = pathToEnvVar(pathArr);
     if (process.env[envVar] !== undefined) {
-      setAtPath(config, pathArr, process.env[envVar]);
+      setAtPath(config, pathArr, normalizeEnvValue(process.env[envVar] as string));
     }
   }
 

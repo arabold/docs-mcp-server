@@ -1,5 +1,6 @@
 import type { Mock } from "vitest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { sanitizeEnvironment } from "../../utils/env";
 import { resolveGitHubAuth } from "./github-auth";
 
 // Mock child_process
@@ -113,6 +114,25 @@ describe("resolveGitHubAuth", () => {
       const result = await resolveGitHubAuth();
 
       expect(result).toEqual({ Authorization: "Bearer gh-token-value" });
+    });
+  });
+  describe("sanitized environment values", () => {
+    it("should use sanitized GITHUB_TOKEN values", async () => {
+      process.env.GITHUB_TOKEN = '"ghp_test_token"';
+      sanitizeEnvironment(process.env);
+
+      const result = await resolveGitHubAuth();
+
+      expect(result).toEqual({ Authorization: "Bearer ghp_test_token" });
+    });
+
+    it("should use sanitized GH_TOKEN values", async () => {
+      process.env.GH_TOKEN = '"ghp_test_token"';
+      sanitizeEnvironment(process.env);
+
+      const result = await resolveGitHubAuth();
+
+      expect(result).toEqual({ Authorization: "Bearer ghp_test_token" });
     });
   });
 
