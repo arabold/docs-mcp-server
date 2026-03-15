@@ -8,7 +8,7 @@ description: >-
   available in the local index.
 compatibility: Requires Node.js 22+ and npx
 metadata:
-  author: arabold
+  author: grounded.tools
 ---
 
 # Docs Search

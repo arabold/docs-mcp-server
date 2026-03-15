@@ -7,7 +7,7 @@ description: >-
   Use when you need to add, update, or delete indexed documentation.
 compatibility: Requires Node.js 22+ and npx
 metadata:
-  author: arabold
+  author: grounded.tools
 ---
 
 # Docs Manage
