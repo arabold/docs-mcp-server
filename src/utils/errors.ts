@@ -44,4 +44,4 @@ class ChallengeError extends ScraperError {
   }
 }
 
-export { ScraperError, InvalidUrlError, RedirectError, ChallengeError };
+export { ChallengeError, InvalidUrlError, RedirectError, ScraperError };
