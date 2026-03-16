@@ -565,6 +565,9 @@ export class MimeTypeUtils {
       "text/x-xml": "xml",
       "text/xml": "xml",
       "application/xml": "xml",
+      "application/xslt+xml": "xml",
+      "application/xml-dtd": "xml",
+      "application/wsdl+xml": "xml",
       "text/x-sql": "sql",
       "text/x-graphql": "graphql",
 

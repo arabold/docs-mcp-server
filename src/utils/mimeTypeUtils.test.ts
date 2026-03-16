@@ -76,6 +76,9 @@ describe("MimeTypeUtils", () => {
       expect(MimeTypeUtils.isSafeForTextProcessing("application/x-yaml")).toBe(true);
       expect(MimeTypeUtils.isSafeForTextProcessing("application/yaml")).toBe(true);
       expect(MimeTypeUtils.isSafeForTextProcessing("application/json")).toBe(true);
+      expect(MimeTypeUtils.isSafeForTextProcessing("application/xslt+xml")).toBe(true);
+      expect(MimeTypeUtils.isSafeForTextProcessing("application/xml-dtd")).toBe(true);
+      expect(MimeTypeUtils.isSafeForTextProcessing("application/wsdl+xml")).toBe(true);
     });
 
     it("should reject unsafe application types", () => {
@@ -397,6 +400,37 @@ describe("MimeTypeUtils", () => {
       });
     });
 
+    describe("XML-based formats (issue #341)", () => {
+      it("should detect XSLT/XSL files with standard MIME types", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xslt")).toBe(
+          "application/xslt+xml",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xsl")).toBe(
+          "application/xml",
+        );
+      });
+
+      it("should detect XSD, DTD, and WSDL files with standard MIME types", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("schema.xsd")).toBe(
+          "application/xml",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("doctype.dtd")).toBe(
+          "application/xml-dtd",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("service.wsdl")).toBe(
+          "application/wsdl+xml",
+        );
+      });
+
+      it("should recognize all XML-variant MIME types as source code", () => {
+        expect(MimeTypeUtils.isSourceCode("application/xslt+xml")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("application/xml-dtd")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("application/wsdl+xml")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("application/xml")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("text/xml")).toBe(true);
+      });
+    });
+
     describe("schema and API definitions", () => {
       it("should detect GraphQL and Protocol Buffers", () => {
         expect(MimeTypeUtils.detectMimeTypeFromPath("schema.graphql")).toBe(
@@ -564,6 +598,18 @@ describe("MimeTypeUtils", () => {
         "dockerfile",
       );
       expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-terraform")).toBe("hcl");
+    });
+
+    it("should extract xml for XML-variant application/* MIME types (issue #341)", () => {
+      expect(MimeTypeUtils.extractLanguageFromMimeType("application/xslt+xml")).toBe(
+        "xml",
+      );
+      expect(MimeTypeUtils.extractLanguageFromMimeType("application/xml-dtd")).toBe(
+        "xml",
+      );
+      expect(MimeTypeUtils.extractLanguageFromMimeType("application/wsdl+xml")).toBe(
+        "xml",
+      );
     });
 
     it("should return empty string for unknown MIME types", () => {
