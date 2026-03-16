@@ -18,7 +18,7 @@ export class FixedDimensionEmbeddings extends Embeddings {
     private readonly embeddings: Embeddings,
     private readonly targetDimension: number,
     providerAndModel: string,
-    private readonly allowTruncate: boolean = false,
+    public readonly allowTruncate: boolean = false,
   ) {
     super({});
     // Parse provider and model from string (e.g., "gemini:embedding-001" or just "text-embedding-3-small")

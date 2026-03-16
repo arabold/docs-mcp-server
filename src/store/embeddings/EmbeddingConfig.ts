@@ -82,6 +82,7 @@ export class EmbeddingConfig {
     // Google Gemini models (with MRL support)
     "text-embedding-preview-0409": 768,
     "embedding-001": 768,
+    "gemini-embedding-2-preview": 3072,
 
     // AWS Bedrock models
     // Amazon Titan models
