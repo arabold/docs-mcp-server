@@ -2,6 +2,11 @@ name: Release
 
 on:
   workflow_dispatch: # Allows manual triggering
+    inputs:
+      release_version:
+        description: "Optional manual release version (e.g. 2.1.0 or v2.1.0). If set, CI publishes even without releasable commits."
+        required: false
+        type: string
 
 jobs:
   release:
@@ -15,8 +20,8 @@ jobs:
       # id-token: write # Needed for OIDC trusted publishing (if not using NPM_TOKEN)
     outputs:
       # Output whether a new release was published
-      new_release_published: ${{ steps.semantic.outputs.new_release_published }}
-      new_release_version: ${{ steps.semantic.outputs.new_release_version }}
+      new_release_published: ${{ steps.release-result.outputs.new_release_published }}
+      new_release_version: ${{ steps.release-result.outputs.new_release_version }}
     steps:
       - name: Checkout code
         # Need fetch-depth: 0 for semantic-release to analyze all relevant commits
@@ -35,8 +40,27 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Determine release mode
+        id: release-mode
+        run: |
+          input_version='${{ github.event.inputs.release_version || '' }}'
+          input_version="${input_version#v}"
+
+          if [ -n "$input_version" ]; then
+            if [[ ! "$input_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+              echo "❌ Invalid release_version: '$input_version'. Use semver like 2.1.0 or 2.1.0-beta.1"
+              exit 1
+            fi
+            echo "manual_release=true" >> "$GITHUB_OUTPUT"
+            echo "release_version=$input_version" >> "$GITHUB_OUTPUT"
+          else
+            echo "manual_release=false" >> "$GITHUB_OUTPUT"
+            echo "release_version=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Determine next version (dry-run)
         id: semantic-dry
+        if: steps.release-mode.outputs.manual_release != 'true'
         uses: cycjimmy/semantic-release-action@v4
         with:
           dry_run: true
@@ -48,16 +72,60 @@ jobs:
         run: npm run build
         env:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
-          # Use the calculated next version if available, otherwise fall back to package.json version
-          # (which will be used by vite.config.ts if APP_VERSION is empty)
-          APP_VERSION: ${{ steps.semantic-dry.outputs.new_release_version || '' }}
+          # Use manual input version when provided, otherwise semantic-release dry-run version.
+          APP_VERSION: ${{ steps.release-mode.outputs.release_version || steps.semantic-dry.outputs.new_release_version || '' }}
 
       - name: Run semantic-release
         id: semantic # Give step an ID to reference its outputs
+        if: steps.release-mode.outputs.manual_release != 'true'
         uses: cycjimmy/semantic-release-action@v4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish manual npm release
+        if: steps.release-mode.outputs.manual_release == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version='${{ steps.release-mode.outputs.release_version }}'
+          npm version "$version" --no-git-tag-version
+          npm publish --access public
+
+      - name: Commit manual version bump
+        if: steps.release-mode.outputs.manual_release == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "chore(release): ${{ steps.release-mode.outputs.release_version }} [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Tag manual release
+        if: steps.release-mode.outputs.manual_release == 'true'
+        run: |
+          version='${{ steps.release-mode.outputs.release_version }}'
+          git tag "v$version"
+          git push origin "v$version"
+
+      - name: Create GitHub release (manual)
+        if: steps.release-mode.outputs.manual_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.release-mode.outputs.release_version }}
+          generate_release_notes: true
+          name: v${{ steps.release-mode.outputs.release_version }}
+
+      - name: Resolve release outputs
+        id: release-result
+        run: |
+          if [ "${{ steps.release-mode.outputs.manual_release }}" = "true" ]; then
+            echo "new_release_published=true" >> "$GITHUB_OUTPUT"
+            echo "new_release_version=${{ steps.release-mode.outputs.release_version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_release_published=${{ steps.semantic.outputs.new_release_published }}" >> "$GITHUB_OUTPUT"
+            echo "new_release_version=${{ steps.semantic.outputs.new_release_version }}" >> "$GITHUB_OUTPUT"
+          fi
 
   docker_publish:
     name: Build and Push Docker Image to GHCR
