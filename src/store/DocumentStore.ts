@@ -614,14 +614,14 @@ export class DocumentStore {
    * This prevents FTS5 syntax errors while supporting intuitive phrase searches.
    *
    * Query construction:
-   * - Exact match of full input: `("escaped full query")`
-   * - Individual terms: `("term1" AND "term2" AND "phrase")`
-   * - Combined: `("full query") OR ("term1" AND "term2")`
+   * - Exact match of full input: `"escaped full query"`
+   * - Individual terms: `"term1" OR "term2" OR "phrase"`
+   * - Combined: `"full query" OR "term1" OR "term2"`
    *
    * Examples:
-   * - `foo bar` -> `("foo bar") OR ("foo" AND "bar")`
-   * - `"hello world"` -> `("hello world")`
-   * - `test "exact phrase" word` -> `("test exact phrase word") OR ("test" AND "exact phrase" AND "word")`
+   * - `foo bar` -> `"foo bar" OR "foo" OR "bar"`
+   * - `"hello world"` -> `"hello world"`
+   * - `test "exact phrase" word` -> `"test exact phrase word" OR "test" OR "exact phrase" OR "word"`
    */
   private escapeFtsQuery(query: string): string {
     // Tokenize the query using a simple quote-toggle state machine

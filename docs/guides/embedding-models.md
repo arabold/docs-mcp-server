@@ -1,6 +1,6 @@
 # Embedding Model Configuration
 
-This guide details how to configure the embedding models used for vector search. You can set the embedding model using the `embeddings.model` configuration key, the `DOCS_MCP_EMBEDDING_MODEL` environment variable, or the `--embedding-model` CLI flag.
+This guide details how to configure the embedding models used for vector search. You can set the embedding model using the `app.embeddingModel` configuration key, the `DOCS_MCP_EMBEDDING_MODEL` environment variable, or the `--embedding-model` CLI flag.
 
 ## Model Selection
 
