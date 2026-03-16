@@ -73,11 +73,11 @@ When vector search is disabled (no embedding model configured, missing credentia
 ### Requirement: FTS Query Construction
 The system SHALL construct FTS5 queries from user input using a quote-aware tokenizer with the following rules:
 
-- **Unquoted terms**: `foo bar` produces `("foo bar") OR ("foo" OR "bar")` -- both a phrase match and individual term matches are attempted.
+- **Unquoted terms**: `foo bar` produces `"foo bar" OR "foo" OR "bar"` -- both a phrase match and individual term matches are attempted.
 - **Quoted phrases**: `"exact phrase"` preserves the exact phrase match in the FTS query.
-- **Mixed input**: `test "exact phrase" word` produces `("test exact phrase word") OR ("test" OR "exact phrase" OR "word")`.
+- **Mixed input**: `test "exact phrase" word` produces `"test exact phrase word" OR "test" OR "exact phrase" OR "word"`.
 
-This dual approach (phrase + individual terms) ensures both exact and partial matches are returned.
+This dual approach (phrase + individual terms) ensures both exact and partial matches are returned. The output is an unparenthesized OR chain; all tokens are individually quoted for FTS5 safety.
 
 **Code reference:** `src/store/DocumentStore.ts:606-691`
 

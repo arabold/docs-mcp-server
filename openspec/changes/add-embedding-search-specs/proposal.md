@@ -9,8 +9,9 @@ The project has extensive implementation of embedding model resolution, vector g
 - Add `hybrid-search` spec: how search queries execute in hybrid (vector + FTS) and FTS-only modes with RRF ranking
 - Add `search-result-reassembly` spec: how raw search results are expanded with context, clustered, and assembled into coherent responses
 
-All specs document **existing behavior** reverse-engineered from the implementation. No code changes are proposed.
+All specs document **existing behavior** reverse-engineered from the implementation. No behavioral code changes are proposed.
 
 ## Impact
 - Affected specs: `embedding-resolution` (new), `embedding-generation` (new), `hybrid-search` (new), `search-result-reassembly` (new)
-- Affected code: None (documentation-only change)
+- Affected code: Comment-only fix in `src/store/DocumentStore.ts` (stale JSDoc corrected)
+- Affected docs: Several existing docs updated to match current implementation
