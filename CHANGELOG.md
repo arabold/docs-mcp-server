@@ -1,3 +1,12 @@
+## [2.1.1](https://github.com/arabold/docs-mcp-server/compare/v2.1.0...v2.1.1) (2026-03-16)
+
+
+### Bug Fixes
+
+* **embeddings:** allow Gemini models with MRL truncation to bypass dimension check ([6f48350](https://github.com/arabold/docs-mcp-server/commit/6f483504ec213368f2551b7ebcefab52044183d1)), closes [#363](https://github.com/arabold/docs-mcp-server/issues/363)
+* **scraper:** preserve standard application/* MIME types for XML formats ([ebb7a48](https://github.com/arabold/docs-mcp-server/commit/ebb7a48af3a8fcb9501eb47495d226ff280eed73))
+* **scraper:** support XSLT and other XML-variant file formats ([#341](https://github.com/arabold/docs-mcp-server/issues/341)) ([c7ab720](https://github.com/arabold/docs-mcp-server/commit/c7ab72036378a34481b42a3ecae05772115d722f))
+
 # [2.1.0](https://github.com/arabold/docs-mcp-server/compare/v2.0.4...v2.1.0) (2026-03-16)
 
 
