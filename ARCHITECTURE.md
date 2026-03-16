@@ -268,6 +268,7 @@ SQLite database with normalized schema:
 
 - `libraries`: Library metadata and organization
 - `versions`: Version tracking with indexing status and configuration
+- `pages`: Page-level metadata (URL, title, ETag, content type, crawl depth)
 - `documents`: Content chunks with embeddings and metadata
 
 The `versions` table serves as the job state hub, storing progress, errors, and scraper configuration for reproducible re-indexing.

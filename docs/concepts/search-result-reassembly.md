@@ -22,8 +22,9 @@ After collecting all related chunks, the system:
 1. **Groups by URL**: Combines chunks from the same document/URL
 2. **Deduplicates**: Removes duplicate chunk IDs from overlapping context searches
 3. **Orders by sort_order**: Retrieves chunks from database ordered by their original document position
-4. **Merges content**: Joins chunk content with double newlines to create coherent text
-5. **Preserves metadata**: Maintains highest relevance score and MIME type information
+4. **Clusters by distance**: Splits chunks into separate groups when the `sort_order` gap exceeds `maxChunkDistance` (default 3)
+5. **Merges content**: Joins chunk content using a content-type-aware strategy -- double newlines for prose (markdown/HTML/text) or direct concatenation for structured content (source code/JSON). See [Content-Agnostic Assembly](content-agnostic-assembly.md) for the two-strategy architecture.
+6. **Preserves metadata**: Maintains highest relevance score and MIME type information
 
 ## Hierarchical Relationship Detection
 
@@ -49,8 +50,8 @@ graph TD
     B --> F[Subsequent Siblings]
 
     C --> G["Parent path = child.path.slice(0, -1)<br/>Before current in sort_order"]
-    D --> H["Same path<br/>Before current in sort_order<br/>Limit: 2"]
-    E --> I["Path extends current by 1 element<br/>After current in sort_order<br/>Limit: 5"]
+    D --> H["Same path<br/>Before current in sort_order<br/>Limit: 1"]
+    E --> I["Path extends current by 1 element<br/>After current in sort_order<br/>Limit: 3"]
     F --> J["Same path<br/>After current in sort_order<br/>Limit: 2"]
 
     G --> K[Collect All Chunk IDs]
@@ -74,8 +75,9 @@ graph TD
 
 The system applies reasonable limits to prevent excessive context expansion:
 
-- **Sibling Limit**: 2 chunks (preceding and subsequent)
-- **Child Limit**: 5 chunks
+- **Preceding Sibling Limit**: 1 chunk
+- **Subsequent Sibling Limit**: 2 chunks
+- **Child Limit**: 3 chunks
 - **Parent Limit**: 1 chunk (by definition)
 
 These limits balance comprehensive context with performance and relevance.

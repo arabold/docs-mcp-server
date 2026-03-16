@@ -220,7 +220,21 @@ Settings for the vector embedding generation.
 | Option | Default | Description |
 |:-------|:--------|:------------|
 | `batchSize` | `100` | Number of chunks to embed in one request. |
+| `batchChars` | `50000` | Maximum total characters per embedding batch. |
+| `requestTimeoutMs` | `30000` | Timeout for each embedding API request (ms). |
+| `initTimeoutMs` | `30000` | Timeout for the initial test embedding during model initialization (ms). |
 | `vectorDimension` | `1536` | Dimension of the vector space (must match model). |
+
+### Search (`search`)
+
+Settings for the hybrid search ranking system.
+
+| Option | Default | Description |
+|:-------|:--------|:------------|
+| `overfetchFactor` | `2` | Multiplier on the search limit for FTS overfetch (fetches `limit * overfetchFactor` candidates). |
+| `weightVec` | `1` | RRF weight for vector search results. |
+| `weightFts` | `1` | RRF weight for full-text search results. |
+| `vectorMultiplier` | `10` | Additional multiplier for vector search candidate count (`limit * overfetchFactor * vectorMultiplier`). |
 
 ### Database (`db`)
 

@@ -221,7 +221,7 @@ Handles document lifecycle operations with normalized schema access.
 
 Embeddings stored as BLOB in documents table:
 
-- 1536-dimensional vectors (OpenAI embedding size)
+- 1536-dimensional vectors by default (configurable via `embeddings.vectorDimension`)
 - Provider-agnostic binary serialization
 - NULL handling for documents without embeddings
 - Direct storage eliminates need for separate vector table

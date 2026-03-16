@@ -615,13 +615,13 @@ export class DocumentStore {
    *
    * Query construction:
    * - Exact match of full input: `("escaped full query")`
-   * - Individual terms: `("term1" AND "term2" AND "phrase")`
-   * - Combined: `("full query") OR ("term1" AND "term2")`
+   * - Individual terms: `("term1" OR "term2" OR "phrase")`
+   * - Combined: `("full query") OR ("term1" OR "term2")`
    *
    * Examples:
-   * - `foo bar` -> `("foo bar") OR ("foo" AND "bar")`
+   * - `foo bar` -> `("foo bar") OR ("foo" OR "bar")`
    * - `"hello world"` -> `("hello world")`
-   * - `test "exact phrase" word` -> `("test exact phrase word") OR ("test" AND "exact phrase" AND "word")`
+   * - `test "exact phrase" word` -> `("test exact phrase word") OR ("test" OR "exact phrase" OR "word")`
    */
   private escapeFtsQuery(query: string): string {
     // Tokenize the query using a simple quote-toggle state machine
