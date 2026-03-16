@@ -13,6 +13,7 @@ import {
   ModelConfigurationError,
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
+import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings";
 import { ConnectionError, DimensionError, StoreError } from "./errors";
 import type { DbChunkMetadata, DbChunkRank, StoredScraperOptions } from "./types";
 import {
@@ -533,6 +534,16 @@ export class DocumentStore {
 
         // Cache the discovered dimensions for future use
         EmbeddingConfig.setKnownModelDimensions(config.model, this.modelDimension);
+      }
+
+      // For models wrapped in FixedDimensionEmbeddings with truncation enabled
+      // (e.g., Gemini with MRL support), the effective output dimension is capped
+      // at the target dimension. Use the effective dimension for validation.
+      if (
+        this.embeddings instanceof FixedDimensionEmbeddings &&
+        this.embeddings.allowTruncate
+      ) {
+        this.modelDimension = Math.min(this.modelDimension, this.dbDimension);
       }
 
       if (this.modelDimension > this.dbDimension) {
