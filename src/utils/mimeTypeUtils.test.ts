@@ -401,15 +401,33 @@ describe("MimeTypeUtils", () => {
     });
 
     describe("XML-based formats (issue #341)", () => {
-      it("should detect XSLT/XSL files as XML", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xslt")).toBe("text/x-xml");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xsl")).toBe("text/x-xml");
+      it("should detect XSLT/XSL files with standard MIME types", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xslt")).toBe(
+          "application/xslt+xml",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xsl")).toBe(
+          "application/xml",
+        );
       });
 
-      it("should detect XSD, DTD, and WSDL files as XML", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("schema.xsd")).toBe("text/x-xml");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("doctype.dtd")).toBe("text/x-xml");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("service.wsdl")).toBe("text/x-xml");
+      it("should detect XSD, DTD, and WSDL files with standard MIME types", () => {
+        expect(MimeTypeUtils.detectMimeTypeFromPath("schema.xsd")).toBe(
+          "application/xml",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("doctype.dtd")).toBe(
+          "application/xml-dtd",
+        );
+        expect(MimeTypeUtils.detectMimeTypeFromPath("service.wsdl")).toBe(
+          "application/wsdl+xml",
+        );
+      });
+
+      it("should recognize all XML-variant MIME types as source code", () => {
+        expect(MimeTypeUtils.isSourceCode("application/xslt+xml")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("application/xml-dtd")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("application/wsdl+xml")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("application/xml")).toBe(true);
+        expect(MimeTypeUtils.isSourceCode("text/xml")).toBe(true);
       });
     });
 

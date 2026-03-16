@@ -377,13 +377,6 @@ export class MimeTypeUtils {
       graphql: "text/x-graphql",
       gql: "text/x-graphql",
 
-      // XML-based formats (mime package returns application/* types that pipelines don't handle)
-      xslt: "text/x-xml",
-      xsl: "text/x-xml",
-      xsd: "text/x-xml",
-      dtd: "text/x-xml",
-      wsdl: "text/x-xml",
-
       // Schema/API definitions
       proto: "text/x-proto",
       prisma: "text/x-prisma",
