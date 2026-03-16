@@ -44,6 +44,11 @@ const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
   ".html",
   ".htm",
   ".xml",
+  ".xsl",
+  ".xslt",
+  ".xsd",
+  ".dtd",
+  ".wsdl",
   ".xhtml",
   // Stylesheets
   ".css",
