@@ -172,7 +172,8 @@ export class GitHubRepoProcessor {
       title: processed.title?.trim() || filename || "Untitled",
       etag: rawContent.etag,
       lastModified: rawContent.lastModified,
-      contentType: rawContent.mimeType,
+      sourceContentType: rawContent.mimeType,
+      contentType: processed.contentType || rawContent.mimeType,
       content: processed,
       links: [], // Always return empty links array for individual files
       status: FetchStatus.SUCCESS,

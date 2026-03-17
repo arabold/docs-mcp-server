@@ -9,6 +9,7 @@ import { PipelineFactory } from "./pipeline/PipelineFactory";
 import { DocumentManagementService } from "./store/DocumentManagementService";
 import { TelemetryEvent } from "./telemetry";
 import { type AppConfig, loadConfig } from "./utils/config";
+import { sanitizeEnvironment } from "./utils/env";
 
 // Mock external dependencies to prevent actual server startup
 const mockPipelineStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -67,20 +68,52 @@ vi.mock("playwright", () => ({
 
 const mockFsExistsSync = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockFsReadFileSync = vi.hoisted(() => vi.fn());
+const mockFsMkdirSync = vi.hoisted(() => vi.fn());
+const mockFsWriteFileSync = vi.hoisted(() => vi.fn());
 
 vi.mock("node:fs", () => ({
   default: {
     existsSync: mockFsExistsSync,
     readFileSync: mockFsReadFileSync,
+    mkdirSync: mockFsMkdirSync,
+    writeFileSync: mockFsWriteFileSync,
   },
   existsSync: mockFsExistsSync,
   readFileSync: mockFsReadFileSync,
+  mkdirSync: mockFsMkdirSync,
+  writeFileSync: mockFsWriteFileSync,
 }));
 
 // Suppress console.error in tests
 vi.spyOn(console, "error").mockImplementation(() => {});
 
 const appConfig: AppConfig = loadConfig();
+
+describe("Bootstrap Environment Sanitization", () => {
+  it("should sanitize quoted runtime environment values before consumers use them", () => {
+    const env = {
+      OPENAI_API_BASE: '"http://localhost:11434/v1"',
+      GITHUB_TOKEN: '"ghp_test_token"',
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: '  "/usr/bin/chromium"  ',
+      LOG_LEVEL: '"debug"',
+      UNCHANGED: "plain-value",
+    };
+
+    const sanitizedKeys = sanitizeEnvironment(env);
+
+    expect(env.OPENAI_API_BASE).toBe("http://localhost:11434/v1");
+    expect(env.GITHUB_TOKEN).toBe("ghp_test_token");
+    expect(env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH).toBe("/usr/bin/chromium");
+    expect(env.LOG_LEVEL).toBe("debug");
+    expect(env.UNCHANGED).toBe("plain-value");
+    expect(sanitizedKeys).toEqual([
+      "OPENAI_API_BASE",
+      "GITHUB_TOKEN",
+      "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+      "LOG_LEVEL",
+    ]);
+  });
+});
 
 describe("CLI Flag Validation", () => {
   beforeEach(() => {

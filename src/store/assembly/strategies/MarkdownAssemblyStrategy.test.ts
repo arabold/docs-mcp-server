@@ -172,7 +172,7 @@ describe("MarkdownAssemblyStrategy", () => {
 
     it("handles plain text content types", () => {
       expect(strategy.canHandle("text/plain")).toBe(true);
-      expect(strategy.canHandle("text/css")).toBe(true);
+      expect(strategy.canHandle("text/csv")).toBe(true);
     });
 
     it("serves as fallback for unknown types", () => {

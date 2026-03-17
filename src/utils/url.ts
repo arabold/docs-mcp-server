@@ -85,23 +85,6 @@ export function validateUrl(url: string): void {
 }
 
 /**
- * Checks if two URLs have the exact same hostname
- */
-export function hasSameHostname(urlA: URL, urlB: URL): boolean {
-  return urlA.hostname.toLowerCase() === urlB.hostname.toLowerCase();
-}
-
-/**
- * Checks if two URLs are on the same domain (including subdomains)
- * Using the public suffix list to properly handle domains like .co.uk
- */
-export function hasSameDomain(urlA: URL, urlB: URL): boolean {
-  const domainA = psl.get(urlA.hostname.toLowerCase());
-  const domainB = psl.get(urlB.hostname.toLowerCase());
-  return domainA !== null && domainA === domainB;
-}
-
-/**
  * Extracts the primary/registrable domain from a hostname using the public suffix list.
  * This properly handles complex TLDs like .co.uk, .com.au, etc.
  *
@@ -127,19 +110,6 @@ export function extractPrimaryDomain(hostname: string): string {
   // Use public suffix list for accurate domain extraction
   const domain = psl.get(hostname.toLowerCase());
   return domain || hostname; // Fallback to original hostname if psl fails
-}
-
-/**
- * Checks if a target URL is under the same path as the base URL
- * Example: base = https://example.com/docs/
- *          target = https://example.com/docs/getting-started
- *          result = true
- */
-export function isSubpath(baseUrl: URL, targetUrl: URL): boolean {
-  const basePath = baseUrl.pathname.endsWith("/")
-    ? baseUrl.pathname
-    : `${baseUrl.pathname}/`;
-  return targetUrl.pathname.startsWith(basePath);
 }
 
 export type { UrlNormalizerOptions };

@@ -263,6 +263,7 @@ describe("DocumentRetrieverService", () => {
       content: "HTML content",
       url: "https://example.com",
       score: 0.9,
+      source_content_type: mimeType,
       content_type: mimeType,
       metadata: {},
     } as DbPageChunk & DbChunkRank;
@@ -282,6 +283,7 @@ describe("DocumentRetrieverService", () => {
       content: "HTML content",
       score: 0.9,
       mimeType: "text/html",
+      sourceMimeType: "text/html",
     });
   });
 
@@ -314,6 +316,7 @@ describe("DocumentRetrieverService", () => {
       content: "Plain content",
       score: 0.9,
       mimeType: undefined,
+      sourceMimeType: undefined,
     });
   });
 
@@ -659,6 +662,7 @@ describe("DocumentRetrieverService", () => {
         content: "# Heading\n\nSome content",
         url: "https://example.com/doc.md",
         score: 0.9,
+        source_content_type: "text/markdown",
         content_type: "text/markdown",
         metadata: {},
       } as DbPageChunk & DbChunkRank;
@@ -678,6 +682,7 @@ describe("DocumentRetrieverService", () => {
         content: "# Heading\n\nSome content", // Should use "\n\n" joining for markdown
         score: 0.9,
         mimeType: "text/markdown",
+        sourceMimeType: "text/markdown",
       });
     });
 
@@ -691,6 +696,7 @@ describe("DocumentRetrieverService", () => {
         content: "function test() {\n  return 'hello';\n}",
         url: "https://example.com/code.ts",
         score: 0.9,
+        source_content_type: "text/x-typescript",
         content_type: "text/x-typescript",
         metadata: {},
       } as DbPageChunk & DbChunkRank;
@@ -709,6 +715,7 @@ describe("DocumentRetrieverService", () => {
         content: "function test() {\n  return 'hello';\n}", // Should use simple concatenation for code
         score: 0.9,
         mimeType: "text/x-typescript",
+        sourceMimeType: "text/x-typescript",
       });
     });
 
@@ -722,6 +729,7 @@ describe("DocumentRetrieverService", () => {
         content: '{"key": "value"}',
         url: "https://example.com/config.json",
         score: 0.9,
+        source_content_type: "application/json",
         content_type: "application/json",
         metadata: {},
       } as DbPageChunk & DbChunkRank;
@@ -739,6 +747,7 @@ describe("DocumentRetrieverService", () => {
         content: '{"key": "value"}', // Should use simple concatenation for JSON
         score: 0.9,
         mimeType: "application/json",
+        sourceMimeType: "application/json",
       });
     });
 

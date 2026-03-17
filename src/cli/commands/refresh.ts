@@ -11,6 +11,8 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
 import { loadConfig } from "../../utils/config";
+import { logger } from "../../utils/logger";
+import { renderTextOutput } from "../output";
 import { type CliContext, getEventBus } from "../utils";
 
 export function createRefreshCommand(cli: Argv) {
@@ -19,6 +21,7 @@ export function createRefreshCommand(cli: Argv) {
     "Update an existing library version by re-scraping changed pages",
     (yargs) => {
       return yargs
+        .version(false)
         .positional("library", {
           type: "string",
           description: "Library name to refresh",
@@ -78,7 +81,7 @@ export function createRefreshCommand(cli: Argv) {
       let pipeline: IPipeline | null = null;
 
       // Display initial status
-      console.log("⏳ Initializing refresh job...");
+      logger.info("⏳ Initializing refresh job...");
 
       // Subscribe to event bus for progress updates (only for local pipelines)
       let unsubscribeProgress: (() => void) | null = null;
@@ -87,14 +90,14 @@ export function createRefreshCommand(cli: Argv) {
       if (!serverUrl) {
         unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
           const { job, progress } = event;
-          console.log(
+          logger.info(
             `📄 Refreshing ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
           );
         });
 
         unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
           if (event.status === PipelineJobStatus.RUNNING) {
-            console.log(
+            logger.info(
               `🚀 Refreshing ${event.library}${event.version ? ` v${event.version}` : ""}...`,
             );
           }
@@ -130,12 +133,12 @@ export function createRefreshCommand(cli: Argv) {
         });
 
         if ("pagesRefreshed" in result) {
-          console.log(`✅ Successfully refreshed ${result.pagesRefreshed} pages`);
+          renderTextOutput(`Successfully refreshed ${result.pagesRefreshed} pages`);
         } else {
-          console.log(`✅ Refresh job started with ID: ${result.jobId}`);
+          renderTextOutput(`Refresh job started with ID: ${result.jobId}`);
         }
       } catch (error) {
-        console.error(
+        logger.error(
           `❌ Refresh failed: ${error instanceof Error ? error.message : String(error)}`,
         );
         throw error;

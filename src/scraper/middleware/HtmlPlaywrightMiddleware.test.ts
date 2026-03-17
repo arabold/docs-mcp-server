@@ -923,3 +923,252 @@ describe("mergePlaywrightHeaders", () => {
     expect(result).toEqual({ "content-type": "text/html" });
   });
 });
+
+describe("Route handling race condition protection", () => {
+  let playwrightMiddleware: HtmlPlaywrightMiddleware;
+
+  beforeEach(() => {
+    const mockScraperConfig = {
+      maxPages: 1000,
+      maxDepth: 3,
+      maxConcurrency: 3,
+      pageTimeoutMs: 5000,
+      browserTimeoutMs: 30000,
+      fetcher: {
+        maxRetries: 6,
+        baseDelayMs: 1000,
+        maxCacheItems: 200,
+        maxCacheItemSizeBytes: 500 * 1024,
+      },
+      document: {
+        maxSize: 10 * 1024 * 1024,
+      },
+    };
+    playwrightMiddleware = new HtmlPlaywrightMiddleware(mockScraperConfig);
+  });
+
+  afterAll(async () => {
+    await playwrightMiddleware.closeBrowser();
+  });
+
+  describe("isRouteAlreadyHandledError", () => {
+    it("should detect 'Route is already handled' error", () => {
+      const error = new Error("Route is already handled!");
+      // @ts-expect-error Accessing private method for testing
+      expect(playwrightMiddleware.isRouteAlreadyHandledError(error)).toBe(true);
+    });
+
+    it("should detect partial 'Route is already handled' error messages", () => {
+      const error = new Error("Error: Route is already handled");
+      // @ts-expect-error Accessing private method for testing
+      expect(playwrightMiddleware.isRouteAlreadyHandledError(error)).toBe(true);
+    });
+
+    it("should not detect other errors as route handled errors", () => {
+      const error = new Error("Network timeout");
+      // @ts-expect-error Accessing private method for testing
+      expect(playwrightMiddleware.isRouteAlreadyHandledError(error)).toBe(false);
+    });
+
+    it("should not detect non-Error objects as route handled errors", () => {
+      // @ts-expect-error Accessing private method for testing
+      expect(playwrightMiddleware.isRouteAlreadyHandledError("some string")).toBe(false);
+      // @ts-expect-error Accessing private method for testing
+      expect(playwrightMiddleware.isRouteAlreadyHandledError(null)).toBe(false);
+      // @ts-expect-error Accessing private method for testing
+      expect(playwrightMiddleware.isRouteAlreadyHandledError(undefined)).toBe(false);
+    });
+  });
+
+  describe("Route handler error handling", () => {
+    it("should gracefully handle 'Route is already handled' during route.abort()", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/image.png",
+          resourceType: () => "image",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        abort: vi.fn().mockRejectedValue(new Error("Route is already handled!")),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Simulate route handling with the captured handler
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should gracefully handle 'Route is already handled' during route.fulfill()", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/test",
+          resourceType: () => "document",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        fulfill: vi.fn().mockRejectedValue(new Error("Route is already handled!")),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Simulate route handling with the captured handler
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should gracefully handle 'Route is already handled' during route.continue()", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/api/data",
+          resourceType: () => "xhr",
+          method: () => "POST",
+          headers: () => ({}),
+        }),
+        continue: vi.fn().mockRejectedValue(new Error("Route is already handled!")),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Simulate route handling with the captured handler
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should re-throw non-'Route is already handled' errors", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/image.png",
+          resourceType: () => "image",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        abort: vi.fn().mockRejectedValue(new Error("Page is closed")),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Simulate route handling with the captured handler - should throw
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).rejects.toThrow("Page is closed");
+
+      launchSpy.mockRestore();
+    });
+
+    it("should handle network errors and gracefully handle already-handled on abort", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/script.js",
+          resourceType: () => "script",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        fetch: vi.fn().mockRejectedValue(new Error("Network timeout")),
+        abort: vi.fn().mockRejectedValue(new Error("Route is already handled!")),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      // Simulate route handling with the captured handler
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+
+      expect(mockRoute.fetch).toHaveBeenCalled();
+      expect(mockRoute.abort).toHaveBeenCalledWith("failed");
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+  });
+});

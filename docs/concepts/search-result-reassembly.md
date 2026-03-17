@@ -4,26 +4,46 @@
 
 The search result reassembly system reconstructs coherent document sections from individual chunks stored in the database. When a search query matches specific chunks, the system automatically expands the context by including related chunks (parents, siblings, children) and reassembles them in their original document order.
 
-## Two-Phase Architecture
+## Pipeline Architecture
 
-### Phase 1: Context Expansion
+The reassembly pipeline processes initial search matches through four stages:
 
-For each search result chunk, the system identifies and collects related chunks using hierarchical relationships:
+### Stage 1: Grouping and Clustering
+
+Initial search results (from hybrid or FTS-only search) are organized before any context expansion:
+
+1. **Groups by URL**: Combines chunks from the same document/URL
+2. **Clusters by distance**: Within each URL group, splits chunks into clusters when the `sort_order` gap between consecutive chunks exceeds `maxChunkDistance` (default 3). Each cluster produces a separate search result.
+
+### Stage 2: Context Expansion
+
+For each cluster, the system selects a content-type-aware strategy (see [Content-Agnostic Assembly](content-agnostic-assembly.md)) that determines how to expand context:
+
+**Markdown/HTML/text content** (MarkdownAssemblyStrategy):
 
 1. **Parent Chunks**: Broader context at higher levels in the document hierarchy
 2. **Preceding Siblings**: Content that appears before the matched chunk at the same hierarchical level
 3. **Child Chunks**: More detailed content at deeper levels within the matched section
 4. **Subsequent Siblings**: Content that appears after the matched chunk at the same hierarchical level
+5. **Deduplicates**: Removes duplicate chunk IDs from overlapping context searches
+6. **Orders by sort_order**: Retrieves chunks from database ordered by their original document position
 
-### Phase 2: Reassembly and Ordering
+**Source code/JSON content** (HierarchicalAssemblyStrategy):
 
-After collecting all related chunks, the system:
+1. Reconstructs complete structural subtrees containing the matched chunks
+2. Uses structural ancestor detection and parent chain walking
 
-1. **Groups by URL**: Combines chunks from the same document/URL
-2. **Deduplicates**: Removes duplicate chunk IDs from overlapping context searches
-3. **Orders by sort_order**: Retrieves chunks from database ordered by their original document position
-4. **Merges content**: Joins chunk content with double newlines to create coherent text
-5. **Preserves metadata**: Maintains highest relevance score and MIME type information
+### Stage 3: Content Assembly
+
+Assembles expanded chunks into coherent text using strategy-specific joining:
+
+- **Prose content**: Joined with double newlines (`\n\n`)
+- **Structured content**: Direct concatenation (no separator), relying on splitter concatenation guarantees
+
+### Stage 4: Scoring and Ordering
+
+1. **Preserves metadata**: Each assembled result retains the highest relevance score from its constituent chunks
+2. **Sorts by score**: Final results across all URLs/clusters sorted descending by score
 
 ## Hierarchical Relationship Detection
 
@@ -49,8 +69,8 @@ graph TD
     B --> F[Subsequent Siblings]
 
     C --> G["Parent path = child.path.slice(0, -1)<br/>Before current in sort_order"]
-    D --> H["Same path<br/>Before current in sort_order<br/>Limit: 2"]
-    E --> I["Path extends current by 1 element<br/>After current in sort_order<br/>Limit: 5"]
+    D --> H["Same path<br/>Before current in sort_order<br/>Limit: 1"]
+    E --> I["Path extends current by 1 element<br/>After current in sort_order<br/>Limit: 3"]
     F --> J["Same path<br/>After current in sort_order<br/>Limit: 2"]
 
     G --> K[Collect All Chunk IDs]
@@ -74,8 +94,9 @@ graph TD
 
 The system applies reasonable limits to prevent excessive context expansion:
 
-- **Sibling Limit**: 2 chunks (preceding and subsequent)
-- **Child Limit**: 5 chunks
+- **Preceding Sibling Limit**: 1 chunk
+- **Subsequent Sibling Limit**: 2 chunks
+- **Child Limit**: 3 chunks
 - **Parent Limit**: 1 chunk (by definition)
 
 These limits balance comprehensive context with performance and relevance.

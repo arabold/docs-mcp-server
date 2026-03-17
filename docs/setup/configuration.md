@@ -200,9 +200,16 @@ Settings for chunking text for vector search.
 
 | Option | Default | Description |
 |:-------|:--------|:------------|
-| `minChunkSize` | `500` | Minimum characters per chunk. |
-| `preferredChunkSize` | `1500` | Target characters per chunk. |
-| `maxChunkSize` | `5000` | Maximum characters per chunk. |
+| `minChunkSize` | `500` | Minimum characters per chunk body. Chunks below this threshold are merged with adjacent chunks by the greedy optimizer. |
+| `preferredChunkSize` | `1500` | Soft target for chunk body size in characters. The greedy optimizer splits when combining two chunks would exceed this value, provided both sides are already above `minChunkSize`. |
+| `maxChunkSize` | `5000` | Hard upper limit for chunk body size in characters. No chunk body will exceed this value. |
+
+> **Note:** These size limits apply to the **text body** of each chunk. Before embedding,
+> a small metadata header (page title, URL, section path) is prepended to each chunk,
+> adding to the total character count sent to the embedding model. Because characters are
+> not tokens, the actual token count depends on your embedding model's tokenizer. If your
+> model has a small context window (e.g., some local models), consider lowering
+> `maxChunkSize` to leave headroom for metadata and token expansion.
 
 ### Embeddings (`embeddings`)
 
@@ -213,7 +220,21 @@ Settings for the vector embedding generation.
 | Option | Default | Description |
 |:-------|:--------|:------------|
 | `batchSize` | `100` | Number of chunks to embed in one request. |
+| `batchChars` | `50000` | Maximum total characters per embedding batch. |
+| `requestTimeoutMs` | `30000` | Timeout for each embedding API request (ms). |
+| `initTimeoutMs` | `30000` | Timeout for the initial test embedding during model initialization (ms). |
 | `vectorDimension` | `1536` | Dimension of the vector space (must match model). |
+
+### Search (`search`)
+
+Settings for the hybrid search ranking system.
+
+| Option | Default | Description |
+|:-------|:--------|:------------|
+| `overfetchFactor` | `2` | Multiplier on the search limit for FTS overfetch (fetches `limit * overfetchFactor` candidates). |
+| `weightVec` | `1` | RRF weight for vector search results. |
+| `weightFts` | `1` | RRF weight for full-text search results. |
+| `vectorMultiplier` | `10` | Additional multiplier for vector search candidate count (`limit * overfetchFactor * vectorMultiplier`). |
 
 ### Database (`db`)
 

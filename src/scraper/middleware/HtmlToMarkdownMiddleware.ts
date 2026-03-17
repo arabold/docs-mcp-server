@@ -1,7 +1,8 @@
 // @ts-expect-error
 import { gfm } from "@joplin/turndown-plugin-gfm";
 import TurndownService from "turndown";
-import { logger } from "../../utils/logger"; // Added logger
+import { logger } from "../../utils/logger";
+import { fullTrim } from "../../utils/string";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 
 /**
@@ -31,7 +32,7 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
     // Preserve code blocks and syntax (replicated from HtmlProcessor)
     this.turndownService.addRule("pre", {
       filter: ["pre"],
-      replacement: (_content, node) => {
+      replacement: (_content: string, node: Node) => {
         const element = node as unknown as HTMLElement;
         let language = element.getAttribute("data-language") || "";
         if (!language) {
@@ -64,17 +65,24 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
     });
     this.turndownService.addRule("anchor", {
       filter: ["a"],
-      replacement: (content, node) => {
-        const href = (node as HTMLElement).getAttribute("href");
-        if (!content || content === "#") {
+      replacement: (content: string, node: Node) => {
+        const element = node as HTMLElement;
+        const href = element.getAttribute("href");
+        const normalizedContent = this.normalizeLinkContent(content);
+
+        if (!normalizedContent || normalizedContent === "#") {
           return ""; // Remove if content is # or empty
         }
         if (!href) {
-          return content; // Preserve content if href is missing or empty
+          return normalizedContent; // Preserve content if href is missing or empty
         }
-        return `[${content}](${href})`; // Standard link conversion
+        return `[${normalizedContent}](${href})`; // Standard link conversion
       },
     });
+  }
+
+  private normalizeLinkContent(content: string): string {
+    return fullTrim(content).replace(/[ \t]*[\r\n]+[ \t]*/g, " ");
   }
 
   /**

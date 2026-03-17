@@ -13,7 +13,7 @@ import {
   type EmbeddingModelConfig,
 } from "../store/embeddings/EmbeddingConfig";
 import { TelemetryService } from "../telemetry";
-import { LogLevel, logger, setLogLevel } from "../utils/logger";
+import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
 
@@ -87,7 +87,7 @@ export function ensurePlaywrightBrowsersInstalled(): void {
     // Not installed or not found, attempt to install
     logger.debug(String(error));
     try {
-      console.log(
+      logger.info(
         "🌐 Installing Playwright Chromium browser... (this may take a moment)",
       );
       execSync("npm exec -y playwright install --no-shell --with-deps chromium", {
@@ -95,7 +95,7 @@ export function ensurePlaywrightBrowsersInstalled(): void {
         cwd: getProjectRoot(),
       });
     } catch (_installErr) {
-      console.error(
+      logger.error(
         "❌ Failed to install Playwright browsers automatically. Please run:\n  npx playwright install --no-shell --with-deps chromium\nand try again.",
       );
       process.exit(1);
@@ -133,28 +133,6 @@ export function validateResumeFlag(resume: boolean, serverUrl?: string): void {
       "--resume flag is incompatible with --server-url. " +
         "External workers handle their own job recovery.",
     );
-  }
-}
-
-/**
- * Formats output for CLI commands
- */
-export const formatOutput = (data: unknown): string => JSON.stringify(data, null, 2);
-
-/**
- * Sets up logging based on global options
- */
-export function setupLogging(
-  options: { silent?: boolean; verbose?: boolean },
-  protocol?: "stdio" | "http",
-): void {
-  // Suppress logging in stdio mode (before any logger calls)
-  if (protocol === "stdio") {
-    setLogLevel(LogLevel.ERROR);
-  } else if (options.silent) {
-    setLogLevel(LogLevel.ERROR);
-  } else if (options.verbose) {
-    setLogLevel(LogLevel.DEBUG);
   }
 }
 

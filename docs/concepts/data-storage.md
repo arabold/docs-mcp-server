@@ -107,12 +107,13 @@ Page-level metadata for each unique URL within a version.
 - `title` (TEXT): Page title extracted from content
 - `etag` (TEXT): HTTP ETag for change detection
 - `last_modified` (TEXT): HTTP Last-Modified header
-- `content_type` (TEXT): MIME type of the content
+- `source_content_type` (TEXT): Original MIME type of the fetched resource before processing
+- `content_type` (TEXT): MIME type of the stored chunk content after processing
 - `depth` (INTEGER): Crawl depth from source URL (0 = root page)
 - `created_at` (DATETIME): Creation timestamp
 - `updated_at` (DATETIME): Last update timestamp
 
-**Purpose:** Page-level metadata tracking, ETag-based refresh support, and depth tracking for scoping.
+**Purpose:** Page-level metadata tracking, original-versus-processed content type tracking, ETag-based refresh support, and depth tracking for scoping.
 
 **Code Reference:** 
 - `db/migrations/009-add-pages-table.sql` - Initial pages table creation
@@ -220,7 +221,7 @@ Handles document lifecycle operations with normalized schema access.
 
 Embeddings stored as BLOB in documents table:
 
-- 1536-dimensional vectors (OpenAI embedding size)
+- 1536-dimensional vectors by default (configurable via `embeddings.vectorDimension`)
 - Provider-agnostic binary serialization
 - NULL handling for documents without embeddings
 - Direct storage eliminates need for separate vector table

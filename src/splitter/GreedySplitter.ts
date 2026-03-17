@@ -54,7 +54,10 @@ export class GreedySplitter implements DocumentSplitter {
       }
 
       if (currentChunk) {
-        const combinedSize = currentChunk.content.length + nextChunk.content.length;
+        // Account for the newline separator that may be added when merging (see merge below)
+        const separatorSize = currentChunk.content.endsWith("\n") ? 0 : 1;
+        const combinedSize =
+          currentChunk.content.length + separatorSize + nextChunk.content.length;
 
         // HARD LIMIT: Never exceed max chunk size
         if (combinedSize > this.maxChunkSize) {

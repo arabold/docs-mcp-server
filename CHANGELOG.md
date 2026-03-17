@@ -1,3 +1,74 @@
+## [2.1.1](https://github.com/arabold/docs-mcp-server/compare/v2.1.0...v2.1.1) (2026-03-16)
+
+
+### Bug Fixes
+
+* **embeddings:** allow Gemini models with MRL truncation to bypass dimension check ([6f48350](https://github.com/arabold/docs-mcp-server/commit/6f483504ec213368f2551b7ebcefab52044183d1)), closes [#363](https://github.com/arabold/docs-mcp-server/issues/363)
+* **scraper:** preserve standard application/* MIME types for XML formats ([ebb7a48](https://github.com/arabold/docs-mcp-server/commit/ebb7a48af3a8fcb9501eb47495d226ff280eed73))
+* **scraper:** support XSLT and other XML-variant file formats ([#341](https://github.com/arabold/docs-mcp-server/issues/341)) ([c7ab720](https://github.com/arabold/docs-mcp-server/commit/c7ab72036378a34481b42a3ecae05772115d722f))
+
+# [2.1.0](https://github.com/arabold/docs-mcp-server/compare/v2.0.4...v2.1.0) (2026-03-16)
+
+
+### Bug Fixes
+
+* address PR review feedback on llmstxt-discovery spec ([07fd40a](https://github.com/arabold/docs-mcp-server/commit/07fd40a1bbd8c85b6f0706c856c40915b59ce71c))
+* address second-round Copilot review feedback ([835f9f1](https://github.com/arabold/docs-mcp-server/commit/835f9f174f3032bf08490eaabb9c089e419bb60c))
+* **cli:** standardize machine-friendly output and logging ([b82cdce](https://github.com/arabold/docs-mcp-server/commit/b82cdce674aaae1eb26cd309944a679e08f7b351))
+* **cli:** tighten logger defaults and test isolation ([d0b523e](https://github.com/arabold/docs-mcp-server/commit/d0b523e8bd7cabf1058319c7893ccbbee0fe7fbb))
+* **config:** sanitize environment values at startup ([8515428](https://github.com/arabold/docs-mcp-server/commit/8515428c0bcfb6defa6f634385c413193b06a689))
+* correct chunk size warning to compare body only and account for merge separator ([163870a](https://github.com/arabold/docs-mcp-server/commit/163870aec7e6871a48d829c909ce6af3824a67db)), closes [#314](https://github.com/arabold/docs-mcp-server/issues/314)
+* **deps:** add remark-parse runtime dependency ([d25d5fd](https://github.com/arabold/docs-mcp-server/commit/d25d5fdd505549b5ca0cbe574f3e20ac5a584633))
+* **docs:** align content type tracking details ([ff4a91b](https://github.com/arabold/docs-mcp-server/commit/ff4a91ba8120bd7fe2408067807df98f90925808))
+* **scraper:** normalize presentational wrappers inside links ([3b6379e](https://github.com/arabold/docs-mcp-server/commit/3b6379e7e8fbe5c81c76f847477b384671117a67))
+* **scraper:** prevent ZIP-based documents from being treated as archives ([9d4be97](https://github.com/arabold/docs-mcp-server/commit/9d4be97f46ea70a981f3ba17f3b7a477f73a2254))
+* **test:** sync rebased lockfile and logger mocks ([42b1882](https://github.com/arabold/docs-mcp-server/commit/42b18829fe96dc9b07ccc910cbfb491df83ba5a2))
+* **web:** truncate long URLs with ellipsis in library and search views ([c4de706](https://github.com/arabold/docs-mcp-server/commit/c4de70693d8ce57cfba4119670db0fc114a47c14))
+
+
+### Features
+
+* **scraper:** expand default sanitizer exclusion selectors ([e0134b2](https://github.com/arabold/docs-mcp-server/commit/e0134b201dce15f9174c5d30a3f2b3920448bd08))
+* **scraper:** replace markitdown-ts with kreuzberg for document parsing ([f3344b8](https://github.com/arabold/docs-mcp-server/commit/f3344b809124b67b7a2c383027a61066abc3e6a8)), closes [#310](https://github.com/arabold/docs-mcp-server/issues/310)
+
+# [2.1.0](https://github.com/arabold/docs-mcp-server/compare/v2.0.4...v2.1.0) (2026-03-15)
+
+
+### Bug Fixes
+
+* address PR review feedback on llmstxt-discovery spec ([07fd40a](https://github.com/arabold/docs-mcp-server/commit/07fd40a1bbd8c85b6f0706c856c40915b59ce71c))
+* address second-round Copilot review feedback ([835f9f1](https://github.com/arabold/docs-mcp-server/commit/835f9f174f3032bf08490eaabb9c089e419bb60c))
+* **cli:** standardize machine-friendly output and logging ([b82cdce](https://github.com/arabold/docs-mcp-server/commit/b82cdce674aaae1eb26cd309944a679e08f7b351))
+* **cli:** tighten logger defaults and test isolation ([d0b523e](https://github.com/arabold/docs-mcp-server/commit/d0b523e8bd7cabf1058319c7893ccbbee0fe7fbb))
+* **config:** sanitize environment values at startup ([8515428](https://github.com/arabold/docs-mcp-server/commit/8515428c0bcfb6defa6f634385c413193b06a689))
+* correct chunk size warning to compare body only and account for merge separator ([163870a](https://github.com/arabold/docs-mcp-server/commit/163870aec7e6871a48d829c909ce6af3824a67db)), closes [#314](https://github.com/arabold/docs-mcp-server/issues/314)
+* **deps:** add remark-parse runtime dependency ([d25d5fd](https://github.com/arabold/docs-mcp-server/commit/d25d5fdd505549b5ca0cbe574f3e20ac5a584633))
+* **docs:** align content type tracking details ([ff4a91b](https://github.com/arabold/docs-mcp-server/commit/ff4a91ba8120bd7fe2408067807df98f90925808))
+* **scraper:** normalize presentational wrappers inside links ([3b6379e](https://github.com/arabold/docs-mcp-server/commit/3b6379e7e8fbe5c81c76f847477b384671117a67))
+* **scraper:** prevent ZIP-based documents from being treated as archives ([9d4be97](https://github.com/arabold/docs-mcp-server/commit/9d4be97f46ea70a981f3ba17f3b7a477f73a2254))
+* **test:** sync rebased lockfile and logger mocks ([42b1882](https://github.com/arabold/docs-mcp-server/commit/42b18829fe96dc9b07ccc910cbfb491df83ba5a2))
+* **web:** truncate long URLs with ellipsis in library and search views ([c4de706](https://github.com/arabold/docs-mcp-server/commit/c4de70693d8ce57cfba4119670db0fc114a47c14))
+
+
+### Features
+
+* **scraper:** expand default sanitizer exclusion selectors ([e0134b2](https://github.com/arabold/docs-mcp-server/commit/e0134b201dce15f9174c5d30a3f2b3920448bd08))
+* **scraper:** replace markitdown-ts with kreuzberg for document parsing ([f3344b8](https://github.com/arabold/docs-mcp-server/commit/f3344b809124b67b7a2c383027a61066abc3e6a8)), closes [#310](https://github.com/arabold/docs-mcp-server/issues/310)
+
+## [2.0.4](https://github.com/arabold/docs-mcp-server/compare/v2.0.3...v2.0.4) (2026-02-17)
+
+
+### Bug Fixes
+
+* handle playwright route already handled race condition error ([4669029](https://github.com/arabold/docs-mcp-server/commit/4669029a8fb3a5ff6b37cd0308579e0df2df76e1)), closes [#332](https://github.com/arabold/docs-mcp-server/issues/332)
+
+## [2.0.3](https://github.com/arabold/docs-mcp-server/compare/v2.0.2...v2.0.3) (2026-02-10)
+
+
+### Bug Fixes
+
+* relax engines constraint from exact Node 22.0.0 to >=22 ([9c05bcc](https://github.com/arabold/docs-mcp-server/commit/9c05bcc21087686d2e0d27654ee87a03ef7dbc49)), closes [#331](https://github.com/arabold/docs-mcp-server/issues/331)
+
 ## [2.0.2](https://github.com/arabold/docs-mcp-server/compare/v2.0.1...v2.0.2) (2026-02-03)
 
 

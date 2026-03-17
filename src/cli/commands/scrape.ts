@@ -12,6 +12,8 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
+import { logger } from "../../utils/logger";
+import { renderTextOutput } from "../output";
 import { type CliContext, getEventBus, parseHeaders } from "../utils";
 
 export function createScrapeCommand(cli: Argv) {
@@ -177,7 +179,7 @@ export function createScrapeCommand(cli: Argv) {
       let pipeline: IPipeline | null = null;
 
       // Display initial status
-      console.log("⏳ Initializing scraping job...");
+      logger.info("⏳ Initializing scraping job...");
 
       // Subscribe to event bus for progress updates (only for local pipelines)
       let unsubscribeProgress: (() => void) | null = null;
@@ -186,14 +188,14 @@ export function createScrapeCommand(cli: Argv) {
       if (!serverUrl) {
         unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
           const { job, progress } = event;
-          console.log(
+          logger.info(
             `📄 Scraping ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
           );
         });
 
         unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
           if (event.status === PipelineJobStatus.RUNNING) {
-            console.log(
+            logger.info(
               `🚀 Scraping ${event.library}${event.version ? ` v${event.version}` : ""}...`,
             );
           }
@@ -249,12 +251,12 @@ export function createScrapeCommand(cli: Argv) {
         });
 
         if ("pagesScraped" in result) {
-          console.log(`✅ Successfully scraped ${result.pagesScraped} pages`);
+          renderTextOutput(`Successfully scraped ${result.pagesScraped} pages`);
         } else {
-          console.log(`✅ Scraping job started with ID: ${result.jobId}`);
+          renderTextOutput(`Scraping job started with ID: ${result.jobId}`);
         }
       } catch (error) {
-        console.error(
+        logger.error(
           `❌ Scraping failed: ${error instanceof Error ? error.message : String(error)}`,
         );
         throw error;

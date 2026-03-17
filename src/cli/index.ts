@@ -26,8 +26,8 @@ import { createScrapeCommand } from "./commands/scrape";
 import { createSearchCommand } from "./commands/search";
 import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
+import { applyGlobalCliOutputMode, registerGlobalOutputOptions } from "./output";
 import { registerGlobalServices } from "./services";
-import { setupLogging } from "./utils";
 
 /**
  * Creates and configures the main CLI program with all commands.
@@ -42,7 +42,7 @@ export function createCli(argv: string[]): Argv {
   let globalTelemetryService: TelemetryService | null = null;
   const commandStartTimes = new Map<string, number>();
 
-  const cli = yargs(hideBin(argv))
+  const cli = registerGlobalOutputOptions(yargs(hideBin(argv)))
     .scriptName("docs-mcp-server")
     .strict()
     .usage("Usage: $0 <command> [options]")
@@ -53,10 +53,11 @@ export function createCli(argv: string[]): Argv {
       description: "Enable verbose (debug) logging",
       default: false,
     })
-    .option("silent", {
+    .option("quiet", {
       type: "boolean",
       description: "Disable all logging except errors",
       default: false,
+      alias: ["silent"],
     })
     .option("telemetry", {
       type: "boolean",
@@ -84,8 +85,8 @@ export function createCli(argv: string[]): Argv {
     // Middleware for Global Setup (similar to preAction)
     .middleware(async (argv) => {
       // 0. Validate Options
-      if (argv.verbose && argv.silent) {
-        throw new Error("Arguments verbose and silent are mutually exclusive");
+      if (argv.verbose && argv.quiet) {
+        throw new Error("Arguments verbose and quiet are mutually exclusive");
       }
 
       // 1. Load Config & Resolve Paths
@@ -106,9 +107,9 @@ export function createCli(argv: string[]): Argv {
       }
 
       // 2. Setup Logging
-      setupLogging({
+      applyGlobalCliOutputMode({
         verbose: argv.verbose as boolean,
-        silent: argv.silent as boolean,
+        quiet: argv.quiet as boolean,
       });
 
       // 3. Init Telemetry

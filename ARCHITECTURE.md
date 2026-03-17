@@ -255,9 +255,10 @@ Content processing follows a modular strategy-pipeline-splitter architecture:
 1. **Scraper Strategies**: Handle different source types (web, local files, package registries)
 2. **Content Fetchers**: Retrieve raw content from various sources (HTTP, filesystem, APIs)
 3. **Processing Pipelines**: Transform content using middleware chains and content-type-specific logic
-4. **Document Splitters**: Segment content into semantic chunks preserving document structure
-5. **Size Optimization**: Apply universal chunk sizing for optimal embedding generation
-6. **Embedders**: Generate vector embeddings using configured provider
+4. **Document Processing**: Extract text from binary documents (PDF, Office, EPUB, etc.) using Kreuzberg
+5. **Document Splitters**: Segment content into semantic chunks preserving document structure
+6. **Size Optimization**: Apply universal chunk sizing for optimal embedding generation
+7. **Embedders**: Generate vector embeddings using configured provider
 
 The system uses a two-phase splitting approach: semantic splitting preserves document structure, followed by size optimization for embedding quality. See [Content Processing](docs/concepts/content-processing.md) for detailed processing flows.
 
@@ -267,6 +268,7 @@ SQLite database with normalized schema:
 
 - `libraries`: Library metadata and organization
 - `versions`: Version tracking with indexing status and configuration
+- `pages`: Page-level metadata (URL, title, ETag, content type, crawl depth)
 - `documents`: Content chunks with embeddings and metadata
 
 The `versions` table serves as the job state hub, storing progress, errors, and scraper configuration for reproducible re-indexing.
@@ -359,6 +361,7 @@ Detailed documentation for specific architectural areas:
 - [Event Bus Architecture](docs/concepts/eventbus-architecture.md) - Event-driven architecture and real-time updates
 - [Pipeline Architecture](docs/concepts/pipeline-architecture.md) - Job processing and worker coordination
 - [Content Processing](docs/concepts/content-processing.md) - Scraping and document processing
+- [Supported Formats](docs/concepts/supported-formats.md) - File format reference and pipeline routing
 - [Data Storage](docs/concepts/data-storage.md) - Database design and embedding management
 - [Refresh Architecture](docs/concepts/refresh-architecture.md) - Efficient re-indexing with change detection
 - [Splitter Hierarchy](docs/concepts/splitter-hierarchy.md) - Document chunk organization and hierarchy

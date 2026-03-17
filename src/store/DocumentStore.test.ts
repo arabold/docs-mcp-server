@@ -93,6 +93,7 @@ function createScrapeResult(
   return {
     url,
     title,
+    sourceContentType: "text/html",
     contentType: "text/html",
     textContent: content,
     links: [],

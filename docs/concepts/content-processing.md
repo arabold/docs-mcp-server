@@ -91,6 +91,7 @@ Transform raw content using middleware chains and content-type-specific logic:
 - **HtmlPipeline**: Converts HTML to clean markdown via middleware, then applies semantic splitting
 - **MarkdownPipeline**: Processes markdown with metadata extraction and semantic splitting
 - **JsonPipeline**: Validates JSON structure and applies hierarchical splitting
+- **DocumentPipeline**: Extracts text from binary documents (PDF, Office, EPUB, RTF, etc.) via Kreuzberg, converting to markdown
 - **SourceCodePipeline**: Handles programming languages with language detection and line-based splitting
 - **TextPipeline**: Fallback for generic text content with basic processing
 
@@ -133,6 +134,19 @@ Segment content into semantic chunks while preserving document structure:
 - Handles oversized content while preserving document structure
 - Ensures optimal chunk sizes for embedding generation
 
+Chunk sizes are controlled by three character-based thresholds:
+
+| Setting | Role |
+|:--------|:-----|
+| `minChunkSize` | Floor for merging -- chunks below this are combined with neighbors |
+| `preferredChunkSize` | Soft target -- the optimizer splits when merging would exceed this |
+| `maxChunkSize` | Hard ceiling -- no chunk body will exceed this value |
+
+All sizes are measured in **characters** (`string.length`), not tokens. Before embedding,
+a metadata header (page title, URL, section path) is prepended to each chunk, so the total
+text sent to the embedding model is slightly larger than the chunk body. The actual token
+count depends on the embedding model's tokenizer.
+
 ## Content Processing Flow
 
 ```mermaid
@@ -161,6 +175,7 @@ graph TD
         E3[JsonPipeline]
         E4[SourceCodePipeline]
         E5[TextPipeline]
+        E6[DocumentPipeline]
     end
 
     subgraph "Two-Phase Splitting"
@@ -190,12 +205,14 @@ graph TD
     D --> E3
     D --> E4
     D --> E5
+    D --> E6
 
     E1 --> F1
     E2 --> F1
     E3 --> F1
     E4 --> F1
     E5 --> F1
+    E6 --> F1
 
     F1 --> F2
     F2 --> G
@@ -240,16 +257,24 @@ graph TD
         B4 --> C4[SemanticMarkdownSplitter]
     end
 
+    subgraph "Document Processing"
+        A5[Raw Document] --> B5[Kreuzberg Extraction]
+        B5 --> C5[Markdown Conversion]
+        C5 --> D5[SemanticMarkdownSplitter]
+    end
+
     H1 --> G[GreedySplitter]
     C2 --> G
     C3 --> G
     C4 --> G
+    D5 --> G
     G --> H[ContentChunk Array]
 
     style A1 fill:#ffebee
     style A2 fill:#fff3e0
     style A3 fill:#f3e5f5
     style A4 fill:#e8f5e8
+    style A5 fill:#fff9c4
     style H fill:#e1f5fe
 ```
 
@@ -259,8 +284,11 @@ graph TD
 - **JSON**: Structural validation with hierarchical object/array splitting
 - **Source Code**: Tree-sitter semantic boundary detection with language-specific parsing
 - **Markdown**: Direct semantic splitting with metadata preservation
+- **Documents**: Binary extraction via Kreuzberg with Markdown output and table-aware content handling
 
 All content types converge on GreedySplitter for universal size optimization while preserving content-specific semantic boundaries.
+
+For the full list of supported file formats and MIME types, see [Supported Formats](supported-formats.md).
 
 ## Two-Phase Splitting Architecture
 

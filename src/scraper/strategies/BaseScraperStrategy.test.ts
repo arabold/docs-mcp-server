@@ -64,6 +64,7 @@ describe("BaseScraperStrategy", () => {
       result: {
         url: "https://example.com/",
         title: "",
+        sourceContentType: "",
         contentType: "",
         textContent: "test",
         etag: null,
