@@ -87,6 +87,32 @@ export class DocumentNotFoundError extends StoreError {
 }
 
 /**
+ * Error thrown when the configured embedding model or vector dimension differs from the
+ * values stored in the database metadata. This indicates that existing vectors are
+ * incompatible with the new configuration and must be invalidated before proceeding.
+ *
+ * The CLI layer catches this error to either prompt the user interactively (TTY) or
+ * fail startup entirely (non-interactive/MCP/stdio mode).
+ */
+export class EmbeddingModelChangedError extends StoreError {
+  constructor(
+    public readonly previousModel: string,
+    public readonly previousDimension: string,
+    public readonly currentModel: string,
+    public readonly currentDimension: string,
+  ) {
+    super(
+      `Embedding model change detected:\n` +
+        `  Previous: ${previousModel} (${previousDimension} dimensions)\n` +
+        `  Current:  ${currentModel} (${currentDimension} dimensions)\n\n` +
+        `All existing vectors are incompatible and must be invalidated.\n` +
+        `To confirm this change, start the server interactively (with a TTY connected)\n` +
+        `and follow the prompts.`,
+    );
+  }
+}
+
+/**
  * Error thrown when required credentials for an embedding provider are missing.
  * This allows the system to gracefully degrade to FTS-only search when vectorization is unavailable.
  */

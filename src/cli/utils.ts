@@ -4,6 +4,7 @@
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
@@ -366,4 +367,76 @@ export function resolveEmbeddingContext(
     logger.debug(`Failed to resolve embedding configuration: ${error}`);
     return null;
   }
+}
+
+/**
+ * Prompts the user interactively to confirm an embedding model change.
+ * Returns true if the user confirms (y/Y), false otherwise.
+ */
+function promptModelChangeConfirmation(
+  previousModel: string,
+  previousDimension: string,
+  currentModel: string,
+  currentDimension: string,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    console.error(
+      `\n⚠️  Embedding model change detected:\n` +
+        `   Previous: ${previousModel} (${previousDimension} dimensions)\n` +
+        `   Current:  ${currentModel} (${currentDimension} dimensions)\n\n` +
+        `   All existing embedding vectors will be invalidated.\n` +
+        `   Libraries must be re-scraped to restore vector search.\n` +
+        `   Full-text search will continue working for all existing documents.\n`,
+    );
+
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stderr,
+    });
+
+    rl.question("   Proceed with model change? (y/N) ", (answer) => {
+      rl.close();
+      const confirmed = answer.trim().toLowerCase() === "y";
+      resolve(confirmed);
+    });
+  });
+}
+
+/**
+ * Handles EmbeddingModelChangedError during service initialization.
+ *
+ * - In non-interactive mode (no TTY): re-throws the error to fail startup.
+ * - In interactive mode (TTY): prompts the user for confirmation, then either
+ *   resolves the model change (invalidates vectors) or exits.
+ *
+ * @param error The EmbeddingModelChangedError thrown by DocumentStore.initialize()
+ * @param service The DocumentManagementService instance (already partially initialized)
+ * @throws Re-throws the error in non-interactive mode or if the user rejects the change
+ */
+export async function handleEmbeddingModelChange(
+  error: import("../store/errors").EmbeddingModelChangedError,
+  service: import("../store/DocumentManagementService").DocumentManagementService,
+): Promise<void> {
+  // Non-interactive: fail startup entirely
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw error;
+  }
+
+  // Interactive: prompt user for confirmation
+  const confirmed = await promptModelChangeConfirmation(
+    error.previousModel,
+    error.previousDimension,
+    error.currentModel,
+    error.currentDimension,
+  );
+
+  if (!confirmed) {
+    throw new Error(
+      "Embedding model change rejected. Startup aborted.\n" +
+        "Restore the previous embedding model configuration to continue without changes.",
+    );
+  }
+
+  // User confirmed: invalidate vectors and complete initialization
+  await service.resolveModelChange();
 }

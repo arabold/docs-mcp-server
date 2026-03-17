@@ -223,7 +223,7 @@ Settings for the vector embedding generation.
 | `batchChars` | `50000` | Maximum total characters per embedding batch. |
 | `requestTimeoutMs` | `30000` | Timeout for each embedding API request (ms). |
 | `initTimeoutMs` | `30000` | Timeout for the initial test embedding during model initialization (ms). |
-| `vectorDimension` | `1536` | Dimension of the vector space (must match model). |
+| `vectorDimension` | `1536` | Dimension of the vector space. Must be a positive integer (minimum 1). Override with `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION`. Changing this value triggers a model change confirmation on next startup. |
 
 ### Search (`search`)
 

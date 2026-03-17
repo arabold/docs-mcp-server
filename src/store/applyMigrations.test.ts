@@ -30,9 +30,11 @@ describe("Database Migrations", () => {
     const tableNames = (tables as TableRow[]).map((t) => t.name);
     expect(tableNames).toContain("documents");
     expect(tableNames).toContain("documents_fts");
-    // documents_vec is dropped by migration 012 and created at runtime by DocumentStore.ensureVectorTable()
-    expect(tableNames).not.toContain("documents_vec");
+    // documents_vec is created by migration 003 (with fixed 1536 dimension);
+    // DocumentStore.ensureVectorTable() reconciles it at runtime if the configured dimension differs
+    expect(tableNames).toContain("documents_vec");
     expect(tableNames).toContain("libraries");
+    expect(tableNames).toContain("metadata");
     expect(tableNames).toContain("pages");
 
     // Check columns for 'documents'
@@ -101,30 +103,19 @@ describe("Database Migrations", () => {
       .get() as { sql: string } | undefined;
     expect(ftsTableInfo?.sql).toContain("VIRTUAL TABLE documents_fts USING fts5");
 
-    // documents_vec is created at runtime by DocumentStore.ensureVectorTable() with config dimension; not present after migrations
+    // documents_vec is created by migration 003 (with fixed 1536 dimension) and survives through all
+    // subsequent migrations. DocumentStore.ensureVectorTable() reconciles it at runtime if needed.
     const vecTableInfo = db
       .prepare(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_vec';",
       )
       .get() as { sql: string } | undefined;
-    expect(vecTableInfo).toBeUndefined();
+    expect(vecTableInfo).toBeDefined();
   });
 
-  /** Create documents_vec with fixed dimension for tests that need vector search without full DocumentStore init */
-  function createVectorTableForTest(testDb: DatabaseType, dimension: number): void {
-    testDb.exec(`
-      CREATE VIRTUAL TABLE documents_vec USING vec0(
-        library_id INTEGER NOT NULL,
-        version_id INTEGER NOT NULL,
-        embedding FLOAT[${dimension}]
-      );
-    `);
-  }
-
   it("should handle vector search with empty results gracefully", () => {
-    // Apply all migrations (documents_vec is dropped by 012; create it for this test)
+    // Apply all migrations (documents_vec exists from migration 003 with 1536d)
     expect(() => applyMigrations(db)).not.toThrow();
-    createVectorTableForTest(db, 1536);
 
     // Insert a library and version but no documents
     db.prepare("INSERT INTO libraries (name) VALUES (?)").run("empty-lib");
@@ -172,9 +163,8 @@ describe("Database Migrations", () => {
   });
 
   it("should perform vector search and return similar vectors correctly", () => {
-    // Apply all migrations (documents_vec is dropped by 012; create it for this test)
+    // Apply all migrations (documents_vec exists from migration 003 with 1536d)
     expect(() => applyMigrations(db)).not.toThrow();
-    createVectorTableForTest(db, 1536);
 
     // Insert test library and version
     db.prepare("INSERT INTO libraries (name) VALUES (?)").run("test-lib");
@@ -381,9 +371,8 @@ describe("Database Migrations", () => {
   });
 
   it("should perform FTS search and return relevant text matches correctly", () => {
-    // Apply all migrations (documents_vec dropped by 012; create it so triggers from 011 can run on document insert)
+    // Apply all migrations (documents_vec exists from migration 003; triggers from 011 sync on document insert)
     expect(() => applyMigrations(db)).not.toThrow();
-    createVectorTableForTest(db, 1536);
 
     // Insert test library and version
     db.prepare("INSERT INTO libraries (name) VALUES (?)").run("docs-lib");
