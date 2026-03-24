@@ -23,7 +23,19 @@ vi.mock("../../mcp/tools", () => ({
 }));
 
 vi.mock("../../store", () => ({
-  createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
+  DocumentManagementService: vi.fn().mockImplementation(() => ({
+    initialize: vi.fn().mockResolvedValue(undefined),
+    shutdown: vi.fn(),
+  })),
+  DocumentManagementClient: vi.fn().mockImplementation(() => ({
+    initialize: vi.fn().mockResolvedValue(undefined),
+    shutdown: vi.fn(),
+  })),
+}));
+vi.mock("../../store/errors", () => ({
+  EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {
+    name = "EmbeddingModelChangedError";
+  },
 }));
 vi.mock("../../pipeline", () => ({
   PipelineFactory: {
@@ -50,6 +62,7 @@ vi.mock("../utils", () => ({
   validateAuthConfig: vi.fn(),
   createAppServerConfig: vi.fn((config) => config),
   warnHttpUsage: vi.fn(),
+  handleEmbeddingModelChange: vi.fn(),
   CliContext: {},
   setupLogging: vi.fn(),
   setLogLevel: vi.fn(),

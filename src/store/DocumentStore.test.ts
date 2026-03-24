@@ -4,6 +4,7 @@ import type { Chunk } from "../splitter/types";
 import { loadConfig } from "../utils/config";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
+import { EmbeddingModelChangedError } from "./errors";
 import { VersionStatus } from "./types";
 
 // Mock only the embedding service to generate deterministic embeddings for testing
@@ -1514,6 +1515,288 @@ describe("DocumentStore - Common Functionality", () => {
         // etag can be null, but the field should exist
         expect(page).toHaveProperty("etag");
       }
+    });
+  });
+});
+
+/**
+ * Tests for embedding model change safety:
+ * metadata persistence, change detection, vector invalidation, ensureVectorTable.
+ */
+describe("DocumentStore - Embedding Model Change Safety", () => {
+  let store: DocumentStore;
+  let originalApiKey: string | undefined;
+
+  beforeEach(() => {
+    // Set dummy API key so areCredentialsAvailable("openai") returns true
+    // and initializeEmbeddings() proceeds (the actual API call is mocked)
+    originalApiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "test-key-for-model-change-safety";
+  });
+
+  afterEach(async () => {
+    if (store) {
+      await store.shutdown();
+    }
+    // Restore original env
+    if (originalApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = originalApiKey;
+    }
+  });
+
+  /**
+   * Helper: create and initialize a store with the given embedding model spec.
+   * Returns the store for further assertions.
+   */
+  async function createStore(
+    modelSpec: string,
+    dimension?: number,
+  ): Promise<DocumentStore> {
+    const cfg = loadConfig();
+    if (modelSpec) {
+      const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(modelSpec);
+      cfg.app.embeddingModel = embeddingConfig.modelSpec;
+    } else {
+      cfg.app.embeddingModel = "";
+    }
+    if (dimension !== undefined) {
+      cfg.embeddings.vectorDimension = dimension;
+    }
+    const s = new DocumentStore(":memory:", cfg);
+    await s.initialize();
+    return s;
+  }
+
+  // 9.2 Test getEmbeddingMetadata returns null when no keys exist (first-run)
+  describe("getEmbeddingMetadata", () => {
+    it("should return null for both fields on first run before any embedding init", async () => {
+      // Create store in FTS-only mode so initializeEmbeddings skips metadata write
+      store = await createStore("");
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBeNull();
+      expect(metadata.dimension).toBeNull();
+    });
+  });
+
+  // 9.3 Test setEmbeddingMetadata writes and reads correctly
+  describe("setEmbeddingMetadata", () => {
+    it("should write and read model and dimension correctly", async () => {
+      store = await createStore("");
+      store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
+
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBe("openai:text-embedding-3-small");
+      expect(metadata.dimension).toBe("1536");
+    });
+
+    it("should overwrite existing metadata on subsequent calls", async () => {
+      store = await createStore("");
+      store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
+      store.setEmbeddingMetadata("openai:text-embedding-ada-002", 768);
+
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBe("openai:text-embedding-ada-002");
+      expect(metadata.dimension).toBe("768");
+    });
+  });
+
+  // 9.4 Test checkEmbeddingModelChange throws when model differs
+  describe("checkEmbeddingModelChange", () => {
+    it("should throw EmbeddingModelChangedError when model differs", async () => {
+      // First init with model A
+      store = await createStore("openai:text-embedding-3-small");
+      await store.shutdown();
+
+      // Get the DB reference before shutdown wipes it — we need a fresh store on the same DB
+      // Since we use :memory:, we must simulate by manually setting metadata
+      store = await createStore("openai:text-embedding-3-small");
+
+      // Manually set stored metadata to a different model
+      store.setEmbeddingMetadata("openai:text-embedding-ada-002", 1536);
+
+      // Now checkEmbeddingModelChange should detect the mismatch
+      expect(() => store.checkEmbeddingModelChange()).toThrow(EmbeddingModelChangedError);
+    });
+
+    // 9.5 Test checkEmbeddingModelChange throws when dimension differs
+    it("should throw EmbeddingModelChangedError when dimension differs", async () => {
+      store = await createStore("openai:text-embedding-3-small");
+
+      // Set stored metadata with same model but different dimension
+      store.setEmbeddingMetadata("openai:text-embedding-3-small", 768);
+
+      expect(() => store.checkEmbeddingModelChange()).toThrow(EmbeddingModelChangedError);
+    });
+
+    // 9.6 Test checkEmbeddingModelChange does not throw when model and dimension match
+    it("should not throw when model and dimension match", async () => {
+      store = await createStore("openai:text-embedding-3-small");
+
+      // Metadata was persisted by initializeEmbeddings — check should pass
+      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
+    });
+
+    // 9.7 Test checkEmbeddingModelChange does not throw on first run (no stored metadata)
+    it("should not throw on first run when no metadata exists", async () => {
+      // Create store but clear metadata to simulate first run
+      store = await createStore("openai:text-embedding-3-small");
+
+      // @ts-expect-error Accessing private property for testing
+      store.db.exec("DELETE FROM metadata");
+
+      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
+    });
+
+    // 9.8 Test checkEmbeddingModelChange does not throw in FTS-only mode
+    it("should not throw when in FTS-only mode (no embedding model)", async () => {
+      store = await createStore("");
+
+      // Even if metadata exists from a prior run, FTS-only skips the check
+      store.setEmbeddingMetadata("openai:text-embedding-3-small", 1536);
+
+      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
+    });
+  });
+
+  // 9.9, 9.10, 9.11 Test invalidateAllVectors
+  describe("invalidateAllVectors", () => {
+    it("should set all embeddings to NULL", async () => {
+      store = await createStore("openai:text-embedding-3-small");
+
+      // Add a document so we have an embedding to invalidate
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Test Doc",
+          "https://example.com/test",
+          "Some test content for embedding invalidation",
+        ),
+      );
+
+      // Verify embedding exists
+      // @ts-expect-error Accessing private property for testing
+      const before = store.db
+        .prepare("SELECT COUNT(*) as cnt FROM documents WHERE embedding IS NOT NULL")
+        .get() as { cnt: number };
+      expect(before.cnt).toBeGreaterThan(0);
+
+      store.invalidateAllVectors("openai:text-embedding-ada-002", 1536);
+
+      // @ts-expect-error Accessing private property for testing
+      const after = store.db
+        .prepare("SELECT COUNT(*) as cnt FROM documents WHERE embedding IS NOT NULL")
+        .get() as { cnt: number };
+      expect(after.cnt).toBe(0);
+    });
+
+    it("should recreate documents_vec as empty", async () => {
+      store = await createStore("openai:text-embedding-3-small");
+
+      // Add a document to populate documents_vec
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Test Doc",
+          "https://example.com/test",
+          "Content for vec table test",
+        ),
+      );
+
+      // @ts-expect-error Accessing private property for testing
+      const vecBefore = store.db
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
+        .get() as { cnt: number };
+      expect(vecBefore.cnt).toBeGreaterThan(0);
+
+      store.invalidateAllVectors("openai:text-embedding-ada-002", 768);
+
+      // Vec table should exist but be empty
+      // @ts-expect-error Accessing private property for testing
+      const vecAfter = store.db
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
+        .get() as { cnt: number };
+      expect(vecAfter.cnt).toBe(0);
+
+      // And the new dimension should be reflected in the DDL
+      // @ts-expect-error Accessing private property for testing
+      const ddl = store.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("768");
+    });
+
+    it("should update metadata with new model and dimension", async () => {
+      store = await createStore("openai:text-embedding-3-small");
+
+      store.invalidateAllVectors("openai:text-embedding-ada-002", 768);
+
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBe("openai:text-embedding-ada-002");
+      expect(metadata.dimension).toBe("768");
+    });
+  });
+
+  // 9.12, 9.13 Test ensureVectorTable
+  describe("ensureVectorTable", () => {
+    it("should create table with configured dimension and no backfill", async () => {
+      store = await createStore("openai:text-embedding-3-small");
+
+      // Verify documents_vec exists with the correct dimension
+      // @ts-expect-error Accessing private property for testing
+      const ddl = store.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl).toBeDefined();
+      expect(ddl.sql).toContain("1536");
+
+      // Table should be empty (no backfill)
+      // @ts-expect-error Accessing private property for testing
+      const count = store.db
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
+        .get() as { cnt: number };
+      expect(count.cnt).toBe(0);
+    });
+
+    it("should be a no-op when dimension matches existing table", async () => {
+      store = await createStore("openai:text-embedding-3-small");
+
+      // Add a document to populate vec table
+      await store.addDocuments(
+        "testlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Test Doc",
+          "https://example.com/test",
+          "Content for no-op test",
+        ),
+      );
+
+      // @ts-expect-error Accessing private property for testing
+      const vecBefore = store.db
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
+        .get() as { cnt: number };
+      expect(vecBefore.cnt).toBeGreaterThan(0);
+
+      // Calling ensureVectorTable again should be a no-op (dimension matches)
+      // @ts-expect-error Accessing private method for testing
+      store.ensureVectorTable();
+
+      // @ts-expect-error Accessing private property for testing
+      const vecAfter = store.db
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
+        .get() as { cnt: number };
+      expect(vecAfter.cnt).toBe(vecBefore.cnt);
     });
   });
 });

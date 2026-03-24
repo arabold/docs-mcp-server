@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLocalDocumentManagement } from "../store";
+import { DocumentManagementService } from "../store";
 import { resolveStorePath } from "../utils/paths";
 import { createCli } from "./index";
 import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
@@ -126,12 +126,17 @@ vi.mock("../store", async () => {
       capturedCreateArgs.push(opts);
       return { shutdown: vi.fn() } as any;
     }),
-    createLocalDocumentManagement: vi.fn().mockResolvedValue({
-      initialize: vi.fn(),
+    DocumentManagementService: vi.fn().mockImplementation(() => ({
+      initialize: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn(),
-    }),
+    })),
   };
 });
+vi.mock("../store/errors", () => ({
+  EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {
+    name = "EmbeddingModelChangedError";
+  },
+}));
 
 vi.mock("../app", () => ({
   startAppServer: vi.fn().mockResolvedValue({
@@ -149,14 +154,14 @@ vi.mock("../mcp/startStdioServer", () => ({
 
 describe("Global option propagation", () => {
   let mockResolveStorePath: any;
-  let mockCreateLocalDocumentManagement: any;
+  let mockDocumentManagementService: any;
 
   beforeEach(async () => {
     vi.clearAllMocks();
 
     // Get references to the mocked functions
     mockResolveStorePath = vi.mocked(resolveStorePath);
-    mockCreateLocalDocumentManagement = vi.mocked(createLocalDocumentManagement);
+    mockDocumentManagementService = vi.mocked(DocumentManagementService);
   });
 
   it("should pass --store-path through preAction hook to default command", async () => {
@@ -183,8 +188,8 @@ describe("Global option propagation", () => {
     // Verify that resolveStorePath was called with the CLI option
     expect(mockResolveStorePath).toHaveBeenCalledWith(customStorePath);
 
-    // Verify that createLocalDocumentManagement was called with the resolved path
-    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+    // Verify that DocumentManagementService was constructed with the resolved path
+    expect(mockDocumentManagementService).toHaveBeenCalledWith(
       expect.objectContaining({
         emitter: expect.any(Object),
       }), // EventBusService instance
@@ -219,8 +224,8 @@ describe("Global option propagation", () => {
     // Verify that resolveStorePath was called with the env var value
     expect(mockResolveStorePath).toHaveBeenCalledWith(envStorePath);
 
-    // Verify that createLocalDocumentManagement was called with the resolved path
-    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+    // Verify that DocumentManagementService was constructed with the resolved path
+    expect(mockDocumentManagementService).toHaveBeenCalledWith(
       expect.objectContaining({
         emitter: expect.any(Object),
       }), // EventBusService instance
@@ -250,7 +255,7 @@ describe("Global option propagation", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+    expect(mockDocumentManagementService).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         app: expect.objectContaining({
@@ -274,7 +279,7 @@ describe("Global option propagation", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(mockCreateLocalDocumentManagement).toHaveBeenCalledWith(
+    expect(mockDocumentManagementService).toHaveBeenCalledWith(
       expect.any(Object),
       expect.objectContaining({
         app: expect.objectContaining({
