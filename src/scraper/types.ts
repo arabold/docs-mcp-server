@@ -129,7 +129,9 @@ export interface ScrapeResult {
   url: string;
   /** Page title */
   title: string;
-  /** MIME type of the content being processed */
+  /** Original MIME type of the fetched resource before pipeline processing */
+  sourceContentType: string;
+  /** MIME type of the stored content after pipeline processing */
   contentType: string;
   /** The final processed content, typically as a string (e.g., Markdown). Used primarily for debugging */
   textContent: string;

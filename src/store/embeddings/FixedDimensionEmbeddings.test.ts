@@ -70,6 +70,40 @@ describe("FixedDimensionEmbeddings", () => {
     await expect(() => wrapper.embedQuery("test")).rejects.toThrow(DimensionError);
   });
 
+  test("should truncate Gemini-sized vectors (3072d) to target dimension when allowTruncate is true", async () => {
+    const geminiDimension = 3072;
+    const base = new MockBaseEmbeddings(geminiDimension);
+    const wrapper = new FixedDimensionEmbeddings(
+      base,
+      targetDimension,
+      "gemini:gemini-embedding-001",
+      true,
+    );
+
+    const vector = await wrapper.embedQuery("test");
+    expect(vector.length).toBe(targetDimension);
+    expect(vector).toEqual(Array(targetDimension).fill(1));
+  });
+
+  test("should expose allowTruncate as a public property", () => {
+    const base = new MockBaseEmbeddings(targetDimension);
+    const withTruncate = new FixedDimensionEmbeddings(
+      base,
+      targetDimension,
+      "gemini:model",
+      true,
+    );
+    const withoutTruncate = new FixedDimensionEmbeddings(
+      base,
+      targetDimension,
+      "test:model",
+      false,
+    );
+
+    expect(withTruncate.allowTruncate).toBe(true);
+    expect(withoutTruncate.allowTruncate).toBe(false);
+  });
+
   test("should process multiple documents correctly", async () => {
     const shortDimension = 1024;
     const base = new MockBaseEmbeddings(shortDimension);

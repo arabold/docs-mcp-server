@@ -14,13 +14,67 @@ The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
 -   🔒 **Private & Local:** Runs entirely on your machine; your code never leaves your network.
 -   🧩 **Broad Compatibility:** Works with any MCP-compatible client (Claude, Cline, etc.).
 -   📁 **Multiple Sources:** Index websites, GitHub repositories, local folders, and zip archives.
--   📄 **Rich File Support:** Processes HTML, Markdown, PDF, Word (.docx), Excel, PowerPoint, and source code.
+-   📄 **Rich File Support:** Processes HTML, Markdown, PDF, Office documents (Word, Excel, PowerPoint), OpenDocument, RTF, EPUB, Jupyter Notebooks, and [90+ source code languages](docs/concepts/supported-formats.md).
+
+---
+
+## 📄 Supported Formats
+
+| Category | Formats |
+|----------|---------|
+| **Documents** | PDF, Word (.docx/.doc), Excel (.xlsx/.xls), PowerPoint (.pptx/.ppt), OpenDocument (.odt/.ods/.odp), RTF, EPUB, FictionBook, Jupyter Notebooks |
+| **Archives** | ZIP, TAR, gzipped TAR (contents are extracted and processed individually) |
+| **Web** | HTML, XHTML |
+| **Markup** | Markdown, MDX, reStructuredText, AsciiDoc, Org Mode, Textile, R Markdown |
+| **Source Code** | TypeScript, JavaScript, Python, Go, Rust, C/C++, Java, Kotlin, Ruby, PHP, Swift, C#, and [many more](docs/concepts/supported-formats.md#source-code) |
+| **Data** | JSON, YAML, TOML, CSV, XML, SQL, GraphQL, Protocol Buffers |
+| **Config** | Dockerfile, Makefile, Terraform/HCL, INI, dotenv, Bazel |
+
+See **[Supported Formats](docs/concepts/supported-formats.md)** for the complete reference including MIME types and processing details.
 
 ---
 
 ## 🚀 Quick Start
 
-**1. Start the server** (requires Node.js 22+):
+### CLI First
+
+For agents and scripts, the CLI is usually the simplest way to use Grounded Docs.
+
+**1. Index documentation** (requires Node.js 22+):
+
+```bash
+npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
+```
+
+**2. Query the index:**
+
+```bash
+npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
+```
+
+**3. Fetch a single page as Markdown:**
+
+```bash
+npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+```
+
+### Output Behavior
+
+- Structured commands default to clean JSON on stdout in non-interactive runs.
+- Use `--output json|yaml|toon` to pick a structured format.
+- Plain-text commands such as `fetch-url` keep their text payload on stdout.
+- Diagnostics go through the shared logger and are kept off stdout in non-interactive runs.
+- Use `--quiet` to suppress non-error diagnostics or `--verbose` to enable debug output.
+
+### Agent Skills
+
+The [`skills/`](skills/) directory contains [Agent Skills](https://agentskills.io) that teach AI coding assistants how to use the CLI — covering documentation search, index management, and URL fetching.
+
+### MCP Server
+
+If you want a long-running MCP endpoint for Claude, Cline, Copilot, Gemini CLI, or other MCP clients:
+
+**1. Start the server:**
 
 ```bash
 npx @arabold/docs-mcp-server@latest
@@ -78,6 +132,7 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 -   **[Connecting Clients](docs/guides/mcp-clients.md)**: How to connect Claude, VS Code (Cline/Roo), and other MCP clients.
 -   **[Basic Usage](docs/guides/basic-usage.md)**: Using the Web UI, CLI, and scraping local files.
 -   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.
+-   **[Supported Formats](docs/concepts/supported-formats.md)**: Complete file format and MIME type reference.
 -   **[Embedding Models](docs/guides/embedding-models.md)**: Configure OpenAI, Ollama, Gemini, and other providers.
 
 ### Key Concepts & Architecture

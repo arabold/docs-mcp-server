@@ -4,6 +4,7 @@ import { VertexAIEmbeddings } from "@langchain/google-vertexai";
 import { OpenAIEmbeddings } from "@langchain/openai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
+import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
 import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
@@ -187,6 +188,25 @@ describe("createEmbeddingModel", () => {
     expect(model).toBeInstanceOf(BedrockEmbeddings);
     expect(model).toMatchObject({
       model: "amazon.titan-embed-text-v1",
+    });
+  });
+
+  describe("OPENAI_API_BASE handling", () => {
+    test("should use sanitized OPENAI_API_BASE values", () => {
+      const env = {
+        OPENAI_API_KEY: '"test-openai-key"',
+        OPENAI_API_BASE: '"http://localhost:11434/v1"',
+      };
+      sanitizeEnvironment(env);
+      vi.stubGlobal("process", { env });
+
+      const model = createEmbeddingModel("openai:nomic-embed-text", runtimeConfig);
+      expect(model).toBeInstanceOf(OpenAIEmbeddings);
+
+      const clientConfig = (model as any).clientConfig;
+      if (clientConfig?.baseURL) {
+        expect(clientConfig.baseURL).toBe("http://localhost:11434/v1");
+      }
     });
   });
 });

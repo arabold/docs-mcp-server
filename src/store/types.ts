@@ -10,6 +10,7 @@ export interface DbPage {
   title: string | null;
   etag: string | null;
   last_modified: string | null;
+  source_content_type: string | null;
   content_type: string | null;
   depth: number | null;
   created_at: string;
@@ -51,6 +52,7 @@ export interface DbChunk {
 export interface DbPageChunk extends DbChunk {
   url: string;
   title?: string | null;
+  source_content_type?: string | null;
   content_type?: string | null;
 }
 
@@ -77,6 +79,7 @@ export interface StoreSearchResult {
   content: string;
   score: number | null;
   mimeType?: string | null;
+  sourceMimeType?: string | null;
 }
 
 /**

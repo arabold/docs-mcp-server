@@ -13,6 +13,7 @@ import {
   ModelConfigurationError,
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
+import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings";
 import { ConnectionError, DimensionError, StoreError } from "./errors";
 import type { DbChunkMetadata, DbChunkRank, StoredScraperOptions } from "./types";
 import {
@@ -32,8 +33,9 @@ import {
 interface RawSearchResult extends DbChunk {
   // Page fields joined from pages table
   url?: string;
-  title?: string;
-  content_type?: string;
+  title?: string | null;
+  source_content_type?: string | null;
+  content_type?: string | null;
   // Search scoring fields
   vec_score?: number;
   fts_score?: number;
@@ -88,7 +90,16 @@ export class DocumentStore {
     insertEmbedding: Database.Statement<[string, bigint]>;
     // New statement for pages table
     insertPage: Database.Statement<
-      [number, string, string, string | null, string | null, string | null, number | null]
+      [
+        number,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        number | null,
+      ]
     >;
     getPageId: Database.Statement<[number, string]>;
     deleteDocuments: Database.Statement<[string, string]>;
@@ -226,7 +237,7 @@ export class DocumentStore {
   private prepareStatements(): void {
     const statements = {
       getById: this.db.prepare<[bigint]>(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type 
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type 
          FROM documents d
          JOIN pages p ON d.page_id = p.id
          WHERE d.id = ?`,
@@ -246,10 +257,11 @@ export class DocumentStore {
           string | null,
           string | null,
           string | null,
+          string | null,
           number | null,
         ]
       >(
-        "INSERT INTO pages (version_id, url, title, etag, last_modified, content_type, depth) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth",
+        "INSERT INTO pages (version_id, url, title, etag, last_modified, source_content_type, content_type, depth) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, source_content_type = excluded.source_content_type, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth",
       ),
       getPageId: this.db.prepare<[number, string]>(
         "SELECT id FROM pages WHERE version_id = ? AND url = ?",
@@ -342,7 +354,7 @@ export class DocumentStore {
       getChildChunks: this.db.prepare<
         [string, string, string, number, string, bigint, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -358,7 +370,7 @@ export class DocumentStore {
       getPrecedingSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -373,7 +385,7 @@ export class DocumentStore {
       getSubsequentSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -386,7 +398,7 @@ export class DocumentStore {
         LIMIT ?
       `),
       getParentChunk: this.db.prepare<[string, string, string, string, bigint]>(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -524,6 +536,16 @@ export class DocumentStore {
         EmbeddingConfig.setKnownModelDimensions(config.model, this.modelDimension);
       }
 
+      // For models wrapped in FixedDimensionEmbeddings with truncation enabled
+      // (e.g., Gemini with MRL support), the effective output dimension is capped
+      // at the target dimension. Use the effective dimension for validation.
+      if (
+        this.embeddings instanceof FixedDimensionEmbeddings &&
+        this.embeddings.allowTruncate
+      ) {
+        this.modelDimension = Math.min(this.modelDimension, this.dbDimension);
+      }
+
       if (this.modelDimension > this.dbDimension) {
         throw new DimensionError(config.modelSpec, this.modelDimension, this.dbDimension);
       }
@@ -592,14 +614,14 @@ export class DocumentStore {
    * This prevents FTS5 syntax errors while supporting intuitive phrase searches.
    *
    * Query construction:
-   * - Exact match of full input: `("escaped full query")`
-   * - Individual terms: `("term1" AND "term2" AND "phrase")`
-   * - Combined: `("full query") OR ("term1" AND "term2")`
+   * - Exact match of full input: `"escaped full query"`
+   * - Individual terms: `"term1" OR "term2" OR "phrase"`
+   * - Combined: `"full query" OR "term1" OR "term2"`
    *
    * Examples:
-   * - `foo bar` -> `("foo bar") OR ("foo" AND "bar")`
-   * - `"hello world"` -> `("hello world")`
-   * - `test "exact phrase" word` -> `("test exact phrase word") OR ("test" AND "exact phrase" AND "word")`
+   * - `foo bar` -> `"foo bar" OR "foo" OR "bar"`
+   * - `"hello world"` -> `"hello world"`
+   * - `test "exact phrase" word` -> `"test exact phrase word" OR "test" OR "exact phrase" OR "word"`
    */
   private escapeFtsQuery(query: string): string {
     // Tokenize the query using a simple quote-toggle state machine
@@ -1199,12 +1221,15 @@ export class DocumentStore {
           return `${header}${chunk.content}`;
         });
 
-        // Validate chunk sizes before creating embeddings
-        for (let i = 0; i < texts.length; i++) {
-          const textSize = texts[i].length;
-          if (textSize > this.splitterMaxChunkSize) {
+        // Validate chunk body sizes before creating embeddings.
+        // Note: We compare the chunk body (without the metadata header) against maxChunkSize,
+        // because the splitter's size budget applies to the content body only. The metadata
+        // header (title, URL, path) is expected overhead added after splitting.
+        for (let i = 0; i < chunks.length; i++) {
+          const bodySize = chunks[i].content.length;
+          if (bodySize > this.splitterMaxChunkSize) {
             logger.warn(
-              `⚠️  Chunk ${i + 1}/${texts.length} exceeds max size: ${textSize} > ${this.splitterMaxChunkSize} chars (URL: ${url})`,
+              `⚠️  Chunk ${i + 1}/${chunks.length} body exceeds max size: ${bodySize} > ${this.splitterMaxChunkSize} chars (URL: ${url})`,
             );
           }
         }
@@ -1280,7 +1305,8 @@ export class DocumentStore {
       // Insert documents in a transaction
       const transaction = this.db.transaction(() => {
         // Extract content type from metadata if available
-        const contentType = result.contentType || null;
+        const sourceContentType = result.sourceContentType || result.contentType || null;
+        const contentType = result.contentType || result.sourceContentType || null;
 
         // Extract etag from document metadata if available
         const etag = result.etag || null;
@@ -1295,6 +1321,7 @@ export class DocumentStore {
           title || "",
           etag,
           lastModified,
+          sourceContentType,
           contentType,
           depth,
         );
@@ -1588,6 +1615,7 @@ export class DocumentStore {
             d.metadata,
             p.url as url,
             p.title as title,
+            p.source_content_type as source_content_type,
             p.content_type as content_type,
             COALESCE(1 / (1 + v.vec_distance), 0) as vec_score,
             COALESCE(-MIN(f.fts_score, 0), 0) as fts_score
@@ -1626,6 +1654,7 @@ export class DocumentStore {
             ...row,
             url: row.url || "", // Ensure url is never undefined
             title: row.title || null,
+            source_content_type: row.source_content_type || null,
             content_type: row.content_type || null,
           };
           // Add search scores as additional properties (not in metadata)
@@ -1644,6 +1673,7 @@ export class DocumentStore {
             d.metadata,
             p.url as url,
             p.title as title,
+            p.source_content_type as source_content_type,
             p.content_type as content_type,
             bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
           FROM documents_fts f
@@ -1675,6 +1705,7 @@ export class DocumentStore {
             ...row,
             url: row.url || "", // Ensure url is never undefined
             title: row.title || null,
+            source_content_type: row.source_content_type || null,
             content_type: row.content_type || null,
           };
           // Add search scores as additional properties (not in metadata)
@@ -1854,7 +1885,7 @@ export class DocumentStore {
       // Use parameterized query for variable number of IDs
       const placeholders = ids.map(() => "?").join(",");
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id
@@ -1886,7 +1917,7 @@ export class DocumentStore {
     try {
       const normalizedVersion = version.toLowerCase();
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.content_type FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id

@@ -7,7 +7,8 @@ import { createDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
-import { type CliContext, formatOutput, getEventBus } from "../utils";
+import { renderStructuredOutput } from "../output";
+import { type CliContext, getEventBus } from "../utils";
 
 export function createListCommand(cli: Argv) {
   cli.command(
@@ -47,7 +48,7 @@ export function createListCommand(cli: Argv) {
         // Call the tool directly - tracking is now handled inside the tool
         const result = await listLibrariesTool.execute();
 
-        console.log(formatOutput(result.libraries));
+        renderStructuredOutput(result.libraries, argv);
       } finally {
         await docService.shutdown();
       }

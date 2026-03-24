@@ -84,7 +84,8 @@ vi.mock("../../utils/logger", () => ({
     warn: vi.fn(),
     error: vi.fn(),
   },
-  LogLevel: { ERROR: 0 },
+  LogLevel: { ERROR: 0, INFO: 2, DEBUG: 3 },
+  getLogLevelFromEnv: vi.fn(() => null),
   setLogLevel: vi.fn(),
 }));
 // Mock main to avoid importing real code

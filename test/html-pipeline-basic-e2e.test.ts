@@ -30,7 +30,7 @@ describe("HTML Pipeline Basic Tests", () => {
       
       const result = await fetchUrlTool.execute({
         url,
-        scrapeMode: ScrapeMode.Auto,
+        scrapeMode: ScrapeMode.Fetch,
         followRedirects: true,
       });
 
@@ -62,7 +62,7 @@ describe("HTML Pipeline Basic Tests", () => {
       
       const result = await fetchUrlTool.execute({
         url,
-        scrapeMode: ScrapeMode.Auto,
+        scrapeMode: ScrapeMode.Fetch,
         followRedirects: true,
       });
 

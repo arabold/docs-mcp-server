@@ -125,8 +125,8 @@ The strategy pattern integrates into `DocumentRetrieverService.finalizeResult()`
 ```
 For each matched chunk:
   - Parent: 1 chunk
-  - Preceding siblings: limit 2
-  - Children: limit 5
+  - Preceding siblings: limit 1
+  - Children: limit 3
   - Subsequent siblings: limit 2
 ```
 

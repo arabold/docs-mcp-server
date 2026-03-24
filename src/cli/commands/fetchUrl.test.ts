@@ -1,9 +1,11 @@
 /** Unit test for fetchUrlAction */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import { FetchUrlTool } from "../../tools";
 import { createFetchUrlCommand } from "./fetchUrl";
+
+const stdoutWriteMock = vi.fn();
 
 vi.mock("../../scraper/fetcher", () => ({
   HttpFetcher: vi.fn().mockImplementation(() => ({})),
@@ -35,8 +37,18 @@ vi.mock("../../utils/config", async (importOriginal) => {
 });
 
 describe("fetch-url command", () => {
+  let stdoutWriteSpy: { mockRestore: () => void };
+
   beforeEach(() => {
     vi.clearAllMocks();
+    stdoutWriteMock.mockReset();
+    stdoutWriteSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation(stdoutWriteMock as any);
+  });
+
+  afterEach(() => {
+    stdoutWriteSpy.mockRestore();
   });
 
   it("executes FetchUrlTool", async () => {
@@ -53,5 +65,6 @@ describe("fetch-url command", () => {
         scrapeMode: "auto",
       }),
     );
+    expect(stdoutWriteMock).toHaveBeenCalledWith("# md\n");
   });
 });

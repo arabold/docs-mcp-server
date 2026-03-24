@@ -101,6 +101,37 @@ Add this to your MCP settings (VS Code, Claude Desktop, etc.):
 
 ---
 
+## 💻 CLI Usage
+
+For agents and scripts, the CLI is the simplest way to use Grounded Docs — no running server required.
+
+```bash
+# Index documentation
+npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
+
+# Query the index
+npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
+
+# Fetch a single page as Markdown
+npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+```
+
+The server and CLI share the same local database. Start the server without arguments to run the MCP endpoint and web interface, then use the CLI in parallel to query from an agent or script.
+
+See **[Basic Usage](../guides/basic-usage.md#-cli-usage)** for the full command reference and output formats.
+
+---
+
+## 🤖 Agent Skills
+
+The repository includes ready-made [Agent Skills](https://agentskills.io) in the [`skills/`](https://github.com/arabold/docs-mcp-server/tree/main/skills) directory. These are structured instruction files (`SKILL.md`) that teach AI coding agents how to use the CLI — covering documentation search, index management, and URL fetching.
+
+To install them, copy the skill folders into the appropriate location for your agent. Consult your agent's documentation for the correct path — for example, [Claude Code](https://code.claude.com/docs/en/skills), [Gemini CLI](https://geminicli.com/docs/cli/skills/), or [Cursor](https://cursor.com/docs/context/skills).
+
+See **[Basic Usage](../guides/basic-usage.md#agent-skills)** for the full list of bundled skills and **[agentskills.io](https://agentskills.io)** for the specification and all compatible agents.
+
+---
+
 ## 🐳 Advanced: Docker Compose (Scaling)
 
 For production deployments or when you need to scale processing, use Docker Compose to run separate services. The system selects either a local in-process worker or a remote worker client based on the configuration.

@@ -31,7 +31,9 @@ export interface ProcessItemResult {
   url: string;
   /** The title of the page or document, extracted during processing */
   title?: string | null;
-  /** The MIME type of the content being processed, if known */
+  /** Original MIME type of the fetched resource, if known */
+  sourceContentType?: string | null;
+  /** MIME type of the stored content after pipeline processing, if known */
   contentType?: string | null;
   /** The ETag header value from the HTTP response, if available, used for caching and change detection. */
   etag?: string | null;
@@ -203,6 +205,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               result: {
                 url: finalUrl,
                 title: result.content.title?.trim() || result.title?.trim() || "",
+                sourceContentType: result.sourceContentType || result.contentType || "",
                 contentType: result.contentType || "",
                 textContent: result.content.textContent || "",
                 links: result.content.links || [],

@@ -11,6 +11,8 @@ import {
   parseConfigValue,
   pathToEnvVar,
 } from "./config";
+import { normalizeEnvValue } from "./env";
+import { logger } from "./logger";
 
 // Mock env-paths to return a controlled system path
 vi.mock("env-paths", () => ({
@@ -104,7 +106,7 @@ describe("Configuration Loading", () => {
       // For the "default" case, we accept that it tries to write to `/system/config-mock`
       // and logs a warning (which we can suppress or inspect).
 
-      const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
       const config = loadConfig({}, {}); // No args -> Default System Path
 
@@ -112,10 +114,10 @@ describe("Configuration Loading", () => {
       // It should try to save.
       // We can check if `fs.writeFileSync` was called if we spy on it, but we are using real FS.
       // Since it fails to write to `/system/...`, it logs a warning.
-      expect(consoleSpy).toHaveBeenCalledWith(
+      expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("Failed to save config file"),
       );
-      consoleSpy.mockRestore();
+      warnSpy.mockRestore();
     });
 
     it("should load explicit config from --config and NOT write back", () => {
@@ -324,21 +326,134 @@ describe("Config CLI Helpers", () => {
   });
 });
 
-describe("Auto-generated Environment Variable Overrides", () => {
+describe("normalizeEnvValue", () => {
+  it("strips surrounding double quotes", () => {
+    expect(normalizeEnvValue('"http://localhost:11434/v1"')).toBe(
+      "http://localhost:11434/v1",
+    );
+  });
+
+  it("strips surrounding single quotes", () => {
+    expect(normalizeEnvValue("'http://localhost:11434/v1'")).toBe(
+      "http://localhost:11434/v1",
+    );
+  });
+
+  it("leaves unquoted strings unchanged", () => {
+    expect(normalizeEnvValue("http://localhost:11434/v1")).toBe(
+      "http://localhost:11434/v1",
+    );
+  });
+
+  it("trims whitespace before checking quotes", () => {
+    expect(normalizeEnvValue('  "http://localhost:11434/v1"  ')).toBe(
+      "http://localhost:11434/v1",
+    );
+  });
+
+  it("does not strip mismatched quotes", () => {
+    expect(normalizeEnvValue("\"http://localhost:11434/v1'")).toBe(
+      "\"http://localhost:11434/v1'",
+    );
+  });
+
+  it("does not strip quotes that only appear on one side", () => {
+    expect(normalizeEnvValue('"only-start')).toBe('"only-start');
+    expect(normalizeEnvValue('only-end"')).toBe('only-end"');
+  });
+
+  it("handles empty string", () => {
+    expect(normalizeEnvValue("")).toBe("");
+  });
+
+  it("handles string that is just quotes", () => {
+    expect(normalizeEnvValue('""')).toBe("");
+    expect(normalizeEnvValue("''")).toBe("");
+  });
+});
+
+describe("Quoted configuration environment variable handling (GH-353)", () => {
   let originalEnv: NodeJS.ProcessEnv;
+  let tmpDir: string;
 
   beforeEach(() => {
     originalEnv = { ...process.env };
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-env-test-"));
   });
 
   afterEach(() => {
     process.env = originalEnv;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("should strip double-quoted DOCS_MCP_EMBEDDING_MODEL", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = '"openai:nomic-embed-text"';
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "quoted-config.yaml") },
+    );
+
+    expect(config.app.embeddingModel).toBe("openai:nomic-embed-text");
+  });
+
+  it("should strip single-quoted DOCS_MCP_EMBEDDING_MODEL", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "'openai:nomic-embed-text'";
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "quoted-config.yaml") },
+    );
+
+    expect(config.app.embeddingModel).toBe("openai:nomic-embed-text");
+  });
+
+  it("should strip double-quoted OPENAI_API_KEY", () => {
+    process.env.OPENAI_API_KEY = '"ollama"';
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "quoted-config.yaml") },
+    );
+
+    // The key itself isn't in AppConfig, but the embedding model should default correctly
+    // when OPENAI_API_KEY is truthy (even quoted)
+    expect(config.app.embeddingModel).toBeTruthy();
+  });
+
+  it("should strip quotes from auto-generated env vars", () => {
+    process.env.DOCS_MCP_SCRAPER_MAX_PAGES = '"500"';
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "quoted-config.yaml") },
+    );
+
+    expect(config.scraper.maxPages).toBe(500);
+  });
+});
+
+describe("Auto-generated Environment Variable Overrides", () => {
+  let originalEnv: NodeJS.ProcessEnv;
+  let tmpDir: string;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-auto-env-test-"));
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("applies auto-generated env var override", () => {
     process.env.DOCS_MCP_SCRAPER_MAX_PAGES = "500";
 
-    const config = loadConfig({}, {});
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
+    );
 
     expect(config.scraper.maxPages).toBe(500);
   });
@@ -347,7 +462,10 @@ describe("Auto-generated Environment Variable Overrides", () => {
     process.env.PORT = "3000";
     process.env.DOCS_MCP_SERVER_PORTS_DEFAULT = "4000";
 
-    const config = loadConfig({}, {});
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
+    );
 
     expect(config.server.ports.default).toBe(4000);
   });
@@ -355,7 +473,10 @@ describe("Auto-generated Environment Variable Overrides", () => {
   it("applies deeply nested env var", () => {
     process.env.DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE = "52428800";
 
-    const config = loadConfig({}, {});
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
+    );
 
     expect(config.scraper.document.maxSize).toBe(52428800);
   });

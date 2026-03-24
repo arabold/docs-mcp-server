@@ -19,6 +19,8 @@ describe("MarkdownPipeline", () => {
     const pipeline = new MarkdownPipeline(appConfig);
     expect(pipeline.canProcess("text/markdown")).toBe(true);
     expect(pipeline.canProcess("text/x-markdown")).toBe(true);
+    expect(pipeline.canProcess("text/mdx")).toBe(true);
+    expect(pipeline.canProcess("text/x-gfm")).toBe(true);
   });
 
   // MarkdownPipeline now processes all text/* types as markdown, including text/html.
