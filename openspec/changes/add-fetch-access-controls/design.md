@@ -73,6 +73,28 @@ Alternative considered: permissive defaults with warnings only. Rejected because
 
 Alternative considered: separate booleans such as `allowLoopback` and `allowLinkLocal`. Rejected because they create overlapping policy states and make it harder to explain how exceptions should be configured.
 
+### Keep TLS verification secure by default with host-scoped exceptions
+
+TLS certificate verification remains enabled by default for all HTTPS requests. Add `allowInvalidTls` for broad override behavior and `allowedInvalidTlsHosts` for hostname-bound exceptions when operators need to reach trusted internal services with self-signed or otherwise invalid certificates.
+
+TLS exceptions are evaluated only after the target has already been permitted by the network access policy. `allowedInvalidTlsHosts` only affects certificate validation for the explicitly requested hostname. It does not expand network reachability, does not permit direct IP access unless `allowInvalidTls` is enabled globally, and does not automatically trust redirected or secondary-request hosts unless they are also listed.
+
+Example host-scoped invalid TLS exception:
+
+```yaml
+scraper:
+  security:
+    network:
+      allowPrivateNetworks: false
+      allowedHosts:
+        - docs.internal.example
+      allowInvalidTls: false
+      allowedInvalidTlsHosts:
+        - docs.internal.example
+```
+
+Alternative considered: placing TLS settings under `scraper.fetcher`. Rejected because certificate verification is a trust-boundary policy that must apply consistently across HTTP and browser-based fetch paths.
+
 ### Add file access modes with allowlisted roots and secure traversal defaults
 
 Model local file access as `disabled`, `allowedRoots`, or `unrestricted`. In `allowedRoots` mode, expand configured tokens such as `$DOCUMENTS`, canonicalize paths, and require the effective target to remain inside an allowed root. Set `followSymlinks` and `includeHidden` to `false` by default. Hidden paths will be blocked even when explicitly named unless the user opts in.
@@ -126,6 +148,7 @@ Alternative considered: using `$HOME` as a default root. Rejected because it is 
 - [Regression in supported web archive scraping] -> Exempt internally managed temp archive handoff from user file-root checks while preserving network policy on the original URL.
 - [DNS resolution and redirect validation complexity] -> Keep the first implementation limited to HTTP(S) plus redirect revalidation and well-defined CIDR checks, covered by focused tests.
 - [Browser subrequest enforcement complexity] -> Intercept all Playwright requests centrally and apply the same resolver/policy helper used by non-browser fetchers.
+- [Invalid TLS exceptions broaden trust for named hosts] -> Keep TLS verification enabled by default and require explicit hostname-based opt-in for self-signed or invalid certificates.
 - [Platform-specific `$DOCUMENTS` resolution differences] -> Fall back to explicit paths when the token cannot be resolved reliably.
 - [Confusion around hidden path semantics] -> Treat `includeHidden: false` as a hard deny for both direct fetch and traversal, and document this explicitly.
 - [Symlink handling may surprise users with linked doc folders] -> Keep an opt-in `followSymlinks` flag and validate the resolved target stays within an allowed root.

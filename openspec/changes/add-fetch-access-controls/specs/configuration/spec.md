@@ -38,6 +38,11 @@ The system SHALL support overriding any configuration setting via environment va
 - **WHEN** the configuration is loaded
 - **THEN** the resulting `scraper.security.network.allowedHosts` value SHALL be parsed as a string array
 
+#### Scenario: TLS host array override provided as JSON
+- **GIVEN** the environment variable `DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_INVALID_TLS_HOSTS` is provided as `["docs.internal.example"]`
+- **WHEN** the configuration is loaded
+- **THEN** the resulting `scraper.security.network.allowedInvalidTlsHosts` value SHALL be parsed as a string array
+
 #### Scenario: Array override provided as inline array string
 - **GIVEN** the environment variable `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS` is provided as `["$DOCUMENTS", "/srv/docs"]`
 - **WHEN** the configuration is loaded
@@ -75,6 +80,29 @@ The system SHALL expose configuration for outbound network and local file access
 - **GIVEN** `scraper.security.network.allowPrivateNetworks` is `true`
 - **WHEN** the configuration is loaded
 - **THEN** private, loopback, link-local, and other special-use network targets SHALL be eligible for access
+
+#### Scenario: Invalid TLS verification defaults to disabled override
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** `scraper.security.network.allowInvalidTls` SHALL default to `false`
+
+#### Scenario: Invalid TLS host allowlist defaults to empty
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** `scraper.security.network.allowedInvalidTlsHosts` SHALL default to an empty list
+
+#### Scenario: Invalid TLS host allowlist permits named HTTPS target
+- **GIVEN** `scraper.security.network.allowInvalidTls` is `false`
+- **AND** `scraper.security.network.allowedInvalidTlsHosts` contains `docs.internal.example`
+- **AND** the target is otherwise permitted by network policy
+- **WHEN** the configuration is loaded
+- **THEN** requests explicitly targeting `docs.internal.example` SHALL be eligible for TLS verification bypass
+- **AND** direct IP requests SHALL still require `allowInvalidTls`
+
+#### Scenario: Broad invalid TLS override enables all HTTPS targets
+- **GIVEN** `scraper.security.network.allowInvalidTls` is `true`
+- **WHEN** the configuration is loaded
+- **THEN** HTTPS requests SHALL be eligible to bypass invalid certificate errors
 
 #### Scenario: File access mode defaults to allowed roots
 - **GIVEN** no custom security configuration is provided

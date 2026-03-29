@@ -55,6 +55,38 @@ The system SHALL enforce a shared outbound network access policy for one-shot UR
 - **WHEN** the request redirects to `wiki.internal.example`
 - **THEN** the redirected request SHALL be rejected unless the new target also matches `allowedHosts`, `allowedCidrs`, or `allowPrivateNetworks`
 
+### Requirement: TLS Verification Must Respect Network Security Policy
+The system SHALL verify TLS certificates for HTTPS requests by default across HTTP and browser-based fetch paths. TLS exception policy SHALL only affect certificate validation after the target has already been permitted by the outbound network access policy.
+
+#### Scenario: Reject invalid TLS certificate by default
+- **GIVEN** no TLS override is configured
+- **WHEN** a user fetches an HTTPS URL whose certificate is invalid or self-signed
+- **THEN** the system SHALL reject the request because TLS verification failed
+
+#### Scenario: Allow invalid TLS for configured hostname
+- **GIVEN** `allowInvalidTls` is `false`
+- **AND** `allowedInvalidTlsHosts` contains `docs.internal.example`
+- **AND** the target is already permitted by the outbound network access policy
+- **WHEN** a user fetches `https://docs.internal.example/guide`
+- **THEN** the system SHALL permit the request to proceed without rejecting the invalid certificate
+
+#### Scenario: Host-scoped invalid TLS exception does not permit direct IP access
+- **GIVEN** `allowInvalidTls` is `false`
+- **AND** `allowedInvalidTlsHosts` contains `docs.internal.example`
+- **WHEN** a user fetches the direct IP address of that service over HTTPS with an invalid certificate
+- **THEN** the system SHALL reject the request unless `allowInvalidTls` is `true`
+
+#### Scenario: Host-scoped invalid TLS exception does not permit redirected hostname
+- **GIVEN** `allowInvalidTls` is `false`
+- **AND** `allowedInvalidTlsHosts` contains `docs.internal.example`
+- **WHEN** the request redirects to `wiki.internal.example` with an invalid certificate
+- **THEN** the redirected request SHALL be rejected unless the new hostname is also allowed by TLS policy
+
+#### Scenario: Broad invalid TLS override enables all HTTPS targets
+- **GIVEN** `allowInvalidTls` is `true`
+- **WHEN** a user fetches an HTTPS URL with an invalid certificate
+- **THEN** the system SHALL permit the request to proceed without rejecting the certificate
+
 ### Requirement: Browser-Initiated Requests Must Respect Network Policy
 The system SHALL apply the same outbound network access policy to every HTTP(S) request initiated by browser-based fetching during rendering or page evaluation.
 
@@ -83,6 +115,13 @@ The system SHALL apply the same outbound network access policy to every HTTP(S) 
 - **AND** `allowedHosts` contains `docs.internal.example`
 - **WHEN** the page requests a subresource from the direct IP address of that service
 - **THEN** the system SHALL reject the subrequest unless the address is also permitted by `allowedCidrs` or `allowPrivateNetworks`
+
+#### Scenario: Browser subrequest invalid TLS exception remains hostname-bound
+- **GIVEN** browser-based fetching is used
+- **AND** `allowInvalidTls` is `false`
+- **AND** `allowedInvalidTlsHosts` contains `docs.internal.example`
+- **WHEN** the page requests an HTTPS subresource from the direct IP address of that service with an invalid certificate
+- **THEN** the system SHALL reject the subrequest unless `allowInvalidTls` is `true`
 
 #### Scenario: Block redirect to restricted network target
 - **WHEN** a public URL redirects to a target blocked by the outbound access policy
