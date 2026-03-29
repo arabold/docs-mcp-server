@@ -7,7 +7,8 @@ import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { createDocumentManagement, type DocumentManagementService } from "../../store";
+import { DocumentManagementClient, DocumentManagementService } from "../../store";
+import { EmbeddingModelChangedError } from "../../store/errors";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
@@ -18,6 +19,7 @@ import {
   type CliContext,
   createAppServerConfig,
   getEventBus,
+  handleEmbeddingModelChange,
   parseAuthConfig,
   resolveProtocol,
   validateAuthConfig,
@@ -139,11 +141,24 @@ export function createMcpCommand(cli: Argv) {
 
         const eventBus = getEventBus(argv as CliContext);
 
-        const docService: IDocumentManagement = await createDocumentManagement({
-          serverUrl,
-          eventBus,
-          appConfig: appConfig,
-        });
+        let docService: IDocumentManagement;
+        if (serverUrl) {
+          const client = new DocumentManagementClient(serverUrl);
+          await client.initialize();
+          docService = client;
+        } else {
+          const service = new DocumentManagementService(eventBus, appConfig);
+          try {
+            await service.initialize();
+          } catch (error) {
+            if (error instanceof EmbeddingModelChangedError) {
+              await handleEmbeddingModelChange(error, service);
+            } else {
+              throw error;
+            }
+          }
+          docService = service;
+        }
         const pipelineOptions: PipelineOptions = {
           recoverJobs: false, // MCP command doesn't support job recovery
           serverUrl,

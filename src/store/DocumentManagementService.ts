@@ -87,6 +87,14 @@ export class DocumentManagementService {
   }
 
   /**
+   * Resolves a confirmed embedding model change by invalidating all vectors
+   * and completing the initialization that was interrupted by EmbeddingModelChangedError.
+   */
+  async resolveModelChange(): Promise<void> {
+    await this.store.resolveModelChange();
+  }
+
+  /**
    * Shuts down the underlying document store and cleans up pipeline resources.
    */
 
