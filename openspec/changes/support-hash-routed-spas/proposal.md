@@ -4,11 +4,12 @@ Currently, when scraping hash-routed Single Page Applications (SPAs) like `docs.
 
 ## What Changes
 
-- Add a new explicit configuration option (e.g., `--preserve-hashes` via CLI or `preserveHashes` in scraper config) to disable hash stripping during URL normalization for web crawling.
+- Add a new explicit configuration option (e.g., `--preserve-hashes` via CLI, `preserveHashes` in scraper config, and a `preserveHashes` field in MCP `scrape_docs`) to disable hash stripping during URL normalization for web crawling.
 - When enabled, `normalizeUrl` within the web scraping strategy will retain URL hash fragments, treating them as distinct crawler identities.
 - Enforce or strongly warn that the `playwright` (or `auto`) scrape mode must be used when preserving hashes, as the `fetch` mode cannot evaluate client-side hash routes.
 - Update `HtmlPlaywrightMiddleware` to correctly handle page interception when hash fragments are present in the source URL, ensuring the SPA can boot up and navigate to the requested hash route.
 - Expose the `preserveHashes` option in the Web UI so users can enable it when adding or refreshing a library via the browser.
+- Expose the `preserveHashes` option through the MCP `scrape_docs` tool so non-CLI clients can request hash-routed SPA crawling as well.
 
 ## Capabilities
 
@@ -20,7 +21,7 @@ Currently, when scraping hash-routed Single Page Applications (SPAs) like `docs.
 
 ## Impact
 
-- **CLI/Config**: Introduces a new `--preserve-hashes` argument to scraper commands and a `preserveHashes` boolean property to the internal scraper configuration.
+- **CLI/Config/MCP**: Introduces a new `--preserve-hashes` argument to scraper commands, a `preserveHashes` boolean property to the internal scraper configuration, and a matching field on the MCP `scrape_docs` tool.
 - **WebScraperStrategy**: Updates how URL normalization is invoked, explicitly passing `removeHash: false` when the feature is enabled.
 - **HtmlPlaywrightMiddleware**: Updates request interception logic (`reqUrl === context.source`) to account for browsers stripping hash fragments from network requests.
 - **Web UI**: Updates the add and refresh library components and their respective route handlers to expose and process the new toggle.

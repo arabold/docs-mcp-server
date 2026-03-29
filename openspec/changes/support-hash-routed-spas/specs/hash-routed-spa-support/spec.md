@@ -1,11 +1,15 @@
 ## ADDED Requirements
 
 ### Requirement: Explicit Hash Route Preservation
-The system SHALL provide a configuration option and CLI flag (`--preserve-hashes` / `preserveHashes`) to disable the stripping of hash fragments from URLs during web crawling. This allows Single Page Applications (SPAs) that utilize hash-based client-side routing to be correctly identified, queued, and indexed as distinct pages.
+The system SHALL provide a configuration option and CLI flag (`--preserve-hashes` / `preserveHashes`) and SHALL expose the same capability through the MCP `scrape_docs` tool to disable the stripping of hash fragments from URLs during web crawling. This allows Single Page Applications (SPAs) that utilize hash-based client-side routing to be correctly identified, queued, and indexed as distinct pages.
 
 #### Scenario: User enables hash preservation for an SPA
 - **WHEN** the user provides the `--preserve-hashes` CLI flag or enables `preserveHashes` in the configuration
 - **THEN** the scraper's URL normalization step SHALL NOT strip the `#` fragment from discovered URLs, queuing each hash route as a separate entity
+
+#### Scenario: MCP client enables hash preservation for an SPA
+- **WHEN** an MCP client calls `scrape_docs` with `preserveHashes: true`
+- **THEN** the MCP tool SHALL pass `preserveHashes: true` through to the scraping pipeline as part of the `ScraperOptions`
 
 ### Requirement: Playwright Rendering for Hash Routes
 The system SHALL enforce the use of `playwright` (or `auto`, which falls back to Playwright) as the `scrapeMode` when `preserveHashes` is enabled, because the `fetch` mode cannot evaluate client-side hash routing.

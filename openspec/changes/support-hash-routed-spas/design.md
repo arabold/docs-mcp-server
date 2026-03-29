@@ -8,6 +8,7 @@ Attempting to "guess" whether a site is a hash-routed SPA is unpredictable and r
 
 **Goals:**
 - Provide a CLI flag (`--preserve-hashes`) and config option (`preserveHashes`) to disable hash stripping.
+- Expose the same option consistently through MCP `scrape_docs` so external clients can request hash-routed scraping.
 - Ensure URLs with hashes are treated as distinct documents in the database and crawler queue when the flag is enabled.
 - Ensure `HtmlPlaywrightMiddleware` correctly intercepts and serves the initial page shell, even when the requested URL contains a hash fragment.
 - Expose the `preserveHashes` setting in the Web UI for both adding and refreshing libraries.
@@ -21,7 +22,7 @@ Attempting to "guess" whether a site is a hash-routed SPA is unpredictable and r
 ## Decisions
 
 1. **Explicit Opt-in Flag (`preserveHashes`)**:
-   - *Decision*: Add a `preserveHashes` boolean to `ScraperOptions` and the CLI.
+   - *Decision*: Add a `preserveHashes` boolean to `ScraperOptions` and expose it through every user-facing scrape entrypoint: CLI, Web UI, and MCP `scrape_docs`.
    - *Rationale*: Safe, predictable, and doesn't break the vast majority of sites that use traditional anchor links.
    - *Alternative Considered*: "Auto" detection based on DOM analysis or URL patterns (e.g., `#/`). Rejected because heuristics are brittle and often lead to false positives (indexing duplicate pages for normal anchor links).
 
@@ -37,9 +38,15 @@ Attempting to "guess" whether a site is a hash-routed SPA is unpredictable and r
    - *Decision*: Expose a checkbox for "Preserve Hash Routes" in the Web UI.
    - *Rationale*: Users must be able to specify this option without resorting to the CLI. The checkbox state will be passed via the form submission to the API endpoints and onto the pipeline.
 
+5. **MCP Tool Integration**:
+   - *Decision*: Add `preserveHashes` to the MCP `scrape_docs` input schema and pass it through `ScrapeTool` into the pipeline job options.
+   - *Rationale*: MCP is a first-class public scraping interface. Omitting the option there would make the feature inconsistent and unavailable to automated clients that do not use the CLI or Web UI.
+
 ## Risks / Trade-offs
 
 - **[Risk] User Confusion**: Users might enable `--preserve-hashes` on a traditional site, causing every anchor link to be indexed as a separate duplicate page.
   - *Mitigation*: Clearly document that this flag is exclusively for hash-routed SPAs.
 - **[Risk] Playwright Interception Mismatch**: The updated URL comparison in `HtmlPlaywrightMiddleware` might inadvertently fulfill sub-resource requests if not scoped correctly.
   - *Mitigation*: Use strict URL parsing (e.g., `new URL(context.source)`) to ensure only the exact base path of the initial document is fulfilled from the pre-fetched content.
+- **[Risk] Entry-point Drift**: One user-facing surface could expose different behavior or defaults than another.
+  - *Mitigation*: Treat `preserveHashes` as a shared `ScraperOptions` field, add propagation tests for CLI, Web UI, and MCP, and document the same behavior in all interfaces.
