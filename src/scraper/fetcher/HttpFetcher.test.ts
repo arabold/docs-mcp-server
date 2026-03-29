@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CancellationError } from "../../pipeline/errors";
 import { loadConfig } from "../../utils/config";
-import { RedirectError, ScraperError } from "../../utils/errors";
+import { RedirectError, ScraperError, TlsCertificateError } from "../../utils/errors";
 
 vi.mock("axios");
 
@@ -321,6 +321,26 @@ describe("HttpFetcher", () => {
 
       expect(result.status).toBe("not_found");
       expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries for 404
+    });
+
+    it("should not retry on TLS certificate validation errors", async () => {
+      const fetcher = createFetcher();
+      const tlsError = Object.assign(
+        new Error("unable to verify the first certificate"),
+        {
+          code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+        },
+      );
+      mockedAxios.get.mockRejectedValue(tlsError);
+
+      await expect(
+        fetcher.fetch("https://example.com", {
+          maxRetries: 2,
+          retryDelay: 1,
+        }),
+      ).rejects.toBeInstanceOf(TlsCertificateError);
+
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
     });
   });
 
