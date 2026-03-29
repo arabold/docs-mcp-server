@@ -15,7 +15,6 @@
 import path from "node:path";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { Command } from "commander";
 import { applyMigrations } from "../src/store/applyMigrations";
 import { resolveStorePath } from "../src/utils/paths";
 
@@ -47,6 +46,41 @@ interface TableSchema {
 
 interface DatabaseSchema {
   tables: Map<string, TableSchema>;
+}
+
+interface CliOptions {
+  db?: string;
+}
+
+/**
+ * Parses supported CLI flags for the schema validation helper.
+ */
+function parseCliOptions(argv: string[]): CliOptions {
+  const options: CliOptions = {};
+
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+
+    if (arg === "--db") {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error("--db requires a path value");
+      }
+
+      options.db = value;
+      index++;
+      continue;
+    }
+
+    if (arg === "--help" || arg === "-h") {
+      console.log("Usage: ./scripts/validate-schema.ts [--db <path-to-documents.db>]");
+      process.exit(0);
+    }
+
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return options;
 }
 
 /**
@@ -253,15 +287,7 @@ function compareSchemas(
  * Main function to orchestrate the schema comparison.
  */
 async function main() {
-  const program = new Command();
-
-  program
-    .name("validate-schema")
-    .description("Validate SQLite database schema against migrations")
-    .option("--db <path>", "Path to the target documents.db file")
-    .parse(process.argv);
-
-  const options = program.opts();
+  const options = parseCliOptions(process.argv.slice(2));
   
   // Determine the target database path
   let targetDbPath: string;
