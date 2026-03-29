@@ -10,6 +10,7 @@ Attempting to "guess" whether a site is a hash-routed SPA is unpredictable and r
 - Provide a CLI flag (`--preserve-hashes`) and config option (`preserveHashes`) to disable hash stripping.
 - Ensure URLs with hashes are treated as distinct documents in the database and crawler queue when the flag is enabled.
 - Ensure `HtmlPlaywrightMiddleware` correctly intercepts and serves the initial page shell, even when the requested URL contains a hash fragment.
+- Expose the `preserveHashes` setting in the Web UI for both adding and refreshing libraries.
 - Validate that `preserveHashes` is only used with a compatible scrape mode (`playwright` or `auto`), since pure `fetch` cannot execute client-side routing.
 
 **Non-Goals:**
@@ -31,6 +32,10 @@ Attempting to "guess" whether a site is a hash-routed SPA is unpredictable and r
 3. **Scrape Mode Enforcement**:
    - *Decision*: If `preserveHashes` is enabled and `scrapeMode` is explicitly set to `fetch`, the scraper should either throw a validation error or automatically upgrade the mode to `playwright`.
    - *Rationale*: A pure HTTP fetch cannot resolve a hash route (the server just returns the empty SPA shell). Playwright is required to boot the SPA and allow the client-side router to render the content for the specific hash.
+
+4. **Web UI Integration**:
+   - *Decision*: Expose a checkbox for "Preserve Hash Routes" in the Web UI.
+   - *Rationale*: Users must be able to specify this option without resorting to the CLI. The checkbox state will be passed via the form submission to the API endpoints and onto the pipeline.
 
 ## Risks / Trade-offs
 

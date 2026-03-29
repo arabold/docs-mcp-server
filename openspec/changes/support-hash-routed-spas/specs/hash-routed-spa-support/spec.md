@@ -20,3 +20,10 @@ When `preserveHashes` is enabled and Playwright intercepts the initial page load
 #### Scenario: Playwright intercepts a hash-routed URL
 - **WHEN** `HtmlPlaywrightMiddleware` intercepts a request for a URL that originally contained a hash (e.g., `http://example.com/#/docs`)
 - **THEN** it SHALL successfully fulfill the `http://example.com/` request with the pre-fetched content, allowing the SPA to boot and the client-side router to evaluate the `#/docs` fragment
+
+### Requirement: Web UI Configuration
+The system SHALL expose the `preserveHashes` option in the Web UI, allowing users to explicitly enable it when adding a new library or refreshing an existing one.
+
+#### Scenario: User configures hash preservation via Web UI
+- **WHEN** the user checks the "Preserve Hash Routes" option in the Web UI and submits the form
+- **THEN** the `preserveHashes` setting SHALL be passed to the scraping pipeline as part of the `ScraperOptions`
