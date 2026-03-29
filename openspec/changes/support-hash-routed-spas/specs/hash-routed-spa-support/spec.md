@@ -12,11 +12,11 @@ The system SHALL provide a configuration option and CLI flag (`--preserve-hashes
 - **THEN** the MCP tool SHALL pass `preserveHashes: true` through to the scraping pipeline as part of the `ScraperOptions`
 
 ### Requirement: Playwright Rendering for Hash Routes
-The system SHALL enforce the use of `playwright` (or `auto`, which falls back to Playwright) as the `scrapeMode` when `preserveHashes` is enabled, because the `fetch` mode cannot evaluate client-side hash routing.
+The system SHALL enforce the use of `playwright` rendering when `preserveHashes` is enabled, because the `fetch` mode cannot evaluate client-side hash routing.
 
 #### Scenario: User attempts to use fetch mode with preserve hashes
 - **WHEN** `preserveHashes` is true AND `scrapeMode` is explicitly set to `fetch`
-- **THEN** the system SHALL throw a configuration validation error or automatically upgrade the mode to `playwright`, logging a warning to the user
+- **THEN** the system SHALL upgrade the effective scrape mode to `playwright` and SHALL log a warning that `fetch` mode is incompatible with preserved hash routes
 
 ### Requirement: Accurate Page Interception in Playwright
 When `preserveHashes` is enabled and Playwright intercepts the initial page load, it SHALL fulfill the request using the pre-fetched content, successfully matching the `reqUrl` (which lacks the hash fragment due to browser networking rules) against the base path of the original `context.source`.
@@ -24,6 +24,17 @@ When `preserveHashes` is enabled and Playwright intercepts the initial page load
 #### Scenario: Playwright intercepts a hash-routed URL
 - **WHEN** `HtmlPlaywrightMiddleware` intercepts a request for a URL that originally contained a hash (e.g., `http://example.com/#/docs`)
 - **THEN** it SHALL successfully fulfill the `http://example.com/` request with the pre-fetched content, allowing the SPA to boot and the client-side router to evaluate the `#/docs` fragment
+
+### Requirement: Hash-Aware Crawl Identity
+When `preserveHashes` is enabled, the system SHALL preserve hash fragments in crawl identity at the queue and deduplication layer so that hash-routed pages are discovered, queued, refreshed, and stored as distinct pages.
+
+#### Scenario: Distinct hash routes are queued separately
+- **WHEN** the crawler discovers `https://example.com/#/guide` and `https://example.com/#/api` during the same job with `preserveHashes` enabled
+- **THEN** the queue and `visited` deduplication logic SHALL treat them as distinct URLs and SHALL process both pages
+
+#### Scenario: Refresh preserves existing hash-routed pages
+- **WHEN** a version was originally scraped with `preserveHashes: true` and a refresh job is enqueued without changing that option
+- **THEN** the refresh job SHALL reuse the stored `preserveHashes: true` setting and SHALL rebuild its `initialQueue` without collapsing stored hash-routed page URLs
 
 ### Requirement: Web UI Configuration
 The system SHALL expose the `preserveHashes` option in the Web UI, allowing users to explicitly enable it when adding a new library or refreshing an existing one.
