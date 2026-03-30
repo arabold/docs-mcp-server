@@ -2,6 +2,7 @@ import { URL } from "node:url";
 import { CancellationError } from "../../pipeline/errors";
 import type { ProgressCallback } from "../../types";
 import type { AppConfig } from "../../utils/config";
+import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { normalizeUrl, type UrlNormalizerOptions } from "../../utils/url";
 import { FetchStatus } from "../fetcher/types";
@@ -47,7 +48,11 @@ export interface ProcessItemResult {
   status: FetchStatus;
 }
 
+class FailureThresholdExceededError extends ScraperError {}
+
 export abstract class BaseScraperStrategy implements ScraperStrategy {
+  private static readonly FAILURE_RATE_MIN_SAMPLE = 10;
+
   /**
    * Set of normalized URLs that have been marked for processing.
    *
@@ -69,6 +74,8 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   protected totalDiscovered = 0; // Track total URLs discovered (unlimited)
   protected effectiveTotal = 0; // Track effective total (limited by maxPages)
   protected canonicalBaseUrl?: URL; // Final URL after initial redirect (depth 0)
+  protected completedChildPageAttempts = 0;
+  protected failedChildPages = 0;
 
   abstract canHandle(url: string): boolean;
 
@@ -108,6 +115,53 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     signal?: AbortSignal,
   ): Promise<ProcessItemResult>;
 
+  private shouldCountTowardFailureThreshold(
+    item: QueueItem,
+    result?: ProcessItemResult,
+  ): boolean {
+    return item.depth > 0 && !this.isRefreshDeletion(item, result);
+  }
+
+  private isRefreshDeletion(item: QueueItem, result?: ProcessItemResult): boolean {
+    return item.pageId !== undefined && result?.status === FetchStatus.NOT_FOUND;
+  }
+
+  private recordChildPageCompletion(item: QueueItem, result?: ProcessItemResult): void {
+    if (!this.shouldCountTowardFailureThreshold(item, result)) {
+      return;
+    }
+
+    this.completedChildPageAttempts++;
+  }
+
+  private recordChildPageFailure(item: QueueItem): void {
+    if (item.depth === 0) {
+      return;
+    }
+
+    this.completedChildPageAttempts++;
+    this.failedChildPages++;
+  }
+
+  private ensureFailureRateWithinThreshold(): void {
+    if (
+      this.completedChildPageAttempts < BaseScraperStrategy.FAILURE_RATE_MIN_SAMPLE ||
+      this.completedChildPageAttempts === 0
+    ) {
+      return;
+    }
+
+    const failureRate = this.failedChildPages / this.completedChildPageAttempts;
+    const threshold = this.config.scraper.abortOnFailureRate;
+
+    if (failureRate > threshold) {
+      throw new FailureThresholdExceededError(
+        `Scrape aborted after ${this.failedChildPages}/${this.completedChildPageAttempts} child pages failed (${failureRate.toFixed(2)} > ${threshold.toFixed(2)})`,
+        false,
+      );
+    }
+  }
+
   protected async processBatch(
     batch: QueueItem[],
     baseUrl: URL,
@@ -116,12 +170,32 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     signal?: AbortSignal, // Add signal
   ): Promise<QueueItem[]> {
     const maxPages = options.maxPages ?? this.config.scraper.maxPages;
+    let batchAbortError: FailureThresholdExceededError | null = null;
+
+    const ensureFailureRateWithinThreshold = (): void => {
+      try {
+        this.ensureFailureRateWithinThreshold();
+      } catch (error) {
+        if (error instanceof FailureThresholdExceededError) {
+          batchAbortError ??= error;
+        }
+        throw error;
+      }
+    };
+
+    const throwIfBatchAborted = (): void => {
+      if (batchAbortError) {
+        throw batchAbortError;
+      }
+      if (signal?.aborted) {
+        throw new CancellationError("Scraping cancelled during batch processing");
+      }
+    };
+
     const results = await Promise.all(
       batch.map(async (item) => {
         // Check signal before processing each item in the batch
-        if (signal?.aborted) {
-          throw new CancellationError("Scraping cancelled during batch processing");
-        }
+        throwIfBatchAborted();
         // Resolve default for maxDepth check
         const maxDepth = options.maxDepth ?? this.config.scraper.maxDepth;
         if (item.depth > maxDepth) {
@@ -131,6 +205,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         try {
           // Pass signal to processItem
           const result = await this.processItem(item, options, signal);
+          throwIfBatchAborted();
 
           // Only count items that represent tracked pages or have actual content
           // - Refresh operations (have pageId): Always count (they're tracked in DB)
@@ -149,6 +224,9 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           }
 
           if (result.status === FetchStatus.NOT_MODIFIED) {
+            this.recordChildPageCompletion(item, result);
+            ensureFailureRateWithinThreshold();
+            throwIfBatchAborted();
             // File/page hasn't changed, skip processing but count as processed
             logger.debug(`Page unchanged (304): ${item.url}`);
             if (shouldCount) {
@@ -167,6 +245,19 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           }
 
           if (result.status === FetchStatus.NOT_FOUND) {
+            const isRefreshDeletion = this.isRefreshDeletion(item, result);
+
+            if (item.depth === 0 && !isRefreshDeletion) {
+              throw new ScraperError(`Root page not found: ${item.url}`, false);
+            }
+
+            if (!isRefreshDeletion) {
+              this.recordChildPageFailure(item);
+              ensureFailureRateWithinThreshold();
+            }
+
+            throwIfBatchAborted();
+
             // File/page was deleted, count as processed
             logger.debug(`Page deleted (404): ${item.url}`);
             if (shouldCount) {
@@ -179,7 +270,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 maxDepth: maxDepth,
                 result: null,
                 pageId: item.pageId,
-                deleted: true,
+                deleted: isRefreshDeletion,
               });
             }
             return [];
@@ -189,6 +280,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             logger.error(`❌ Unknown fetch status: ${result.status}`);
             return [];
           }
+
+          this.recordChildPageCompletion(item, result);
+          ensureFailureRateWithinThreshold();
+          throwIfBatchAborted();
 
           // Handle successful processing - report result with content
           // Use the final URL from the result (which may differ due to redirects)
@@ -216,6 +311,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               } satisfies ScrapeResult,
               pageId: item.pageId,
             });
+            throwIfBatchAborted();
           }
 
           // Extract discovered links - use the final URL as the base for resolving relative links
@@ -240,13 +336,28 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               }
               return null;
             })
-            .filter((item) => item !== null);
+            .filter((item): item is QueueItem => item !== null);
         } catch (error) {
+          if (
+            error instanceof FailureThresholdExceededError ||
+            error instanceof CancellationError
+          ) {
+            throw error;
+          }
+
           // Never ignore errors for the root URL (depth 0) - if it fails, the job should fail
           // There's no point in "successfully" completing with 0 documents
           if (item.depth === 0) {
             throw error;
           }
+
+          if (batchAbortError) {
+            throw batchAbortError;
+          }
+
+          this.recordChildPageFailure(item);
+          ensureFailureRateWithinThreshold();
+
           if (options.ignoreErrors) {
             logger.error(`❌ Failed to process ${item.url}: ${error}`);
             return [];
@@ -287,6 +398,8 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   ): Promise<void> {
     this.visited.clear();
     this.pageCount = 0;
+    this.completedChildPageAttempts = 0;
+    this.failedChildPages = 0;
 
     // Check if this is a refresh operation with pre-populated queue
     const initialQueue = options.initialQueue || [];

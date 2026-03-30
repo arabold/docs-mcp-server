@@ -55,10 +55,11 @@ export const DEFAULT_CONFIG = {
     maxPages: 1000,
     maxDepth: 3,
     maxConcurrency: 3,
+    abortOnFailureRate: 0.5,
     pageTimeoutMs: 5000,
     browserTimeoutMs: 30_000,
     fetcher: {
-      maxRetries: 6,
+      maxRetries: 3,
       baseDelayMs: 1000,
       maxCacheItems: 200,
       maxCacheItemSizeBytes: 500 * 1024,
@@ -147,6 +148,11 @@ export const AppConfigSchema = z.object({
         .number()
         .int()
         .default(DEFAULT_CONFIG.scraper.maxConcurrency),
+      abortOnFailureRate: z.coerce
+        .number()
+        .min(0)
+        .max(1)
+        .default(DEFAULT_CONFIG.scraper.abortOnFailureRate),
       pageTimeoutMs: z.coerce
         .number()
         .int()

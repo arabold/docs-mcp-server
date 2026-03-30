@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CancellationError } from "../../pipeline/errors";
-import { loadConfig } from "../../utils/config";
+import { DEFAULT_CONFIG } from "../../utils/config";
 import { RedirectError, ScraperError } from "../../utils/errors";
 
 vi.mock("axios");
@@ -11,8 +11,7 @@ const mockedAxios = vi.mocked(axios, true);
 
 import { HttpFetcher } from "./HttpFetcher";
 
-const scraperConfig = loadConfig().scraper;
-const createFetcher = () => new HttpFetcher(scraperConfig);
+const createFetcher = () => new HttpFetcher(DEFAULT_CONFIG.scraper);
 
 describe("HttpFetcher", () => {
   beforeEach(() => {
@@ -143,8 +142,8 @@ describe("HttpFetcher", () => {
         }),
       ).rejects.toThrow(ScraperError);
 
-      // Should call initial attempt + 6 retries (default SCRAPER_FETCHER_MAX_RETRIES = 6)
-      expect(mockedAxios.get).toHaveBeenCalledTimes(7);
+      // Should call initial attempt + 3 retries (default SCRAPER_FETCHER_MAX_RETRIES = 3)
+      expect(mockedAxios.get).toHaveBeenCalledTimes(4);
     });
 
     it("should respect custom maxRetries option", async () => {
