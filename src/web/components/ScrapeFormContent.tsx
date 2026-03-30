@@ -55,7 +55,8 @@ const ScrapeFormContent = ({
   const scrapeModeValue = initialValues?.scrapeMode || ScrapeMode.Auto;
   const followRedirectsValue = initialValues?.followRedirects ?? true;
   const ignoreErrorsValue = initialValues?.ignoreErrors ?? true;
-  const preserveHashesValue = initialValues?.preserveHashes ?? false;
+  const preserveHashesValue =
+    initialValues?.preserveHashes ?? scraperConfig?.preserveHashes ?? false;
 
   // Format exclude patterns - use initial values if provided, otherwise use defaults
   const excludePatternsText =
