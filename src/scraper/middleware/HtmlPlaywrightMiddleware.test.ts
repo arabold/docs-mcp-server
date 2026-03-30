@@ -176,6 +176,20 @@ describe("HtmlPlaywrightMiddleware", () => {
       document: {
         maxSize: 10 * 1024 * 1024,
       },
+      security: {
+        network: {
+          allowPrivateNetworks: false,
+          allowedHosts: [],
+          allowedCidrs: [],
+          allowInvalidTls: false,
+        },
+        fileAccess: {
+          mode: "unrestricted" as const,
+          allowedRoots: [],
+          followSymlinks: false,
+          includeHidden: false,
+        },
+      },
     };
     playwrightMiddleware = new HtmlPlaywrightMiddleware(mockScraperConfig);
   });
@@ -946,6 +960,20 @@ describe("Route handling race condition protection", () => {
       },
       document: {
         maxSize: 10 * 1024 * 1024,
+      },
+      security: {
+        network: {
+          allowPrivateNetworks: false,
+          allowedHosts: [],
+          allowedCidrs: [],
+          allowInvalidTls: false,
+        },
+        fileAccess: {
+          mode: "unrestricted" as const,
+          allowedRoots: [],
+          followSymlinks: false,
+          includeHidden: false,
+        },
       },
     };
     playwrightMiddleware = new HtmlPlaywrightMiddleware(mockScraperConfig);

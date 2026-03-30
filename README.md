@@ -152,6 +152,7 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 ### Key Concepts & Architecture
 -   **[Deployment Modes](docs/infrastructure/deployment-modes.md)**: Standalone vs. Distributed (Docker Compose).
 -   **[Authentication](docs/infrastructure/authentication.md)**: Securing your server with OAuth2/OIDC.
+-   **[Security](docs/infrastructure/security.md)**: Trust boundaries, deployment hardening, and outbound access controls.
 -   **[Telemetry](docs/infrastructure/telemetry.md)**: Privacy-first usage data collection.
 -   **[Architecture](ARCHITECTURE.md)**: Deep dive into the system design.
 

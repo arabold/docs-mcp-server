@@ -22,11 +22,12 @@ import type { ContentFetcher, FetchOptions, RawContent } from "./types";
 export class AutoDetectFetcher implements ContentFetcher {
   private readonly httpFetcher: HttpFetcher;
   private readonly browserFetcher: BrowserFetcher;
-  private readonly fileFetcher = new FileFetcher();
+  private readonly fileFetcher: FileFetcher;
 
   constructor(scraperConfig: AppConfig["scraper"]) {
     this.httpFetcher = new HttpFetcher(scraperConfig);
     this.browserFetcher = new BrowserFetcher(scraperConfig);
+    this.fileFetcher = new FileFetcher(scraperConfig);
   }
 
   /**

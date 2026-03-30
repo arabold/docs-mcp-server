@@ -121,6 +121,10 @@ export interface ScraperOptions {
    * @default true
    */
   clean?: boolean;
+  /**
+   * Internal-only allowlist roots for application-managed temporary files.
+   */
+  internalAllowedFileRoots?: string[];
 }
 
 /**

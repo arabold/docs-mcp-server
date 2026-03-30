@@ -6,7 +6,7 @@ The product intentionally fetches arbitrary web and local content, but today it 
 
 - Add configurable outbound access controls for HTTP(S) fetches used by `fetch_url` and scraping workflows.
 - Default-deny access to private, loopback, link-local, and other special-use network targets unless explicitly allowed via host or CIDR allowlists.
-- Add configurable TLS verification controls for trusted internal hosts with invalid or self-signed certificates.
+- Add configurable TLS verification controls for environments that need to allow invalid or self-signed HTTPS certificates.
 - Add configurable local file access modes, with allowed root directories, `$DOCUMENTS` token expansion, and secure defaults for symlinks and hidden paths.
 - Preserve supported archive workflows by distinguishing user-requested local file access from internally managed temporary files and archive member resolution.
 - Enforce the same access policy across CLI, MCP, and web-triggered fetch/scrape operations.

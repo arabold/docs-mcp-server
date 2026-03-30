@@ -263,8 +263,16 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     // Delegate to LocalFileStrategy
     const localUrl = `file://${tempFile}`;
     const localItem = { ...item, url: localUrl };
+    const localOptions = {
+      ...options,
+      internalAllowedFileRoots: [...(options.internalAllowedFileRoots ?? []), tempFile],
+    };
 
-    const result = await this.localFileStrategy.processItem(localItem, options, signal);
+    const result = await this.localFileStrategy.processItem(
+      localItem,
+      localOptions,
+      signal,
+    );
 
     // We need to fix up the links to point back to something meaningful?
     // If we process a zip, we get file:///tmp/.../file.txt
