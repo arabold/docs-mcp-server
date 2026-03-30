@@ -32,6 +32,11 @@ export function createRefreshCommand(cli: Argv) {
           description: "Version of the library (optional)",
           alias: "v",
         })
+        .option("preserve-hashes", {
+          type: "boolean",
+          description: "Override the stored hash-route setting for this refresh job",
+          alias: "preserveHashes",
+        })
         .option("embedding-model", {
           type: "string",
           description:
@@ -59,6 +64,7 @@ export function createRefreshCommand(cli: Argv) {
         command: "refresh",
         library: argv.library,
         version: argv.version,
+        preserveHashes: argv.preserveHashes,
         useServerUrl: !!argv.serverUrl,
       });
 
@@ -129,6 +135,7 @@ export function createRefreshCommand(cli: Argv) {
         const result = await refreshTool.execute({
           library,
           version,
+          preserveHashes: argv.preserveHashes as boolean | undefined,
           waitForCompletion: true, // Always wait for completion in CLI
         });
 

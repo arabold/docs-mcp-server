@@ -62,6 +62,7 @@ const LibraryDetailCard = ({ library }: LibraryDetailCardProps) => {
               },
               indexedAt: v.indexedAt,
               sourceUrl: v.sourceUrl ?? undefined,
+              preserveHashes: v.preserveHashes,
             };
             return (
               <VersionDetailsRow

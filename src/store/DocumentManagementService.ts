@@ -167,9 +167,10 @@ export class DocumentManagementService {
     const libMap = await this.store.queryLibraryVersions();
     const summaries: LibrarySummary[] = [];
     for (const [library, versions] of libMap) {
-      const vs = versions.map(
-        (v) =>
-          ({
+      const vs = await Promise.all(
+        versions.map(async (v) => {
+          const scraperOptions = await this.store.getScraperOptions(v.versionId);
+          return {
             id: v.versionId,
             ref: { library, version: v.version },
             status: v.status as VersionStatus,
@@ -181,7 +182,9 @@ export class DocumentManagementService {
             counts: { documents: v.documentCount, uniqueUrls: v.uniqueUrlCount },
             indexedAt: v.indexedAt,
             sourceUrl: v.sourceUrl ?? undefined,
-          }) satisfies VersionSummary,
+            preserveHashes: scraperOptions?.options.preserveHashes,
+          } satisfies VersionSummary;
+        }),
       );
       summaries.push({ library, versions: vs });
     }

@@ -175,6 +175,7 @@ export function registerLibraryDetailRoutes(
                 },
                 indexedAt: v.indexedAt,
                 sourceUrl: v.sourceUrl ?? undefined,
+                preserveHashes: v.preserveHashes,
               };
               return (
                 <VersionDetailsRow
@@ -237,6 +238,7 @@ export function registerLibraryDetailRoutes(
           headers?: Array<{ name: string; value: string }>;
           followRedirects?: boolean;
           ignoreErrors?: boolean;
+          preserveHashes?: boolean;
         } = {
           library: libraryName,
         };
@@ -276,6 +278,7 @@ export function registerLibraryDetailRoutes(
                     : undefined,
                   followRedirects: opts.followRedirects,
                   ignoreErrors: opts.ignoreErrors,
+                  preserveHashes: opts.preserveHashes,
                 };
               }
             }

@@ -46,6 +46,12 @@ For agents and scripts, the CLI is usually the simplest way to use Grounded Docs
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 ```
 
+For hash-routed SPA docs sites, enable hash preservation explicitly:
+
+```bash
+npx @arabold/docs-mcp-server@latest scrape my-spa https://docs.example.com/#/guide --preserve-hashes
+```
+
 **2. Query the index:**
 
 ```bash
@@ -97,6 +103,9 @@ npx @arabold/docs-mcp-server@latest
 
 See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo) and other setup options.
 
+`scrape_docs` also accepts `preserveHashes: true` for documentation sites that use hash-based client-side routing.
+Use it only for hash-routed SPAs; normal sites typically use hash fragments for in-page anchors.
+
 <details>
 <summary>Alternative: Run with Docker</summary>
 
@@ -134,6 +143,11 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 -   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.
 -   **[Supported Formats](docs/concepts/supported-formats.md)**: Complete file format and MIME type reference.
 -   **[Embedding Models](docs/guides/embedding-models.md)**: Configure OpenAI, Ollama, Gemini, and other providers.
+
+### Hash-Routed SPAs
+-   Use `--preserve-hashes`, MCP `preserveHashes`, or the Web UI "Preserve Hash Routes" checkbox only for docs sites that route with URLs like `#/guide`.
+-   When enabled with `scrapeMode=fetch`, the scraper automatically upgrades the job to Playwright because plain fetch cannot evaluate client-side hash routes.
+-   Refresh reuses the stored `preserveHashes` setting by default, and CLI/Web refresh entrypoints can override it explicitly.
 
 ### Key Concepts & Architecture
 -   **[Deployment Modes](docs/infrastructure/deployment-modes.md)**: Standalone vs. Distributed (Docker Compose).

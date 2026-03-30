@@ -163,6 +163,7 @@ describe("HtmlPlaywrightMiddleware", () => {
       maxPages: 1000,
       maxDepth: 3,
       maxConcurrency: 3,
+      preserveHashes: false,
       pageTimeoutMs: 5000,
       browserTimeoutMs: 30000,
       fetcher: {
@@ -932,6 +933,7 @@ describe("Route handling race condition protection", () => {
       maxPages: 1000,
       maxDepth: 3,
       maxConcurrency: 3,
+      preserveHashes: false,
       pageTimeoutMs: 5000,
       browserTimeoutMs: 30000,
       fetcher: {
@@ -1167,6 +1169,53 @@ describe("Route handling race condition protection", () => {
       expect(mockRoute.abort).toHaveBeenCalledWith("failed");
       expect(context.errors).toHaveLength(0);
       expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should fulfill the initial request for hash-routed URLs using the hash-stripped source", async () => {
+      const initialHtml = "<html><body><p>Hash-routed app</p></body></html>";
+      const context = createPipelineTestContext(
+        initialHtml,
+        "https://example.com/docs#/guide",
+        {
+          scrapeMode: ScrapeMode.Playwright,
+          preserveHashes: true,
+        },
+      );
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/docs",
+          resourceType: () => "document",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        fulfill: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml, {
+        url: "https://example.com/docs#/guide",
+      });
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+      expect(mockRoute.fulfill).toHaveBeenCalledWith({
+        status: 200,
+        contentType: "text/html; charset=utf-8",
+        body: initialHtml,
+      });
 
       launchSpy.mockRestore();
     });

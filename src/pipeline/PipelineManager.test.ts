@@ -771,7 +771,7 @@ describe("PipelineManager", () => {
       const jobId = await manager.enqueueRefreshJob("incomplete-lib", "1.0.0");
 
       // Assertions: Should have called enqueueJobWithStoredOptions instead of normal refresh
-      expect(enqueueStoredSpy).toHaveBeenCalledWith("incomplete-lib", "1.0.0");
+      expect(enqueueStoredSpy).toHaveBeenCalledWith("incomplete-lib", "1.0.0", undefined);
       expect(jobId).toBe("mock-job-id");
 
       // Should NOT have called getPagesByVersionId since we're doing a full re-scrape
@@ -806,7 +806,7 @@ describe("PipelineManager", () => {
       await manager.enqueueRefreshJob("queued-lib", "2.0.0");
 
       // Assertions: Should perform full re-scrape for queued versions
-      expect(enqueueStoredSpy).toHaveBeenCalledWith("queued-lib", "2.0.0");
+      expect(enqueueStoredSpy).toHaveBeenCalledWith("queued-lib", "2.0.0", undefined);
     });
 
     it("should perform normal refresh for completed versions", async () => {
@@ -848,6 +848,79 @@ describe("PipelineManager", () => {
       expect(job).toBeDefined();
       expect(job?.library).toBe("completed-lib");
       expect(job?.version).toBe("3.0.0");
+    });
+
+    it("should upgrade fetch mode to playwright when preserveHashes is enabled", async () => {
+      const jobId = await manager.enqueueScrapeJob("test-lib", "1.0.0", {
+        url: "https://example.com/#/guide",
+        library: "test-lib",
+        version: "1.0.0",
+        scrapeMode: "fetch" as any,
+        preserveHashes: true,
+      });
+
+      const job = await manager.getJob(jobId);
+      expect(job?.scraperOptions?.scrapeMode).toBe("playwright");
+      expect(job?.scraperOptions?.preserveHashes).toBe(true);
+    });
+
+    it("should reuse stored preserveHashes during refresh when no override is provided", async () => {
+      const mockPages = [
+        { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(888);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com/#/guide",
+        options: { preserveHashes: true },
+      });
+
+      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0");
+      const job = await manager.getJob(jobId);
+
+      expect(job?.scraperOptions?.preserveHashes).toBe(true);
+    });
+
+    it("should override stored preserveHashes during refresh when explicitly provided", async () => {
+      const mockPages = [
+        { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(889);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com/#/guide",
+        options: { preserveHashes: true },
+      });
+
+      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0", {
+        preserveHashes: false,
+      });
+      const job = await manager.getJob(jobId);
+
+      expect(job?.scraperOptions?.preserveHashes).toBe(false);
+    });
+
+    it("should default refresh jobs to auto scrapeMode when older stored options omit it", async () => {
+      const mockPages = [
+        { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(890);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com/#/guide",
+        options: { preserveHashes: true },
+      });
+
+      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0", {
+        preserveHashes: true,
+      });
+      const job = await manager.getJob(jobId);
+
+      expect(job?.scraperOptions?.scrapeMode).toBe("auto");
+      expect(job?.scraperOptions?.preserveHashes).toBe(true);
     });
   });
 

@@ -67,13 +67,26 @@ export function createMcpServerInstance(
           .optional()
           .default(true)
           .describe("Follow HTTP redirects (3xx responses)."),
+        preserveHashes: z
+          .boolean()
+          .optional()
+          .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
       },
       {
         title: "Scrape New Library Documentation",
         destructiveHint: true, // replaces existing docs
         openWorldHint: true, // requires internet access
       },
-      async ({ url, library, version, maxPages, maxDepth, scope, followRedirects }) => {
+      async ({
+        url,
+        library,
+        version,
+        maxPages,
+        maxDepth,
+        scope,
+        followRedirects,
+        preserveHashes,
+      }) => {
         // Track MCP tool usage
         telemetry.track(TelemetryEvent.TOOL_USED, {
           tool: "scrape_docs",
@@ -99,6 +112,7 @@ export function createMcpServerInstance(
               maxDepth,
               scope,
               followRedirects,
+              preserveHashes,
             },
           });
 

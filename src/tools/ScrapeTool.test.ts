@@ -196,4 +196,23 @@ describe("ScrapeTool", () => {
       }),
     );
   });
+
+  it("should pass preserveHashes to the pipeline manager", async () => {
+    const options: ScrapeToolOptions = {
+      ...getBaseOptions("2.0.0"),
+      options: {
+        preserveHashes: true,
+      },
+    };
+
+    await scrapeTool.execute(options);
+
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
+      "test-lib",
+      "2.0.0",
+      expect.objectContaining({
+        preserveHashes: true,
+      }),
+    );
+  });
 });

@@ -46,6 +46,31 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     }
   }
 
+  private restorePreservedHash(requestedUrl: string, actualUrl: string): string {
+    if (!requestedUrl.includes("#")) {
+      return actualUrl;
+    }
+
+    try {
+      const requested = new URL(requestedUrl);
+      const actual = new URL(actualUrl);
+      const normalizePathname = (pathname: string): string =>
+        pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+      if (
+        requested.origin === actual.origin &&
+        normalizePathname(requested.pathname) === normalizePathname(actual.pathname) &&
+        requested.search === actual.search
+      ) {
+        actual.hash = requested.hash;
+        return actual.toString();
+      }
+    } catch {
+      return actualUrl;
+    }
+
+    return actualUrl;
+  }
+
   // Removed custom isInScope logic; using shared scope utility for consistent behavior
 
   /**
@@ -87,6 +112,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       // Use AutoDetectFetcher which handles fallbacks automatically
       const rawContent: RawContent = await this.fetcher.fetch(url, fetchOptions);
+      const effectiveSource = options.preserveHashes
+        ? this.restorePreservedHash(url, rawContent.source)
+        : rawContent.source;
 
       logger.debug(
         `Fetch result for ${url}: status=${rawContent.status}, etag=${rawContent.etag || "none"}`,
@@ -96,7 +124,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       // Use the final URL from rawContent.source (which may differ due to redirects)
       if (rawContent.status !== FetchStatus.SUCCESS) {
         logger.debug(`Skipping pipeline for ${url} due to status: ${rawContent.status}`);
-        return { url: rawContent.source, links: [], status: rawContent.status };
+        return { url: effectiveSource, links: [], status: rawContent.status };
       }
 
       // --- Start Pipeline Processing ---
@@ -109,7 +137,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           logger.debug(
             `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
           );
-          processed = await pipeline.process(rawContent, options, this.fetcher);
+          processed = await pipeline.process(
+            { ...rawContent, source: effectiveSource },
+            options,
+            this.fetcher,
+          );
           break;
         }
       }
@@ -119,7 +151,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for URL ${url}. Skipping processing.`,
         );
-        return { url: rawContent.source, links: [], status: FetchStatus.SUCCESS };
+        return { url: effectiveSource, links: [], status: FetchStatus.SUCCESS };
       }
 
       // Log errors from pipeline
@@ -133,7 +165,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           `⚠️  No processable content found for ${url} after pipeline execution.`,
         );
         return {
-          url: rawContent.source,
+          url: effectiveSource,
           links: processed.links,
           status: FetchStatus.SUCCESS,
         };
@@ -141,7 +173,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       // Update canonical base URL from the first page's final URL (after redirects)
       if (item.depth === 0) {
-        this.canonicalBaseUrl = new URL(rawContent.source);
+        this.canonicalBaseUrl = new URL(effectiveSource);
       }
 
       const filteredLinks =
@@ -170,7 +202,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         }) ?? [];
 
       return {
-        url: rawContent.source,
+        url: effectiveSource,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
         sourceContentType: rawContent.mimeType,

@@ -303,6 +303,58 @@ describe("BaseScraperStrategy", () => {
     expect(progressCallback).toHaveBeenCalledTimes(3);
   });
 
+  it("should keep distinct hash routes separate when preserveHashes is enabled", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 10,
+      maxDepth: 1,
+      preserveHashes: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.url === "https://example.com/") {
+        return {
+          content: {
+            textContent: "main page",
+            metadata: {},
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+          links: [
+            "https://example.com/#/guide",
+            "https://example.com/#/api",
+            "https://example.com/#/guide",
+          ],
+          status: FetchStatus.SUCCESS,
+        };
+      }
+
+      return {
+        content: {
+          textContent: item.url,
+          metadata: {},
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+        links: [],
+        status: FetchStatus.SUCCESS,
+      };
+    });
+
+    await strategy.scrape(options, progressCallback);
+
+    expect(strategy.processItem).toHaveBeenCalledTimes(3);
+    const visitedUrls = Array.from(strategy.getVisitedUrls());
+    expect(visitedUrls).toContain("https://example.com/");
+    expect(visitedUrls).toContain("https://example.com/#/guide");
+    expect(visitedUrls).toContain("https://example.com/#/api");
+  });
+
   it("should process page via shortest path (breadth-first search)", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",

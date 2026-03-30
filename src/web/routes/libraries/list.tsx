@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ListLibrariesTool } from "../../../tools/ListLibrariesTool";
 import type { RefreshVersionTool } from "../../../tools/RefreshVersionTool";
 import { RemoveTool } from "../../../tools";
@@ -66,19 +66,36 @@ export function registerLibrariesRoutes(
   );
 
   // POST route for refreshing a version
-  server.post<{ Params: { libraryName: string; versionParam: string } }>(
+  server.post<{
+    Params: { libraryName: string; versionParam: string };
+    Body: { preserveHashes?: boolean | "true" | "false" | undefined };
+  }>(
     "/web/libraries/:libraryName/versions/:versionParam/refresh",
-    async (request, reply) => {
+    async (
+      request: FastifyRequest<{
+        Params: { libraryName: string; versionParam: string };
+        Body: { preserveHashes?: boolean | "true" | "false" | undefined };
+      }>,
+      reply,
+    ) => {
       const { libraryName, versionParam } = request.params;
       const version =
         versionParam === "latest" || versionParam === ""
           ? undefined
           : versionParam;
+      const preserveHashes =
+        request.body?.preserveHashes === true || request.body?.preserveHashes === "true"
+          ? true
+          : request.body?.preserveHashes === false ||
+              request.body?.preserveHashes === "false"
+            ? false
+            : undefined;
       try {
         // Start refresh without waiting for completion
         await refreshVersionTool.execute({
           library: libraryName,
           version,
+          preserveHashes,
           waitForCompletion: false,
         });
         // Show toast notification via HX-Trigger

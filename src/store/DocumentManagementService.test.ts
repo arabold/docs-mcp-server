@@ -972,6 +972,10 @@ describe("DocumentManagementService", () => {
           ],
         ]);
         mockStore.queryLibraryVersions.mockResolvedValue(enrichedMap);
+        mockStore.getScraperOptions.mockResolvedValue({
+          sourceUrl: "https://ex/libStatus/1.0.0",
+          options: { preserveHashes: true },
+        });
 
         const result = await docService.listLibraries();
         const lib = result.find((r) => r.library === "libStatus");
@@ -981,6 +985,7 @@ describe("DocumentManagementService", () => {
         );
         expect(byVer["1.0.0"]).toMatchObject({
           status: "completed",
+          preserveHashes: true,
           // progress omitted for completed
         });
         expect(byVer["1.1.0"]).toMatchObject({
@@ -1041,6 +1046,7 @@ describe("DocumentManagementService", () => {
           ],
         ]);
         mockStore.queryLibraryVersions.mockResolvedValue(enrichedMap);
+        mockStore.getScraperOptions.mockResolvedValue(null);
         const result = await docService.listLibraries();
         const lib = result.find((r) => r.library === "libActive");
         expect(lib).toBeTruthy();

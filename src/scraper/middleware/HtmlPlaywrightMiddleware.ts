@@ -876,9 +876,18 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       // Set up route interception with special handling for the initial page load
       await page.route("**/*", async (route) => {
         const reqUrl = route.request().url();
+        const initialRequestUrl = (() => {
+          try {
+            const initialUrl = new URL(context.source);
+            initialUrl.hash = "";
+            return initialUrl.toString();
+          } catch {
+            return context.source;
+          }
+        })();
 
         // Serve the initial HTML for the main page (bypass cache and fetch)
-        if (reqUrl === context.source) {
+        if (reqUrl === initialRequestUrl) {
           try {
             return await route.fulfill({
               status: 200,

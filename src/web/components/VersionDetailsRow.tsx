@@ -31,6 +31,7 @@ const VersionDetailsRow = ({
   const versionLabel = version.ref.version || "Latest";
   // Use empty string for latest version in param and rowId
   const versionParam = version.ref.version || "";
+  const preserveHashes = version.preserveHashes ?? false;
 
   // Sanitize both libraryName and versionParam for valid CSS selector
   const sanitizedLibraryName = libraryName.replace(/[^a-zA-Z0-9-_]/g, "-");
@@ -137,6 +138,7 @@ const VersionDetailsRow = ({
                 hx-post={`/web/libraries/${encodeURIComponent(libraryName)}/versions/${encodeURIComponent(versionParam)}/refresh`}
                 hx-swap="none"
                 hx-trigger="trigger-refresh"
+                hx-vals={JSON.stringify({ preserveHashes })}
               >
                 <svg
                   class="w-4 h-4"

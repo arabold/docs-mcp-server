@@ -12,6 +12,7 @@ import type { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
 import { ScraperRegistry, ScraperService } from "../scraper";
 import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
+import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { VersionStatus } from "../store/types";
 import type { AppConfig } from "../utils/config";
@@ -83,6 +84,26 @@ export class PipelineManager implements IPipeline {
       sourceUrl: job.sourceUrl,
       scraperOptions: job.scraperOptions,
     };
+  }
+
+  private normalizeScraperOptions(options: ScraperOptions): ScraperOptions {
+    const normalizedOptions: ScraperOptions = {
+      ...options,
+      scrapeMode: options.scrapeMode ?? ScrapeMode.Auto,
+      preserveHashes: options.preserveHashes ?? this.appConfig.scraper.preserveHashes,
+    };
+
+    if (
+      normalizedOptions.preserveHashes &&
+      normalizedOptions.scrapeMode === ScrapeMode.Fetch
+    ) {
+      logger.warn(
+        `⚠️  Upgrading scrape mode to '${ScrapeMode.Playwright}' for ${options.url} because preserved hash routes are incompatible with '${ScrapeMode.Fetch}'.`,
+      );
+      normalizedOptions.scrapeMode = ScrapeMode.Playwright;
+    }
+
+    return normalizedOptions;
   }
 
   /**
@@ -233,6 +254,8 @@ export class PipelineManager implements IPipeline {
       await this.cancelJob(job.id);
     }
 
+    const normalizedOptions = this.normalizeScraperOptions(options);
+
     const jobId = uuidv4();
     const abortController = new AbortController();
     let resolveCompletion!: () => void;
@@ -265,8 +288,8 @@ export class PipelineManager implements IPipeline {
       progressMaxPages: 0,
       errorMessage: null,
       updatedAt: new Date(),
-      sourceUrl: options.url,
-      scraperOptions: options,
+      sourceUrl: normalizedOptions.url,
+      scraperOptions: normalizedOptions,
     };
 
     this.jobMap.set(jobId, job);
@@ -298,6 +321,7 @@ export class PipelineManager implements IPipeline {
   async enqueueRefreshJob(
     library: string,
     version: string | undefined | null,
+    options?: Pick<ScraperOptions, "preserveHashes">,
   ): Promise<string> {
     // Normalize version: treat undefined/null as "" (unversioned)
     const normalizedVersion = version ?? "";
@@ -327,7 +351,7 @@ export class PipelineManager implements IPipeline {
         logger.info(
           `⚠️  Version ${library}@${normalizedVersion || "latest"} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
         );
-        return this.enqueueJobWithStoredOptions(library, normalizedVersion);
+        return this.enqueueJobWithStoredOptions(library, normalizedVersion, options);
       }
 
       // Get all pages for this version with their ETags and depths
@@ -367,6 +391,9 @@ export class PipelineManager implements IPipeline {
         library,
         version: normalizedVersion,
         ...(storedOptions?.options || {}), // Include stored options if available (spread first)
+        ...(options?.preserveHashes !== undefined
+          ? { preserveHashes: options.preserveHashes }
+          : {}),
         // Override with refresh-specific options (these must come after the spread)
         initialQueue, // Pre-populated queue with existing pages
         isRefresh: true, // Mark this as a refresh operation
@@ -390,6 +417,7 @@ export class PipelineManager implements IPipeline {
   async enqueueJobWithStoredOptions(
     library: string,
     version: string | undefined | null,
+    options?: Pick<ScraperOptions, "preserveHashes">,
   ): Promise<string> {
     const normalizedVersion = version ?? "";
 
@@ -415,6 +443,9 @@ export class PipelineManager implements IPipeline {
         library,
         version: normalizedVersion,
         ...storedOptions,
+        ...(options?.preserveHashes !== undefined
+          ? { preserveHashes: options.preserveHashes }
+          : {}),
       };
 
       logger.info(

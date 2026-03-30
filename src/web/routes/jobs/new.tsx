@@ -50,6 +50,7 @@ export function registerNewJobRoutes(
           maxDepth?: string;
           scope?: "subpages" | "hostname" | "domain";
           scrapeMode?: ScrapeMode;
+          preserveHashes?: "on" | undefined;
           followRedirects?: "on" | undefined; // Checkbox value is 'on' if checked
           ignoreErrors?: "on" | undefined;
           includePatterns?: string;
@@ -126,6 +127,7 @@ export function registerNewJobRoutes(
               : undefined,
             scope: body.scope,
             scrapeMode: body.scrapeMode,
+            preserveHashes: body.preserveHashes === "on",
             // Checkboxes send 'on' when checked, otherwise undefined
             followRedirects: body.followRedirects === "on",
             ignoreErrors: body.ignoreErrors === "on",

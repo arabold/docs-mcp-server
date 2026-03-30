@@ -42,6 +42,11 @@ const enqueueScrapeInput = z.object({
 const enqueueRefreshInput = z.object({
   library: nonEmptyTrimmed,
   version: optionalTrimmed,
+  options: z
+    .object({
+      preserveHashes: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 const jobIdInput = z.object({ id: z.string().min(1) });
@@ -89,6 +94,7 @@ export function createPipelineRouter(trpc: unknown) {
           const jobId = await ctx.pipeline.enqueueRefreshJob(
             input.library,
             input.version ?? null,
+            input.options,
           );
 
           return { jobId };
