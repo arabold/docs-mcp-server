@@ -1,3 +1,10 @@
+## [2.2.1](https://github.com/arabold/docs-mcp-server/compare/v2.2.0...v2.2.1) (2026-03-30)
+
+
+### Bug Fixes
+
+* **release:** disable github success issue actions ([efcb946](https://github.com/arabold/docs-mcp-server/commit/efcb94693067b2029705ae68cb37682a0dbcb4cd))
+
 # [2.2.0](https://github.com/arabold/docs-mcp-server/compare/v2.1.1...v2.2.0) (2026-03-30)
 
 
