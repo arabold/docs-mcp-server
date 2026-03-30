@@ -224,9 +224,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           }
 
           if (result.status === FetchStatus.NOT_MODIFIED) {
-            this.recordChildPageCompletion(item, result);
-            ensureFailureRateWithinThreshold();
-            throwIfBatchAborted();
             // File/page hasn't changed, skip processing but count as processed
             logger.debug(`Page unchanged (304): ${item.url}`);
             if (shouldCount) {
@@ -241,6 +238,9 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 pageId: item.pageId,
               });
             }
+            this.recordChildPageCompletion(item, result);
+            ensureFailureRateWithinThreshold();
+            throwIfBatchAborted();
             return [];
           }
 
@@ -261,7 +261,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             // File/page was deleted, count as processed
             logger.debug(`Page deleted (404): ${item.url}`);
             if (shouldCount) {
-              await progressCallback({
+              const progress: ScraperProgressEvent = {
                 pagesScraped: currentPageCount,
                 totalPages: this.effectiveTotal,
                 totalDiscovered: this.totalDiscovered,
@@ -270,8 +270,13 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 maxDepth: maxDepth,
                 result: null,
                 pageId: item.pageId,
-                deleted: isRefreshDeletion,
-              });
+              };
+
+              if (isRefreshDeletion) {
+                progress.deleted = true;
+              }
+
+              await progressCallback(progress);
             }
             return [];
           }
@@ -280,10 +285,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             logger.error(`❌ Unknown fetch status: ${result.status}`);
             return [];
           }
-
-          this.recordChildPageCompletion(item, result);
-          ensureFailureRateWithinThreshold();
-          throwIfBatchAborted();
 
           // Handle successful processing - report result with content
           // Use the final URL from the result (which may differ due to redirects)
@@ -317,6 +318,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           // Extract discovered links - use the final URL as the base for resolving relative links
           const nextItems = result.links || [];
           const linkBaseUrl = finalUrl ? new URL(finalUrl) : baseUrl;
+
+          this.recordChildPageCompletion(item, result);
+          ensureFailureRateWithinThreshold();
+          throwIfBatchAborted();
 
           return nextItems
             .map((value) => {

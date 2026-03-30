@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
-import { loadConfig } from "../../utils/config";
+import { AppConfigSchema, DEFAULT_CONFIG, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { BaseScraperStrategy } from "./BaseScraperStrategy";
@@ -18,6 +18,18 @@ class TestScraperStrategy extends BaseScraperStrategy {
   getVisitedUrls(): Set<string> {
     return this.visited;
   }
+}
+
+function createTestConfig(overrides?: { abortOnFailureRate?: number }) {
+  return AppConfigSchema.parse({
+    ...DEFAULT_CONFIG,
+    scraper: {
+      ...DEFAULT_CONFIG.scraper,
+      ...(overrides?.abortOnFailureRate !== undefined
+        ? { abortOnFailureRate: overrides.abortOnFailureRate }
+        : {}),
+    },
+  });
 }
 
 describe("BaseScraperStrategy", () => {
@@ -253,7 +265,7 @@ describe("BaseScraperStrategy", () => {
   });
 
   it("should abort when child-page failure rate exceeds the threshold after minimum sample", async () => {
-    const config = loadConfig({ scraper: { abortOnFailureRate: 0.5 } });
+    const config = createTestConfig({ abortOnFailureRate: 0.5 });
     strategy = new TestScraperStrategy(config);
     strategy.processItem.mockClear();
 
@@ -311,7 +323,7 @@ describe("BaseScraperStrategy", () => {
   });
 
   it("should continue when child-page failure rate stays at the threshold", async () => {
-    const config = loadConfig({ scraper: { abortOnFailureRate: 0.5 } });
+    const config = createTestConfig({ abortOnFailureRate: 0.5 });
     strategy = new TestScraperStrategy(config);
     strategy.processItem.mockClear();
 
@@ -368,7 +380,7 @@ describe("BaseScraperStrategy", () => {
   });
 
   it("should not count refresh deletions toward the child-page failure threshold", async () => {
-    const config = loadConfig({ scraper: { abortOnFailureRate: 0 } });
+    const config = createTestConfig({ abortOnFailureRate: 0 });
     strategy = new TestScraperStrategy(config);
     strategy.processItem.mockClear();
 
