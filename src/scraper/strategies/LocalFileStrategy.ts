@@ -12,11 +12,59 @@ import type { QueueItem, ScraperOptions } from "../types";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 /**
+ * Convert a file:// URL string to a normalized absolute filesystem path.
+ * Handles both file:// and file:/// formats and decodes percent-encoded characters.
+ * The returned path is resolved via path.resolve() to eliminate any ".." segments.
+ */
+export function fileUrlToPath(fileUrl: string): string {
+  let filePath = fileUrl.replace(/^file:\/\/\/?/, "");
+  filePath = decodeURIComponent(filePath);
+
+  // Ensure absolute path on Unix-like systems
+  if (!filePath.startsWith("/") && process.platform !== "win32") {
+    filePath = `/${filePath}`;
+  }
+
+  // Resolve to canonicalize and remove any ".." or "." segments
+  return path.resolve(filePath);
+}
+
+/**
+ * Determine the base directory for a given file:// URL.
+ * - If the URL points to a directory, the base is that directory itself.
+ * - If the URL points to a file, the base is its parent directory.
+ * The returned path always ends with the platform path separator.
+ */
+function computeFileBaseDir(resolvedPath: string): string {
+  // Append separator so that containment checks work correctly
+  // e.g. "/home/user/docs" + "/" -> ensures "/home/user/docs-other" doesn't match
+  return resolvedPath.endsWith(path.sep) ? resolvedPath : `${resolvedPath}${path.sep}`;
+}
+
+/**
+ * Check whether `candidate` is contained within `baseDir`
+ * (or is exactly `baseDir` without trailing separator).
+ * Both paths must already be resolved / normalized.
+ */
+function isPathWithinBase(candidate: string, baseDir: string): boolean {
+  // Exact match (the root path itself)
+  if (candidate === baseDir || candidate === baseDir.replace(/[/\\]+$/, "")) {
+    return true;
+  }
+  return candidate.startsWith(baseDir);
+}
+
+/**
  * LocalFileStrategy handles crawling and scraping of local files and folders using file:// URLs.
  *
  * All files with a MIME type of `text/*` are processed. This includes HTML, Markdown, plain text, and source code files such as `.js`, `.ts`, `.tsx`, `.css`, etc. Binary files, PDFs, images, and other non-text formats are ignored.
  *
  * Supports include/exclude filters and percent-encoded paths.
+ *
+ * Security: All file paths are resolved via `path.resolve()` and verified to
+ * reside within the root URL's directory tree before any filesystem access.
+ * This prevents path-traversal attacks via `..` segments, percent-encoding
+ * tricks, or symlinks that escape the intended directory.
  */
 export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly fileFetcher = new FileFetcher();
@@ -36,13 +84,23 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     options: ScraperOptions,
     _signal?: AbortSignal,
   ): Promise<ProcessItemResult> {
-    // Parse the file URL properly to handle both file:// and file:/// formats
-    let filePath = item.url.replace(/^file:\/\/\/?/, "");
-    filePath = decodeURIComponent(filePath);
+    // Resolve the item path using the shared helper
+    const filePath = fileUrlToPath(item.url);
 
-    // Ensure absolute path on Unix-like systems (if not already absolute)
-    if (!filePath.startsWith("/") && process.platform !== "win32") {
-      filePath = `/${filePath}`;
+    // Compute the allowed base directory from the scrape root URL.
+    // All resolved paths must fall within this directory tree.
+    const rootPath = fileUrlToPath(options.url);
+    const baseDir = computeFileBaseDir(rootPath);
+
+    if (!isPathWithinBase(filePath, baseDir)) {
+      logger.warn(
+        `⚠️  Blocked path traversal: "${filePath}" is outside base directory "${baseDir}"`,
+      );
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.NOT_FOUND,
+      };
     }
 
     let stats: Awaited<ReturnType<typeof fs.stat>> | null = null;
@@ -94,6 +152,12 @@ export class LocalFileStrategy extends BaseScraperStrategy {
             return url.href;
           })
           .filter((url) => {
+            // Verify discovered path is within the base directory
+            const resolvedChild = fileUrlToPath(url);
+            if (!isPathWithinBase(resolvedChild, baseDir)) {
+              logger.debug(`Skipping out-of-base link: ${url}`);
+              return false;
+            }
             const allowed = this.shouldProcessUrl(url, options);
             if (!allowed) {
               logger.debug(`Skipping out-of-scope link: ${url}`);
@@ -138,7 +202,11 @@ export class LocalFileStrategy extends BaseScraperStrategy {
               }
             }
             logger.debug(`Found ${links.length} entries in archive ${filePath}`);
-            return { url: item.url, links, status: FetchStatus.SUCCESS };
+            return {
+              url: item.url,
+              links,
+              status: FetchStatus.SUCCESS,
+            };
           } catch (err) {
             logger.error(`❌ Failed to list archive ${filePath}: ${err}`);
             // Treat as binary file or fail?
@@ -176,7 +244,11 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       // Handle NOT_MODIFIED status (file hasn't changed)
       if (rawContent.status === FetchStatus.NOT_MODIFIED) {
         logger.debug(`✓ File unchanged: ${filePath}`);
-        return { url: rawContent.source, links: [], status: FetchStatus.NOT_MODIFIED };
+        return {
+          url: rawContent.source,
+          links: [],
+          status: FetchStatus.NOT_MODIFIED,
+        };
       }
 
       return await this.processContent(item.url, filePath, rawContent, options);
@@ -296,7 +368,11 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       logger.warn(
         `⚠️  Unsupported content type "${rawContent.mimeType}" for file ${displayPath}. Skipping processing.`,
       );
-      return { url: rawContent.source, links: [], status: FetchStatus.SUCCESS };
+      return {
+        url: rawContent.source,
+        links: [],
+        status: FetchStatus.SUCCESS,
+      };
     }
 
     for (const err of processed.errors ?? []) {

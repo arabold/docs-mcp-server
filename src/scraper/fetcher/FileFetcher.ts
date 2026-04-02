@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { ScraperError } from "../../utils/errors";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import {
@@ -21,6 +22,9 @@ export class FileFetcher implements ContentFetcher {
    * Fetches the content of a file given a file:// URL, decoding percent-encoded paths as needed.
    * Uses enhanced MIME type detection for better source code file recognition.
    * Supports conditional fetching via ETag comparison for efficient refresh operations.
+   *
+   * Security: The file path is resolved via `path.resolve()` to canonicalize
+   * it and eliminate any `..` or `.` segments before performing filesystem I/O.
    */
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
     // Remove the file:// protocol prefix and handle both file:// and file:/// formats
@@ -33,6 +37,9 @@ export class FileFetcher implements ContentFetcher {
     if (!filePath.startsWith("/") && process.platform !== "win32") {
       filePath = `/${filePath}`;
     }
+
+    // Resolve to canonical absolute path – removes ".." and "." segments
+    filePath = path.resolve(filePath);
 
     try {
       const stats = await fs.stat(filePath);
