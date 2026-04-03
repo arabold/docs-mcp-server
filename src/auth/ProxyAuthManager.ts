@@ -160,6 +160,35 @@ export class ProxyAuthManager {
       const endpoints = await this.discoverEndpoints();
       const params = new URLSearchParams(request.query as Record<string, string>);
 
+      // Validate redirect_uri to prevent open-redirect attacks (CWE-601).
+      // Only redirect_uris whose origin matches the proxy server are allowed.
+      const redirectUri = params.get("redirect_uri");
+      if (redirectUri) {
+        const serverOrigin = `${request.protocol}://${request.headers.host}`;
+        try {
+          const parsed = new URL(redirectUri);
+          if (parsed.origin !== serverOrigin) {
+            logger.warn(
+              `Blocked authorize request with disallowed redirect_uri: ${redirectUri}`,
+            );
+            reply.status(400).send({
+              error: "invalid_request",
+              error_description: "redirect_uri origin does not match this server",
+            });
+            return;
+          }
+        } catch {
+          logger.warn(
+            `Blocked authorize request with malformed redirect_uri: ${redirectUri}`,
+          );
+          reply.status(400).send({
+            error: "invalid_request",
+            error_description: "redirect_uri is not a valid URL",
+          });
+          return;
+        }
+      }
+
       // Add resource parameter (RFC 8707) for token binding
       if (!params.has("resource")) {
         const resourceUrl = `${request.protocol}://${request.headers.host}/sse`;
