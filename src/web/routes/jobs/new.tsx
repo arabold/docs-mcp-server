@@ -2,7 +2,9 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { ScrapeTool } from "../../../tools/ScrapeTool";
 import { ScrapeMode } from "../../../scraper/types";
 import type { AppConfig } from "../../../utils/config";
+import { InvalidUrlError } from "../../../utils/errors";
 import { logger } from "../../../utils/logger";
+import { assertPublicUrl } from "../../../utils/urlSsrfGuard";
 import AddJobButton from "../../components/AddJobButton";
 import AddVersionButton from "../../components/AddVersionButton";
 import Alert from "../../components/Alert";
@@ -74,6 +76,10 @@ export function registerNewJobRoutes(
             />
           );
         }
+
+        // SSRF protection: reject private/internal IPs, file:// URLs,
+        // and non-HTTP schemes before enqueueing any scrape job.
+        assertPublicUrl(body.url);
 
         // Parse includePatterns and excludePatterns from textarea input
         function parsePatterns(input?: string): string[] | undefined {
@@ -168,7 +174,10 @@ export function registerNewJobRoutes(
         logger.error(`❌ Scrape job submission failed: ${error}`);
 
         // Use appropriate HTTP status code based on error type
-        if (error instanceof ValidationError) {
+        if (
+          error instanceof ValidationError ||
+          error instanceof InvalidUrlError
+        ) {
           reply.status(400); // Bad Request for validation errors
         } else {
           reply.status(500); // Internal Server Error for other errors
