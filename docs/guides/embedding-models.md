@@ -14,6 +14,7 @@ If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults t
 - `gemini:embedding-001` (Google Gemini)
 - `aws:amazon.titan-embed-text-v1` (AWS Bedrock)
 - `microsoft:text-embedding-ada-002` (Azure OpenAI)
+- `transformers:BAAI/bge-small-en-v1.5` (Local, offline via Transformers.js)
 - Or any OpenAI-compatible model name
 
 ## Provider Configuration
@@ -34,6 +35,7 @@ Provider credentials use the provider-specific environment variables listed belo
 | `AZURE_OPENAI_API_INSTANCE_NAME`   | Azure OpenAI instance name.                           |
 | `AZURE_OPENAI_API_DEPLOYMENT_NAME` | Azure OpenAI deployment name.                         |
 | `AZURE_OPENAI_API_VERSION`         | Azure OpenAI API version.                             |
+| `TRANSFORMERS_DEVICE`              | Device for Transformers.js (cpu or webgpu).           |
 
 ### Examples
 
@@ -114,6 +116,39 @@ DOCS_MCP_EMBEDDING_MODEL="microsoft:text-embedding-ada-002" \
 npx @arabold/docs-mcp-server@latest
 ```
 
+#### Transformers.js (Local, Offline)
+
+Run embeddings locally without any API keys or internet connection after initial model download. Uses ONNX runtime for CPU inference.
+
+```bash
+DOCS_MCP_EMBEDDING_MODEL="transformers:BAAI/bge-small-en-v1.5" \
+npx @arabold/docs-mcp-server@latest
+```
+
+**Optional:** Enable GPU acceleration with WebGPU (requires compatible hardware):
+
+```bash
+TRANSFORMERS_DEVICE="webgpu" \
+DOCS_MCP_EMBEDDING_MODEL="transformers:BAAI/bge-small-en-v1.5" \
+npx @arabold/docs-mcp-server@latest
+```
+
+#### Docker Usage
+
+When running in Docker, the model is downloaded on first use and cached inside the container at `/models`. The cache persists across `docker restart` but is lost when the container is recreated.
+
+To persist the model cache across container recreation, mount the volume:
+
+```bash
+docker run --rm \
+  -v docs-mcp-data:/data \
+  -v docs-mcp-config:/config \
+  -v docs-mcp-models:/models \
+  -e DOCS_MCP_EMBEDDING_MODEL="transformers:BAAI/bge-small-en-v1.5" \
+  -p 6280:6280 \
+  ghcr.io/arabold/docs-mcp-server:latest
+```
+
 ## Changing the Embedding Model
 
 When you change the embedding model or vector dimension after initial setup, existing embedding vectors become semantically incompatible with the new configuration. The server detects this automatically by tracking the active model identity in a metadata table.
@@ -145,4 +180,4 @@ When you change the embedding model or vector dimension after initial setup, exi
 
 ### Vector Dimension Override
 
-The vector dimension defaults to the model's native dimension (e.g., 1536 for `text-embedding-3-small`). You can override it with `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` as an environment variable. The value must be a positive integer (minimum 1).
+The vector dimension defaults to the model's native dimension (e.g., 1536 for `text-embedding-3-small`, 384 for `BAAI/bge-small-en-v1.5`). For Transformers.js models not from the list of known models, it is auto-detected via inference. For other providers, it is discovered by embedding a test string. You can override it with `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` as an environment variable. The value must be a positive integer (minimum 1).

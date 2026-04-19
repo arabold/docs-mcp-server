@@ -14,6 +14,7 @@ import {
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings";
+import { TransformersJSEmbeddings } from "./embeddings/TransformersJSEmbeddings";
 import {
   ConnectionError,
   DimensionError,
@@ -634,6 +635,27 @@ export class DocumentStore {
       // Use known dimensions if available, otherwise detect via test query
       if (config.dimensions !== null) {
         this.modelDimension = config.dimensions;
+      } else if (this.embeddings instanceof TransformersJSEmbeddings) {
+        // For Transformers.js, use the built-in dimension detection with timeout
+        const dimensionPromise = this.embeddings.getVectorDimension();
+        let timeoutId: NodeJS.Timeout | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(
+              new Error(
+                `Embedding service connection timed out after ${this.embeddingInitTimeoutMs / 1000} seconds`,
+              ),
+            );
+          }, this.embeddingInitTimeoutMs);
+        });
+
+        try {
+          this.modelDimension = await Promise.race([dimensionPromise, timeoutPromise]);
+        } finally {
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+          }
+        }
       } else {
         // Fallback: determine the model's actual dimension by embedding a test string
         // Use a timeout to fail fast if the embedding service is unreachable

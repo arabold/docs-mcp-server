@@ -3,6 +3,7 @@ import path from "node:path";
 import envPaths from "env-paths";
 import yaml from "yaml";
 import { z } from "zod";
+import { EmbeddingConfig } from "../store/embeddings/EmbeddingConfig";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
 
@@ -488,6 +489,32 @@ export function loadConfig(
     setAtPath(mergedInput, ["app", "embeddingModel"], "text-embedding-3-small");
   }
 
+  // Smart default for vectorDimension based on embedding provider
+  // Only applies when DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION is not explicitly set
+  // and the model is a transformers provider (avoids 1536d padding for 384d/768d models)
+  if (
+    !process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION &&
+    getAtPath(mergedInput, ["embeddings", "vectorDimension"]) ===
+      DEFAULT_CONFIG.embeddings.vectorDimension
+  ) {
+    const modelSpec = getAtPath(mergedInput, ["app", "embeddingModel"]);
+    if (typeof modelSpec === "string" && modelSpec) {
+      const normalizedSpec = normalizeEnvValue(modelSpec);
+      const colonIndex = normalizedSpec.indexOf(":");
+      const provider =
+        colonIndex === -1 ? "openai" : normalizedSpec.substring(0, colonIndex);
+
+      if (provider === "transformers") {
+        const model =
+          colonIndex === -1 ? normalizedSpec : normalizedSpec.substring(colonIndex + 1);
+        const knownDims = EmbeddingConfig.getKnownModelDimensions(model);
+        if (knownDims !== null) {
+          setAtPath(mergedInput, ["embeddings", "vectorDimension"], knownDims);
+        }
+      }
+    }
+  }
+
   const parseResult = AppConfigSchema.safeParse(mergedInput);
   if (parseResult.success) {
     return parseResult.data;
@@ -685,7 +712,17 @@ function deepMerge(target: unknown, source: unknown): unknown {
 
   const t = target as ConfigObject;
   const s = source as ConfigObject;
-  const output = { ...t };
+  const output: ConfigObject = {};
+
+  // Copy all keys from target first (deep copy to avoid mutating defaults)
+  for (const key of Object.keys(t)) {
+    const tValue = t[key];
+    if (typeof tValue === "object" && tValue !== null && !Array.isArray(tValue)) {
+      output[key] = deepMerge(tValue, {});
+    } else {
+      output[key] = tValue;
+    }
+  }
 
   for (const key of Object.keys(s)) {
     const sValue = s[key];

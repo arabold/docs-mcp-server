@@ -55,17 +55,19 @@ COPY --from=builder /app/dist ./dist
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
+ENV TRANSFORMERS_CACHE=/models
 
 # Create the writable runtime directories and hand ownership to the
 # unprivileged `node` user that ships with the base image (uid 1000).
 # `/app` is intentionally left root-owned so the runtime user cannot
 # tamper with code or `node_modules` if it is ever compromised.
-RUN mkdir -p /data /config \
-  && chown node:node /data /config
+RUN mkdir -p /data /config /models \
+  && chown node:node /data /config /models
 
 # Define volumes
 VOLUME /data
 VOLUME /config
+VOLUME /models
 
 # Expose the default port of the application
 EXPOSE 6280

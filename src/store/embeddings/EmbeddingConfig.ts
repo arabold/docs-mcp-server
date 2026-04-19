@@ -18,7 +18,8 @@ export type EmbeddingProvider =
   | "gemini"
   | "aws"
   | "microsoft"
-  | "sagemaker";
+  | "sagemaker"
+  | "transformers";
 
 /**
  * Embedding model configuration parsed from environment variables.
@@ -186,7 +187,7 @@ export class EmbeddingConfig {
     "intfloat/e5-base": 768,
     "sentence-transformers/static-similarity-mrl-multilingual-v1": 1024,
     "manu/sentence_croissant_alpha_v0.3": 2048,
-    "BAAI/bge-small-en-v1.5": 512,
+    "BAAI/bge-small-en-v1.5": 384,
     "thenlper/gte-small": 384,
     "sdadas/mmlw-e5-small": 384,
     "manu/sentence_croissant_alpha_v0.4": 2048,

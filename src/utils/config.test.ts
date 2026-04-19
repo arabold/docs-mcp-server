@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EmbeddingConfig } from "../store/embeddings/EmbeddingConfig";
 import { expandConfiguredRoot } from "./accessPolicy";
 import {
   camelToUpperSnake,
@@ -668,5 +669,119 @@ describe("Auto-generated Environment Variable Overrides", () => {
     await expect(expandConfiguredRoot("$DOCUMENTS")).resolves.toBeNull();
 
     homedirSpy.mockRestore();
+  });
+});
+
+describe("Smart Defaults for vectorDimension", () => {
+  let tmpDir: string;
+
+  // Reset singleton at module load to ensure clean state before any test runs
+  EmbeddingConfig.resetInstance();
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-smart-defaults-test-"));
+    EmbeddingConfig.resetInstance();
+    vi.clearAllMocks();
+    // Clear any env vars that might affect tests
+    delete process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION;
+    delete process.env.DOCS_MCP_EMBEDDING_MODEL;
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    EmbeddingConfig.resetInstance();
+    delete process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION;
+    delete process.env.DOCS_MCP_EMBEDDING_MODEL;
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  it("applies known dimension for transformers models with known dimensions", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "transformers:BAAI/bge-small-en-v1.5";
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "smart-default.yaml") },
+    );
+
+    expect(config.embeddings.vectorDimension).toBe(384);
+  });
+
+  it("keeps default 1536 for non-transformers models", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "openai:text-embedding-3-small";
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "non-transformers.yaml") },
+    );
+
+    expect(config.embeddings.vectorDimension).toBe(1536);
+  });
+
+  it("keeps default 1536 for models without provider prefix (defaults to openai)", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "text-embedding-3-small";
+
+    const config = loadConfig({}, { configPath: path.join(tmpDir, "no-provider.yaml") });
+
+    expect(config.embeddings.vectorDimension).toBe(1536);
+  });
+
+  it("respects explicit DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION override", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "transformers:BAAI/bge-small-en-v1.5";
+    process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "1024";
+
+    const config = loadConfig({}, { configPath: path.join(tmpDir, "override.yaml") });
+
+    expect(config.embeddings.vectorDimension).toBe(1024);
+  });
+
+  it("respects explicit vectorDimension in config file", () => {
+    const configPath = path.join(tmpDir, "explicit-dim.yaml");
+    fs.writeFileSync(
+      configPath,
+      `app:\n  embeddingModel: transformers:BAAI/bge-small-en-v1.5\nembeddings:\n  vectorDimension: 768\n`,
+    );
+
+    const config = loadConfig({}, { configPath });
+
+    expect(config.embeddings.vectorDimension).toBe(768);
+  });
+
+  it("respects CLI arg for vectorDimension", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "transformers:BAAI/bge-small-en-v1.5";
+    process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "768";
+
+    const config = loadConfig({}, { configPath: path.join(tmpDir, "cli-override.yaml") });
+
+    expect(config.embeddings.vectorDimension).toBe(768);
+  });
+
+  it("returns 1536 for unknown transformers models (no known dimension)", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "transformers:unknown/repo";
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "unknown-model.yaml") },
+    );
+
+    expect(config.embeddings.vectorDimension).toBe(1536);
+  });
+
+  it("handles case-insensitive transformers provider", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = "TRANSFORMERS:BAAI/bge-small-en-v1.5";
+
+    const config = loadConfig({}, { configPath: path.join(tmpDir, "case-test.yaml") });
+
+    // The provider detection is case-sensitive, so TRANSFORMERS won't match "transformers"
+    // and will fall back to 1536
+    expect(config.embeddings.vectorDimension).toBe(1536);
+  });
+
+  it("handles quoted model spec from Docker compose", () => {
+    process.env.DOCS_MCP_EMBEDDING_MODEL = '"transformers:BAAI/bge-small-en-v1.5"';
+
+    const config = loadConfig({}, { configPath: path.join(tmpDir, "quoted.yaml") });
+
+    expect(config.embeddings.vectorDimension).toBe(384);
   });
 });

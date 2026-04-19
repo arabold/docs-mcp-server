@@ -118,6 +118,11 @@ docker run --rm \
   --protocol http --host 0.0.0.0 --port 6280
 ```
 
+**Note:** When using Transformers.js embeddings, models are cached inside the container in /models. Mount the volume to persist the models cache:
+```bash
+-v docs-mcp-models:/models
+```
+
 </details>
 
 ### 🧠 Configure Embedding Model (Recommended)

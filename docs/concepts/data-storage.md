@@ -241,7 +241,7 @@ Handles document lifecycle operations with normalized schema access.
 
 Embeddings stored as BLOB in documents table:
 
-- 1536-dimensional vectors by default (configurable via `embeddings.vectorDimension`)
+- 1536-dimensional vectors by default or model-specific for `transformers:` models, e.g., 384 for `BAAI/bge-small-en-v1.5`, (configurable via `embeddings.vectorDimension`)
 - Provider-agnostic binary serialization
 - NULL handling for documents without embeddings
 - Direct storage eliminates need for separate vector table

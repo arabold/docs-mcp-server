@@ -8,5 +8,6 @@ public/assets/
 !*.env.example
 *.code-workspace
 .tsbuildinfo
+mise.toml
 .claude/worktrees/
 .opencode/package-lock.json

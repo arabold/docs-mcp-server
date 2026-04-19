@@ -6,8 +6,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
-import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
+import {
+  areCredentialsAvailable,
+  createEmbeddingModel,
+  UnsupportedProviderError,
+} from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
+import { TransformersJSEmbeddings } from "./TransformersJSEmbeddings";
 
 // Suppress logger output during tests
 
@@ -207,6 +212,86 @@ describe("createEmbeddingModel", () => {
       if (clientConfig?.baseURL) {
         expect(clientConfig.baseURL).toBe("http://localhost:11434/v1");
       }
+    });
+  });
+
+  describe("transformers provider", () => {
+    test("should create TransformersJSEmbeddings with requested model", () => {
+      const model = createEmbeddingModel(
+        "transformers:sentence-transformers/all-MiniLM-L6-v2",
+        runtimeConfig,
+      );
+      expect(model).toBeInstanceOf(TransformersJSEmbeddings);
+      expect(model).toMatchObject({
+        modelName: "sentence-transformers/all-MiniLM-L6-v2",
+      });
+    });
+
+    test("should set device to webgpu when TRANSFORMERS_DEVICE is webgpu", () => {
+      vi.stubGlobal("process", {
+        env: {
+          TRANSFORMERS_DEVICE: "webgpu",
+          OPENAI_API_KEY: "test-openai-key",
+          GOOGLE_APPLICATION_CREDENTIALS: "credentials.json",
+          GOOGLE_API_KEY: "test-gemini-key",
+          BEDROCK_AWS_REGION: "us-east-1",
+          AWS_ACCESS_KEY_ID: "test-aws-key",
+          AWS_SECRET_ACCESS_KEY: "test-aws-secret",
+          AZURE_OPENAI_API_KEY: "test-azure-key",
+          AZURE_OPENAI_API_INSTANCE_NAME: "test-instance",
+          AZURE_OPENAI_API_DEPLOYMENT_NAME: "test-deployment",
+          AZURE_OPENAI_API_VERSION: "2024-02-01",
+        },
+      });
+
+      const model = createEmbeddingModel(
+        "transformers:BAAI/bge-small-en-v1.5",
+        runtimeConfig,
+      );
+      expect(model).toBeInstanceOf(TransformersJSEmbeddings);
+      expect(model).toMatchObject({
+        device: "webgpu",
+      });
+    });
+
+    test("should set device to cpu by default", () => {
+      vi.stubGlobal("process", {
+        env: {
+          OPENAI_API_KEY: "test-openai-key",
+          GOOGLE_APPLICATION_CREDENTIALS: "credentials.json",
+          GOOGLE_API_KEY: "test-gemini-key",
+          BEDROCK_AWS_REGION: "us-east-1",
+          AWS_ACCESS_KEY_ID: "test-aws-key",
+          AWS_SECRET_ACCESS_KEY: "test-aws-secret",
+          AZURE_OPENAI_API_KEY: "test-azure-key",
+          AZURE_OPENAI_API_INSTANCE_NAME: "test-instance",
+          AZURE_OPENAI_API_DEPLOYMENT_NAME: "test-deployment",
+          AZURE_OPENAI_API_VERSION: "2024-02-01",
+        },
+      });
+
+      const model = createEmbeddingModel(
+        "transformers:BAAI/bge-small-en-v1.5",
+        runtimeConfig,
+      );
+      expect(model).toBeInstanceOf(TransformersJSEmbeddings);
+      expect(model).toMatchObject({
+        device: "cpu",
+      });
+    });
+  });
+
+  describe("areCredentialsAvailable", () => {
+    test("should return true for transformers provider", () => {
+      expect(areCredentialsAvailable("transformers")).toBe(true);
+    });
+
+    test("should return true for transformers regardless of env vars", () => {
+      vi.stubGlobal("process", {
+        env: {},
+      });
+
+      expect(areCredentialsAvailable("transformers")).toBe(true);
     });
   });
 });

@@ -215,6 +215,7 @@ describe("EmbeddingConfig", () => {
       "aws",
       "microsoft",
       "sagemaker",
+      "transformers",
     ];
 
     it("should accept all valid providers", () => {
