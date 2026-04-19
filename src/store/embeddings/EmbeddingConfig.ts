@@ -18,7 +18,8 @@ export type EmbeddingProvider =
   | "gemini"
   | "aws"
   | "microsoft"
-  | "sagemaker";
+  | "sagemaker"
+  | "transformers";
 
 /**
  * Embedding model configuration parsed from environment variables.

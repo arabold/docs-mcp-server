@@ -14,6 +14,7 @@ import {
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings";
+import { TransformersJSEmbeddings } from "./embeddings/TransformersJSEmbeddings";
 import {
   ConnectionError,
   DimensionError,
@@ -626,6 +627,9 @@ export class DocumentStore {
       // Use known dimensions if available, otherwise detect via test query
       if (config.dimensions !== null) {
         this.modelDimension = config.dimensions;
+      } else if (this.embeddings instanceof TransformersJSEmbeddings) {
+        // For Transformers.js, use the built-in dimension detection
+        this.modelDimension = await this.embeddings.getVectorDimension();
       } else {
         // Fallback: determine the model's actual dimension by embedding a test string
         // Use a timeout to fail fast if the embedding service is unreachable

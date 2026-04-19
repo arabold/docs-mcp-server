@@ -14,6 +14,7 @@ If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults t
 - `gemini:embedding-001` (Google Gemini)
 - `aws:amazon.titan-embed-text-v1` (AWS Bedrock)
 - `microsoft:text-embedding-ada-002` (Azure OpenAI)
+- `transformers:Xenova/bge-small-en-v1.5` (Local, offline via Transformers.js)
 - Or any OpenAI-compatible model name
 
 ## Provider Configuration
@@ -34,6 +35,7 @@ Provider credentials use the provider-specific environment variables listed belo
 | `AZURE_OPENAI_API_INSTANCE_NAME`   | Azure OpenAI instance name.                           |
 | `AZURE_OPENAI_API_DEPLOYMENT_NAME` | Azure OpenAI deployment name.                         |
 | `AZURE_OPENAI_API_VERSION`         | Azure OpenAI API version.                             |
+| `TRANSFORMERS_DEVICE`              | Device for Transformers.js (cpu or webgpu).           |
 
 ### Examples
 
@@ -113,6 +115,49 @@ AZURE_OPENAI_API_VERSION="2024-02-01" \
 DOCS_MCP_EMBEDDING_MODEL="microsoft:text-embedding-ada-002" \
 npx @arabold/docs-mcp-server@latest
 ```
+
+#### Transformers.js (Local, Offline)
+
+Run embeddings locally without any API keys or internet connection after initial model download. Uses ONNX runtime for CPU inference.
+
+```bash
+DOCS_MCP_EMBEDDING_MODEL="transformers:Xenova/bge-small-en-v1.5" \
+npx @arabold/docs-mcp-server@latest
+```
+
+**Optional:** Enable GPU acceleration with WebGPU (requires compatible hardware):
+
+```bash
+TRANSFORMERS_DEVICE="webgpu" \
+DOCS_MCP_EMBEDDING_MODEL="transformers:Xenova/bge-small-en-v1.5" \
+npx @arabold/docs-mcp-server@latest
+```
+
+**Pre-configured models:**
+- `Xenova/bge-small-en-v1.5` (384d, recommended default)
+- `Xenova/all-MiniLM-L6-v2` (384d, fast)
+- `Xenova/bge-base-en-v1.5` (768d, better quality)
+- `Xenova/microsoft/mpnet-base` (768d)
+- `Xenova/paraphrase-multilingual-MiniLM-L12-v2` (384d, multilingual)
+- Any other sentence-transformers model from HuggingFace (dimensions auto-detected)
+
+#### Docker Usage
+
+When running in Docker, the model is downloaded on first use and cached inside the container. By default, the cache is stored at `/app/.cache` and will be lost on container restart.
+
+To persist the model cache across container restarts, use the `TRANSFORMERS_CACHE` environment variable:
+
+```bash
+docker run --rm \
+  -v docs-mcp-data:/data \
+  -v docs-mcp-config:/config \
+  -e TRANSFORMERS_CACHE=/config/.cache \
+  -e DOCS_MCP_EMBEDDING_MODEL="transformers:Xenova/bge-small-en-v1.5" \
+  -p 6280:6280 \
+  ghcr.io/arabold/docs-mcp-server:latest
+```
+
+This stores the model cache in the `/config` volume, so it persists between container runs. The first startup will take longer as the model downloads (~100-200MB), but subsequent starts will be fast.
 
 ## Changing the Embedding Model
 
