@@ -448,12 +448,12 @@ describe("BaseScraperStrategy", () => {
     expect(progressCallback).not.toHaveBeenCalled();
   });
 
-  it("should throw for non-refresh child NOT_FOUND when ignoreErrors is false", async () => {
+  it("should count non-refresh child NOT_FOUND as a terminal failure but continue crawling", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",
       library: "test",
       version: "1.0.0",
-      maxPages: 2,
+      maxPages: 3,
       maxDepth: 1,
       ignoreErrors: false,
     };
@@ -462,7 +462,7 @@ describe("BaseScraperStrategy", () => {
     strategy.processItem
       .mockResolvedValueOnce({
         url: options.url,
-        links: ["https://example.com/missing"],
+        links: ["https://example.com/missing", "https://example.com/valid"],
         status: FetchStatus.SUCCESS,
         content: {
           title: "Root",
@@ -476,11 +476,29 @@ describe("BaseScraperStrategy", () => {
         url: "https://example.com/missing",
         links: [],
         status: FetchStatus.NOT_FOUND,
+      })
+      .mockResolvedValueOnce({
+        url: "https://example.com/valid",
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: "Valid",
+          textContent: "Valid content",
+          links: [],
+          errors: [],
+          chunks: [],
+        },
       });
 
-    await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
-      "Page not found: https://example.com/missing",
-    );
+    // Scrape should complete without throwing — the 404 is counted as a failure
+    // for the rate-based threshold, but does not abort the crawl on its own.
+    await expect(strategy.scrape(options, progressCallback)).resolves.not.toThrow();
+
+    // progressCallback should have been called for root + valid page (not the 404 page)
+    const calls = progressCallback.mock.calls.map((c) => c[0].currentUrl);
+    expect(calls).toContain("https://example.com/");
+    expect(calls).toContain("https://example.com/valid");
+    expect(calls).not.toContain("https://example.com/missing");
   });
 
   it("should deduplicate URLs and avoid processing the same URL twice", async () => {
