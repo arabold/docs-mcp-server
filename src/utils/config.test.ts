@@ -185,6 +185,16 @@ describe("Configuration Loading", () => {
       expect(config.assembly.maxParentChainDepth).toBe(10);
     });
 
+    it("should apply scraper retry and abort threshold defaults", () => {
+      const configPath = path.join(tmpDir, "scraper-defaults.yaml");
+      fs.writeFileSync(configPath, "");
+
+      const config = loadConfig({ config: configPath });
+
+      expect(config.scraper.fetcher.maxRetries).toBe(3);
+      expect(config.scraper.abortOnFailureRate).toBe(0.5);
+    });
+
     it("should recover from malformed config file by using defaults (Read-Only mode)", () => {
       // Should it overwrite? No, read-only mode should NOT overwrite even if invalid.
       const configPath = path.join(tmpDir, "malformed.yaml");
@@ -479,6 +489,17 @@ describe("Auto-generated Environment Variable Overrides", () => {
     );
 
     expect(config.scraper.document.maxSize).toBe(52428800);
+  });
+
+  it("applies scraper abort-on-failure-rate env var override", () => {
+    process.env.DOCS_MCP_SCRAPER_ABORT_ON_FAILURE_RATE = "0.25";
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
+    );
+
+    expect(config.scraper.abortOnFailureRate).toBe(0.25);
   });
 
   it("rejects vectorDimension of 0 or negative values", () => {

@@ -367,7 +367,6 @@ describe("PipelineWorker", () => {
             depth: 1,
             maxDepth: 1,
             result: null, // No result for 304
-            deleted: false,
             pageId: 123, // Page ID from refresh queue
             totalDiscovered: 0,
           };
@@ -387,7 +386,6 @@ describe("PipelineWorker", () => {
         mockJob,
         expect.objectContaining({
           result: null,
-          deleted: false,
           pageId: 123,
         }),
       );

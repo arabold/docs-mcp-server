@@ -1155,12 +1155,23 @@ describe("WebScraperStrategy", () => {
     it("should report deleted flag when page returns 404 Not Found during refresh", async () => {
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
-      // Configure mock to return 404
-      mockFetchFn.mockResolvedValue({
-        content: "",
-        mimeType: "text/html",
-        source: "https://example.com/deleted-page",
-        status: FetchStatus.NOT_FOUND,
+      // Keep the root page successful and return 404 for the refreshed page
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com") {
+          return {
+            content: "<html><body><h1>Root</h1></body></html>",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+
+        return {
+          content: "",
+          mimeType: "text/html",
+          source: "https://example.com/deleted-page",
+          status: FetchStatus.NOT_FOUND,
+        };
       });
 
       // Create a queue item with pageId and etag (refresh operation)
@@ -1183,9 +1194,10 @@ describe("WebScraperStrategy", () => {
         }),
       );
 
-      // Verify no processed documents were returned
-      const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);
-      expect(docCalls).toHaveLength(0);
+      // Verify the deleted page is reported as a deletion and the only document result is the root page
+      const deletedCalls = progressCallback.mock.calls.filter((call) => call[0].deleted);
+      expect(deletedCalls).toHaveLength(1);
+      expect(deletedCalls[0][0].currentUrl).toBe("https://example.com/deleted-page");
     });
 
     it("should refresh page content when page returns 200 OK", async () => {

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
-import { loadConfig } from "../../utils/config";
+import { AppConfigSchema, DEFAULT_CONFIG, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { BaseScraperStrategy } from "./BaseScraperStrategy";
@@ -18,6 +18,18 @@ class TestScraperStrategy extends BaseScraperStrategy {
   getVisitedUrls(): Set<string> {
     return this.visited;
   }
+}
+
+function createTestConfig(overrides?: { abortOnFailureRate?: number }) {
+  return AppConfigSchema.parse({
+    ...DEFAULT_CONFIG,
+    scraper: {
+      ...DEFAULT_CONFIG.scraper,
+      ...(overrides?.abortOnFailureRate !== undefined
+        ? { abortOnFailureRate: overrides.abortOnFailureRate }
+        : {}),
+    },
+  });
 }
 
 describe("BaseScraperStrategy", () => {
@@ -125,6 +137,98 @@ describe("BaseScraperStrategy", () => {
     expect(strategy.processItem).toHaveBeenCalledTimes(1);
   });
 
+  it("should throw when the root page returns NOT_FOUND during a normal scrape", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 1,
+      maxDepth: 1,
+      ignoreErrors: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockResolvedValue({
+      url: options.url,
+      links: [],
+      status: FetchStatus.NOT_FOUND,
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
+      "Root page not found",
+    );
+  });
+
+  it("should treat a tracked root page returning NOT_FOUND during refresh as a deletion", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 2,
+      maxDepth: 1,
+      initialQueue: [
+        {
+          url: "https://example.com/",
+          depth: 0,
+          pageId: 123,
+        },
+      ],
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockResolvedValue({
+      url: options.url,
+      links: [],
+      status: FetchStatus.NOT_FOUND,
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.toBeUndefined();
+    expect(progressCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentUrl: "https://example.com/",
+        deleted: true,
+        pageId: 123,
+        result: null,
+      }),
+    );
+  });
+
+  it("should not mark non-refresh child NOT_FOUND pages as deleted", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 2,
+      maxDepth: 1,
+      ignoreErrors: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem
+      .mockResolvedValueOnce({
+        url: options.url,
+        links: ["https://example.com/missing"],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: "Root",
+          textContent: "Root content",
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        url: "https://example.com/missing",
+        links: [],
+        status: FetchStatus.NOT_FOUND,
+      });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.toBeUndefined();
+
+    const deletedCalls = progressCallback.mock.calls.filter((call) => call[0].deleted);
+    expect(deletedCalls).toHaveLength(0);
+  });
+
   it("should ignore errors at depth > 0 when ignoreErrors is true", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",
@@ -160,6 +264,168 @@ describe("BaseScraperStrategy", () => {
     expect(strategy.processItem).toHaveBeenCalledTimes(2);
   });
 
+  it("should abort when child-page failure rate exceeds the threshold after minimum sample", async () => {
+    const config = createTestConfig({ abortOnFailureRate: 0.5 });
+    strategy = new TestScraperStrategy(config);
+    strategy.processItem.mockClear();
+
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 20,
+      maxDepth: 2,
+      ignoreErrors: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) {
+        return {
+          url: item.url,
+          links: Array.from(
+            { length: 10 },
+            (_, index) => `https://example.com/page-${index + 1}`,
+          ),
+          status: FetchStatus.SUCCESS,
+          content: {
+            title: "Root",
+            textContent: "Root content",
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+        };
+      }
+
+      const pageNumber = Number.parseInt(item.url.split("page-")[1] ?? "0", 10);
+      if (pageNumber <= 6) {
+        throw new Error(`Child page ${pageNumber} failed`);
+      }
+
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: `Page ${pageNumber}`,
+          textContent: `Content ${pageNumber}`,
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+      };
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
+      /Scrape aborted after \d+\/\d+ child pages failed/,
+    );
+  });
+
+  it("should continue when child-page failure rate stays at the threshold", async () => {
+    const config = createTestConfig({ abortOnFailureRate: 0.5 });
+    strategy = new TestScraperStrategy(config);
+    strategy.processItem.mockClear();
+
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 20,
+      maxDepth: 2,
+      ignoreErrors: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) {
+        return {
+          url: item.url,
+          links: Array.from(
+            { length: 10 },
+            (_, index) => `https://example.com/page-${index + 1}`,
+          ),
+          status: FetchStatus.SUCCESS,
+          content: {
+            title: "Root",
+            textContent: "Root content",
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+        };
+      }
+
+      const pageNumber = Number.parseInt(item.url.split("page-")[1] ?? "0", 10);
+      if (pageNumber <= 5) {
+        throw new Error(`Child page ${pageNumber} failed`);
+      }
+
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: `Page ${pageNumber}`,
+          textContent: `Content ${pageNumber}`,
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+      };
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.toBeUndefined();
+    expect(strategy.processItem).toHaveBeenCalledTimes(11);
+  });
+
+  it("should not count refresh deletions toward the child-page failure threshold", async () => {
+    const config = createTestConfig({ abortOnFailureRate: 0 });
+    strategy = new TestScraperStrategy(config);
+    strategy.processItem.mockClear();
+
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 20,
+      maxDepth: 1,
+      ignoreErrors: true,
+      initialQueue: Array.from({ length: 10 }, (_, index) => ({
+        url: `https://example.com/deleted-${index + 1}`,
+        depth: 1,
+        pageId: index + 1,
+      })),
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) {
+        return {
+          url: item.url,
+          links: [],
+          status: FetchStatus.SUCCESS,
+          content: {
+            title: "Root",
+            textContent: "Root content",
+            links: [],
+            errors: [],
+            chunks: [],
+          },
+        };
+      }
+
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.NOT_FOUND,
+      };
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.toBeUndefined();
+    expect(progressCallback).toHaveBeenCalledTimes(11);
+  });
+
   it("should throw errors when ignoreErrors is false", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",
@@ -180,6 +446,59 @@ describe("BaseScraperStrategy", () => {
     );
     expect(strategy.processItem).toHaveBeenCalledTimes(1);
     expect(progressCallback).not.toHaveBeenCalled();
+  });
+
+  it("should count non-refresh child NOT_FOUND as a terminal failure but continue crawling", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 3,
+      maxDepth: 1,
+      ignoreErrors: false,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem
+      .mockResolvedValueOnce({
+        url: options.url,
+        links: ["https://example.com/missing", "https://example.com/valid"],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: "Root",
+          textContent: "Root content",
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        url: "https://example.com/missing",
+        links: [],
+        status: FetchStatus.NOT_FOUND,
+      })
+      .mockResolvedValueOnce({
+        url: "https://example.com/valid",
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: "Valid",
+          textContent: "Valid content",
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+      });
+
+    // Scrape should complete without throwing — the 404 is counted as a failure
+    // for the rate-based threshold, but does not abort the crawl on its own.
+    await expect(strategy.scrape(options, progressCallback)).resolves.not.toThrow();
+
+    // progressCallback should have been called for root + valid page (not the 404 page)
+    const calls = progressCallback.mock.calls.map((c) => c[0].currentUrl);
+    expect(calls).toContain("https://example.com/");
+    expect(calls).toContain("https://example.com/valid");
+    expect(calls).not.toContain("https://example.com/missing");
   });
 
   it("should deduplicate URLs and avoid processing the same URL twice", async () => {
