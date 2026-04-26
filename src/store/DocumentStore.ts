@@ -1723,6 +1723,19 @@ export class DocumentStore {
       const ftsQuery = this.escapeFtsQuery(query);
       const normalizedVersion = version.toLowerCase();
 
+      // Resolve library/version to IDs upfront so we can pass them directly
+      // to the vec0 partition columns and avoid full-table scans.
+      const versionRow = this.statements.getVersionId.get(
+        library.toLowerCase(),
+        normalizedVersion,
+      ) as { id: number; library_id: number } | undefined;
+
+      if (!versionRow) {
+        return [];
+      }
+
+      const { id: versionId, library_id: libraryId } = versionRow;
+
       if (this.isVectorSearchEnabled) {
         // Hybrid search: vector + full-text search with RRF ranking
         const rawEmbedding = await this.embeddings.embedQuery(query);
@@ -1740,12 +1753,8 @@ export class DocumentStore {
               dv.rowid as id,
               dv.distance as vec_distance
             FROM documents_vec dv
-            JOIN documents d ON dv.rowid = d.id
-            JOIN pages p ON d.page_id = p.id
-            JOIN versions v ON p.version_id = v.id
-            JOIN libraries l ON v.library_id = l.id
-            WHERE l.name = ?
-              AND COALESCE(v.name, '') = COALESCE(?, '')
+            WHERE dv.library_id = ?
+              AND dv.version_id = ?
               AND dv.embedding MATCH ?
               AND dv.k = ?
             ORDER BY dv.distance
@@ -1757,10 +1766,7 @@ export class DocumentStore {
             FROM documents_fts f
             JOIN documents d ON f.rowid = d.id
             JOIN pages p ON d.page_id = p.id
-            JOIN versions v ON p.version_id = v.id
-            JOIN libraries l ON v.library_id = l.id
-            WHERE l.name = ?
-              AND COALESCE(v.name, '') = COALESCE(?, '')
+            WHERE p.version_id = ?
               AND documents_fts MATCH ?
             ORDER BY fts_score
             LIMIT ?
@@ -1787,12 +1793,11 @@ export class DocumentStore {
         `);
 
         const rawResults = stmt.all(
-          library.toLowerCase(),
-          normalizedVersion,
+          libraryId,
+          versionId,
           JSON.stringify(embedding),
           vectorSearchK,
-          library.toLowerCase(),
-          normalizedVersion,
+          versionId,
           ftsQuery,
           overfetchLimit,
         ) as RawSearchResult[];
@@ -1835,10 +1840,7 @@ export class DocumentStore {
           FROM documents_fts f
           JOIN documents d ON f.rowid = d.id
           JOIN pages p ON d.page_id = p.id
-          JOIN versions v ON p.version_id = v.id
-          JOIN libraries l ON v.library_id = l.id
-          WHERE l.name = ?
-            AND COALESCE(v.name, '') = COALESCE(?, '')
+          WHERE p.version_id = ?
             AND documents_fts MATCH ?
             AND NOT EXISTS (
               SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
@@ -1848,12 +1850,9 @@ export class DocumentStore {
           LIMIT ?
         `);
 
-        const rawResults = stmt.all(
-          library.toLowerCase(),
-          normalizedVersion,
-          ftsQuery,
-          limit,
-        ) as (RawSearchResult & { fts_score: number })[];
+        const rawResults = stmt.all(versionId, ftsQuery, limit) as (RawSearchResult & {
+          fts_score: number;
+        })[];
 
         // Assign FTS ranks based on order (best score = rank 1)
         return rawResults.map((row, index) => {
