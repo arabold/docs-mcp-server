@@ -1283,26 +1283,9 @@ export class DocumentStore {
     );
   }
 
-  private isMalformedEmbeddingResponseError(error: unknown): boolean {
-    if (!(error instanceof Error)) return false;
-
-    const message = error.message.toLowerCase();
-    return (
-      message.includes("cannot read properties of undefined") ||
-      message.includes("reading '0'") ||
-      message.includes("invalid response") ||
-      message.includes("unexpected response") ||
-      (message.includes("embedding") && message.includes("undefined"))
-    );
-  }
-
   private getEmbeddingErrorHint(error: unknown): string | null {
     if (this.isInputSizeError(error)) {
       return "The embedding input appears to exceed provider or model limits. Check model context size and reduce embedding batch size if needed.";
-    }
-
-    if (this.isMalformedEmbeddingResponseError(error)) {
-      return "The embedding provider returned an unexpected response or fewer vectors than requested. Check provider logs for rejected requests or unsupported model, batch, or context settings.";
     }
 
     if (error instanceof Error) {

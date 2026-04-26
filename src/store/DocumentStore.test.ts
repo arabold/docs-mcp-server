@@ -793,7 +793,7 @@ describe("DocumentStore - With Embeddings", () => {
       expect(mockEmbedDocuments).toHaveBeenCalledTimes(1);
     });
 
-    it("should include embedding context when provider response is malformed", async () => {
+    it("should include embedding context when provider response fails", async () => {
       // Skip if embeddings are disabled
       // @ts-expect-error Accessing private property for testing
       if (!store.embeddings) {
@@ -827,10 +827,10 @@ describe("DocumentStore - With Embeddings", () => {
         expect(message).toContain("https://example.com/malformed-response");
         expect(message).toContain("openai:text-embedding-3-small");
         expect(message).toContain("Batch 1");
-        expect(message).toContain("unexpected response");
         expect(message).toContain("Verify embedding provider configuration");
-        expect(message).toContain("context size");
+        expect(message).toContain("request size");
         expect(message).toContain("backend logs");
+        expect(message).toContain("Cannot read properties of undefined");
       } finally {
         if (originalOpenAiApiBase === undefined) {
           delete process.env.OPENAI_API_BASE;
