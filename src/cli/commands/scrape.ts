@@ -81,6 +81,12 @@ export function createScrapeCommand(cli: Argv) {
           default: ScrapeMode.Auto,
           alias: "scrapeMode",
         })
+        .option("preserve-hashes", {
+          type: "boolean",
+          description:
+            "Preserve URL hash fragments for hash-routed SPA documentation sites",
+          alias: "preserveHashes",
+        })
         .option("include-pattern", {
           type: "string",
           array: true,
@@ -146,6 +152,10 @@ export function createScrapeCommand(cli: Argv) {
       const maxDepth = (argv.maxDepth as number) ?? appConfig.scraper.maxDepth;
       const maxConcurrency =
         (argv.maxConcurrency as number) ?? appConfig.scraper.maxConcurrency;
+      const preserveHashes =
+        typeof argv.preserveHashes === "boolean"
+          ? (argv.preserveHashes as boolean)
+          : appConfig.scraper.preserveHashes;
 
       // Update appConfig with effective values
       appConfig.scraper.maxPages = maxPages;
@@ -162,6 +172,7 @@ export function createScrapeCommand(cli: Argv) {
         maxConcurrency,
         scope: argv.scope,
         scrapeMode: argv.scrapeMode,
+        preserveHashes,
         followRedirects: argv.followRedirects,
         hasHeaders: (argv.header as string[]).length > 0,
         hasIncludePatterns: (argv.includePattern as string[]).length > 0,
@@ -237,6 +248,7 @@ export function createScrapeCommand(cli: Argv) {
             scope: argv.scope as "subpages" | "hostname" | "domain",
             followRedirects: argv.followRedirects as boolean,
             scrapeMode: argv.scrapeMode as ScrapeMode,
+            preserveHashes,
             includePatterns:
               (argv.includePattern as string[])?.length > 0
                 ? (argv.includePattern as string[])

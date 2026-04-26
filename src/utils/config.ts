@@ -55,6 +55,7 @@ export const DEFAULT_CONFIG = {
     maxPages: 1000,
     maxDepth: 3,
     maxConcurrency: 3,
+    preserveHashes: false,
     pageTimeoutMs: 5000,
     browserTimeoutMs: 30_000,
     fetcher: {
@@ -147,6 +148,7 @@ export const AppConfigSchema = z.object({
         .number()
         .int()
         .default(DEFAULT_CONFIG.scraper.maxConcurrency),
+      preserveHashes: envBoolean.default(DEFAULT_CONFIG.scraper.preserveHashes),
       pageTimeoutMs: z.coerce
         .number()
         .int()

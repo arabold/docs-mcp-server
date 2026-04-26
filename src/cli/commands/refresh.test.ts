@@ -78,4 +78,18 @@ describe("refresh command", () => {
     expect(pipelineMock.start).toHaveBeenCalledTimes(1);
     expect(pipelineMock.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("passes preserveHashes override to RefreshVersionTool", async () => {
+    const parser = yargs().scriptName("test");
+    createRefreshCommand(parser);
+
+    await parser.parse(`refresh react --preserve-hashes`);
+
+    const execute = vi.mocked(RefreshVersionTool).mock.results[0]?.value.execute;
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preserveHashes: true,
+      }),
+    );
+  });
 });

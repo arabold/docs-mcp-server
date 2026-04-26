@@ -573,6 +573,7 @@ describe("DocumentStore - With Embeddings", () => {
         maxPages: 100,
         scope: "subpages" as const,
         followRedirects: true,
+        preserveHashes: true,
       };
 
       await store.storeScraperOptions(versionId, scraperOptions);
@@ -582,6 +583,7 @@ describe("DocumentStore - With Embeddings", () => {
       expect(retrieved?.options.maxDepth).toBe(3);
       expect(retrieved?.options.maxPages).toBe(100);
       expect(retrieved?.options.scope).toBe("subpages");
+      expect(retrieved?.options.preserveHashes).toBe(true);
     });
   });
 

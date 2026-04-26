@@ -523,6 +523,48 @@ describe("WebScraperStrategy", () => {
     );
   });
 
+  it("should preserve the requested hash in stored page identity when enabled", async () => {
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+    options.url = "https://example.com/docs#/guide";
+    options.preserveHashes = true;
+
+    mockFetchFn.mockResolvedValue({
+      content:
+        "<html><head><title>Guide</title></head><body><h1>Guide</h1></body></html>",
+      mimeType: "text/html",
+      source: "https://example.com/docs",
+      status: FetchStatus.SUCCESS,
+    });
+
+    await strategy.scrape(options, progressCallback);
+
+    const docCall = progressCallback.mock.calls.find((call) => call[0].result);
+    expect(docCall).toBeDefined();
+    expect(docCall![0].currentUrl).toBe("https://example.com/docs#/guide");
+    expect(docCall![0].result?.url).toBe("https://example.com/docs#/guide");
+  });
+
+  it("should preserve the requested hash across canonical trailing-slash redirects", async () => {
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+    options.url = "https://example.com/docs#/guide";
+    options.preserveHashes = true;
+
+    mockFetchFn.mockResolvedValue({
+      content:
+        "<html><head><title>Guide</title></head><body><h1>Guide</h1></body></html>",
+      mimeType: "text/html",
+      source: "https://example.com/docs/",
+      status: FetchStatus.SUCCESS,
+    });
+
+    await strategy.scrape(options, progressCallback);
+
+    const docCall = progressCallback.mock.calls.find((call) => call[0].result);
+    expect(docCall).toBeDefined();
+    expect(docCall![0].currentUrl).toBe("https://example.com/docs/#/guide");
+    expect(docCall![0].result?.url).toBe("https://example.com/docs/#/guide");
+  });
+
   describe("pipeline selection", () => {
     it("should process HTML content through HtmlPipeline", async () => {
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();

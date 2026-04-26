@@ -43,6 +43,7 @@ describe("ListLibrariesTool", () => {
       counts: { documents: docs, uniqueUrls: urls },
       indexedAt,
       sourceUrl: null,
+      preserveHashes: version === "18.2.0",
     });
     const mockRawLibraries = [
       {
@@ -81,20 +82,24 @@ describe("ListLibrariesTool", () => {
           name: "react",
           versions: [
             {
+              id: expect.any(Number),
               version: "18.2.0",
               documentCount: 150,
               uniqueUrlCount: 50,
               indexedAt: "2024-01-10T10:00:00.000Z",
               status: "completed",
               sourceUrl: null,
+              preserveHashes: true,
             },
             {
+              id: expect.any(Number),
               version: "17.0.1",
               documentCount: 120,
               uniqueUrlCount: 45,
               indexedAt: "2023-05-15T12:30:00.000Z",
               status: "completed",
               sourceUrl: null,
+              preserveHashes: false,
             },
           ],
         },
@@ -102,12 +107,14 @@ describe("ListLibrariesTool", () => {
           name: "vue",
           versions: [
             {
+              id: expect.any(Number),
               version: "3.2.0",
               documentCount: 200,
               uniqueUrlCount: 70,
               indexedAt: "2024-02-20T08:00:00.000Z",
               status: "completed",
               sourceUrl: null,
+              preserveHashes: false,
             },
           ],
         },
@@ -115,12 +122,14 @@ describe("ListLibrariesTool", () => {
           name: "old-lib",
           versions: [
             {
+              id: expect.any(Number),
               version: "1.0.0",
               documentCount: 10,
               uniqueUrlCount: 5,
               indexedAt: null,
               status: "completed",
               sourceUrl: null,
+              preserveHashes: false,
             },
           ],
         },
@@ -128,12 +137,14 @@ describe("ListLibrariesTool", () => {
           name: "unversioned-only",
           versions: [
             {
+              id: expect.any(Number),
               version: "",
               documentCount: 1,
               uniqueUrlCount: 1,
               indexedAt: "2024-04-01T00:00:00.000Z",
               status: "completed",
               sourceUrl: null,
+              preserveHashes: false,
             },
           ],
         },
@@ -141,20 +152,24 @@ describe("ListLibrariesTool", () => {
           name: "mixed-versions",
           versions: [
             {
+              id: expect.any(Number),
               version: "",
               documentCount: 2,
               uniqueUrlCount: 1,
               indexedAt: "2024-04-03T00:00:00.000Z",
               status: "completed",
               sourceUrl: null,
+              preserveHashes: false,
             },
             {
+              id: expect.any(Number),
               version: "1.0.0",
               documentCount: 5,
               uniqueUrlCount: 2,
               indexedAt: "2024-04-02T00:00:00.000Z",
               status: "completed",
               sourceUrl: null,
+              preserveHashes: false,
             },
           ],
         },
