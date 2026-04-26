@@ -263,6 +263,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             if (!isRefreshDeletion) {
               this.recordChildPageFailure(item);
               ensureFailureRateWithinThreshold();
+
+              if (!options.ignoreErrors) {
+                throw new ScraperError(`Page not found: ${item.url}`, false);
+              }
             }
 
             throwIfBatchAborted();

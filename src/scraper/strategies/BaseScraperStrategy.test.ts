@@ -448,6 +448,41 @@ describe("BaseScraperStrategy", () => {
     expect(progressCallback).not.toHaveBeenCalled();
   });
 
+  it("should throw for non-refresh child NOT_FOUND when ignoreErrors is false", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 2,
+      maxDepth: 1,
+      ignoreErrors: false,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem
+      .mockResolvedValueOnce({
+        url: options.url,
+        links: ["https://example.com/missing"],
+        status: FetchStatus.SUCCESS,
+        content: {
+          title: "Root",
+          textContent: "Root content",
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+      })
+      .mockResolvedValueOnce({
+        url: "https://example.com/missing",
+        links: [],
+        status: FetchStatus.NOT_FOUND,
+      });
+
+    await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
+      "Page not found: https://example.com/missing",
+    );
+  });
+
   it("should deduplicate URLs and avoid processing the same URL twice", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",
