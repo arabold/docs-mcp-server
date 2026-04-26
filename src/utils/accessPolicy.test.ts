@@ -55,6 +55,14 @@ describe("ScraperAccessPolicy", () => {
     ).rejects.toBeInstanceOf(AccessPolicyError);
   });
 
+  it("blocks bracketed IPv6 loopback targets by default", async () => {
+    const policy = new ScraperAccessPolicy(createSecurityConfig());
+
+    await expect(
+      policy.assertNetworkUrlAllowed("http://[::1]/test"),
+    ).rejects.toBeInstanceOf(AccessPolicyError);
+  });
+
   it("allows explicitly allowlisted private hostname targets", async () => {
     lookupMock.mockResolvedValue([{ address: "10.42.0.10", family: 4 }]);
     const policy = new ScraperAccessPolicy(
@@ -147,6 +155,27 @@ describe("ScraperAccessPolicy", () => {
     await expect(policy.resolveFileAccess("file:///docs/link.md")).rejects.toBeInstanceOf(
       AccessPolicyError,
     );
+  });
+
+  it("blocks symlinked parent directories by default", async () => {
+    vol.fromJSON({
+      "/outside/secret.md": "secret",
+    });
+    await vol.promises.mkdir("/docs", { recursive: true });
+    await vol.promises.symlink("/outside", "/docs/link");
+
+    const policy = new ScraperAccessPolicy(
+      createSecurityConfig({
+        fileAccess: {
+          mode: "allowedRoots",
+          allowedRoots: ["/docs"],
+        },
+      }),
+    );
+
+    await expect(
+      policy.resolveFileAccess("file:///docs/link/secret.md"),
+    ).rejects.toBeInstanceOf(AccessPolicyError);
   });
 
   it("validates archive members against the backing archive path", async () => {

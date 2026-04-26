@@ -2,8 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
 import { type AppConfig, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
-import type { ScrapeResult, ScraperOptions, ScraperProgressEvent } from "../types";
+import type {
+  QueueItem,
+  ScrapeResult,
+  ScraperOptions,
+  ScraperProgressEvent,
+} from "../types";
 import { ScrapeMode } from "../types"; // Import ScrapeMode
+import type { ProcessItemResult } from "./BaseScraperStrategy";
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
 // Mock dependencies
@@ -64,6 +70,51 @@ describe("WebScraperStrategy", () => {
     expect(strategy.canHandle("file:///path/to/file.txt")).toBe(false);
     expect(strategy.canHandle("invalid://example.com")).toBe(false);
     expect(strategy.canHandle("any_string")).toBe(false);
+  }, 10000);
+
+  it("should carry internal archive roots to discovered temp archive members", async () => {
+    const testStrategy = strategy as unknown as {
+      processBatch(
+        batch: QueueItem[],
+        baseUrl: URL,
+        options: ScraperOptions,
+        progressCallback: ProgressCallback<ScraperProgressEvent>,
+        signal?: AbortSignal,
+      ): Promise<QueueItem[]>;
+      processItem(
+        item: QueueItem,
+        options: ScraperOptions,
+        signal?: AbortSignal,
+      ): Promise<ProcessItemResult>;
+      visited: Set<string>;
+      effectiveTotal: number;
+    };
+    testStrategy.visited.add("https://example.com/archive.zip");
+    testStrategy.effectiveTotal = 1;
+
+    const processItemSpy = vi.spyOn(testStrategy, "processItem").mockResolvedValue({
+      url: "https://example.com/archive.zip",
+      links: ["file:///tmp/scraper-docs.zip/guide.md"],
+      internalAllowedFileRoots: ["/tmp/scraper-docs.zip"],
+      status: FetchStatus.SUCCESS,
+    });
+
+    const nextItems = await testStrategy.processBatch(
+      [{ url: "https://example.com/archive.zip", depth: 0 }],
+      new URL("https://example.com/archive.zip"),
+      { ...options, url: "https://example.com/archive.zip" },
+      vi.fn(),
+    );
+
+    expect(nextItems).toEqual([
+      {
+        url: "file:///tmp/scraper-docs.zip/guide.md",
+        depth: 1,
+        internalAllowedFileRoots: ["/tmp/scraper-docs.zip"],
+      },
+    ]);
+
+    processItemSpy.mockRestore();
   }, 10000);
 
   it("should use HttpFetcher to fetch content and process result", async () => {

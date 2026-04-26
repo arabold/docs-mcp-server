@@ -73,13 +73,18 @@ export class ScraperAccessPolicy {
       return;
     }
 
-    const hostname = parsed.hostname.toLowerCase();
-    if (this.allowedHosts.has(hostname)) {
+    const hostname = normalizeHostname(parsed.hostname);
+    const ipFamily = net.isIP(hostname);
+    if (ipFamily !== 0) {
+      this.assertAddressAllowed(hostname, url);
       return;
     }
 
-    if (this.isIpAddress(hostname)) {
-      this.assertAddressAllowed(hostname, url);
+    if (looksLikeIpLiteral(hostname)) {
+      throw new AccessPolicyError(`Security policy blocked network access to ${url}`);
+    }
+
+    if (this.allowedHosts.has(hostname)) {
       return;
     }
 
@@ -146,9 +151,9 @@ export class ScraperAccessPolicy {
       }
     }
 
-    if (!this.security.fileAccess.followSymlinks) {
-      const stats = await fs.lstat(accessPath).catch(() => null);
-      if (stats?.isSymbolicLink()) {
+    if (!this.security.fileAccess.followSymlinks && !matchedBypassRoot) {
+      const symlinkPath = await findSymlinkInPath(accessPath);
+      if (symlinkPath) {
         throw new AccessPolicyError(`Security policy blocked symlink access for ${url}`);
       }
     }
@@ -174,10 +179,6 @@ export class ScraperAccessPolicy {
       accessPath,
       virtualArchivePath: resolved.virtualArchivePath,
     };
-  }
-
-  private isIpAddress(hostname: string): boolean {
-    return net.isIP(hostname) !== 0;
   }
 
   private assertAddressAllowed(address: string, url: string): void {
@@ -236,6 +237,32 @@ export class ScraperAccessPolicy {
     }
     return null;
   }
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[(.*)]$/, "$1");
+}
+
+function looksLikeIpLiteral(hostname: string): boolean {
+  return hostname.includes(":") || /^\d+(?:\.\d+){0,3}$/.test(hostname);
+}
+
+async function findSymlinkInPath(targetPath: string): Promise<string | null> {
+  const resolved = path.resolve(targetPath);
+  const root = path.parse(resolved).root;
+  const relative = path.relative(root, resolved);
+  const segments = relative.split(path.sep).filter(Boolean);
+  let current = root;
+
+  for (const segment of segments) {
+    current = path.join(current, segment);
+    const stats = await fs.lstat(current).catch(() => null);
+    if (stats?.isSymbolicLink()) {
+      return current;
+    }
+  }
+
+  return null;
 }
 
 /**

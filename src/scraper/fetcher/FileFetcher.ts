@@ -34,7 +34,12 @@ export class FileFetcher implements ContentFetcher {
    */
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
     const filePath = this.accessPolicy
-      ? (await this.accessPolicy.resolveFileAccess(source)).filePath
+      ? (
+          await this.accessPolicy.resolveFileAccess(
+            source,
+            options?.internalAllowedFileRoots,
+          )
+        ).filePath
       : fileUrlToPathLoose(source);
 
     try {

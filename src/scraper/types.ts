@@ -9,6 +9,8 @@ export type QueueItem = {
   depth: number;
   pageId?: number; // Database page ID for efficient deletion during refresh
   etag?: string | null; // Last known ETag for conditional requests during refresh
+  /** Internal-only allowlist roots for application-managed temporary files. */
+  internalAllowedFileRoots?: string[];
 };
 
 /**

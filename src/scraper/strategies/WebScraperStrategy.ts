@@ -108,6 +108,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         followRedirects: options.followRedirects,
         headers: options.headers, // Forward custom headers
         etag: item.etag, // Pass ETag for conditional requests
+        ...(item.internalAllowedFileRoots
+          ? { internalAllowedFileRoots: item.internalAllowedFileRoots }
+          : {}),
       };
 
       // Use AutoDetectFetcher which handles fallbacks automatically
@@ -287,6 +290,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     return {
       ...result,
       url: item.url, // Keep original URL as the source of this item
+      links: result.links,
+      internalAllowedFileRoots: [tempFile],
       // links are file://...
     };
   }

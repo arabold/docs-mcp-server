@@ -44,6 +44,8 @@ export interface ProcessItemResult {
   content?: PipelineResult;
   /** Extracted links from the content. This may be an empty array if no links were found or if the content was not processed. */
   links?: string[];
+  /** Internal-only allowlist roots to carry to discovered queue items. */
+  internalAllowedFileRoots?: string[];
   /** Any non-critical errors encountered during processing. This may be an empty array if no errors were encountered or if the content was not processed. */
   status: FetchStatus;
 }
@@ -327,6 +329,8 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           // Extract discovered links - use the final URL as the base for resolving relative links
           const nextItems = result.links || [];
           const linkBaseUrl = finalUrl ? new URL(finalUrl) : baseUrl;
+          const internalAllowedFileRoots =
+            result.internalAllowedFileRoots ?? item.internalAllowedFileRoots;
 
           this.recordChildPageCompletion(item, result);
           ensureFailureRateWithinThreshold();
@@ -343,6 +347,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 return {
                   url: targetUrl.href,
                   depth: item.depth + 1,
+                  ...(internalAllowedFileRoots ? { internalAllowedFileRoots } : {}),
                 } satisfies QueueItem;
               } catch (_error) {
                 // Invalid URL or path
