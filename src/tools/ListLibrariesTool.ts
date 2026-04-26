@@ -5,6 +5,7 @@ import type { VersionStatus, VersionSummary } from "../store/types";
 export interface LibraryInfo {
   name: string;
   versions: Array<{
+    id: number;
     version: string;
     documentCount: number;
     uniqueUrlCount: number;
@@ -13,6 +14,7 @@ export interface LibraryInfo {
     // Progress is omitted for COMPLETED versions to reduce noise
     progress?: { pages: number; maxPages: number };
     sourceUrl?: string | null;
+    preserveHashes?: boolean;
   }>;
 }
 
@@ -39,6 +41,7 @@ export class ListLibrariesTool {
     const libraries: LibraryInfo[] = rawLibraries.map(({ library, versions }) => ({
       name: library,
       versions: versions.map((v: VersionSummary) => ({
+        id: v.id,
         version: v.ref.version,
         documentCount: v.counts.documents,
         uniqueUrlCount: v.counts.uniqueUrls,
@@ -46,6 +49,7 @@ export class ListLibrariesTool {
         status: v.status,
         ...(v.progress ? { progress: v.progress } : undefined),
         sourceUrl: v.sourceUrl,
+        preserveHashes: v.preserveHashes,
       })),
     }));
 

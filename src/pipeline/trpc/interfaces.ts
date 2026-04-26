@@ -26,7 +26,11 @@ export interface IPipeline {
     version: string | undefined | null,
     options: ScraperOptions,
   ): Promise<string>;
-  enqueueRefreshJob(library: string, version: string | undefined | null): Promise<string>;
+  enqueueRefreshJob(
+    library: string,
+    version: string | undefined | null,
+    options?: Pick<ScraperOptions, "preserveHashes">,
+  ): Promise<string>;
   getJob(jobId: string): Promise<PipelineJob | undefined>;
   getJobs(status?: PipelineJobStatus): Promise<PipelineJob[]>;
   cancelJob(jobId: string): Promise<void>;

@@ -44,4 +44,26 @@ class ChallengeError extends ScraperError {
   }
 }
 
-export { ChallengeError, InvalidUrlError, RedirectError, ScraperError };
+class TlsCertificateError extends ScraperError {
+  constructor(
+    public readonly url: string,
+    public readonly code?: string,
+    cause?: Error,
+  ) {
+    super(
+      `TLS certificate validation failed for ${url}${
+        code ? ` (${code})` : ""
+      }. The remote site may have an incomplete or untrusted certificate chain.`,
+      false,
+      cause,
+    );
+  }
+}
+
+export {
+  ChallengeError,
+  InvalidUrlError,
+  RedirectError,
+  ScraperError,
+  TlsCertificateError,
+};

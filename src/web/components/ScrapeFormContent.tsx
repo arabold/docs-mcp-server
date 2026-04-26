@@ -19,6 +19,7 @@ export interface ScrapeFormInitialValues {
   headers?: Array<{ name: string; value: string }>;
   followRedirects?: boolean;
   ignoreErrors?: boolean;
+  preserveHashes?: boolean;
 }
 
 interface ScrapeFormContentProps {
@@ -54,6 +55,8 @@ const ScrapeFormContent = ({
   const scrapeModeValue = initialValues?.scrapeMode || ScrapeMode.Auto;
   const followRedirectsValue = initialValues?.followRedirects ?? true;
   const ignoreErrorsValue = initialValues?.ignoreErrors ?? true;
+  const preserveHashesValue =
+    initialValues?.preserveHashes ?? scraperConfig?.preserveHashes ?? false;
 
   // Format exclude patterns - use initial values if provided, otherwise use defaults
   const excludePatternsText =
@@ -247,9 +250,10 @@ const ScrapeFormContent = ({
               scopeValue !== "subpages" ||
               includePatternsValue ||
               excludePatternsText ||
-              scrapeModeValue !== ScrapeMode.Auto)
-              ? "true"
-              : "false"
+              scrapeModeValue !== ScrapeMode.Auto ||
+              preserveHashesValue)
+               ? "true"
+               : "false"
           }
           x-data="{ open: false }"
           x-init="open = $el.dataset.shouldOpen === 'true'"
@@ -460,7 +464,23 @@ const ScrapeFormContent = ({
                 >
                   Playwright
                 </option>
-              </select>
+                </select>
+              </div>
+            <div class="flex items-center">
+              <input
+                id="preserveHashes"
+                name="preserveHashes"
+                type="checkbox"
+                checked={preserveHashesValue}
+                class="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+              />
+              <label
+                for="preserveHashes"
+                class="ml-1 block text-sm text-gray-900 dark:text-gray-300"
+              >
+                Preserve Hash Routes
+              </label>
+              <Tooltip text="Enable this for documentation sites that use hash fragments as client-side routes rather than same-page anchors." />
             </div>
             <div>
               <div class="flex items-center mb-1">

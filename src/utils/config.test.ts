@@ -501,4 +501,18 @@ describe("Auto-generated Environment Variable Overrides", () => {
 
     expect(config.scraper.abortOnFailureRate).toBe(0.25);
   });
+
+  it("rejects vectorDimension of 0 or negative values", () => {
+    // vectorDimension = 0 should fail Zod .min(1) validation
+    process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "0";
+    expect(() =>
+      loadConfig({}, { configPath: path.join(tmpDir, "dim-zero.yaml") }),
+    ).toThrow();
+
+    // vectorDimension = -1 should also fail
+    process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "-1";
+    expect(() =>
+      loadConfig({}, { configPath: path.join(tmpDir, "dim-neg.yaml") }),
+    ).toThrow();
+  });
 });

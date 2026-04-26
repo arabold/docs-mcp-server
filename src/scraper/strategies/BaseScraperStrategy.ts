@@ -87,6 +87,15 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     this.options = options;
   }
 
+  protected getUrlNormalizerOptions(scrapeOptions: ScraperOptions): UrlNormalizerOptions {
+    return {
+      ...this.options.urlNormalizerOptions,
+      removeHash: scrapeOptions.preserveHashes
+        ? false
+        : (this.options.urlNormalizerOptions?.removeHash ?? true),
+    };
+  }
+
   /**
    * Determines if a URL should be processed based on scope and include/exclude patterns in ScraperOptions.
    * Scope is checked first, then patterns.
@@ -373,12 +382,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     );
 
     // After all concurrent processing is done, deduplicate the results
-    const allLinks = results.flat();
+    const allLinks = results.flat().filter((item): item is QueueItem => item !== null);
     const uniqueLinks: QueueItem[] = [];
 
     // Now perform deduplication once, after all parallel processing is complete
     for (const item of allLinks) {
-      const normalizedUrl = normalizeUrl(item.url, this.options.urlNormalizerOptions);
+      const normalizedUrl = normalizeUrl(item.url, this.getUrlNormalizerOptions(options));
       if (!this.visited.has(normalizedUrl)) {
         this.visited.add(normalizedUrl);
         uniqueLinks.push(item);
@@ -420,7 +429,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     const queue: QueueItem[] = [];
     const normalizedRootUrl = normalizeUrl(
       options.url,
-      this.options.urlNormalizerOptions,
+      this.getUrlNormalizerOptions(options),
     );
 
     if (isRefreshMode) {
@@ -430,7 +439,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
       // Add all items from initialQueue, using visited set to deduplicate
       for (const item of initialQueue) {
-        const normalizedUrl = normalizeUrl(item.url, this.options.urlNormalizerOptions);
+        const normalizedUrl = normalizeUrl(
+          item.url,
+          this.getUrlNormalizerOptions(options),
+        );
         if (!this.visited.has(normalizedUrl)) {
           this.visited.add(normalizedUrl);
           queue.push(item);

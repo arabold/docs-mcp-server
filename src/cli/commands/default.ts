@@ -7,7 +7,8 @@ import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { createLocalDocumentManagement } from "../../store";
+import { DocumentManagementService } from "../../store";
+import { EmbeddingModelChangedError } from "../../store/errors";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
@@ -18,6 +19,7 @@ import {
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
+  handleEmbeddingModelChange,
   parseAuthConfig,
   resolveProtocol,
   validateAuthConfig,
@@ -140,7 +142,16 @@ export function createDefaultAction(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService = await createLocalDocumentManagement(eventBus, appConfig);
+      const docService = new DocumentManagementService(eventBus, appConfig);
+      try {
+        await docService.initialize();
+      } catch (error) {
+        if (error instanceof EmbeddingModelChangedError) {
+          await handleEmbeddingModelChange(error, docService);
+        } else {
+          throw error;
+        }
+      }
       const pipelineOptions: PipelineOptions = {
         recoverJobs: (argv.resume as boolean) || false,
         appConfig: appConfig,

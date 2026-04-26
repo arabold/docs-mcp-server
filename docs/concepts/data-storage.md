@@ -2,11 +2,11 @@
 
 ## Overview
 
-The storage system uses SQLite with a normalized, four-table schema design for efficient document storage, retrieval, and version management. The schema supports page-level metadata tracking, ETag-based change detection, and hierarchical document chunking.
+The storage system uses SQLite with a normalized schema design for efficient document storage, retrieval, and version management. The schema supports page-level metadata tracking, ETag-based change detection, hierarchical document chunking, and embedding model identity tracking.
 
 ## Database Schema
 
-The database consists of four core tables with normalized relationships:
+The database consists of four core tables with normalized relationships, plus a metadata table for system-level configuration tracking:
 
 ```mermaid
 erDiagram
@@ -57,6 +57,11 @@ erDiagram
         int sort_order
         blob embedding
         datetime created_at
+    }
+
+    metadata {
+        text key PK
+        text value
     }
 ```
 
@@ -137,6 +142,18 @@ Document chunks with embeddings and hierarchical metadata.
 
 **Code Reference:** `src/store/types.ts` lines 39-48 (DbChunk interface)
 
+### Metadata Table
+
+Key-value store for system-level configuration tracking, independent of library/version data.
+
+**Schema:**
+- `key` (TEXT PRIMARY KEY): Configuration key name
+- `value` (TEXT NOT NULL): Configuration value
+
+**Purpose:** Tracks the active embedding model identity (`embedding_model` and `embedding_dimension` keys) to detect incompatible configuration changes between server restarts. When a model or dimension change is detected, the server prompts the user to confirm vector invalidation before proceeding.
+
+**Code Reference:** `db/migrations/013-create-metadata-table.sql`, `src/store/DocumentStore.ts` - `getEmbeddingMetadata()`, `setEmbeddingMetadata()`, `checkEmbeddingModelChange()`
+
 ## Schema Evolution
 
 ### Migration System
@@ -154,6 +171,9 @@ Sequential SQL migrations in `db/migrations/`:
 9. `008-case-insensitive-names.sql` - Case-insensitive library name handling
 10. `009-add-pages-table.sql` - Page-level metadata normalization
 11. `010-add-depth-to-pages.sql` - Crawl depth tracking for refresh operations
+12. `011-add-vector-triggers.sql` - FTS and vector table trigger maintenance
+13. `012-add-source-content-type.sql` - Source content type tracking on pages
+14. `013-create-metadata-table.sql` - Key-value metadata table for embedding model tracking
 
 **Code Reference:** All migration files in `db/migrations/` directory
 

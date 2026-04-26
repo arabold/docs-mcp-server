@@ -6,6 +6,7 @@ import { ValidationError } from "./errors";
 export interface RefreshVersionToolOptions {
   library: string;
   version?: string | null; // Make version optional
+  preserveHashes?: boolean;
   /** If false, returns jobId immediately without waiting. Defaults to true. */
   waitForCompletion?: boolean;
 }
@@ -30,7 +31,7 @@ export class RefreshVersionTool {
   }
 
   async execute(options: RefreshVersionToolOptions): Promise<RefreshExecuteResult> {
-    const { library, version, waitForCompletion = true } = options;
+    const { library, version, preserveHashes, waitForCompletion = true } = options;
 
     let internalVersion: string;
     const partialVersionRegex = /^\d+(\.\d+)?$/; // Matches '1' or '1.2'
@@ -68,7 +69,9 @@ export class RefreshVersionTool {
     const refreshVersion: string | null = internalVersion === "" ? null : internalVersion;
 
     // Enqueue the refresh job using the injected pipeline
-    const jobId = await pipeline.enqueueRefreshJob(library, refreshVersion);
+    const jobId = await pipeline.enqueueRefreshJob(library, refreshVersion, {
+      preserveHashes,
+    });
 
     // Conditionally wait for completion
     if (waitForCompletion) {

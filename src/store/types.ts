@@ -115,6 +115,7 @@ export interface VersionScraperOptions {
   excludePatterns?: string[];
 
   // Processing options
+  preserveHashes?: boolean;
   scrapeMode?: ScrapeMode;
   headers?: Record<string, string>;
 }
@@ -167,6 +168,7 @@ export interface VersionSummary {
   counts: { documents: number; uniqueUrls: number };
   indexedAt: string | null; // ISO 8601
   sourceUrl?: string | null;
+  preserveHashes?: boolean;
 }
 
 /**

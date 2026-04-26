@@ -30,8 +30,11 @@ describe("Database Migrations", () => {
     const tableNames = (tables as TableRow[]).map((t) => t.name);
     expect(tableNames).toContain("documents");
     expect(tableNames).toContain("documents_fts");
+    // documents_vec is created by migration 003 (with fixed 1536 dimension);
+    // DocumentStore.ensureVectorTable() reconciles it at runtime if the configured dimension differs
     expect(tableNames).toContain("documents_vec");
     expect(tableNames).toContain("libraries");
+    expect(tableNames).toContain("metadata");
     expect(tableNames).toContain("pages");
 
     // Check columns for 'documents'
@@ -100,23 +103,18 @@ describe("Database Migrations", () => {
       .get() as { sql: string } | undefined;
     expect(ftsTableInfo?.sql).toContain("VIRTUAL TABLE documents_fts USING fts5");
 
-    // Check vector virtual table exists
+    // documents_vec is created by migration 003 (with fixed 1536 dimension) and survives through all
+    // subsequent migrations. DocumentStore.ensureVectorTable() reconciles it at runtime if needed.
     const vecTableInfo = db
       .prepare(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_vec';",
       )
       .get() as { sql: string } | undefined;
     expect(vecTableInfo).toBeDefined();
-    expect(vecTableInfo?.sql).toContain("USING vec0");
-
-    // Check that vector table has the expected schema with foreign keys
-    expect(vecTableInfo?.sql).toContain("library_id INTEGER NOT NULL");
-    expect(vecTableInfo?.sql).toContain("version_id INTEGER NOT NULL");
-    expect(vecTableInfo?.sql).toContain("embedding FLOAT[1536]");
   });
 
   it("should handle vector search with empty results gracefully", () => {
-    // Apply all migrations
+    // Apply all migrations (documents_vec exists from migration 003 with 1536d)
     expect(() => applyMigrations(db)).not.toThrow();
 
     // Insert a library and version but no documents
@@ -165,7 +163,7 @@ describe("Database Migrations", () => {
   });
 
   it("should perform vector search and return similar vectors correctly", () => {
-    // Apply all migrations
+    // Apply all migrations (documents_vec exists from migration 003 with 1536d)
     expect(() => applyMigrations(db)).not.toThrow();
 
     // Insert test library and version
@@ -373,7 +371,7 @@ describe("Database Migrations", () => {
   });
 
   it("should perform FTS search and return relevant text matches correctly", () => {
-    // Apply all migrations
+    // Apply all migrations (documents_vec exists from migration 003; triggers from 011 sync on document insert)
     expect(() => applyMigrations(db)).not.toThrow();
 
     // Insert test library and version

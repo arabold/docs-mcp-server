@@ -21,6 +21,7 @@ app:
 scraper:
   maxPages: 1000
   maxDepth: 3
+  preserveHashes: false
   document:
     maxSize: 10485760  # 10MB
 
@@ -166,6 +167,7 @@ Settings controlling the web scraping behavior.
 | `maxPages` | `1000` | Maximum number of pages to crawl per job. |
 | `maxDepth` | `3` | Maximum link depth to traverse. |
 | `maxConcurrency` | `3` | Number of concurrent page fetches. |
+| `preserveHashes` | `false` | Preserve hash fragments as page identity for hash-routed SPA docs sites. |
 | `pageTimeoutMs` | `5000` | Timeout for a single page load (ms). |
 | `browserTimeoutMs` | `30000` | Timeout for the browser instance (ms). |
 | `fetcher.maxRetries` | `6` | Number of retries for failed requests. |
@@ -173,6 +175,18 @@ Settings controlling the web scraping behavior.
 | `document.maxSize` | `10485760` | Maximum size (bytes) for PDF/Office documents. |
 
 _Note: Scraper settings are often overridden per-job via CLI arguments like `--max-pages`._
+
+Use `scraper.preserveHashes` only for documentation sites that use hash-based SPA routes such as `https://docs.example.com/#/guide`.
+Leave it disabled for normal sites, where hashes usually point to anchors within the same page.
+
+### Hash Route Behavior
+
+- CLI scrape: use `--preserve-hashes` to enable hash-aware crawling for a job.
+- CLI refresh: use `--preserve-hashes` to override the stored setting for that refresh job.
+- MCP: `scrape_docs` accepts `preserveHashes: true`.
+- Web UI: the scrape form includes a "Preserve Hash Routes" checkbox, and refresh reuses the stored setting.
+- Refresh: stored scraper options retain `preserveHashes` and reuse it by default.
+- Rendering: if `preserveHashes` is enabled and `scrapeMode` is `fetch`, the job is upgraded to `playwright` automatically.
 
 > **Migration Note:** In versions prior to 1.37, `document.maxSize` was a top-level setting. It has been moved to `scraper.document.maxSize`. Update your config files accordingly.
 
@@ -223,7 +237,7 @@ Settings for the vector embedding generation.
 | `batchChars` | `50000` | Maximum total characters per embedding batch. |
 | `requestTimeoutMs` | `30000` | Timeout for each embedding API request (ms). |
 | `initTimeoutMs` | `30000` | Timeout for the initial test embedding during model initialization (ms). |
-| `vectorDimension` | `1536` | Dimension of the vector space (must match model). |
+| `vectorDimension` | `1536` | Dimension of the vector space. Must be a positive integer (minimum 1). Override with `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION`. Changing this value triggers a model change confirmation on next startup. |
 
 ### Search (`search`)
 

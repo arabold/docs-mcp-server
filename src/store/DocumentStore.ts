@@ -14,7 +14,12 @@ import {
   UnsupportedProviderError,
 } from "./embeddings/EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./embeddings/FixedDimensionEmbeddings";
-import { ConnectionError, DimensionError, StoreError } from "./errors";
+import {
+  ConnectionError,
+  DimensionError,
+  EmbeddingModelChangedError,
+  StoreError,
+} from "./errors";
 import type { DbChunkMetadata, DbChunkRank, StoredScraperOptions } from "./types";
 import {
   type DbChunk,
@@ -465,6 +470,119 @@ export class DocumentStore {
   }
 
   /**
+   * Reads the stored embedding model and dimension from the metadata table.
+   * Returns null for each value that doesn't exist (e.g., first run or pre-metadata database).
+   */
+  getEmbeddingMetadata(): { model: string | null; dimension: string | null } {
+    // Uses inline db.prepare() so this method works before prepareStatements() is called.
+    // This is necessary because checkEmbeddingModelChange() runs before ensureVectorTable(),
+    // and prepareStatements() cannot run until documents_vec exists (triggers reference it).
+    const modelRow = this.db
+      .prepare<[string]>("SELECT value FROM metadata WHERE key = ?")
+      .get("embedding_model") as { value: string } | undefined;
+    const dimensionRow = this.db
+      .prepare<[string]>("SELECT value FROM metadata WHERE key = ?")
+      .get("embedding_dimension") as { value: string } | undefined;
+    return {
+      model: modelRow?.value ?? null,
+      dimension: dimensionRow?.value ?? null,
+    };
+  }
+
+  /**
+   * Persists the active embedding model and dimension to the metadata table.
+   * Uses upsert (INSERT ON CONFLICT UPDATE) so it works for both first-run and subsequent updates.
+   * Uses inline db.prepare() so this method works before prepareStatements() is called.
+   */
+  setEmbeddingMetadata(model: string, dimension: number): void {
+    const stmt = this.db.prepare<[string, string]>(
+      "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    );
+    stmt.run("embedding_model", model);
+    stmt.run("embedding_dimension", String(dimension));
+  }
+
+  /**
+   * Compares the configured embedding model and dimension against stored metadata.
+   * Throws EmbeddingModelChangedError if either has changed since the last run.
+   *
+   * Skipped when:
+   * - No metadata exists (first run / upgrade from pre-metadata DB → silent initialization)
+   * - No embedding model is configured (FTS-only mode)
+   * - Credentials are unavailable for the configured provider (will fall back to FTS-only)
+   */
+  checkEmbeddingModelChange(): void {
+    // Skip if no embedding config (FTS-only mode)
+    if (!this.embeddingConfig) {
+      return;
+    }
+
+    // Skip if credentials are unavailable (will fall back to FTS-only in initializeEmbeddings)
+    if (!areCredentialsAvailable(this.embeddingConfig.provider)) {
+      return;
+    }
+
+    const stored = this.getEmbeddingMetadata();
+
+    // First run: no stored metadata → skip check (silent initialization)
+    if (stored.model === null) {
+      return;
+    }
+
+    const currentModel = this.config.app.embeddingModel;
+    const currentDimension = String(this.config.embeddings.vectorDimension);
+
+    const modelChanged = stored.model !== currentModel;
+    const dimensionChanged =
+      stored.dimension !== null && stored.dimension !== currentDimension;
+
+    if (modelChanged || dimensionChanged) {
+      throw new EmbeddingModelChangedError(
+        stored.model,
+        stored.dimension ?? "unknown",
+        currentModel,
+        currentDimension,
+      );
+    }
+  }
+
+  /**
+   * Invalidates all existing embedding vectors after a confirmed model/dimension change.
+   * Sets all document embeddings to NULL, drops and recreates the vec table as empty,
+   * and updates the metadata with the new model and dimension.
+   *
+   * After invalidation, FTS search continues working; vector search returns no results
+   * until libraries are re-scraped.
+   */
+  invalidateAllVectors(newModel: string, newDimension: number): void {
+    logger.warn(
+      `⚠️  Invalidating all embedding vectors due to model/dimension change.\n` +
+        `   All libraries must be re-scraped to restore vector search.\n` +
+        `   Full-text search remains available for all existing documents.`,
+    );
+
+    // Clear all stored embedding blobs
+    this.db.exec("UPDATE documents SET embedding = NULL");
+
+    // Drop and recreate vec table as empty with the new dimension
+    this.db.exec("DROP TABLE IF EXISTS documents_vec");
+    this.db.exec(`
+      CREATE VIRTUAL TABLE documents_vec USING vec0(
+        library_id INTEGER NOT NULL,
+        version_id INTEGER NOT NULL,
+        embedding FLOAT[${newDimension}]
+      );
+    `);
+
+    // Update metadata to reflect the new configuration
+    this.setEmbeddingMetadata(newModel, newDimension);
+
+    logger.info(
+      `✅ Embedding vectors invalidated. Metadata updated to: ${newModel} (${newDimension}d)`,
+    );
+  }
+
+  /**
    * Initialize the embeddings client using the provided config.
    * If no embedding config is provided (null or undefined), embeddings will not be initialized.
    * This allows DocumentStore to be used without embeddings for FTS-only operations.
@@ -555,6 +673,9 @@ export class DocumentStore {
       logger.debug(
         `Embeddings initialized: ${config.provider}:${config.model} (${this.modelDimension}d)`,
       );
+
+      // Persist the active embedding model identity for change detection on next startup
+      this.setEmbeddingMetadata(config.modelSpec, this.dbDimension);
     } catch (error) {
       // Handle model-related errors with helpful messages
       if (error instanceof Error) {
@@ -698,16 +819,28 @@ export class DocumentStore {
       // 1. Load extensions first (moved before migrations)
       sqliteVec.load(this.db);
 
-      // 2. Apply migrations (after extensions are loaded)
+      // 2. Apply migrations (after extensions are loaded, includes metadata table creation)
       await applyMigrations(this.db, {
         maxRetries: this.config.db.migrationMaxRetries,
         retryDelayMs: this.config.db.migrationRetryDelayMs,
       });
 
-      // 3. Initialize prepared statements
+      // 3. Check embedding model/dimension metadata for changes
+      //    Uses inline db.prepare() so it works before prepareStatements().
+      //    Throws EmbeddingModelChangedError if mismatch detected.
+      //    The CLI layer catches this to prompt (TTY) or fail (non-interactive).
+      this.checkEmbeddingModelChange();
+
+      // 4. Create vector table at runtime with configurable dimension
+      //    Must run before prepareStatements() because triggers on `documents`
+      //    reference `documents_vec`.
+      this.ensureVectorTable();
+
+      // 5. Initialize prepared statements (after vec table exists)
       this.prepareStatements();
 
-      // 4. Initialize embeddings client (await to catch errors)
+      // 6. Initialize embeddings client (await to catch errors)
+      //    On success, persists model identity to metadata table.
       await this.initializeEmbeddings();
     } catch (error) {
       // Re-throw StoreError, ModelConfigurationError, and UnsupportedProviderError directly
@@ -723,10 +856,82 @@ export class DocumentStore {
   }
 
   /**
+   * Resolves a model change by invalidating all vectors and completing initialization.
+   * Called by the CLI layer after the user confirms a model/dimension change.
+   * Assumes initialize() was previously called and threw EmbeddingModelChangedError,
+   * meaning steps 1-2 (load extensions, apply migrations) completed successfully.
+   * Steps 3+ (ensureVectorTable, prepareStatements, initializeEmbeddings) are
+   * completed here after invalidation.
+   */
+  async resolveModelChange(): Promise<void> {
+    const currentModel = this.config.app.embeddingModel;
+    const currentDimension = this.config.embeddings.vectorDimension;
+
+    // Invalidate all existing vectors and update metadata
+    this.invalidateAllVectors(currentModel, currentDimension);
+
+    // Complete the remaining initialization steps that were skipped when
+    // checkEmbeddingModelChange() threw in initialize():
+
+    // Re-create vector table (no-op since invalidateAllVectors already did it with correct dimension)
+    this.ensureVectorTable();
+
+    // Initialize prepared statements (must run after vec table exists)
+    this.prepareStatements();
+
+    // Initialize embeddings client (will also persist metadata on success)
+    await this.initializeEmbeddings();
+  }
+
+  /**
    * Gracefully closes database connections
    */
   async shutdown(): Promise<void> {
     this.db.close();
+  }
+
+  /**
+   * Creates or reconciles the documents_vec virtual table with configurable dimension.
+   * Called after migrations and model change detection. The table is initially created
+   * by migration 003 with a fixed 1536 dimension; this method reconciles it at runtime
+   * if the configured dimension differs.
+   * Idempotent: if the table already exists with the same dimension, no-op; if dimension
+   * changed in config, drops and recreates so any embedding provider (e.g. 1536 or 3584) works.
+   *
+   * Note: No backfill of existing embeddings is performed. Vectors are populated during
+   * scraping, not at startup. Old vectors from a different dimension or model are incompatible
+   * and are handled by the model change detection system (checkEmbeddingModelChange).
+   */
+  private ensureVectorTable(): void {
+    const dim = this.config.embeddings.vectorDimension;
+    if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
+      throw new StoreError(
+        `Invalid embeddings.vectorDimension: ${dim}. Must be a positive integer.`,
+      );
+    }
+
+    const existingSql = this.db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec';",
+      )
+      .get() as { sql: string } | undefined;
+
+    if (existingSql) {
+      const match = existingSql.sql.match(/embedding\s+FLOAT\s*\[\s*(\d+)\s*]/i);
+      const existingDim = match ? Number(match[1]) : null;
+      if (existingDim === dim) {
+        return;
+      }
+      this.db.exec("DROP TABLE documents_vec;");
+    }
+
+    this.db.exec(`
+      CREATE VIRTUAL TABLE documents_vec USING vec0(
+        library_id INTEGER NOT NULL,
+        version_id INTEGER NOT NULL,
+        embedding FLOAT[${dim}]
+      );
+    `);
   }
 
   /**

@@ -89,4 +89,20 @@ describe("scrape command", () => {
     expect(pipelineMock.start).toHaveBeenCalledTimes(1);
     expect(pipelineMock.stop).toHaveBeenCalledTimes(1);
   });
+
+  it("passes preserveHashes through to ScrapeTool", async () => {
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse(["scrape", "react", "https://react.dev", "--preserve-hashes"]);
+
+    const execute = vi.mocked(ScrapeTool).mock.results[0]?.value.execute;
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          preserveHashes: true,
+        }),
+      }),
+    );
+  });
 });

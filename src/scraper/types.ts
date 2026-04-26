@@ -71,6 +71,8 @@ export interface ScraperOptions {
   followRedirects?: boolean;
   maxConcurrency?: number;
   ignoreErrors?: boolean;
+  /** Preserve URL hash fragments for hash-routed SPAs instead of treating them as anchors. */
+  preserveHashes?: boolean;
   /** CSS selectors for elements to exclude during HTML processing */
   excludeSelectors?: string[];
   /**

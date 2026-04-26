@@ -56,6 +56,7 @@ export const DEFAULT_CONFIG = {
     maxDepth: 3,
     maxConcurrency: 3,
     abortOnFailureRate: 0.5,
+    preserveHashes: false,
     pageTimeoutMs: 5000,
     browserTimeoutMs: 30_000,
     fetcher: {
@@ -153,6 +154,7 @@ export const AppConfigSchema = z.object({
         .min(0)
         .max(1)
         .default(DEFAULT_CONFIG.scraper.abortOnFailureRate),
+      preserveHashes: envBoolean.default(DEFAULT_CONFIG.scraper.preserveHashes),
       pageTimeoutMs: z.coerce
         .number()
         .int()
@@ -232,6 +234,7 @@ export const AppConfigSchema = z.object({
       vectorDimension: z.coerce
         .number()
         .int()
+        .min(1, "embedding dimension must be at least 1")
         .default(DEFAULT_CONFIG.embeddings.vectorDimension),
     })
     .default(DEFAULT_CONFIG.embeddings),

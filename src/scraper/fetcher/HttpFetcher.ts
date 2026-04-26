@@ -1,7 +1,12 @@
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import { CancellationError } from "../../pipeline/errors";
 import type { AppConfig } from "../../utils/config";
-import { ChallengeError, RedirectError, ScraperError } from "../../utils/errors";
+import {
+  ChallengeError,
+  RedirectError,
+  ScraperError,
+  TlsCertificateError,
+} from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
@@ -39,6 +44,16 @@ export class HttpFetcher implements ContentFetcher {
     "EPERM", // Operation not permitted
   ];
 
+  private readonly tlsCertificateErrorCodes = [
+    "CERT_HAS_EXPIRED",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "ERR_TLS_CERT_ALTNAME_INVALID",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_GET_ISSUER_CERT",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ];
+
   private fingerprintGenerator: FingerprintGenerator;
 
   constructor(scraperConfig: AppConfig["scraper"]) {
@@ -53,6 +68,10 @@ export class HttpFetcher implements ContentFetcher {
 
   private async delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private isTlsCertificateError(code?: string): boolean {
+    return code ? this.tlsCertificateErrorCodes.includes(code) : false;
   }
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
@@ -180,6 +199,7 @@ export class HttpFetcher implements ContentFetcher {
         const axiosError = error as AxiosError;
         const status = axiosError.response?.status;
         const code = axiosError.code;
+        const errorCause = error instanceof Error ? error : undefined;
 
         // Handle abort/cancel: do not retry, throw CancellationError
         if (options?.signal?.aborted || code === "ERR_CANCELED") {
@@ -240,6 +260,10 @@ export class HttpFetcher implements ContentFetcher {
           }
         }
 
+        if (this.isTlsCertificateError(code)) {
+          throw new TlsCertificateError(source, code, errorCause);
+        }
+
         if (
           attempt < maxRetries &&
           (status === undefined || this.retryableStatusCodes.includes(status)) &&
@@ -261,7 +285,7 @@ export class HttpFetcher implements ContentFetcher {
             attempt + 1
           } attempts: ${axiosError.message ?? "Unknown error"}`,
           true,
-          error instanceof Error ? error : undefined,
+          errorCause,
         );
       }
     }

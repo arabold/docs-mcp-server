@@ -1,3 +1,24 @@
+## [2.2.1](https://github.com/arabold/docs-mcp-server/compare/v2.2.0...v2.2.1) (2026-03-30)
+
+
+### Bug Fixes
+
+* **release:** disable github success issue actions ([efcb946](https://github.com/arabold/docs-mcp-server/commit/efcb94693067b2029705ae68cb37682a0dbcb4cd))
+
+# [2.2.0](https://github.com/arabold/docs-mcp-server/compare/v2.1.1...v2.2.0) (2026-03-30)
+
+
+### Bug Fixes
+
+* **deps:** declare directly imported packages ([36d4374](https://github.com/arabold/docs-mcp-server/commit/36d4374036338d2e22ff6772e072a7c82fe329e9))
+* **scraper:** fall back to browser on tls certificate errors ([30cc6cc](https://github.com/arabold/docs-mcp-server/commit/30cc6ccf9d2778c152c524fe4b46b12667c36315)), closes [#368](https://github.com/arabold/docs-mcp-server/issues/368)
+
+
+### Features
+
+* **store:** add embedding model change safety ([5407360](https://github.com/arabold/docs-mcp-server/commit/5407360d39655b8e0e665ff0d26a165dd289bd39)), closes [#330](https://github.com/arabold/docs-mcp-server/issues/330) [#330](https://github.com/arabold/docs-mcp-server/issues/330)
+* **store:** configurable embedding dimension for documents_vec ([b82fa02](https://github.com/arabold/docs-mcp-server/commit/b82fa0289a7a44f204075cc43993e5374d09e15a))
+
 ## [2.1.1](https://github.com/arabold/docs-mcp-server/compare/v2.1.0...v2.1.1) (2026-03-16)
 
 

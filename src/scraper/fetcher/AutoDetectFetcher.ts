@@ -5,7 +5,7 @@
  */
 
 import type { AppConfig } from "../../utils/config";
-import { ChallengeError } from "../../utils/errors";
+import { ChallengeError, TlsCertificateError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { BrowserFetcher } from "./BrowserFetcher";
 import { FileFetcher } from "./FileFetcher";
@@ -61,6 +61,12 @@ export class AutoDetectFetcher implements ContentFetcher {
         if (error instanceof ChallengeError) {
           logger.info(
             `🔄 Challenge detected for ${source}, falling back to browser fetcher...`,
+          );
+          return this.browserFetcher.fetch(source, options);
+        }
+        if (error instanceof TlsCertificateError) {
+          logger.info(
+            `🔄 TLS certificate validation failed for ${source}, falling back to browser fetcher...`,
           );
           return this.browserFetcher.fetch(source, options);
         }

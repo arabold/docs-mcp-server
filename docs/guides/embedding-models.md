@@ -113,3 +113,36 @@ AZURE_OPENAI_API_VERSION="2024-02-01" \
 DOCS_MCP_EMBEDDING_MODEL="microsoft:text-embedding-ada-002" \
 npx @arabold/docs-mcp-server@latest
 ```
+
+## Changing the Embedding Model
+
+When you change the embedding model or vector dimension after initial setup, existing embedding vectors become semantically incompatible with the new configuration. The server detects this automatically by tracking the active model identity in a metadata table.
+
+### What Happens on Model Change
+
+**Interactive mode (TTY connected):** The server displays a warning and prompts for confirmation before proceeding. Rejecting the prompt aborts startup with no changes made.
+
+```
+⚠️  Embedding model change detected:
+   Previous: openai:text-embedding-3-small (1536 dimensions)
+   Current:  openai:text-embedding-ada-002 (1536 dimensions)
+
+   All existing embedding vectors will be invalidated.
+   Libraries must be re-scraped to restore vector search.
+   Full-text search will continue working for all existing documents.
+
+   Proceed with model change? (y/N)
+```
+
+**Non-interactive mode (MCP/stdio, CI/CD):** The server fails startup entirely with a descriptive error message. To resolve the change, start the server interactively once to confirm the migration.
+
+### After Confirming a Model Change
+
+- All stored embedding vectors are set to NULL
+- The vector search index (`documents_vec`) is recreated empty with the new dimension
+- Full-text search continues working for all existing documents
+- Libraries must be re-scraped to regenerate embeddings with the new model
+
+### Vector Dimension Override
+
+The vector dimension defaults to the model's native dimension (e.g., 1536 for `text-embedding-3-small`). You can override it with `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` as an environment variable. The value must be a positive integer (minimum 1).

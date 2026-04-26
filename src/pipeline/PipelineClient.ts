@@ -109,6 +109,7 @@ export class PipelineClient implements IPipeline {
   async enqueueRefreshJob(
     library: string,
     version: string | undefined | null,
+    options?: { preserveHashes?: boolean },
   ): Promise<string> {
     try {
       const normalizedVersion =
@@ -118,6 +119,7 @@ export class PipelineClient implements IPipeline {
       const result = await this.client.enqueueRefreshJob.mutate({
         library,
         version: normalizedVersion,
+        options,
       });
       logger.debug(`Refresh job ${result.jobId} enqueued successfully`);
       return result.jobId;

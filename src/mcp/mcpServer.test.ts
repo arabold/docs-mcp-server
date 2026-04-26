@@ -75,4 +75,33 @@ describe("MCP Server Read-Only Mode", () => {
     // This ensures our capability changes don't break server creation
     expect(server).toBeDefined();
   });
+
+  it("should register scrape_docs with preserveHashes support and propagate it", async () => {
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const scrapeTool = (server as any)._registeredTools.scrape_docs;
+
+    expect(scrapeTool).toBeDefined();
+    expect(scrapeTool.inputSchema).toBeDefined();
+
+    const parsed = scrapeTool.inputSchema.parse({
+      url: "https://example.com/#/guide",
+      library: "example-lib",
+      preserveHashes: true,
+    });
+    expect(parsed.preserveHashes).toBe(true);
+
+    await scrapeTool.handler({
+      url: "https://example.com/#/guide",
+      library: "example-lib",
+      preserveHashes: true,
+    });
+
+    expect(mockTools.scrape.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          preserveHashes: true,
+        }),
+      }),
+    );
+  });
 });
