@@ -6,6 +6,22 @@ import { z } from "zod";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
 
+const envStringArray = z
+  .union([z.array(z.string()), z.string()])
+  .transform((value) => {
+    if (Array.isArray(value)) {
+      return value;
+    }
+
+    const parsed = yaml.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item));
+    }
+
+    return [value];
+  })
+  .pipe(z.array(z.string()));
+
 /**
  * Custom zod schema for boolean values that properly handles string representations.
  * Unlike z.coerce.boolean() which treats any non-empty string as true,
@@ -67,6 +83,20 @@ export const DEFAULT_CONFIG = {
     },
     document: {
       maxSize: 10 * 1024 * 1024, // 10MB max size for PDF/Office documents
+    },
+    security: {
+      network: {
+        allowPrivateNetworks: false,
+        allowedHosts: [] as string[],
+        allowedCidrs: [] as string[],
+        allowInvalidTls: false,
+      },
+      fileAccess: {
+        mode: "allowedRoots",
+        allowedRoots: ["$DOCUMENTS"] as string[],
+        followSymlinks: false,
+        includeHidden: false,
+      },
     },
   },
   splitter: {
@@ -191,6 +221,42 @@ export const AppConfigSchema = z.object({
             .default(DEFAULT_CONFIG.scraper.document.maxSize),
         })
         .default(DEFAULT_CONFIG.scraper.document),
+      security: z
+        .object({
+          network: z
+            .object({
+              allowPrivateNetworks: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.network.allowPrivateNetworks,
+              ),
+              allowedHosts: envStringArray.default(
+                DEFAULT_CONFIG.scraper.security.network.allowedHosts,
+              ),
+              allowedCidrs: envStringArray.default(
+                DEFAULT_CONFIG.scraper.security.network.allowedCidrs,
+              ),
+              allowInvalidTls: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.network.allowInvalidTls,
+              ),
+            })
+            .default(DEFAULT_CONFIG.scraper.security.network),
+          fileAccess: z
+            .object({
+              mode: z
+                .enum(["disabled", "allowedRoots", "unrestricted"])
+                .default(DEFAULT_CONFIG.scraper.security.fileAccess.mode),
+              allowedRoots: envStringArray.default(
+                DEFAULT_CONFIG.scraper.security.fileAccess.allowedRoots,
+              ),
+              followSymlinks: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.fileAccess.followSymlinks,
+              ),
+              includeHidden: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.fileAccess.includeHidden,
+              ),
+            })
+            .default(DEFAULT_CONFIG.scraper.security.fileAccess),
+        })
+        .default(DEFAULT_CONFIG.scraper.security),
     })
     .default(DEFAULT_CONFIG.scraper),
   splitter: z

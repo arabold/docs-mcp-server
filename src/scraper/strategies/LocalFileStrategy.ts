@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileUrlToPathLoose, ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type ArchiveAdapter, getArchiveAdapter } from "../../utils/archive";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
@@ -19,12 +20,15 @@ import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrate
  * Supports include/exclude filters and percent-encoded paths.
  */
 export class LocalFileStrategy extends BaseScraperStrategy {
-  private readonly fileFetcher = new FileFetcher();
+  private readonly fileFetcher: FileFetcher;
   private readonly pipelines: ContentPipeline[];
+  private readonly accessPolicy: ScraperAccessPolicy;
 
   constructor(config: AppConfig) {
     super(config);
+    this.fileFetcher = new FileFetcher(config.scraper);
     this.pipelines = PipelineFactory.createStandardPipelines(config);
+    this.accessPolicy = new ScraperAccessPolicy(config.scraper.security);
   }
 
   canHandle(url: string): boolean {
@@ -36,14 +40,11 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     options: ScraperOptions,
     _signal?: AbortSignal,
   ): Promise<ProcessItemResult> {
-    // Parse the file URL properly to handle both file:// and file:/// formats
-    let filePath = item.url.replace(/^file:\/\/\/?/, "");
-    filePath = decodeURIComponent(filePath);
-
-    // Ensure absolute path on Unix-like systems (if not already absolute)
-    if (!filePath.startsWith("/") && process.platform !== "win32") {
-      filePath = `/${filePath}`;
-    }
+    const resolvedAccess = await this.accessPolicy.resolveFileAccess(
+      item.url,
+      options.internalAllowedFileRoots,
+    );
+    const filePath = resolvedAccess.filePath;
 
     let stats: Awaited<ReturnType<typeof fs.stat>> | null = null;
     let archivePath: string | null = null;
@@ -79,20 +80,33 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       // Handle physical directory
       if (stats?.isDirectory()) {
         const contents = await fs.readdir(filePath);
+        const visibleContents = this.config.scraper.security.fileAccess.includeHidden
+          ? contents
+          : contents.filter((name) => !name.startsWith("."));
         // Only return links that pass shouldProcessUrl
-        const links = contents
-          .map((name) => {
+        const linkEntries = await Promise.all(
+          visibleContents.map(async (name) => {
+            const entryPath = path.join(filePath, name);
+            if (!this.config.scraper.security.fileAccess.followSymlinks) {
+              const entryStats = await fs.lstat(entryPath).catch(() => null);
+              if (entryStats?.isSymbolicLink()) {
+                return null;
+              }
+            }
+
             // Construct valid file URL using URL class to ensure proper encoding and structure
-            const url = new URL(
-              `file://${path.join(filePath, name).replace(/\\/g, "/")}`,
-            );
+            const url = new URL(`file://${entryPath.replace(/\\/g, "/")}`);
             // Ensure we always have file:/// format (empty host)
             if (url.hostname !== "") {
               url.pathname = `/${url.hostname}${url.pathname}`;
               url.hostname = "";
             }
+
             return url.href;
-          })
+          }),
+        );
+        const links = linkEntries
+          .filter((url): url is string => Boolean(url))
           .filter((url) => {
             const allowed = this.shouldProcessUrl(url, options);
             if (!allowed) {
@@ -102,7 +116,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
           });
 
         logger.debug(
-          `Found ${links.length} files in ${filePath} (from ${contents.length} entries)`,
+          `Found ${links.length} files in ${filePath} (from ${visibleContents.length} entries)`,
         );
         return { url: item.url, links, status: FetchStatus.SUCCESS };
       }
@@ -133,7 +147,10 @@ export class LocalFileStrategy extends BaseScraperStrategy {
                 virtualUrl.hostname = "";
               }
 
-              if (this.shouldProcessUrl(virtualUrl.href, options)) {
+              if (
+                this.shouldProcessUrl(virtualUrl.href, options) &&
+                this.isVisibleArchiveEntry(entry.path)
+              ) {
                 links.push(virtualUrl.href);
               }
             }
@@ -228,6 +245,17 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       }
     }
     return { archive: null, inner: null, adapter: null };
+  }
+
+  private isVisibleArchiveEntry(entryPath: string): boolean {
+    if (this.config.scraper.security.fileAccess.includeHidden) {
+      return true;
+    }
+
+    return !entryPath
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .some((segment) => segment.startsWith("."));
   }
 
   private async processArchiveEntry(

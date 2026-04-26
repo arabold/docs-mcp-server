@@ -108,6 +108,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         followRedirects: options.followRedirects,
         headers: options.headers, // Forward custom headers
         etag: item.etag, // Pass ETag for conditional requests
+        ...(item.internalAllowedFileRoots
+          ? { internalAllowedFileRoots: item.internalAllowedFileRoots }
+          : {}),
       };
 
       // Use AutoDetectFetcher which handles fallbacks automatically
@@ -263,8 +266,16 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     // Delegate to LocalFileStrategy
     const localUrl = `file://${tempFile}`;
     const localItem = { ...item, url: localUrl };
+    const localOptions = {
+      ...options,
+      internalAllowedFileRoots: [...(options.internalAllowedFileRoots ?? []), tempFile],
+    };
 
-    const result = await this.localFileStrategy.processItem(localItem, options, signal);
+    const result = await this.localFileStrategy.processItem(
+      localItem,
+      localOptions,
+      signal,
+    );
 
     // We need to fix up the links to point back to something meaningful?
     // If we process a zip, we get file:///tmp/.../file.txt
@@ -279,6 +290,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     return {
       ...result,
       url: item.url, // Keep original URL as the source of this item
+      links: result.links,
+      internalAllowedFileRoots: [tempFile],
       // links are file://...
     };
   }

@@ -9,7 +9,20 @@ vi.mock("node:fs/promises", () => ({ default: vol.promises }));
 vi.mock("node:fs");
 
 describe("LocalFileStrategy", () => {
-  const appConfig = loadConfig();
+  const appConfig = {
+    ...loadConfig(),
+    scraper: {
+      ...loadConfig().scraper,
+      security: {
+        ...loadConfig().scraper.security,
+        fileAccess: {
+          ...loadConfig().scraper.security.fileAccess,
+          mode: "unrestricted" as const,
+          allowedRoots: [],
+        },
+      },
+    },
+  };
 
   beforeEach(() => {
     vol.reset();

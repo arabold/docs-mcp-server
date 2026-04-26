@@ -24,6 +24,18 @@ scraper:
   preserveHashes: false
   document:
     maxSize: 10485760  # 10MB
+  security:
+    network:
+      allowPrivateNetworks: false
+      allowedHosts: []
+      allowedCidrs: []
+      allowInvalidTls: false
+    fileAccess:
+      mode: allowedRoots
+      allowedRoots:
+        - $DOCUMENTS
+      followSymlinks: false
+      includeHidden: false
 
 splitter:
   preferredChunkSize: 1500
@@ -75,6 +87,17 @@ export DOCS_MCP_SPLITTER_PREFERRED_CHUNK_SIZE=2000
 
 # Override app settings
 export DOCS_MCP_APP_TELEMETRY_ENABLED=false
+
+# Override scraper security settings
+export DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_INVALID_TLS=true
+export DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS=true
+```
+
+Array-valued settings accept JSON or YAML-style inline arrays:
+
+```bash
+export DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_HOSTS='["docs.internal.example","wiki.corp.local"]'
+export DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS='["$DOCUMENTS", "/srv/docs"]'
 ```
 
 Some settings also have **legacy aliases** for convenience:
@@ -189,6 +212,86 @@ Leave it disabled for normal sites, where hashes usually point to anchors within
 - Rendering: if `preserveHashes` is enabled and `scrapeMode` is `fetch`, the job is upgraded to `playwright` automatically.
 
 > **Migration Note:** In versions prior to 1.37, `document.maxSize` was a top-level setting. It has been moved to `scraper.document.maxSize`. Update your config files accordingly.
+
+### Scraper Security (`scraper.security`)
+
+Outbound network access and local file access defaults are intentionally conservative so internet-exposed deployments do not automatically gain access to private networks or broad local file trees.
+
+#### Network (`scraper.security.network`)
+
+| Option | Default | Description |
+|:-------|:--------|:------------|
+| `allowPrivateNetworks` | `false` | Blocks loopback, RFC1918 private ranges, link-local, and other special-use targets unless explicitly allowed. When set to `true`, all network targets become eligible. |
+| `allowedHosts` | `[]` | Hostname-bound exceptions. Only requests explicitly targeting these hostnames are exempt from private-network blocking. |
+| `allowedCidrs` | `[]` | Address-bound exceptions. Allows direct IP access or resolved host connections whose address falls inside one of the configured CIDRs. |
+| `allowInvalidTls` | `false` | Broad HTTPS certificate-verification override. This only applies after the target has already passed network access checks. |
+
+An empty `allowedHosts` and `allowedCidrs` list does not allow any private or special-use targets while `allowPrivateNetworks` remains `false`.
+
+#### File Access (`scraper.security.fileAccess`)
+
+| Option | Default | Description |
+|:-------|:--------|:------------|
+| `mode` | `allowedRoots` | Local file access mode: `disabled`, `allowedRoots`, or `unrestricted`. |
+| `allowedRoots` | `[$DOCUMENTS]` | Allowlisted local roots when `mode` is `allowedRoots`. Empty means no user-requested `file://` access is permitted. |
+| `followSymlinks` | `false` | Blocks symlinks by default. When enabled, resolved targets must still stay inside an allowed root. |
+| `includeHidden` | `false` | Blocks hidden files, hidden directories, and hidden archive members by default, even when explicitly requested. |
+
+`$DOCUMENTS` is a convenience token. It expands to the current account's documents directory when that directory can be resolved. If it cannot be resolved, it grants no access by itself.
+
+Internally managed temporary archive files created during accepted web archive scraping remain allowed even when they sit outside user-configured roots. That exception is limited to the downloaded archive artifact and its virtual members.
+
+### Security Examples
+
+Selective internal network access with self-signed HTTPS:
+
+```yaml
+scraper:
+  security:
+    network:
+      allowPrivateNetworks: false
+      allowedHosts:
+        - docs.internal.example
+      allowedCidrs:
+        - 10.42.0.0/16
+      allowInvalidTls: true
+```
+
+Restricted local file access:
+
+```yaml
+scraper:
+  security:
+    fileAccess:
+      mode: allowedRoots
+      allowedRoots:
+        - $DOCUMENTS
+        - /srv/docs
+      followSymlinks: false
+      includeHidden: false
+```
+
+Fully trusted local deployment:
+
+```yaml
+scraper:
+  security:
+    network:
+      allowPrivateNetworks: true
+      allowInvalidTls: false
+    fileAccess:
+      mode: unrestricted
+      allowedRoots: []
+      followSymlinks: true
+      includeHidden: true
+```
+
+Be explicit with these overrides:
+
+- `allowPrivateNetworks: true` broadens network reach beyond public internet targets.
+- `allowInvalidTls: true` broadly trusts invalid HTTPS certificates, but it still does not bypass network allowlists.
+- `fileAccess.mode: allowedRoots` with `allowedRoots: []` denies all user-requested `file://` access.
+- Unresolved `$DOCUMENTS` tokens do not fall back to `$HOME` or any other implicit path.
 
 ### GitHub Authentication
 

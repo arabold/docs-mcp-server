@@ -1,5 +1,7 @@
+import https from "node:https";
 import axios, { type AxiosError, type AxiosRequestConfig } from "axios";
 import { CancellationError } from "../../pipeline/errors";
+import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
 import {
   ChallengeError,
@@ -55,11 +57,13 @@ export class HttpFetcher implements ContentFetcher {
   ];
 
   private fingerprintGenerator: FingerprintGenerator;
+  private readonly accessPolicy: ScraperAccessPolicy;
 
   constructor(scraperConfig: AppConfig["scraper"]) {
     this.maxRetriesDefault = scraperConfig.fetcher.maxRetries;
     this.baseDelayDefaultMs = scraperConfig.fetcher.baseDelayMs;
     this.fingerprintGenerator = new FingerprintGenerator();
+    this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
   }
 
   canFetch(source: string): boolean {
@@ -98,104 +102,153 @@ export class HttpFetcher implements ContentFetcher {
     baseDelay: number = this.baseDelayDefaultMs,
     followRedirects: boolean = true,
   ): Promise<RawContent> {
+    await this.accessPolicy.assertNetworkUrlAllowed(source);
+
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        const fingerprint = this.fingerprintGenerator.generateHeaders();
-        const headers: Record<string, string> = {
-          ...fingerprint,
-          ...options?.headers, // User-provided headers override generated ones
-        };
+        let currentUrl = source;
+        let redirectCount = 0;
 
-        // Add If-None-Match header for conditional requests if ETag is provided
-        if (options?.etag) {
-          headers["If-None-Match"] = options.etag;
-          logger.debug(
-            `Conditional request for ${source} with If-None-Match: ${options.etag}`,
-          );
-        }
+        while (true) {
+          const fingerprint = this.fingerprintGenerator.generateHeaders();
+          const headers: Record<string, string> = {
+            ...fingerprint,
+            ...options?.headers, // User-provided headers override generated ones
+          };
 
-        const config: AxiosRequestConfig = {
-          responseType: "arraybuffer",
-          headers: {
-            ...headers,
-            // Override Accept-Encoding to exclude zstd which Axios doesn't handle automatically
-            // This prevents servers from sending zstd-compressed content that would appear as binary garbage
-            "Accept-Encoding": "gzip, deflate, br",
-          },
-          timeout: options?.timeout,
-          signal: options?.signal, // Pass signal to axios
-          // Axios follows redirects by default, we need to explicitly disable it if needed
-          maxRedirects: followRedirects ? 5 : 0,
-          decompress: true,
-          // Allow 304 responses to be handled as successful responses
-          validateStatus: (status) => {
-            return (status >= 200 && status < 300) || status === 304;
-          },
-        };
+          // Add If-None-Match header for conditional requests if ETag is provided
+          if (options?.etag) {
+            headers["If-None-Match"] = options.etag;
+            logger.debug(
+              `Conditional request for ${source} with If-None-Match: ${options.etag}`,
+            );
+          }
 
-        const response = await axios.get(source, config);
+          const config: AxiosRequestConfig = {
+            responseType: "arraybuffer",
+            headers: {
+              ...headers,
+              // Override Accept-Encoding to exclude zstd which Axios doesn't handle automatically
+              // This prevents servers from sending zstd-compressed content that would appear as binary garbage
+              "Accept-Encoding": "gzip, deflate, br",
+            },
+            timeout: options?.timeout,
+            signal: options?.signal, // Pass signal to axios
+            // Redirects are handled manually so every target can be revalidated before connect.
+            maxRedirects: 0,
+            decompress: true,
+            // Allow 304 responses to be handled as successful responses
+            validateStatus: (status) => {
+              return (status >= 200 && status < 400) || status === 304;
+            },
+          };
 
-        // Handle 304 Not Modified responses for conditional requests
-        if (response.status === 304) {
-          logger.debug(`HTTP 304 Not Modified for ${source}`);
+          if (this.accessPolicy.shouldAllowInvalidTls(currentUrl)) {
+            config.httpsAgent = new https.Agent({ rejectUnauthorized: false });
+          }
+
+          const response = await axios.get(currentUrl, config);
+
+          if (response.status >= 300 && response.status < 400) {
+            const location = response.headers.location;
+            if (!location) {
+              throw new ScraperError(
+                `Redirect response for ${currentUrl} did not include a location header`,
+                false,
+              );
+            }
+
+            if (!followRedirects) {
+              throw new RedirectError(currentUrl, location, response.status);
+            }
+
+            if (redirectCount >= 5) {
+              throw new ScraperError(
+                `Too many redirects while fetching ${source}`,
+                false,
+              );
+            }
+
+            const redirectUrl = new URL(location, currentUrl).href;
+            await this.accessPolicy.assertNetworkUrlAllowed(redirectUrl);
+
+            currentUrl = redirectUrl;
+            redirectCount += 1;
+            continue;
+          }
+
+          // Handle 304 Not Modified responses for conditional requests
+          if (response.status === 304) {
+            logger.debug(`HTTP 304 Not Modified for ${currentUrl}`);
+            return {
+              content: Buffer.from(""),
+              mimeType: "text/plain",
+              source: currentUrl,
+              status: FetchStatus.NOT_MODIFIED,
+            } satisfies RawContent;
+          }
+
+          const contentTypeHeader = response.headers["content-type"];
+          const { mimeType, charset } = MimeTypeUtils.parseContentType(contentTypeHeader);
+          const contentEncoding = response.headers["content-encoding"];
+
+          // Convert ArrayBuffer to Buffer properly
+          let content: Buffer;
+          if (response.data instanceof ArrayBuffer) {
+            content = Buffer.from(response.data);
+          } else if (Buffer.isBuffer(response.data)) {
+            content = response.data;
+          } else if (typeof response.data === "string") {
+            content = Buffer.from(response.data, "utf-8");
+          } else {
+            // Fallback for other data types
+            content = Buffer.from(response.data);
+          }
+
+          // Determine the final effective URL after redirects (if any)
+          const finalUrl =
+            // Node follow-redirects style
+            response.request?.res?.responseUrl ||
+            // Some adapters may expose directly
+            response.request?.responseUrl ||
+            // Fallback to axios recorded config URL
+            response.config?.url ||
+            currentUrl;
+
+          await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
+
+          // Extract ETag header for caching
+          const etag = response.headers.etag || response.headers.ETag;
+          if (etag) {
+            logger.debug(`Received ETag for ${finalUrl}: ${etag}`);
+          }
+
+          // Extract Last-Modified header for caching
+          const lastModified = response.headers["last-modified"];
+          const lastModifiedISO = lastModified
+            ? new Date(lastModified).toISOString()
+            : undefined;
+
           return {
-            content: Buffer.from(""),
-            mimeType: "text/plain",
-            source: source,
-            status: FetchStatus.NOT_MODIFIED,
+            content,
+            mimeType,
+            charset,
+            encoding: contentEncoding,
+            source: finalUrl,
+            etag,
+            lastModified: lastModifiedISO,
+            status: FetchStatus.SUCCESS,
           } satisfies RawContent;
         }
-
-        const contentTypeHeader = response.headers["content-type"];
-        const { mimeType, charset } = MimeTypeUtils.parseContentType(contentTypeHeader);
-        const contentEncoding = response.headers["content-encoding"];
-
-        // Convert ArrayBuffer to Buffer properly
-        let content: Buffer;
-        if (response.data instanceof ArrayBuffer) {
-          content = Buffer.from(response.data);
-        } else if (Buffer.isBuffer(response.data)) {
-          content = response.data;
-        } else if (typeof response.data === "string") {
-          content = Buffer.from(response.data, "utf-8");
-        } else {
-          // Fallback for other data types
-          content = Buffer.from(response.data);
-        }
-
-        // Determine the final effective URL after redirects (if any)
-        const finalUrl =
-          // Node follow-redirects style
-          response.request?.res?.responseUrl ||
-          // Some adapters may expose directly
-          response.request?.responseUrl ||
-          // Fallback to axios recorded config URL
-          response.config?.url ||
-          source;
-
-        // Extract ETag header for caching
-        const etag = response.headers.etag || response.headers.ETag;
-        if (etag) {
-          logger.debug(`Received ETag for ${source}: ${etag}`);
-        }
-
-        // Extract Last-Modified header for caching
-        const lastModified = response.headers["last-modified"];
-        const lastModifiedISO = lastModified
-          ? new Date(lastModified).toISOString()
-          : undefined;
-
-        return {
-          content,
-          mimeType,
-          charset,
-          encoding: contentEncoding,
-          source: finalUrl,
-          etag,
-          lastModified: lastModifiedISO,
-          status: FetchStatus.SUCCESS,
-        } satisfies RawContent;
       } catch (error: unknown) {
+        if (error instanceof RedirectError || error instanceof ChallengeError) {
+          throw error;
+        }
+
+        if (error instanceof ScraperError && !error.isRetryable) {
+          throw error;
+        }
+
         const axiosError = error as AxiosError;
         const status = axiosError.response?.status;
         const code = axiosError.code;

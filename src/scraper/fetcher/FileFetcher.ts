@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import { fileUrlToPathLoose, ScraperAccessPolicy } from "../../utils/accessPolicy";
+import type { AppConfig } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import {
@@ -13,6 +15,14 @@ import {
  * Fetches content from local file system.
  */
 export class FileFetcher implements ContentFetcher {
+  private readonly accessPolicy: ScraperAccessPolicy | null;
+
+  constructor(scraperConfig?: AppConfig["scraper"]) {
+    this.accessPolicy = scraperConfig
+      ? new ScraperAccessPolicy(scraperConfig.security)
+      : null;
+  }
+
   canFetch(source: string): boolean {
     return source.startsWith("file://");
   }
@@ -23,16 +33,14 @@ export class FileFetcher implements ContentFetcher {
    * Supports conditional fetching via ETag comparison for efficient refresh operations.
    */
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
-    // Remove the file:// protocol prefix and handle both file:// and file:/// formats
-    let filePath = source.replace(/^file:\/\/\/?/, "");
-
-    // Decode percent-encoded characters
-    filePath = decodeURIComponent(filePath);
-
-    // Ensure absolute path on Unix-like systems (if not already absolute)
-    if (!filePath.startsWith("/") && process.platform !== "win32") {
-      filePath = `/${filePath}`;
-    }
+    const filePath = this.accessPolicy
+      ? (
+          await this.accessPolicy.resolveFileAccess(
+            source,
+            options?.internalAllowedFileRoots,
+          )
+        ).filePath
+      : fileUrlToPathLoose(source);
 
     try {
       const stats = await fs.stat(filePath);
