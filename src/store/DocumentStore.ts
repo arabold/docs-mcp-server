@@ -52,6 +52,14 @@ interface RankedResult extends RawSearchResult {
   rrf_score: number;
 }
 
+interface EmbeddingBatchContext {
+  url: string;
+  batchIndex: number;
+  batchTextCount: number;
+  batchChars: number;
+  totalChunks: number;
+}
+
 /**
  * Manages document storage and retrieval using SQLite with vector and full-text search capabilities.
  * Provides direct access to SQLite with prepared statements to store and query document
@@ -1275,6 +1283,92 @@ export class DocumentStore {
     );
   }
 
+  private isMalformedEmbeddingResponseError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("cannot read properties of undefined") ||
+      message.includes("reading '0'") ||
+      message.includes("invalid response") ||
+      message.includes("unexpected response") ||
+      (message.includes("embedding") && message.includes("undefined"))
+    );
+  }
+
+  private getEmbeddingErrorHint(error: unknown): string | null {
+    if (this.isInputSizeError(error)) {
+      return "The embedding input appears to exceed provider or model limits. Check model context size and reduce embedding batch size if needed.";
+    }
+
+    if (this.isMalformedEmbeddingResponseError(error)) {
+      return "The embedding provider returned an unexpected response or fewer vectors than requested. Check provider logs for rejected requests or unsupported model, batch, or context settings.";
+    }
+
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
+      if (message.includes("rate limit") || message.includes("429")) {
+        return "The embedding provider appears to be rate limiting requests. Reduce concurrency or retry after the provider quota resets.";
+      }
+      if (
+        message.includes("timed out") ||
+        message.includes("econnrefused") ||
+        message.includes("enotfound") ||
+        message.includes("etimedout") ||
+        message.includes("econnreset") ||
+        message.includes("network") ||
+        message.includes("fetch failed")
+      ) {
+        return "The embedding service appears unreachable. Check that the provider endpoint is running and accessible.";
+      }
+    }
+
+    return null;
+  }
+
+  private getEmbeddingProviderHint(): string | null {
+    if (!this.embeddingConfig) return null;
+
+    switch (this.embeddingConfig.provider) {
+      case "openai":
+        if (process.env.OPENAI_API_BASE) {
+          return "For OpenAI-compatible backends, verify OPENAI_API_BASE, the served model name, backend batch size, and model context size.";
+        }
+        return "For OpenAI, verify model access, API key, quota, and rate limits.";
+      case "microsoft":
+        return "For Azure OpenAI, verify the deployment name, API version, model access, and quota.";
+      case "aws":
+        return "For AWS Bedrock, verify the region, credentials, model access, and service quota.";
+      case "gemini":
+        return "For Gemini, verify the API key, model availability, request size, and quota.";
+      case "vertex":
+        return "For Vertex AI, verify credentials, project access, model availability, request size, and quota.";
+      case "sagemaker":
+        return "For SageMaker, verify the endpoint, region, credentials, request size, and quota.";
+      default:
+        return null;
+    }
+  }
+
+  private createEmbeddingConnectionError(
+    error: unknown,
+    context: EmbeddingBatchContext,
+  ): ConnectionError {
+    const modelSpec = this.embeddingConfig?.modelSpec ?? "unknown";
+    const errorHint = this.getEmbeddingErrorHint(error);
+    const providerHint = this.getEmbeddingProviderHint();
+    const hints = [errorHint, providerHint].filter((hint) => hint !== null);
+    const hintText = hints.length > 0 ? `\n   ${hints.join("\n   ")}` : "";
+
+    return new ConnectionError(
+      `Failed to generate embeddings for ${context.url} using ${modelSpec}.\n` +
+        `   Batch ${context.batchIndex}: ${context.batchTextCount} text(s), ${context.batchChars} chars, ${context.totalChunks} page chunk(s).\n` +
+        `   Config: batchSize=${this.embeddingBatchSize}, batchChars=${this.embeddingBatchChars}, vectorDimension=${this.dbDimension}.` +
+        hintText,
+      error,
+    );
+  }
+
   /**
    * Creates embeddings for an array of texts with automatic retry logic for size-related errors.
    * If a batch fails due to size limits:
@@ -1398,19 +1492,37 @@ export class DocumentStore {
         let currentBatchSize = 0;
         let batchCount = 0;
 
+        const processEmbeddingBatch = async (isFinalBatch = false) => {
+          batchCount++;
+          const batchTexts = currentBatch;
+          const batchChars = currentBatchSize;
+          logger.debug(
+            `Processing ${isFinalBatch ? "final " : ""}embedding batch ${batchCount}: ${batchTexts.length} texts, ${batchChars} chars`,
+          );
+
+          try {
+            const batchEmbeddings = await this.embedDocumentsWithRetry(batchTexts);
+            rawEmbeddings.push(...batchEmbeddings);
+          } catch (error) {
+            throw this.createEmbeddingConnectionError(error, {
+              url,
+              batchIndex: batchCount,
+              batchTextCount: batchTexts.length,
+              batchChars,
+              totalChunks: chunks.length,
+            });
+          }
+
+          currentBatch = [];
+          currentBatchSize = 0;
+        };
+
         for (const text of texts) {
           const textSize = text.length;
 
           // If adding this text would exceed the limit, process the current batch first
           if (currentBatchSize + textSize > maxBatchChars && currentBatch.length > 0) {
-            batchCount++;
-            logger.debug(
-              `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
-            );
-            const batchEmbeddings = await this.embedDocumentsWithRetry(currentBatch);
-            rawEmbeddings.push(...batchEmbeddings);
-            currentBatch = [];
-            currentBatchSize = 0;
+            await processEmbeddingBatch();
           }
 
           // Add text to current batch
@@ -1419,25 +1531,13 @@ export class DocumentStore {
 
           // Also respect the count-based limit for APIs that have per-request item limits
           if (currentBatch.length >= this.embeddingBatchSize) {
-            batchCount++;
-            logger.debug(
-              `Processing embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
-            );
-            const batchEmbeddings = await this.embedDocumentsWithRetry(currentBatch);
-            rawEmbeddings.push(...batchEmbeddings);
-            currentBatch = [];
-            currentBatchSize = 0;
+            await processEmbeddingBatch();
           }
         }
 
         // Process any remaining texts in the final batch
         if (currentBatch.length > 0) {
-          batchCount++;
-          logger.debug(
-            `Processing final embedding batch ${batchCount}: ${currentBatch.length} texts, ${currentBatchSize} chars`,
-          );
-          const batchEmbeddings = await this.embedDocumentsWithRetry(currentBatch);
-          rawEmbeddings.push(...batchEmbeddings);
+          await processEmbeddingBatch(true);
         }
         paddedEmbeddings = rawEmbeddings.map((vector) => this.padVector(vector));
       }
@@ -1523,6 +1623,9 @@ export class DocumentStore {
 
       transaction();
     } catch (error) {
+      if (error instanceof StoreError) {
+        throw error;
+      }
       throw new ConnectionError("Failed to add documents to store", error);
     }
   }
