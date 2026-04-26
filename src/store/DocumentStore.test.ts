@@ -828,9 +828,9 @@ describe("DocumentStore - With Embeddings", () => {
         expect(message).toContain("openai:text-embedding-3-small");
         expect(message).toContain("Batch 1");
         expect(message).toContain("unexpected response");
-        expect(message).toContain("OpenAI-compatible backends");
+        expect(message).toContain("Verify embedding provider configuration");
         expect(message).toContain("context size");
-        expect(message).toContain("batch size");
+        expect(message).toContain("backend logs");
       } finally {
         if (originalOpenAiApiBase === undefined) {
           delete process.env.OPENAI_API_BASE;

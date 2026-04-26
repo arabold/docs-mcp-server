@@ -1326,37 +1326,15 @@ export class DocumentStore {
     return null;
   }
 
-  private getEmbeddingProviderHint(): string | null {
-    if (!this.embeddingConfig) return null;
-
-    switch (this.embeddingConfig.provider) {
-      case "openai":
-        if (process.env.OPENAI_API_BASE) {
-          return "For OpenAI-compatible backends, verify OPENAI_API_BASE, the served model name, backend batch size, and model context size.";
-        }
-        return "For OpenAI, verify model access, API key, quota, and rate limits.";
-      case "microsoft":
-        return "For Azure OpenAI, verify the deployment name, API version, model access, and quota.";
-      case "aws":
-        return "For AWS Bedrock, verify the region, credentials, model access, and service quota.";
-      case "gemini":
-        return "For Gemini, verify the API key, model availability, request size, and quota.";
-      case "vertex":
-        return "For Vertex AI, verify credentials, project access, model availability, request size, and quota.";
-      case "sagemaker":
-        return "For SageMaker, verify the endpoint, region, credentials, request size, and quota.";
-      default:
-        return null;
-    }
-  }
-
   private createEmbeddingConnectionError(
     error: unknown,
     context: EmbeddingBatchContext,
   ): ConnectionError {
     const modelSpec = this.embeddingConfig?.modelSpec ?? "unknown";
     const errorHint = this.getEmbeddingErrorHint(error);
-    const providerHint = this.getEmbeddingProviderHint();
+    const providerHint = this.embeddingConfig
+      ? "Verify embedding provider configuration, model availability, credentials, quota, request size, and backend logs."
+      : null;
     const hints = [errorHint, providerHint].filter((hint) => hint !== null);
     const hintText = hints.length > 0 ? `\n   ${hints.join("\n   ")}` : "";
 
