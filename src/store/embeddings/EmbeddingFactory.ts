@@ -11,10 +11,11 @@ import {
 import type { AppConfig } from "../../utils/config";
 import { MissingCredentialsError } from "../errors";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
+import { TransformersJSEmbeddings } from "./TransformersJSEmbeddings";
 
 /**
  * Supported embedding model providers. Each provider requires specific environment
- * variables to be set for API access.
+ * variables to be set for API access, except 'transformers' which runs locally.
  */
 export type EmbeddingProvider =
   | "openai"
@@ -22,7 +23,8 @@ export type EmbeddingProvider =
   | "gemini"
   | "aws"
   | "microsoft"
-  | "sagemaker";
+  | "sagemaker"
+  | "transformers";
 
 /**
  * Error thrown when an invalid or unsupported embedding provider is specified.
@@ -31,7 +33,7 @@ export class UnsupportedProviderError extends Error {
   constructor(provider: string) {
     super(
       `❌ Unsupported embedding provider: ${provider}\n` +
-        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker\n" +
+        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker, transformers\n" +
         "   See README.md for configuration options or run with --help for more details.",
     );
     this.name = "UnsupportedProviderError";
@@ -93,6 +95,10 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
       );
     }
 
+    case "transformers":
+      // Transformers.js runs locally - no credentials needed
+      return true;
+
     default:
       return false;
   }
@@ -110,6 +116,7 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
  * - Google GenAI (Gemini): GOOGLE_API_KEY
  * - AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION (or BEDROCK_AWS_REGION)
  * - Microsoft: AZURE_OPENAI_API_KEY, AZURE_OPENAI_API_INSTANCE_NAME, AZURE_OPENAI_API_DEPLOYMENT_NAME, AZURE_OPENAI_API_VERSION
+ * - Transformers: No credentials required (runs locally via ONNX)
  *
  * @param providerAndModel - The provider and model name in the format "provider:model_name"
  *                          or just "model_name" for OpenAI models.
@@ -261,6 +268,24 @@ export function createEmbeddingModel(
         azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
         azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION,
         deploymentName: model,
+      });
+    }
+
+    case "transformers": {
+      // Transformers.js runs locally - no credentials needed
+      const modelName =
+        model.startsWith("Xenova/") || model.startsWith("onnx-community/")
+          ? model
+          : `Xenova/${model}`;
+
+      const device =
+        process.env.TRANSFORMERS_DEVICE?.toLowerCase() === "webgpu" ? "webgpu" : "cpu";
+
+      return new TransformersJSEmbeddings({
+        modelName,
+        device,
+        normalize: true,
+        stripNewLines: baseConfig.stripNewLines,
       });
     }
 

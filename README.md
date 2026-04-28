@@ -118,6 +118,11 @@ docker run --rm \
   --protocol http --host 0.0.0.0 --port 6280
 ```
 
+**Note:** When using Transformers.js embeddings, models are cached inside the container. To persist the cache across restarts, add:
+```bash
+-e TRANSFORMERS_CACHE=/config/.cache
+```
+
 </details>
 
 ### 🧠 Configure Embedding Model (Recommended)
