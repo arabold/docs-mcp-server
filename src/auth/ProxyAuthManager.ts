@@ -183,8 +183,7 @@ export class ProxyAuthManager {
       if (!responseType || !ALLOWED_RESPONSE_TYPES.has(responseType)) {
         reply.status(400).type("application/json").send({
           error: "unsupported_response_type",
-          error_description:
-            "Only the 'code' response_type is supported by this proxy.",
+          error_description: "Only the 'code' response_type is supported by this proxy.",
         });
         return;
       }
@@ -215,10 +214,13 @@ export class ProxyAuthManager {
       // client_credentials, urn:ietf:params:oauth:grant-type:*).
       const grantType = tokenBody.get("grant_type");
       if (!grantType || !ALLOWED_GRANT_TYPES.has(grantType)) {
-        reply.status(400).type("application/json").send({
-          error: "unsupported_grant_type",
-          error_description: `Grant type '${grantType ?? ""}' is not supported by this proxy.`,
-        });
+        reply
+          .status(400)
+          .type("application/json")
+          .send({
+            error: "unsupported_grant_type",
+            error_description: `Grant type '${grantType ?? ""}' is not supported by this proxy.`,
+          });
         return;
       }
 
