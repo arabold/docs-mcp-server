@@ -30,10 +30,13 @@ export function fileUrlToPath(fileUrl: string): string {
 }
 
 /**
- * Determine the base directory for a given file:// URL.
- * - If the URL points to a directory, the base is that directory itself.
- * - If the URL points to a file, the base is its parent directory.
- * The returned path always ends with the platform path separator.
+ * Compute the base directory for containment checks given a resolved root path.
+ * The returned path always ends with the platform path separator so that
+ * prefix-based containment checks do not produce false positives
+ * (e.g. "/home/user/docs" won't match "/home/user/docs-other").
+ *
+ * Note: This function performs lexical normalization only — it does not
+ * distinguish between files and directories on disk.
  */
 function computeFileBaseDir(resolvedPath: string): string {
   // Append separator so that containment checks work correctly
@@ -45,13 +48,29 @@ function computeFileBaseDir(resolvedPath: string): string {
  * Check whether `candidate` is contained within `baseDir`
  * (or is exactly `baseDir` without trailing separator).
  * Both paths must already be resolved / normalized.
+ *
+ * Uses path.relative() for robust comparison, which also handles
+ * case-insensitive filesystems on Windows correctly.
  */
 function isPathWithinBase(candidate: string, baseDir: string): boolean {
+  const baseDirTrimmed = baseDir.replace(/[/\\]+$/, "");
+
   // Exact match (the root path itself)
-  if (candidate === baseDir || candidate === baseDir.replace(/[/\\]+$/, "")) {
+  if (candidate === baseDirTrimmed) {
     return true;
   }
-  return candidate.startsWith(baseDir);
+
+  // Use path.relative for robust containment check.
+  // If the relative path starts with ".." or is absolute, the candidate is outside.
+  const relative = path.relative(baseDirTrimmed, candidate);
+  if (relative === "") {
+    return true;
+  }
+  // Reject if relative path escapes upward or is an absolute path
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -63,8 +82,9 @@ function isPathWithinBase(candidate: string, baseDir: string): boolean {
  *
  * Security: All file paths are resolved via `path.resolve()` and verified to
  * reside within the root URL's directory tree before any filesystem access.
- * This prevents path-traversal attacks via `..` segments, percent-encoding
- * tricks, or symlinks that escape the intended directory.
+ * This prevents path-traversal attacks via `..` segments and percent-encoding
+ * tricks. Note: this is a lexical check only — symlinks within the base
+ * directory that point outside it are not detected by this mechanism.
  */
 export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly fileFetcher = new FileFetcher();

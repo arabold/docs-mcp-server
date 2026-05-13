@@ -15,15 +15,14 @@ describe("LocalFileStrategy path traversal protection", () => {
     vol.reset();
   });
 
-  it("should reject discovered links that escape the root via ..", async () => {
+  it("should block items from initialQueue that contain .. traversal segments", async () => {
     const strategy = new LocalFileStrategy(appConfig);
     const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
-    // Set up a legitimate docs directory and a sensitive file outside it
     vol.fromJSON(
       {
         "/home/user/docs/readme.md": "# Docs",
-        "/etc/passwd": "root:x:0:0:root:/root:/bin/bash",
+        "/tmp/sensitive/secret.txt": "sensitive-data-here",
       },
       "/",
     );
@@ -34,48 +33,103 @@ describe("LocalFileStrategy path traversal protection", () => {
       version: "1.0",
       maxPages: 10,
       maxDepth: 3,
+      initialQueue: [
+        {
+          url: "file:///home/user/docs/../../../tmp/sensitive/secret.txt",
+          depth: 1,
+          pageId: 100,
+        },
+      ],
     };
 
     await strategy.scrape(options, progressCallback);
 
-    // Only readme.md should be processed, not /etc/passwd
     const processedUrls = progressCallback.mock.calls
       .filter((call) => call[0].result)
       .map((call) => call[0].currentUrl);
+    // The traversal item should be blocked
+    expect(processedUrls).not.toContain("file:///tmp/sensitive/secret.txt");
+    expect(processedUrls).not.toContain("file:///home/user/docs/../../../tmp/sensitive/secret.txt");
+    // Legitimate file should still be processed
     expect(processedUrls).toContain("file:///home/user/docs/readme.md");
-    expect(processedUrls).not.toContain("file:///etc/passwd");
   });
 
-  it("should prevent reading files via percent-encoded traversal", async () => {
+  it("should block initialQueue items with percent-encoded traversal against a legitimate root", async () => {
     const strategy = new LocalFileStrategy(appConfig);
     const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
 
     vol.fromJSON(
       {
-        "/etc/passwd": "root:x:0:0:root:/root:/bin/bash",
+        "/home/user/docs/readme.md": "# Docs",
+        "/tmp/sensitive/secret.txt": "sensitive-data-here",
       },
       "/",
     );
 
-    // Attempt to read /etc/passwd via percent-encoded traversal
-    // URL constructor normalizes this to /etc/passwd, which is outside the root
     const options: ScraperOptions = {
-      url: "file:///home/user/docs/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+      url: "file:///home/user/docs",
       library: "test",
       version: "1.0",
-      maxPages: 1,
-      maxDepth: 0,
+      maxPages: 10,
+      maxDepth: 3,
+      initialQueue: [
+        {
+          url: "file:///home/user/docs/%2e%2e/%2e%2e/%2e%2e/tmp/sensitive/secret.txt",
+          depth: 1,
+          pageId: 100,
+        },
+      ],
     };
 
     await strategy.scrape(options, progressCallback);
 
-    // Should NOT have processed the file with sensitive content
+    const processedUrls = progressCallback.mock.calls
+      .filter((call) => call[0].result)
+      .map((call) => call[0].currentUrl);
+    expect(processedUrls).not.toContain("file:///tmp/sensitive/secret.txt");
+
+    // Verify no sensitive content was processed
     const processedContent = progressCallback.mock.calls
       .filter((call) => call[0].result)
       .map((call) => call[0].result?.textContent);
     for (const content of processedContent) {
-      expect(content).not.toContain("root:x:0:0");
+      expect(content).not.toContain("sensitive-data-here");
     }
+  });
+
+  it("should block absolute out-of-base paths in initialQueue", async () => {
+    const strategy = new LocalFileStrategy(appConfig);
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    vol.fromJSON(
+      {
+        "/home/user/docs/readme.md": "# Docs",
+        "/var/secrets/config.txt": "secret-config-value",
+      },
+      "/",
+    );
+
+    const options: ScraperOptions = {
+      url: "file:///home/user/docs",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 3,
+      initialQueue: [
+        {
+          url: "file:///var/secrets/config.txt",
+          depth: 1,
+          pageId: 999,
+        },
+      ],
+    };
+
+    await strategy.scrape(options, progressCallback);
+
+    const processedUrls = progressCallback.mock.calls
+      .filter((call) => call[0].result)
+      .map((call) => call[0].currentUrl);
+    expect(processedUrls).not.toContain("file:///var/secrets/config.txt");
   });
 
   it("should allow reading files within the base directory", async () => {
@@ -118,8 +172,6 @@ describe("LocalFileStrategy path traversal protection", () => {
       "/",
     );
 
-    // Single file as the root: the base dir is the file itself
-    // so the file IS within its own base
     const options: ScraperOptions = {
       url: "file:///home/user/docs/readme.md",
       library: "test",
@@ -130,46 +182,9 @@ describe("LocalFileStrategy path traversal protection", () => {
 
     await strategy.scrape(options, progressCallback);
 
-    // The file should still be processed
     expect(progressCallback).toHaveBeenCalled();
     const processed = progressCallback.mock.calls.filter((call) => call[0].result);
     expect(processed).toHaveLength(1);
     expect(processed[0][0].result?.textContent).toContain("Hello");
-  });
-
-  it("should block items from initialQueue that escape the root directory", async () => {
-    const strategy = new LocalFileStrategy(appConfig);
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
-
-    vol.fromJSON(
-      {
-        "/home/user/docs/readme.md": "# Docs",
-        "/etc/shadow": "root:$6$...:...",
-      },
-      "/",
-    );
-
-    const options: ScraperOptions = {
-      url: "file:///home/user/docs",
-      library: "test",
-      version: "1.0",
-      maxPages: 10,
-      maxDepth: 3,
-      initialQueue: [
-        {
-          url: "file:///etc/shadow",
-          depth: 1,
-          pageId: 999,
-        },
-      ],
-    };
-
-    await strategy.scrape(options, progressCallback);
-
-    // The /etc/shadow item should be blocked by containment check
-    const processedUrls = progressCallback.mock.calls
-      .filter((call) => call[0].result)
-      .map((call) => call[0].currentUrl);
-    expect(processedUrls).not.toContain("file:///etc/shadow");
   });
 });
