@@ -18,14 +18,17 @@ import type { AuthConfig, AuthContext } from "./types";
  * for arbitrary grant flows against the upstream authorization server
  * (e.g. password, client_credentials) that this resource server does not
  * advertise in its authorization-server metadata.
+ *
+ * These values are the single source of truth and are also referenced
+ * by the `/.well-known/oauth-authorization-server` metadata endpoint.
  */
-const ALLOWED_GRANT_TYPES = new Set(["authorization_code", "refresh_token"]);
+export const ALLOWED_GRANT_TYPES = new Set(["authorization_code", "refresh_token"]);
 
 /**
  * OAuth2 response types accepted by the /oauth/authorize proxy endpoint.
- * Mirrors `response_types_supported` in the AS metadata.
+ * Single source of truth — also referenced by the AS metadata endpoint.
  */
-const ALLOWED_RESPONSE_TYPES = new Set(["code"]);
+export const ALLOWED_RESPONSE_TYPES = new Set(["code"]);
 
 export class ProxyAuthManager {
   private proxyProvider: ProxyOAuthServerProvider | null = null;
@@ -124,8 +127,8 @@ export class ProxyAuthManager {
         revocation_endpoint: `${baseUrl.origin}/oauth/revoke`,
         registration_endpoint: `${baseUrl.origin}/oauth/register`,
         scopes_supported: ["profile", "email"],
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
+        response_types_supported: [...ALLOWED_RESPONSE_TYPES],
+        grant_types_supported: [...ALLOWED_GRANT_TYPES],
         token_endpoint_auth_methods_supported: [
           "client_secret_basic",
           "client_secret_post",
