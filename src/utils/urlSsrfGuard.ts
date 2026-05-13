@@ -48,23 +48,32 @@ function parseIpv4ToInt(hostname: string): number | null {
 
 /**
  * Returns true when the IPv4 integer belongs to a non-public range:
- * loopback, link-local, private (RFC 1918), 0.0.0.0/8, broadcast.
+ * loopback, link-local, private (RFC 1918), CGNAT, multicast, reserved,
+ * benchmarking, 0.0.0.0/8, broadcast.
  */
 function isPrivateIpv4(ip: number): boolean {
   // 0.0.0.0/8
   if (ip >>> 24 === 0) return true;
   // 10.0.0.0/8
   if (ip >>> 24 === 10) return true;
+  // 100.64.0.0/10 (CGNAT - RFC 6598): 100.64.0.0 – 100.127.255.255
+  if ((ip & 0xffc00000) >>> 0 === 0x64400000) return true;
   // 127.0.0.0/8 (loopback)
   if (ip >>> 24 === 127) return true;
   // 169.254.0.0/16 (link-local / metadata)
   if (ip >>> 16 === 0xa9fe) return true;
   // 172.16.0.0/12
   if (ip >>> 16 >= 0xac10 && ip >>> 16 <= 0xac1f) return true;
+  // 192.0.0.0/24 (IETF protocol assignments)
+  if (ip >>> 8 === 0xc00000) return true;
   // 192.168.0.0/16
   if (ip >>> 16 === 0xc0a8) return true;
-  // 255.255.255.255
-  if (ip === 0xffffffff) return true;
+  // 198.18.0.0/15 (benchmarking - RFC 2544): 198.18.0.0 – 198.19.255.255
+  if ((ip & 0xfffe0000) >>> 0 === 0xc6120000) return true;
+  // 224.0.0.0/4 (multicast)
+  if (ip >>> 28 === 0xe) return true;
+  // 240.0.0.0/4 (reserved, includes broadcast 255.255.255.255)
+  if (ip >>> 28 === 0xf) return true;
   return false;
 }
 
@@ -75,16 +84,31 @@ function isPrivateIpv4(ip: number): boolean {
 function isPrivateIpv6(hostname: string): boolean {
   // Remove brackets around IPv6 addresses: [::1] -> ::1
   const raw = hostname.replace(/^\[|\]$/g, "");
-  // Expand and check simplified patterns
   const lower = raw.toLowerCase();
   // ::1 (loopback)
   if (lower === "::1" || lower === "0:0:0:0:0:0:0:1") return true;
   // :: (unspecified)
   if (lower === "::" || lower === "0:0:0:0:0:0:0:0") return true;
-  // fe80::/10 (link-local)
-  if (lower.startsWith("fe80")) return true;
+  // fe80::/10 (link-local) — covers fe80 through febf
+  if (/^fe[89ab]/i.test(lower)) return true;
   // fc00::/7 (unique local)
   if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+  // IPv4-mapped IPv6 (::ffff:x.x.x.x or ::ffff:HHHH:HHHH)
+  const v4MappedMatch = lower.match(/^(?:::ffff:|0{0,4}(?::0{0,4})*::?ffff:)(.+)$/);
+  if (v4MappedMatch) {
+    const embedded = v4MappedMatch[1];
+    // Dotted-decimal form: ::ffff:127.0.0.1
+    const ipInt = parseIpv4ToInt(embedded);
+    if (ipInt !== null && isPrivateIpv4(ipInt)) return true;
+    // Hex form: ::ffff:7f00:1
+    const hexMatch = embedded.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hexMatch) {
+      const hi = Number.parseInt(hexMatch[1], 16);
+      const lo = Number.parseInt(hexMatch[2], 16);
+      const reconstructed = ((hi << 16) | lo) >>> 0;
+      if (isPrivateIpv4(reconstructed)) return true;
+    }
+  }
   return false;
 }
 
@@ -101,7 +125,7 @@ export function assertPublicUrl(url: string): void {
   try {
     parsed = new URL(url);
   } catch {
-    throw new InvalidUrlError(url);
+    throw new InvalidUrlError("The provided URL is not valid.");
   }
 
   // Only allow http / https
@@ -118,7 +142,8 @@ export function assertPublicUrl(url: string): void {
     throw new InvalidUrlError("URLs targeting localhost are not allowed.");
   }
 
-  // IPv6 check
+  // IPv6 check — block all bracketed IPv6 literal addresses as defense-in-depth
+  // (scrape targets should use hostnames, not raw IPv6 literals)
   if (hostname.startsWith("[") || isPrivateIpv6(hostname)) {
     throw new InvalidUrlError(
       "URLs targeting private or loopback IPv6 addresses are not allowed.",

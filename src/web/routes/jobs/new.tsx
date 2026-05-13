@@ -79,7 +79,8 @@ export function registerNewJobRoutes(
 
         // SSRF protection: reject private/internal IPs, file:// URLs,
         // and non-HTTP schemes before enqueueing any scrape job.
-        assertPublicUrl(body.url);
+        const trimmedUrl = body.url.trim();
+        assertPublicUrl(trimmedUrl);
 
         // Parse includePatterns and excludePatterns from textarea input
         function parsePatterns(input?: string): string[] | undefined {
@@ -119,7 +120,7 @@ export function registerNewJobRoutes(
 
         // Prepare options for ScrapeTool
         const scrapeOptions = {
-          url: body.url,
+          url: trimmedUrl,
           library: body.library,
           version: normalizedVersion,
           waitForCompletion: false, // Don't wait in UI

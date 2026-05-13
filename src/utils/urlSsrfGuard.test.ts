@@ -74,6 +74,30 @@ describe("assertPublicUrl", () => {
     });
   });
 
+  describe("should reject additional non-public ranges", () => {
+    it.each([
+      ["http://100.64.0.1/", "CGNAT"],
+      ["http://100.127.255.255/", "CGNAT upper bound"],
+      ["http://192.0.0.1/", "IETF protocol assignments"],
+      ["http://198.18.0.1/", "benchmarking"],
+      ["http://198.19.255.255/", "benchmarking upper bound"],
+      ["http://224.0.0.1/", "multicast"],
+      ["http://239.255.255.255/", "multicast upper bound"],
+      ["http://240.0.0.1/", "reserved"],
+      ["http://255.255.255.255/", "broadcast"],
+    ])("rejects %s (%s)", (url) => {
+      expect(() => assertPublicUrl(url)).toThrow(/not allowed/i);
+    });
+
+    it("allows 100.63.255.255 (just below CGNAT)", () => {
+      expect(() => assertPublicUrl("http://100.63.255.255/")).not.toThrow();
+    });
+
+    it("allows 100.128.0.0 (just above CGNAT)", () => {
+      expect(() => assertPublicUrl("http://100.128.0.0/")).not.toThrow();
+    });
+  });
+
   describe("should reject invalid/empty URLs", () => {
     it.each(["", "not-a-url", "://missing-scheme"])("rejects %s", (url) => {
       expect(() => assertPublicUrl(url)).toThrow();
@@ -82,7 +106,6 @@ describe("assertPublicUrl", () => {
 
   describe("should not be bypassed by tricks", () => {
     it("rejects decimal IP for 127.0.0.1", () => {
-      // 2130706433 = 127.0.0.1 in decimal
       expect(() => assertPublicUrl("http://2130706433/")).toThrow();
     });
 
@@ -110,6 +133,47 @@ describe("assertPublicUrl", () => {
 
     it("allows 172.32.0.0 (just above private range)", () => {
       expect(() => assertPublicUrl("http://172.32.0.0/")).not.toThrow();
+    });
+  });
+
+  describe("IPv6 link-local fe80::/10 full range", () => {
+    it.each([
+      "http://[fe80::1]/",
+      "http://[fe90::1]/",
+      "http://[fea0::1]/",
+      "http://[feb0::1]/",
+      "http://[febf::1]/",
+    ])("rejects %s", (url) => {
+      expect(() => assertPublicUrl(url)).toThrow(/not allowed/i);
+    });
+  });
+
+  describe("IPv4-mapped IPv6 addresses", () => {
+    it.each([
+      "http://[::ffff:127.0.0.1]/",
+      "http://[::ffff:169.254.169.254]/",
+      "http://[::ffff:10.0.0.1]/",
+      "http://[::ffff:192.168.1.1]/",
+      "http://[::ffff:7f00:1]/",
+    ])("rejects %s", (url) => {
+      expect(() => assertPublicUrl(url)).toThrow(/not allowed/i);
+    });
+
+    it("rejects all IPv6 literals as defense-in-depth", () => {
+      // Even public IPs in IPv6 literal form are blocked — scrape targets should use hostnames
+      expect(() => assertPublicUrl("http://[::ffff:8.8.8.8]/")).toThrow(/not allowed/i);
+    });
+  });
+
+  describe("should not reflect raw URL in error messages", () => {
+    it("does not include the raw URL on parse failure", () => {
+      try {
+        assertPublicUrl("not-a-url");
+        expect.unreachable("should have thrown");
+      } catch (e) {
+        expect((e as Error).message).not.toContain("not-a-url");
+        expect((e as Error).message).toMatch(/not valid/i);
+      }
     });
   });
 });
