@@ -215,4 +215,21 @@ describe("ProxyAuthManager /oauth/authorize redirect_uri validation", () => {
     expect(statusCode).toBe(400);
     expect(sentBody).toEqual(expect.objectContaining({ error: "invalid_request" }));
   });
+
+  it("should reject malformed redirect_uri that cannot be parsed", async () => {
+    const { statusCode, sentBody } = await callAuthorize({
+      client_id: "test-client",
+      redirect_uri: "http://%",
+      response_type: "code",
+      scope: "openid",
+    });
+
+    expect(statusCode).toBe(400);
+    expect(sentBody).toEqual(
+      expect.objectContaining({
+        error: "invalid_request",
+        error_description: "redirect_uri is not a valid URL",
+      }),
+    );
+  });
 });

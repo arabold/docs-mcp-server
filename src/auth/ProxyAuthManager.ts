@@ -164,6 +164,10 @@ export class ProxyAuthManager {
       // Only redirect_uris whose origin matches the proxy server are allowed.
       const redirectUri = params.get("redirect_uri");
       if (redirectUri) {
+        // NOTE: If deployed behind a TLS-terminating reverse proxy, Fastify
+        // must be configured with `trustProxy: true` so that
+        // `request.protocol` reflects the original scheme (X-Forwarded-Proto).
+        // Without it, legitimate https redirect_uris will be rejected.
         const serverOrigin = `${request.protocol}://${request.headers.host}`;
         try {
           const parsed = new URL(redirectUri);
