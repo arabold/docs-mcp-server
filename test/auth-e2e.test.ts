@@ -179,6 +179,90 @@ describe("Authentication End-to-End Tests", () => {
     }, 10000);
   });
 
+  describe("OAuth Proxy Endpoint Hardening", () => {
+    // These tests exercise the rejection paths added in the OAuth proxy
+    // hardening change. They run entirely against the local server — the
+    // proxy validates and short-circuits before any upstream AS discovery,
+    // so a reachable Clerk instance is not required for these cases.
+
+    it("should reject /oauth/token requests with missing grant_type as invalid_request", async () => {
+      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
+        console.log("⚠️  Skipping test - authentication not configured");
+        return;
+      }
+
+      const response = await fetch(`${baseUrl}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ code: "anything" }).toString(),
+      });
+
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe("invalid_request");
+    }, 10000);
+
+    it("should reject /oauth/token requests with unsupported grant_type", async () => {
+      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
+        console.log("⚠️  Skipping test - authentication not configured");
+        return;
+      }
+
+      const response = await fetch(`${baseUrl}/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: "x",
+          client_secret: "y",
+        }).toString(),
+      });
+
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe("unsupported_grant_type");
+    }, 10000);
+
+    it("should reject /oauth/authorize requests with unsupported response_type", async () => {
+      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
+        console.log("⚠️  Skipping test - authentication not configured");
+        return;
+      }
+
+      const url = new URL(`${baseUrl}/oauth/authorize`);
+      url.searchParams.set("response_type", "token");
+      url.searchParams.set("client_id", "x");
+
+      const response = await fetch(url.toString(), { redirect: "manual" });
+
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe("unsupported_response_type");
+    }, 10000);
+
+    it("should advertise only allow-listed grant/response types in AS metadata", async () => {
+      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
+        console.log("⚠️  Skipping test - authentication not configured");
+        return;
+      }
+
+      const response = await fetch(
+        `${baseUrl}/.well-known/oauth-authorization-server`,
+      );
+      expect(response.status).toBe(200);
+      const metadata = (await response.json()) as {
+        response_types_supported: string[];
+        grant_types_supported: string[];
+      };
+
+      expect(metadata.response_types_supported).toEqual(["code"]);
+      expect(metadata.grant_types_supported).toEqual([
+        "authorization_code",
+        "refresh_token",
+      ]);
+    }, 10000);
+  });
+
   describe("Environment Variable Configuration", () => {
     it("should load authentication configuration from environment variables", () => {
       // Skip if no auth config

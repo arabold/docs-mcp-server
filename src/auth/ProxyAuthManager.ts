@@ -30,6 +30,48 @@ export const ALLOWED_GRANT_TYPES = new Set(["authorization_code", "refresh_token
  */
 export const ALLOWED_RESPONSE_TYPES = new Set(["code"]);
 
+/**
+ * Forward a proxied upstream response to the client as JSON, defending against
+ * the upstream returning a non-JSON body (e.g. an HTML 502 page from an
+ * intermediate proxy). Calling `response.json()` directly would throw a
+ * SyntaxError in that case, leaving Fastify to emit an unhandled 500 with no
+ * useful error envelope. Instead we surface a spec-shaped OAuth error so the
+ * MCP client sees a parseable JSON body.
+ */
+async function sendUpstreamJsonResponse(
+  reply: import("fastify").FastifyReply,
+  response: Response,
+  upstream: string,
+): Promise<void> {
+  const text = await response.text();
+  // Both /oauth/token and /oauth/register are specified to return a JSON
+  // object; an empty body — like a non-JSON body — is treated as an upstream
+  // failure rather than silently forwarded. Forwarding `null` would technically
+  // be valid JSON but defeats the purpose of this helper: clients expect an
+  // object they can read `.error` / `.access_token` from.
+  if (text.length > 0) {
+    try {
+      const data = JSON.parse(text);
+      if (data !== null && typeof data === "object") {
+        reply.status(response.status).type("application/json").send(data);
+        return;
+      }
+    } catch {
+      // fall through to the error envelope below
+    }
+  }
+  logger.warn(
+    `Upstream ${upstream} endpoint returned a non-JSON-object body (status=${response.status}, bytes=${text.length})`,
+  );
+  reply
+    .status(502)
+    .type("application/json")
+    .send({
+      error: "server_error",
+      error_description: `Upstream ${upstream} endpoint returned an invalid response.`,
+    });
+}
+
 export class ProxyAuthManager {
   private proxyProvider: ProxyOAuthServerProvider | null = null;
   private discoveredEndpoints: {
@@ -140,30 +182,37 @@ export class ProxyAuthManager {
       reply.type("application/json").send(metadata);
     });
 
-    // OAuth2 Protected Resource Metadata (RFC 9728)
-    server.get("/.well-known/oauth-protected-resource", async (request, reply) => {
-      const baseUrl = `${request.protocol}://${request.headers.host}`;
+    // OAuth2 Protected Resource Metadata (RFC 9728).
+    //
+    // Identifiers here are derived from the trusted `baseUrl` (config-driven),
+    // not from `request.headers.host`. The Host header is client-controlled,
+    // and this metadata is consumed by clients to decide which resource server
+    // to bind tokens to — so trusting the Host header here would reintroduce
+    // the audience-binding attack vector that the OAuth proxy itself defends
+    // against.
+    server.get("/.well-known/oauth-protected-resource", async (_request, reply) => {
+      const origin = baseUrl.origin;
       const metadata = {
-        resource: `${baseUrl}/sse`,
+        resource: `${origin}/sse`,
         authorization_servers: [this.config.issuerUrl],
         scopes_supported: ["profile", "email"],
         bearer_methods_supported: ["header"],
         resource_name: "Documentation MCP Server",
         resource_documentation: "https://github.com/arabold/docs-mcp-server#readme",
         // Enhanced metadata for better discoverability
-        resource_server_metadata_url: `${baseUrl}/.well-known/oauth-protected-resource`,
+        resource_server_metadata_url: `${origin}/.well-known/oauth-protected-resource`,
         authorization_server_metadata_url: `${this.config.issuerUrl}/.well-known/openid-configuration`,
         jwks_uri: `${this.config.issuerUrl}/.well-known/jwks.json`,
         // Supported MCP transports
         mcp_transports: [
           {
             transport: "sse",
-            endpoint: `${baseUrl}/sse`,
+            endpoint: `${origin}/sse`,
             description: "Server-Sent Events transport",
           },
           {
             transport: "http",
-            endpoint: `${baseUrl}/mcp`,
+            endpoint: `${origin}/mcp`,
             description: "Streaming HTTP transport",
           },
         ],
@@ -172,18 +221,31 @@ export class ProxyAuthManager {
       reply.type("application/json").send(metadata);
     });
 
+    // Resource identifier pinned to the trusted `baseUrl` (config-derived),
+    // NOT to `request.headers.host`. The Host header is client-controlled and
+    // can be spoofed when the deployment lacks strict Host validation upstream,
+    // which would reintroduce the very audience-binding attack this proxy is
+    // meant to prevent.
+    const pinnedResourceUrl = `${baseUrl.origin}/sse`;
+
     // OAuth2 Authorization endpoint
     server.get("/oauth/authorize", async (request, reply) => {
-      // In a proxy setup, redirect to the upstream authorization server
-      const endpoints = await this.discoverEndpoints();
       const params = new URLSearchParams(request.query as Record<string, string>);
 
-      // Validate response_type matches what this AS advertises (RFC 6749 §3.1.1).
-      // Rejecting unsupported values prevents the proxy from being used to drive
-      // arbitrary upstream flows (e.g. implicit/hybrid) that this server does
-      // not support and that bypass the resource binding below.
+      // Validate response_type matches what this AS advertises (RFC 6749 §3.1.1
+      // and §4.1.2.1). A missing parameter is `invalid_request`; a value that
+      // is present but unsupported is `unsupported_response_type`. Validation
+      // runs before upstream discovery so that bogus requests do not incur a
+      // network round-trip to the authorization server.
       const responseType = params.get("response_type");
-      if (!responseType || !ALLOWED_RESPONSE_TYPES.has(responseType)) {
+      if (!responseType) {
+        reply.status(400).type("application/json").send({
+          error: "invalid_request",
+          error_description: "Missing required parameter 'response_type'.",
+        });
+        return;
+      }
+      if (!ALLOWED_RESPONSE_TYPES.has(responseType)) {
         reply.status(400).type("application/json").send({
           error: "unsupported_response_type",
           error_description: "Only the 'code' response_type is supported by this proxy.",
@@ -191,48 +253,54 @@ export class ProxyAuthManager {
         return;
       }
 
-      // Force the resource parameter (RFC 8707) to one of this server's own
-      // resource identifiers. Trusting a client-supplied `resource` here would
-      // let a caller mint tokens audience-bound to a different resource server
-      // and replay them against that server.
-      const resourceUrl = `${request.protocol}://${request.headers.host}/sse`;
-      params.set("resource", resourceUrl);
+      // Force the resource parameter (RFC 8707) to this server's own resource
+      // identifier. Trusting a client-supplied `resource` here would let a
+      // caller mint tokens audience-bound to a different resource server and
+      // replay them against that server.
+      params.set("resource", pinnedResourceUrl);
 
+      const endpoints = await this.discoverEndpoints();
       const redirectUrl = `${endpoints.authorizationUrl}?${params.toString()}`;
       reply.redirect(redirectUrl);
     });
 
     // OAuth2 Token endpoint
     server.post("/oauth/token", async (request, reply) => {
-      // Proxy token requests to the upstream server
-      const endpoints = await this.discoverEndpoints();
-
-      // Prepare token request body, preserving resource parameter if present
       const tokenBody = new URLSearchParams(request.body as Record<string, string>);
 
-      // Validate grant_type against the allow-list advertised in our AS metadata
-      // (RFC 6749 §4 / RFC 8628). Without this check the proxy is effectively an
-      // open relay to the upstream token endpoint and could be used to obtain
-      // tokens via grants this resource server never sanctioned (e.g. password,
-      // client_credentials, urn:ietf:params:oauth:grant-type:*).
+      // Validate grant_type against the allow-list advertised in our AS
+      // metadata (RFC 6749 §4 / §5.2). A missing parameter is `invalid_request`;
+      // a present-but-unsupported value is `unsupported_grant_type`. Without
+      // this check the proxy is effectively an open relay to the upstream token
+      // endpoint and could be used to obtain tokens via grants this resource
+      // server never sanctioned (e.g. password, client_credentials,
+      // urn:ietf:params:oauth:grant-type:*).
       const grantType = tokenBody.get("grant_type");
-      if (!grantType || !ALLOWED_GRANT_TYPES.has(grantType)) {
+      if (!grantType) {
+        reply.status(400).type("application/json").send({
+          error: "invalid_request",
+          error_description: "Missing required parameter 'grant_type'.",
+        });
+        return;
+      }
+      if (!ALLOWED_GRANT_TYPES.has(grantType)) {
         reply
           .status(400)
           .type("application/json")
           .send({
             error: "unsupported_grant_type",
-            error_description: `Grant type '${grantType ?? ""}' is not supported by this proxy.`,
+            error_description: `Grant type '${grantType}' is not supported by this proxy.`,
           });
         return;
       }
 
-      // Force the resource parameter (RFC 8707) to one of this server's own
-      // resource identifiers, regardless of what the client requested. This
-      // ensures the upstream AS audience-binds the issued token to this MCP
-      // server and not an arbitrary attacker-chosen resource.
-      const resourceUrl = `${request.protocol}://${request.headers.host}/sse`;
-      tokenBody.set("resource", resourceUrl);
+      // Force the resource parameter (RFC 8707) to this server's own resource
+      // identifier, regardless of what the client requested. This ensures the
+      // upstream AS audience-binds the issued token to this MCP server and not
+      // an arbitrary attacker-chosen resource.
+      tokenBody.set("resource", pinnedResourceUrl);
+
+      const endpoints = await this.discoverEndpoints();
 
       const response = await fetch(endpoints.tokenUrl, {
         method: "POST",
@@ -242,8 +310,7 @@ export class ProxyAuthManager {
         body: tokenBody.toString(),
       });
 
-      const data = await response.json();
-      reply.status(response.status).type("application/json").send(data);
+      await sendUpstreamJsonResponse(reply, response, "token");
     });
 
     // OAuth2 Token Revocation endpoint
@@ -278,8 +345,7 @@ export class ProxyAuthManager {
           body: JSON.stringify(request.body),
         });
 
-        const data = await response.json();
-        reply.status(response.status).type("application/json").send(data);
+        await sendUpstreamJsonResponse(reply, response, "register");
       } else {
         reply.status(404).send({ error: "Dynamic client registration not supported" });
       }
