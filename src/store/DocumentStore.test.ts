@@ -800,44 +800,34 @@ describe("DocumentStore - With Embeddings", () => {
         return;
       }
 
-      const originalOpenAiApiBase = process.env.OPENAI_API_BASE;
-      process.env.OPENAI_API_BASE = "http://localhost:8000/v1";
       mockEmbedDocuments.mockRejectedValue(
         new TypeError("Cannot read properties of undefined (reading '0')"),
       );
 
-      try {
-        const error = await store
-          .addDocuments(
-            "malformedresponse",
-            "1.0.0",
-            1,
-            createScrapeResult(
-              "Malformed Response Test",
-              "https://example.com/malformed-response",
-              "Test content",
-              ["test"],
-            ),
-          )
-          .catch((error: unknown) => error);
+      const error = await store
+        .addDocuments(
+          "malformedresponse",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Malformed Response Test",
+            "https://example.com/malformed-response",
+            "Test content",
+            ["test"],
+          ),
+        )
+        .catch((error: unknown) => error);
 
-        expect(error).toBeInstanceOf(Error);
-        const message = error instanceof Error ? error.message : String(error);
-        expect(message).toContain("Failed to generate embeddings");
-        expect(message).toContain("https://example.com/malformed-response");
-        expect(message).toContain("openai:text-embedding-3-small");
-        expect(message).toContain("Batch 1");
-        expect(message).toContain("Verify embedding provider configuration");
-        expect(message).toContain("request size");
-        expect(message).toContain("backend logs");
-        expect(message).toContain("Cannot read properties of undefined");
-      } finally {
-        if (originalOpenAiApiBase === undefined) {
-          delete process.env.OPENAI_API_BASE;
-        } else {
-          process.env.OPENAI_API_BASE = originalOpenAiApiBase;
-        }
-      }
+      expect(error).toBeInstanceOf(Error);
+      const message = error instanceof Error ? error.message : String(error);
+      expect(message).toContain("Failed to generate embeddings");
+      expect(message).toContain("https://example.com/malformed-response");
+      expect(message).toContain("openai:text-embedding-3-small");
+      expect(message).toContain("Batch 1");
+      expect(message).toContain("Verify embedding provider configuration");
+      expect(message).toContain("request size");
+      expect(message).toContain("backend logs");
+      expect(message).toContain("Cannot read properties of undefined");
     });
 
     it("should handle nested retry for multiple batch splits", async () => {
