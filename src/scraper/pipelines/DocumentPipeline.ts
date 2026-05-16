@@ -130,11 +130,16 @@ export class DocumentPipeline extends BasePipeline {
         chunks,
       };
     } catch (error) {
-      // Log a safe error message to avoid potential binary data in the logs
+      // Surface the underlying cause chain so environmental failures
+      // (e.g. missing native bindings, glibc mismatches) are diagnosable
+      // from the logs instead of silently dropping documents. Each cause's
+      // message is truncated to keep potentially binary data out of logs.
       const errorName = error instanceof Error ? error.name : "UnknownError";
+      const reasons = collectErrorReasons(error);
       const safeMessage = `Failed to convert document: ${errorName}`;
+      const detail = reasons.length > 0 ? ` — ${reasons.join(" | ")}` : "";
 
-      logger.warn(`${safeMessage} for ${rawContent.source}`);
+      logger.error(`❌ ${safeMessage} (${mimeType}) for ${rawContent.source}${detail}`);
 
       return {
         title: null,
@@ -218,4 +223,40 @@ export class DocumentPipeline extends BasePipeline {
       return source.substring(lastSlash + 1) || null;
     }
   }
+}
+
+/**
+ * Maximum length (in characters) of any single error message included in
+ * extraction failure logs. Kreuzberg errors may embed parts of the input
+ * document; truncating defends the logs against accidental binary dumps
+ * while still surfacing enough text to diagnose the root cause.
+ */
+const MAX_ERROR_DETAIL_LENGTH = 500;
+
+/**
+ * Walks an `Error.cause` chain and returns a deduplicated, truncated list
+ * of each link's `message`. Used to surface the underlying cause of a
+ * Kreuzberg extraction failure (e.g. "GLIBC_2.38 not found") rather than
+ * just the wrapper's generic name.
+ */
+function collectErrorReasons(error: unknown): string[] {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  let depth = 0;
+  while (current && !seen.has(current) && depth < 10) {
+    seen.add(current);
+    if (current instanceof Error && current.message) {
+      const trimmed = current.message
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, MAX_ERROR_DETAIL_LENGTH);
+      if (trimmed && !messages.includes(trimmed)) {
+        messages.push(trimmed);
+      }
+    }
+    current = (current as { cause?: unknown }).cause;
+    depth++;
+  }
+  return messages;
 }
