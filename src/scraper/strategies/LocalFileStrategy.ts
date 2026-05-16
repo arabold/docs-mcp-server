@@ -14,7 +14,12 @@ import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrate
 /**
  * LocalFileStrategy handles crawling and scraping of local files and folders using file:// URLs.
  *
- * All files with a MIME type of `text/*` are processed. This includes HTML, Markdown, plain text, and source code files such as `.js`, `.ts`, `.tsx`, `.css`, etc. Binary files, PDFs, images, and other non-text formats are ignored.
+ * Files are routed to the appropriate pipeline based on their detected MIME type:
+ * `text/*` content (HTML, Markdown, plain text, source code such as `.js`/`.ts`/`.tsx`/`.css`)
+ * is handled by the text/HTML/Markdown/source-code pipelines, while binary documents
+ * (PDF, Office, OpenDocument, RTF, eBooks, Jupyter notebooks) are handled by the
+ * `DocumentPipeline`. Other binary formats (images, etc.) fall through unprocessed
+ * and are logged as unsupported.
  *
  * Supports include/exclude filters and percent-encoded paths.
  */

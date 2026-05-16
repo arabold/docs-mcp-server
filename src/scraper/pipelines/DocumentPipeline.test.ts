@@ -444,5 +444,67 @@ describe("DocumentPipeline", () => {
       expect(result.errors![0].message).toContain("Could not determine document type");
       expect(result.textContent).toBeNull();
     });
+
+    it("should log the underlying cause chain when extraction throws", async () => {
+      // Regression guard for issue #394: when @kreuzberg/node failed to load
+      // its native binding (glibc mismatch in Docker), the original log line
+      // only said "Failed to convert document: Error" with no clue about the
+      // actual underlying problem (`GLIBC_2.38 not found`). This test pins
+      // the behavior that the wrapped Error.cause chain reaches the log.
+      const { logger } = await import("../../utils/logger");
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+      const wrapped = new Error("Failed to load Kreuzberg native bindings", {
+        cause: new Error(
+          "/lib/aarch64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found",
+        ),
+      });
+      const mockedExtractBytes = vi.mocked(extractBytes);
+      mockedExtractBytes.mockRejectedValueOnce(wrapped);
+
+      const rawContent = createRawContent(
+        "sample.pdf",
+        "application/pdf",
+        Buffer.from("%PDF-1.4 fake"),
+      );
+
+      const result = await pipeline.process(rawContent, baseOptions);
+
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors![0].message).toContain("Failed to convert document");
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      const logged = errorSpy.mock.calls[0][0];
+      expect(logged).toContain("Failed to convert document");
+      expect(logged).toContain("Failed to load Kreuzberg native bindings");
+      expect(logged).toContain("GLIBC_2.38");
+      expect(logged).toContain("application/pdf");
+
+      errorSpy.mockRestore();
+    });
+
+    it("should truncate very long error messages to keep binary out of logs", async () => {
+      const { logger } = await import("../../utils/logger");
+      const errorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
+
+      // Simulate a Kreuzberg error whose message embeds a huge blob (could be
+      // binary from the malformed input document). The log must not contain
+      // the full blob.
+      const huge = "X".repeat(50_000);
+      vi.mocked(extractBytes).mockRejectedValueOnce(new Error(huge));
+
+      const rawContent = createRawContent(
+        "sample.pdf",
+        "application/pdf",
+        Buffer.from("%PDF-1.4 fake"),
+      );
+      await pipeline.process(rawContent, baseOptions);
+
+      const logged = errorSpy.mock.calls[0][0] as string;
+      // The log line wraps the message; it should be far smaller than the
+      // raw 50k blob (allow some envelope for prefix/suffix/mime type/url).
+      expect(logged.length).toBeLessThan(2_000);
+
+      errorSpy.mockRestore();
+    });
   });
 });

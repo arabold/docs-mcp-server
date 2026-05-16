@@ -1,5 +1,5 @@
 # Base stage with build dependencies
-FROM node:22-slim AS base
+FROM node:22-trixie-slim AS base
 
 WORKDIR /app
 
