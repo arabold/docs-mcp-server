@@ -90,6 +90,8 @@ export interface FetchOptions {
    * and may return a 304 Not Modified response if content hasn't changed.
    */
   etag?: string | null;
+  /** Internal-only allowlist roots for application-managed temporary files. */
+  internalAllowedFileRoots?: string[];
 }
 
 /**

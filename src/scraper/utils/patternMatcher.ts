@@ -58,6 +58,23 @@ export function matchesAnyPattern(path: string, patterns?: string[]): boolean {
 }
 
 /**
+ * Matches a flat string (hostname, label, etc.) against patterns without any
+ * path normalization. Patterns use the same syntax as URL patterns: a glob
+ * processed by minimatch, or a regex wrapped in `/.../`. Matching is
+ * case-insensitive, which matches DNS semantics for the hostname use case.
+ */
+export function matchesAnyHostPattern(value: string, patterns?: string[]): boolean {
+  if (!patterns || patterns.length === 0) return false;
+  const normalized = value.toLowerCase();
+  return patterns.some((pattern) => {
+    if (isRegexPattern(pattern)) {
+      return patternToRegExp(pattern).test(value);
+    }
+    return minimatch(normalized, pattern.toLowerCase(), { dot: true });
+  });
+}
+
+/**
  * Extracts the path and query from a URL string (no domain).
  */
 export function extractPathAndQuery(url: string): string {

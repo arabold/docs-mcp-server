@@ -6,6 +6,22 @@ import { z } from "zod";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
 
+const envStringArray = z
+  .union([z.array(z.string()), z.string()])
+  .transform((value) => {
+    if (Array.isArray(value)) {
+      return value;
+    }
+
+    const parsed = yaml.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.map((item) => String(item));
+    }
+
+    return [value];
+  })
+  .pipe(z.array(z.string()));
+
 /**
  * Custom zod schema for boolean values that properly handles string representations.
  * Unlike z.coerce.boolean() which treats any non-empty string as true,
@@ -67,6 +83,21 @@ export const DEFAULT_CONFIG = {
     },
     document: {
       maxSize: 10 * 1024 * 1024, // 10MB max size for PDF/Office documents
+    },
+    security: {
+      network: {
+        mode: "open",
+        allowPrivateNetworks: false,
+        allowedHosts: [] as string[],
+        allowedCidrs: [] as string[],
+        allowInvalidTls: false,
+      },
+      fileAccess: {
+        mode: "allowedRoots",
+        allowedRoots: ["$DOCUMENTS"] as string[],
+        followSymlinks: false,
+        includeHidden: false,
+      },
     },
   },
   splitter: {
@@ -191,6 +222,45 @@ export const AppConfigSchema = z.object({
             .default(DEFAULT_CONFIG.scraper.document.maxSize),
         })
         .default(DEFAULT_CONFIG.scraper.document),
+      security: z
+        .object({
+          network: z
+            .object({
+              mode: z
+                .enum(["open", "allowlist"])
+                .default(DEFAULT_CONFIG.scraper.security.network.mode),
+              allowPrivateNetworks: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.network.allowPrivateNetworks,
+              ),
+              allowedHosts: envStringArray.default(
+                DEFAULT_CONFIG.scraper.security.network.allowedHosts,
+              ),
+              allowedCidrs: envStringArray.default(
+                DEFAULT_CONFIG.scraper.security.network.allowedCidrs,
+              ),
+              allowInvalidTls: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.network.allowInvalidTls,
+              ),
+            })
+            .default(DEFAULT_CONFIG.scraper.security.network),
+          fileAccess: z
+            .object({
+              mode: z
+                .enum(["disabled", "allowedRoots", "unrestricted"])
+                .default(DEFAULT_CONFIG.scraper.security.fileAccess.mode),
+              allowedRoots: envStringArray.default(
+                DEFAULT_CONFIG.scraper.security.fileAccess.allowedRoots,
+              ),
+              followSymlinks: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.fileAccess.followSymlinks,
+              ),
+              includeHidden: envBoolean.default(
+                DEFAULT_CONFIG.scraper.security.fileAccess.includeHidden,
+              ),
+            })
+            .default(DEFAULT_CONFIG.scraper.security.fileAccess),
+        })
+        .default(DEFAULT_CONFIG.scraper.security),
     })
     .default(DEFAULT_CONFIG.scraper),
   splitter: z
@@ -416,7 +486,52 @@ export function loadConfig(
     setAtPath(mergedInput, ["app", "embeddingModel"], "text-embedding-3-small");
   }
 
-  return AppConfigSchema.parse(mergedInput);
+  const parseResult = AppConfigSchema.safeParse(mergedInput);
+  if (parseResult.success) {
+    return parseResult.data;
+  }
+
+  // The file on disk is structurally wrong (e.g., array fields saved as
+  // objects by a prior buggy version, or a hand-edit with a typo). Rather
+  // than refusing to start, fall back to env-and-CLI-on-defaults and replace
+  // the corrupted file so the next load is clean. The original file is moved
+  // aside to `<configPath>.invalid-<timestamp>` so hand-edits aren't lost.
+  if (!isReadOnlyConfig && fs.existsSync(configPath)) {
+    const quarantinePath = `${configPath}.invalid-${Date.now()}`;
+    try {
+      fs.renameSync(configPath, quarantinePath);
+      logger.warn(
+        `Configuration file has invalid shape and was moved to ${quarantinePath}; resetting to defaults. Reason: ${parseResult.error.message}`,
+      );
+    } catch (renameError) {
+      logger.warn(
+        `Configuration file has invalid shape; resetting to defaults (could not quarantine original: ${renameError}). Reason: ${parseResult.error.message}`,
+      );
+    }
+  } else {
+    logger.warn(
+      `Configuration file has invalid shape; resetting to defaults. Reason: ${parseResult.error.message}`,
+    );
+  }
+  const fallbackInput = deepMerge(
+    defaults,
+    deepMerge(envConfig, cliConfig),
+  ) as ConfigObject;
+  if (
+    !getAtPath(fallbackInput, ["app", "embeddingModel"]) &&
+    process.env.OPENAI_API_KEY
+  ) {
+    setAtPath(fallbackInput, ["app", "embeddingModel"], "text-embedding-3-small");
+  }
+  const fallback = AppConfigSchema.parse(fallbackInput);
+  if (!isReadOnlyConfig) {
+    try {
+      saveConfigFile(configPath, fallback as unknown as ConfigObject);
+    } catch (error) {
+      logger.warn(`Failed to write fresh config file ${configPath}: ${error}`);
+    }
+  }
+  return fallback;
 }
 
 function loadConfigFile(filePath: string): Record<string, unknown> | null {
@@ -560,6 +675,11 @@ function getAtPath(obj: ConfigObject, pathArr: string[]): unknown {
 function deepMerge(target: unknown, source: unknown): unknown {
   if (typeof target !== "object" || target === null) return source;
   if (typeof source !== "object" || source === null) return target;
+  // Arrays are scalars from a merge standpoint: source replaces target entirely.
+  // Recursing into arrays would either splice into a wrong shape (spreading an
+  // array into a plain object) or silently union by index, neither of which
+  // matches user expectations for list-shaped config values.
+  if (Array.isArray(target) || Array.isArray(source)) return source;
 
   const t = target as ConfigObject;
   const s = source as ConfigObject;
@@ -572,8 +692,10 @@ function deepMerge(target: unknown, source: unknown): unknown {
     if (
       typeof sValue === "object" &&
       sValue !== null &&
+      !Array.isArray(sValue) &&
       typeof tValue === "object" &&
       tValue !== null &&
+      !Array.isArray(tValue) &&
       key in t
     ) {
       output[key] = deepMerge(tValue, sValue);
