@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import archiver from "archiver";
+// @ts-expect-error -- @types/archiver@7 lags behind archiver@8's named ESM exports.
+import { ZipArchive } from "archiver";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { LocalFileStrategy } from "../src/scraper/strategies/LocalFileStrategy";
 import type { AppConfig } from "../src/utils/config";
@@ -19,7 +20,7 @@ describe("LocalFileStrategy - Archive Integration", () => {
 
     // Create a zip file with some content
     const output = fs.createWriteStream(ZIP_PATH);
-    const archive = archiver("zip", { zlib: { level: 9 } });
+    const archive = new ZipArchive({ zlib: { level: 9 } });
 
     await new Promise<void>((resolve, reject) => {
       output.on("close", resolve);
