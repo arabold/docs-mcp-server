@@ -1,3 +1,26 @@
+## [2.2.2](https://github.com/arabold/docs-mcp-server/compare/v2.2.1...v2.2.2) (2026-05-16)
+
+
+### Bug Fixes
+
+* address review - add handler tests, deduplicate constants ([905e3ab](https://github.com/arabold/docs-mcp-server/commit/905e3ab94fba9c7059a15fae06fa83c31716c3f1))
+* **auth:** harden OAuth proxy resource pinning, JSON robustness, and RFC 6749 error codes ([0b5516e](https://github.com/arabold/docs-mcp-server/commit/0b5516ef97123d4e9220b5a04f071131663d75b6)), closes [#395](https://github.com/arabold/docs-mcp-server/issues/395)
+* **auth:** validate grant_type/response_type and pin resource on OAuth proxy ([69a9fa3](https://github.com/arabold/docs-mcp-server/commit/69a9fa3b713efa62d1200c68f04f1bc0c4910d81))
+* **docker:** bump base image to bookworm-trixie so Kreuzberg can load ([3a188fb](https://github.com/arabold/docs-mcp-server/commit/3a188fb3dd8c1a9e790944d9e1654ac7cc3f3f50)), closes [#394](https://github.com/arabold/docs-mcp-server/issues/394)
+* **scraper:** add fail-fast threshold for unhealthy targets ([6d346f8](https://github.com/arabold/docs-mcp-server/commit/6d346f8e9ba75e986549aa3851c4159e236520f4))
+* **scraper:** add web UI requirements to hash-routed SPA specs ([ff09422](https://github.com/arabold/docs-mcp-server/commit/ff0942242fc630d16f56c6df828fca1e4531d3d6))
+* **scraper:** align hash-routed SPA spec with MCP support ([#379](https://github.com/arabold/docs-mcp-server/issues/379)) ([1fabc11](https://github.com/arabold/docs-mcp-server/commit/1fabc112304e185452310d74c0e7a9c92550daf1))
+* **scraper:** draft specs for hash-routed SPA support ([#379](https://github.com/arabold/docs-mcp-server/issues/379)) ([92181ae](https://github.com/arabold/docs-mcp-server/commit/92181ae6e907aba30791be531636cf5a412df712))
+* **scraper:** fail strict scrapes on child not found ([9ce3ec1](https://github.com/arabold/docs-mcp-server/commit/9ce3ec104f479aa1c91bf78b6087500faa3e9a6f))
+* **scraper:** revert immediate throw for child 404 to match spec and fix failing tests ([c54b3d9](https://github.com/arabold/docs-mcp-server/commit/c54b3d92dbe2658d79b3443b2965252ea97a0f0a))
+* **scraper:** support hash-routed spa crawling ([a3cb51c](https://github.com/arabold/docs-mcp-server/commit/a3cb51ca445d7b7f65b06c07d5d0a6ca9da9dd2b))
+* **scraper:** surface Kreuzberg failure causes so silent skips become visible ([3015906](https://github.com/arabold/docs-mcp-server/commit/30159066482854680df0a982cb2e9aabe03f9c99)), closes [#394](https://github.com/arabold/docs-mcp-server/issues/394)
+* **scraper:** tighten failure threshold accounting ([dcf68ae](https://github.com/arabold/docs-mcp-server/commit/dcf68ae7d44d528f473cac452138dbfe5bf5588d))
+* **scraper:** tighten hash-routed SPA spec contract ([#379](https://github.com/arabold/docs-mcp-server/issues/379)) ([7db4dc1](https://github.com/arabold/docs-mcp-server/commit/7db4dc14e1ce7906290f04187532cbd03da39de9))
+* **store:** improve embedding failure diagnostics ([3c9e9c3](https://github.com/arabold/docs-mcp-server/commit/3c9e9c3caef07f1906827d41f41e707065ee2668))
+* **store:** use vec0 partition columns directly in search queries ([ed4ebd7](https://github.com/arabold/docs-mcp-server/commit/ed4ebd727d70db7c2d0a34ed0569c987141d205d))
+* **web:** honor preserve hash defaults ([ecc768a](https://github.com/arabold/docs-mcp-server/commit/ecc768a54852411abebe225aec252509df429546))
+
 ## [2.2.1](https://github.com/arabold/docs-mcp-server/compare/v2.2.0...v2.2.1) (2026-03-30)
 
 
