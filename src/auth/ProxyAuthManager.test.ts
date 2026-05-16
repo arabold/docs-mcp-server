@@ -6,7 +6,11 @@ import type { FastifyInstance } from "fastify";
 import { jwtVerify } from "jose";
 import { HttpResponse, http } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ProxyAuthManager } from "./ProxyAuthManager";
+import {
+  ALLOWED_GRANT_TYPES,
+  ALLOWED_RESPONSE_TYPES,
+  ProxyAuthManager,
+} from "./ProxyAuthManager";
 import type { AuthConfig } from "./types";
 
 // Get the mocked function
@@ -35,6 +39,49 @@ beforeEach(() => {
   // We just reset handlers to remove any specific overrides from previous tests
   server.resetHandlers();
 });
+
+/**
+ * Helper to extract a registered route handler from mockServer.
+ * After calling registerRoutes, finds the handler registered for the given method + path.
+ */
+function getHandler(
+  mockServer: FastifyInstance,
+  method: "get" | "post",
+  path: string,
+): (request: any, reply: any) => Promise<any> {
+  const calls = (mockServer[method] as ReturnType<typeof vi.fn>).mock.calls;
+  const match = calls.find(([p]: [string]) => p === path);
+  if (!match)
+    throw new Error(`No handler registered for ${method.toUpperCase()} ${path}`);
+  return match[1];
+}
+
+/** Create a minimal mock Fastify reply object. */
+function createMockReply() {
+  const reply: any = {
+    statusCode: 200,
+    body: undefined,
+    contentType: undefined,
+    redirectUrl: undefined,
+  };
+  reply.status = vi.fn((code: number) => {
+    reply.statusCode = code;
+    return reply;
+  });
+  reply.type = vi.fn((t: string) => {
+    reply.contentType = t;
+    return reply;
+  });
+  reply.send = vi.fn((data: any) => {
+    reply.body = data;
+    return reply;
+  });
+  reply.redirect = vi.fn((url: string) => {
+    reply.redirectUrl = url;
+    return reply;
+  });
+  return reply;
+}
 
 describe("ProxyAuthManager", () => {
   let authManager: ProxyAuthManager;
@@ -186,6 +233,189 @@ describe("ProxyAuthManager", () => {
       expect(() => uninitializedManager.registerRoutes(mockServer, baseUrl)).toThrow(
         "Proxy provider not initialized",
       );
+    });
+  });
+
+  describe("constants consistency", () => {
+    it("ALLOWED_RESPONSE_TYPES and ALLOWED_GRANT_TYPES should match metadata", async () => {
+      authManager = new ProxyAuthManager(validAuthConfig);
+      await authManager.initialize();
+
+      const baseUrl = new URL("https://server.example.com");
+      authManager.registerRoutes(mockServer, baseUrl);
+
+      // Invoke the metadata handler
+      const handler = getHandler(
+        mockServer,
+        "get",
+        "/.well-known/oauth-authorization-server",
+      );
+      const reply = createMockReply();
+      await handler({}, reply);
+
+      expect(reply.body.response_types_supported).toEqual([...ALLOWED_RESPONSE_TYPES]);
+      expect(reply.body.grant_types_supported).toEqual([...ALLOWED_GRANT_TYPES]);
+    });
+  });
+
+  describe("/oauth/authorize handler", () => {
+    beforeEach(async () => {
+      authManager = new ProxyAuthManager(validAuthConfig);
+      await authManager.initialize();
+      authManager.registerRoutes(mockServer, new URL("https://server.example.com"));
+    });
+
+    it("should reject missing response_type with 400", async () => {
+      const handler = getHandler(mockServer, "get", "/oauth/authorize");
+      const reply = createMockReply();
+      const request = {
+        protocol: "https",
+        headers: { host: "server.example.com" },
+        query: { client_id: "abc", redirect_uri: "https://client.example.com/cb" },
+      };
+
+      await handler(request, reply);
+
+      expect(reply.status).toHaveBeenCalledWith(400);
+      expect(reply.body.error).toBe("unsupported_response_type");
+    });
+
+    it("should reject unsupported response_type (e.g. token) with 400", async () => {
+      const handler = getHandler(mockServer, "get", "/oauth/authorize");
+      const reply = createMockReply();
+      const request = {
+        protocol: "https",
+        headers: { host: "server.example.com" },
+        query: { response_type: "token", client_id: "abc" },
+      };
+
+      await handler(request, reply);
+
+      expect(reply.status).toHaveBeenCalledWith(400);
+      expect(reply.body.error).toBe("unsupported_response_type");
+    });
+
+    it("should redirect to upstream with resource parameter forced for valid response_type", async () => {
+      const handler = getHandler(mockServer, "get", "/oauth/authorize");
+      const reply = createMockReply();
+      const request = {
+        protocol: "https",
+        headers: { host: "server.example.com" },
+        query: {
+          response_type: "code",
+          client_id: "abc",
+          redirect_uri: "https://client.example.com/cb",
+          resource: "https://evil.example.com/sse",
+        },
+      };
+
+      await handler(request, reply);
+
+      expect(reply.redirect).toHaveBeenCalled();
+      const redirectUrl = reply.redirectUrl as string;
+      expect(redirectUrl).toContain("auth.example.com/oauth/authorize");
+      // Verify resource was overwritten to this server's own identifier
+      const params = new URL(redirectUrl).searchParams;
+      expect(params.get("resource")).toBe("https://server.example.com/sse");
+    });
+  });
+
+  describe("/oauth/token handler", () => {
+    beforeEach(async () => {
+      authManager = new ProxyAuthManager(validAuthConfig);
+      await authManager.initialize();
+      authManager.registerRoutes(mockServer, new URL("https://server.example.com"));
+    });
+
+    it("should reject missing grant_type with 400", async () => {
+      const handler = getHandler(mockServer, "post", "/oauth/token");
+      const reply = createMockReply();
+      const request = {
+        protocol: "https",
+        headers: { host: "server.example.com" },
+        body: { code: "some_code" },
+      };
+
+      await handler(request, reply);
+
+      expect(reply.status).toHaveBeenCalledWith(400);
+      expect(reply.body.error).toBe("unsupported_grant_type");
+    });
+
+    it("should reject unsupported grant_type (e.g. client_credentials) with 400", async () => {
+      const handler = getHandler(mockServer, "post", "/oauth/token");
+      const reply = createMockReply();
+      const request = {
+        protocol: "https",
+        headers: { host: "server.example.com" },
+        body: {
+          grant_type: "client_credentials",
+          client_id: "abc",
+          client_secret: "secret",
+        },
+      };
+
+      await handler(request, reply);
+
+      expect(reply.status).toHaveBeenCalledWith(400);
+      expect(reply.body.error).toBe("unsupported_grant_type");
+    });
+
+    it("should proxy valid grant_type to upstream with forced resource parameter", async () => {
+      // Mock upstream token endpoint
+      server.use(
+        http.post("https://auth.example.com/oauth/token", async ({ request }) => {
+          const body = await request.text();
+          const params = new URLSearchParams(body);
+          return HttpResponse.json({
+            access_token: "at_123",
+            token_type: "Bearer",
+            resource_received: params.get("resource"),
+          });
+        }),
+      );
+
+      const handler = getHandler(mockServer, "post", "/oauth/token");
+      const reply = createMockReply();
+      const request = {
+        protocol: "https",
+        headers: { host: "server.example.com" },
+        body: {
+          grant_type: "authorization_code",
+          code: "auth_code_123",
+          redirect_uri: "https://client.example.com/cb",
+          resource: "https://evil.example.com/sse",
+        },
+      };
+
+      await handler(request, reply);
+
+      expect(reply.body.access_token).toBe("at_123");
+      // Verify the resource was overwritten
+      expect(reply.body.resource_received).toBe("https://server.example.com/sse");
+    });
+
+    it("should accept refresh_token grant_type", async () => {
+      server.use(
+        http.post("https://auth.example.com/oauth/token", async () => {
+          return HttpResponse.json({
+            access_token: "at_refreshed",
+            token_type: "Bearer",
+          });
+        }),
+      );
+
+      const handler = getHandler(mockServer, "post", "/oauth/token");
+      const reply = createMockReply();
+      const request = {
+        protocol: "https",
+        headers: { host: "server.example.com" },
+        body: { grant_type: "refresh_token", refresh_token: "rt_123" },
+      };
+
+      await handler(request, reply);
+
+      expect(reply.body.access_token).toBe("at_refreshed");
     });
   });
 

@@ -12,6 +12,24 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { logger } from "../utils/logger";
 import type { AuthConfig, AuthContext } from "./types";
 
+/**
+ * OAuth2 grant types accepted by the /oauth/token proxy endpoint.
+ * Restricting these prevents the proxy from being used as an open relay
+ * for arbitrary grant flows against the upstream authorization server
+ * (e.g. password, client_credentials) that this resource server does not
+ * advertise in its authorization-server metadata.
+ *
+ * These values are the single source of truth and are also referenced
+ * by the `/.well-known/oauth-authorization-server` metadata endpoint.
+ */
+export const ALLOWED_GRANT_TYPES = new Set(["authorization_code", "refresh_token"]);
+
+/**
+ * OAuth2 response types accepted by the /oauth/authorize proxy endpoint.
+ * Single source of truth — also referenced by the AS metadata endpoint.
+ */
+export const ALLOWED_RESPONSE_TYPES = new Set(["code"]);
+
 export class ProxyAuthManager {
   private proxyProvider: ProxyOAuthServerProvider | null = null;
   private discoveredEndpoints: {
@@ -109,8 +127,8 @@ export class ProxyAuthManager {
         revocation_endpoint: `${baseUrl.origin}/oauth/revoke`,
         registration_endpoint: `${baseUrl.origin}/oauth/register`,
         scopes_supported: ["profile", "email"],
-        response_types_supported: ["code"],
-        grant_types_supported: ["authorization_code", "refresh_token"],
+        response_types_supported: [...ALLOWED_RESPONSE_TYPES],
+        grant_types_supported: [...ALLOWED_GRANT_TYPES],
         token_endpoint_auth_methods_supported: [
           "client_secret_basic",
           "client_secret_post",
@@ -160,11 +178,25 @@ export class ProxyAuthManager {
       const endpoints = await this.discoverEndpoints();
       const params = new URLSearchParams(request.query as Record<string, string>);
 
-      // Add resource parameter (RFC 8707) for token binding
-      if (!params.has("resource")) {
-        const resourceUrl = `${request.protocol}://${request.headers.host}/sse`;
-        params.set("resource", resourceUrl);
+      // Validate response_type matches what this AS advertises (RFC 6749 §3.1.1).
+      // Rejecting unsupported values prevents the proxy from being used to drive
+      // arbitrary upstream flows (e.g. implicit/hybrid) that this server does
+      // not support and that bypass the resource binding below.
+      const responseType = params.get("response_type");
+      if (!responseType || !ALLOWED_RESPONSE_TYPES.has(responseType)) {
+        reply.status(400).type("application/json").send({
+          error: "unsupported_response_type",
+          error_description: "Only the 'code' response_type is supported by this proxy.",
+        });
+        return;
       }
+
+      // Force the resource parameter (RFC 8707) to one of this server's own
+      // resource identifiers. Trusting a client-supplied `resource` here would
+      // let a caller mint tokens audience-bound to a different resource server
+      // and replay them against that server.
+      const resourceUrl = `${request.protocol}://${request.headers.host}/sse`;
+      params.set("resource", resourceUrl);
 
       const redirectUrl = `${endpoints.authorizationUrl}?${params.toString()}`;
       reply.redirect(redirectUrl);
@@ -178,11 +210,29 @@ export class ProxyAuthManager {
       // Prepare token request body, preserving resource parameter if present
       const tokenBody = new URLSearchParams(request.body as Record<string, string>);
 
-      // Add resource parameter if not already present (for backward compatibility)
-      if (!tokenBody.has("resource")) {
-        const resourceUrl = `${request.protocol}://${request.headers.host}/sse`;
-        tokenBody.set("resource", resourceUrl);
+      // Validate grant_type against the allow-list advertised in our AS metadata
+      // (RFC 6749 §4 / RFC 8628). Without this check the proxy is effectively an
+      // open relay to the upstream token endpoint and could be used to obtain
+      // tokens via grants this resource server never sanctioned (e.g. password,
+      // client_credentials, urn:ietf:params:oauth:grant-type:*).
+      const grantType = tokenBody.get("grant_type");
+      if (!grantType || !ALLOWED_GRANT_TYPES.has(grantType)) {
+        reply
+          .status(400)
+          .type("application/json")
+          .send({
+            error: "unsupported_grant_type",
+            error_description: `Grant type '${grantType ?? ""}' is not supported by this proxy.`,
+          });
+        return;
       }
+
+      // Force the resource parameter (RFC 8707) to one of this server's own
+      // resource identifiers, regardless of what the client requested. This
+      // ensures the upstream AS audience-binds the issued token to this MCP
+      // server and not an arbitrary attacker-chosen resource.
+      const resourceUrl = `${request.protocol}://${request.headers.host}/sse`;
+      tokenBody.set("resource", resourceUrl);
 
       const response = await fetch(endpoints.tokenUrl, {
         method: "POST",
