@@ -40,7 +40,7 @@ The server includes a built-in OAuth2 proxy that enables seamless integration wi
 - **Dynamic Client Registration (DCR)** - RFC 7591 compliant automatic client registration
 - **Resource Parameter Support** - RFC 8707 compliant multi-transport resource identification
 - **Multi-Transport Detection** - Automatic resource URL detection for SSE and HTTP transports
-- **Standard OAuth Flows** - Authorization Code, Client Credentials, and refresh token support
+- **Standard OAuth Flows** - Authorization Code and refresh token support
 - **Smart Discovery** - Uses OAuth2 authorization server discovery (RFC 8414) for comprehensive endpoint detection including DCR and JWKS
 
 ### Authentication Flow

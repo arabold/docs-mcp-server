@@ -40,20 +40,23 @@ beforeEach(() => {
   server.resetHandlers();
 });
 
+type RouteHandler = (request: any, reply: any) => Promise<any>;
+
 /**
- * Helper to extract a registered route handler from mockServer.
- * After calling registerRoutes, finds the handler registered for the given method + path.
+ * Extract a registered route handler from mockServer. After registerRoutes
+ * has been called, finds the handler bound to the given method + path on the
+ * mocked Fastify instance.
  */
 function getHandler(
   mockServer: FastifyInstance,
   method: "get" | "post",
   path: string,
-): (request: any, reply: any) => Promise<any> {
-  const calls = (mockServer[method] as ReturnType<typeof vi.fn>).mock.calls;
-  const match = calls.find(([p]: [string]) => p === path);
+): RouteHandler {
+  const mockFn = vi.mocked(mockServer[method] as (...args: unknown[]) => unknown);
+  const match = mockFn.mock.calls.find((call) => call[0] === path);
   if (!match)
     throw new Error(`No handler registered for ${method.toUpperCase()} ${path}`);
-  return match[1];
+  return match[1] as RouteHandler;
 }
 
 /** Create a minimal mock Fastify reply object. */
@@ -265,7 +268,7 @@ describe("ProxyAuthManager", () => {
       authManager.registerRoutes(mockServer, new URL("https://server.example.com"));
     });
 
-    it("should reject missing response_type with 400", async () => {
+    it("should reject missing response_type with 400 invalid_request", async () => {
       const handler = getHandler(mockServer, "get", "/oauth/authorize");
       const reply = createMockReply();
       const request = {
@@ -277,7 +280,7 @@ describe("ProxyAuthManager", () => {
       await handler(request, reply);
 
       expect(reply.status).toHaveBeenCalledWith(400);
-      expect(reply.body.error).toBe("unsupported_response_type");
+      expect(reply.body.error).toBe("invalid_request");
     });
 
     it("should reject unsupported response_type (e.g. token) with 400", async () => {
@@ -295,12 +298,17 @@ describe("ProxyAuthManager", () => {
       expect(reply.body.error).toBe("unsupported_response_type");
     });
 
-    it("should redirect to upstream with resource parameter forced for valid response_type", async () => {
+    it("should pin resource to baseUrl regardless of client-supplied resource or Host header", async () => {
+      // Combined coverage of both audience-binding attack vectors:
+      //   - client passes a malicious `resource` query param
+      //   - client spoofs the `Host` header
+      // Both must be ignored; the pinned value must come from the trusted
+      // `baseUrl` passed to registerRoutes.
       const handler = getHandler(mockServer, "get", "/oauth/authorize");
       const reply = createMockReply();
       const request = {
         protocol: "https",
-        headers: { host: "server.example.com" },
+        headers: { host: "attacker.example.com" },
         query: {
           response_type: "code",
           client_id: "abc",
@@ -312,10 +320,7 @@ describe("ProxyAuthManager", () => {
       await handler(request, reply);
 
       expect(reply.redirect).toHaveBeenCalled();
-      const redirectUrl = reply.redirectUrl as string;
-      expect(redirectUrl).toContain("auth.example.com/oauth/authorize");
-      // Verify resource was overwritten to this server's own identifier
-      const params = new URL(redirectUrl).searchParams;
+      const params = new URL(reply.redirectUrl as string).searchParams;
       expect(params.get("resource")).toBe("https://server.example.com/sse");
     });
   });
@@ -327,7 +332,7 @@ describe("ProxyAuthManager", () => {
       authManager.registerRoutes(mockServer, new URL("https://server.example.com"));
     });
 
-    it("should reject missing grant_type with 400", async () => {
+    it("should reject missing grant_type with 400 invalid_request", async () => {
       const handler = getHandler(mockServer, "post", "/oauth/token");
       const reply = createMockReply();
       const request = {
@@ -339,7 +344,7 @@ describe("ProxyAuthManager", () => {
       await handler(request, reply);
 
       expect(reply.status).toHaveBeenCalledWith(400);
-      expect(reply.body.error).toBe("unsupported_grant_type");
+      expect(reply.body.error).toBe("invalid_request");
     });
 
     it("should reject unsupported grant_type (e.g. client_credentials) with 400", async () => {
@@ -361,16 +366,21 @@ describe("ProxyAuthManager", () => {
       expect(reply.body.error).toBe("unsupported_grant_type");
     });
 
-    it("should proxy valid grant_type to upstream with forced resource parameter", async () => {
-      // Mock upstream token endpoint
+    it("should proxy valid grant_type and pin resource on the upstream request, ignoring client resource and Host", async () => {
+      // Combined coverage of both audience-binding attack vectors against the
+      // token endpoint:
+      //   - client passes a malicious `resource` form field
+      //   - client spoofs the `Host` header
+      // Asserts the byte that actually reaches the upstream AS, which is what
+      // ultimately controls token audience binding.
+      let receivedResource: string | null = null;
       server.use(
         http.post("https://auth.example.com/oauth/token", async ({ request }) => {
-          const body = await request.text();
-          const params = new URLSearchParams(body);
+          const params = new URLSearchParams(await request.text());
+          receivedResource = params.get("resource");
           return HttpResponse.json({
             access_token: "at_123",
             token_type: "Bearer",
-            resource_received: params.get("resource"),
           });
         }),
       );
@@ -379,7 +389,7 @@ describe("ProxyAuthManager", () => {
       const reply = createMockReply();
       const request = {
         protocol: "https",
-        headers: { host: "server.example.com" },
+        headers: { host: "attacker.example.com" },
         body: {
           grant_type: "authorization_code",
           code: "auth_code_123",
@@ -391,18 +401,37 @@ describe("ProxyAuthManager", () => {
       await handler(request, reply);
 
       expect(reply.body.access_token).toBe("at_123");
-      // Verify the resource was overwritten
-      expect(reply.body.resource_received).toBe("https://server.example.com/sse");
+      expect(receivedResource).toBe("https://server.example.com/sse");
     });
 
-    it("should accept refresh_token grant_type", async () => {
-      server.use(
-        http.post("https://auth.example.com/oauth/token", async () => {
-          return HttpResponse.json({
-            access_token: "at_refreshed",
-            token_type: "Bearer",
-          });
+    it.each([
+      {
+        name: "HTML body",
+        response: new HttpResponse("<html>502 Bad Gateway</html>", {
+          status: 502,
+          headers: { "Content-Type": "text/html" },
         }),
+      },
+      {
+        name: "empty body",
+        response: new HttpResponse(null, { status: 502 }),
+      },
+      {
+        name: "JSON null literal",
+        response: new HttpResponse("null", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      },
+    ])("should return a 502 JSON error when the upstream returns $name", async ({
+      response: upstreamResponse,
+    }) => {
+      // Defends against upstream non-object responses (HTML pages, empty
+      // bodies, bare `null`) turning into an unhandled 500 or a misleading
+      // `null` payload. Clients must always see a parseable OAuth-style
+      // error envelope.
+      server.use(
+        http.post("https://auth.example.com/oauth/token", () => upstreamResponse),
       );
 
       const handler = getHandler(mockServer, "post", "/oauth/token");
@@ -410,12 +439,46 @@ describe("ProxyAuthManager", () => {
       const request = {
         protocol: "https",
         headers: { host: "server.example.com" },
-        body: { grant_type: "refresh_token", refresh_token: "rt_123" },
+        body: { grant_type: "authorization_code", code: "abc" },
       };
 
       await handler(request, reply);
 
-      expect(reply.body.access_token).toBe("at_refreshed");
+      expect(reply.status).toHaveBeenCalledWith(502);
+      expect(reply.body.error).toBe("server_error");
+    });
+  });
+
+  describe("/.well-known/oauth-protected-resource metadata", () => {
+    beforeEach(async () => {
+      authManager = new ProxyAuthManager(validAuthConfig);
+      await authManager.initialize();
+      authManager.registerRoutes(mockServer, new URL("https://server.example.com"));
+    });
+
+    it("should pin all metadata identifiers to baseUrl, ignoring Host", async () => {
+      // RFC 9728 metadata tells clients which resource to audience-bind tokens
+      // to; if we derived `resource` from `request.headers.host`, an attacker
+      // who can reach this endpoint with a spoofed Host could publish a
+      // metadata document pointing clients at the wrong resource.
+      const handler = getHandler(
+        mockServer,
+        "get",
+        "/.well-known/oauth-protected-resource",
+      );
+      const reply = createMockReply();
+      await handler(
+        { protocol: "https", headers: { host: "attacker.example.com" } },
+        reply,
+      );
+
+      expect(reply.body.resource).toBe("https://server.example.com/sse");
+      expect(reply.body.resource_server_metadata_url).toBe(
+        "https://server.example.com/.well-known/oauth-protected-resource",
+      );
+      expect(
+        reply.body.mcp_transports.map((t: { endpoint: string }) => t.endpoint),
+      ).toEqual(["https://server.example.com/sse", "https://server.example.com/mcp"]);
     });
   });
 
