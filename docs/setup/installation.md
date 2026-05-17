@@ -33,6 +33,8 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
+**Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). The named volumes in the example above (`docs-mcp-data`, `docs-mcp-config`) inherit this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make sure it is writable by uid 1000 — either `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
+
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
 ### Configure Your Client
