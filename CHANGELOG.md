@@ -1,3 +1,21 @@
+# [2.3.0](https://github.com/arabold/docs-mcp-server/compare/v2.2.2...v2.3.0) (2026-05-17)
+
+
+### Bug Fixes
+
+* **deps:** pin @kreuzberg/node to 4.4.x and adapt archiver@8 ESM import ([4102163](https://github.com/arabold/docs-mcp-server/commit/4102163fd4f513354cf5d6727661950c1579566e))
+* **docker:** address review feedback on non-root hardening ([3ecd71a](https://github.com/arabold/docs-mcp-server/commit/3ecd71a0760f81e090ec23260bb64809b93366a7))
+* **http:** normalize content-type and content-encoding header types ([840fb86](https://github.com/arabold/docs-mcp-server/commit/840fb86ec65ef036731c7b2c1396da969f51a840))
+* **scraper:** preserve scheme when matching URL patterns ([c3f8913](https://github.com/arabold/docs-mcp-server/commit/c3f8913fb32f48b72eb2f5b48f1265f4f6c9e6ec))
+* **scraper:** preserve user-provided path as scope anchor across depth-0 redirects ([559bda7](https://github.com/arabold/docs-mcp-server/commit/559bda7b65abe041baaae6aef8652143d94f2735)), closes [#381](https://github.com/arabold/docs-mcp-server/issues/381)
+* **store:** avoid vec metadata filters in search ([32050f6](https://github.com/arabold/docs-mcp-server/commit/32050f69421e6895c2f4688f9b3bdabee174f27e))
+
+
+### Features
+
+* **scraper:** add fetch access controls ([333b2ff](https://github.com/arabold/docs-mcp-server/commit/333b2ff2ffd93780dce98ff4f888b3c74dbcd3f1))
+* **scraper:** skip well-known trackers during page rendering ([d67af3c](https://github.com/arabold/docs-mcp-server/commit/d67af3c7a8a80d2198894eab9cdd5478e666a102))
+
 ## [2.2.2](https://github.com/arabold/docs-mcp-server/compare/v2.2.1...v2.2.2) (2026-05-16)
 
 
