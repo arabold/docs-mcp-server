@@ -32,6 +32,24 @@
 - **Pre-commit**: Husky runs lint, typecheck, and tests. **Never** bypass.
 - **Security**: **NEVER** commit secrets, credentials, or sensitive data (e.g., `.env`).
 
+### Dependency Hygiene
+
+The lockfile is sensitive to the platform it was generated on. `promptfoo` (dev dep) pulls in cloud-vendor SDKs (`@azure/core-rest-pipeline`, `@azure/core-client`, `@redis/client`, `pg`, `gcp-metadata`) as **platform-conditional optional transitives**. macOS resolves a leaner set than Linux. Running `npm install` on macOS silently trims those entries from `package-lock.json`; the next `npm ci` in CI or Docker then fails with **`EUSAGE: Missing: <pkg> from lock file`**.
+
+Rules:
+
+- **Don't run `npm install` locally on macOS** if you intend to commit the resulting `package-lock.json`. Use `npm ci` instead when you just need `node_modules` — it installs from the existing lockfile without mutating it.
+- **Regenerate the lockfile in Linux** when adding/bumping deps:
+  ```bash
+  docker run --rm -v "$PWD:/w" -w /w node:22-trixie-slim \
+    sh -c "rm -rf node_modules package-lock.json && npm install --ignore-scripts"
+  ```
+- **Verify before pushing** any lockfile change: `npm ci --dry-run` should succeed on Linux. Easy local check:
+  ```bash
+  docker run --rm -v "$PWD:/w" -w /w node:22-trixie-slim npm ci --dry-run
+  ```
+- **If CI reports EUSAGE**, the fix is always: regenerate the lockfile from scratch in a Linux environment and commit only the regenerated lockfile (no `package.json` changes).
+
 ### Commit Messages
 
 Strictly enforced by `commitlint`. Commits will fail if format is incorrect.
