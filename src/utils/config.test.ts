@@ -509,6 +509,60 @@ describe("Auto-generated Environment Variable Overrides", () => {
     expect(config.scraper.abortOnFailureRate).toBe(0.25);
   });
 
+  describe("scraper.skipKnownTrackers", () => {
+    it("defaults to true when nothing is set", () => {
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "tracker-default.yaml") },
+      );
+
+      expect(config.scraper.skipKnownTrackers).toBe(true);
+    });
+
+    it("respects a file-set value", () => {
+      const configPath = path.join(tmpDir, "tracker-file.yaml");
+      fs.writeFileSync(configPath, "scraper:\n  skipKnownTrackers: false\n");
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.scraper.skipKnownTrackers).toBe(false);
+    });
+
+    it("respects env override", () => {
+      process.env.DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS = "false";
+
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "tracker-env.yaml") },
+      );
+
+      expect(config.scraper.skipKnownTrackers).toBe(false);
+    });
+
+    it("env takes precedence over a conflicting file value", () => {
+      const configPath = path.join(tmpDir, "tracker-precedence.yaml");
+      fs.writeFileSync(configPath, "scraper:\n  skipKnownTrackers: true\n");
+      process.env.DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS = "false";
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.scraper.skipKnownTrackers).toBe(false);
+    });
+
+    it("fills in the new key when reading a pre-existing config that lacks it", () => {
+      // Simulate a config file written by a prior release that lacked the key.
+      // Explicit configPath is read-only (no disk-rewrite), but the resolved
+      // config still gains the new default.
+      const configPath = path.join(tmpDir, "tracker-upgrade.yaml");
+      fs.writeFileSync(configPath, "scraper:\n  maxPages: 42\n");
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.scraper.skipKnownTrackers).toBe(true);
+      expect(config.scraper.maxPages).toBe(42);
+    });
+  });
+
   it("rejects vectorDimension of 0 or negative values", () => {
     // vectorDimension = 0 should fail Zod .min(1) validation
     process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "0";

@@ -165,6 +165,7 @@ describe("HtmlPlaywrightMiddleware", () => {
       maxConcurrency: 3,
       abortOnFailureRate: 0.5,
       preserveHashes: false,
+      skipKnownTrackers: true,
       pageTimeoutMs: 5000,
       browserTimeoutMs: 30000,
       fetcher: {
@@ -951,6 +952,7 @@ describe("Route handling race condition protection", () => {
       maxConcurrency: 3,
       abortOnFailureRate: 0.5,
       preserveHashes: false,
+      skipKnownTrackers: true,
       pageTimeoutMs: 5000,
       browserTimeoutMs: 30000,
       fetcher: {
@@ -1250,6 +1252,198 @@ describe("Route handling race condition protection", () => {
       });
 
       launchSpy.mockRestore();
+    });
+  });
+
+  describe("Tracker blocklist", () => {
+    const baseConfig = {
+      maxPages: 1000,
+      maxDepth: 3,
+      maxConcurrency: 3,
+      abortOnFailureRate: 0.5,
+      preserveHashes: false,
+      skipKnownTrackers: true,
+      pageTimeoutMs: 5000,
+      browserTimeoutMs: 30000,
+      fetcher: {
+        maxRetries: 3,
+        baseDelayMs: 1000,
+        maxCacheItems: 200,
+        maxCacheItemSizeBytes: 500 * 1024,
+      },
+      document: {
+        maxSize: 10 * 1024 * 1024,
+      },
+      security: {
+        network: {
+          mode: "open" as const,
+          allowPrivateNetworks: false,
+          allowedHosts: [],
+          allowedCidrs: [],
+          allowInvalidTls: false,
+        },
+        fileAccess: {
+          mode: "unrestricted" as const,
+          allowedRoots: [],
+          followSymlinks: false,
+          includeHidden: false,
+        },
+      },
+    };
+
+    const makeMockRoute = (url: string, resourceType: string) => ({
+      request: () => ({
+        url: () => url,
+        resourceType: () => resourceType,
+        method: () => "GET",
+        headers: () => ({}),
+      }),
+      abort: vi.fn().mockResolvedValue(undefined),
+    });
+
+    it("aborts an analytics sub-resource when the flag is on", async () => {
+      const middleware = new HtmlPlaywrightMiddleware(baseConfig);
+      const route = makeMockRoute(
+        "https://www.google-analytics.com/analytics.js",
+        "script",
+      );
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://www.google-analytics.com/analytics.js",
+      );
+
+      expect(handled).toBe(true);
+      expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
+    });
+
+    it("does NOT abort when the flag is off", async () => {
+      const middleware = new HtmlPlaywrightMiddleware({
+        ...baseConfig,
+        skipKnownTrackers: false,
+      });
+      const route = makeMockRoute(
+        "https://www.google-analytics.com/analytics.js",
+        "script",
+      );
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://www.google-analytics.com/analytics.js",
+      );
+
+      expect(handled).toBe(false);
+      expect(route.abort).not.toHaveBeenCalled();
+    });
+
+    it("does NOT abort a generic CDN library", async () => {
+      const middleware = new HtmlPlaywrightMiddleware(baseConfig);
+      const route = makeMockRoute(
+        "https://unpkg.com/mermaid@11/dist/mermaid.min.js",
+        "script",
+      );
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://unpkg.com/mermaid@11/dist/mermaid.min.js",
+      );
+
+      expect(handled).toBe(false);
+      expect(route.abort).not.toHaveBeenCalled();
+    });
+
+    it("does NOT abort the top-level navigation document", async () => {
+      const middleware = new HtmlPlaywrightMiddleware(baseConfig);
+      // A blocklisted host that happens to be the start URL is exempt because
+      // the top-level navigation is resourceType "document".
+      const route = makeMockRoute(
+        "https://www.google-analytics.com/somedocs",
+        "document",
+      );
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://www.google-analytics.com/somedocs",
+      );
+
+      expect(handled).toBe(false);
+      expect(route.abort).not.toHaveBeenCalled();
+    });
+
+    it("does NOT abort an iframe document on a blocklisted host", async () => {
+      const middleware = new HtmlPlaywrightMiddleware(baseConfig);
+      const route = makeMockRoute("https://widget.kapa.ai/embed", "document");
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://widget.kapa.ai/embed",
+      );
+
+      expect(handled).toBe(false);
+      expect(route.abort).not.toHaveBeenCalled();
+    });
+
+    it("DOES abort a script loaded inside an allowed iframe", async () => {
+      const middleware = new HtmlPlaywrightMiddleware(baseConfig);
+      const route = makeMockRoute(
+        "https://widget.kapa.ai/kapa-widget.bundle.js",
+        "script",
+      );
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://widget.kapa.ai/kapa-widget.bundle.js",
+      );
+
+      expect(handled).toBe(true);
+      expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
+    });
+
+    it("aborts an analytics image beacon under the blocklist (not the image rule)", async () => {
+      // The blocklist runs before the resource-type abort, so an analytics
+      // beacon delivered as `image` is aborted as "blockedbyclient" rather than
+      // the silent generic image abort.
+      const middleware = new HtmlPlaywrightMiddleware(baseConfig);
+      const route = makeMockRoute(
+        "https://www.google-analytics.com/collect.gif",
+        "image",
+      );
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://www.google-analytics.com/collect.gif",
+      );
+
+      expect(handled).toBe(true);
+      expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
+    });
+
+    it("returns true silently if the route was already handled", async () => {
+      const middleware = new HtmlPlaywrightMiddleware(baseConfig);
+      const route = {
+        request: () => ({
+          url: () => "https://www.google-analytics.com/analytics.js",
+          resourceType: () => "script",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        abort: vi.fn().mockRejectedValue(new Error("Route is already handled!")),
+      };
+
+      // @ts-expect-error Accessing private method for testing
+      const handled = await middleware.tryBlocklistAbort(
+        route as any,
+        "https://www.google-analytics.com/analytics.js",
+      );
+
+      expect(handled).toBe(true);
     });
   });
 });

@@ -73,6 +73,7 @@ export const DEFAULT_CONFIG = {
     maxConcurrency: 3,
     abortOnFailureRate: 0.5,
     preserveHashes: false,
+    skipKnownTrackers: true,
     pageTimeoutMs: 5000,
     browserTimeoutMs: 30_000,
     fetcher: {
@@ -186,6 +187,7 @@ export const AppConfigSchema = z.object({
         .max(1)
         .default(DEFAULT_CONFIG.scraper.abortOnFailureRate),
       preserveHashes: envBoolean.default(DEFAULT_CONFIG.scraper.preserveHashes),
+      skipKnownTrackers: envBoolean.default(DEFAULT_CONFIG.scraper.skipKnownTrackers),
       pageTimeoutMs: z.coerce
         .number()
         .int()
