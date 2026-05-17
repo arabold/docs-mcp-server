@@ -1375,6 +1375,10 @@ export class DocumentStore {
           return [...firstEmbeddings, ...secondEmbeddings];
         } else {
           // Single text that's too large - split in half and retry
+          if (isRetry) {
+            throw error;
+          }
+
           const text = texts[0];
           const midpoint = Math.floor(text.length / 2);
           const firstHalf = text.substring(0, midpoint);

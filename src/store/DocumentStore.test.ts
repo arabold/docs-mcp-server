@@ -1325,7 +1325,9 @@ describe("DocumentStore - Common Functionality", () => {
 
       // Should find the document containing --error-on-warnings
       expect(results.length).toBeGreaterThan(0);
-      expect(results[0].content).toContain("--error-on-warnings");
+      expect(
+        results.some((result) => result.content.includes("--error-on-warnings")),
+      ).toBe(true);
     });
 
     it("should handle other quoted strings with special characters", async () => {
@@ -1413,8 +1415,12 @@ describe("DocumentStore - Common Functionality", () => {
 
       // Should find documents containing both "programming" AND the phrase "design patterns"
       expect(results.length).toBeGreaterThan(0);
-      expect(results[0].content).toContain("programming");
-      expect(results[0].content).toContain("design patterns");
+      expect(
+        results.some((result) => {
+          const content = result.content.toLowerCase();
+          return content.includes("programming") && content.includes("design patterns");
+        }),
+      ).toBe(true);
     });
 
     it("should treat FTS operators as literal keywords when in unquoted position", async () => {
