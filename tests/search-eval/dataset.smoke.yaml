@@ -1,0 +1,47 @@
+# Smoke dataset: one query per library, one intent each.
+# Use to validate the benchmark pipeline end-to-end before committing to the
+# full 60-query run. Not for baseline use.
+#
+# Invoke via:
+#   DOCS_EVAL_DATASET=tests/search-eval/dataset.smoke.yaml \
+#     npm run evaluate:search:baseline
+
+status: draft
+notes: |
+  Smoke subset of dataset.yaml. Each entry is duplicated verbatim from the
+  main dataset; do not edit independently.
+
+entries:
+  - vars:
+      library: react
+      query: useEffect usage
+      intent: api-lookup
+      qrels:
+        - { url: "https://react.dev/reference/react/useEffect", grade: 3 }
+        - { url: "https://react.dev/learn/synchronizing-with-effects", grade: 2 }
+  - vars:
+      library: python
+      query: pathlib read text file
+      intent: api-lookup
+      qrels:
+        - { url: "https://docs.python.org/3/library/pathlib.html", grade: 3 }
+  - vars:
+      library: fastapi
+      query: path parameter type validation
+      intent: api-lookup
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/path-params/", grade: 3 }
+  - vars:
+      library: vite
+      query: configure path alias in vite.config
+      intent: api-lookup
+      qrels:
+        - { url: "https://vite.dev/config/shared-options", grade: 3 }
+        - { url: "https://vite.dev/config/", grade: 1 }
+  - vars:
+      library: tailwindcss
+      query: customizing theme colors
+      intent: api-lookup
+      qrels:
+        - { url: "https://tailwindcss.com/docs/customizing-colors", grade: 3 }
+        - { url: "https://tailwindcss.com/docs/theme", grade: 2 }

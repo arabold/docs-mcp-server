@@ -1,0 +1,23 @@
+You are scoring how coherent each returned chunk is as a STANDALONE READABLE UNIT.
+
+Score 1 — Fragmented:
+  Most chunks begin or end mid-sentence, mid-list item, or mid-code-block. A
+  reader landing on a chunk in isolation cannot tell what it is about without
+  external context. Example: a chunk that starts with "...and then call render()."
+  with no preceding context, or ends with "Below we will see how to" and nothing
+  follows.
+
+Score 3 — Mixed:
+  Chunks form recognisable units (paragraphs, sections, code blocks) but some
+  have rough edges — an opening sentence that references an undefined "this",
+  a code block that is complete but missing its surrounding explanation, a
+  heading severed from the section it introduces.
+
+Score 5 — Self-contained:
+  Every chunk reads as a complete unit. Code blocks are fully enclosed, prose
+  sections include enough framing to stand alone, headings stay with their
+  content. A reader landing on any single chunk can understand what concept,
+  API, or example it covers without needing the neighbouring chunks.
+
+Score only the chunks shown. Ignore retrieval relevance — that is measured
+separately. Return an integer in [1,5].

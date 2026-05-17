@@ -378,3 +378,18 @@ Detailed documentation for specific architectural areas:
 - [Deployment Modes](docs/infrastructure/deployment-modes.md) - Protocol detection and server modes
 - [Authentication](docs/infrastructure/authentication.md) - OAuth2 authentication and security
 - [Telemetry](docs/infrastructure/telemetry.md) - Privacy-first telemetry architecture
+
+## Benchmarking
+
+The retrieval quality of `SearchTool` is measured by the search-quality benchmark.
+It produces deterministic IR metrics (MRR, Recall@k, nDCG@k, Hit@k) against a
+labelled qrel dataset, plus LLM-judged chunk-coherence / faithfulness / answerability
+scores. Scope is retrieval-only — end-to-end RAG generation is intentionally
+out of scope.
+
+Headline metrics gate regressions against a checked-in baseline; LLM-judged scores
+are observational. The benchmark runs on `workflow_dispatch` and a weekly schedule
+and is not wired into PR-required checks.
+
+- **Operator guide:** [docs/guides/benchmarking.md](docs/guides/benchmarking.md) — prerequisites, how to run, how to interpret results.
+- **Developer internals:** [tests/search-eval/README.md](tests/search-eval/README.md) — file layout and extension points.

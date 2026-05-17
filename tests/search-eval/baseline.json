@@ -1,0 +1,91 @@
+{
+  "recordedAt": "2026-05-17T22:21:50.209Z",
+  "config": {
+    "embeddingModel": "text-embedding-3-small",
+    "topK": 5,
+    "judge": "openai:gpt-5.4-mini",
+    "datasetFile": "tests/search-eval/dataset.yaml",
+    "datasetStatus": "draft",
+    "datasetEntryCount": 60,
+    "timestamp": "2026-05-17T22:21:49.480Z"
+  },
+  "summary": {
+    "config": {
+      "embeddingModel": "text-embedding-3-small",
+      "topK": 5,
+      "judge": "openai:gpt-5.4-mini",
+      "datasetFile": "tests/search-eval/dataset.yaml",
+      "datasetStatus": "draft",
+      "datasetEntryCount": 60,
+      "timestamp": "2026-05-17T22:21:49.480Z"
+    },
+    "ir": {
+      "mrr": 0.6672222222222222,
+      "recall_at_3": 0.5777777777777778,
+      "recall_at_5": 0.6111111111111112,
+      "recall_at_10": 0.6111111111111112,
+      "ndcg_at_5": 0.6142311203238005,
+      "ndcg_at_10": 0.6142311203238005,
+      "hit_at_1": 0.6,
+      "hit_at_3": 0.7333333333333333,
+      "hit_at_5": 0.7833333333333333
+    },
+    "perIntent": [
+      {
+        "intent": "api-lookup",
+        "n": 19,
+        "mrr": 0.7149122807017543,
+        "recall_at_5": 0.6842105263157895,
+        "ndcg_at_5": 0.6414112176821347,
+        "hit_at_3": 0.7894736842105263
+      },
+      {
+        "intent": "conceptual",
+        "n": 15,
+        "mrr": 0.7555555555555554,
+        "recall_at_5": 0.5888888888888888,
+        "ndcg_at_5": 0.6867823353838346,
+        "hit_at_3": 0.8
+      },
+      {
+        "intent": "comparison",
+        "n": 12,
+        "mrr": 0.6069444444444444,
+        "recall_at_5": 0.5972222222222222,
+        "ndcg_at_5": 0.5653518211026617,
+        "hit_at_3": 0.6666666666666666
+      },
+      {
+        "intent": "troubleshooting",
+        "n": 14,
+        "mrr": 0.5595238095238095,
+        "recall_at_5": 0.5476190476190476,
+        "ndcg_at_5": 0.5415069428198581,
+        "hit_at_3": 0.6428571428571429
+      }
+    ],
+    "structuralPassRate": {
+      "code_block_balance": 0.9833333333333333,
+      "non_empty_content": 1,
+      "url_presence": 1
+    },
+    "llmJudged": [
+      {
+        "metric": "chunk_coherence",
+        "mean": 3.6333333333333333,
+        "n": 60
+      },
+      {
+        "metric": "content_faithfulness",
+        "mean": 3.4,
+        "n": 60
+      },
+      {
+        "metric": "answerability",
+        "mean": 4.45,
+        "n": 60
+      }
+    ],
+    "crossJudge": []
+  }
+}

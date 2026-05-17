@@ -5,16 +5,40 @@ import { SearchTool } from "../tools";
 import { loadConfig } from "../utils/config";
 import { LogLevel, setLogLevel } from "../utils/logger";
 
+// Phase tracing: writes a timestamped line to stderr at each phase boundary.
+// Opt-in via DOCS_EVAL_TRACE=1; off by default so promptfoo's exec-provider
+// stderr stays clean.
+const TRACE = process.env.DOCS_EVAL_TRACE === "1";
+const T0 = Date.now();
+const trace = (phase: string) => {
+  if (TRACE) console.error(`[trace +${Date.now() - T0}ms] ${phase}`);
+};
+trace("module-load");
+
 async function main() {
+  trace("main:start");
   // Silence logs to prevent pollution of stdout (JSON output)
   setLogLevel(LogLevel.ERROR);
 
   // DEBUG: Print args
   // console.error("ARGV:", JSON.stringify(process.argv));
 
-  // Parse arguments to handle Promptfoo's format
-  // Format: node vite-node [script?] <prompt> <context-json>
-  // Note: vite-node might swallow the script path from argv
+  // Parse arguments to handle Promptfoo's exec-provider format.
+  //
+  // Promptfoo invokes us like:
+  //   ./run-provider.sh <prompt-tokens...> <provider-config-json> <test-context-json>
+  //
+  // The two trailing JSON blobs are promptfoo bookkeeping (provider id/config/env;
+  // test vars/qrels/assertions/options/etc.) and must NOT be folded into the search
+  // query. We pop every trailing arg that parses as a JSON object, capturing `vars`
+  // from whichever blob carries it (the test context). What remains is the prompt.
+  //
+  // The previous version only popped JSON blobs that had `vars` or `options`,
+  // which left the provider-config blob (with neither) tacked onto the query
+  // string — turning "pathlib read text file" into
+  // `pathlib read text file {"id":"exec:./run-provider.sh","config":{...},"env":{}}`
+  // and hiding the actual query in noise. That regressed retrieval enough to
+  // return zero hits on some libraries.
 
   const args = process.argv.slice(2);
   interface Context {
@@ -22,28 +46,24 @@ async function main() {
   }
   let context: Context = {};
 
-  // 1. Identify and remove Context JSONs (last args)
-  // Promptfoo might pass multiple JSON objects (options, context)
   while (args.length > 0) {
     const lastArg = args[args.length - 1];
-    if (lastArg.trim().startsWith("{") && lastArg.trim().endsWith("}")) {
-      try {
-        const parsed = JSON.parse(lastArg);
-        // Only accept if it looks like the context object (has vars) or options
-        if (parsed.vars || parsed.options) {
-          if (parsed.vars) context = parsed;
-          args.pop(); // Remove context from args
-        } else {
-          // Might be part of the query if it's a valid JSON but not our context
-          break;
-        }
-      } catch (_e) {
-        // Not valid JSON, stop removing
-        break;
-      }
-    } else {
+    const trimmed = lastArg.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) break;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      // Looks like JSON but isn't — assume it's a literal query fragment.
       break;
     }
+    if (parsed && typeof parsed === "object") {
+      const obj = parsed as { vars?: Record<string, string> };
+      if (obj.vars && !context.vars) context = obj;
+      args.pop();
+      continue;
+    }
+    break;
   }
 
   // 2. The rest is the query
@@ -62,7 +82,9 @@ async function main() {
   // 4. Initialize System
   // We use default config path logic (system path or env vars)
   // Ensure DOCS_MCP_STORE_PATH is set if running in a specific environment
+  trace("loadConfig:start");
   const appConfig = loadConfig();
+  trace("loadConfig:done");
 
   // Fallback to default system path if storePath is not set
   if (!appConfig.app.storePath) {
@@ -74,27 +96,33 @@ async function main() {
   const eventBus = new EventBusService();
 
   // Create service (headless)
+  trace("createDocumentManagement:start");
   const docService = await createDocumentManagement({
     appConfig,
     eventBus,
   });
+  trace("createDocumentManagement:done");
 
   try {
     // 5. Verify Library Exists (Fast Fail)
     try {
+      trace("validateLibraryExists:start");
       await docService.validateLibraryExists(library);
+      trace("validateLibraryExists:done");
     } catch (_e) {
       console.error(`Error: Library '${library}' not found. Please index it first.`);
       process.exit(1);
     }
 
     // 6. Run Search
+    trace("searchTool.execute:start");
     const searchTool = new SearchTool(docService);
     const result = await searchTool.execute({
       library,
       query,
       limit: 5, // Return top 5 for ranking evaluation
     });
+    trace("searchTool.execute:done");
 
     // 7. Format Output
     // We want the LLM to judge the content.
@@ -110,12 +138,17 @@ async function main() {
             )
             .join("\n\n");
 
-    // Extract metadata for deterministic checks (Ranking)
+    // Metadata consumed by promptfoo JS assertions (IR metrics, structural
+    // checks) and by the aggregator. Carries everything those consumers need
+    // so they never have to re-parse `outputText`.
     const metadata = {
-      results: results.map((r) => ({
+      library,
+      query,
+      results: results.map((r, i) => ({
         url: r.url,
         score: r.score ?? 0,
-        title: `${r.content.slice(0, 50)}...`, // simplified title if needed
+        position: i,
+        content: r.content,
       })),
     };
 
@@ -131,13 +164,30 @@ async function main() {
         metadata: metadata,
       }),
     );
+    trace("stdout-flushed");
   } catch (error) {
     console.error("Search failed:", error);
     process.exit(1);
   } finally {
     // 9. Cleanup
+    trace("shutdown:start");
     await docService.shutdown();
+    trace("shutdown:done");
   }
 }
 
-main();
+main().then(
+  () => {
+    trace("main:returned");
+    // Force exit so anything that holds the event loop open (file watchers,
+    // unclosed handles) cannot stall the process. When promptfoo spawns this
+    // script the parent waits for the child to exit before reading stdout —
+    // a dangling watcher = a 60-minute hang.
+    trace("process.exit(0)");
+    process.exit(0);
+  },
+  (err) => {
+    console.error("Unhandled provider error:", err);
+    process.exit(1);
+  },
+);

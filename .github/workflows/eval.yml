@@ -1,0 +1,111 @@
+name: Search Benchmark
+
+# Intentionally NOT on push or pull_request — the benchmark is too costly and
+# too variable to gate PRs. It runs on manual dispatch and a weekly schedule.
+# Results are uploaded as an artifact; regressions are visible in the run
+# summary but do not block merges. See openspec/changes/define-search-benchmark/.
+
+on:
+  workflow_dispatch:
+    inputs:
+      judge:
+        description: "Judge model id (must be in tests/search-eval/judges.ts allowlist)"
+        required: false
+        default: "openai:gpt-5.4-mini"
+      cross_judge:
+        description: "Optional secondary judge for variance estimation"
+        required: false
+        default: ""
+      cross_judge_n:
+        description: "Number of queries to sample for cross-judge"
+        required: false
+        default: "10"
+  schedule:
+    # Mondays 07:00 UTC. Weekly cadence balances signal vs. judge cost.
+    - cron: "0 7 * * 1"
+
+jobs:
+  evaluate:
+    name: Evaluate search quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DOCS_EVAL_JUDGE: ${{ github.event.inputs.judge || 'openai:gpt-5.4-mini' }}
+      DOCS_EVAL_CROSS_JUDGE: ${{ github.event.inputs.cross_judge || '' }}
+      DOCS_EVAL_CROSS_JUDGE_N: ${{ github.event.inputs.cross_judge_n || '10' }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+          cache: "npm"
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Cache the indexed docs store so we don't re-scrape every run.
+      # Bust the cache by bumping the `key` (e.g. when adding a library
+      # to dataset.yaml or when source docs have changed substantially).
+      - name: Restore docs store cache
+        id: store-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/docs-mcp-server
+          key: docs-store-v1-${{ hashFiles('tests/search-eval/dataset.yaml') }}
+
+      # On cache miss: scrape the libraries referenced by the dataset. The
+      # URL map below must stay in sync with dataset.yaml — when adding a new
+      # library, append it here too.
+      - name: Scrape libraries on cache miss
+        # Each command excludes 2-letter language-prefix paths to avoid pulling
+        # translation mirrors (FastAPI alone has ~15 languages and would balloon
+        # to ~1300 pages otherwise). The benchmark's qrels reference English
+        # pages only.
+        if: steps.store-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          npx docs-mcp-server scrape react https://react.dev \
+            --exclude-pattern '/^https:\/\/react\.dev\/[a-z]{2}(-[a-z]+)?\//' \
+            --max-pages 300
+          npx docs-mcp-server scrape python https://docs.python.org/3/ \
+            --exclude-pattern '/^https:\/\/docs\.python\.org\/3\/[a-z]{2}(-[a-z]+)?\//' \
+            --max-pages 500
+          npx docs-mcp-server scrape fastapi https://fastapi.tiangolo.com/ \
+            --exclude-pattern '/^https:\/\/fastapi\.tiangolo\.com\/[a-z]{2}(-[a-z]+)?\//' \
+            --max-pages 200
+          npx docs-mcp-server scrape vite https://vitejs.dev/guide/ \
+            --max-pages 200
+          npx docs-mcp-server scrape tailwindcss https://tailwindcss.com/docs \
+            --max-pages 300
+
+      - name: Run benchmark
+        run: npm run evaluate:search
+
+      # Always upload the summary, even when the previous step exits 1 on
+      # regression — we want the data either way.
+      - name: Upload summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-eval-summary-${{ github.run_id }}
+          path: |
+            tests/search-eval/results/summary.json
+            tests/search-eval/results/promptfoo-raw.json
+            tests/search-eval/results/cross-judge.json
+
+      - name: Append summary to job
+        if: always()
+        run: |
+          if [ -f tests/search-eval/results/summary.json ]; then
+            echo "## Search Benchmark" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            jq '{ir, perIntent, structuralPassRate, llmJudged, crossJudge, config}' tests/search-eval/results/summary.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary.json was produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
