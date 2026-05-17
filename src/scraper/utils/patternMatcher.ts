@@ -37,13 +37,22 @@ export function patternToRegExp(pattern: string): RegExp {
 }
 
 /**
+ * Matches an absolute URL with a scheme (e.g. `https://`, `file://`).
+ * Used to avoid prepending a `/` to inputs that are already full URLs.
+ */
+const URL_WITH_PROTOCOL_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+/**
  * Checks if a given path matches any pattern in the list.
  * For globs, uses minimatch. For regex, uses RegExp.
  */
 export function matchesAnyPattern(path: string, patterns?: string[]): boolean {
   if (!patterns || patterns.length === 0) return false;
-  // Always match from a leading slash for path-based globs
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  // Always match from a leading slash for path-based globs, but leave full
+  // URLs (with scheme) untouched so anchored regex patterns like `^https://`
+  // still match.
+  const isFullUrl = URL_WITH_PROTOCOL_RE.test(path);
+  const normalizedPath = isFullUrl || path.startsWith("/") ? path : `/${path}`;
   return patterns.some((pattern) => {
     if (isRegexPattern(pattern)) {
       return patternToRegExp(pattern).test(normalizedPath);
