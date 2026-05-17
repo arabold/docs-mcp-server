@@ -1,5 +1,10 @@
-
 import { vi } from 'vitest'
+
+// Globally auto-mock the logger so all tests get vi.fn() spies for logger.*
+// methods (needed for `expect(logger.x).toHaveBeenCalled(...)` assertions).
+// Runtime output is already silenced separately by `silent: 'passed-only'`
+// in vite.config.ts and the logger's built-in VITEST_WORKER_ID check.
+vi.mock('../src/utils/logger')
 
 // Mock localStorage
 const localStorageMock = (function() {

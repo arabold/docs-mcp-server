@@ -89,18 +89,6 @@ vi.mock("../../telemetry", () => ({
     CLI_COMMAND: "CLI_COMMAND",
   },
 }));
-// Mock logger
-vi.mock("../../utils/logger", () => ({
-  logger: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-  LogLevel: { ERROR: 0, INFO: 2, DEBUG: 3 },
-  getLogLevelFromEnv: vi.fn(() => null),
-  setLogLevel: vi.fn(),
-}));
 // Mock main to avoid importing real code
 vi.mock("../services", () => ({
   registerGlobalServices: vi.fn(),

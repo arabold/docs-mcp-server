@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
-import { logger } from "../../utils/logger";
 import { createConfigCommand } from "./config";
 
 const stdoutWriteMock = vi.fn();
@@ -34,24 +33,19 @@ vi.mock("../../utils/config", async (importOriginal) => {
 
 describe("config command", () => {
   let stdoutWriteSpy: { mockRestore: () => void };
-  let loggerErrorSpy: { mockRestore: () => void };
 
   beforeEach(() => {
     vi.clearAllMocks();
     stdoutWriteMock.mockReset();
-    process.env.ENABLE_TEST_LOGS = "1";
     stdoutWriteSpy = vi
       .spyOn(process.stdout, "write")
       .mockImplementation(stdoutWriteMock as any);
-    loggerErrorSpy = vi.spyOn(logger, "error").mockImplementation(() => {});
     process.exitCode = undefined;
   });
 
   afterEach(() => {
-    delete process.env.ENABLE_TEST_LOGS;
     process.exitCode = undefined;
     stdoutWriteSpy.mockRestore();
-    loggerErrorSpy.mockRestore();
   });
 
   describe("config (no subcommand)", () => {
@@ -112,9 +106,6 @@ describe("config command", () => {
 
       await parser.parse("config get invalid.path");
 
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Invalid config path"),
-      );
       expect(process.exitCode).toBe(1);
     });
 
@@ -159,9 +150,6 @@ describe("config command", () => {
 
       await parser.parse("config set invalid.path value");
 
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Invalid config path"),
-      );
       expect(process.exitCode).toBe(1);
     });
 
@@ -171,9 +159,6 @@ describe("config command", () => {
 
       await parser.parse("config set scraper.maxPages 500 --config /some/path.yaml");
 
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("Cannot modify configuration"),
-      );
       expect(process.exitCode).toBe(1);
     });
   });

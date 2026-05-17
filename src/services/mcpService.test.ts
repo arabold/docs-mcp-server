@@ -38,14 +38,6 @@ vi.mock("../telemetry", () => ({
   },
 }));
 
-vi.mock("../utils/logger", () => ({
-  logger: {
-    info: vi.fn(),
-    debug: vi.fn(),
-    error: vi.fn(),
-  },
-}));
-
 describe("MCP Service", () => {
   let server: ReturnType<typeof Fastify>;
   let mockDocService: IDocumentManagement;

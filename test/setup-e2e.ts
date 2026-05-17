@@ -1,15 +1,12 @@
 /**
  * Setup file for e2e tests that use the mock server.
- * 
- * This setup is separate from the main test/setup.ts to ensure that
- * unit tests don't unnecessarily load the mock server infrastructure.
+ *
+ * The global `vi.mock("../src/utils/logger")` is applied in setup-env.ts
+ * (which runs first), so it is not repeated here.
  */
 
 import { afterAll, afterEach, beforeAll } from "vitest";
-import { vi } from "vitest";
 import { server } from "./mock-server";
-
-vi.mock("../src/utils/logger");
 
 // Start mock server before all tests
 beforeAll(() => {

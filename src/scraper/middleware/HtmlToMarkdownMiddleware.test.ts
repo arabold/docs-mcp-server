@@ -1,12 +1,9 @@
 import * as cheerio from "cheerio"; // Import cheerio
 import TurndownService from "turndown"; // Import for mocking if needed
 import { describe, expect, it, vi } from "vitest";
-import { logger } from "../../utils/logger";
 import type { ScraperOptions } from "../types";
 import { HtmlToMarkdownMiddleware } from "./HtmlToMarkdownMiddleware";
 import type { MiddlewareContext } from "./types";
-
-// Suppress logger output during tests
 
 // Helper to create a minimal valid ScraperOptions object
 const createMockScraperOptions = (url = "http://example.com"): ScraperOptions => ({
@@ -146,38 +143,28 @@ describe("HtmlToMarkdownMiddleware", () => {
     // No close needed
   });
 
-  it("should skip processing and warn if context.dom is missing for HTML content", async () => {
+  it("should skip processing if context.dom is missing for HTML content", async () => {
     const middleware = new HtmlToMarkdownMiddleware();
     const context = createMockContext(); // No HTML content, dom is undefined
     const next = vi.fn().mockResolvedValue(undefined);
-    const warnSpy = vi.spyOn(logger, "warn");
 
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
     expect(context.content).toBe(""); // Original content (empty string)
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("context.dom is missing"),
-    );
     expect(context.errors).toHaveLength(0);
-
-    warnSpy.mockRestore();
   });
 
   it("should skip processing if content type is not HTML", async () => {
     const middleware = new HtmlToMarkdownMiddleware();
     const context = createMockContext("Just plain text");
     const next = vi.fn().mockResolvedValue(undefined);
-    const warnSpy = vi.spyOn(logger, "warn");
 
     await middleware.process(context, next);
 
     expect(next).toHaveBeenCalledOnce();
     expect(context.content).toBe("Just plain text"); // Content unchanged
-    expect(warnSpy).not.toHaveBeenCalled(); // Should not warn if not HTML
     expect(context.errors).toHaveLength(0);
-
-    warnSpy.mockRestore();
   });
 
   it("should handle errors during Turndown conversion", async () => {

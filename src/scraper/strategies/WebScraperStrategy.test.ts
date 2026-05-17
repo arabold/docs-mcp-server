@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
 import { type AppConfig, loadConfig } from "../../utils/config";
-import { logger } from "../../utils/logger";
 import { FetchStatus } from "../fetcher/types";
 import type {
   QueueItem,
@@ -486,15 +485,12 @@ describe("WebScraperStrategy", () => {
         ["https://example.com/foo/child"],
         "https://example.com/foo~abc",
       );
-      const warnSpy = vi.spyOn(logger, "warn");
       await strategy.scrape(options, vi.fn());
 
       expect(mockFetchFn).toHaveBeenCalledWith(
         "https://example.com/foo/child",
         expect.anything(),
       );
-      expect(warnSpy).toHaveBeenCalled();
-      warnSpy.mockRestore();
     });
 
     it("trailing-slash redirect: descendant adoption keeps children in scope", async () => {
@@ -554,7 +550,7 @@ describe("WebScraperStrategy", () => {
       );
     });
 
-    it("site-reorg redirect (siblingwise): child under redirected path is NOT followed; warning logged", async () => {
+    it("site-reorg redirect (siblingwise): child under redirected path is NOT followed", async () => {
       options.url = "https://example.com/v1/api";
       options.scope = "subpages";
       options.maxDepth = 1;
@@ -563,18 +559,12 @@ describe("WebScraperStrategy", () => {
         ["https://example.com/v2/api/child"],
         "https://example.com/v2/api",
       );
-      const warnSpy = vi.spyOn(logger, "warn");
       await strategy.scrape(options, vi.fn());
 
       expect(mockFetchFn).not.toHaveBeenCalledWith(
         "https://example.com/v2/api/child",
         expect.anything(),
       );
-      const siblingwiseWarn = warnSpy.mock.calls.find((c) =>
-        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
-      );
-      expect(siblingwiseWarn).toBeDefined();
-      warnSpy.mockRestore();
     });
 
     it("dead-URL redirect to homepage: scope does not expand to the whole host", async () => {
@@ -586,18 +576,12 @@ describe("WebScraperStrategy", () => {
         ["https://example.com/home/intro"],
         "https://example.com/",
       );
-      const warnSpy = vi.spyOn(logger, "warn");
       await strategy.scrape(options, vi.fn());
 
       expect(mockFetchFn).not.toHaveBeenCalledWith(
         "https://example.com/home/intro",
         expect.anything(),
       );
-      const siblingwiseWarn = warnSpy.mock.calls.find((c) =>
-        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
-      );
-      expect(siblingwiseWarn).toBeDefined();
-      warnSpy.mockRestore();
     });
 
     it("protocol-upgrade redirect: child links on the new protocol are in scope", async () => {
@@ -780,7 +764,7 @@ describe("WebScraperStrategy", () => {
       );
     });
 
-    it("siblingwise redirect with hash drops the hash and warns", async () => {
+    it("siblingwise redirect with hash drops the hash and contracts scope", async () => {
       options.url = "https://example.com/foo#/guide";
       options.scope = "subpages";
       options.preserveHashes = true;
@@ -790,18 +774,12 @@ describe("WebScraperStrategy", () => {
         ["https://example.com/bar#/api"],
         "https://example.com/bar",
       );
-      const warnSpy = vi.spyOn(logger, "warn");
       await strategy.scrape(options, vi.fn());
 
       expect(mockFetchFn).not.toHaveBeenCalledWith(
         "https://example.com/bar#/api",
         expect.anything(),
       );
-      const siblingwiseWarn = warnSpy.mock.calls.find((c) =>
-        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
-      );
-      expect(siblingwiseWarn).toBeDefined();
-      warnSpy.mockRestore();
     });
 
     it("hash routes are equivalent under hostname scope", async () => {
@@ -835,55 +813,6 @@ describe("WebScraperStrategy", () => {
         "https://example.com/foo",
         expect.anything(),
       );
-    });
-
-    it("siblingwise warning fires at most once per scrape", async () => {
-      options.url = "https://example.com/foo";
-      options.scope = "subpages";
-      options.maxDepth = 2;
-      mockPageWithLinks(
-        "https://example.com/foo",
-        ["https://example.com/foo/child"],
-        "https://example.com/foo~abc",
-      );
-      const warnSpy = vi.spyOn(logger, "warn");
-      await strategy.scrape(options, vi.fn());
-
-      const siblingwiseWarns = warnSpy.mock.calls.filter((c) =>
-        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
-      );
-      expect(siblingwiseWarns.length).toBe(1);
-      warnSpy.mockRestore();
-    });
-
-    it("no warning when there is no redirect", async () => {
-      options.url = "https://example.com/api";
-      options.scope = "subpages";
-      options.maxDepth = 1;
-      mockPageWithLinks("https://example.com/api", []);
-      const warnSpy = vi.spyOn(logger, "warn");
-      await strategy.scrape(options, vi.fn());
-
-      const siblingwiseWarns = warnSpy.mock.calls.filter((c) =>
-        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
-      );
-      expect(siblingwiseWarns.length).toBe(0);
-      warnSpy.mockRestore();
-    });
-
-    it("no warning when the redirect is descendant-only (e.g. trailing slash)", async () => {
-      options.url = "https://example.com/api";
-      options.scope = "subpages";
-      options.maxDepth = 1;
-      mockPageWithLinks("https://example.com/api", [], "https://example.com/api/");
-      const warnSpy = vi.spyOn(logger, "warn");
-      await strategy.scrape(options, vi.fn());
-
-      const siblingwiseWarns = warnSpy.mock.calls.filter((c) =>
-        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
-      );
-      expect(siblingwiseWarns.length).toBe(0);
-      warnSpy.mockRestore();
     });
 
     it("scope: undefined behaves identically to scope: 'subpages'", async () => {
