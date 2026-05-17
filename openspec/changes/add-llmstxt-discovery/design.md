@@ -45,7 +45,7 @@ Stop at first successful probe. Note: this derivation intentionally does NOT reu
 
 ### Decision 2a: Seed filtering waits for canonical scope base
 
-The implementation must avoid filtering llms.txt URLs against a stale pre-redirect scope base. The root page establishes `canonicalBaseUrl` during depth-0 processing, including protocol/host adoption and siblingwise redirect behavior from the `scraping-scope` capability. llms.txt URL seeding SHALL either run after depth-0 processing has established that canonical base or defer filtering/enqueueing until then.
+The implementation must avoid filtering llms.txt URLs against a stale pre-redirect scope base. The root page establishes `canonicalBaseUrl` during depth-0 processing, including protocol/host adoption and siblingwise redirect behavior from the `scraping-scope` capability. The canonical base keeps the user-provided path as the scope anchor while adopting the final protocol and host. llms.txt URL seeding SHALL either run after depth-0 processing has established that canonical base or defer filtering/enqueueing until then.
 
 **Rationale:** A common scrape starts at `http://example.com/docs` and redirects to `https://www.example.com/docs/`. If llms.txt URLs are filtered before the redirect is known, valid `https://www.example.com/docs/...` links can be rejected by protocol or host scope checks. Waiting for the canonical base keeps llms.txt seeding consistent with normal BFS link discovery.
 
@@ -64,11 +64,11 @@ When fetching a page from llms.txt, try a Markdown URL variant first. Build the 
 
 Accept the `.md` response only if:
 - HTTP status is 200
-- Content-Type indicates Markdown or text (`text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm`, `text/plain`, or similar safe text)
+- Content-Type indicates Markdown (`text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm`) or `text/plain`
 
 Otherwise, fall back to the original URL.
 
-**Rationale:** Some servers may return a 200 with an HTML error page for the `.md` URL. Content-type validation prevents treating HTML as raw Markdown.
+**Rationale:** Some servers may return a 200 with an HTML error page or a non-Markdown text asset for the `.md` URL. Content-type validation prevents treating HTML, CSS, JavaScript, or other arbitrary text as raw Markdown.
 
 ### Decision 5: llms.txt itself is not indexed as a document
 
