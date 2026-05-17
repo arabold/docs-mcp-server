@@ -34,10 +34,9 @@
 
 ### Dependency Hygiene
 
-`package-lock.json` is platform-sensitive — `promptfoo` (an otherwise-optional benchmarking dev dep) drags in cloud SDKs that resolve differently on macOS vs Linux. Running `npm install` on macOS trims those entries and CI then fails with `EUSAGE: Missing: <pkg> from lock file`.
-
-- Use `npm ci` (not `npm install`) when you just need `node_modules`; it installs from the lockfile without mutating it.
-- When changing deps, regenerate in Linux: `docker run --rm -v "$PWD:/w" -w /w node:22-trixie-slim sh -c "rm -rf node_modules package-lock.json && npm install"`. Keep Node 22 — sqlite binaries are Node-version-bound, do not bump to v24+.
+- Use `npm ci` (not `npm install`) when you just need `node_modules`; it installs from the lockfile without mutating it. Reserve `npm install` for intentional dependency changes.
+- Keep Node 22 — `better-sqlite3` ships a Node-ABI-pinned native binary. Do not bump the engine floor to v24+.
+- For occasional CLI tools that aren't part of the runtime (e.g. `promptfoo` for search evals), invoke them via `npx -y <pkg>@<version>` from `package.json` scripts rather than declaring them as dependencies — keeps the dep tree and lockfile clean.
 
 ### Commit Messages
 
