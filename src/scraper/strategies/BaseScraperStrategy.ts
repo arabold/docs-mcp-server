@@ -124,11 +124,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
       url.startsWith("file://") &&
       isFileUrlInsideRoots(url, context.internalAllowedFileRoots);
 
-    if (options.scope && !isInternalArchiveMember) {
+    if (!isInternalArchiveMember) {
+      const scope = options.scope ?? "subpages";
       try {
         const base = this.canonicalBaseUrl ?? new URL(options.url);
         const target = new URL(url);
-        if (!isInScope(base, target, options.scope)) return false;
+        if (!isInScope(base, target, scope)) return false;
       } catch {
         return false;
       }

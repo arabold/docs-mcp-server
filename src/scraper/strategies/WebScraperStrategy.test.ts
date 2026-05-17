@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
 import { type AppConfig, loadConfig } from "../../utils/config";
+import { logger } from "../../utils/logger";
 import { FetchStatus } from "../fetcher/types";
 import type {
   QueueItem,
@@ -217,29 +218,455 @@ describe("WebScraperStrategy", () => {
   }, 10000);
 
   // --- Scope Tests ---
-  // These tests now rely on the actual pipeline running,
-  // verifying behavior by checking mockFetchFn calls and progressCallback results.
+  // Comprehensive coverage of the scraping-scope spec: each scope mode, depth-0 redirect
+  // shapes, port/trailing-dot/protocol edge cases, and the start-URL exemption.
 
-  it("should follow links based on scope=subpages", async () => {
-    const baseHtml = `
-      <html><head><title>Test Site</title></head><body>
-        <h1>Test Page</h1>
-        <a href="https://example.com/subpage1">Subpage 1</a>
-        <a href="https://example.com/subpage2/">Subpage 2</a>
-        <a href="https://otherdomain.com/page">External Link</a>
-        <a href="https://api.example.com/endpoint">Different Subdomain</a>
-        <a href="/relative-path">Relative Path</a>
-      </body></html>`;
+  /**
+   * Configure mockFetchFn to return a page at `startUrl` with the given anchor links.
+   * Optionally simulate a depth-0 redirect by setting `finalSource` to a different URL than the
+   * one fetched (matches how AutoDetectFetcher reports the post-redirect URL via `source`).
+   * Every fetch for an unrelated URL returns a generic page so the crawler can keep walking.
+   */
+  function mockPageWithLinks(
+    startUrl: string,
+    anchors: string[],
+    finalSource: string = startUrl,
+  ) {
+    const startHtml = `<html><head><title>Start</title></head><body>${anchors
+      .map((href) => `<a href="${href}">${href}</a>`)
+      .join("")}</body></html>`;
+    mockFetchFn.mockImplementation(async (url: string) => {
+      if (url === startUrl) {
+        return {
+          content: startHtml,
+          mimeType: "text/html",
+          source: finalSource,
+          status: FetchStatus.SUCCESS,
+        };
+      }
+      return {
+        content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
+        mimeType: "text/html",
+        source: url,
+        status: FetchStatus.SUCCESS,
+      };
+    });
+  }
+
+  describe("scope filtering", () => {
+    it("subpages: descendant in, sibling out, subdomain out, different host out", async () => {
+      options.url = "https://example.com/api/";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api/", [
+        "https://example.com/api/intro",
+        "https://example.com/blog/post",
+        "https://api.example.com/v1",
+        "https://other.com/page",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/blog/post",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://api.example.com/v1",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://other.com/page",
+        expect.anything(),
+      );
+    });
+
+    it("subpages: /api/index.html start follows siblings under /api/", async () => {
+      options.url = "https://example.com/api/index.html";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api/index.html", [
+        "https://example.com/api/intro",
+        "https://example.com/api/guides/deep",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/guides/deep",
+        expect.anything(),
+      );
+    });
+
+    it("subpages: /api/index extensionless start follows siblings under /api/", async () => {
+      options.url = "https://example.com/api/index";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api/index", [
+        "https://example.com/api/intro",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+    });
+
+    it("subpages: /v1.0 start scopes narrowly to /v1.0/* (silent bug fixed)", async () => {
+      options.url = "https://example.com/v1.0";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/v1.0", [
+        "https://example.com/v1.0/intro",
+        "https://example.com/v2.0/intro",
+        "https://example.com/other/page",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/v1.0/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/v2.0/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/other/page",
+        expect.anything(),
+      );
+    });
+
+    it("subpages: /foo.html start scopes to itself only (silent bug fixed)", async () => {
+      options.url = "https://example.com/foo.html";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/foo.html", [
+        "https://example.com/other.html",
+        "https://example.com/some/page",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      // Start URL itself is fetched (depth-0 exemption); other links are out of scope
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/foo.html",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/other.html",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/some/page",
+        expect.anything(),
+      );
+    });
+
+    it("subpages: path comparison is case-sensitive", async () => {
+      options.url = "https://example.com/Api/";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/Api/", ["https://example.com/api/intro"]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+    });
+
+    it("hostname: same host all paths followed; subdomain rejected", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "hostname";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api", [
+        "https://example.com/blog/post",
+        "https://api.example.com/v1",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/blog/post",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://api.example.com/v1",
+        expect.anything(),
+      );
+    });
+
+    it("hostname: different ports treated as different hosts", async () => {
+      options.url = "https://example.com:8443/api";
+      options.scope = "hostname";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com:8443/api", [
+        "https://example.com:9000/api/intro",
+        "https://example.com/api/intro",
+        "https://example.com:8443/api/intro",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com:8443/api/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com:9000/api/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+    });
+
+    it("hostname: protocol mismatch rejected", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "hostname";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api", ["http://example.com/api/intro"]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "http://example.com/api/intro",
+        expect.anything(),
+      );
+    });
+
+    it("domain: same primary domain across subdomains accepted; different primary domain rejected", async () => {
+      options.url = "https://docs.example.com/";
+      options.scope = "domain";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://docs.example.com/", [
+        "https://api.example.com/v1",
+        "https://example.org/page",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://api.example.com/v1",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.org/page",
+        expect.anything(),
+      );
+    });
+
+    it("domain: GitHub Pages users are isolated", async () => {
+      options.url = "https://userA.github.io/proj/";
+      options.scope = "domain";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://userA.github.io/proj/", [
+        "https://userB.github.io/other/",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://userB.github.io/other/",
+        expect.anything(),
+      );
+    });
+  });
+
+  describe("depth-0 redirect handling", () => {
+    it("hash-suffix redirect: child links under the unsuffixed path are in scope (issue #381)", async () => {
+      options.url = "https://example.com/foo";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/foo",
+        ["https://example.com/foo/child"],
+        "https://example.com/foo~abc",
+      );
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/foo/child",
+        expect.anything(),
+      );
+      expect(warnSpy).toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it("trailing-slash redirect: descendant adoption keeps children in scope", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/api",
+        ["https://example.com/api/intro"],
+        "https://example.com/api/",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+    });
+
+    it("directory-index redirect: siblings under /api/ remain in scope", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/api",
+        ["https://example.com/api/intro"],
+        "https://example.com/api/index.html",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+    });
+
+    it("deeper-descendant redirect: scope narrows to the deeper path", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      // Redirect path /api/v2/intro is treated as a directory (last segment isn't an index file).
+      // Descendants like /api/v2/intro/child are in scope; siblings under /api/ are not.
+      mockPageWithLinks(
+        "https://example.com/api",
+        ["https://example.com/api/v2/intro/child", "https://example.com/api/v1/intro"],
+        "https://example.com/api/v2/intro",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/v2/intro/child",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/api/v1/intro",
+        expect.anything(),
+      );
+    });
+
+    it("site-reorg redirect (siblingwise): child under redirected path is NOT followed; warning logged", async () => {
+      options.url = "https://example.com/v1/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/v1/api",
+        ["https://example.com/v2/api/child"],
+        "https://example.com/v2/api",
+      );
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/v2/api/child",
+        expect.anything(),
+      );
+      const siblingwiseWarn = warnSpy.mock.calls.find((c) =>
+        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(siblingwiseWarn).toBeDefined();
+      warnSpy.mockRestore();
+    });
+
+    it("dead-URL redirect to homepage: scope does not expand to the whole host", async () => {
+      options.url = "https://example.com/removed";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/removed",
+        ["https://example.com/home/intro"],
+        "https://example.com/",
+      );
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/home/intro",
+        expect.anything(),
+      );
+      const siblingwiseWarn = warnSpy.mock.calls.find((c) =>
+        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(siblingwiseWarn).toBeDefined();
+      warnSpy.mockRestore();
+    });
+
+    it("protocol-upgrade redirect: child links on the new protocol are in scope", async () => {
+      options.url = "http://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "http://example.com/api",
+        ["https://example.com/api/child"],
+        "https://example.com/api",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/child",
+        expect.anything(),
+      );
+    });
+
+    it("apex→www redirect: child links on www are in scope", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/api",
+        ["https://www.example.com/api/child"],
+        "https://www.example.com/api",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://www.example.com/api/child",
+        expect.anything(),
+      );
+    });
+
+    it("port-change redirect: child links on the new port are in scope", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/api",
+        ["https://example.com:8443/api/child"],
+        "https://example.com:8443/api",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com:8443/api/child",
+        expect.anything(),
+      );
+    });
+  });
+
+  it("should not enqueue cross-origin links introduced via <base href> when scope=subpages", async () => {
+    const start = "https://example.com/app/index.html";
+    const cdnBase = "https://cdn.example.com/lib/";
+    const relLink = "script.js";
+    const resolved = `${cdnBase}${relLink}`;
 
     mockFetchFn.mockImplementation(async (url: string) => {
-      if (url === "https://example.com")
+      if (url === start) {
         return {
-          content: baseHtml,
+          content: `<html><head><base href="${cdnBase}"></head><body><a href="${relLink}">Script</a></body></html>`,
           mimeType: "text/html",
           source: url,
           status: FetchStatus.SUCCESS,
         };
-      // Return simple content for subpages, title reflects URL
+      }
       return {
         content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
         mimeType: "text/html",
@@ -248,145 +675,237 @@ describe("WebScraperStrategy", () => {
       };
     });
 
+    options.url = start;
     options.scope = "subpages";
-    options.maxDepth = 1; // Limit depth for simplicity
-    options.maxPages = 5; // Allow enough pages
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+    options.maxDepth = 1;
+    options.maxPages = 5;
 
-    await strategy.scrape(options, progressCallback);
+    await strategy.scrape(options, vi.fn());
 
-    // Verify fetcher calls
-    expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", expect.anything());
-    expect(mockFetchFn).toHaveBeenCalledWith(
-      "https://example.com/subpage1",
-      expect.anything(),
-    );
-    expect(mockFetchFn).toHaveBeenCalledWith(
-      "https://example.com/subpage2/",
-      expect.anything(),
-    );
-    expect(mockFetchFn).toHaveBeenCalledWith(
-      "https://example.com/relative-path",
-      expect.anything(),
-    );
-    expect(mockFetchFn).not.toHaveBeenCalledWith(
-      "https://otherdomain.com/page",
-      expect.anything(),
-    );
-    expect(mockFetchFn).not.toHaveBeenCalledWith(
-      "https://api.example.com/endpoint",
-      expect.anything(),
-    );
+    expect(mockFetchFn).toHaveBeenCalledWith(start, expect.anything());
+    expect(mockFetchFn).not.toHaveBeenCalledWith(resolved, expect.anything());
+  });
 
-    // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
-    expect(receivedDocs).toHaveLength(4);
-    expect(receivedDocs.some((doc) => doc?.title === "Test Site")).toBe(true);
-    expect(
-      receivedDocs.some((doc) => doc?.title === "https://example.com/subpage1"),
-    ).toBe(true);
-    expect(
-      receivedDocs.some((doc) => doc?.title === "https://example.com/subpage2/"),
-    ).toBe(true);
-    expect(
-      receivedDocs.some((doc) => doc?.title === "https://example.com/relative-path"),
-    ).toBe(true);
-  }, 10000);
+  describe("hash-route scope interaction", () => {
+    // Anchor tags use hash hrefs that resolve relative to the page URL. The link extractor
+    // resolves them to absolute URLs via the URL constructor, which preserves the hash. With
+    // preserveHashes=true, the URL normalizer keeps the hash so each route is a distinct queue
+    // entry. Scope filtering is pathname-only, so hash routes sharing a pathname all pass.
 
-  it("should follow links based on scope=hostname", async () => {
-    mockFetchFn.mockImplementation(async (url: string) => {
-      if (url === "https://example.com") {
+    function mockPageWithHashLinks(
+      startUrl: string,
+      hashHrefs: string[],
+      finalSource: string = startUrl,
+    ) {
+      const startHtml = `<html><head><title>Start</title></head><body>${hashHrefs
+        .map((h) => `<a href="${h}">${h}</a>`)
+        .join("")}</body></html>`;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === startUrl) {
+          return {
+            content: startHtml,
+            mimeType: "text/html",
+            source: finalSource,
+            status: FetchStatus.SUCCESS,
+          };
+        }
         return {
-          content:
-            '<html><head><title>Base</title></head><body><a href="/subpage">Sub</a><a href="https://api.example.com/ep">API</a><a href="https://other.com">Other</a></body></html>',
+          content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
           mimeType: "text/html",
           source: url,
           status: FetchStatus.SUCCESS,
         };
-      }
-      return {
-        content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
-        mimeType: "text/html",
-        source: url,
-        status: FetchStatus.SUCCESS,
-      };
+      });
+    }
+
+    it("hash-routed siblings on the same pathname all pass subpages scope (issue #379)", async () => {
+      options.url = "https://docs.example.com/";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks("https://docs.example.com/", [
+        "#/Docs/welcome",
+        "#/Docs/api",
+        "#/Docs/config",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://docs.example.com/#/Docs/welcome",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://docs.example.com/#/Docs/api",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://docs.example.com/#/Docs/config",
+        expect.anything(),
+      );
     });
 
-    options.scope = "hostname";
-    options.maxDepth = 1;
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+    it("hash route to a different pathname is still filtered by subpages scope", async () => {
+      options.url = "https://example.com/foo/";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks("https://example.com/foo/", [
+        "https://example.com/bar#/section",
+      ]);
+      await strategy.scrape(options, vi.fn());
 
-    await strategy.scrape(options, progressCallback);
-
-    // Verify fetcher calls
-    expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", expect.anything());
-    expect(mockFetchFn).toHaveBeenCalledWith(
-      "https://example.com/subpage",
-      expect.anything(),
-    );
-    expect(mockFetchFn).not.toHaveBeenCalledWith(
-      "https://api.example.com/ep",
-      expect.anything(),
-    );
-    expect(mockFetchFn).not.toHaveBeenCalledWith("https://other.com", expect.anything());
-
-    // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
-    expect(receivedDocs).toHaveLength(2);
-    expect(receivedDocs.some((doc) => doc?.title === "Base")).toBe(true);
-    expect(receivedDocs.some((doc) => doc?.title === "https://example.com/subpage")).toBe(
-      true,
-    );
-  }, 10000);
-
-  it("should follow links based on scope=domain", async () => {
-    mockFetchFn.mockImplementation(async (url: string) => {
-      if (url === "https://example.com") {
-        return {
-          content:
-            '<html><head><title>Base</title></head><body><a href="/subpage">Sub</a><a href="https://api.example.com/ep">API</a><a href="https://other.com">Other</a></body></html>',
-          mimeType: "text/html",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        };
-      }
-      return {
-        content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
-        mimeType: "text/html",
-        source: url,
-        status: FetchStatus.SUCCESS,
-      };
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/bar#/section",
+        expect.anything(),
+      );
     });
 
-    options.scope = "domain";
-    options.maxDepth = 1;
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+    it("descendant redirect with restored hash keeps hash routes in scope", async () => {
+      options.url = "https://example.com/docs#/guide";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      // Mock returns `/docs/` as the source (server stripped the hash and added trailing slash).
+      // restorePreservedHash will re-attach `#/guide` since pre/post paths match modulo slash.
+      mockPageWithHashLinks(
+        "https://example.com/docs#/guide",
+        ["https://example.com/docs/#/api"],
+        "https://example.com/docs/",
+      );
+      await strategy.scrape(options, vi.fn());
 
-    await strategy.scrape(options, progressCallback);
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/#/api",
+        expect.anything(),
+      );
+    });
 
-    // Verify fetcher calls
-    expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", expect.anything());
-    expect(mockFetchFn).toHaveBeenCalledWith(
-      "https://example.com/subpage",
-      expect.anything(),
-    );
-    expect(mockFetchFn).toHaveBeenCalledWith(
-      "https://api.example.com/ep",
-      expect.anything(),
-    ); // Same domain
-    expect(mockFetchFn).not.toHaveBeenCalledWith("https://other.com", expect.anything());
+    it("siblingwise redirect with hash drops the hash and warns", async () => {
+      options.url = "https://example.com/foo#/guide";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks(
+        "https://example.com/foo#/guide",
+        ["https://example.com/bar#/api"],
+        "https://example.com/bar",
+      );
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
 
-    // Verify documents via callback
-    const receivedDocs = progressCallback.mock.calls.map((call) => call[0].result);
-    expect(receivedDocs).toHaveLength(3);
-    expect(receivedDocs.some((doc) => doc?.title === "Base")).toBe(true);
-    expect(receivedDocs.some((doc) => doc?.title === "https://example.com/subpage")).toBe(
-      true,
-    );
-    expect(receivedDocs.some((doc) => doc?.title === "https://api.example.com/ep")).toBe(
-      true,
-    );
-  }, 10000);
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/bar#/api",
+        expect.anything(),
+      );
+      const siblingwiseWarn = warnSpy.mock.calls.find((c) =>
+        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(siblingwiseWarn).toBeDefined();
+      warnSpy.mockRestore();
+    });
+
+    it("hash routes are equivalent under hostname scope", async () => {
+      options.url = "https://example.com/";
+      options.scope = "hostname";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks("https://example.com/", ["#/a", "#/b"]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/#/a",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/#/b",
+        expect.anything(),
+      );
+    });
+  });
+
+  describe("scope edge cases", () => {
+    it("start URL is always fetched even when its path doesn't match its own scope post-redirect", async () => {
+      options.url = "https://example.com/foo";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/foo", [], "https://example.com/foo~abc");
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/foo",
+        expect.anything(),
+      );
+    });
+
+    it("siblingwise warning fires at most once per scrape", async () => {
+      options.url = "https://example.com/foo";
+      options.scope = "subpages";
+      options.maxDepth = 2;
+      mockPageWithLinks(
+        "https://example.com/foo",
+        ["https://example.com/foo/child"],
+        "https://example.com/foo~abc",
+      );
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
+
+      const siblingwiseWarns = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(siblingwiseWarns.length).toBe(1);
+      warnSpy.mockRestore();
+    });
+
+    it("no warning when there is no redirect", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api", []);
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
+
+      const siblingwiseWarns = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(siblingwiseWarns.length).toBe(0);
+      warnSpy.mockRestore();
+    });
+
+    it("no warning when the redirect is descendant-only (e.g. trailing slash)", async () => {
+      options.url = "https://example.com/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api", [], "https://example.com/api/");
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
+
+      const siblingwiseWarns = warnSpy.mock.calls.filter((c) =>
+        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(siblingwiseWarns.length).toBe(0);
+      warnSpy.mockRestore();
+    });
+
+    it("scope: undefined behaves identically to scope: 'subpages'", async () => {
+      options.url = "https://example.com/api/";
+      options.scope = undefined;
+      options.maxDepth = 1;
+      mockPageWithLinks("https://example.com/api/", [
+        "https://example.com/api/intro",
+        "https://example.com/blog/post",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/api/intro",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/blog/post",
+        expect.anything(),
+      );
+    });
+  });
 
   // --- Limit Tests ---
 
@@ -995,160 +1514,6 @@ describe("WebScraperStrategy", () => {
 
     expect(mockFetchFn).toHaveBeenCalledWith(original, expect.anything());
     expect(mockFetchFn).toHaveBeenCalledWith(expectedCanonicalFollow, expect.anything());
-  });
-
-  // Integration: relative resolution from index.html with subpages scope
-  it("should follow nested descendant from index.html (subpages scope) but not upward sibling", async () => {
-    const start = "https://example.com/api/index.html";
-    const nestedRel = "aiq/agent/index.html";
-    const upwardRel = "../shared/index.html";
-    const expectedNested = "https://example.com/api/aiq/agent/index.html";
-    const expectedUpward = "https://example.com/shared/index.html";
-
-    mockFetchFn.mockImplementation(async (url: string) => {
-      if (url === start) {
-        return {
-          content: `<html><body>
-            <a href="${nestedRel}">Nested</a>
-            <a href="${upwardRel}">UpOne</a>
-          </body></html>`,
-          mimeType: "text/html",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        };
-      }
-      return {
-        content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
-        mimeType: "text/html",
-        source: url,
-        status: FetchStatus.SUCCESS,
-      };
-    });
-
-    options.url = start;
-    options.scope = "subpages";
-    options.maxDepth = 1;
-    options.maxPages = 5;
-
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
-    await strategy.scrape(options, progressCallback);
-
-    expect(mockFetchFn).toHaveBeenCalledWith(start, expect.anything());
-    expect(mockFetchFn).toHaveBeenCalledWith(expectedNested, expect.anything());
-    expect(mockFetchFn).not.toHaveBeenCalledWith(expectedUpward, expect.anything());
-  });
-
-  // Integration: upward relative allowed with hostname scope
-  it("should follow upward relative link when scope=hostname", async () => {
-    const start = "https://example.com/api/index.html";
-    const nestedRel = "aiq/agent/index.html";
-    const upwardRel = "../shared/index.html";
-    const expectedNested = "https://example.com/api/aiq/agent/index.html";
-    const expectedUpward = "https://example.com/shared/index.html";
-
-    mockFetchFn.mockImplementation(async (url: string) => {
-      if (url === start) {
-        return {
-          content: `<html><body>
-            <a href="${nestedRel}">Nested</a>
-            <a href="${upwardRel}">UpOne</a>
-          </body></html>`,
-          mimeType: "text/html",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        };
-      }
-      return {
-        content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
-        mimeType: "text/html",
-        source: url,
-        status: FetchStatus.SUCCESS,
-      };
-    });
-
-    options.url = start;
-    options.scope = "hostname";
-    options.maxDepth = 1;
-    options.maxPages = 10;
-
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
-    await strategy.scrape(options, progressCallback);
-
-    expect(mockFetchFn).toHaveBeenCalledWith(start, expect.anything());
-    expect(mockFetchFn).toHaveBeenCalledWith(expectedNested, expect.anything());
-    expect(mockFetchFn).toHaveBeenCalledWith(expectedUpward, expect.anything());
-  });
-
-  // Integration: directory base parity
-  it("should treat directory base and index.html base equivalently for nested descendant", async () => {
-    const startDir = "https://example.com/api/";
-    const nestedRel = "aiq/agent/index.html";
-    const expectedNested = "https://example.com/api/aiq/agent/index.html";
-
-    mockFetchFn.mockImplementation(async (url: string) => {
-      if (url === startDir) {
-        return {
-          content: `<html><body><a href="${nestedRel}">Nested</a></body></html>`,
-          mimeType: "text/html",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        };
-      }
-      return {
-        content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
-        mimeType: "text/html",
-        source: url,
-        status: FetchStatus.SUCCESS,
-      };
-    });
-
-    options.url = startDir;
-    options.scope = "subpages";
-    options.maxDepth = 1;
-    options.maxPages = 5;
-
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
-    await strategy.scrape(options, progressCallback);
-
-    expect(mockFetchFn).toHaveBeenCalledWith(startDir, expect.anything());
-    expect(mockFetchFn).toHaveBeenCalledWith(expectedNested, expect.anything());
-  });
-
-  it("should not enqueue cross-origin links introduced via <base href> when scope=subpages", async () => {
-    const start = "https://example.com/app/index.html";
-    const cdnBase = "https://cdn.example.com/lib/";
-    const relLink = "script.js";
-    const resolved = `${cdnBase}${relLink}`;
-
-    mockFetchFn.mockImplementation(async (url: string) => {
-      if (url === start) {
-        return {
-          content: `<html><head><base href="${cdnBase}"></head><body><a href="${relLink}">Script</a></body></html>`,
-          mimeType: "text/html",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        };
-      }
-      // Any unexpected fetches return generic content
-      return {
-        content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
-        mimeType: "text/html",
-        source: url,
-        status: FetchStatus.SUCCESS,
-      };
-    });
-
-    options.url = start;
-    options.scope = "subpages";
-    options.maxDepth = 1;
-    options.maxPages = 5;
-
-    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
-    await strategy.scrape(options, progressCallback);
-
-    // Should fetch only the start page; the cross-origin (different hostname) base-derived link is filtered out
-    expect(mockFetchFn).toHaveBeenCalledWith(start, expect.anything());
-    expect(mockFetchFn).not.toHaveBeenCalledWith(resolved, expect.anything());
   });
 
   describe("cleanup", () => {
