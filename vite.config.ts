@@ -86,5 +86,13 @@ export default defineConfig({
     exclude: ["test/**/*-live-e2e.test.ts"],
     // Use the e2e setup which includes both logger mock and mock server
     setupFiles: ["test/setup-env.ts", "test/setup-e2e.ts"],
+    // Suppress stdout/stderr from passing tests. Failed tests still show
+    // their output so debugging information is preserved. Set
+    // ENABLE_TEST_LOGS=1 (or pass --silent=false) to surface logs for all tests.
+    silent: process.env.ENABLE_TEST_LOGS === "1" ? false : "passed-only",
+    env: {
+      // Silence dotenv v17 "injected env" banners during test runs.
+      DOTENV_CONFIG_QUIET: "true",
+    },
   },
 });

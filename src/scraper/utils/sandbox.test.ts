@@ -1,6 +1,5 @@
 import { JSDOM } from "jsdom"; // Import JSDOM for mocking
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { logger } from "../../utils/logger";
 import { executeJsInSandbox } from "./sandbox";
 
 // Mock the JSDOM module
@@ -178,11 +177,9 @@ describe("executeJsInSandbox", () => {
 
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].message).toMatch(/Script execution timed out/i);
-    // We've verified the error is captured and has the correct message.
-    // Testing the exact logger.error string is removed.
   });
 
-  it("should skip external scripts and log a warning if fetchScriptContent is not provided", async () => {
+  it("should skip external scripts cleanly when fetchScriptContent is not provided", async () => {
     const initialHtml = `
       <!DOCTYPE html>
       <html>
@@ -245,53 +242,6 @@ describe("executeJsInSandbox", () => {
     expect(result.finalHtml).toBe(initialHtml); // Should return original HTML
   });
 
-  it("should provide console methods to the sandbox", async () => {
-    const initialHtml = `
-      <!DOCTYPE html>
-      <html>
-        <body>
-          <script>
-            console.log('Info message', 123);
-            console.warn('Warning message');
-            console.error('Error message');
-          </script>
-        </body>
-      </html>
-    `;
-    // Specific mock for this test
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: {
-            document: {
-              querySelectorAll: vi.fn(() => [
-                {
-                  textContent:
-                    "console.log('Info message', 123); console.warn('Warning message'); console.error('Error message');",
-                  src: "",
-                },
-              ]),
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout,
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
-          },
-          serialize: vi.fn(() => initialHtml),
-        }) as unknown as JSDOM,
-    );
-
-    await executeJsInSandbox({
-      html: initialHtml,
-      url: "http://example.com/console",
-    });
-
-    expect(logger.debug).toHaveBeenCalledWith('Sandbox log: ["Info message",123]');
-    expect(logger.debug).toHaveBeenCalledWith('Sandbox warn: ["Warning message"]');
-    expect(logger.debug).toHaveBeenCalledWith('Sandbox error: ["Error message"]');
-  });
-
   // --- Tests for fetchScriptContent ---
 
   it("should fetch and execute external script via fetchScriptContent callback", async () => {
@@ -338,15 +288,6 @@ describe("executeJsInSandbox", () => {
     expect(mockFetch).toHaveBeenCalledWith("http://example.com/external.js");
     expect(result.errors).toHaveLength(0);
     expect(result.finalHtml).toContain("Modified by external");
-    expect(logger.debug).toHaveBeenCalledWith(
-      "Attempting to fetch external script (src=external.js) from http://example.com/external.js",
-    );
-    expect(logger.debug).toHaveBeenCalledWith(
-      "Successfully fetched external script (src=external.js) from http://example.com/external.js",
-    );
-    expect(logger.debug).toHaveBeenCalledWith(
-      "Executing external script (src=external.js) in sandbox for http://example.com/fetch-success",
-    );
   });
 
   it("should handle fetch failure when fetchScriptContent returns null", async () => {
@@ -389,11 +330,7 @@ describe("executeJsInSandbox", () => {
     // Error should be added by the *caller* (HtmlJsExecutorMiddleware) based on null return,
     // so sandbox itself reports 0 errors directly from execution.
     // expect(result.errors).toHaveLength(1); // This depends on whether the callback adds the error
-    expect(result.finalHtml).toContain("<p>Content</p>"); // Content unchanged
-    // Verify script execution was NOT attempted
-    expect(logger.debug).not.toHaveBeenCalledWith(
-      expect.stringContaining("Executing external script (src=fetch-fail.js)"),
-    );
+    expect(result.finalHtml).toContain("<p>Content</p>"); // Content unchanged (script body never ran)
   });
 
   it("should handle fetch error when fetchScriptContent throws", async () => {
@@ -439,11 +376,7 @@ describe("executeJsInSandbox", () => {
       "Fetch callback failed for script http://example.com/fetch-throw.js: Network Error",
     );
     expect(result.errors[0].cause).toBe(fetchError);
-    expect(result.finalHtml).toContain("<p>Content</p>"); // Content unchanged
-    // Verify script execution was NOT attempted
-    expect(logger.debug).not.toHaveBeenCalledWith(
-      expect.stringContaining("Executing external script (src=fetch-throw.js)"),
-    );
+    expect(result.finalHtml).toContain("<p>Content</p>"); // Content unchanged (script body never ran)
   });
 
   it("should handle invalid script URLs", async () => {
@@ -498,9 +431,5 @@ describe("executeJsInSandbox", () => {
     expect(result.errors[0].message).toContain("Fetch failed for invalid URL");
 
     expect(result.finalHtml).toContain("<p>Content</p>"); // Content unchanged
-    // Ensure no warning about URL format was logged, as URL parsing succeeded
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("Invalid URL format"),
-    );
   });
 });

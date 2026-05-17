@@ -20,7 +20,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LocalFileStrategy } from "../src/scraper/strategies/LocalFileStrategy";
 import type {
   ScrapeResult,
@@ -29,7 +29,6 @@ import type {
 } from "../src/scraper/types";
 import type { ProgressCallback } from "../src/types";
 import { loadConfig } from "../src/utils/config";
-import { logger } from "../src/utils/logger";
 
 const FIXTURE_PDF = path.join(__dirname, "fixtures", "sample.pdf");
 
@@ -37,16 +36,6 @@ describe("LocalFileStrategy - PDF in mounted directory (issue #394)", () => {
   let tmpDir: string;
 
   beforeAll(() => {
-    // Surface any warn/error the pipeline emits — the production bug looks
-    // like a silent skip because the DocumentPipeline catches errors and only
-    // logs `warn`. We want those visible while running this test.
-    vi.spyOn(logger, "warn").mockImplementation((msg: unknown) => {
-      console.warn(`[logger.warn] ${String(msg)}`);
-    });
-    vi.spyOn(logger, "error").mockImplementation((msg: unknown) => {
-      console.error(`[logger.error] ${String(msg)}`);
-    });
-
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-issue394-"));
 
     // The exact files the reporter described: a .txt that "works" and a PDF
@@ -60,7 +49,6 @@ describe("LocalFileStrategy - PDF in mounted directory (issue #394)", () => {
     if (tmpDir && fs.existsSync(tmpDir)) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
-    vi.restoreAllMocks();
   });
 
   it("indexes a PDF sitting next to .txt/.md in a directory served via file://", async () => {
