@@ -162,4 +162,62 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   }, 240_000);
+
+  it("recursively indexes a bind-mounted local docs folder via file:///", () => {
+    // This is the actual workflow from issue #394: a user bind-mounts a host
+    // directory into the container and points the scraper at the directory
+    // (not a single file), expecting every supported file inside to be indexed.
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-dir-"));
+    const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-docs-"));
+    fs.chmodSync(dataDir, 0o777);
+    // The container reads the docs mount, so it needs to be traversable by
+    // the unprivileged runtime user (uid 1000); the writable /data mount
+    // above is the only place the app actually writes.
+    fs.chmodSync(docsDir, 0o755);
+    try {
+      // Mirror the fixture set from local-file-pdf-e2e.test.ts: one PDF
+      // (Kreuzberg path) plus a .md and a .txt (text path) so we catch both
+      // a "silent skip" regression and a permissions/access-policy regression.
+      fs.copyFileSync(
+        path.join(PROJECT_ROOT, "test", "fixtures", "sample.pdf"),
+        path.join(docsDir, "sample.pdf"),
+      );
+      fs.writeFileSync(path.join(docsDir, "notes.txt"), "plain text note");
+      fs.writeFileSync(path.join(docsDir, "readme.md"), "# Readme\n\nbody");
+
+      const r = docker(
+        [
+          "run",
+          "--rm",
+          "-v",
+          `${dataDir}:/data`,
+          "-v",
+          `${docsDir}:/docs:ro`,
+          "-e",
+          "DOCS_MCP_TELEMETRY=false",
+          "-e",
+          "DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS=/docs",
+          IMAGE_TAG,
+          "scrape",
+          "docker-e2e-dir",
+          "file:///docs",
+          "--max-pages",
+          "10",
+          "--max-depth",
+          "1",
+        ],
+        { timeout: 180_000 },
+      );
+      expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+      // All three files must land — anything less means a silent skip slipped
+      // back in for one of the file types.
+      const m = (r.stdout + r.stderr).match(/Successfully scraped\s+(\d+)\s+pages?/);
+      expect(m, "expected scrape summary line in CLI output").not.toBeNull();
+      expect(Number(m?.[1] ?? 0)).toBeGreaterThanOrEqual(3);
+      expect(fs.existsSync(path.join(dataDir, "documents.db"))).toBe(true);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(docsDir, { recursive: true, force: true });
+    }
+  }, 240_000);
 });
