@@ -1,7 +1,7 @@
 # scraping-scope Specification
 
 ## Purpose
-TBD - created by archiving change fix-subpages-scope-after-redirect. Update Purpose after archive.
+Defines how discovered URLs are filtered for web scraping scopes, including protocol, host, path, redirect, hash-route, and warning behavior.
 ## Requirements
 ### Requirement: Default scope is subpages
 
@@ -254,14 +254,15 @@ When the depth-0 fetch follows a redirect, the scope base URL's protocol and hos
 - **THEN** the scope base host is `example.com:8443`
 - **AND** child links on `example.com:8443/api/` are in scope but `example.com/api/...` is not
 
-### Requirement: Depth-0 redirect to descendant path adopts the redirected path
+### Requirement: Depth-0 redirect keeps the user-provided path as scope anchor
 
-When the depth-0 fetch redirects to a URL whose pathname is a path-descendant of the user-provided URL's pathname, the scope base URL's pathname SHALL be replaced with the redirected pathname. A pathname `child` is a path-descendant of `parent` when, after treating `parent` as a directory (trailing slash appended if missing), `child` equals `parent` or starts with `parent + "/"`.
+When the depth-0 fetch redirects, the scope base URL's pathname SHALL remain the user-provided pathname. The post-redirect URL is still used for the stored page URL and for resolving relative links from the fetched document, but discovered-link scope filtering uses the user-provided path together with the adopted protocol and host. This treats the user-provided URL as the crawl boundary and preserves intent for index URLs like `/docs` that redirect to a concrete first page while the caller expects to crawl the wider `/docs/` subtree.
 
 #### Scenario: Trailing slash redirect
 - **WHEN** the user-provided URL is `https://example.com/api`
 - **AND** the depth-0 response redirects to `https://example.com/api/`
-- **THEN** the scope base pathname is `/api/`
+- **THEN** the scope base pathname is `/api`
+- **AND** child links beginning with `https://example.com/api/` are in scope
 
 #### Scenario: Directory index redirect
 - **WHEN** the user-provided URL is `https://example.com/api`
@@ -272,13 +273,19 @@ When the depth-0 fetch redirects to a URL whose pathname is a path-descendant of
 #### Scenario: Deeper-descendant redirect
 - **WHEN** the user-provided URL is `https://example.com/api`
 - **AND** the depth-0 response redirects to `https://example.com/api/v2/intro`
-- **THEN** the scope base pathname is `/api/v2/intro` (the redirected path itself)
-- **AND** the resulting base directory is `/api/v2/intro/` (the redirected path treated as a directory, per the base-directory computation rule)
-- **AND** descendant links under `/api/v2/intro/...` are in scope, while sibling links under `/api/` are not
+- **THEN** the scope base pathname is `/api` (the user-provided path)
+- **AND** descendant links under `/api/v2/intro/...` are in scope
+- **AND** sibling links under `/api/` are also in scope
 
-### Requirement: Depth-0 redirect to siblingwise path keeps user-provided path
+#### Scenario: Docs index redirects to a concrete first page
+- **WHEN** the user-provided URL is `https://tailwindcss.com/docs`
+- **AND** the depth-0 response redirects to `https://tailwindcss.com/docs/installation/using-vite`
+- **THEN** the scope base pathname is `/docs`
+- **AND** sibling docs under `/docs/`, like `/docs/theme`, are in scope
 
-When the depth-0 fetch redirects to a URL whose pathname is NOT a path-descendant of the user-provided URL's pathname, the scope base URL's pathname SHALL remain the user-provided pathname (while protocol and host adopt the redirect, per the protocol/host requirement). This preserves user intent when a server appends a platform-specific suffix or redirects to a reorganized location.
+### Requirement: Siblingwise depth-0 redirects stay bounded by the user-provided path
+
+When the depth-0 fetch redirects to a URL whose pathname is NOT a path-descendant of the user-provided URL's pathname, discovered-link filtering SHALL remain bounded by the user-provided pathname (while protocol and host adopt the redirect, per the protocol/host requirement). This prevents a dead URL, reorganized URL, or platform-specific suffix from expanding the crawl boundary to the redirected sibling path.
 
 #### Scenario: Document360-style hash-suffix redirect (issue #381)
 - **WHEN** the user-provided URL is `https://help.example.com/en/integrations/peoplevox-api-guide`
@@ -323,7 +330,8 @@ The depth-0 redirect adoption rules apply to the post-redirect URL as returned b
 - **AND** `preserveHashes` is enabled
 - **AND** the depth-0 response redirects to `https://example.com/docs/`
 - **THEN** the restored `effectiveSource` is `https://example.com/docs/#/guide`
-- **AND** the scope base pathname is `/docs/` (the hash is ignored for scope purposes)
+- **AND** the scope base pathname is `/docs` (the hash is ignored for scope purposes)
+- **AND** the scope base directory is `/docs/`
 - **AND** subsequent hash-routed links like `https://example.com/docs/#/api` are in scope
 
 #### Scenario: Siblingwise redirect with hash drops the hash and warns
@@ -359,4 +367,3 @@ When the depth-0 redirect changes the path siblingwise (the redirected pathname 
 - **WHEN** the user-provided URL is `https://example.com/api`
 - **AND** the depth-0 response is served directly with no redirect
 - **THEN** no scope-redirect warning is logged
-

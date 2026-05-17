@@ -8,3 +8,5 @@ public/assets/
 !*.env.example
 *.code-workspace
 .tsbuildinfo
+.claude/worktrees/
+.opencode/package-lock.json

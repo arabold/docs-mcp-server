@@ -165,7 +165,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       }
 
       // Check if content processing resulted in usable content
-      if (!processed.textContent || !processed.textContent.trim()) {
+      if (!processed.textContent?.trim()) {
         logger.warn(
           `⚠️  No processable content found for ${url} after pipeline execution.`,
         );
@@ -179,28 +179,25 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       // Update canonical base URL from the first page's final URL (after redirects).
       // Protocol and host are always adopted from the redirected URL so cross-origin redirects
       // (http→https, apex↔www, port changes) don't drop every discovered link via the host check.
-      // The path is adopted only when the redirected pathname is a descendant of the user-provided
-      // pathname; otherwise the user's path is kept as the scope anchor. This preserves user intent
-      // when a server appends a platform-specific suffix (e.g. Document360 /foo → /foo~hash) or
-      // redirects to a reorganized location (/v1 → /v2).
+      // Keep the user-provided path as the scope anchor: callers who start at `/docs` expect the
+      // whole docs subtree even when the server redirects that index URL to a concrete page.
       if (item.depth === 0) {
         const final = new URL(effectiveSource);
         const userPath = new URL(options.url).pathname;
-        if (isPathDescendant(userPath, final.pathname)) {
-          this.canonicalBaseUrl = final;
-        } else {
-          if (!this.siblingwiseRedirectWarned) {
-            logger.warn(
-              `⚠️  Depth-0 redirect changed path siblingwise. Scope anchor remains the user-provided path; ` +
-                `discovered links under the redirected path will not be in scope. ` +
-                `Requested: ${options.url} → Final: ${effectiveSource} → Scope anchor: ${userPath}. ` +
-                `If the redirected path is intended, resubmit with that URL.`,
-            );
-            this.siblingwiseRedirectWarned = true;
-          }
-          final.pathname = userPath;
-          this.canonicalBaseUrl = final;
+        if (
+          !isPathDescendant(userPath, final.pathname) &&
+          !this.siblingwiseRedirectWarned
+        ) {
+          logger.warn(
+            `⚠️  Depth-0 redirect changed path siblingwise. Scope anchor remains the user-provided path; ` +
+              `discovered links under the redirected path will not be in scope. ` +
+              `Requested: ${options.url} → Final: ${effectiveSource} → Scope anchor: ${userPath}. ` +
+              `If the redirected path is intended, resubmit with that URL.`,
+          );
+          this.siblingwiseRedirectWarned = true;
         }
+        final.pathname = userPath;
+        this.canonicalBaseUrl = final;
       }
 
       const filteredLinks =

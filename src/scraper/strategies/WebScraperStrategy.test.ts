@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
 import { type AppConfig, loadConfig } from "../../utils/config";
+import { logger } from "../../utils/logger";
 import { FetchStatus } from "../fetcher/types";
 import type {
   QueueItem,
@@ -527,12 +528,10 @@ describe("WebScraperStrategy", () => {
       );
     });
 
-    it("deeper-descendant redirect: scope narrows to the deeper path", async () => {
+    it("deeper-descendant redirect: scope remains anchored at the user-provided path", async () => {
       options.url = "https://example.com/api";
       options.scope = "subpages";
       options.maxDepth = 1;
-      // Redirect path /api/v2/intro is treated as a directory (last segment isn't an index file).
-      // Descendants like /api/v2/intro/child are in scope; siblings under /api/ are not.
       mockPageWithLinks(
         "https://example.com/api",
         ["https://example.com/api/v2/intro/child", "https://example.com/api/v1/intro"],
@@ -544,9 +543,51 @@ describe("WebScraperStrategy", () => {
         "https://example.com/api/v2/intro/child",
         expect.anything(),
       );
-      expect(mockFetchFn).not.toHaveBeenCalledWith(
+      expect(mockFetchFn).toHaveBeenCalledWith(
         "https://example.com/api/v1/intro",
         expect.anything(),
+      );
+    });
+
+    it("docs-index redirect: sibling docs remain in scope", async () => {
+      options.url = "https://tailwindcss.com/docs";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://tailwindcss.com/docs",
+        [
+          "https://tailwindcss.com/docs/theme",
+          "https://tailwindcss.com/docs/installation/play-cdn",
+        ],
+        "https://tailwindcss.com/docs/installation/using-vite",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://tailwindcss.com/docs/theme",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://tailwindcss.com/docs/installation/play-cdn",
+        expect.anything(),
+      );
+    });
+
+    it("descendant redirect: does not emit siblingwise redirect warning", async () => {
+      const warnSpy = vi.spyOn(logger, "warn");
+      options.url = "https://tailwindcss.com/docs";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://tailwindcss.com/docs",
+        ["https://tailwindcss.com/docs/theme"],
+        "https://tailwindcss.com/docs/installation/using-vite",
+      );
+
+      await strategy.scrape(options, vi.fn());
+
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("Depth-0 redirect changed path siblingwise"),
       );
     });
 
@@ -564,6 +605,39 @@ describe("WebScraperStrategy", () => {
       expect(mockFetchFn).not.toHaveBeenCalledWith(
         "https://example.com/v2/api/child",
         expect.anything(),
+      );
+    });
+
+    it("siblingwise redirect: emits one warning and keeps user-provided scope anchor", async () => {
+      const warnSpy = vi.spyOn(logger, "warn");
+      options.url = "https://example.com/v1/api";
+      options.scope = "subpages";
+      options.maxDepth = 1;
+      mockPageWithLinks(
+        "https://example.com/v1/api",
+        ["https://example.com/v1/api/child", "https://example.com/v2/api/child"],
+        "https://example.com/v2/api",
+      );
+
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/v1/api/child",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/v2/api/child",
+        expect.anything(),
+      );
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Requested: https://example.com/v1/api"),
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Scope anchor: /v1/api"),
       );
     });
 
