@@ -17,7 +17,7 @@ import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { convertToString } from "../utils/buffer";
-import { type LlmsTxtResult, parseLlmsTxt } from "../utils/llmsTxtParser";
+import { isLlmsTxtUrl, type LlmsTxtResult, parseLlmsTxt } from "../utils/llmsTxtParser";
 import { isPathDescendant } from "../utils/scope";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 import { LocalFileStrategy } from "./LocalFileStrategy";
@@ -85,15 +85,6 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
   // Removed custom isInScope logic; using shared scope utility for consistent behavior
 
-  private isLlmsTxtUrl(url: string): boolean {
-    try {
-      const basename = new URL(url).pathname.split("/").filter(Boolean).at(-1);
-      return basename?.toLowerCase() === "llms.txt";
-    } catch {
-      return false;
-    }
-  }
-
   private createFetchOptions(
     item: QueueItem,
     options: ScraperOptions,
@@ -129,10 +120,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
   private isAcceptableMarkdownVariant(rawContent: RawContent): boolean {
     const mimeType = rawContent.mimeType.toLowerCase();
-    return (
-      MimeTypeUtils.isMarkdown(mimeType) ||
-      (mimeType.startsWith("text/") && !MimeTypeUtils.isHtml(mimeType))
-    );
+    return MimeTypeUtils.isMarkdown(mimeType) || mimeType === "text/plain";
   }
 
   private isMarkdownUrl(url: string): boolean {
@@ -318,7 +306,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     const { url } = item;
 
     try {
-      if (this.isLlmsTxtUrl(url)) {
+      if (isLlmsTxtUrl(url)) {
         logger.debug(`Skipping llms.txt meta-file: ${url}`);
         return { url, links: [], status: FetchStatus.SUCCESS };
       }

@@ -27,6 +27,20 @@ const emptyLlmsTxtResult = (): LlmsTxtResult => ({
 const markdownLinkPattern = /^\s*[-*+]\s+\[([^\]\n]+)]\(([^)\s]+)\)\s*(?::\s*(.+?)\s*)?$/;
 
 /**
+ * Returns true when a URL points to an llms.txt meta-file.
+ * @param url The URL to inspect.
+ * @returns Whether the URL path basename is exactly llms.txt.
+ */
+export function isLlmsTxtUrl(url: string): boolean {
+  try {
+    const basename = new URL(url).pathname.split("/").filter(Boolean).at(-1);
+    return basename?.toLowerCase() === "llms.txt";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Parses llms.txt Markdown into project metadata and curated links.
  * @param content The llms.txt Markdown content.
  * @returns Parsed llms.txt metadata and links, or an empty result for invalid content.

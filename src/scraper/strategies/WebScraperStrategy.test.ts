@@ -1660,6 +1660,53 @@ describe("WebScraperStrategy", () => {
       expect(guideDoc?.[0].result?.contentType).toBe("text/markdown");
     });
 
+    it("should reject non-Markdown text variants for llms.txt pages", async () => {
+      options.url = "https://example.com/docs/start";
+      options.scope = "hostname";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Styles](https://example.com/docs/styles.css)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com/docs/styles.css.md") {
+          return {
+            content: "body { color: red; }",
+            mimeType: "text/css",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      await strategy.scrape(options, progressCallback);
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/styles.css.md",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/styles.css",
+        expect.anything(),
+      );
+      expect(
+        progressCallback.mock.calls.some(
+          (call) => call[0].result?.url === "https://example.com/docs/styles.css.md",
+        ),
+      ).toBe(false);
+    });
+
     it("should fetch llms.txt Markdown URLs without adding another .md suffix", async () => {
       options.url = "https://example.com/docs/start";
       options.scope = "hostname";

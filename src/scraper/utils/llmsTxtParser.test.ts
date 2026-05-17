@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseLlmsTxt } from "./llmsTxtParser";
+import { isLlmsTxtUrl, parseLlmsTxt } from "./llmsTxtParser";
 
 describe("parseLlmsTxt", () => {
   it("parses complete llms.txt content with sections and summary", () => {
@@ -122,5 +122,18 @@ describe("parseLlmsTxt", () => {
         optional: false,
       },
     ]);
+  });
+});
+
+describe("isLlmsTxtUrl", () => {
+  it("matches URLs whose path basename is llms.txt", () => {
+    expect(isLlmsTxtUrl("https://example.com/llms.txt")).toBe(true);
+    expect(isLlmsTxtUrl("https://example.com/docs/LLMS.TXT?cache=1#top")).toBe(true);
+  });
+
+  it("does not match non-llms.txt URLs", () => {
+    expect(isLlmsTxtUrl("https://example.com/docs/llms.txt/child")).toBe(false);
+    expect(isLlmsTxtUrl("https://example.com/docs/llms-full.txt")).toBe(false);
+    expect(isLlmsTxtUrl("not a url")).toBe(false);
   });
 });

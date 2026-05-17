@@ -16,6 +16,7 @@ import type {
   ScraperProgressEvent,
   ScraperStrategy,
 } from "../types";
+import { isLlmsTxtUrl } from "../utils/llmsTxtParser";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
 import { isInScope } from "../utils/scope";
 
@@ -542,16 +543,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
    */
   async cleanup(): Promise<void> {
     // No-op by default
-  }
-}
-
-function isLlmsTxtUrl(url: string): boolean {
-  try {
-    const pathname = new URL(url).pathname;
-    const basename = pathname.split("/").filter(Boolean).at(-1);
-    return basename?.toLowerCase() === "llms.txt";
-  } catch {
-    return false;
   }
 }
 
