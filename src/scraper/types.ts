@@ -9,6 +9,8 @@ export type QueueItem = {
   depth: number;
   pageId?: number; // Database page ID for efficient deletion during refresh
   etag?: string | null; // Last known ETag for conditional requests during refresh
+  /** True when the queue item was seeded from a discovered llms.txt file. */
+  fromLlmsTxt?: boolean;
   /** Internal-only allowlist roots for application-managed temporary files. */
   internalAllowedFileRoots?: string[];
 };

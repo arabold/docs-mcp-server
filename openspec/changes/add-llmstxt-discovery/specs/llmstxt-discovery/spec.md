@@ -2,7 +2,7 @@
 
 ### Requirement: Automatic llms.txt detection
 
-The system SHALL automatically probe for an `llms.txt` file during normal web scraping when using the web scraper strategy. The system SHALL NOT probe for llms.txt during refresh operations (when `isRefresh` is true). The probe SHALL derive candidate URLs by extracting the parent directory of the input URL path (stripping the last path segment regardless of whether it looks like a file or directory — e.g., `https://example.com/docs/getting-started` yields `https://example.com/docs/llms.txt`, and `https://example.com/docs/` yields `https://example.com/docs/llms.txt`). If the subpath probe fails, the system SHALL fall back to the site root (`https://example.com/llms.txt`). Probing SHALL stop at the first successful response (HTTP 200 with valid llms.txt content). If no `llms.txt` is found (HTTP 404, network error, or invalid content), the system SHALL proceed with normal BFS crawling from the original URL without error.
+The system SHALL automatically probe for an `llms.txt` file during web scraping and refresh operations when using the web scraper strategy. The probe SHALL derive candidate URLs by extracting the parent directory of the input URL path (stripping the last path segment regardless of whether it looks like a file or directory — e.g., `https://example.com/docs/getting-started` yields `https://example.com/docs/llms.txt`, and `https://example.com/docs/` yields `https://example.com/docs/llms.txt`). If the subpath probe fails, the system SHALL fall back to the site root (`https://example.com/llms.txt`). Probing SHALL stop at the first successful response (HTTP 200 with valid llms.txt content). If no `llms.txt` is found (HTTP 404, network error, or invalid content), the system SHALL proceed with normal BFS crawling from the original URL without error.
 
 The system SHALL use the existing fetcher path and shared outbound access policy for llms.txt probes, including redirect-target validation, DNS-resolved IP validation, configured host/CIDR allowlists, private-network blocking, and TLS policy.
 
@@ -30,10 +30,10 @@ The system SHALL use the existing fetcher path and shared outbound access policy
 - **WHEN** the scrape uses a non-web strategy (GitHub, npm, PyPI, local file)
 - **THEN** the system SHALL NOT probe for llms.txt
 
-#### Scenario: llms.txt probe skipped during refresh
+#### Scenario: llms.txt probe during refresh
 - **WHEN** the user performs a refresh operation (`isRefresh` is true) with a pre-populated queue
-- **THEN** the system SHALL NOT probe for llms.txt
-- **AND** the system SHALL process only the pre-populated queue entries
+- **THEN** the system SHALL probe for llms.txt
+- **AND** accepted llms.txt links SHALL be eligible for queueing after the depth-0 canonical scope base is established
 
 #### Scenario: llms.txt probe blocked by access policy
 - **WHEN** a candidate llms.txt URL is blocked by the outbound access policy

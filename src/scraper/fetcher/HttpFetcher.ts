@@ -12,6 +12,7 @@ import {
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
+import { withMarkdownPreferredAccept } from "./headers";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -118,10 +119,13 @@ export class HttpFetcher implements ContentFetcher {
 
         while (true) {
           const fingerprint = this.fingerprintGenerator.generateHeaders();
-          const headers: Record<string, string> = {
-            ...fingerprint,
-            ...options?.headers, // User-provided headers override generated ones
-          };
+          const headers = withMarkdownPreferredAccept(
+            {
+              ...fingerprint,
+              ...options?.headers, // User-provided headers override generated ones
+            },
+            options?.headers,
+          );
 
           // Add If-None-Match header for conditional requests if ETag is provided
           if (options?.etag) {

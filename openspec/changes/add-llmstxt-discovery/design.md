@@ -76,11 +76,11 @@ The llms.txt file is consumed for its URL list but is not processed through the 
 
 **Rationale:** Indexing llms.txt would create chunks containing link lists that pollute search results. Its value is in the URLs it contains, not its content. Relying on `defaultPatterns.ts` would be fragile since `getEffectiveExclusionPatterns()` replaces defaults entirely when the user provides custom patterns.
 
-### Decision 6: No llms.txt probe during refresh
+### Decision 6: llms.txt probe also runs during refresh
 
-Refresh operations (`isRefresh: true`) use a pre-populated queue from the database (previously scraped pages with ETags for conditional requests). The llms.txt probe is skipped during refresh because introducing new seed URLs into a refresh would add pages the user did not previously index, which is unexpected behavior for a "refresh existing content" operation.
+Refresh operations (`isRefresh: true`) use a pre-populated queue from the database but still preserve the scraper's existing discovery behavior: if refreshed pages change and expose new links, those links can be crawled and indexed. The llms.txt probe follows the same model. A refresh probes llms.txt, waits for the depth-0 canonical scope base, and seeds accepted llms.txt URLs alongside the refresh queue.
 
-**Rationale:** Refresh is about updating existing content, not discovering new pages. If the user wants to re-index with llms.txt discovery, they should run a fresh scrape.
+**Rationale:** Refresh keeps a library current, including newly published documentation pages. Treating llms.txt as a discovery source during refresh is consistent with existing link-following behavior and lets curated docs additions enter the index without requiring a full manual re-scrape.
 
 ## Risks / Trade-offs
 
