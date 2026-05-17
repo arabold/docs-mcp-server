@@ -766,6 +766,7 @@ describe("BaseScraperStrategy", () => {
         version: "1.0.0",
         maxPages: 5,
         maxDepth: 1,
+        scope: "hostname",
         includePatterns: ["docs/*"],
       };
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
@@ -814,6 +815,7 @@ describe("BaseScraperStrategy", () => {
         version: "1.0.0",
         maxPages: 5,
         maxDepth: 1,
+        scope: "hostname",
         includePatterns: ["/docs\\/intro.*/"],
       };
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
@@ -861,6 +863,7 @@ describe("BaseScraperStrategy", () => {
         version: "1.0.0",
         maxPages: 5,
         maxDepth: 1,
+        scope: "hostname",
         excludePatterns: ["docs/private/*"],
       };
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
@@ -908,6 +911,7 @@ describe("BaseScraperStrategy", () => {
         version: "1.0.0",
         maxPages: 5,
         maxDepth: 1,
+        scope: "hostname",
         excludePatterns: ["/private/"],
       };
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
@@ -955,6 +959,7 @@ describe("BaseScraperStrategy", () => {
         version: "1.0.0",
         maxPages: 5,
         maxDepth: 1,
+        scope: "hostname",
         includePatterns: ["docs/*"],
         excludePatterns: ["docs/private/*"],
       };

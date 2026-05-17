@@ -101,14 +101,13 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
    * Scope is checked first, then patterns.
    */
   protected shouldProcessUrl(url: string, options: ScraperOptions): boolean {
-    if (options.scope) {
-      try {
-        const base = this.canonicalBaseUrl ?? new URL(options.url);
-        const target = new URL(url);
-        if (!isInScope(base, target, options.scope)) return false;
-      } catch {
-        return false;
-      }
+    const scope = options.scope ?? "subpages";
+    try {
+      const base = this.canonicalBaseUrl ?? new URL(options.url);
+      const target = new URL(url);
+      if (!isInScope(base, target, scope)) return false;
+    } catch {
+      return false;
     }
     return shouldIncludeUrl(url, options.includePatterns, options.excludePatterns);
   }
