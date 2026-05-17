@@ -1787,8 +1787,8 @@ export class DocumentStore {
       const ftsQuery = this.escapeFtsQuery(query);
       const normalizedVersion = version.toLowerCase();
 
-      // Resolve library/version to IDs upfront so we can pass them directly
-      // to the vec0 partition columns and avoid full-table scans.
+      // Resolve library/version upfront so we can short-circuit missing versions
+      // and constrain FTS queries by version_id.
       const versionRow = this.statements.getVersionId.get(
         library.toLowerCase(),
         normalizedVersion,
@@ -1798,7 +1798,7 @@ export class DocumentStore {
         return [];
       }
 
-      const { id: versionId, library_id: libraryId } = versionRow;
+      const { id: versionId } = versionRow;
 
       if (this.isVectorSearchEnabled) {
         // Hybrid search: vector + full-text search with RRF ranking
@@ -1817,8 +1817,12 @@ export class DocumentStore {
               dv.rowid as id,
               dv.distance as vec_distance
             FROM documents_vec dv
-            WHERE dv.library_id = ?
-              AND dv.version_id = ?
+            JOIN documents d ON dv.rowid = d.id
+            JOIN pages p ON d.page_id = p.id
+            JOIN versions v ON p.version_id = v.id
+            JOIN libraries l ON v.library_id = l.id
+            WHERE l.name = ?
+              AND COALESCE(v.name, '') = COALESCE(?, '')
               AND dv.embedding MATCH ?
               AND dv.k = ?
             ORDER BY dv.distance
@@ -1857,8 +1861,8 @@ export class DocumentStore {
         `);
 
         const rawResults = stmt.all(
-          libraryId,
-          versionId,
+          library.toLowerCase(),
+          normalizedVersion,
           JSON.stringify(embedding),
           vectorSearchK,
           versionId,
