@@ -451,6 +451,46 @@ describe("patternMatcher", () => {
         false,
       );
     });
+
+    it("should match regex patterns anchored on a full URL", () => {
+      // Regression test: previously the matcher prepended `/` to inputs that
+      // didn't start with one, which broke regex patterns anchored with
+      // `^https://` because the URL became `/https://...` before testing.
+      const pythonDocs = [
+        "/^https:\\/\\/docs\\.python\\.org\\/3\\/(library|reference|howto)\\//",
+      ];
+
+      expect(
+        shouldIncludeUrl("https://docs.python.org/3/library/functions.html", pythonDocs),
+      ).toBe(true);
+      expect(
+        shouldIncludeUrl(
+          "https://docs.python.org/3/reference/datamodel.html",
+          pythonDocs,
+        ),
+      ).toBe(true);
+      expect(
+        shouldIncludeUrl("https://docs.python.org/3/howto/regex.html", pythonDocs),
+      ).toBe(true);
+
+      // Other sections on the same host should not match.
+      expect(
+        shouldIncludeUrl("https://docs.python.org/3/tutorial/index.html", pythonDocs),
+      ).toBe(false);
+      // Other hosts should not match.
+      expect(shouldIncludeUrl("https://example.com/3/library/foo.html", pythonDocs)).toBe(
+        false,
+      );
+    });
+
+    it("should support multi-host regex include patterns", () => {
+      // A single regex can allow specific subdomains while excluding others.
+      const patterns = ["/^https:\\/\\/(docs|api)\\.example\\.com\\/v\\d+\\//"];
+
+      expect(shouldIncludeUrl("https://docs.example.com/v1/guide", patterns)).toBe(true);
+      expect(shouldIncludeUrl("https://api.example.com/v2/ref", patterns)).toBe(true);
+      expect(shouldIncludeUrl("https://blog.example.com/v1/post", patterns)).toBe(false);
+    });
   });
 
   describe("full URL vs pathname pattern matching", () => {
