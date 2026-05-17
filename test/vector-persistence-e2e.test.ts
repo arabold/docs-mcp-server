@@ -50,6 +50,14 @@ describe("Vector persistence", () => {
     appConfig.app.storePath = tempDir;
     appConfig.app.embeddingModel = embeddingConfig.modelSpec;
 
+    // The test scrapes a real file under process.cwd(), which in CI/worktree
+    // setups can live under a hidden segment (e.g. `.claude/worktrees/...`).
+    // Loosen the local file policy for this e2e test so the path itself does
+    // not become the thing under test.
+    appConfig.scraper.security.fileAccess.mode = "unrestricted";
+    appConfig.scraper.security.fileAccess.includeHidden = true;
+    appConfig.scraper.security.fileAccess.followSymlinks = true;
+
     const eventBus = new EventBusService();
     docService = await createLocalDocumentManagement(eventBus, appConfig);
 

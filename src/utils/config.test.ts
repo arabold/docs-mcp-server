@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expandConfiguredRoot } from "./accessPolicy";
 import {
   camelToUpperSnake,
   collectLeafPaths,
@@ -244,6 +245,12 @@ describe("Environment Variable Helpers", () => {
     it("converts path with camelCase segments", () => {
       expect(pathToEnvVar(["splitter", "json", "maxNestingDepth"])).toBe(
         "DOCS_MCP_SPLITTER_JSON_MAX_NESTING_DEPTH",
+      );
+    });
+
+    it("converts nested security path", () => {
+      expect(pathToEnvVar(["scraper", "security", "fileAccess", "followSymlinks"])).toBe(
+        "DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS",
       );
     });
   });
@@ -514,5 +521,110 @@ describe("Auto-generated Environment Variable Overrides", () => {
     expect(() =>
       loadConfig({}, { configPath: path.join(tmpDir, "dim-neg.yaml") }),
     ).toThrow();
+  });
+
+  it("loads scraper security defaults", () => {
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "security-defaults.yaml") },
+    );
+
+    expect(config.scraper.security.network.allowPrivateNetworks).toBe(false);
+    expect(config.scraper.security.network.allowedHosts).toEqual([]);
+    expect(config.scraper.security.network.allowedCidrs).toEqual([]);
+    expect(config.scraper.security.network.allowInvalidTls).toBe(false);
+    expect(config.scraper.security.fileAccess.mode).toBe("allowedRoots");
+    expect(config.scraper.security.fileAccess.allowedRoots).toEqual(["$DOCUMENTS"]);
+    expect(config.scraper.security.fileAccess.followSymlinks).toBe(false);
+    expect(config.scraper.security.fileAccess.includeHidden).toBe(false);
+  });
+
+  it("applies nested security env overrides", () => {
+    process.env.DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_INVALID_TLS = "true";
+    process.env.DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS = "true";
+    process.env.DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_INCLUDE_HIDDEN = "true";
+
+    const config = loadConfig({}, { configPath: path.join(tmpDir, "security-env.yaml") });
+
+    expect(config.scraper.security.network.allowInvalidTls).toBe(true);
+    expect(config.scraper.security.fileAccess.followSymlinks).toBe(true);
+    expect(config.scraper.security.fileAccess.includeHidden).toBe(true);
+  });
+
+  it("parses security arrays from env", () => {
+    process.env.DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_HOSTS =
+      '["docs.internal.example","wiki.corp.local"]';
+    process.env.DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS =
+      '["$DOCUMENTS", "/srv/docs"]';
+
+    const config = loadConfig(
+      {},
+      { configPath: path.join(tmpDir, "security-arrays.yaml") },
+    );
+
+    expect(config.scraper.security.network.allowedHosts).toEqual([
+      "docs.internal.example",
+      "wiki.corp.local",
+    ]);
+    expect(config.scraper.security.fileAccess.allowedRoots).toEqual([
+      "$DOCUMENTS",
+      "/srv/docs",
+    ]);
+  });
+
+  it("recovers in-memory from a structurally invalid explicit config without touching the file", () => {
+    // Read-only mode (explicit `configPath`): we still return a valid config
+    // built from defaults rather than throwing, but we must not rewrite or
+    // move the user's file because they passed it deliberately.
+    const configPath = path.join(tmpDir, "invalid-shape.yaml");
+    const original = [
+      "scraper:",
+      "  security:",
+      "    network:",
+      "      allowedHosts: {}",
+      "      allowedCidrs: {}",
+      "    fileAccess:",
+      '      allowedRoots: { "0": "$DOCUMENTS" }',
+      "",
+    ].join("\n");
+    fs.writeFileSync(configPath, original);
+
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const config = loadConfig({}, { configPath });
+
+    expect(Array.isArray(config.scraper.security.network.allowedHosts)).toBe(true);
+    expect(Array.isArray(config.scraper.security.fileAccess.allowedRoots)).toBe(true);
+    // File contents preserved exactly in read-only mode.
+    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+    // No quarantine file in read-only mode either.
+    const quarantined = fs
+      .readdirSync(tmpDir)
+      .filter((name) => name.startsWith("invalid-shape.yaml.invalid-"));
+    expect(quarantined.length).toBe(0);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("invalid shape"));
+    warnSpy.mockRestore();
+  });
+
+  it("preserves array-valued defaults across a saved-then-reloaded config", () => {
+    // Regression: deepMerge used to recurse into arrays as if they were
+    // objects, producing `{}` when an array default merged with the same
+    // array shape read back from the saved YAML file.
+    const configPath = path.join(tmpDir, "roundtrip.yaml");
+    loadConfig({}, { configPath });
+    const second = loadConfig({}, { configPath });
+
+    expect(Array.isArray(second.scraper.security.network.allowedHosts)).toBe(true);
+    expect(Array.isArray(second.scraper.security.network.allowedCidrs)).toBe(true);
+    expect(Array.isArray(second.scraper.security.fileAccess.allowedRoots)).toBe(true);
+    expect(second.scraper.security.fileAccess.allowedRoots).toEqual(["$DOCUMENTS"]);
+  });
+
+  it("treats unresolved $DOCUMENTS as no access", async () => {
+    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/missing-home");
+
+    await expect(expandConfiguredRoot("$DOCUMENTS")).resolves.toBeNull();
+
+    homedirSpy.mockRestore();
   });
 });

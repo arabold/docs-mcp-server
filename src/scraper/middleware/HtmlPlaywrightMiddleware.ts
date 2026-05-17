@@ -1,4 +1,5 @@
 import type { Browser, BrowserContext, ElementHandle, Frame, Page } from "playwright";
+import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type AppConfig, defaults } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
@@ -44,6 +45,7 @@ interface CachedResource {
 export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   private browser: Browser | null = null;
   private readonly config: AppConfig["scraper"];
+  private readonly accessPolicy: ScraperAccessPolicy;
 
   // Static LRU cache for all fetched resources, shared across instances
   private static readonly resourceCache = new SimpleMemoryCache<string, CachedResource>(
@@ -52,6 +54,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
   constructor(config: AppConfig["scraper"]) {
     this.config = config;
+    this.accessPolicy = new ScraperAccessPolicy(config.security);
+  }
+
+  private async isRequestAllowed(url: string): Promise<boolean> {
+    try {
+      await this.accessPolicy.assertNetworkUrlAllowed(url);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -536,6 +548,10 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       })();
       const resourceType = route.request().resourceType();
 
+      if (!(await this.isRequestAllowed(reqUrl))) {
+        return await route.abort("blockedbyclient");
+      }
+
       // Abort non-essential resources
       if (["image", "font", "media"].includes(resourceType)) {
         try {
@@ -690,6 +706,10 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
     let framePage: Page | null = null;
     try {
+      if (!(await this.isRequestAllowed(resolvedUrl))) {
+        return "";
+      }
+
       // Create a new page in the same browser context for consistency
       framePage = await parentPage.context().newPage();
 
@@ -862,9 +882,18 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Always create a browser context (with or without credentials)
       if (credentials) {
-        browserContext = await browser.newContext({ httpCredentials: credentials });
+        browserContext = await browser.newContext({
+          httpCredentials: credentials,
+          ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
+            "https://browser-context.local",
+          ),
+        });
       } else {
-        browserContext = await browser.newContext();
+        browserContext = await browser.newContext({
+          ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
+            "https://browser-context.local",
+          ),
+        });
       }
       page = await browserContext.newPage();
 
@@ -915,6 +944,10 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           }
         })();
         const resourceType = route.request().resourceType();
+
+        if (!(await this.isRequestAllowed(reqUrl))) {
+          return await route.abort("blockedbyclient");
+        }
 
         // Abort non-essential resources
         if (["image", "font", "media"].includes(resourceType)) {

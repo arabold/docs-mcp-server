@@ -39,6 +39,13 @@ describe("Refresh Pipeline E2E Tests", () => {
     appConfig = loadConfig();
     appConfig.app.storePath = ":memory:";
     appConfig.app.embeddingModel = ""; // disable embeddings for refresh e2e
+    // Tests mock the network with nock and the filesystem with memfs at
+    // virtual paths like /test-docs. Loosen scraper security so the test
+    // doesn't have to thread those paths through the policy machinery.
+    appConfig.scraper.security.fileAccess.mode = "unrestricted";
+    appConfig.scraper.security.fileAccess.includeHidden = true;
+    appConfig.scraper.security.fileAccess.followSymlinks = true;
+    appConfig.scraper.security.network.allowPrivateNetworks = true;
     // Initialize in-memory store and services
     // DocumentManagementService creates its own DocumentStore internally
     const eventBus = new EventBusService();
@@ -771,6 +778,78 @@ describe("Refresh Pipeline E2E Tests", () => {
         10,
       );
       expect(search.length).toBeGreaterThan(0);
+    }, 30000);
+  });
+
+  describe("Network access policy (allowlist mode)", () => {
+    const ALLOWED_HOST = "docs.allowed.example";
+    const BLOCKED_HOST = "evil.blocked.example";
+    const ALLOWED_BASE = `http://${ALLOWED_HOST}`;
+    const BLOCKED_BASE = `http://${BLOCKED_HOST}`;
+
+    beforeEach(() => {
+      // Stop the open-mode pipeline that the outer beforeEach started so we
+      // can swap in an allowlist-mode config for this group of tests.
+      // (PipelineManager is recreated by the inner setup below.)
+      appConfig.scraper.security.network.mode = "allowlist";
+      appConfig.scraper.security.network.allowedHosts = [ALLOWED_HOST];
+      appConfig.scraper.security.network.allowedCidrs = [];
+      appConfig.scraper.security.network.allowPrivateNetworks = false;
+    });
+
+    it("scrapes allowlisted hosts and rejects non-allowlisted hosts end-to-end", async () => {
+      nock(ALLOWED_BASE)
+        .get("/")
+        .reply(200, "<html><body><h1>Allowed</h1></body></html>", {
+          "Content-Type": "text/html",
+        });
+
+      const allowedJobId = await pipelineManager.enqueueScrapeJob(
+        "allow-lib",
+        "1.0.0",
+        {
+          url: `${ALLOWED_BASE}/`,
+          library: "allow-lib",
+          version: "1.0.0",
+          maxPages: 1,
+          maxDepth: 0,
+        } satisfies ScraperOptions,
+      );
+      await pipelineManager.waitForJobCompletion(allowedJobId);
+
+      const allowedPages = await docService.getPagesByVersionId(
+        await docService.ensureVersion({ library: "allow-lib", version: "1.0.0" }),
+      );
+      expect(allowedPages.length).toBe(1);
+
+      // The blocked host must never receive a request — set up an
+      // interceptor that would be consumed if the request leaked through.
+      const blockedInterceptor = nock(BLOCKED_BASE).get("/").reply(200, "should-not-fire");
+
+      const blockedJobId = await pipelineManager.enqueueScrapeJob(
+        "block-lib",
+        "1.0.0",
+        {
+          url: `${BLOCKED_BASE}/`,
+          library: "block-lib",
+          version: "1.0.0",
+          maxPages: 1,
+          maxDepth: 0,
+        } satisfies ScraperOptions,
+      );
+      // The job is expected to fail with an AccessPolicyError; surface it as
+      // a job failure rather than letting it bubble out of the test.
+      await pipelineManager.waitForJobCompletion(blockedJobId).catch(() => {});
+
+      // No pages indexed for the blocked host.
+      const blockedPages = await docService.getPagesByVersionId(
+        await docService.ensureVersion({ library: "block-lib", version: "1.0.0" }),
+      );
+      expect(blockedPages.length).toBe(0);
+
+      // The blocked interceptor must not have been consumed.
+      expect(blockedInterceptor.isDone()).toBe(false);
+      nock.cleanAll();
     }, 30000);
   });
 });

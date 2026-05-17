@@ -1,4 +1,5 @@
 import { type Browser, chromium, type Page } from "playwright";
+import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
@@ -17,38 +18,68 @@ import {
  */
 export class BrowserFetcher implements ContentFetcher {
   private browser: Browser | null = null;
-  private page: Page | null = null;
   private fingerprintGenerator: FingerprintGenerator;
   private readonly defaultTimeoutMs: number;
+  private readonly accessPolicy: ScraperAccessPolicy;
 
   constructor(scraperConfig: AppConfig["scraper"]) {
     this.defaultTimeoutMs = scraperConfig.browserTimeoutMs;
     this.fingerprintGenerator = new FingerprintGenerator();
+    this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
   }
 
   canFetch(source: string): boolean {
     return source.startsWith("http://") || source.startsWith("https://");
   }
 
-  async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
+  private async isRequestAllowed(url: string): Promise<boolean> {
     try {
-      await this.ensureBrowserReady();
+      await this.accessPolicy.assertNetworkUrlAllowed(url);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
-      if (!this.page) {
-        throw new ScraperError("Failed to create browser page", false);
-      }
+  async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
+    let page: Page | null = null;
+    let browserContext: { newPage(): Promise<Page>; close(): Promise<void> } | null =
+      null;
+
+    try {
+      await this.accessPolicy.assertNetworkUrlAllowed(source);
+
+      const browser = await this.ensureBrowserReady();
+      const fingerprintHeaders = this.fingerprintGenerator.generateHeaders();
+      browserContext = await browser.newContext({
+        ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
+          "https://browser-context.local",
+        ),
+      });
+      page = await browserContext.newPage();
+      await page.setViewportSize({ width: 1920, height: 1080 });
+
+      await page.route("**/*", async (route) => {
+        const requestUrl = route.request().url();
+        if (!(await this.isRequestAllowed(requestUrl))) {
+          return await route.abort("blockedbyclient");
+        }
+
+        return await route.continue();
+      });
 
       // Set custom headers if provided
-      if (options?.headers) {
-        await this.page.setExtraHTTPHeaders(options.headers);
-      }
+      await page.setExtraHTTPHeaders({
+        ...fingerprintHeaders,
+        ...options?.headers,
+      });
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
 
       // Navigate to the page and wait for it to load
       logger.debug(`Navigating to ${source} with browser...`);
-      const response = await this.page.goto(source, {
+      const response = await page.goto(source, {
         waitUntil: "networkidle",
         timeout,
       });
@@ -70,10 +101,11 @@ export class BrowserFetcher implements ContentFetcher {
       }
 
       // Get the final URL after any redirects
-      const finalUrl = this.page.url();
+      const finalUrl = page.url();
+      await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
 
       // Get the page content
-      const content = await this.page.content();
+      const content = await page.content();
       const contentBuffer = Buffer.from(content, "utf-8");
 
       // Determine content type
@@ -103,6 +135,10 @@ export class BrowserFetcher implements ContentFetcher {
         false,
         error instanceof Error ? error : undefined,
       );
+    } finally {
+      await page?.unroute("**/*").catch(() => undefined);
+      await page?.close().catch(() => undefined);
+      await browserContext?.close().catch(() => undefined);
     }
   }
 
@@ -114,22 +150,13 @@ export class BrowserFetcher implements ContentFetcher {
     });
   }
 
-  private async ensureBrowserReady(): Promise<void> {
+  private async ensureBrowserReady(): Promise<Browser> {
     if (!this.browser) {
       logger.debug("Launching browser...");
       this.browser = await BrowserFetcher.launchBrowser();
     }
 
-    if (!this.page) {
-      this.page = await this.browser.newPage();
-
-      // Generate and set realistic browser headers
-      const dynamicHeaders = this.fingerprintGenerator.generateHeaders();
-      await this.page.setExtraHTTPHeaders(dynamicHeaders);
-
-      // Set viewport
-      await this.page.setViewportSize({ width: 1920, height: 1080 });
-    }
+    return this.browser;
   }
 
   /**
@@ -138,17 +165,6 @@ export class BrowserFetcher implements ContentFetcher {
    */
   async close(): Promise<void> {
     // Close page first
-    if (this.page) {
-      try {
-        await this.page.close();
-      } catch (error) {
-        logger.warn(`⚠️  Error closing browser page: ${error}`);
-      } finally {
-        this.page = null;
-      }
-    }
-
-    // Then close browser
     if (this.browser) {
       try {
         await this.browser.close();
