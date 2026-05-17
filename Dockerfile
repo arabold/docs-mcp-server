@@ -56,11 +56,12 @@ COPY --from=builder /app/dist ./dist
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
 
-# Create volume mount points and hand ownership to the unprivileged `node`
-# user that ships with the base image (uid 1000), so the container does not
-# need to run as root at runtime.
+# Create the writable runtime directories and hand ownership to the
+# unprivileged `node` user that ships with the base image (uid 1000).
+# `/app` is intentionally left root-owned so the runtime user cannot
+# tamper with code or `node_modules` if it is ever compromised.
 RUN mkdir -p /data /config \
-  && chown -R node:node /data /config /app
+  && chown node:node /data /config
 
 # Define volumes
 VOLUME /data
@@ -71,7 +72,10 @@ EXPOSE 6280
 ENV PORT=6280
 ENV HOST=0.0.0.0
 
-# Drop privileges before running the app.
+# Drop privileges before running the app. Named Docker volumes inherit
+# this ownership automatically; if you bind-mount a host directory onto
+# /data or /config instead, it must be writable by uid 1000 — e.g.
+# `chown 1000:1000 ./data` or `docker run --user "$(id -u):$(id -g)"`.
 USER node
 
 # Set the command to run the application

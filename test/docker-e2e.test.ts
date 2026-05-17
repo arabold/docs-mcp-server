@@ -14,19 +14,17 @@
  * will use that image instead of building one.
  */
 
-import { execSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const DOCKER_AVAILABLE = (() => {
-  try {
-    execSync("docker version --format '{{.Server.Version}}'", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  const r = spawnSync("docker", ["version", "--format", "{{.Server.Version}}"], {
+    stdio: "ignore",
+  });
+  return r.status === 0;
 })();
 
 const PREBUILT_TAG = process.env.DOCKER_IMAGE_TAG;
@@ -43,10 +41,16 @@ function docker(args: string[], opts: { timeout?: number } = {}) {
 describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
   beforeAll(() => {
     if (PREBUILT_TAG) return;
-    execSync(`docker build -t ${IMAGE_TAG} .`, {
+    // Pass the tag as an argv element rather than building a shell string, so
+    // a `DOCKER_IMAGE_TAG` containing spaces or metacharacters cannot be
+    // interpreted by a shell.
+    const r = spawnSync("docker", ["build", "-t", IMAGE_TAG, "."], {
       cwd: PROJECT_ROOT,
       stdio: "inherit",
     });
+    if (r.status !== 0) {
+      throw new Error(`docker build failed with exit code ${r.status}`);
+    }
   }, 600_000);
 
   afterAll(() => {
