@@ -295,6 +295,48 @@ When the depth-0 fetch redirects to a URL whose pathname is NOT a path-descendan
 - **THEN** the scope base pathname is `/removed-section`
 - **AND** the scope does NOT expand to the whole host
 
+### Requirement: Hash fragments do not participate in scope filtering
+
+Scope filtering SHALL operate on `URL.protocol`, `URL.host`, and `URL.pathname`, all of which exclude the fragment by definition. Hash fragments are a client-side routing concern controlled by the `preserveHashes` option, which determines whether `URL.hash` participates in queue identity and dedup. Scope decisions are independent of hash values: two URLs with the same protocol/host/pathname but different hashes are equivalent under every scope mode. This is the mechanism by which hash-routed SPAs (issue #379) are crawlable — distinct hash routes share a pathname and therefore share a scope verdict.
+
+The depth-0 redirect adoption rules apply to the post-redirect URL as returned by the fetcher; if `preserveHashes` is enabled, the user-requested hash is restored to that URL by the URL-normalization layer when the pre- and post-redirect paths match (so `https://x/docs#/guide` → `https://x/docs/` yields `effectiveSource = https://x/docs/#/guide`). The scope-base pathname computed from `effectiveSource` is unaffected by this restoration.
+
+#### Scenario: Hash-routed siblings on the same pathname all pass subpages scope
+- **WHEN** the user-provided URL is `https://docs.example.com/`
+- **AND** the page contains hash-routed links `#/Docs/welcome`, `#/Docs/api`, `#/Docs/config`
+- **AND** `preserveHashes` is enabled
+- **AND** scope is `subpages`
+- **THEN** every hash-routed target is in scope (each has pathname `/`, which equals the scope-base directory `/`)
+- **AND** each distinct hash route is fetched as a separate page
+
+#### Scenario: Hash route to a different pathname is filtered by subpages scope
+- **WHEN** scope base is `https://example.com/foo/`
+- **AND** discovered URL is `https://example.com/bar#/section`
+- **AND** scope is `subpages`
+- **THEN** the URL is NOT in scope (pathname `/bar` does not start with `/foo/`; the hash does not rescue it)
+
+#### Scenario: Descendant redirect with restored hash preserves the scope contract
+- **WHEN** the user-provided URL is `https://example.com/docs#/guide`
+- **AND** `preserveHashes` is enabled
+- **AND** the depth-0 response redirects to `https://example.com/docs/`
+- **THEN** the restored `effectiveSource` is `https://example.com/docs/#/guide`
+- **AND** the scope base pathname is `/docs/` (the hash is ignored for scope purposes)
+- **AND** subsequent hash-routed links like `https://example.com/docs/#/api` are in scope
+
+#### Scenario: Siblingwise redirect with hash drops the hash and warns
+- **WHEN** the user-provided URL is `https://example.com/foo#/guide`
+- **AND** `preserveHashes` is enabled
+- **AND** the depth-0 response redirects to `https://example.com/bar`
+- **THEN** the hash is NOT restored (the URL-normalization layer restores only when pre- and post-redirect paths match)
+- **AND** the siblingwise-redirect warning is logged
+- **AND** the scope base pathname remains `/foo`
+
+#### Scenario: Hash routes are equivalent under hostname and domain scope
+- **WHEN** scope base is `https://example.com/`
+- **AND** discovered URLs are `https://example.com/#/a` and `https://example.com/#/b`
+- **AND** scope is `hostname` (or `domain`)
+- **THEN** both URLs are in scope (host/domain check ignores pathname and therefore ignores hash)
+
 ### Requirement: Siblingwise depth-0 redirect emits a warning
 
 When the depth-0 redirect changes the path siblingwise (the redirected pathname is not a path-descendant of the user-provided pathname), the scraper SHALL log a warning that identifies the user-provided URL, the redirected URL, and the resulting scope anchor (user-provided path), and suggests resubmitting with the redirected URL if the new path is intended. The warning SHALL fire at most once per scrape and SHALL NOT fire when the redirected pathname is a descendant or equal to the user-provided pathname.

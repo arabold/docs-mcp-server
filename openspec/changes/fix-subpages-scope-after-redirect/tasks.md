@@ -53,6 +53,12 @@
   - Warning fires at most once per scrape on multi-page crawl.
   - Warning does not fire when there is no redirect or when the redirect is descendant-only.
   - `scope: undefined` at the strategy layer behaves identically to `scope: "subpages"`.
+- [x] 5.6 Add a `describe("hash-route scope interaction")` block covering the `preserveHashes` × scope contract (orthogonal to existing hash-preservation tests):
+  - Hash-routed siblings on the same pathname all pass subpages scope (issue #379 scenario).
+  - Hash route to a different pathname is still filtered by subpages scope.
+  - Descendant redirect with restored hash keeps hash routes in scope.
+  - Siblingwise redirect with hash drops the hash and warns.
+  - Hash routes are equivalent under hostname scope.
 
 ## 6. Validation
 

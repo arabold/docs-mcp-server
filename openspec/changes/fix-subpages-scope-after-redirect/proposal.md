@@ -10,7 +10,7 @@ Issue #381 surfaced one concrete failure (`scope=subpages` discovers only the de
 - `isInScope` SHALL compare on `URL.host` (hostname + optional port) for `subpages` and `hostname` scopes. `domain` scope continues to use primary-domain extraction (port-agnostic).
 - Hostname comparison SHALL strip a single trailing `.` from hostnames before comparison so `example.com.` and `example.com` are treated as equivalent.
 - `BaseScraperStrategy.shouldProcessUrl` SHALL default `scope` to `"subpages"` when undefined, preventing programmatic callers from accidentally bypassing scope filtering.
-- A new `scraping-scope` capability SHALL document all three scopes, depth-0 redirect handling, host/protocol/path comparison rules, base-directory computation (with concrete examples), filter ordering, and the start-URL exemption.
+- A new `scraping-scope` capability SHALL document all three scopes, depth-0 redirect handling, host/protocol/path comparison rules, base-directory computation (with concrete examples), filter ordering, the start-URL exemption, and the orthogonality between scope filtering and the `preserveHashes` option (scope acts on pathname; hashes are a queue-identity concern handled separately).
 - **BREAKING (behavioral, no API change)**:
   1. Start URLs whose redirect changes the path siblingwise (`/v1` → `/v2/`) now scrape only the depth-0 page plus a warning instead of silently following the redirect into a different subtree.
   2. Start URLs like `/v1.0`, `/v2.1`, `/foo.html`, `/changelog.md` no longer accidentally crawl the entire hostname under `scope=subpages`. They now scope to themselves and their descendants.

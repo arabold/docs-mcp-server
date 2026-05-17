@@ -686,6 +686,143 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).not.toHaveBeenCalledWith(resolved, expect.anything());
   });
 
+  describe("hash-route scope interaction", () => {
+    // Anchor tags use hash hrefs that resolve relative to the page URL. The link extractor
+    // resolves them to absolute URLs via the URL constructor, which preserves the hash. With
+    // preserveHashes=true, the URL normalizer keeps the hash so each route is a distinct queue
+    // entry. Scope filtering is pathname-only, so hash routes sharing a pathname all pass.
+
+    function mockPageWithHashLinks(
+      startUrl: string,
+      hashHrefs: string[],
+      finalSource: string = startUrl,
+    ) {
+      const startHtml = `<html><head><title>Start</title></head><body>${hashHrefs
+        .map((h) => `<a href="${h}">${h}</a>`)
+        .join("")}</body></html>`;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === startUrl) {
+          return {
+            content: startHtml,
+            mimeType: "text/html",
+            source: finalSource,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body>${url}</body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+    }
+
+    it("hash-routed siblings on the same pathname all pass subpages scope (issue #379)", async () => {
+      options.url = "https://docs.example.com/";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks("https://docs.example.com/", [
+        "#/Docs/welcome",
+        "#/Docs/api",
+        "#/Docs/config",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://docs.example.com/#/Docs/welcome",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://docs.example.com/#/Docs/api",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://docs.example.com/#/Docs/config",
+        expect.anything(),
+      );
+    });
+
+    it("hash route to a different pathname is still filtered by subpages scope", async () => {
+      options.url = "https://example.com/foo/";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks("https://example.com/foo/", [
+        "https://example.com/bar#/section",
+      ]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/bar#/section",
+        expect.anything(),
+      );
+    });
+
+    it("descendant redirect with restored hash keeps hash routes in scope", async () => {
+      options.url = "https://example.com/docs#/guide";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      // Mock returns `/docs/` as the source (server stripped the hash and added trailing slash).
+      // restorePreservedHash will re-attach `#/guide` since pre/post paths match modulo slash.
+      mockPageWithHashLinks(
+        "https://example.com/docs#/guide",
+        ["https://example.com/docs/#/api"],
+        "https://example.com/docs/",
+      );
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/#/api",
+        expect.anything(),
+      );
+    });
+
+    it("siblingwise redirect with hash drops the hash and warns", async () => {
+      options.url = "https://example.com/foo#/guide";
+      options.scope = "subpages";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks(
+        "https://example.com/foo#/guide",
+        ["https://example.com/bar#/api"],
+        "https://example.com/bar",
+      );
+      const warnSpy = vi.spyOn(logger, "warn");
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/bar#/api",
+        expect.anything(),
+      );
+      const siblingwiseWarn = warnSpy.mock.calls.find((c) =>
+        String(c[0]).includes("Depth-0 redirect changed path siblingwise"),
+      );
+      expect(siblingwiseWarn).toBeDefined();
+      warnSpy.mockRestore();
+    });
+
+    it("hash routes are equivalent under hostname scope", async () => {
+      options.url = "https://example.com/";
+      options.scope = "hostname";
+      options.preserveHashes = true;
+      options.maxDepth = 1;
+      mockPageWithHashLinks("https://example.com/", ["#/a", "#/b"]);
+      await strategy.scrape(options, vi.fn());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/#/a",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/#/b",
+        expect.anything(),
+      );
+    });
+  });
+
   describe("scope edge cases", () => {
     it("start URL is always fetched even when its path doesn't match its own scope post-redirect", async () => {
       options.url = "https://example.com/foo";
