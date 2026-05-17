@@ -56,6 +56,12 @@ COPY --from=builder /app/dist ./dist
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
 
+# Create volume mount points and hand ownership to the unprivileged `node`
+# user that ships with the base image (uid 1000), so the container does not
+# need to run as root at runtime.
+RUN mkdir -p /data /config \
+  && chown -R node:node /data /config /app
+
 # Define volumes
 VOLUME /data
 VOLUME /config
@@ -64,6 +70,9 @@ VOLUME /config
 EXPOSE 6280
 ENV PORT=6280
 ENV HOST=0.0.0.0
+
+# Drop privileges before running the app.
+USER node
 
 # Set the command to run the application
 ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]
