@@ -1,4 +1,11 @@
-import type { Browser, BrowserContext, ElementHandle, Frame, Page } from "playwright";
+import type {
+  Browser,
+  BrowserContext,
+  ElementHandle,
+  Frame,
+  Page,
+  Route,
+} from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type AppConfig, defaults } from "../../utils/config";
 import { logger } from "../../utils/logger";
@@ -6,6 +13,7 @@ import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { BrowserFetcher } from "../fetcher";
 import { ScrapeMode } from "../types";
 import { SimpleMemoryCache } from "../utils/SimpleMemoryCache";
+import { isBlockedSubresource } from "./subresourceBlocklist";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 
 /**
@@ -64,6 +72,31 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Returns true if the request was handled (aborted) by the built-in tracker
+   * blocklist; the caller should bail out of further processing in that case.
+   * Returns false when the blocklist is disabled, when the request is a
+   * top-level/iframe document navigation, or when no entry matches.
+   */
+  private async tryBlocklistAbort(route: Route, reqUrl: string): Promise<boolean> {
+    if (!this.config.skipKnownTrackers) return false;
+    if (route.request().resourceType() === "document") return false;
+    const match = isBlockedSubresource(reqUrl);
+    if (!match.blocked) return false;
+
+    logger.debug(`Blocked sub-resource (${match.category}): ${reqUrl}`);
+    try {
+      await route.abort("blockedbyclient");
+    } catch (error) {
+      if (this.isRouteAlreadyHandledError(error)) {
+        logger.debug(`Route already handled (blocklist abort): ${reqUrl}`);
+        return true;
+      }
+      throw error;
+    }
+    return true;
   }
 
   /**
@@ -552,6 +585,10 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         return await route.abort("blockedbyclient");
       }
 
+      if (await this.tryBlocklistAbort(route, reqUrl)) {
+        return;
+      }
+
       // Abort non-essential resources
       if (["image", "font", "media"].includes(resourceType)) {
         try {
@@ -947,6 +984,10 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
         if (!(await this.isRequestAllowed(reqUrl))) {
           return await route.abort("blockedbyclient");
+        }
+
+        if (await this.tryBlocklistAbort(route, reqUrl)) {
+          return;
         }
 
         // Abort non-essential resources
