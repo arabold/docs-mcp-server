@@ -708,6 +708,44 @@ describe("DocumentStore - With Embeddings", () => {
       expect(await store.checkDocumentExists("truncatetest", "1.0.0")).toBe(true);
     });
 
+    it("should truncate an oversized single text after splitting a batch", async () => {
+      // Skip if embeddings are disabled
+      // @ts-expect-error Accessing private property for testing
+      if (!store.embeddings) {
+        return;
+      }
+
+      mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
+        callCount++;
+
+        if (texts.length > 1 || texts[0].includes("oversized")) {
+          throw new Error("maximum context length exceeded");
+        }
+
+        return texts.map(() => new Array(1536).fill(0.1));
+      });
+
+      const result = createScrapeResult(
+        "Split Then Truncate",
+        "https://example.com/split-then-truncate",
+        "regular chunk",
+        ["test"],
+      );
+      result.chunks = [
+        { types: ["text"], content: "regular chunk", section: { level: 0, path: ["a"] } },
+        {
+          types: ["text"],
+          content: `oversized ${"x".repeat(1000)}`,
+          section: { level: 0, path: ["b"] },
+        },
+      ];
+
+      await store.addDocuments("splittruncatetest", "1.0.0", 1, result);
+
+      expect(callCount).toBeGreaterThan(2);
+      expect(await store.checkDocumentExists("splittruncatetest", "1.0.0")).toBe(true);
+    });
+
     it("should detect various size error messages", async () => {
       // Skip if embeddings are disabled
       // @ts-expect-error Accessing private property for testing

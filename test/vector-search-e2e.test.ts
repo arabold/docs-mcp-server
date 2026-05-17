@@ -40,7 +40,7 @@ describe("Vector Search End-to-End Tests", () => {
     // The OpenAI embeddings endpoint is mocked by test/mock-server.ts.
     prevOpenAiApiKey = process.env.OPENAI_API_KEY;
     prevOpenAiApiBase = process.env.OPENAI_API_BASE;
-    process.env.OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
+    process.env.OPENAI_API_KEY = "test-key";
     delete process.env.OPENAI_API_BASE;
 
     // Create temporary directory for test database
@@ -53,6 +53,8 @@ describe("Vector Search End-to-End Tests", () => {
 
     appConfig.app.storePath = tempDir;
     appConfig.app.embeddingModel = embeddingConfig.modelSpec;
+    appConfig.embeddings.vectorDimension = 1536;
+    appConfig.scraper.security.fileAccess.mode = "allowedRoots";
     appConfig.scraper.security.fileAccess.allowedRoots = [process.cwd()];
 
     // Initialize DocumentManagementService with temporary directory and embedding config
@@ -71,31 +73,28 @@ describe("Vector Search End-to-End Tests", () => {
   }, 30000);
 
   afterAll(async () => {
-    if (pipeline) {
-      await pipeline.stop();
-    }
-    if (docService) {
-      await docService.shutdown();
-    }
-    // Clean up temporary directory
-    if (tempDir) {
-      try {
-        rmSync(tempDir, { recursive: true, force: true });
-      } catch (error) {
-        // Ignore cleanup errors
+    try {
+      if (pipeline) {
+        await pipeline.stop();
       }
-    }
+      if (docService) {
+        await docService.shutdown();
+      }
+      if (tempDir) {
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    } finally {
+      if (prevOpenAiApiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = prevOpenAiApiKey;
+      }
 
-    if (prevOpenAiApiKey === undefined) {
-      delete process.env.OPENAI_API_KEY;
-    } else {
-      process.env.OPENAI_API_KEY = prevOpenAiApiKey;
-    }
-
-    if (prevOpenAiApiBase === undefined) {
-      delete process.env.OPENAI_API_BASE;
-    } else {
-      process.env.OPENAI_API_BASE = prevOpenAiApiBase;
+      if (prevOpenAiApiBase === undefined) {
+        delete process.env.OPENAI_API_BASE;
+      } else {
+        process.env.OPENAI_API_BASE = prevOpenAiApiBase;
+      }
     }
   });
 
