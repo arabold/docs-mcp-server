@@ -43,6 +43,8 @@ The system SHALL support overriding any configuration setting via environment va
 - **WHEN** the configuration is loaded
 - **THEN** the resulting `scraper.security.fileAccess.allowedRoots` value SHALL be parsed as a string array
 
+## ADDED Requirements
+
 ### Requirement: Scraper Security Configuration
 The system SHALL expose configuration for outbound network and local file access controls under `scraper.security`.
 

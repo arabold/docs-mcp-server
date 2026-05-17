@@ -2,9 +2,7 @@
 
 ## Purpose
 Defines how the application configuration is structured, loaded, and overridden through config files, environment variables, and CLI commands. Includes bootstrap-time environment normalization.
-
 ## Requirements
-
 ### Requirement: Nested Document Configuration Under Scraper
 
 The system SHALL organize document processing settings under `scraper.document.*` in the configuration hierarchy.
@@ -22,38 +20,47 @@ The system SHALL organize document processing settings under `scraper.document.*
 - **THEN** the default value of `10485760` (10MB) SHALL be used
 
 ### Requirement: Generic Environment Variable Overrides
-
 The system SHALL support overriding any configuration setting via environment variables using a predictable naming convention. Environment-derived configuration values SHALL be normalized by trimming surrounding whitespace and stripping matching surrounding single or double quotes before schema parsing.
 
 #### Scenario: Environment Variable Naming Convention
-
 - **GIVEN** a config path `scraper.document.maxSize`
 - **WHEN** the environment variable `DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE` is set
 - **THEN** its value SHALL override the config file and default values
 
 #### Scenario: Quoted configuration override from Docker Compose
-
 - **GIVEN** the environment variable `DOCS_MCP_EMBEDDING_MODEL` is provided as `"openai:nomic-embed-text"`
 - **WHEN** the configuration is loaded
 - **THEN** the resulting `app.embeddingModel` value SHALL be `openai:nomic-embed-text`
 
 #### Scenario: Whitespace-padded configuration override
-
 - **GIVEN** the environment variable `DOCS_MCP_SCRAPER_MAX_PAGES` is provided as `  "500"  `
 - **WHEN** the configuration is loaded
 - **THEN** the resulting `scraper.maxPages` value SHALL be parsed as `500`
 
 #### Scenario: CamelCase to Upper Snake Case Conversion
-
 - **GIVEN** a config path segment `maxNestingDepth`
 - **WHEN** converted to environment variable format
 - **THEN** it SHALL become `MAX_NESTING_DEPTH`
 
 #### Scenario: Deeply Nested Path Conversion
-
 - **GIVEN** a config path `splitter.json.maxNestingDepth`
 - **WHEN** converted to environment variable name
 - **THEN** it SHALL become `DOCS_MCP_SPLITTER_JSON_MAX_NESTING_DEPTH`
+
+#### Scenario: Nested security override naming
+- **GIVEN** a config path `scraper.security.fileAccess.followSymlinks`
+- **WHEN** converted to environment variable name
+- **THEN** it SHALL become `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS`
+
+#### Scenario: Array override provided as JSON
+- **GIVEN** the environment variable `DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_HOSTS` is provided as `["docs.internal.example","wiki.corp.local"]`
+- **WHEN** the configuration is loaded
+- **THEN** the resulting `scraper.security.network.allowedHosts` value SHALL be parsed as a string array
+
+#### Scenario: Array override provided as inline array string
+- **GIVEN** the environment variable `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS` is provided as `["$DOCUMENTS", "/srv/docs"]`
+- **WHEN** the configuration is loaded
+- **THEN** the resulting `scraper.security.fileAccess.allowedRoots` value SHALL be parsed as a string array
 
 ### Requirement: Environment Variable Precedence
 
@@ -216,3 +223,164 @@ The system SHALL expose a `scraper.skipKnownTrackers` boolean in the typed confi
 - **WHEN** the application starts and `loadConfig` runs
 - **THEN** the resolved configuration contains `scraper.skipKnownTrackers: true`
 - **AND** previously set keys in that file retain their values
+
+### Requirement: Scrape Failure Rate Threshold Configuration
+The configuration system SHALL expose `scraper.abortOnFailureRate` as the child-page failure-rate threshold used to abort unhealthy scrape targets. The value SHALL be a floating-point fraction in the inclusive range `[0.0, 1.0]`, where `0.0` means any completed child-page failure above the minimum sample triggers an abort and `1.0` means the scraper never aborts based on failure rate alone.
+
+#### Scenario: Config file sets scrape failure rate threshold
+- **WHEN** the configuration file sets `scraper.abortOnFailureRate` to a numeric value in the inclusive range `[0.0, 1.0]`
+- **THEN** the scraper SHALL interpret that value as the maximum allowed fraction of terminally failed child pages among completed child-page attempts
+
+#### Scenario: Environment variable overrides scrape failure rate threshold
+- **WHEN** the environment variable `DOCS_MCP_SCRAPER_ABORT_ON_FAILURE_RATE` is set
+- **THEN** the environment variable value SHALL override config file and default values for `scraper.abortOnFailureRate`
+
+#### Scenario: Default scrape failure rate threshold is one half
+- **WHEN** no explicit configuration for `scraper.abortOnFailureRate` is provided
+- **THEN** the loaded configuration SHALL set `scraper.abortOnFailureRate` to `0.5`
+
+### Requirement: Updated Default HTTP Retry Configuration
+The configuration system SHALL default `scraper.fetcher.maxRetries` to `3`.
+
+#### Scenario: Default fetch retry count is three
+- **WHEN** no explicit configuration for `scraper.fetcher.maxRetries` is provided
+- **THEN** the loaded configuration SHALL set `scraper.fetcher.maxRetries` to `3`
+
+#### Scenario: Explicit fetch retry override still wins
+- **WHEN** the user provides an explicit value for `scraper.fetcher.maxRetries`
+- **THEN** the loaded configuration SHALL use the explicit value instead of the default
+
+### Requirement: Scraper Security Configuration
+The system SHALL expose configuration for outbound network and local file access controls under `scraper.security`.
+
+#### Scenario: Network mode defaults to open
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** `scraper.security.network.mode` SHALL default to `open`
+
+#### Scenario: Allowlist mode is selectable via configuration
+- **GIVEN** `scraper.security.network.mode` is `allowlist`
+- **WHEN** the configuration is loaded
+- **THEN** the outbound network policy SHALL permit only targets that match `allowedHosts` or `allowedCidrs`
+- **AND** `allowPrivateNetworks` SHALL not affect access decisions in allowlist mode
+
+#### Scenario: Allowed host patterns accept globs and regex
+- **GIVEN** `scraper.security.network.allowedHosts` contains `docs.internal.example`, `*.corp.local`, and `/^docs\d+\.example\.com$/`
+- **WHEN** the configuration is loaded
+- **THEN** entries SHALL be parsed as host patterns matching the bare hostname
+- **AND** literal entries SHALL match exactly, glob entries SHALL match via minimatch, and `/.../` entries SHALL match via JavaScript regular expressions
+
+#### Scenario: Private network access defaults to disabled
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** private network access for scraper-driven HTTP(S) fetches SHALL default to disabled
+
+#### Scenario: Host allowlist can permit a specific internal hostname
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `false`
+- **AND** `scraper.security.network.allowedHosts` contains `docs.internal.example`
+- **WHEN** the configuration is loaded
+- **THEN** requests explicitly targeting `docs.internal.example` SHALL be eligible for access despite the default private-network restriction
+- **AND** direct IP requests SHALL still require `allowedCidrs` or `allowPrivateNetworks`
+
+#### Scenario: CIDR allowlist can permit a specific internal subnet
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `false`
+- **AND** `scraper.security.network.allowedCidrs` contains `10.42.0.0/16`
+- **WHEN** the configuration is loaded
+- **THEN** requests whose resolved address falls within `10.42.0.0/16` SHALL be eligible for access despite the default private-network restriction
+
+#### Scenario: Empty network allowlists do not permit private targets
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `false`
+- **AND** `scraper.security.network.allowedHosts` is empty
+- **AND** `scraper.security.network.allowedCidrs` is empty
+- **WHEN** the configuration is loaded
+- **THEN** no private or special-use network targets SHALL be permitted by configuration
+
+#### Scenario: Private network override enables broad internal access
+- **GIVEN** `scraper.security.network.allowPrivateNetworks` is `true`
+- **WHEN** the configuration is loaded
+- **THEN** private, loopback, link-local, and other special-use network targets SHALL be eligible for access
+
+#### Scenario: Invalid TLS verification defaults to disabled override
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** `scraper.security.network.allowInvalidTls` SHALL default to `false`
+
+#### Scenario: Broad invalid TLS override enables all HTTPS targets
+- **GIVEN** `scraper.security.network.allowInvalidTls` is `true`
+- **WHEN** the configuration is loaded
+- **THEN** HTTPS requests SHALL be eligible to bypass invalid certificate errors
+
+#### Scenario: File access mode defaults to allowed roots
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** local file access mode SHALL default to `allowedRoots`
+
+#### Scenario: Documents root is configured by default
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** the allowed file roots SHALL include `$DOCUMENTS`
+
+#### Scenario: Internal archive handoff does not require temp root configuration
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the system processes a supported web archive root via an internal temporary file
+- **THEN** the default file access configuration SHALL not require the OS temporary directory to be added to `allowedRoots`
+
+#### Scenario: Empty file root allowlist denies user-requested file access
+- **GIVEN** `scraper.security.fileAccess.mode` is `allowedRoots`
+- **AND** `scraper.security.fileAccess.allowedRoots` is empty
+- **WHEN** the configuration is loaded
+- **THEN** user-requested `file://` access SHALL not be permitted by configuration
+
+#### Scenario: Unresolvable documents token grants no access
+- **GIVEN** `scraper.security.fileAccess.allowedRoots` contains `$DOCUMENTS`
+- **AND** the runtime cannot resolve a documents directory for the current platform or account
+- **WHEN** the configuration is loaded and file access policy is evaluated
+- **THEN** `$DOCUMENTS` SHALL not expand to an implicit fallback path
+- **AND** no access SHALL be granted from that token alone
+
+#### Scenario: Supported allowed-root tokens
+- **GIVEN** `scraper.security.fileAccess.allowedRoots` accepts tokens that expand at runtime
+- **WHEN** the configuration is loaded
+- **THEN** the supported tokens SHALL include `$HOME`, `$DOCUMENTS`, `$DOWNLOADS`, `$DESKTOP`, and `$CWD`
+- **AND** any other value SHALL be treated as a literal filesystem path
+- **AND** a token that cannot be resolved at runtime SHALL grant no access by itself
+
+#### Scenario: Hidden path access defaults to disabled
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** hidden file and directory access SHALL default to disabled
+
+#### Scenario: Symlink following defaults to disabled
+- **GIVEN** no custom security configuration is provided
+- **WHEN** the configuration is loaded
+- **THEN** symlink following for local file access SHALL default to disabled
+
+### Requirement: Vector Dimension Configuration
+The system SHALL support a configurable vector dimension via the `embeddings.vectorDimension` configuration key. This value determines the size of the `documents_vec` virtual table column and the target dimension for vector padding/truncation.
+
+The configuration key SHALL follow the standard configuration precedence:
+1. Built-in default: `1536` (lowest priority)
+2. Configuration file (`config.yaml`, key `embeddings.vectorDimension`)
+3. Environment variable (`DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION`)
+4. CLI arguments (highest priority)
+
+The Zod schema SHALL validate that `vectorDimension` is a positive integer (`>= 1`). Values of 0, negative numbers, or non-integers SHALL be rejected at configuration load time.
+
+#### Scenario: Default vector dimension
+- **WHEN** no `vectorDimension` override is specified
+- **THEN** the system SHALL use 1536 as the vector dimension
+
+#### Scenario: Custom vector dimension via environment variable
+- **WHEN** `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` is set to `768`
+- **THEN** the system SHALL use 768 as the vector dimension
+- **AND** the `documents_vec` table SHALL use `embedding FLOAT[768]`
+
+#### Scenario: Invalid vector dimension rejected
+- **WHEN** `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` is set to `0`
+- **THEN** the system SHALL reject the configuration with an error message
+- **AND** startup SHALL fail
+
+#### Scenario: Non-integer vector dimension rejected
+- **WHEN** `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` is set to `768.5`
+- **THEN** the system SHALL reject the configuration with an error message
+

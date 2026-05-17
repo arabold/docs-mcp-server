@@ -2,9 +2,7 @@
 
 ## Purpose
 Defines how embeddings are produced for document chunks, including metadata enrichment, batch processing, error recovery, dimension normalization, and fallback behavior when embeddings are disabled.
-
 ## Requirements
-
 ### Requirement: Chunk Metadata Header
 The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
 
@@ -88,6 +86,8 @@ The system SHALL normalize all embedding vectors to a fixed database dimension (
 - **Oversized vector without truncation**: The system SHALL raise a `DimensionError`.
 - **Undersized vector**: The system SHALL pad the vector with zeros to reach the target dimension.
 
+The target dimension (`embeddings.vectorDimension`) is configurable at runtime and determines the size of the `documents_vec` virtual table. When the dimension changes between startups, the model change detection system SHALL handle invalidation before any new vectors are stored.
+
 **Code reference:** `src/store/embeddings/FixedDimensionEmbeddings.ts:13-67`, `src/store/DocumentStore.ts:455-465`
 
 #### Scenario: Gemini model with MRL truncation
@@ -105,6 +105,12 @@ The system SHALL normalize all embedding vectors to a fixed database dimension (
 - **WHEN** an embedding model returns 1536-dimensional vectors
 - **AND** the database vector dimension is 1536
 - **THEN** the system SHALL store the vector as-is without modification
+
+#### Scenario: Custom vector dimension configuration
+- **WHEN** `embeddings.vectorDimension` is set to 768
+- **AND** the embedding model returns 768-dimensional vectors
+- **THEN** the system SHALL store the vector as-is without modification
+- **AND** the `documents_vec` table SHALL use `embedding FLOAT[768]`
 
 ### Requirement: Dimension Detection
 The system SHALL determine the output dimensions of the configured embedding model using the following strategy:
@@ -137,6 +143,8 @@ When embeddings are disabled (no model configured, missing credentials, or initi
 - The FTS5 full-text search index SHALL still be populated
 - Documents SHALL remain fully searchable via full-text search
 
+When the embedding model changes and vectors are invalidated, existing documents SHALL have their embeddings set to `NULL`. The system SHALL continue operating in FTS-only mode for those documents until they are re-scraped with the new model.
+
 **Code reference:** `src/store/DocumentStore.ts:483-486, 1166-1169, 1308`
 
 #### Scenario: No embedding model configured
@@ -151,4 +159,9 @@ When embeddings are disabled (no model configured, missing credentials, or initi
 - **AND** the system SHALL continue operating in FTS-only mode
 - **AND** documents SHALL be stored without embeddings
 
-**Known gap:** The system does not track which embedding model was used for existing vectors. If the user changes the embedding model, old vectors remain in the database but are semantically incompatible with new vectors. Vector similarity search will produce degraded results. The only remedy is to re-scrape all libraries. There is currently no automatic detection or migration for model changes.
+#### Scenario: Vectors invalidated after model change
+- **WHEN** a model change has been confirmed and vectors have been invalidated
+- **THEN** all existing documents SHALL have `NULL` embeddings
+- **AND** FTS search SHALL continue working for all documents
+- **AND** vector search SHALL return no results until libraries are re-scraped
+

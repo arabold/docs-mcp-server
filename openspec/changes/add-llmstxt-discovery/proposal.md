@@ -8,12 +8,13 @@ Separately, [Cloudflare's Markdown for Agents](https://blog.cloudflare.com/markd
 
 ## What Changes
 
-- **Automatic llms.txt probe**: Before BFS crawling begins, `WebScraperStrategy` probes for `/llms.txt` at the site (subpath directory first, then site root). If found, the listed URLs are parsed and added to the BFS crawl queue as seeds alongside the original URL.
-- **llms.txt parser**: A new utility (`llmsTxtParser`) parses the well-defined Markdown format of llms.txt files, extracting project name, summary, section groupings, and link lists.
-- **Markdown URL preference**: When fetching pages discovered via llms.txt, the fetcher first attempts to retrieve the `.md` variant of the URL (e.g., `page.html.md`). Falls back to the original URL on failure.
-- **Markdown content negotiation**: All web scraper HTTP requests include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8`. When a server responds with `Content-Type: text/markdown`, the response bypasses HTML-to-Markdown conversion. This applies to all web-scraped pages, not just llms.txt-discovered ones.
+- **Automatic llms.txt probe**: `WebScraperStrategy` probes for `/llms.txt` at the site (subpath directory first, then site root) during normal web scrapes. It skips refreshes. If found, listed URLs are parsed, resolved against the llms.txt URL when relative, filtered after the depth-0 scope base is established, and added to the BFS crawl queue as seeds alongside the original URL.
+- **llms.txt parser**: A new utility (`llmsTxtParser`) parses the well-defined Markdown format of llms.txt files, extracting project name, summary, section groupings, and link lists while ignoring malformed or non-HTTP(S) links during crawl seeding.
+- **Markdown URL preference**: When fetching pages discovered via llms.txt, the fetcher first attempts to retrieve the `.md` variant of the URL (e.g., `page.html.md` or `guide/index.html.md`). It accepts the variant only for Markdown or text responses, and falls back to the original URL otherwise.
+- **Markdown content negotiation**: Web scraper HTTP(S) requests default to `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller supplied an explicit `Accept` header. When a server responds with a Markdown MIME type, the response bypasses HTML-to-Markdown conversion. This applies to all web-scraped pages, not just llms.txt-discovered ones.
 - **QueueItem extension**: `QueueItem` gains an optional `fromLlmsTxt` flag so `processItem` knows which pages to try `.md` variants for.
-- **Logging**: Discovery and usage of llms.txt is logged at info level; probe failures logged at debug level.
+- **Access policy**: llms.txt probes, extracted URLs, redirects, and `.md` variant fetches use the existing fetcher and shared outbound access policy, so SSRF/private-network/TLS restrictions are preserved.
+- **Logging**: Discovery and usage of llms.txt is logged at info level; probe failures and `.md` fallback decisions are logged at debug level.
 
 ## Impact
 

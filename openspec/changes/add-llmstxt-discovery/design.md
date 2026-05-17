@@ -43,6 +43,12 @@ Stop at first successful probe. Note: this derivation intentionally does NOT reu
 
 **Rationale:** The spec says `/llms.txt` at the root but also mentions "(or, optionally, in a subpath)". Documentation often lives under a subpath (e.g., `/docs/`), and a subpath llms.txt is more targeted. Probing the subpath first gives us the most relevant file.
 
+### Decision 2a: Seed filtering waits for canonical scope base
+
+The implementation must avoid filtering llms.txt URLs against a stale pre-redirect scope base. The root page establishes `canonicalBaseUrl` during depth-0 processing, including protocol/host adoption and siblingwise redirect behavior from the `scraping-scope` capability. llms.txt URL seeding SHALL either run after depth-0 processing has established that canonical base or defer filtering/enqueueing until then.
+
+**Rationale:** A common scrape starts at `http://example.com/docs` and redirects to `https://www.example.com/docs/`. If llms.txt URLs are filtered before the redirect is known, valid `https://www.example.com/docs/...` links can be rejected by protocol or host scope checks. Waiting for the canonical base keeps llms.txt seeding consistent with normal BFS link discovery.
+
 ### Decision 3: Seeds supplement BFS, they do not replace it
 
 URLs from llms.txt are added to the crawl queue at depth 0. Normal BFS link-following continues from these pages. The existing `maxPages`, `maxDepth`, scope, and pattern filters all apply.
@@ -51,9 +57,14 @@ URLs from llms.txt are added to the crawl queue at depth 0. Normal BFS link-foll
 
 ### Decision 4: .md URL preference uses content-type validation
 
-When fetching a page from llms.txt, try `url.md` (or `url/index.html.md` for directory URLs) first. Accept the `.md` response only if:
+When fetching a page from llms.txt, try a Markdown URL variant first. Build the variant using explicit path rules:
+- Paths ending in `/` append `index.html.md` (for example `/guide/` -> `/guide/index.html.md`).
+- Paths whose last segment has no `.` append `/index.html.md` (for example `/guide` -> `/guide/index.html.md`).
+- Paths whose last segment contains `.` append `.md` (for example `/guide.html` -> `/guide.html.md`).
+
+Accept the `.md` response only if:
 - HTTP status is 200
-- Content-Type indicates text (`text/markdown`, `text/plain`, or similar)
+- Content-Type indicates Markdown or text (`text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm`, `text/plain`, or similar safe text)
 
 Otherwise, fall back to the original URL.
 
@@ -85,9 +96,9 @@ Refresh operations (`isRefresh: true`) use a pre-populated queue from the databa
 - **`.md` URL returning wrong content**: A server may serve different content at `url.md` than at `url`.
   - Mitigation: Content-type validation. The `.md` preference is best-effort, not critical.
 
-### Decision 7: Accept: text/markdown content negotiation on all web fetches
+### Decision 7: Accept: text/markdown content negotiation on web fetches
 
-All HTTP requests made by the web scraper SHALL include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` as the Accept header. When a server responds with `Content-Type: text/markdown` (or `text/plain` with Markdown content), the response body is treated as Markdown and bypasses HTML-to-Markdown conversion.
+All HTTP(S) requests made by the web scraper SHALL default to `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` as the Accept header unless the caller supplied an explicit `Accept` or `accept` header in `ScraperOptions.headers`. When a server responds with a Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, or `text/x-gfm`), the response body is treated as Markdown and bypasses HTML-to-Markdown conversion.
 
 This is independent of the `.md` URL preference (Decision 4). Content negotiation applies to **all** web-scraped pages, not just llms.txt-discovered pages.
 
@@ -104,6 +115,18 @@ For llms.txt-discovered pages, the fetch order is:
 3. If server returns HTML despite the Accept header, process through normal HTML pipeline
 
 For non-llms.txt pages, only steps 2-3 apply.
+
+### Decision 7a: text/plain stays conservative
+
+Generic `text/plain` responses continue to use the existing text-processing fallback unless they are accepted `.md` variant responses or pass a conservative Markdown-content heuristic added by the implementation. This avoids treating arbitrary plaintext logs or API responses as Markdown while still allowing llms.txt `.md` variants served as `text/plain` to use Markdown splitting.
+
+### Decision 7b: Access policy remains authoritative
+
+llms.txt probes, redirects, extracted llms.txt URLs, `.md` variant attempts, browser-rendered requests, and content-negotiated fetches SHALL use the existing fetcher path and shared outbound access policy. The feature must not introduce direct HTTP calls that bypass host/CIDR allowlists, private-network blocking, TLS policy, redirect validation, or browser subrequest enforcement.
+
+### Decision 7c: Relative links resolve against llms.txt URL
+
+The parser may return raw link targets. The web strategy resolves relative llms.txt links against the URL of the discovered llms.txt file before applying scope and pattern filters. Links that do not resolve to HTTP(S) URLs are ignored for web crawl seeding.
 
 ### Decision 8: x-markdown-tokens response header
 

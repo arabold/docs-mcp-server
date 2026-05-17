@@ -62,9 +62,3 @@ When the embedding model changes and vectors are invalidated, existing documents
 - **THEN** all existing documents SHALL have `NULL` embeddings
 - **AND** FTS search SHALL continue working for all documents
 - **AND** vector search SHALL return no results until libraries are re-scraped
-
-## REMOVED Requirements
-
-### Requirement: Known Gap Documentation
-**Reason**: The "known gap" note previously documented at the end of this spec ("The system does not track which embedding model was used for existing vectors...") is now resolved by the `embedding-model-change-safety` capability, which implements model tracking via database metadata and vector invalidation on model change.
-**Migration**: No code migration needed. The gap is closed by the new `embedding-model-change-safety` spec.

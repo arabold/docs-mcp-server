@@ -2,7 +2,9 @@
 
 ### Requirement: Automatic llms.txt detection
 
-The system SHALL automatically probe for an `llms.txt` file before beginning BFS crawling when using the web scraper strategy. The system SHALL NOT probe for llms.txt during refresh operations (when `isRefresh` is true). The probe SHALL derive candidate URLs by extracting the parent directory of the input URL path (stripping the last path segment regardless of whether it looks like a file or directory — e.g., `https://example.com/docs/getting-started` yields `https://example.com/docs/llms.txt`, and `https://example.com/docs/` yields `https://example.com/docs/llms.txt`). If the subpath probe fails, the system SHALL fall back to the site root (`https://example.com/llms.txt`). Probing SHALL stop at the first successful response (HTTP 200 with valid llms.txt content). If no `llms.txt` is found (HTTP 404, network error, or invalid content), the system SHALL proceed with normal BFS crawling from the original URL without error.
+The system SHALL automatically probe for an `llms.txt` file during normal web scraping when using the web scraper strategy. The system SHALL NOT probe for llms.txt during refresh operations (when `isRefresh` is true). The probe SHALL derive candidate URLs by extracting the parent directory of the input URL path (stripping the last path segment regardless of whether it looks like a file or directory — e.g., `https://example.com/docs/getting-started` yields `https://example.com/docs/llms.txt`, and `https://example.com/docs/` yields `https://example.com/docs/llms.txt`). If the subpath probe fails, the system SHALL fall back to the site root (`https://example.com/llms.txt`). Probing SHALL stop at the first successful response (HTTP 200 with valid llms.txt content). If no `llms.txt` is found (HTTP 404, network error, or invalid content), the system SHALL proceed with normal BFS crawling from the original URL without error.
+
+The system SHALL use the existing fetcher path and shared outbound access policy for llms.txt probes, including redirect-target validation, DNS-resolved IP validation, configured host/CIDR allowlists, private-network blocking, and TLS policy.
 
 #### Scenario: llms.txt found at subpath
 - **WHEN** the user initiates a scrape of `https://docs.example.com/docs/guide`
@@ -33,6 +35,11 @@ The system SHALL automatically probe for an `llms.txt` file before beginning BFS
 - **THEN** the system SHALL NOT probe for llms.txt
 - **AND** the system SHALL process only the pre-populated queue entries
 
+#### Scenario: llms.txt probe blocked by access policy
+- **WHEN** a candidate llms.txt URL is blocked by the outbound access policy
+- **THEN** the system SHALL treat that candidate as a probe failure
+- **AND** the system SHALL NOT bypass the configured network policy to fetch it
+
 ### Requirement: llms.txt Markdown parser
 
 The system SHALL provide a parser for the llms.txt Markdown format as defined by the [llms.txt specification](https://llmstxt.org/). The parser SHALL extract the following from a valid llms.txt file:
@@ -41,7 +48,7 @@ The system SHALL provide a parser for the llms.txt Markdown format as defined by
 - Sections (H2 headings) with their link lists - optional
 - Each link: URL (required), title (required), description (optional), and whether it belongs to the `## Optional` section (boolean)
 
-The parser SHALL return an empty result (no URLs) if the content does not contain a valid H1 heading or contains no link lists.
+The parser SHALL return an empty result (no URLs) if the content does not contain a valid H1 heading or contains no link lists. Relative link targets SHALL be allowed in parser output; the web strategy SHALL resolve them against the discovered llms.txt URL before crawl seeding. Link targets that do not resolve to HTTP(S) URLs SHALL be ignored during web crawl seeding.
 
 #### Scenario: Parse complete llms.txt
 - **WHEN** the parser receives valid llms.txt content with an H1, blockquote, and multiple H2 sections containing link lists
@@ -55,9 +62,13 @@ The parser SHALL return an empty result (no URLs) if the content does not contai
 - **WHEN** the parser receives content that is not valid llms.txt (no H1 heading, or HTML content, or binary data)
 - **THEN** the parser SHALL return an empty result with no URLs
 
+#### Scenario: Resolve relative links during crawl seeding
+- **WHEN** llms.txt at `https://docs.example.com/docs/llms.txt` contains a link target `guide/intro`
+- **THEN** the web strategy SHALL resolve it to `https://docs.example.com/docs/guide/intro` before filtering and queueing
+
 ### Requirement: llms.txt URL seeding
 
-The system SHALL add URLs extracted from a detected llms.txt file to the BFS crawl queue at depth 0, alongside the original input URL. All llms.txt URLs SHALL be filtered through the existing scope and include/exclude pattern logic via `shouldProcessUrl()`. URLs that do not pass filtering SHALL be silently dropped. The BFS crawl SHALL continue normally from seeded pages, following discovered links subject to `maxPages`, `maxDepth`, and all other existing constraints.
+The system SHALL add URLs extracted from a detected llms.txt file to the BFS crawl queue at depth 0, alongside the original input URL. All llms.txt URLs SHALL be filtered through the existing scope and include/exclude pattern logic via `shouldProcessUrl()`. Filtering and enqueueing SHALL occur only after the depth-0 canonical scope base has been established, so protocol/host/path updates caused by the start URL's redirect are applied consistently with normal BFS link discovery. URLs that do not pass filtering SHALL be silently dropped. The BFS crawl SHALL continue normally from seeded pages, following discovered links subject to `maxPages`, `maxDepth`, and all other existing constraints.
 
 #### Scenario: URLs seeded and crawled with link following
 - **WHEN** llms.txt lists 5 documentation URLs
@@ -81,9 +92,16 @@ The system SHALL add URLs extracted from a detected llms.txt file to the BFS cra
 - **THEN** the system SHALL silently drop the out-of-scope URL
 - **AND** only seed URLs that pass the existing `shouldProcessUrl()` check
 
+#### Scenario: llms.txt URLs use post-redirect scope base
+- **WHEN** the user scrapes `http://example.com/docs`
+- **AND** the depth-0 response redirects to `https://www.example.com/docs/`
+- **AND** llms.txt lists `https://www.example.com/docs/guide`
+- **THEN** the listed URL SHALL be evaluated against the post-redirect protocol and host
+- **AND** it SHALL be eligible for queueing when it otherwise passes scope and pattern filters
+
 ### Requirement: Markdown content negotiation
 
-The web scraper SHALL include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` in the HTTP headers of all web page fetch requests. When a server responds with `Content-Type: text/markdown` (or `text/plain` with Markdown-structured content), the system SHALL treat the response body as Markdown and bypass HTML-to-Markdown conversion. When the server responds with `Content-Type: text/html` (ignoring the Markdown preference), the system SHALL process the response through the normal HTML pipeline. This content negotiation applies to all web-scraped pages regardless of whether they were discovered via llms.txt or BFS link-following.
+The web scraper SHALL default HTTP(S) web page fetch requests to include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller supplied an explicit `Accept` or `accept` header. When a server responds with a Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, or `text/x-gfm`), the system SHALL treat the response body as Markdown and bypass HTML-to-Markdown conversion. When the server responds with `Content-Type: text/html` (ignoring the Markdown preference), the system SHALL process the response through the normal HTML pipeline. This content negotiation applies to all web-scraped pages regardless of whether they were discovered via llms.txt or BFS link-following.
 
 #### Scenario: Server returns Markdown via content negotiation
 - **WHEN** fetching any web page with the `Accept: text/markdown` header
@@ -91,19 +109,24 @@ The web scraper SHALL include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8
 - **THEN** the system SHALL use the response body as Markdown directly
 - **AND** the content SHALL be processed through the Markdown pipeline (not the HTML pipeline)
 
+#### Scenario: Caller-supplied Accept header is preserved
+- **WHEN** a web scrape is invoked with a custom `Accept` header in `ScraperOptions.headers`
+- **THEN** the system SHALL preserve the caller-provided value
+- **AND** it SHALL NOT overwrite it with the default Markdown-preferred Accept header
+
 #### Scenario: Server ignores Accept header and returns HTML
 - **WHEN** fetching any web page with the `Accept: text/markdown` header
 - **AND** the server responds with HTTP 200 and `Content-Type: text/html`
 - **THEN** the system SHALL process the response through the normal HTML-to-Markdown pipeline
 
-#### Scenario: Server returns text/plain with Markdown content
-- **WHEN** fetching any web page with the `Accept: text/markdown` header
+#### Scenario: Generic text/plain remains plain text
+- **WHEN** fetching a normal web page with the `Accept: text/markdown` header
 - **AND** the server responds with HTTP 200 and `Content-Type: text/plain`
-- **THEN** the system SHALL treat the response body as Markdown
+- **THEN** the system SHALL process the response through the normal text pipeline unless the implementation can conservatively identify it as Markdown content
 
 ### Requirement: Markdown URL preference for llms.txt pages
 
-When fetching a page that was discovered via llms.txt, the system SHALL first attempt to fetch the Markdown variant of the URL before falling back to the original URL. For file-like URLs (path ends with a filename, e.g., `page.html`), the system SHALL append `.md` to the path (e.g., `page.html.md`). For directory-like URLs (path ends with `/` or has no file extension in the last segment), the system SHALL append `index.html.md` to the path (e.g., `guide/` becomes `guide/index.html.md`). The `.md` variant request SHALL include the `Accept: text/markdown` header (per the Markdown content negotiation requirement). The system SHALL accept the `.md` response only if the HTTP status is 200 and the Content-Type indicates text content (`text/markdown`, `text/plain`, `text/x-markdown`, or similar). If the `.md` URL fails (non-200 status, non-text content type, or network error), the system SHALL fall back to fetching the original URL (which also uses content negotiation). Pages discovered via normal BFS link-following (not from llms.txt) SHALL NOT attempt the `.md` variant.
+When fetching a page that was discovered via llms.txt, the system SHALL first attempt to fetch the Markdown variant of the URL before falling back to the original URL. Variant construction SHALL use these path rules: paths ending in `/` append `index.html.md`; paths whose last segment has no `.` append `/index.html.md`; paths whose last segment contains `.` append `.md`. For example, `/guide/` and `/guide` both become `/guide/index.html.md`, while `/guide.html` becomes `/guide.html.md`. The `.md` variant request SHALL include the default Markdown-preferred `Accept` header unless the caller supplied an explicit `Accept` header. The system SHALL accept the `.md` response only if the HTTP status is 200 and the Content-Type indicates Markdown or safe text content (`text/markdown`, `text/plain`, `text/x-markdown`, or similar). If the `.md` URL fails (non-200 status, non-text content type, access-policy rejection, or network error), the system SHALL fall back to fetching the original URL (which also uses content negotiation). Pages discovered via normal BFS link-following (not from llms.txt) SHALL NOT attempt the `.md` variant.
 
 #### Scenario: Successful .md fetch
 - **WHEN** fetching a page listed in llms.txt at `https://example.com/docs/guide.html`
@@ -134,9 +157,14 @@ When fetching a page that was discovered via llms.txt, the system SHALL first at
 - **AND** `https://example.com/docs/guide/index.html.md` returns HTTP 200 with `Content-Type: text/markdown`
 - **THEN** the system SHALL use the Markdown content from the `index.html.md` URL
 
+#### Scenario: .md URL for extensionless directory-like URL
+- **WHEN** fetching a page listed in llms.txt at `https://example.com/docs/guide`
+- **AND** `https://example.com/docs/guide/index.html.md` returns HTTP 200 with `Content-Type: text/markdown`
+- **THEN** the system SHALL use the Markdown content from the `index.html.md` URL
+
 ### Requirement: llms.txt file exclusion from indexing
 
-The llms.txt file itself SHALL NOT be indexed as a document in the store. The exclusion SHALL be hardcoded in the URL filtering logic (not via configurable default exclude patterns), so that it remains active even when the user provides custom `excludePatterns`. If the llms.txt URL falls within the crawl scope and would normally be discovered during BFS crawling, it SHALL be excluded from content processing and storage. It is a meta-file used for URL discovery, not documentation content.
+The llms.txt file itself SHALL NOT be indexed as a document in the store. The exclusion SHALL be hardcoded in the URL filtering logic (not via configurable default exclude patterns), so that it remains active even when the user provides custom `excludePatterns`. If the llms.txt URL falls within the crawl scope and would normally be discovered during BFS crawling, it SHALL be excluded from content processing and storage. The exclusion SHALL match URLs whose pathname basename is exactly `llms.txt`, case-insensitive, ignoring query strings and hash fragments. It is a meta-file used for URL discovery, not documentation content.
 
 #### Scenario: llms.txt excluded from indexing
 - **WHEN** the BFS crawl encounters the llms.txt file URL during link following
