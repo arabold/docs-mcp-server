@@ -423,6 +423,19 @@ DEBUG=mcp:auth npx docs-mcp-server --auth-enabled --auth-issuer-url "..."
 - Implement proper CORS policies for web clients
 - Use secure OAuth2 flows (Authorization Code with PKCE)
 
+### Outbound Access Controls
+
+Authentication controls who can use MCP and HTTP endpoints. It does not, by itself, restrict where scraper-driven fetches can connect after a request is authenticated.
+
+The scraper now applies outbound access controls by default:
+
+- Private, loopback, link-local, and other special-use network targets are blocked unless explicitly allowlisted or `scraper.security.network.allowPrivateNetworks` is enabled.
+- Local `file://` access is constrained by `scraper.security.fileAccess` and defaults to `$DOCUMENTS` only.
+- Hidden files and symlinks are blocked by default.
+- `allowInvalidTls` only changes certificate validation after the target has already passed the network policy. It does not bypass host or CIDR restrictions.
+
+For deployment hardening guidance, see [Infrastructure Security](./security.md).
+
 ### Access Control
 
 - All authenticated users receive full access to all endpoints

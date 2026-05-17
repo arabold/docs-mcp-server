@@ -39,6 +39,21 @@ describe("LocalFileStrategy - Archive Integration", () => {
         document: {
             maxSize: 1024 * 1024,
         },
+        security: {
+          network: {
+            mode: "open",
+            allowPrivateNetworks: false,
+            allowedHosts: [],
+            allowedCidrs: [],
+            allowInvalidTls: false,
+          },
+          fileAccess: {
+            mode: "unrestricted",
+            allowedRoots: [],
+            followSymlinks: true,
+            includeHidden: true,
+          },
+        },
       },
       splitter: {
           maxChunkSize: 1000,

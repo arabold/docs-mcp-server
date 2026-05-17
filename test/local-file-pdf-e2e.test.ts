@@ -65,6 +65,14 @@ describe("LocalFileStrategy - PDF in mounted directory (issue #394)", () => {
 
   it("indexes a PDF sitting next to .txt/.md in a directory served via file://", async () => {
     const appConfig = loadConfig();
+    // This test points at an OS temp directory that lives outside the default
+    // `$DOCUMENTS` allowed root. The new scraper security policy would block
+    // it unless we widen the allowed roots to include this run's tmpDir.
+    // On macOS, `/var/folders/...` is itself reached via a symlinked ancestor
+    // (`/var` → `/private/var`), so we also need to permit symlink traversal
+    // for the policy to read fixture files.
+    appConfig.scraper.security.fileAccess.allowedRoots = [tmpDir];
+    appConfig.scraper.security.fileAccess.followSymlinks = true;
     const strategy = new LocalFileStrategy(appConfig);
 
     const dirUrl = `file://${tmpDir}`;

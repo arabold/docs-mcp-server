@@ -60,7 +60,14 @@ class TlsCertificateError extends ScraperError {
   }
 }
 
+class AccessPolicyError extends ScraperError {
+  constructor(message: string) {
+    super(message, false);
+  }
+}
+
 export {
+  AccessPolicyError,
   ChallengeError,
   InvalidUrlError,
   RedirectError,

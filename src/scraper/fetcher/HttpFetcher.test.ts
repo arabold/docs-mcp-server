@@ -353,7 +353,9 @@ describe("HttpFetcher", () => {
 
     await fetcher.fetch("https://example.com");
 
-    // Test behavior: verify that axios is called with required properties
+    // Test behavior: verify that axios is called with required properties.
+    // Redirects are handled manually so every target can pass the access
+    // policy before connect, so axios is always invoked with maxRedirects: 0.
     expect(mockedAxios.get).toHaveBeenCalledWith(
       "https://example.com",
       expect.objectContaining({
@@ -366,7 +368,7 @@ describe("HttpFetcher", () => {
           "Accept-Encoding": "gzip, deflate, br",
         }),
         timeout: undefined,
-        maxRedirects: 5,
+        maxRedirects: 0,
         signal: undefined,
         decompress: true,
       }),
@@ -391,7 +393,7 @@ describe("HttpFetcher", () => {
         responseType: "arraybuffer",
         headers: expect.objectContaining(headers),
         timeout: undefined,
-        maxRedirects: 5,
+        maxRedirects: 0,
         signal: undefined,
         decompress: true,
       }),
@@ -413,10 +415,13 @@ describe("HttpFetcher", () => {
       expect(result.content).toEqual(
         Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
       );
+      // Redirects are followed manually so axios is always invoked with
+      // maxRedirects: 0; the follow-by-default behavior is exercised inside
+      // HttpFetcher's own loop.
       expect(mockedAxios.get).toHaveBeenCalledWith(
         "https://example.com",
         expect.objectContaining({
-          maxRedirects: 5, // Should allow redirects by default
+          maxRedirects: 0,
         }),
       );
     });
@@ -440,7 +445,7 @@ describe("HttpFetcher", () => {
       expect(mockedAxios.get).toHaveBeenCalledWith(
         "https://example.com",
         expect.objectContaining({
-          maxRedirects: 5, // Should allow redirects
+          maxRedirects: 0,
         }),
       );
     });

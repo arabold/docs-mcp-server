@@ -1,6 +1,8 @@
+import path from "node:path";
 import { URL } from "node:url";
 import { CancellationError } from "../../pipeline/errors";
 import type { ProgressCallback } from "../../types";
+import { fileUrlToPathLoose } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
@@ -44,6 +46,8 @@ export interface ProcessItemResult {
   content?: PipelineResult;
   /** Extracted links from the content. This may be an empty array if no links were found or if the content was not processed. */
   links?: string[];
+  /** Internal-only allowlist roots to carry to discovered queue items. */
+  internalAllowedFileRoots?: string[];
   /** Any non-critical errors encountered during processing. This may be an empty array if no errors were encountered or if the content was not processed. */
   status: FetchStatus;
 }
@@ -99,9 +103,28 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   /**
    * Determines if a URL should be processed based on scope and include/exclude patterns in ScraperOptions.
    * Scope is checked first, then patterns.
+   *
+   * `internalAllowedFileRoots` opts a queue item out of the protocol-strict
+   * scope check: when a web URL has been accepted as an archive root and the
+   * archive expands into `file://` members, those members are continuations of
+   * the same accepted scrape and should not be rejected because they crossed
+   * from `https:` to `file:`. The bypass is intentionally narrow — the
+   * `file://` target must resolve inside one of the internal roots — so
+   * arbitrary links injected into archive content cannot escape the archive
+   * sandbox via this path. Downstream `resolveFileAccess` enforces the same
+   * rule, but rejecting early here keeps unrelated `file://` URLs out of the
+   * crawl queue entirely.
    */
-  protected shouldProcessUrl(url: string, options: ScraperOptions): boolean {
-    if (options.scope) {
+  protected shouldProcessUrl(
+    url: string,
+    options: ScraperOptions,
+    context: { internalAllowedFileRoots?: string[] } = {},
+  ): boolean {
+    const isInternalArchiveMember =
+      url.startsWith("file://") &&
+      isFileUrlInsideRoots(url, context.internalAllowedFileRoots);
+
+    if (options.scope && !isInternalArchiveMember) {
       try {
         const base = this.canonicalBaseUrl ?? new URL(options.url);
         const target = new URL(url);
@@ -327,6 +350,8 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           // Extract discovered links - use the final URL as the base for resolving relative links
           const nextItems = result.links || [];
           const linkBaseUrl = finalUrl ? new URL(finalUrl) : baseUrl;
+          const internalAllowedFileRoots =
+            result.internalAllowedFileRoots ?? item.internalAllowedFileRoots;
 
           this.recordChildPageCompletion(item, result);
           ensureFailureRateWithinThreshold();
@@ -337,12 +362,17 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               try {
                 const targetUrl = new URL(value, linkBaseUrl);
                 // Filter using shouldProcessUrl
-                if (!this.shouldProcessUrl(targetUrl.href, options)) {
+                if (
+                  !this.shouldProcessUrl(targetUrl.href, options, {
+                    internalAllowedFileRoots,
+                  })
+                ) {
                   return null;
                 }
                 return {
                   url: targetUrl.href,
                   depth: item.depth + 1,
+                  ...(internalAllowedFileRoots ? { internalAllowedFileRoots } : {}),
                 } satisfies QueueItem;
               } catch (_error) {
                 // Invalid URL or path
@@ -504,4 +534,26 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   async cleanup(): Promise<void> {
     // No-op by default
   }
+}
+
+/**
+ * Returns true if `url` is a `file://` URL whose resolved filesystem path lies
+ * inside one of the supplied internal roots. Used by the queue-time scope
+ * bypass for archive-member URLs so that arbitrary `file://` links injected
+ * into archive content cannot escape the archive sandbox.
+ */
+function isFileUrlInsideRoots(url: string, roots: string[] | undefined): boolean {
+  if (!roots || roots.length === 0) return false;
+  let target: string;
+  try {
+    target = path.resolve(fileUrlToPathLoose(url));
+  } catch {
+    return false;
+  }
+  return roots.some((root) => {
+    const resolvedRoot = path.resolve(root);
+    if (resolvedRoot === target) return true;
+    const relative = path.relative(resolvedRoot, target);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+  });
 }
