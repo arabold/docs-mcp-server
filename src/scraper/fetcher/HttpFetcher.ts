@@ -198,8 +198,12 @@ export class HttpFetcher implements ContentFetcher {
           }
 
           const contentTypeHeader = response.headers["content-type"];
-          const { mimeType, charset } = MimeTypeUtils.parseContentType(contentTypeHeader);
-          const contentEncoding = response.headers["content-encoding"];
+          const { mimeType, charset } = MimeTypeUtils.parseContentType(
+            typeof contentTypeHeader === "string" ? contentTypeHeader : undefined,
+          );
+          const rawContentEncoding = response.headers["content-encoding"];
+          const contentEncoding =
+            typeof rawContentEncoding === "string" ? rawContentEncoding : undefined;
 
           // Convert ArrayBuffer to Buffer properly
           let content: Buffer;

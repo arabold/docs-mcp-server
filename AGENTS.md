@@ -32,6 +32,12 @@
 - **Pre-commit**: Husky runs lint, typecheck, and tests. **Never** bypass.
 - **Security**: **NEVER** commit secrets, credentials, or sensitive data (e.g., `.env`).
 
+### Dependency Hygiene
+
+- Use `npm ci` (not `npm install`) when you just need `node_modules`; it installs from the lockfile without mutating it. Reserve `npm install` for intentional dependency changes.
+- Keep Node 22 — `better-sqlite3` ships a Node-ABI-pinned native binary. Do not bump the engine floor to v24+.
+- For occasional CLI tools that aren't part of the runtime (e.g. `promptfoo` for search evals), invoke them via `npx -y <pkg>@<version>` from `package.json` scripts rather than declaring them as dependencies — keeps the dep tree and lockfile clean.
+
 ### Commit Messages
 
 Strictly enforced by `commitlint`. Commits will fail if format is incorrect.
