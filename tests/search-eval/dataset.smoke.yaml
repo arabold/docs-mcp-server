@@ -43,5 +43,5 @@ entries:
       query: customizing theme colors
       intent: api-lookup
       qrels:
-        - { url: "https://tailwindcss.com/docs/customizing-colors", grade: 3 }
+        - { url: "https://tailwindcss.com/docs/colors", grade: 3 }
         - { url: "https://tailwindcss.com/docs/theme", grade: 2 }
