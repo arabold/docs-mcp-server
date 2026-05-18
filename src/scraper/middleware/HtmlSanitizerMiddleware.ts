@@ -88,6 +88,80 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
     '[role="region"][aria-label*="skip" i]',
     '[aria-modal="true"]',
     ".noprint",
+    // Skip-links and screen-reader-only anchors (e.g. "Skip to main content").
+    // Scoped to <a> so icon-button labels (`<span class="sr-only">`) are left alone.
+    "a.sr-only",
+    "a.skip-link",
+    "a.skip-nav",
+    "a.screen-reader-only",
+    "a.visually-hidden",
+    // Breadcrumb variants beyond the .breadcrumb class above (ARIA + schema.org).
+    '[aria-label="Breadcrumb" i]',
+    '[itemtype*="BreadcrumbList"]',
+    // Ad networks — removed at sanitization time (after render) rather than at
+    // network level, to avoid triggering anti-adblock detection on monetized
+    // sites. See subresourceBlocklist.ts for the rationale on why ads are not
+    // network-blocked.
+    // Carbon Ads (Vite, Astro, Tailwind, MDN, …)
+    "#carbonads",
+    ".carbonads",
+    ".carbon-wrap",
+    ".carbon-text",
+    ".carbon-img",
+    ".carbon-poweredby",
+    'a[href*="carbonads.net"]',
+    // BuySellAds
+    ".bsa-promotion",
+    ".bsa-cpc",
+    '[id^="bsap_"]',
+    '[id^="bsa-zone_"]',
+    'img[src*="buysellads.com"]',
+    'img[src*="buysellads.net"]',
+    // EthicalAds (ReadTheDocs, Python/Django docs)
+    ".ethical-rtd",
+    ".ethical-fixedfooter",
+    ".ethical-bottom-right",
+    "[data-ea-publisher]",
+    ".keep-us-sustainable",
+    'img[src*="ethicalads.io"]',
+    // Google AdSense
+    ".adsbygoogle",
+    "ins.adsbygoogle",
+    '[id^="google_ads_iframe"]',
+    'img[src*="googlesyndication.com"]',
+    'img[src*="doubleclick.net"]',
+    // Outbrain / Taboola — content-recommendation widgets, indistinguishable
+    // from ads on doc pages.
+    ".OUTBRAIN",
+    '[data-widget-id^="OB_"]',
+    ".taboola",
+    '[id^="taboola-"]',
+    // Tracker pixels that escape via async injection
+    'img[src*="bidr.io"]',
+    'img[src*="adnxs.com"]',
+    'img[src*="adsrvr.org"]',
+    // Third-party search widgets injected outside of nav/header.
+    // Algolia DocSearch (dominant in technical docs)
+    ".DocSearch",
+    ".DocSearch-Button",
+    ".DocSearch-Container",
+    ".DocSearch-Modal",
+    "#docsearch",
+    '[id^="docsearch-"]',
+    ".algolia-autocomplete",
+    ".algolia-docsearch-suggestion",
+    // MkDocs Material result containers (the search box is in nav; results can
+    // render standalone)
+    ".md-search-result",
+    ".md-search__output",
+    // Sphinx / ReadTheDocs search
+    "#searchbox",
+    "#search-results",
+    ".wy-side-search",
+    // Swiftype / Elastic Site Search
+    "#st-search-input",
+    "#st-results-container",
+    ".st-default-search-input",
   ];
 
   async process(context: MiddlewareContext, next: () => Promise<void>): Promise<void> {
