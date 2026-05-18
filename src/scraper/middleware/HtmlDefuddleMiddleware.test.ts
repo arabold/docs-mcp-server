@@ -89,7 +89,7 @@ describe("HtmlDefuddleMiddleware", () => {
     expect($("body").text()).toContain("Lorem ipsum");
   });
 
-  it("removes custom excludeSelectors after Defuddle extraction", async () => {
+  it("respects excludeSelectors (applied to the source DOM before extraction)", async () => {
     const middleware = new HtmlDefuddleMiddleware();
     const context = createMockContext(
       articleHtml('<div class="remove-me">Drop this</div>'),
@@ -147,6 +147,41 @@ describe("HtmlDefuddleMiddleware", () => {
 
     expect(context.title).toBeTruthy();
     expect(context.title).toContain("Test Article");
+  });
+
+  it("triggers fallback when extracted body is only script content (Next.js hydration)", async () => {
+    // Regression for the failure mode where Defuddle returns a body whose
+    // only "content" is a `<script>` blob (e.g. Next.js `__next_f`
+    // hydration). The textual length of the script's children would inflate
+    // the retention ratio so the safety net never tripped, then post-strip
+    // we'd be left with an effectively empty DOM. With the post-strip
+    // measurement, the ratio should now reflect the empty page and fall
+    // back to the original DOM.
+    const middleware = new HtmlDefuddleMiddleware();
+    const hugeScriptPayload = "x".repeat(200_000);
+    const html = `
+      <!doctype html>
+      <html><head><title>Test</title></head>
+      <body>
+        <article>
+          <h1>Test Article</h1>
+          <p>${lorem.repeat(20)}</p>
+          <script>self.__next_f=[${JSON.stringify(hugeScriptPayload)}]</script>
+        </article>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    const $ = context.dom;
+    if (!$) throw new Error("DOM not defined");
+
+    // The hydration payload must not survive into the final DOM, regardless
+    // of which path executed (extraction or fallback).
+    expect($("body").text()).not.toContain(hugeScriptPayload);
+    expect($("script").length).toBe(0);
   });
 
   it("propagates language hints from highlighter wrapper divs to <code>", async () => {

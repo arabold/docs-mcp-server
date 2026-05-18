@@ -32,7 +32,10 @@ const DEFAULT_MIN_RETENTION = 0.01;
  * - Runs Defuddle via linkedom and replaces `context.dom` with a fresh Cheerio
  *   DOM containing only the cleaned content (wrapped in `<html><body>…`).
  * - Honours `context.options.excludeSelectors` by stripping them from the
- *   cleaned DOM after Defuddle has run.
+ *   *source* DOM before Defuddle runs. Defuddle's standardise step unwraps
+ *   class/id hooks, so post-extraction selector matching is unreliable;
+ *   filtering on the source DOM matches the Cheerio sanitiser's behaviour
+ *   and the user's mental model.
  * - Updates `context.title` if Defuddle found a non-empty title and the
  *   previous extractor left it empty.
  * - Falls back to the original DOM if Defuddle returns empty output or removes
@@ -89,8 +92,32 @@ export class HtmlDefuddleMiddleware implements ContentProcessorMiddleware {
       });
 
       const cleanedContent = typeof result?.content === "string" ? result.content : "";
-      const cleanedText = stripTags(cleanedContent).trim();
 
+      // Build the cleaned Cheerio DOM *first*, then measure retention on the
+      // post-sanitisation text. Doing the regex-strip-then-measure dance in
+      // the other order let `<script>` *contents* (e.g. Next.js `__next_f`
+      // hydration payloads) inflate the "kept" character count so the ratio
+      // check passed, after which removing the script tags emptied the page.
+      //
+      // Note on H1 handling: Defuddle's standardize step deliberately drops
+      // the first H1/H2 when it matches the extracted title (and converts
+      // remaining H1s to H2s). The dropped headline text is preserved on
+      // `context.title`, which the indexer attaches to every chunk as
+      // metadata — so it's still searchable, just not duplicated inside the
+      // chunk body. Defuddle exposes no granular flag to opt out of this
+      // single behaviour (only the coarse `standardize: false` which would
+      // also disable code-block / footnote standardisation).
+      const wrappedHtml = `<!doctype html><html><head><title>${escapeHtml(result.title || context.title || "")}</title></head><body>${cleanedContent}</body></html>`;
+      const cleaned$ = cheerio.load(wrappedHtml);
+
+      // Strip dangerous / non-content tags. Defuddle can leak these (Next.js
+      // hydration payloads being the worst offender) and they're never useful
+      // in indexed markdown.
+      cleaned$("script, style, noscript, iframe, svg, link, meta").remove();
+
+      // Measure retention on the post-strip text so the ratio reflects what
+      // actually survives into the chunked output.
+      const cleanedText = cleaned$("body").text().trim();
       const ratio = textLengthBefore > 0 ? cleanedText.length / textLengthBefore : 0;
 
       if (!cleanedText || ratio < this.minTextRetentionRatio) {
@@ -104,23 +131,6 @@ export class HtmlDefuddleMiddleware implements ContentProcessorMiddleware {
         await next();
         return;
       }
-
-      // Note on H1 handling: Defuddle's standardize step deliberately drops
-      // the first H1/H2 when it matches the extracted title (and converts
-      // remaining H1s to H2s). The dropped headline text is preserved on
-      // `context.title`, which the indexer attaches to every chunk as
-      // metadata — so it's still searchable, just not duplicated inside the
-      // chunk body. Defuddle exposes no granular flag to opt out of this
-      // single behaviour (only the coarse `standardize: false` which would
-      // also disable code-block / footnote standardisation).
-      const wrappedHtml = `<!doctype html><html><head><title>${escapeHtml(result.title || context.title || "")}</title></head><body>${cleanedContent}</body></html>`;
-      const cleaned$ = cheerio.load(wrappedHtml);
-
-      // Defuddle can leak inline `<script>` / `<style>` / `<noscript>` blocks
-      // (e.g. Next.js `__next_f` hydration payloads) into its output, which
-      // then gets serialised to multi-hundred-KB markdown by Turndown. Strip
-      // these defensively — they're never useful in indexed content.
-      cleaned$("script, style, noscript, iframe, svg, link, meta").remove();
 
       context.dom = cleaned$;
       if (!context.title && result.title) {
@@ -236,10 +246,6 @@ export class HtmlDefuddleMiddleware implements ContentProcessorMiddleware {
       }
     }
   }
-}
-
-function stripTags(html: string): string {
-  return html.replace(/<[^>]*>/g, " ");
 }
 
 const LANGUAGE_CLASS_RE =
