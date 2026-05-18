@@ -11,7 +11,9 @@ authoritative spec see
 ```
 tests/search-eval/
   dataset.yaml             # Source-of-truth dataset (wrapped form with status/notes).
-  baseline.json            # Checked-in baseline. Empty placeholder until first run.
+  baseline.json            # Checked-in baseline for the main dataset.
+                           # Each dataset writes its own baseline (e.g.
+                           # dataset.smoke.yaml -> dataset.smoke.baseline.json).
   promptfoo.yaml           # Promptfoo config. Run via run.ts, never directly.
   run-provider.sh          # Promptfoo exec-provider wrapper around search-provider.ts.
 
@@ -33,9 +35,9 @@ tests/search-eval/
     ir-metrics.cjs         # Promptfoo assertion: emits IR metric bundle per query.
     structural.cjs         # Promptfoo assertion: structural pass-rate.
   rubrics/
-    chunk-coherence.md     # The three LLM rubrics. Canonical copies live here;
-    content-faithfulness.md # rubrics.ts mirrors them for in-process use.
-    answerability.md
+    chunk-coherence.txt    # The three LLM rubrics. Canonical copies live here;
+    content-faithfulness.txt # rubrics.ts mirrors them for in-process use.
+    answerability.txt      # (.txt because promptfoo rejects .md file refs.)
   results/                 # Gitignored. Per-run output: promptfoo-raw.json,
                            # summary.json, cross-judge.json, dataset.flat.yaml.
 ```

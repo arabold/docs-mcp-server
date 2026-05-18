@@ -199,14 +199,19 @@ export function aggregate(opts: AggregateOptions): RunSummary {
 
 /** CLI entry point used by tests/search-eval/cli/aggregate.ts. */
 export async function aggregateCli(): Promise<void> {
+  const { loadConfig } = await import("../../src/utils/config");
   const datasetPath = process.env.DOCS_EVAL_DATASET ?? "tests/search-eval/dataset.yaml";
   const rawPath = resolve("tests/search-eval/results/promptfoo-raw.json");
   const crossJudgePath = resolve("tests/search-eval/results/cross-judge.json");
   const outputPath = resolve("tests/search-eval/results/summary.json");
   const dataset = loadDataset(datasetPath);
+  const appConfig = loadConfig();
 
   const config: RunConfigSnapshot = {
-    embeddingModel: process.env.DOCS_EVAL_EMBEDDING_MODEL ?? "unknown",
+    embeddingModel:
+      process.env.DOCS_EVAL_EMBEDDING_MODEL ??
+      appConfig.app.embeddingModel ??
+      "unknown",
     topK: Number(process.env.DOCS_EVAL_TOP_K ?? 5),
     judge: process.env.DOCS_EVAL_JUDGE_RESOLVED ?? "unknown",
     crossJudge: process.env.DOCS_EVAL_CROSS_JUDGE,
@@ -216,6 +221,12 @@ export async function aggregateCli(): Promise<void> {
     datasetFile: datasetPath,
     datasetStatus: dataset.status ?? "reviewed",
     datasetEntryCount: dataset.entries.length,
+    assembly: {
+      childLimit: appConfig.assembly.childLimit,
+      precedingSiblingsLimit: appConfig.assembly.precedingSiblingsLimit,
+      subsequentSiblingsLimit: appConfig.assembly.subsequentSiblingsLimit,
+      maxChunkDistance: appConfig.assembly.maxChunkDistance,
+    },
     timestamp: new Date().toISOString(),
   };
 

@@ -36,10 +36,31 @@ const PER_INTENT_KEYS = ["mrr", "recall_at_5", "ndcg_at_5", "hit_at_3"] as const
 
 export interface CompareResult {
   hasBaseline: boolean;
+  /**
+   * Set when the current run's config differs from the baseline's in ways that
+   * make a numeric regression check meaningless (different dataset, different
+   * embedding model, different judge, different top-k). When non-empty, the
+   * comparator skips regression classification — gating on a mismatched
+   * baseline produces false positives.
+   */
+  incompatibilities: string[];
   regressions: RegressionEntry[];
   improvements: RegressionEntry[];
   stable: RegressionEntry[];
 }
+
+/**
+ * Fields that, when they differ between baseline and current run, render the
+ * baseline incompatible for numeric regression comparison. A different
+ * dataset is the most common case (smoke vs full) and the most dangerous.
+ */
+const CONFIG_KEYS_REQUIRING_MATCH = [
+  "datasetFile",
+  "datasetEntryCount",
+  "embeddingModel",
+  "judge",
+  "topK",
+] as const;
 
 function relativeDelta(baseline: number, current: number): number {
   if (baseline === 0) {
@@ -68,9 +89,27 @@ export function compare(
   const regressions: RegressionEntry[] = [];
   const improvements: RegressionEntry[] = [];
   const stable: RegressionEntry[] = [];
+  const incompatibilities: string[] = [];
 
   if (!baseline.summary) {
-    return { hasBaseline: false, regressions, improvements, stable };
+    return { hasBaseline: false, incompatibilities, regressions, improvements, stable };
+  }
+
+  // Refuse to compare metrics when the baseline was recorded under a materially
+  // different configuration — that produces false positives in both directions.
+  const baselineConfig = baseline.summary.config as unknown as Record<string, unknown>;
+  const currentConfig = summary.config as unknown as Record<string, unknown>;
+  for (const key of CONFIG_KEYS_REQUIRING_MATCH) {
+    const b = baselineConfig[key];
+    const c = currentConfig[key];
+    if (b !== undefined && c !== undefined && b !== c) {
+      incompatibilities.push(`${key}: baseline=${JSON.stringify(b)} current=${JSON.stringify(c)}`);
+    }
+  }
+  if (incompatibilities.length > 0) {
+    // Skip numeric classification — caller renders the incompatibility list
+    // and exits zero (no false regressions).
+    return { hasBaseline: true, incompatibilities, regressions, improvements, stable };
   }
 
   // Headline IR metrics.
@@ -109,7 +148,7 @@ export function compare(
     }
   }
 
-  return { hasBaseline: true, regressions, improvements, stable };
+  return { hasBaseline: true, incompatibilities, regressions, improvements, stable };
 }
 
 function bucket(
@@ -197,12 +236,16 @@ export function renderSummary(summary: RunSummary, cmp: CompareResult): string {
 
   if (!cmp.hasBaseline) {
     lines.push("⚠  No baseline found. Run `npm run evaluate:search:baseline` to record one.");
+  } else if (cmp.incompatibilities.length > 0) {
+    lines.push("⚠  Baseline config differs from current run — skipping regression check:");
+    for (const m of cmp.incompatibilities) lines.push(`   ${m}`);
+    lines.push("   Re-record the baseline if this run is the new reference.");
   } else if (cmp.regressions.length > 0) {
     lines.push("❌ Regressions:");
     for (const r of cmp.regressions) {
       const scope = r.scope === "per-intent" ? ` (${r.scopeKey})` : "";
       lines.push(
-        `   ${r.metric}${scope}: ${r.baseline.toFixed(3)} → ${r.current.toFixed(3)}  (${(r.relativeDelta * 100).toFixed(1)}%)`,
+        `   ${r.metric}${scope}: ${r.baseline.toFixed(3)} → ${r.current.toFixed(3)}  (${formatDelta(r.relativeDelta)})`,
       );
     }
   } else {
@@ -213,14 +256,28 @@ export function renderSummary(summary: RunSummary, cmp: CompareResult): string {
 }
 
 function baseValue(cmp: CompareResult, metric: string): number | undefined {
-  if (!cmp.hasBaseline) return undefined;
+  if (!cmp.hasBaseline || cmp.incompatibilities.length > 0) return undefined;
   const all = [...cmp.regressions, ...cmp.improvements, ...cmp.stable];
   return all.find((e) => e.scope === "headline" && e.metric === metric)?.baseline;
 }
 
 function fmtRow(label: string, current: number, baseline: number | undefined, _scope: string): string {
   if (baseline === undefined) return `${label} ${current.toFixed(3)}`;
-  const d = baseline === 0 ? 0 : (current - baseline) / Math.abs(baseline);
+  // baseline=0 with current>0 is a real improvement from "nothing measured" —
+  // surface it instead of pretending the delta is 0%.
+  if (baseline === 0) {
+    if (current === 0) {
+      return `${label} ${current.toFixed(3)}  (baseline 0.000, no change ·)`;
+    }
+    const arrow = current > 0 ? "▲" : "▼";
+    return `${label} ${current.toFixed(3)}  (baseline 0.000, +∞ ${arrow})`;
+  }
+  const d = (current - baseline) / Math.abs(baseline);
   const arrow = d > 0.001 ? "▲" : d < -0.001 ? "▼" : "·";
   return `${label} ${current.toFixed(3)}  (baseline ${baseline.toFixed(3)}, ${(d * 100).toFixed(1)}% ${arrow})`;
+}
+
+function formatDelta(d: number): string {
+  if (!Number.isFinite(d)) return d > 0 ? "+∞" : "-∞";
+  return `${(d * 100).toFixed(1)}%`;
 }

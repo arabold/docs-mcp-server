@@ -47,8 +47,29 @@ const PATHS = {
   rawOutput: resolve("tests/search-eval/results/promptfoo-raw.json"),
   summary: resolve("tests/search-eval/results/summary.json"),
   crossJudge: resolve("tests/search-eval/results/cross-judge.json"),
-  baseline: resolve("tests/search-eval/baseline.json"),
 };
+
+/**
+ * Each dataset gets its own baseline file, so running smoke in `--baseline`
+ * mode doesn't silently overwrite the checked-in main baseline.
+ *   dataset.yaml         -> baseline.json
+ *   dataset.smoke.yaml   -> baseline.smoke.json
+ *   custom/foo.yaml      -> custom/foo.baseline.json   (sits next to dataset)
+ */
+function baselinePathFor(datasetPath: string): string {
+  const ext = datasetPath.endsWith(".yaml")
+    ? ".yaml"
+    : datasetPath.endsWith(".yml")
+      ? ".yml"
+      : "";
+  const stem = ext ? datasetPath.slice(0, -ext.length) : datasetPath;
+  // The canonical main dataset gets the canonical baseline name.
+  if (stem.endsWith("/tests/search-eval/dataset") || stem === "tests/search-eval/dataset") {
+    return resolve("tests/search-eval/baseline.json");
+  }
+  // Anything else gets a sibling .baseline.json so multiple datasets coexist.
+  return resolve(`${stem}.baseline.json`);
+}
 
 async function main() {
   const mode = parseMode(process.argv.slice(2));
@@ -185,6 +206,14 @@ async function main() {
     datasetFile: relative(process.cwd(), datasetPath) || datasetPath,
     datasetStatus: dataset.status ?? "reviewed",
     datasetEntryCount: dataset.entries.length,
+    // Capture chunking config so baselines recorded under different assembly
+    // settings can be told apart (small changes here move recall noticeably).
+    assembly: {
+      childLimit: appConfig.assembly.childLimit,
+      precedingSiblingsLimit: appConfig.assembly.precedingSiblingsLimit,
+      subsequentSiblingsLimit: appConfig.assembly.subsequentSiblingsLimit,
+      maxChunkDistance: appConfig.assembly.maxChunkDistance,
+    },
     timestamp: new Date().toISOString(),
   };
   const summary = aggregate({
@@ -196,18 +225,33 @@ async function main() {
   });
 
   // 8. Compare against baseline.
-  const baseline = loadBaseline(PATHS.baseline);
+  const baselinePath = baselinePathFor(datasetPath);
+  const baseline = loadBaseline(baselinePath);
   const cmp = compare(summary, baseline);
+
+  // Persist regression report into summary.json so CI/downstream consumers
+  // can read it directly without re-running compare().
+  summary.regression = {
+    hasBaseline: cmp.hasBaseline,
+    incompatibilities: cmp.incompatibilities,
+    regressions: cmp.regressions,
+    improvements: cmp.improvements,
+    stable: cmp.stable,
+  };
+  writeFileSync(PATHS.summary, JSON.stringify(summary, null, 2));
+
   console.log(renderSummary(summary, cmp));
 
-  // 9. Baseline mode: write and exit. Measure mode: exit on regression.
+  // 9. Baseline mode: write and exit. Measure mode: exit on real regression.
   if (mode.baseline) {
-    writeBaseline(PATHS.baseline, summary);
-    console.log(`💾 Baseline written → ${PATHS.baseline}`);
+    writeBaseline(baselinePath, summary);
+    console.log(`💾 Baseline written → ${baselinePath}`);
     return;
   }
 
-  if (cmp.hasBaseline && cmp.regressions.length > 0) {
+  // Only fail on real regressions. Config-incompatible baselines produce no
+  // meaningful regression signal; the renderer already surfaced them.
+  if (cmp.hasBaseline && cmp.incompatibilities.length === 0 && cmp.regressions.length > 0) {
     process.exit(1);
   }
 }

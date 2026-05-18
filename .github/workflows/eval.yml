@@ -69,18 +69,18 @@ jobs:
         if: steps.store-cache.outputs.cache-hit != 'true'
         run: |
           set -e
-          npx docs-mcp-server scrape react https://react.dev \
+          npx @arabold/docs-mcp-server@latest scrape react https://react.dev \
             --exclude-pattern '/^https:\/\/react\.dev\/[a-z]{2}(-[a-z]+)?\//' \
             --max-pages 300
-          npx docs-mcp-server scrape python https://docs.python.org/3/ \
+          npx @arabold/docs-mcp-server@latest scrape python https://docs.python.org/3/ \
             --exclude-pattern '/^https:\/\/docs\.python\.org\/3\/[a-z]{2}(-[a-z]+)?\//' \
             --max-pages 500
-          npx docs-mcp-server scrape fastapi https://fastapi.tiangolo.com/ \
+          npx @arabold/docs-mcp-server@latest scrape fastapi https://fastapi.tiangolo.com/ \
             --exclude-pattern '/^https:\/\/fastapi\.tiangolo\.com\/[a-z]{2}(-[a-z]+)?\//' \
             --max-pages 200
-          npx docs-mcp-server scrape vite https://vitejs.dev/guide/ \
+          npx @arabold/docs-mcp-server@latest scrape vite https://vitejs.dev/guide/ \
             --max-pages 200
-          npx docs-mcp-server scrape tailwindcss https://tailwindcss.com/docs \
+          npx @arabold/docs-mcp-server@latest scrape tailwindcss https://tailwindcss.com/docs \
             --max-pages 300
 
       - name: Run benchmark

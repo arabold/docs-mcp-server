@@ -131,24 +131,38 @@ Its history is the audit trail for benchmark drift over time.
 
 ## First run
 
-The repository ships with an empty baseline placeholder. Your first run should be:
+The repository ships with a populated `tests/search-eval/baseline.json` (recorded
+against the default dataset / judge / embedding model). Your first run should be:
 
 ```bash
 # 1. Confirm libraries are indexed.
 npm run evaluate:search:preflight
 
-# 2. Smoke-test the pipeline with 5 queries (~1 minute) before committing to the
-#    full 60-query run. This validates that the provider, assertions, judge,
-#    aggregator, and comparator all work end-to-end.
+# 2. Smoke-test the pipeline with 5 queries (~1 minute) — sanity check the
+#    provider, assertions, judge, aggregator, and comparator. This writes to
+#    `dataset.smoke.baseline.json`, NOT to the main baseline, so you can run it
+#    safely without disturbing the checked-in reference numbers.
 DOCS_EVAL_DATASET=tests/search-eval/dataset.smoke.yaml \
   npm run evaluate:search:baseline
 
-# 3. If smoke passes, record the real baseline against the full dataset.
-npm run evaluate:search:baseline
+# 3. Measure against the checked-in baseline. Exits non-zero on regression.
+npm run evaluate:search
 ```
 
-From step 3 onwards, `npm run evaluate:search` will gate regressions against
-the baseline you just recorded.
+### When to refresh the baseline
+
+`npm run evaluate:search:baseline` overwrites `tests/search-eval/baseline.json`.
+Refresh it when:
+
+- you've intentionally changed something that should shift retrieval (new
+  embedding model, chunking config, scraper logic);
+- you've reviewed the dataset and want the new numbers to be the new reference;
+- a re-scrape or re-index moved scores in a direction you want to keep.
+
+The comparator refuses to gate against a baseline recorded under materially
+different config (different `datasetFile`, `embeddingModel`, `judge`, or `topK`).
+It prints the incompatibility list and exits zero — re-record the baseline if
+this run is the new reference.
 
 ### Performance note
 

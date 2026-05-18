@@ -114,13 +114,28 @@ async function main() {
       process.exit(1);
     }
 
-    // 6. Run Search
+    // 6. Run Search. `top_k` is configurable via DOCS_EVAL_TOP_K so the
+    // benchmark can measure deeper-recall configurations without editing
+    // code. Validate aggressively — silently coercing junk would let bad
+    // configs masquerade as a clean run.
+    const topKRaw = process.env.DOCS_EVAL_TOP_K?.trim();
+    let topK = 5;
+    if (topKRaw) {
+      const parsed = Number(topKRaw);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+        console.error(
+          `Invalid DOCS_EVAL_TOP_K="${topKRaw}": must be an integer in [1, 100].`,
+        );
+        process.exit(1);
+      }
+      topK = parsed;
+    }
     trace("searchTool.execute:start");
     const searchTool = new SearchTool(docService);
     const result = await searchTool.execute({
       library,
       query,
-      limit: 5, // Return top 5 for ranking evaluation
+      limit: topK,
     });
     trace("searchTool.execute:done");
 

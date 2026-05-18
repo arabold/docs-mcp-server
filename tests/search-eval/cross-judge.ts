@@ -67,12 +67,22 @@ export interface CrossJudgeOptions {
   datasetPath: string;
   mainRawPath: string;
   outputPath: string;
+  primaryJudgeId: string;
   secondaryJudgeId: string;
   sampleSize: number;
 }
 
 export function runCrossJudge(opts: CrossJudgeOptions): CrossJudgeAgreement[] {
-  resolveJudge(opts.secondaryJudgeId); // throws if deprecated/unknown
+  const primary = resolveJudge(opts.primaryJudgeId);
+  const secondary = resolveJudge(opts.secondaryJudgeId);
+  // Cross-judging with the same provider yields ~0 deltas and is just
+  // expensive — the spec and docs require a second-provider judge for
+  // meaningful variance estimation. Fail fast.
+  if (primary.provider === secondary.provider) {
+    throw new Error(
+      `Cross-judge secondary "${secondary.id}" is from the same provider as the primary "${primary.id}" (${primary.provider}). Pick a different provider — e.g. ${primary.provider === "openai" ? "anthropic:claude-sonnet-4-6 or google:gemini-3-flash-preview" : "openai:gpt-5.4-mini"}.`,
+    );
+  }
 
   const dataset = loadDataset(opts.datasetPath);
   if (dataset.entries.length === 0) return [];
@@ -119,7 +129,12 @@ export function runCrossJudge(opts: CrossJudgeOptions): CrossJudgeAgreement[] {
     ["-y", "promptfoo@0.121.11", "eval", "-c", tempConfigPath],
     { stdio: "inherit", env },
   );
-  if (child.status !== 0) {
+  // Mirror the main runner's treatment of promptfoo exit codes:
+  //   0   = all passed
+  //   100 = eval completed but some assertions failed (still produces a raw
+  //         output we can aggregate — discarding it would throw away signal)
+  //   other = real failure (config error, crash, etc.)
+  if (child.status !== 0 && child.status !== 100) {
     throw new Error(`cross-judge promptfoo run exited ${child.status}`);
   }
 
@@ -172,6 +187,17 @@ export async function crossJudgeCli(): Promise<void> {
     console.log("[cross-judge] DOCS_EVAL_CROSS_JUDGE_N is non-positive — skipping.");
     return;
   }
+  // The primary judge is the one the main run used; run.ts forwards it via
+  // DOCS_EVAL_JUDGE_RESOLVED. Fall back to DOCS_EVAL_JUDGE if the resolved
+  // form isn't set (e.g. cross-judge invoked standalone for debugging).
+  const primary =
+    process.env.DOCS_EVAL_JUDGE_RESOLVED ?? process.env.DOCS_EVAL_JUDGE;
+  if (!primary) {
+    console.error(
+      "[cross-judge] DOCS_EVAL_JUDGE_RESOLVED unset — cannot verify the secondary judge uses a different provider.",
+    );
+    process.exit(1);
+  }
   const datasetPath = process.env.DOCS_EVAL_DATASET ?? "tests/search-eval/dataset.yaml";
   const mainRawPath = resolve("tests/search-eval/results/promptfoo-raw.json");
   const outputPath = resolve("tests/search-eval/results/cross-judge.json");
@@ -179,6 +205,7 @@ export async function crossJudgeCli(): Promise<void> {
     datasetPath,
     mainRawPath,
     outputPath,
+    primaryJudgeId: primary,
     secondaryJudgeId: secondary,
     sampleSize: n,
   });

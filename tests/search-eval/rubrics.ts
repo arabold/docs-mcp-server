@@ -31,28 +31,44 @@ Score 5 — Self-contained:
 Score only the chunks shown. Ignore retrieval relevance — that is measured
 separately. Return an integer in [1,5].`;
 
-export const CONTENT_FAITHFULNESS_RUBRIC = `You are scoring how FAITHFUL each returned chunk is to the source documentation
-it claims to come from (identified by URL).
+export const CONTENT_FAITHFULNESS_RUBRIC = `You are scoring whether each returned chunk LOOKS LIKE A FAITHFUL EXCERPT of
+the source documentation it claims to come from (identified by URL).
 
-Score 1 — Distorted:
-  The chunk contains text that was not present in the source, has had key
-  facts altered (function signatures, parameter names, defaults, return
-  types), or merges content from multiple unrelated sections in a way that
-  changes meaning. The reader would draw wrong conclusions from the chunk.
+IMPORTANT — what you have:
+  - You DO have the chunk text and the URL it claims to come from.
+  - You DO NOT have access to the live source page. You cannot fetch it.
+  - This means you are judging *plausibility and internal consistency*, not
+    verified fidelity. Treat scores accordingly — do not pretend to know what
+    the source actually says.
 
-Score 3 — Lossy but faithful:
-  The text is genuinely from the source and not altered, but the chunking
-  boundary has dropped surrounding context that materially affects meaning —
-  e.g. a code example without the warning that precedes it, or an API note
-  without the platform-specific caveat from the next paragraph.
+Score 1 — Implausible:
+  The chunk contains text that obviously could not be the source: contradictory
+  facts, mid-sentence fragments stitched together from unrelated sections,
+  formatting that suggests templated boilerplate from a different page, or
+  internal contradictions a real doc page would not have. Function signatures
+  or parameter lists look invented (wildly inconsistent with how the library
+  is known to work). The reader would draw clearly wrong conclusions.
 
-Score 5 — Faithful and complete:
-  Every claim in the chunk is supported by the source, no facts have been
-  altered, and the chunk boundary did not strip context that would change
-  how the chunk reads. Quoting or paraphrasing within the chunk is accurate.
+Score 3 — Plausible but rough:
+  The chunk reads like real documentation but shows signs the chunking boundary
+  dropped material context — e.g. a code example without the caveat that
+  immediately precedes it in a normal doc layout, an API note without its
+  cross-references, or content that mixes a heading and the next section's
+  intro. Internally consistent and matches what you'd expect at this URL, but
+  not a clean excerpt.
 
-You are scoring fidelity to the source, NOT whether the source itself is
-correct. Return an integer in [1,5].`;
+Score 5 — Clean excerpt:
+  The chunk reads as a self-contained, internally consistent excerpt that
+  matches what a careful reader would expect to find at the claimed URL. No
+  stitching artifacts, no contradictions, code and prose are not severed from
+  each other. As far as can be judged without fetching the source, this is
+  exactly the kind of content the documentation contains.
+
+Caveat for the consumer of these scores: this dimension is a coarse signal,
+not ground truth. A chunk can score 5 here and still mis-quote the source in
+ways that would only be detected by direct comparison.
+
+Return an integer in [1,5].`;
 
 export const ANSWERABILITY_RUBRIC = `You are scoring whether the returned chunks, AS A SET, contain enough information
 for a downstream LLM to answer the given query — without external knowledge

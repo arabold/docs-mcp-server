@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-05-17T22:21:50.209Z",
+  "recordedAt": "2026-05-18T13:48:33.660Z",
   "config": {
     "embeddingModel": "text-embedding-3-small",
     "topK": 5,
@@ -7,7 +7,13 @@
     "datasetFile": "tests/search-eval/dataset.yaml",
     "datasetStatus": "draft",
     "datasetEntryCount": 60,
-    "timestamp": "2026-05-17T22:21:49.480Z"
+    "assembly": {
+      "childLimit": 3,
+      "precedingSiblingsLimit": 1,
+      "subsequentSiblingsLimit": 2,
+      "maxChunkDistance": 3
+    },
+    "timestamp": "2026-05-18T13:48:33.604Z"
   },
   "summary": {
     "config": {
@@ -17,18 +23,24 @@
       "datasetFile": "tests/search-eval/dataset.yaml",
       "datasetStatus": "draft",
       "datasetEntryCount": 60,
-      "timestamp": "2026-05-17T22:21:49.480Z"
+      "assembly": {
+        "childLimit": 3,
+        "precedingSiblingsLimit": 1,
+        "subsequentSiblingsLimit": 2,
+        "maxChunkDistance": 3
+      },
+      "timestamp": "2026-05-18T13:48:33.604Z"
     },
     "ir": {
-      "mrr": 0.6672222222222222,
-      "recall_at_3": 0.5777777777777778,
-      "recall_at_5": 0.6111111111111112,
-      "recall_at_10": 0.6111111111111112,
-      "ndcg_at_5": 0.6142311203238005,
-      "ndcg_at_10": 0.6142311203238005,
-      "hit_at_1": 0.6,
-      "hit_at_3": 0.7333333333333333,
-      "hit_at_5": 0.7833333333333333
+      "mrr": 0.6513888888888888,
+      "recall_at_3": 0.5527777777777778,
+      "recall_at_5": 0.5944444444444446,
+      "recall_at_10": 0.5944444444444446,
+      "ndcg_at_5": 0.5978446866153564,
+      "ndcg_at_10": 0.5978446866153564,
+      "hit_at_1": 0.5833333333333334,
+      "hit_at_3": 0.7166666666666667,
+      "hit_at_5": 0.7666666666666667
     },
     "perIntent": [
       {
@@ -44,16 +56,16 @@
         "n": 15,
         "mrr": 0.7555555555555554,
         "recall_at_5": 0.5888888888888888,
-        "ndcg_at_5": 0.6867823353838346,
+        "ndcg_at_5": 0.6852232420579,
         "hit_at_3": 0.8
       },
       {
         "intent": "comparison",
         "n": 12,
-        "mrr": 0.6069444444444444,
-        "recall_at_5": 0.5972222222222222,
-        "ndcg_at_5": 0.5653518211026617,
-        "hit_at_3": 0.6666666666666666
+        "mrr": 0.5277777777777778,
+        "recall_at_5": 0.5138888888888888,
+        "ndcg_at_5": 0.48536851921785956,
+        "hit_at_3": 0.5833333333333334
       },
       {
         "intent": "troubleshooting",
@@ -65,27 +77,34 @@
       }
     ],
     "structuralPassRate": {
-      "code_block_balance": 0.9833333333333333,
+      "code_block_balance": 0.9666666666666667,
       "non_empty_content": 1,
       "url_presence": 1
     },
     "llmJudged": [
       {
         "metric": "chunk_coherence",
-        "mean": 3.6333333333333333,
+        "mean": 3.4833333333333334,
         "n": 60
       },
       {
         "metric": "content_faithfulness",
-        "mean": 3.4,
+        "mean": 3.05,
         "n": 60
       },
       {
         "metric": "answerability",
-        "mean": 4.45,
+        "mean": 4.366666666666666,
         "n": 60
       }
     ],
-    "crossJudge": []
+    "crossJudge": [],
+    "regression": {
+      "hasBaseline": false,
+      "incompatibilities": [],
+      "regressions": [],
+      "improvements": [],
+      "stable": []
+    }
   }
 }

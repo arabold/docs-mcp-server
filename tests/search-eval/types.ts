@@ -82,6 +82,20 @@ export interface JudgeAllowlistEntry {
   deprecated?: boolean;
 }
 
+/**
+ * Chunk-assembly parameters that materially affect retrieval quality. Captured
+ * in every run snapshot so two baselines can be compared meaningfully — a
+ * change to `childLimit` or `maxChunkDistance` can shift recall by tens of
+ * points, and a baseline that doesn't record them looks misleadingly
+ * comparable across configs.
+ */
+export interface AssemblyConfigSnapshot {
+  childLimit: number;
+  precedingSiblingsLimit: number;
+  subsequentSiblingsLimit: number;
+  maxChunkDistance: number;
+}
+
 export interface RunConfigSnapshot {
   embeddingModel: string;
   topK: number;
@@ -91,6 +105,7 @@ export interface RunConfigSnapshot {
   datasetFile: string;
   datasetStatus: "draft" | "reviewed";
   datasetEntryCount: number;
+  assembly: AssemblyConfigSnapshot;
   timestamp: string;
 }
 
@@ -136,6 +151,20 @@ export interface RunSummary {
     n: number;
   }>;
   crossJudge: CrossJudgeAgreement[];
+  /**
+   * Regression status per metric, populated by the orchestrator after the
+   * baseline comparison runs. CI consumers can read this directly from the
+   * machine-readable summary without re-running the comparator.
+   */
+  regression?: RegressionReport;
+}
+
+export interface RegressionReport {
+  hasBaseline: boolean;
+  incompatibilities: string[];
+  regressions: RegressionEntry[];
+  improvements: RegressionEntry[];
+  stable: RegressionEntry[];
 }
 
 export interface BaselineFile {

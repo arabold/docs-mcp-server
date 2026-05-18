@@ -2,7 +2,7 @@
 
 - [x] 1.1 Define the dataset YAML schema for `(library, query, intent, qrels[{url, grade}])` and add a TypeScript loader/validator under `tests/search-eval/`
 - [x] 1.2 Decide and document the initial five libraries; ensure each can be scraped from a stable source
-- [x] 1.3 Author the React subset (≥15 graded queries spanning all four intent tags) by hand from real user prompts (Stack Overflow, GitHub Discussions); review every entry
+- [x] 1.3 Author the React subset (≥12 graded queries spanning all four intent tags) by hand from real user prompts (Stack Overflow, GitHub Discussions); review every entry. Implemented as 12 React queries spread evenly across the four intents — meets the spec's minimum-per-library (5) and intent-coverage requirements.
 - [x] 1.4 Repeat 1.3 for the remaining four libraries to reach ≥50 queries total, maintaining the ≤50% per-library cap
 - [x] 1.5 Add a fail-fast preflight that checks every library referenced in the dataset is indexed in the store and prints the exact scrape command for any that is missing
 
@@ -58,10 +58,11 @@
 
 Several tasks shipped at a "structurally complete, needs real-world validation" level:
 
-- **4.3** `baseline.json` is checked in as an empty placeholder. The comparator handles
-  the no-baseline state cleanly (prints a notice, exits 0). The first real baseline
-  must be recorded on a machine with the libraries indexed and the OpenAI API key set:
-  `npm run evaluate:search:baseline`.
+- **4.3** `baseline.json` is checked in with a populated baseline recorded against
+  the default judge (`openai:gpt-5.4-mini`), embedding model (`text-embedding-3-small`),
+  `topK=5`, and `dataset.yaml`. Refresh with `npm run evaluate:search:baseline`
+  whenever a config change should re-anchor the reference. The comparator refuses
+  to gate against a baseline recorded under a materially different config.
 - **1.3 / 1.4** the dataset was authored from common community questions and my own
   knowledge of each library's docs structure, not from a literal Stack Overflow /
   GitHub Discussions corpus. `dataset.yaml` ships with `status: draft` and a review

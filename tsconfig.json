@@ -23,6 +23,6 @@
     "exactOptionalPropertyTypes": false,
     "assumeChangesOnlyAffectDirectDependencies": true
   },
-  "include": ["src/**/*", "test/**/*"],
+  "include": ["src/**/*", "test/**/*", "tests/**/*"],
   "exclude": ["node_modules", "dist"]
 }
