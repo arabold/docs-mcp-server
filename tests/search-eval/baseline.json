@@ -1,6 +1,7 @@
 {
-  "recordedAt": "2026-05-18T14:34:39.662Z",
+  "recordedAt": "2026-05-18T23:38:03.253Z",
   "config": {
+    "provider": "local",
     "embeddingModel": "text-embedding-3-small",
     "topK": 5,
     "judge": "openai:gpt-5.4-mini",
@@ -13,10 +14,11 @@
       "subsequentSiblingsLimit": 2,
       "maxChunkDistance": 3
     },
-    "timestamp": "2026-05-18T14:34:39.386Z"
+    "timestamp": "2026-05-18T23:38:02.935Z"
   },
   "summary": {
     "config": {
+      "provider": "local",
       "embeddingModel": "text-embedding-3-small",
       "topK": 5,
       "judge": "openai:gpt-5.4-mini",
@@ -29,67 +31,67 @@
         "subsequentSiblingsLimit": 2,
         "maxChunkDistance": 3
       },
-      "timestamp": "2026-05-18T14:34:39.386Z"
+      "timestamp": "2026-05-18T23:38:02.935Z"
     },
     "ir": {
-      "mrr": 0.6892655367231638,
-      "recall_at_3": 0.612994350282486,
-      "recall_at_5": 0.6638418079096046,
-      "recall_at_10": 0.6638418079096046,
-      "ndcg_at_5": 0.6351244562117476,
-      "ndcg_at_10": 0.6351244562117476,
-      "hit_at_1": 0.6101694915254238,
-      "hit_at_3": 0.7627118644067796,
-      "hit_at_5": 0.8305084745762712
+      "mrr": 0.7556497175141245,
+      "recall_at_3": 0.6497175141242937,
+      "recall_at_5": 0.7231638418079097,
+      "recall_at_10": 0.7231638418079097,
+      "ndcg_at_5": 0.6948313062036244,
+      "ndcg_at_10": 0.6948313062036244,
+      "hit_at_1": 0.6779661016949152,
+      "hit_at_3": 0.847457627118644,
+      "hit_at_5": 0.8983050847457628
     },
     "perIntent": [
       {
         "intent": "api-lookup",
         "n": 18,
-        "mrr": 0.7685185185185185,
-        "recall_at_5": 0.75,
-        "ndcg_at_5": 0.7103417661384618,
-        "hit_at_3": 0.8333333333333334
+        "mrr": 0.8518518518518517,
+        "recall_at_5": 0.7777777777777778,
+        "ndcg_at_5": 0.7983216256526039,
+        "hit_at_3": 0.9444444444444444
       },
       {
         "intent": "conceptual",
         "n": 15,
-        "mrr": 0.8222222222222222,
-        "recall_at_5": 0.6888888888888889,
-        "ndcg_at_5": 0.7158146118432983,
+        "mrr": 0.8388888888888888,
+        "recall_at_5": 0.7222222222222222,
+        "ndcg_at_5": 0.7003498472288856,
         "hit_at_3": 0.8666666666666667
       },
       {
         "intent": "comparison",
         "n": 12,
-        "mrr": 0.611111111111111,
-        "recall_at_5": 0.5972222222222222,
-        "ndcg_at_5": 0.5654328467988559,
-        "hit_at_3": 0.6666666666666666
+        "mrr": 0.6458333333333333,
+        "recall_at_5": 0.6388888888888888,
+        "ndcg_at_5": 0.6015143172794173,
+        "hit_at_3": 0.8333333333333334
       },
       {
         "intent": "troubleshooting",
         "n": 14,
-        "mrr": 0.511904761904762,
-        "recall_at_5": 0.5833333333333333,
-        "ndcg_at_5": 0.5116984133403613,
-        "hit_at_3": 0.6428571428571429
+        "mrr": 0.6369047619047619,
+        "recall_at_5": 0.7261904761904762,
+        "ndcg_at_5": 0.6358455920343341,
+        "hit_at_3": 0.7142857142857143
       }
     ],
     "structuralPassRate": {
-      "code_block_balance": 0.9661016949152542,
+      "code_block_balance": 0.7457627118644068,
       "non_empty_content": 1,
       "url_presence": 1
     },
     "llmJudged": [
       {
         "metric": "chunk_coherence",
-        "mean": 3.593220338983051,
+        "mean": 3.559322033898305,
         "n": 59
       },
       {
         "metric": "content_faithfulness",
-        "mean": 3.2711864406779663,
+        "mean": 3.169491525423729,
         "n": 59
       },
       {
@@ -100,10 +102,227 @@
     ],
     "crossJudge": [],
     "regression": {
-      "hasBaseline": false,
+      "hasBaseline": true,
       "incompatibilities": [],
       "regressions": [],
-      "improvements": [],
+      "improvements": [
+        {
+          "metric": "mrr",
+          "baseline": 0.5677966101694916,
+          "current": 0.7556497175141245,
+          "relativeDelta": 0.3308457711442788,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "recall_at_3",
+          "baseline": 0.5084745762711864,
+          "current": 0.6497175141242937,
+          "relativeDelta": 0.2777777777777776,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.5508474576271186,
+          "current": 0.7231638418079097,
+          "relativeDelta": 0.3128205128205131,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "recall_at_10",
+          "baseline": 0.5508474576271186,
+          "current": 0.7231638418079097,
+          "relativeDelta": 0.3128205128205131,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.5278591507701966,
+          "current": 0.6948313062036244,
+          "relativeDelta": 0.3163195242325525,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "ndcg_at_10",
+          "baseline": 0.5278591507701966,
+          "current": 0.6948313062036244,
+          "relativeDelta": 0.3163195242325525,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "hit_at_1",
+          "baseline": 0.5084745762711864,
+          "current": 0.6779661016949152,
+          "relativeDelta": 0.3333333333333333,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.6440677966101694,
+          "current": 0.847457627118644,
+          "relativeDelta": 0.31578947368421056,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "hit_at_5",
+          "baseline": 0.6779661016949152,
+          "current": 0.8983050847457628,
+          "relativeDelta": 0.3250000000000001,
+          "status": "improved",
+          "scope": "headline"
+        },
+        {
+          "metric": "mrr",
+          "baseline": 0.6944444444444444,
+          "current": 0.8518518518518517,
+          "relativeDelta": 0.22666666666666657,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.6111111111111112,
+          "current": 0.7777777777777778,
+          "relativeDelta": 0.27272727272727265,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.6502485564279961,
+          "current": 0.7983216256526039,
+          "relativeDelta": 0.2277176439083789,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.7222222222222222,
+          "current": 0.9444444444444444,
+          "relativeDelta": 0.30769230769230765,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "mrr",
+          "baseline": 0.638888888888889,
+          "current": 0.8388888888888888,
+          "relativeDelta": 0.3130434782608693,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.5666666666666667,
+          "current": 0.7222222222222222,
+          "relativeDelta": 0.27450980392156865,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.5221135860135537,
+          "current": 0.7003498472288856,
+          "relativeDelta": 0.3413744939606015,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.6666666666666666,
+          "current": 0.8666666666666667,
+          "relativeDelta": 0.3000000000000001,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "mrr",
+          "baseline": 0.39583333333333326,
+          "current": 0.6458333333333333,
+          "relativeDelta": 0.6315789473684211,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.4583333333333333,
+          "current": 0.6388888888888888,
+          "relativeDelta": 0.39393939393939387,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.3874043652648241,
+          "current": 0.6015143172794173,
+          "relativeDelta": 0.5526782122556382,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.5833333333333334,
+          "current": 0.8333333333333334,
+          "relativeDelta": 0.42857142857142855,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        },
+        {
+          "metric": "mrr",
+          "baseline": 0.4761904761904762,
+          "current": 0.6369047619047619,
+          "relativeDelta": 0.33749999999999986,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.5357142857142857,
+          "current": 0.7261904761904762,
+          "relativeDelta": 0.35555555555555557,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.4970471218826056,
+          "current": 0.6358455920343341,
+          "relativeDelta": 0.27924609969778774,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.5714285714285714,
+          "current": 0.7142857142857143,
+          "relativeDelta": 0.2500000000000001,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        }
+      ],
       "stable": []
     }
   }
