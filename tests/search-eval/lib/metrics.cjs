@@ -9,7 +9,45 @@
  */
 
 /**
- * Build a Map<url, grade> from a list of qrels.
+ * Normalise a URL so that surface variants of the same doc page collapse to
+ * one form. Applied symmetrically to qrels and ranked URLs before comparison,
+ * so IR metrics stay invariant to:
+ *
+ *   - trailing slash       /foo/  →  /foo
+ *   - query strings        /foo?q=x  →  /foo
+ *   - URL fragments        /foo#section  →  /foo
+ *   - `.md` extension      /foo.md  →  /foo   (added when the scraper
+ *                                              now prefers markdown variants
+ *                                              via llms.txt discovery)
+ *   - `.html` extension    /foo.html  →  /foo (Python-style canonical URLs)
+ *
+ * The dataset's qrels are written in whichever form was canonical when they
+ * were authored. Provider implementations return whichever form the live
+ * service exposes today. This normaliser bridges the two without forcing
+ * either side to change.
+ */
+function normalizeUrl(u) {
+  if (typeof u !== "string") return u;
+  let s = u.trim();
+  // Strip fragment first (anchors aren't part of the page identity).
+  const hash = s.indexOf("#");
+  if (hash !== -1) s = s.slice(0, hash);
+  // Strip query string.
+  const qm = s.indexOf("?");
+  if (qm !== -1) s = s.slice(0, qm);
+  // Drop trailing slash.
+  if (s.endsWith("/")) s = s.slice(0, -1);
+  // Drop renderable-form suffixes. Order: .md before .html in case both
+  // appear, though that shouldn't happen in practice.
+  if (s.endsWith(".md")) s = s.slice(0, -3);
+  else if (s.endsWith(".html")) s = s.slice(0, -5);
+  return s;
+}
+
+/**
+ * Build a Map<url, grade> from a list of qrels. URLs are normalised on entry
+ * so callers can look up either the canonical-doc-site form or any of the
+ * renderable variants (.md, .html, with trailing slash, with fragment, etc.).
  * @param {{url: string, grade: number}[]} qrels
  * @returns {Map<string, number>}
  */
@@ -17,10 +55,15 @@ function qrelsToMap(qrels) {
   const m = new Map();
   for (const q of qrels || []) {
     if (q && typeof q.url === "string" && typeof q.grade === "number") {
-      m.set(q.url, q.grade);
+      m.set(normalizeUrl(q.url), q.grade);
     }
   }
   return m;
+}
+
+/** Normalise every URL in a ranked list to the same canonical form as qrels. */
+function normalizeRanked(ranked) {
+  return (ranked || []).map(normalizeUrl);
 }
 
 /**
@@ -112,16 +155,17 @@ function ndcgAtK(ranked, relevant, k) {
  */
 function computeIrMetrics(ranked, qrels) {
   const relevant = qrelsToMap(qrels);
+  const normalized = normalizeRanked(ranked);
   return {
-    mrr: mrr(ranked, relevant),
-    recall_at_3: recallAtK(ranked, relevant, 3),
-    recall_at_5: recallAtK(ranked, relevant, 5),
-    recall_at_10: recallAtK(ranked, relevant, 10),
-    ndcg_at_5: ndcgAtK(ranked, relevant, 5),
-    ndcg_at_10: ndcgAtK(ranked, relevant, 10),
-    hit_at_1: hitAtK(ranked, relevant, 1),
-    hit_at_3: hitAtK(ranked, relevant, 3),
-    hit_at_5: hitAtK(ranked, relevant, 5),
+    mrr: mrr(normalized, relevant),
+    recall_at_3: recallAtK(normalized, relevant, 3),
+    recall_at_5: recallAtK(normalized, relevant, 5),
+    recall_at_10: recallAtK(normalized, relevant, 10),
+    ndcg_at_5: ndcgAtK(normalized, relevant, 5),
+    ndcg_at_10: ndcgAtK(normalized, relevant, 10),
+    hit_at_1: hitAtK(normalized, relevant, 1),
+    hit_at_3: hitAtK(normalized, relevant, 3),
+    hit_at_5: hitAtK(normalized, relevant, 5),
   };
 }
 
@@ -137,6 +181,8 @@ function mean(xs) {
 }
 
 module.exports = {
+  normalizeUrl,
+  normalizeRanked,
   qrelsToMap,
   mrr,
   recallAtK,

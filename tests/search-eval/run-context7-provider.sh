@@ -9,13 +9,18 @@ cd "$(dirname "$0")"
 
 NODE_BIN="${DOCS_EVAL_NODE:-node}"
 
+# Use temp files instead of $(command) — bash 3.2 (macOS /bin/bash) silently
+# truncates command substitution at 64KB. See the matching note in
+# run-provider.sh for the full story; relevant here once Context7 chunks for
+# large docs (e.g. a 60-snippet React response) pass that threshold.
+TMP_STDOUT=$(mktemp)
 TMP_STDERR=$(mktemp)
 # shellcheck disable=SC2064
-trap "rm -f '$TMP_STDERR'" EXIT
+trap "rm -f '$TMP_STDOUT' '$TMP_STDERR'" EXIT
 
-if STDOUT=$("$NODE_BIN" ./context7-provider.cjs "$@" 2>"$TMP_STDERR"); then
+if "$NODE_BIN" ./context7-provider.cjs "$@" > "$TMP_STDOUT" 2> "$TMP_STDERR"; then
   # Provider emits a single JSON line; pass it through unchanged.
-  echo "$STDOUT" | sed -n '/^{.*}$/p'
+  sed -n '/^{.*}$/p' "$TMP_STDOUT"
 else
   rc=$?
   echo "run-context7-provider.sh: node exited $rc" >&2
@@ -23,6 +28,6 @@ else
   echo "----- stderr -----" >&2
   cat "$TMP_STDERR" >&2
   echo "----- stdout (raw) -----" >&2
-  echo "$STDOUT" >&2
+  cat "$TMP_STDOUT" >&2
   exit "$rc"
 fi
