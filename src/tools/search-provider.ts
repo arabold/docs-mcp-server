@@ -5,18 +5,7 @@ import { SearchTool } from "../tools";
 import { loadConfig } from "../utils/config";
 import { LogLevel, setLogLevel } from "../utils/logger";
 
-// Phase tracing: writes a timestamped line to stderr at each phase boundary.
-// Opt-in via DOCS_EVAL_TRACE=1; off by default so promptfoo's exec-provider
-// stderr stays clean.
-const TRACE = process.env.DOCS_EVAL_TRACE === "1";
-const T0 = Date.now();
-const trace = (phase: string) => {
-  if (TRACE) console.error(`[trace +${Date.now() - T0}ms] ${phase}`);
-};
-trace("module-load");
-
 async function main() {
-  trace("main:start");
   // Silence logs to prevent pollution of stdout (JSON output)
   setLogLevel(LogLevel.ERROR);
 
@@ -82,9 +71,7 @@ async function main() {
   // 4. Initialize System
   // We use default config path logic (system path or env vars)
   // Ensure DOCS_MCP_STORE_PATH is set if running in a specific environment
-  trace("loadConfig:start");
   const appConfig = loadConfig();
-  trace("loadConfig:done");
 
   // Fallback to default system path if storePath is not set
   if (!appConfig.app.storePath) {
@@ -96,19 +83,15 @@ async function main() {
   const eventBus = new EventBusService();
 
   // Create service (headless)
-  trace("createDocumentManagement:start");
   const docService = await createDocumentManagement({
     appConfig,
     eventBus,
   });
-  trace("createDocumentManagement:done");
 
   try {
     // 5. Verify Library Exists (Fast Fail)
     try {
-      trace("validateLibraryExists:start");
       await docService.validateLibraryExists(library);
-      trace("validateLibraryExists:done");
     } catch (_e) {
       console.error(`Error: Library '${library}' not found. Please index it first.`);
       process.exit(1);
@@ -130,14 +113,12 @@ async function main() {
       }
       topK = parsed;
     }
-    trace("searchTool.execute:start");
     const searchTool = new SearchTool(docService);
     const result = await searchTool.execute({
       library,
       query,
       limit: topK,
     });
-    trace("searchTool.execute:done");
 
     // 7. Format Output
     // We want the LLM to judge the content.
@@ -179,28 +160,21 @@ async function main() {
         metadata: metadata,
       }),
     );
-    trace("stdout-flushed");
   } catch (error) {
     console.error("Search failed:", error);
     process.exit(1);
   } finally {
     // 9. Cleanup
-    trace("shutdown:start");
     await docService.shutdown();
-    trace("shutdown:done");
   }
 }
 
+// Force exit so anything that holds the event loop open (file watchers,
+// unclosed handles) cannot stall the process. When promptfoo spawns this
+// script the parent waits for the child to exit before reading stdout —
+// a dangling watcher = a 60-minute hang.
 main().then(
-  () => {
-    trace("main:returned");
-    // Force exit so anything that holds the event loop open (file watchers,
-    // unclosed handles) cannot stall the process. When promptfoo spawns this
-    // script the parent waits for the child to exit before reading stdout —
-    // a dangling watcher = a 60-minute hang.
-    trace("process.exit(0)");
-    process.exit(0);
-  },
+  () => process.exit(0),
   (err) => {
     console.error("Unhandled provider error:", err);
     process.exit(1);
