@@ -1338,11 +1338,13 @@ export class DocumentStore {
    *
    * @param texts Array of texts to embed
    * @param isRetry Internal flag to prevent duplicate warning logs
+   * @param hasTruncatedSingleText Whether a single text has already been truncated once
    * @returns Array of embedding vectors
    */
   private async embedDocumentsWithRetry(
     texts: string[],
     isRetry = false,
+    hasTruncatedSingleText = false,
   ): Promise<number[][]> {
     if (texts.length === 0) {
       return [];
@@ -1368,13 +1370,17 @@ export class DocumentStore {
           }
 
           const [firstEmbeddings, secondEmbeddings] = await Promise.all([
-            this.embedDocumentsWithRetry(firstHalf, true),
-            this.embedDocumentsWithRetry(secondHalf, true),
+            this.embedDocumentsWithRetry(firstHalf, true, false),
+            this.embedDocumentsWithRetry(secondHalf, true, false),
           ]);
 
           return [...firstEmbeddings, ...secondEmbeddings];
         } else {
           // Single text that's too large - split in half and retry
+          if (hasTruncatedSingleText) {
+            throw error;
+          }
+
           const text = texts[0];
           const midpoint = Math.floor(text.length / 2);
           const firstHalf = text.substring(0, midpoint);
@@ -1389,7 +1395,7 @@ export class DocumentStore {
           try {
             // Recursively retry with first half only (mark as retry to prevent duplicate logs)
             // This preserves the beginning of the text which typically contains the most important context
-            const embedding = await this.embedDocumentsWithRetry([firstHalf], true);
+            const embedding = await this.embedDocumentsWithRetry([firstHalf], true, true);
             return embedding;
           } catch (retryError) {
             // If even split text fails, log error and throw
