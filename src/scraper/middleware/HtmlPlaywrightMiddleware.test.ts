@@ -1207,6 +1207,135 @@ describe("Route handling race condition protection", () => {
       launchSpy.mockRestore();
     });
 
+    it("should abort speculative prefetch requests before fetching", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/docs/next?_rsc=abc123",
+          resourceType: () => "fetch",
+          method: () => "GET",
+          headers: () => ({ "next-router-prefetch": "1" }),
+        }),
+        abort: vi.fn().mockResolvedValue(undefined),
+        fetch: vi.fn(),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+
+      expect(mockRoute.abort).toHaveBeenCalledWith("aborted");
+      expect(mockRoute.fetch).not.toHaveBeenCalled();
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should not abort when the route target closes during fetch", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/docs/next?_rsc=abc123",
+          resourceType: () => "fetch",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        fetch: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              "route.fetch: Target page, context or browser has been closed\nCall log:",
+            ),
+          ),
+        abort: vi.fn(),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+
+      expect(mockRoute.fetch).toHaveBeenCalled();
+      expect(mockRoute.abort).not.toHaveBeenCalled();
+      expect(context.errors).toHaveLength(0);
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should not read unsupported response content into the cache", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      let routeHandler: ((route: any) => Promise<void>) | null = null;
+      const mockResponse = {
+        status: vi.fn().mockReturnValue(200),
+        headers: vi.fn().mockReturnValue({ "content-type": "image/png" }),
+        text: vi.fn(),
+      };
+      const mockRoute = {
+        request: () => ({
+          url: () => "https://example.com/logo.png",
+          resourceType: () => "script",
+          method: () => "GET",
+          headers: () => ({}),
+        }),
+        fetch: vi.fn().mockResolvedValue(mockResponse),
+        fulfill: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.route = vi.fn().mockImplementation((_pattern: string, handler: any) => {
+        routeHandler = handler;
+        return Promise.resolve();
+      });
+
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(routeHandler).toBeDefined();
+      await expect((routeHandler as any)(mockRoute)).resolves.not.toThrow();
+
+      expect(mockRoute.fetch).toHaveBeenCalled();
+      expect(mockResponse.text).not.toHaveBeenCalled();
+      expect(mockRoute.fulfill).toHaveBeenCalledWith({ response: mockResponse });
+
+      launchSpy.mockRestore();
+    });
+
     it("should fulfill the initial request for hash-routed URLs using the hash-stripped source", async () => {
       const initialHtml = "<html><body><p>Hash-routed app</p></body></html>";
       const context = createPipelineTestContext(
