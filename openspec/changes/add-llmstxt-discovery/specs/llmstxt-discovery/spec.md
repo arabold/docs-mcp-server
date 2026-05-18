@@ -2,7 +2,7 @@
 
 ### Requirement: Automatic llms.txt detection
 
-The system SHALL automatically probe for an `llms.txt` file during web scraping and refresh operations when using the web scraper strategy. The probe SHALL derive candidate URLs by extracting the parent directory of the input URL path (stripping the last path segment regardless of whether it looks like a file or directory — e.g., `https://example.com/docs/getting-started` yields `https://example.com/docs/llms.txt`, and `https://example.com/docs/` yields `https://example.com/docs/llms.txt`). If the subpath probe fails, the system SHALL fall back to the site root (`https://example.com/llms.txt`). Probing SHALL stop at the first successful response (HTTP 200 with valid llms.txt content). If no `llms.txt` is found (HTTP 404, network error, or invalid content), the system SHALL proceed with normal BFS crawling from the original URL without error.
+The system SHALL automatically probe for an `llms.txt` file during web scraping and refresh operations when using the web scraper strategy. The probe SHALL run before the normal BFS crawl begins. The probe SHALL derive candidate URLs by extracting the parent directory of the input URL path (stripping the last path segment regardless of whether it looks like a file or directory — e.g., `https://example.com/docs/getting-started` yields `https://example.com/docs/llms.txt`, and `https://example.com/docs/` yields `https://example.com/docs/llms.txt`). If the subpath probe fails, the system SHALL fall back to the site root (`https://example.com/llms.txt`). Probing SHALL stop at the first successful response (HTTP 200 with valid llms.txt content). If no `llms.txt` is found (HTTP 404, network error, or invalid content), the system SHALL proceed with normal BFS crawling from the original URL without error.
 
 The system SHALL use the existing fetcher path and shared outbound access policy for llms.txt probes, including redirect-target validation, DNS-resolved IP validation, configured host/CIDR allowlists, private-network blocking, and TLS policy.
 
@@ -40,6 +40,11 @@ The system SHALL use the existing fetcher path and shared outbound access policy
 - **THEN** the system SHALL treat that candidate as a probe failure
 - **AND** the system SHALL NOT bypass the configured network policy to fetch it
 
+#### Scenario: llms.txt probe runs before root page processing
+- **WHEN** the user initiates a web scrape
+- **THEN** the system SHALL probe for llms.txt before fetching the original input URL as a crawl page
+- **AND** a successful probe SHALL make accepted llms.txt links available as fallback crawl seeds if the original input URL cannot be indexed
+
 ### Requirement: llms.txt Markdown parser
 
 The system SHALL provide a parser for the llms.txt Markdown format as defined by the [llms.txt specification](https://llmstxt.org/). The parser SHALL extract the following from a valid llms.txt file:
@@ -68,7 +73,7 @@ The parser SHALL return an empty result (no URLs) if the content does not contai
 
 ### Requirement: llms.txt URL seeding
 
-The system SHALL add URLs extracted from a detected llms.txt file to the BFS crawl queue at depth 0, alongside the original input URL. All llms.txt URLs SHALL be filtered through the existing scope and include/exclude pattern logic via `shouldProcessUrl()`. Filtering and enqueueing SHALL occur only after the depth-0 canonical scope base has been established, so protocol/host updates caused by the start URL's redirect are applied consistently with normal BFS link discovery while the user-provided path remains the scope anchor. URLs that do not pass filtering SHALL be silently dropped. The BFS crawl SHALL continue normally from seeded pages, following discovered links subject to `maxPages`, `maxDepth`, and all other existing constraints.
+The system SHALL add URLs extracted from a detected llms.txt file to the BFS crawl queue at depth 0, alongside the original input URL. All llms.txt URLs SHALL be filtered through the existing scope and include/exclude pattern logic via `shouldProcessUrl()`. Filtering and enqueueing SHALL occur only after the depth-0 canonical scope base has been established when the original input URL is successfully processed, so protocol/host updates caused by the start URL's redirect are applied consistently with normal BFS link discovery while the user-provided path remains the scope anchor. If the original input URL returns `NOT_FOUND` but a valid llms.txt probe produced accepted URLs, the system SHALL continue crawling those accepted llms.txt URLs instead of failing the scrape immediately; in that fallback case, filtering SHALL use the user-provided input URL as the scope base. URLs that do not pass filtering SHALL be silently dropped. The BFS crawl SHALL continue normally from seeded pages, following discovered links subject to `maxPages`, `maxDepth`, and all other existing constraints.
 
 #### Scenario: URLs seeded and crawled with link following
 - **WHEN** llms.txt lists 5 documentation URLs
@@ -99,9 +104,20 @@ The system SHALL add URLs extracted from a detected llms.txt file to the BFS cra
 - **THEN** the listed URL SHALL be evaluated against the post-redirect protocol and host
 - **AND** it SHALL be eligible for queueing when it otherwise passes scope and pattern filters
 
+#### Scenario: Root page not found but llms.txt contains crawlable URLs
+- **WHEN** the llms.txt probe returns valid content with at least one URL that passes scope and pattern filtering
+- **AND** fetching the original input URL returns `NOT_FOUND`
+- **THEN** the system SHALL continue crawling the accepted llms.txt URLs
+- **AND** the scrape SHALL NOT fail with a root-page-not-found error solely because the original input URL was not found
+
+#### Scenario: Root page not found and llms.txt has no accepted URLs
+- **WHEN** the llms.txt probe finds no valid file or no URLs that pass scope and pattern filtering
+- **AND** fetching the original input URL returns `NOT_FOUND`
+- **THEN** the system SHALL fail the normal scrape with a root-page-not-found error
+
 ### Requirement: Markdown content negotiation
 
-The web scraper SHALL default HTTP(S) web page fetch requests to include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller supplied an explicit `Accept` or `accept` header. When a server responds with a Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, or `text/x-gfm`), the system SHALL treat the response body as Markdown and bypass HTML-to-Markdown conversion. When the server responds with `Content-Type: text/html` (ignoring the Markdown preference), the system SHALL process the response through the normal HTML pipeline. This content negotiation applies to all web-scraped pages regardless of whether they were discovered via llms.txt or BFS link-following.
+The web scraper SHALL default HTTP(S) web page fetch requests to include `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller supplied an explicit `Accept` or `accept` header. This default SHALL apply to llms.txt probes, the original input URL, llms.txt `.md` variant attempts, llms.txt original-URL fallbacks, and normal BFS page fetches. When a server responds with a Markdown MIME type (`text/markdown`, `text/x-markdown`, `text/mdx`, or `text/x-gfm`), the system SHALL treat the response body as Markdown and bypass HTML-to-Markdown conversion. When the server responds with `Content-Type: text/html` (ignoring the Markdown preference), the system SHALL process the response through the normal HTML pipeline. This content negotiation applies to all web-scraped pages regardless of whether they were discovered via llms.txt or BFS link-following.
 
 #### Scenario: Server returns Markdown via content negotiation
 - **WHEN** fetching any web page with the `Accept: text/markdown` header

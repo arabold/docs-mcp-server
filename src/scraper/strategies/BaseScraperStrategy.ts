@@ -286,8 +286,15 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
           if (result.status === FetchStatus.NOT_FOUND) {
             const isRefreshDeletion = this.isRefreshDeletion(item, result);
+            const fallbackQueueItems = result.queueItems ?? [];
+            const hasNewFallbackQueueItem = fallbackQueueItems.some(
+              (queueItem) =>
+                !this.visited.has(
+                  normalizeUrl(queueItem.url, this.getUrlNormalizerOptions(options)),
+                ),
+            );
 
-            if (item.depth === 0 && !isRefreshDeletion) {
+            if (item.depth === 0 && !isRefreshDeletion && !hasNewFallbackQueueItem) {
               throw new ScraperError(`Root page not found: ${item.url}`, false);
             }
 
@@ -318,7 +325,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
               await progressCallback(progress);
             }
-            return [];
+            return fallbackQueueItems;
           }
 
           if (result.status !== FetchStatus.SUCCESS) {

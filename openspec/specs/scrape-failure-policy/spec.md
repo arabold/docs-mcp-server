@@ -15,7 +15,7 @@ The scraper SHALL default HTTP fetch retries to 3 retries per page request, in a
 - **THEN** the fetcher SHALL fail the page without consuming additional retries
 
 ### Requirement: Root Page Failures Abort Immediately
-The scraper SHALL fail the scrape job immediately when the root page cannot be processed successfully during a normal scrape. During refresh, a tracked root page that returns `NOT_FOUND` SHALL be treated as a deletion instead of a hard failure.
+The scraper SHALL fail the scrape job immediately when the root page cannot be processed successfully during a normal scrape and no alternate crawl seeds are available. During refresh, a tracked root page that returns `NOT_FOUND` SHALL be treated as a deletion instead of a hard failure.
 
 #### Scenario: Root page fetch failure aborts the job
 - **WHEN** the initial root page fails during fetch or processing
@@ -29,6 +29,16 @@ The scraper SHALL fail the scrape job immediately when the root page cannot be p
 - **WHEN** a refresh crawl re-processes a tracked root page and that page returns `NOT_FOUND`
 - **THEN** the scraper SHALL report the root page as deleted
 - **AND** the scrape SHALL continue applying refresh deletion handling instead of failing the job
+
+#### Scenario: Root page not found with alternate crawl seeds continues
+- **WHEN** a normal crawl's root page returns `NOT_FOUND`
+- **AND** the root processing result includes alternate crawl seeds from prior metadata discovery such as llms.txt
+- **THEN** the scraper SHALL continue with those alternate seeds instead of failing immediately
+
+#### Scenario: Root page not found without alternate crawl seeds aborts
+- **WHEN** a normal crawl's root page returns `NOT_FOUND`
+- **AND** no alternate crawl seeds are available
+- **THEN** the scrape job SHALL terminate with a root-page-not-found error
 
 ### Requirement: Child Page Failure Rate Aborts Unhealthy Targets
 The scraper SHALL track completed child-page attempts and terminal child-page failures, and SHALL abort the crawl when, after a minimum evaluation sample of 10 completed child-page attempts has been reached, the observed child-page failure rate exceeds the configured threshold. Completed child-page attempts SHALL include successful child-page completions and terminal child-page failures, and SHALL exclude refresh deletions and in-flight attempts.
@@ -60,4 +70,3 @@ The scraper SHALL exclude expected page deletions detected during refresh from c
 - **WHEN** a normal crawl encounters a non-root page that returns `NOT_FOUND`
 - **THEN** the scraper SHALL treat that page as a terminal page failure for failure-rate accounting
 - **AND** the page SHALL not be treated as a refresh deletion
-

@@ -26,6 +26,7 @@
 
 - [x] 6.1 Add tests to `src/scraper/strategies/WebScraperStrategy.test.ts` covering: llms.txt probe at subpath, probe fallback to root, probe failure (404/access-policy rejection), URL seeding with scope filtering after depth-0 redirects, relative URL resolution, `.md` URL preference success and fallback, deduplication of llms.txt URLs with original URL, llms.txt exclusion from indexing
 - [x] 6.2 Add tests for Markdown content negotiation: verify `Accept: text/markdown` header is sent by default on web requests, verify custom Accept headers are preserved, verify `Content-Type: text/markdown` responses bypass HTML conversion, verify generic `Content-Type: text/plain` remains text unless accepted as an llms `.md` variant or identified by an implemented Markdown heuristic, verify `Content-Type: text/html` responses are processed normally
+- [x] 6.3 Add a regression test proving accepted llms.txt URLs continue the crawl when the original input URL returns `NOT_FOUND` under Markdown-preferred content negotiation
 
 ## 7. Logging
 

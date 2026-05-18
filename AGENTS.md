@@ -5,7 +5,7 @@
 
 - **Repository**: `arabold/docs-mcp-server`
 - **Core Stack**: Node.js 22.x, TypeScript, Vite, AlpineJS, TailwindCSS, SQLite (better-sqlite3)
-  - **Node Version**: Always use **Node.js v22** for local development and builds, even if `package.json` allows older versions.
+  - **Node Version**: Always use **Node.js v22** for local development and builds, even if `package.json` allows older versions. If `nvm` is installed, run `nvm use 22` before local commands.
 - **Tooling**: Biome (lint/format), Vitest (test), Husky (pre-commit)
 - **Critical Documentation**:
   - 📖 **Read `README.md`** first for project structure, setup, and configuration details.

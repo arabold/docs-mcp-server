@@ -1748,6 +1748,83 @@ describe("WebScraperStrategy", () => {
       );
     });
 
+    it("should continue with llms.txt URLs when the root page is not found", async () => {
+      options.url = "https://example.com";
+      options.scope = "hostname";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Guide](https://example.com/guide.md)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com") {
+          return {
+            content: "",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          };
+        }
+        if (url === "https://example.com/guide.md") {
+          return {
+            content: "# Guide\n\nMarkdown page",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.NOT_FOUND,
+        };
+      });
+
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      await strategy.scrape(options, progressCallback);
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/guide.md",
+        expect.anything(),
+      );
+      expect(
+        progressCallback.mock.calls.some(
+          (call) => call[0].result?.url === "https://example.com/guide.md",
+        ),
+      ).toBe(true);
+    });
+
+    it("should fail when root is not found and llms.txt only lists the root URL", async () => {
+      options.url = "https://example.com";
+      options.scope = "hostname";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Home](https://example.com)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: "",
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.NOT_FOUND,
+        };
+      });
+
+      await expect(
+        strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+      ).rejects.toThrow("Root page not found");
+    });
+
     it("should probe llms.txt during refresh and seed new URLs", async () => {
       options.initialQueue = [{ url: "https://example.com/existing", depth: 1 }];
       options.maxDepth = 1;
