@@ -1,24 +1,428 @@
-- vars:
-    library: "react"
-    query: "useEffect usage"
-    expectedUrl: "https://react.dev/reference/react/useEffect"
-  
-- vars:
-    library: "react"
-    query: "useMemo vs useCallback difference"
-    expectedUrl: "https://react.dev/reference/react/useCallback"
+# Search-quality benchmark dataset.
+#
+# status: draft — entries were authored from a mix of common community questions
+# and my own knowledge of each library's docs structure. Every entry needs a
+# human pass before this dataset becomes the official baseline. The URLs use
+# canonical doc-site paths; if a library has been reorganised, fix the URL and
+# update the grade.
+#
+# Grades:
+#   3 = canonical doc page for the query
+#   2 = closely related / partial answer
+#   1 = peripheral / supporting context
+#
+# Intents:
+#   api-lookup, conceptual, comparison, troubleshooting
 
-- vars:
-    library: "react"
-    query: "create custom hook"
-    expectedUrl: "https://react.dev/learn/reusing-logic-with-custom-hooks"
+status: draft
+notes: |
+  Authored 2026-05-17 as initial dataset for the redesigned benchmark.
+  Audited 2026-05-18 by five per-library agents (independent of the author);
+  applied broken-URL replacements, grade-inversion swaps, and minor regrades
+  surfaced by that audit. The `prose plugin typography styles` Tailwind query
+  was dropped because the plugin no longer has a v4 docs page.
+  Review checklist:
+    - [x] Confirm each URL is reachable and is the right canonical page for the query.
+    - [x] Confirm grades reflect how an expert would rank docs for that query.
+    - [ ] Add or remove queries to match real user prompts you've seen.
+    - [ ] Once reviewed, change `status: draft` → `status: reviewed` and re-record baseline.
 
-- vars:
-    library: "react"
-    query: "React useState"
-    expectedUrl: "https://react.dev/reference/react/useState"
+entries:
+  # ─── React (react.dev) ────────────────────────────────────────────────────
+  - vars:
+      library: react
+      query: useEffect usage
+      intent: api-lookup
+      qrels:
+        - { url: "https://react.dev/reference/react/useEffect", grade: 3 }
+        - { url: "https://react.dev/learn/synchronizing-with-effects", grade: 2 }
+  - vars:
+      library: react
+      query: React useState
+      intent: api-lookup
+      qrels:
+        - { url: "https://react.dev/reference/react/useState", grade: 3 }
+        - { url: "https://react.dev/learn/state-a-components-memory", grade: 2 }
+  - vars:
+      library: react
+      query: useRef return type
+      intent: api-lookup
+      qrels:
+        - { url: "https://react.dev/reference/react/useRef", grade: 3 }
+  - vars:
+      library: react
+      query: create custom hook
+      intent: conceptual
+      qrels:
+        - { url: "https://react.dev/learn/reusing-logic-with-custom-hooks", grade: 3 }
+  - vars:
+      library: react
+      query: how to render a list of items
+      intent: conceptual
+      qrels:
+        - { url: "https://react.dev/learn/rendering-lists", grade: 3 }
+  - vars:
+      library: react
+      query: passing data deep with context
+      intent: conceptual
+      qrels:
+        - { url: "https://react.dev/learn/passing-data-deeply-with-context", grade: 3 }
+        - { url: "https://react.dev/reference/react/useContext", grade: 2 }
+        - { url: "https://react.dev/reference/react/createContext", grade: 2 }
+  - vars:
+      library: react
+      query: useMemo vs useCallback difference
+      intent: comparison
+      qrels:
+        - { url: "https://react.dev/reference/react/useCallback", grade: 3 }
+        - { url: "https://react.dev/reference/react/useMemo", grade: 3 }
+  - vars:
+      library: react
+      query: context vs props drilling
+      intent: comparison
+      qrels:
+        - { url: "https://react.dev/learn/passing-data-deeply-with-context", grade: 3 }
+        - { url: "https://react.dev/reference/react/useContext", grade: 2 }
+  - vars:
+      library: react
+      query: useReducer vs useState when to use
+      intent: comparison
+      qrels:
+        - { url: "https://react.dev/learn/extracting-state-logic-into-a-reducer", grade: 3 }
+        - { url: "https://react.dev/reference/react/useReducer", grade: 2 }
+        - { url: "https://react.dev/reference/react/useState", grade: 1 }
+  - vars:
+      library: react
+      query: infinite re-render loop from useEffect
+      intent: troubleshooting
+      qrels:
+        - { url: "https://react.dev/learn/synchronizing-with-effects", grade: 3 }
+        - { url: "https://react.dev/learn/removing-effect-dependencies", grade: 3 }
+        - { url: "https://react.dev/reference/react/useEffect", grade: 2 }
+  - vars:
+      library: react
+      query: why does my component render twice in development
+      intent: troubleshooting
+      qrels:
+        - { url: "https://react.dev/reference/react/StrictMode", grade: 3 }
+  - vars:
+      library: react
+      query: stale closure inside event handler
+      intent: troubleshooting
+      qrels:
+        - { url: "https://react.dev/reference/react/useRef", grade: 2 }
+        - { url: "https://react.dev/learn/removing-effect-dependencies", grade: 1 }
 
-- vars:
-    library: "react"
-    query: "create render component"
-    expectedUrl: "https://react.dev/learn/your-first-component"
+  # ─── Python stdlib (docs.python.org/3) ────────────────────────────────────
+  - vars:
+      library: python
+      query: pathlib read text file
+      intent: api-lookup
+      qrels:
+        - { url: "https://docs.python.org/3/library/pathlib.html", grade: 3 }
+  - vars:
+      library: python
+      query: argparse subcommand example
+      intent: api-lookup
+      qrels:
+        - { url: "https://docs.python.org/3/library/argparse.html", grade: 3 }
+  - vars:
+      library: python
+      query: datetime parse iso 8601 string
+      intent: api-lookup
+      qrels:
+        - { url: "https://docs.python.org/3/library/datetime.html", grade: 3 }
+  - vars:
+      library: python
+      query: asyncio gather vs create_task
+      intent: comparison
+      qrels:
+        - { url: "https://docs.python.org/3/library/asyncio-task.html", grade: 3 }
+        - { url: "https://docs.python.org/3/library/asyncio.html", grade: 1 }
+  - vars:
+      library: python
+      query: f-string vs str.format
+      intent: comparison
+      qrels:
+        - { url: "https://docs.python.org/3/reference/lexical_analysis.html", grade: 3 }
+        - { url: "https://docs.python.org/3/library/string.html", grade: 2 }
+  - vars:
+      library: python
+      query: pathlib vs os.path
+      intent: comparison
+      qrels:
+        - { url: "https://docs.python.org/3/library/pathlib.html", grade: 3 }
+        - { url: "https://docs.python.org/3/library/os.path.html", grade: 3 }
+  - vars:
+      library: python
+      query: context manager protocol
+      intent: conceptual
+      qrels:
+        - { url: "https://docs.python.org/3/reference/datamodel.html", grade: 3 }
+        - { url: "https://docs.python.org/3/library/contextlib.html", grade: 2 }
+  - vars:
+      library: python
+      query: how generators work
+      intent: conceptual
+      qrels:
+        - { url: "https://docs.python.org/3/reference/expressions.html", grade: 3 }
+        - { url: "https://docs.python.org/3/howto/functional.html", grade: 2 }
+  - vars:
+      library: python
+      query: typing Generic class example
+      intent: conceptual
+      qrels:
+        - { url: "https://docs.python.org/3/library/typing.html", grade: 3 }
+  - vars:
+      library: python
+      query: subprocess hangs on large output
+      intent: troubleshooting
+      qrels:
+        - { url: "https://docs.python.org/3/library/subprocess.html", grade: 3 }
+  - vars:
+      library: python
+      query: FileNotFoundError opening relative path
+      intent: troubleshooting
+      qrels:
+        - { url: "https://docs.python.org/3/library/os.html", grade: 2 }
+        - { url: "https://docs.python.org/3/library/pathlib.html", grade: 2 }
+  - vars:
+      library: python
+      query: json.dumps non-ascii unicode escape
+      intent: troubleshooting
+      qrels:
+        - { url: "https://docs.python.org/3/library/json.html", grade: 3 }
+
+  # ─── FastAPI (fastapi.tiangolo.com) ────────────────────────────────────────
+  - vars:
+      library: fastapi
+      query: path parameter type validation
+      intent: api-lookup
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/path-params/", grade: 3 }
+  - vars:
+      library: fastapi
+      query: optional query parameter
+      intent: api-lookup
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/query-params/", grade: 3 }
+        - { url: "https://fastapi.tiangolo.com/tutorial/query-params-str-validations/", grade: 1 }
+  - vars:
+      library: fastapi
+      query: request body pydantic model
+      intent: api-lookup
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/body/", grade: 3 }
+  - vars:
+      library: fastapi
+      query: dependency injection with yield
+      intent: conceptual
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/dependencies/dependencies-with-yield/", grade: 3 }
+        - { url: "https://fastapi.tiangolo.com/tutorial/dependencies/", grade: 2 }
+  - vars:
+      library: fastapi
+      query: OAuth2 password flow setup
+      intent: conceptual
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/security/simple-oauth2/", grade: 3 }
+        - { url: "https://fastapi.tiangolo.com/tutorial/security/", grade: 2 }
+  - vars:
+      library: fastapi
+      query: background task vs celery
+      intent: comparison
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/background-tasks/", grade: 3 }
+  - vars:
+      library: fastapi
+      query: async def vs def endpoint
+      intent: comparison
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/async/", grade: 3 }
+  - vars:
+      library: fastapi
+      query: enable CORS for all origins
+      intent: troubleshooting
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/cors/", grade: 3 }
+  - vars:
+      library: fastapi
+      query: 422 unprocessable entity validation error
+      intent: troubleshooting
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/handling-errors/", grade: 3 }
+        - { url: "https://fastapi.tiangolo.com/tutorial/body/", grade: 1 }
+  - vars:
+      library: fastapi
+      query: websocket connection close handling
+      intent: troubleshooting
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/advanced/websockets/", grade: 3 }
+  - vars:
+      library: fastapi
+      query: response_model exclude unset
+      intent: api-lookup
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/response-model/", grade: 3 }
+  - vars:
+      library: fastapi
+      query: middleware order of execution
+      intent: conceptual
+      qrels:
+        - { url: "https://fastapi.tiangolo.com/tutorial/middleware/", grade: 3 }
+        - { url: "https://fastapi.tiangolo.com/advanced/middleware/", grade: 2 }
+
+  # ─── Vite (vite.dev — vitejs.dev redirects here as of 2026) ──────────────
+  - vars:
+      library: vite
+      query: configure path alias in vite.config
+      intent: api-lookup
+      qrels:
+        - { url: "https://vite.dev/config/shared-options", grade: 3 }
+        - { url: "https://vite.dev/config/", grade: 1 }
+  - vars:
+      library: vite
+      query: import.meta.env variables
+      intent: api-lookup
+      qrels:
+        - { url: "https://vite.dev/guide/env-and-mode", grade: 3 }
+  - vars:
+      library: vite
+      query: library mode build output
+      intent: api-lookup
+      qrels:
+        - { url: "https://vite.dev/guide/build", grade: 3 }
+  - vars:
+      library: vite
+      query: how HMR works under the hood
+      intent: conceptual
+      qrels:
+        - { url: "https://vite.dev/guide/api-hmr", grade: 2 }
+        - { url: "https://vite.dev/guide/features", grade: 2 }
+  - vars:
+      library: vite
+      query: dependency pre-bundling
+      intent: conceptual
+      qrels:
+        - { url: "https://vite.dev/guide/dep-pre-bundling", grade: 3 }
+  - vars:
+      library: vite
+      query: server-side rendering with vite
+      intent: conceptual
+      qrels:
+        - { url: "https://vite.dev/guide/ssr", grade: 3 }
+  - vars:
+      library: vite
+      query: vite vs webpack dev server speed
+      intent: comparison
+      qrels:
+        - { url: "https://vite.dev/guide/why", grade: 2 }
+        - { url: "https://vite.dev/guide/features", grade: 1 }
+  - vars:
+      library: vite
+      query: rollup vs esbuild in production build
+      intent: comparison
+      qrels:
+        - { url: "https://vite.dev/guide/features", grade: 2 }
+        - { url: "https://vite.dev/guide/why", grade: 2 }
+  - vars:
+      library: vite
+      query: failed to resolve import error
+      intent: troubleshooting
+      qrels:
+        - { url: "https://vite.dev/guide/dep-pre-bundling", grade: 1 }
+  - vars:
+      library: vite
+      query: static asset URL handling in production
+      intent: troubleshooting
+      qrels:
+        - { url: "https://vite.dev/guide/assets", grade: 3 }
+  - vars:
+      library: vite
+      query: writing a vite plugin
+      intent: api-lookup
+      qrels:
+        - { url: "https://vite.dev/guide/api-plugin", grade: 3 }
+        - { url: "https://vite.dev/guide/using-plugins", grade: 2 }
+  - vars:
+      library: vite
+      query: proxy api requests during dev
+      intent: troubleshooting
+      qrels:
+        - { url: "https://vite.dev/config/server-options", grade: 3 }
+
+  # ─── TailwindCSS (tailwindcss.com) ─────────────────────────────────────────
+  - vars:
+      library: tailwindcss
+      query: customizing theme colors
+      intent: api-lookup
+      qrels:
+        - { url: "https://tailwindcss.com/docs/colors", grade: 3 }
+        - { url: "https://tailwindcss.com/docs/theme", grade: 2 }
+  - vars:
+      library: tailwindcss
+      query: responsive breakpoint prefixes
+      intent: api-lookup
+      qrels:
+        - { url: "https://tailwindcss.com/docs/responsive-design", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: applying styles on hover
+      intent: api-lookup
+      qrels:
+        - { url: "https://tailwindcss.com/docs/hover-focus-and-other-states", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: dark mode setup with class strategy
+      intent: conceptual
+      qrels:
+        - { url: "https://tailwindcss.com/docs/dark-mode", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: how does tailwind tree-shake unused classes
+      intent: conceptual
+      qrels:
+        - { url: "https://tailwindcss.com/docs/detecting-classes-in-source-files", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: writing a custom plugin
+      intent: conceptual
+      qrels:
+        - { url: "https://tailwindcss.com/docs/plugins", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: "@apply vs reusable components"
+      intent: comparison
+      qrels:
+        - { url: "https://tailwindcss.com/docs/reusing-styles", grade: 3 }
+        - { url: "https://tailwindcss.com/docs/functions-and-directives", grade: 2 }
+  - vars:
+      library: tailwindcss
+      query: flexbox vs grid in tailwind
+      intent: comparison
+      qrels:
+        - { url: "https://tailwindcss.com/docs/flex", grade: 3 }
+        - { url: "https://tailwindcss.com/docs/grid-template-columns", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: classes not applying after build
+      intent: troubleshooting
+      qrels:
+        - { url: "https://tailwindcss.com/docs/detecting-classes-in-source-files", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: arbitrary values square bracket syntax not working
+      intent: troubleshooting
+      qrels:
+        - { url: "https://tailwindcss.com/docs/adding-custom-styles", grade: 3 }
+  - vars:
+      library: tailwindcss
+      query: install tailwind with vite
+      intent: api-lookup
+      qrels:
+        - { url: "https://tailwindcss.com/docs/installation/using-vite", grade: 3 }
+        - { url: "https://tailwindcss.com/docs/installation", grade: 1 }
+# `prose plugin typography styles` query removed — the Tailwind v4 docs no
+# longer host the typography plugin; it lives at github.com/tailwindlabs/
+# tailwindcss-typography and is out of scope for this benchmark's qrel
+# corpus.

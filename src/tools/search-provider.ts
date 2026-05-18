@@ -12,9 +12,22 @@ async function main() {
   // DEBUG: Print args
   // console.error("ARGV:", JSON.stringify(process.argv));
 
-  // Parse arguments to handle Promptfoo's format
-  // Format: node vite-node [script?] <prompt> <context-json>
-  // Note: vite-node might swallow the script path from argv
+  // Parse arguments to handle Promptfoo's exec-provider format.
+  //
+  // Promptfoo invokes us like:
+  //   ./run-provider.sh <prompt-tokens...> <provider-config-json> <test-context-json>
+  //
+  // The two trailing JSON blobs are promptfoo bookkeeping (provider id/config/env;
+  // test vars/qrels/assertions/options/etc.) and must NOT be folded into the search
+  // query. We pop every trailing arg that parses as a JSON object, capturing `vars`
+  // from whichever blob carries it (the test context). What remains is the prompt.
+  //
+  // The previous version only popped JSON blobs that had `vars` or `options`,
+  // which left the provider-config blob (with neither) tacked onto the query
+  // string — turning "pathlib read text file" into
+  // `pathlib read text file {"id":"exec:./run-provider.sh","config":{...},"env":{}}`
+  // and hiding the actual query in noise. That regressed retrieval enough to
+  // return zero hits on some libraries.
 
   const args = process.argv.slice(2);
   interface Context {
@@ -22,28 +35,24 @@ async function main() {
   }
   let context: Context = {};
 
-  // 1. Identify and remove Context JSONs (last args)
-  // Promptfoo might pass multiple JSON objects (options, context)
   while (args.length > 0) {
     const lastArg = args[args.length - 1];
-    if (lastArg.trim().startsWith("{") && lastArg.trim().endsWith("}")) {
-      try {
-        const parsed = JSON.parse(lastArg);
-        // Only accept if it looks like the context object (has vars) or options
-        if (parsed.vars || parsed.options) {
-          if (parsed.vars) context = parsed;
-          args.pop(); // Remove context from args
-        } else {
-          // Might be part of the query if it's a valid JSON but not our context
-          break;
-        }
-      } catch (_e) {
-        // Not valid JSON, stop removing
-        break;
-      }
-    } else {
+    const trimmed = lastArg.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) break;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      // Looks like JSON but isn't — assume it's a literal query fragment.
       break;
     }
+    if (parsed && typeof parsed === "object") {
+      const obj = parsed as { vars?: Record<string, string> };
+      if (obj.vars && !context.vars) context = obj;
+      args.pop();
+      continue;
+    }
+    break;
   }
 
   // 2. The rest is the query
@@ -88,12 +97,27 @@ async function main() {
       process.exit(1);
     }
 
-    // 6. Run Search
+    // 6. Run Search. `top_k` is configurable via DOCS_EVAL_TOP_K so the
+    // benchmark can measure deeper-recall configurations without editing
+    // code. Validate aggressively — silently coercing junk would let bad
+    // configs masquerade as a clean run.
+    const topKRaw = process.env.DOCS_EVAL_TOP_K?.trim();
+    let topK = 5;
+    if (topKRaw) {
+      const parsed = Number(topKRaw);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
+        console.error(
+          `Invalid DOCS_EVAL_TOP_K="${topKRaw}": must be an integer in [1, 100].`,
+        );
+        process.exit(1);
+      }
+      topK = parsed;
+    }
     const searchTool = new SearchTool(docService);
     const result = await searchTool.execute({
       library,
       query,
-      limit: 5, // Return top 5 for ranking evaluation
+      limit: topK,
     });
 
     // 7. Format Output
@@ -110,12 +134,17 @@ async function main() {
             )
             .join("\n\n");
 
-    // Extract metadata for deterministic checks (Ranking)
+    // Metadata consumed by promptfoo JS assertions (IR metrics, structural
+    // checks) and by the aggregator. Carries everything those consumers need
+    // so they never have to re-parse `outputText`.
     const metadata = {
-      results: results.map((r) => ({
+      library,
+      query,
+      results: results.map((r, i) => ({
         url: r.url,
         score: r.score ?? 0,
-        title: `${r.content.slice(0, 50)}...`, // simplified title if needed
+        position: i,
+        content: r.content,
       })),
     };
 
@@ -140,4 +169,14 @@ async function main() {
   }
 }
 
-main();
+// Force exit so anything that holds the event loop open (file watchers,
+// unclosed handles) cannot stall the process. When promptfoo spawns this
+// script the parent waits for the child to exit before reading stdout —
+// a dangling watcher = a 60-minute hang.
+main().then(
+  () => process.exit(0),
+  (err) => {
+    console.error("Unhandled provider error:", err);
+    process.exit(1);
+  },
+);

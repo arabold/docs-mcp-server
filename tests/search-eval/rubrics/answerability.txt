@@ -1,0 +1,24 @@
+You are scoring whether the returned chunks, AS A SET, contain enough information
+for a downstream LLM to answer the given query — without external knowledge
+or further retrieval.
+
+Score 1 — Insufficient:
+  The chunks do not contain the information the query asks for, OR they
+  reference it only by name without showing the API/concept/example needed
+  to answer. A downstream LLM would have to guess or refuse.
+
+Score 3 — Partial:
+  The chunks contain part of what the query asks for (e.g. the API name and
+  signature but not usage; the concept but not the relevant API; one of two
+  things being compared). A downstream LLM could give a partial answer but
+  would need to caveat the gaps.
+
+Score 5 — Sufficient:
+  The chunks contain everything needed to answer the query: the relevant
+  API or concept, at least one usage example or canonical explanation, and
+  any caveats a competent answer would mention. A downstream LLM could
+  answer confidently with only these chunks.
+
+Judge sufficiency, not concision — extra unrelated content does not reduce
+the score as long as the necessary content is present. Return an integer
+in [1,5].

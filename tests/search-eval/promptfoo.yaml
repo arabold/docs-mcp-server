@@ -1,78 +1,53 @@
-prompts: [ "{{query}}" ]
+# Search-quality benchmark configuration.
+#
+# Don't run promptfoo against this file directly — use `npm run evaluate:search`,
+# which validates the judge model against the allowlist (tests/search-eval/judges.ts),
+# sets DOCS_EVAL_JUDGE_RESOLVED, and runs the comparator afterwards.
+
+description: docs-mcp-server search benchmark
+
+prompts: ["{{query}}"]
 
 providers:
   - id: exec:./run-provider.sh
-    label: Local Search Engine
+    label: docs-mcp-server SearchTool
 
+# Default for model-graded assertions: pinned judge, temperature 0.
+# DOCS_EVAL_JUDGE_RESOLVED is set by run.ts after allowlist validation.
 defaultTest:
+  options:
+    provider:
+      id: "{{env.DOCS_EVAL_JUDGE_RESOLVED}}"
+      config:
+        temperature: 0
   assert:
-    # 1. Relevance: Does the search result provide relevant documentation?
-    - type: model-graded-closedqa
-      value: "The search results must contain relevant documentation chunks for the given keywords."
-      provider: openai:gpt-4o-mini
-      rubric: |
-        Score 1 (Irrelevant): The results are about unrelated topics, different libraries, or do not contain the requested information.
-        Score 3 (Partial): The results mention the keywords but don't provide the main documentation, API signature, or primary usage examples.
-        Score 5 (Relevant): The results contain the core documentation, API signature, or primary usage examples for the searched keywords. The context is appropriate for an LLM to answer questions based on it.
+    # Deterministic IR metrics (MRR, Recall@k, nDCG@k, Hit@k) — headline numbers.
+    - type: javascript
+      value: file://assertions/ir-metrics.cjs
+      metric: ir
 
-    # 2. Richness: Depth of Content
+    # Deterministic structural checks on returned chunks.
+    - type: javascript
+      value: file://assertions/structural.cjs
+      metric: structural
+
+    # LLM-judged: is each chunk a self-contained readable unit?
     - type: llm-rubric
-      value: "The search results provide comprehensive documentation."
-      provider: openai:gpt-4o-mini
-      rubric: |
-        Score 1 (Shallow): The results are just titles or very brief snippets.
-        Score 5 (Rich): The results include detailed explanations, code examples, and context.
+      value: file://rubrics/chunk-coherence.txt
+      metric: chunk_coherence
 
-    # 3. Contextual Integrity: Code blocks are not cut off
-    - type: javascript
-      value: |
-        // Robustly extract the actual content from the JSON output if present
-        let content = output;
-        try {
-           const match = output.match(/\{[\s\S]*\}/);
-           if (match) {
-             const parsed = JSON.parse(match[0]);
-             if (parsed.output) content = parsed.output;
-           }
-        } catch(e) {}
-        
-        // output is provided as a global variable
-        const openBlocks = (content.match(/```/g) || []).length;
-        // Even number of ``` means blocks are closed
-        return openBlocks % 2 === 0;
-      label: "code-integrity"
+    # LLM-judged: are chunks faithful to their source (no hallucinated edits)?
+    - type: llm-rubric
+      value: file://rubrics/content-faithfulness.txt
+      metric: content_faithfulness
 
-    # 4. Ranking: Expected URL is in Top 3
-    # We use the 'metadata' we attached in the provider script
-    - type: javascript
-      value: |
-        // Robustly handle metadata
-        let results = [];
-        let parsed = null;
-        
-        if (typeof providerOutput !== 'undefined' && providerOutput.metadata) {
-          results = providerOutput.metadata.results;
-        } else {
-           // Fallback: try to find and parse JSON in the output
-           try {
-             const match = output.match(/\{[\s\S]*\}/);
-             if (match) {
-               parsed = JSON.parse(match[0]);
-               if (parsed.metadata) results = parsed.metadata.results;
-             } else {
-               // Try direct parse if no match found (unlikely if noisy)
-               parsed = JSON.parse(output);
-               if (parsed.metadata) results = parsed.metadata.results;
-             }
-           } catch(e) {}
-        }
-        
-        const expectedUrl = context.vars.expectedUrl;
-        if (!expectedUrl || !results || results.length === 0) return true; // Skip
+    # LLM-judged: could a downstream LLM answer the query from these chunks alone?
+    - type: llm-rubric
+      value: file://rubrics/answerability.txt
+      metric: answerability
 
-        const foundIndex = results.findIndex(r => r.url === expectedUrl);
-        // Pass if found in top 3 (index 0, 1, 2)
-        return foundIndex !== -1 && foundIndex < 3;
-      label: "ranking-top-3"
+# tests is set to a flat-array dataset emitted by run.ts on each invocation
+# (the source-of-truth dataset.yaml uses a wrapped form for status/notes).
+tests: results/dataset.flat.yaml
 
-tests: dataset.yaml
+outputPath: results/promptfoo-raw.json
