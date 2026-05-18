@@ -109,7 +109,9 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
     ".carbon-text",
     ".carbon-img",
     ".carbon-poweredby",
-    'a[href*="carbonads.net"]',
+    // Scoped to the click-redirect host (srv.carbonads.net) rather than the
+    // apex domain so that legitimate prose links to carbonads.net survive.
+    'a[href*="srv.carbonads.net"]',
     // BuySellAds
     ".bsa-promotion",
     ".bsa-cpc",
@@ -140,6 +142,7 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
     'img[src*="bidr.io"]',
     'img[src*="adnxs.com"]',
     'img[src*="adsrvr.org"]',
+    'img[src*="analytics.yahoo.com"]',
     // Third-party search widgets injected outside of nav/header.
     // Algolia DocSearch (dominant in technical docs)
     ".DocSearch",

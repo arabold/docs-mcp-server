@@ -160,6 +160,7 @@ describe("HtmlSanitizerMiddleware", () => {
             <img src="https://cnv.event.prod.bidr.io/log/cnv?tag_id=3503" />
             <img src="https://insight.adsrvr.org/track/pxl/?adv=abc" />
           </div>
+          <img src="https://sp.analytics.yahoo.com/spp.pl?a=abc" />
           <h1>HMR API</h1>
           <p>Real documentation content describing the HMR API.</p>
         </main>
@@ -174,9 +175,36 @@ describe("HtmlSanitizerMiddleware", () => {
     expect(context.dom("#carbonads").length).toBe(0);
     expect(context.dom('img[src*="bidr.io"]').length).toBe(0);
     expect(context.dom('img[src*="adsrvr.org"]').length).toBe(0);
+    expect(context.dom('img[src*="analytics.yahoo.com"]').length).toBe(0);
     expect(context.dom("h1").text()).toBe("HMR API");
     expect(context.dom("p").text()).toContain("Real documentation content");
     expect(context.errors).toHaveLength(0);
+  });
+
+  it("should keep prose links to the Carbon Ads apex domain", async () => {
+    // Regression: the click-redirect host (srv.carbonads.net) is the ad-only
+    // host; the apex (carbonads.net) is the human-facing landing page that a
+    // docs page discussing monetization might legitimately link to.
+    const middleware = new HtmlSanitizerMiddleware();
+    const html = `
+      <html><body>
+        <main>
+          <h1>How we fund this project</h1>
+          <p>
+            We monetize via
+            <a href="https://carbonads.net/">Carbon Ads</a> — see their site
+            for advertiser information.
+          </p>
+        </main>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    if (!context.dom) throw new Error("DOM not defined");
+    expect(context.dom('a[href="https://carbonads.net/"]').length).toBe(1);
+    expect(context.dom("p").text()).toContain("Carbon Ads");
   });
 
   it("should strip EthicalAds and Google AdSense markup", async () => {
