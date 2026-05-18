@@ -1002,8 +1002,11 @@ describe("WebScraperStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
 
-    // Verify fetcher calls (should be exactly maxPages)
-    expect(mockFetchFn).toHaveBeenCalledTimes(2);
+    // Verify page fetcher calls respect maxPages; llms.txt probe is discovery metadata.
+    const pageFetches = mockFetchFn.mock.calls.filter(
+      (call) => !String(call[0]).endsWith("/llms.txt"),
+    );
+    expect(pageFetches).toHaveLength(2);
     expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", expect.anything());
 
     // Check which subpage was called (only one should be)
@@ -1234,6 +1237,95 @@ describe("WebScraperStrategy", () => {
       expect(docCall![0].result?.contentType).toBe("text/markdown");
     });
 
+    it("should continue BFS from links in markdown content", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const testUrl = "https://example.com/docs/";
+      options.url = testUrl;
+      options.maxDepth = 1;
+
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (String(url).endsWith("/llms.txt")) {
+          return {
+            content: "",
+            mimeType: "text/plain",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          };
+        }
+        if (url === testUrl) {
+          return {
+            content: "# Start\n\nContinue to the [guide](guide).",
+            mimeType: "text/markdown",
+            source: testUrl,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: "# Guide\n\nMarkdown linked page.",
+          mimeType: "text/markdown",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, progressCallback);
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/guide",
+        expect.anything(),
+      );
+      const docUrls = progressCallback.mock.calls
+        .map((call) => call[0].result?.url)
+        .filter(Boolean);
+      expect(docUrls).toContain("https://example.com/docs/guide");
+    });
+
+    it("should continue using HTML link extraction for HTML content", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const testUrl = "https://example.com/docs/";
+      options.url = testUrl;
+      options.maxDepth = 1;
+
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (String(url).endsWith("/llms.txt")) {
+          return {
+            content: "",
+            mimeType: "text/plain",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          };
+        }
+        if (url === testUrl) {
+          return {
+            content:
+              '<html><head><title>Start</title></head><body><a href="guide">Guide</a></body></html>',
+            mimeType: "text/html",
+            source: testUrl,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: "<html><head><title>Guide</title></head><body>Guide</body></html>",
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, progressCallback);
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/guide",
+        expect.anything(),
+      );
+      const startDoc = progressCallback.mock.calls.find(
+        (call) => call[0].result?.url === testUrl,
+      );
+      expect(startDoc?.[0].result?.textContent).toBe(
+        "[Guide](https://example.com/docs/guide)",
+      );
+    });
+
     it("should skip unsupported content types", async () => {
       const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
       const testUrl = "https://example.com/image.png";
@@ -1251,6 +1343,449 @@ describe("WebScraperStrategy", () => {
       // Verify no document was produced for unsupported content
       const docCall = progressCallback.mock.calls.find((call) => call[0].result);
       expect(docCall).toBeUndefined();
+    });
+
+    it("should process text/plain content through TextPipeline", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      const testUrl = "https://example.com/plain";
+      options.url = testUrl;
+
+      mockFetchFn.mockResolvedValue({
+        content: "# Plain Title\n\nThis stays plain text.",
+        mimeType: "text/plain",
+        source: testUrl,
+        status: FetchStatus.SUCCESS,
+      });
+
+      await strategy.scrape(options, progressCallback);
+
+      const docCall = progressCallback.mock.calls.find((call) => call[0].result);
+      expect(docCall).toBeDefined();
+      expect(docCall![0].result?.textContent).toContain("This stays plain text.");
+      expect(docCall![0].result?.contentType).toBe("text/plain");
+    });
+  });
+
+  describe("llms.txt discovery", () => {
+    it("should probe subpath llms.txt and seed resolved in-scope URLs", async () => {
+      options.url = "https://example.com/docs/";
+      options.maxDepth = 0;
+      options.headers = { Authorization: "Bearer token" };
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Intro](intro)\n- [Other](https://example.com/other)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      await strategy.scrape(options, progressCallback);
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/llms.txt",
+        expect.objectContaining({
+          followRedirects: true,
+          headers: { Authorization: "Bearer token" },
+        }),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/llms.txt",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/intro/index.html.md",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/other",
+        expect.anything(),
+      );
+    });
+
+    it("should resolve redirected llms.txt relative links against the final llms.txt URL", async () => {
+      options.url = "https://example.com/docs/start";
+      options.scope = "hostname";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Guide](guide)",
+            mimeType: "text/markdown",
+            source: "https://www.example.com/docs/llms.txt",
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com/docs/start") {
+          return {
+            content:
+              "<html><head><title>Start</title></head><body><h1>Start</h1></body></html>",
+            mimeType: "text/html",
+            source: "https://www.example.com/docs/start",
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://www.example.com/docs/guide/index.html.md",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/docs/guide/index.html.md",
+        expect.anything(),
+      );
+    });
+
+    it("should fall back from subpath llms.txt probe to root", async () => {
+      options.url = "https://example.com/docs/";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "",
+            mimeType: "text/plain",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          };
+        }
+        if (url === "https://example.com/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Root Guide](https://example.com/docs/root)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/llms.txt",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/llms.txt",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/root/index.html.md",
+        expect.anything(),
+      );
+    });
+
+    it("should use post-redirect canonical scope for llms.txt URL seeding", async () => {
+      options.url = "http://example.com/docs";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (String(url).endsWith("/llms.txt")) {
+          return {
+            content: "# Docs\n\n- [Guide](https://www.example.com/docs/guide)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "http://example.com/docs") {
+          return {
+            content:
+              "<html><head><title>Start</title></head><body><h1>Start</h1></body></html>",
+            mimeType: "text/html",
+            source: "https://www.example.com/docs/",
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://www.example.com/docs/guide/index.html.md",
+        expect.anything(),
+      );
+    });
+
+    it("should dedupe llms.txt URLs against the original URL", async () => {
+      options.url = "https://example.com/docs/guide";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Guide](https://example.com/docs/guide)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      const originalFetches = mockFetchFn.mock.calls.filter(
+        (call) => call[0] === "https://example.com/docs/guide",
+      );
+      expect(originalFetches).toHaveLength(1);
+    });
+
+    it("should exclude llms.txt from link-following even with custom exclude patterns", async () => {
+      options.url = "https://example.com/docs/";
+      options.maxDepth = 1;
+      options.excludePatterns = ["**/*.png"];
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "",
+            mimeType: "text/plain",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          };
+        }
+        if (url === "https://example.com/llms.txt") {
+          return {
+            content: "",
+            mimeType: "text/plain",
+            source: url,
+            status: FetchStatus.NOT_FOUND,
+          };
+        }
+        return {
+          content:
+            '<html><head><title>Docs</title></head><body><a href="/docs/llms.txt">llms</a><a href="/docs/page">page</a></body></html>',
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      const llmsTxtPageFetches = mockFetchFn.mock.calls.filter(
+        (call) => call[0] === "https://example.com/docs/llms.txt",
+      );
+      expect(llmsTxtPageFetches).toHaveLength(1);
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/page",
+        expect.anything(),
+      );
+    });
+
+    it("should prefer .md variants for llms.txt pages and fall back on HTML", async () => {
+      options.url = "https://example.com/docs/start";
+      options.scope = "hostname";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content:
+              "# Docs\n\n- [HTML Page](https://example.com/docs/page.html)\n- [Guide](https://example.com/docs/guide/)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com/docs/page.html.md") {
+          return {
+            content: "<html>wrong</html>",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com/docs/guide/index.html.md") {
+          return {
+            content: "# Guide\n\nMarkdown variant",
+            mimeType: "text/plain",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      await strategy.scrape(options, progressCallback);
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/page.html.md",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/page.html",
+        expect.anything(),
+      );
+      const guideDoc = progressCallback.mock.calls.find(
+        (call) => call[0].result?.url === "https://example.com/docs/guide/index.html.md",
+      );
+      expect(guideDoc?.[0].result?.contentType).toBe("text/markdown");
+    });
+
+    it("should reject non-Markdown text variants for llms.txt pages", async () => {
+      options.url = "https://example.com/docs/start";
+      options.scope = "hostname";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Styles](https://example.com/docs/styles.css)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com/docs/styles.css.md") {
+          return {
+            content: "body { color: red; }",
+            mimeType: "text/css",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      await strategy.scrape(options, progressCallback);
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/styles.css.md",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/styles.css",
+        expect.anything(),
+      );
+      expect(
+        progressCallback.mock.calls.some(
+          (call) => call[0].result?.url === "https://example.com/docs/styles.css.md",
+        ),
+      ).toBe(false);
+    });
+
+    it("should fetch llms.txt Markdown URLs without adding another .md suffix", async () => {
+      options.url = "https://example.com/docs/start";
+      options.scope = "hostname";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Intro](https://example.com/docs/intro.md)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com/docs/intro.md") {
+          return {
+            content: "# Intro\n\nMarkdown page",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/intro.md",
+        expect.anything(),
+      );
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/docs/intro.md.md",
+        expect.anything(),
+      );
+    });
+
+    it("should probe llms.txt during refresh and seed new URLs", async () => {
+      options.initialQueue = [{ url: "https://example.com/existing", depth: 1 }];
+      options.maxDepth = 1;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/llms.txt") {
+          return {
+            content: "# Docs\n\n- [New](https://example.com/new)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (url === "https://example.com") {
+          return {
+            content: "",
+            mimeType: "text/html",
+            source: url,
+            status: FetchStatus.NOT_MODIFIED,
+          };
+        }
+        return {
+          content: `<html><head><title>${url}</title></head><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/llms.txt",
+        expect.anything(),
+      );
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/new/index.html.md",
+        expect.anything(),
+      );
     });
   });
 
@@ -1773,9 +2308,12 @@ describe("WebScraperStrategy", () => {
 
       await strategy.scrape(options, progressCallback);
 
-      // Verify root, refresh page, and discovered links were all fetched
-      // Root (depth 0) + refresh page (depth 1) + 2 new links (depth 2) = 4 total
-      expect(mockFetchFn).toHaveBeenCalledTimes(4);
+      // Verify root, refresh page, and discovered links were all fetched.
+      // The llms.txt probe is expected metadata discovery during refresh.
+      const pageFetches = mockFetchFn.mock.calls.filter(
+        (call) => !String(call[0]).endsWith("/llms.txt"),
+      );
+      expect(pageFetches).toHaveLength(4);
       expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", expect.anything());
       expect(mockFetchFn).toHaveBeenCalledWith(
         "https://example.com/page-with-links",
@@ -1856,8 +2394,11 @@ describe("WebScraperStrategy", () => {
 
       await strategy.scrape(options, progressCallback);
 
-      // Verify all three pages plus root were fetched (4 total)
-      expect(mockFetchFn).toHaveBeenCalledTimes(4);
+      // Verify all three pages plus root were fetched; llms.txt probe is metadata.
+      const pageFetches = mockFetchFn.mock.calls.filter(
+        (call) => !String(call[0]).endsWith("/llms.txt"),
+      );
+      expect(pageFetches).toHaveLength(4);
 
       // Verify root was processed + only the updated page produced a processed document (2 total)
       const docCalls = progressCallback.mock.calls.filter((call) => call[0].result);

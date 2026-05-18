@@ -8,6 +8,7 @@ import {
   type MockedObject,
   vi,
 } from "vitest";
+import { MARKDOWN_PREFERRED_ACCEPT } from "../fetcher/headers";
 import { ScrapeMode, type ScraperOptions } from "../types";
 import {
   extractCredentialsAndOrigin,
@@ -880,7 +881,11 @@ describe("mergePlaywrightHeaders", () => {
     const existingHeaders = { authorization: "Bearer existing" };
     const customHeaders = { "x-custom": "value" };
     const result = mergePlaywrightHeaders(existingHeaders, customHeaders);
-    expect(result).toEqual({ authorization: "Bearer existing", "x-custom": "value" });
+    expect(result).toEqual({
+      authorization: "Bearer existing",
+      "x-custom": "value",
+      Accept: MARKDOWN_PREFERRED_ACCEPT,
+    });
   });
 
   it("injects Authorization if credentials and same-origin and not already set", () => {
@@ -938,7 +943,17 @@ describe("mergePlaywrightHeaders", () => {
     const existingHeaders = { "content-type": "text/html" };
     const customHeaders = {};
     const result = mergePlaywrightHeaders(existingHeaders, customHeaders);
-    expect(result).toEqual({ "content-type": "text/html" });
+    expect(result).toEqual({
+      "content-type": "text/html",
+      Accept: MARKDOWN_PREFERRED_ACCEPT,
+    });
+  });
+
+  it("preserves caller-supplied Accept headers", () => {
+    const existingHeaders = { accept: "text/html" };
+    const customHeaders = { accept: "application/json" };
+    const result = mergePlaywrightHeaders(existingHeaders, customHeaders);
+    expect(result).toEqual({ accept: "application/json" });
   });
 });
 

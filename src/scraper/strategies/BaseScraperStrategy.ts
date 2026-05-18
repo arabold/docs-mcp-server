@@ -16,6 +16,7 @@ import type {
   ScraperProgressEvent,
   ScraperStrategy,
 } from "../types";
+import { isLlmsTxtUrl } from "../utils/llmsTxtParser";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
 import { isInScope } from "../utils/scope";
 
@@ -46,6 +47,8 @@ export interface ProcessItemResult {
   content?: PipelineResult;
   /** Extracted links from the content. This may be an empty array if no links were found or if the content was not processed. */
   links?: string[];
+  /** Fully formed queue items discovered outside normal link extraction. */
+  queueItems?: QueueItem[];
   /** Internal-only allowlist roots to carry to discovered queue items. */
   internalAllowedFileRoots?: string[];
   /** Any non-critical errors encountered during processing. This may be an empty array if no errors were encountered or if the content was not processed. */
@@ -120,6 +123,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     options: ScraperOptions,
     context: { internalAllowedFileRoots?: string[] } = {},
   ): boolean {
+    if (isLlmsTxtUrl(url)) {
+      return false;
+    }
+
     const isInternalArchiveMember =
       url.startsWith("file://") &&
       isFileUrlInsideRoots(url, context.internalAllowedFileRoots);
@@ -274,7 +281,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             this.recordChildPageCompletion(item, result);
             ensureFailureRateWithinThreshold();
             throwIfBatchAborted();
-            return [];
+            return result.queueItems ?? [];
           }
 
           if (result.status === FetchStatus.NOT_FOUND) {
@@ -358,7 +365,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           ensureFailureRateWithinThreshold();
           throwIfBatchAborted();
 
-          return nextItems
+          const linkQueueItems = nextItems
             .map((value) => {
               try {
                 const targetUrl = new URL(value, linkBaseUrl);
@@ -382,6 +389,8 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               return null;
             })
             .filter((item): item is QueueItem => item !== null);
+
+          return [...(result.queueItems ?? []), ...linkQueueItems];
         } catch (error) {
           if (
             error instanceof FailureThresholdExceededError ||

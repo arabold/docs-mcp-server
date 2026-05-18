@@ -11,6 +11,7 @@ import { type AppConfig, defaults } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { BrowserFetcher } from "../fetcher";
+import { withMarkdownPreferredAccept } from "../fetcher/headers";
 import { ScrapeMode } from "../types";
 import { SimpleMemoryCache } from "../utils/SimpleMemoryCache";
 import { isBlockedSubresource } from "./subresourceBlocklist";
@@ -1199,5 +1200,5 @@ export function mergePlaywrightHeaders(
       Authorization: `Basic ${basic}`,
     };
   }
-  return headers;
+  return withMarkdownPreferredAccept(headers, customHeaders);
 }

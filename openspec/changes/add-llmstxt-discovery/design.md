@@ -45,7 +45,7 @@ Stop at first successful probe. Note: this derivation intentionally does NOT reu
 
 ### Decision 2a: Seed filtering waits for canonical scope base
 
-The implementation must avoid filtering llms.txt URLs against a stale pre-redirect scope base. The root page establishes `canonicalBaseUrl` during depth-0 processing, including protocol/host adoption and siblingwise redirect behavior from the `scraping-scope` capability. llms.txt URL seeding SHALL either run after depth-0 processing has established that canonical base or defer filtering/enqueueing until then.
+The implementation must avoid filtering llms.txt URLs against a stale pre-redirect scope base. The root page establishes `canonicalBaseUrl` during depth-0 processing, including protocol/host adoption and siblingwise redirect behavior from the `scraping-scope` capability. The canonical base keeps the user-provided path as the scope anchor while adopting the final protocol and host. llms.txt URL seeding SHALL either run after depth-0 processing has established that canonical base or defer filtering/enqueueing until then.
 
 **Rationale:** A common scrape starts at `http://example.com/docs` and redirects to `https://www.example.com/docs/`. If llms.txt URLs are filtered before the redirect is known, valid `https://www.example.com/docs/...` links can be rejected by protocol or host scope checks. Waiting for the canonical base keeps llms.txt seeding consistent with normal BFS link discovery.
 
@@ -64,11 +64,11 @@ When fetching a page from llms.txt, try a Markdown URL variant first. Build the 
 
 Accept the `.md` response only if:
 - HTTP status is 200
-- Content-Type indicates Markdown or text (`text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm`, `text/plain`, or similar safe text)
+- Content-Type indicates Markdown (`text/markdown`, `text/x-markdown`, `text/mdx`, `text/x-gfm`) or `text/plain`
 
 Otherwise, fall back to the original URL.
 
-**Rationale:** Some servers may return a 200 with an HTML error page for the `.md` URL. Content-type validation prevents treating HTML as raw Markdown.
+**Rationale:** Some servers may return a 200 with an HTML error page or a non-Markdown text asset for the `.md` URL. Content-type validation prevents treating HTML, CSS, JavaScript, or other arbitrary text as raw Markdown.
 
 ### Decision 5: llms.txt itself is not indexed as a document
 
@@ -76,11 +76,11 @@ The llms.txt file is consumed for its URL list but is not processed through the 
 
 **Rationale:** Indexing llms.txt would create chunks containing link lists that pollute search results. Its value is in the URLs it contains, not its content. Relying on `defaultPatterns.ts` would be fragile since `getEffectiveExclusionPatterns()` replaces defaults entirely when the user provides custom patterns.
 
-### Decision 6: No llms.txt probe during refresh
+### Decision 6: llms.txt probe also runs during refresh
 
-Refresh operations (`isRefresh: true`) use a pre-populated queue from the database (previously scraped pages with ETags for conditional requests). The llms.txt probe is skipped during refresh because introducing new seed URLs into a refresh would add pages the user did not previously index, which is unexpected behavior for a "refresh existing content" operation.
+Refresh operations (`isRefresh: true`) use a pre-populated queue from the database but still preserve the scraper's existing discovery behavior: if refreshed pages change and expose new links, those links can be crawled and indexed. The llms.txt probe follows the same model. A refresh probes llms.txt, waits for the depth-0 canonical scope base, and seeds accepted llms.txt URLs alongside the refresh queue.
 
-**Rationale:** Refresh is about updating existing content, not discovering new pages. If the user wants to re-index with llms.txt discovery, they should run a fresh scrape.
+**Rationale:** Refresh keeps a library current, including newly published documentation pages. Treating llms.txt as a discovery source during refresh is consistent with existing link-following behavior and lets curated docs additions enter the index without requiring a full manual re-scrape.
 
 ## Risks / Trade-offs
 

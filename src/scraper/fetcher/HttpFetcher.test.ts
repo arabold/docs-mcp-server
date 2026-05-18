@@ -362,7 +362,7 @@ describe("HttpFetcher", () => {
         responseType: "arraybuffer",
         headers: expect.objectContaining({
           "user-agent": expect.any(String),
-          accept: expect.any(String),
+          Accept: "text/markdown, text/html;q=0.9, */*;q=0.8",
           "accept-language": expect.any(String),
           // Verify that our custom Accept-Encoding header is set (excluding zstd)
           "Accept-Encoding": "gzip, deflate, br",
@@ -396,6 +396,33 @@ describe("HttpFetcher", () => {
         maxRedirects: 0,
         signal: undefined,
         decompress: true,
+      }),
+    );
+  });
+
+  it("should preserve caller-supplied Accept headers", async () => {
+    const fetcher = createFetcher();
+    mockedAxios.get.mockResolvedValue({
+      data: Buffer.from("ok", "utf-8"),
+      headers: { "content-type": "text/plain" },
+    });
+
+    await fetcher.fetch("https://example.com", {
+      headers: { accept: "application/json" },
+    });
+
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      "https://example.com",
+      expect.objectContaining({
+        headers: expect.objectContaining({ accept: "application/json" }),
+      }),
+    );
+    expect(mockedAxios.get).toHaveBeenCalledWith(
+      "https://example.com",
+      expect.objectContaining({
+        headers: expect.not.objectContaining({
+          Accept: "text/markdown, text/html;q=0.9, */*;q=0.8",
+        }),
       }),
     );
   });

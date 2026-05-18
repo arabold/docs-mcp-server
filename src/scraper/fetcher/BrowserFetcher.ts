@@ -5,6 +5,7 @@ import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
+import { withMarkdownPreferredAccept } from "./headers";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -69,10 +70,15 @@ export class BrowserFetcher implements ContentFetcher {
       });
 
       // Set custom headers if provided
-      await page.setExtraHTTPHeaders({
-        ...fingerprintHeaders,
-        ...options?.headers,
-      });
+      await page.setExtraHTTPHeaders(
+        withMarkdownPreferredAccept(
+          {
+            ...fingerprintHeaders,
+            ...options?.headers,
+          },
+          options?.headers,
+        ),
+      );
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
@@ -104,13 +110,16 @@ export class BrowserFetcher implements ContentFetcher {
       const finalUrl = page.url();
       await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
 
-      // Get the page content
-      const content = await page.content();
-      const contentBuffer = Buffer.from(content, "utf-8");
-
       // Determine content type
       const contentType = response.headers()["content-type"] || "text/html";
       const { mimeType, charset } = MimeTypeUtils.parseContentType(contentType);
+
+      const content = MimeTypeUtils.isHtml(mimeType)
+        ? await page.content()
+        : await response.body();
+      const contentBuffer = Buffer.isBuffer(content)
+        ? content
+        : Buffer.from(content, "utf-8");
 
       // Extract ETag header for caching
       const etag = response.headers().etag;

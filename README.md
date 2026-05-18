@@ -150,6 +150,11 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 -   When enabled with `scrapeMode=fetch`, the scraper automatically upgrades the job to Playwright because plain fetch cannot evaluate client-side hash routes.
 -   Refresh reuses the stored `preserveHashes` setting by default, and CLI/Web refresh entrypoints can override it explicitly.
 
+### Markdown-Optimized Web Scraping
+-   Web scrapes and refreshes automatically probe for `llms.txt` at the documentation subpath and site root before normal crawling. When found, the curated links become additional crawl seeds, and pages discovered this way prefer `.md` URL variants such as `/guide/index.html.md` or `/page.html.md` before falling back to the original page.
+-   Web requests send `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` by default. Servers that support Markdown content negotiation, including Cloudflare Markdown for Agents, can return Markdown directly so the scraper bypasses HTML-to-Markdown conversion for cleaner output.
+-   This behavior is automatic and requires no configuration. Custom `Accept` headers are preserved when provided.
+
 ### Key Concepts & Architecture
 -   **[Deployment Modes](docs/infrastructure/deployment-modes.md)**: Standalone vs. Distributed (Docker Compose).
 -   **[Authentication](docs/infrastructure/authentication.md)**: Securing your server with OAuth2/OIDC.

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
+import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 
 vi.mock("playwright", () => ({
   chromium: {
@@ -86,7 +87,74 @@ describe("BrowserFetcher", () => {
 
     expect(setViewportSize).toHaveBeenCalledWith({ width: 1920, height: 1080 });
     expect(setExtraHTTPHeaders).toHaveBeenCalledWith(
-      expect.objectContaining({ "X-Test": "1" }),
+      expect.objectContaining({ "X-Test": "1", Accept: MARKDOWN_PREFERRED_ACCEPT }),
     );
+  });
+
+  it("preserves caller-supplied Accept headers", async () => {
+    const setExtraHTTPHeaders = vi.fn().mockResolvedValue(undefined);
+    const page = {
+      setViewportSize: vi.fn().mockResolvedValue(undefined),
+      setExtraHTTPHeaders,
+      route: vi.fn().mockResolvedValue(undefined),
+      unroute: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue({
+        status: () => 200,
+        headers: () => ({ "content-type": "text/html" }),
+      }),
+      url: vi.fn().mockReturnValue("https://example.com"),
+      content: vi.fn().mockResolvedValue("<html><body>ok</body></html>"),
+    };
+    const browser = {
+      newContext: vi.fn().mockResolvedValue({
+        newPage: vi.fn().mockResolvedValue(page),
+        close: vi.fn().mockResolvedValue(undefined),
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    await fetcher.fetch("https://example.com", { headers: { accept: "text/html" } });
+
+    expect(setExtraHTTPHeaders).toHaveBeenCalledWith(
+      expect.objectContaining({ accept: "text/html" }),
+    );
+    expect(setExtraHTTPHeaders).toHaveBeenCalledWith(
+      expect.not.objectContaining({ Accept: MARKDOWN_PREFERRED_ACCEPT }),
+    );
+  });
+
+  it("returns raw response body for Markdown responses instead of rendered HTML", async () => {
+    const page = {
+      setViewportSize: vi.fn().mockResolvedValue(undefined),
+      setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
+      route: vi.fn().mockResolvedValue(undefined),
+      unroute: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      goto: vi.fn().mockResolvedValue({
+        status: () => 200,
+        headers: () => ({ "content-type": "text/markdown; charset=utf-8" }),
+        body: vi.fn().mockResolvedValue(Buffer.from("# Markdown body")),
+      }),
+      url: vi.fn().mockReturnValue("https://example.com/readme.md"),
+      content: vi.fn().mockResolvedValue("<html><body># Markdown body</body></html>"),
+    };
+    const browser = {
+      newContext: vi.fn().mockResolvedValue({
+        newPage: vi.fn().mockResolvedValue(page),
+        close: vi.fn().mockResolvedValue(undefined),
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const result = await fetcher.fetch("https://example.com/readme.md");
+
+    expect(page.content).not.toHaveBeenCalled();
+    expect(result.mimeType).toBe("text/markdown");
+    expect(result.content.toString()).toBe("# Markdown body");
   });
 });
