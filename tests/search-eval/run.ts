@@ -7,6 +7,12 @@
  *                      Exit 0 even when metrics differ from prior baseline.
  *
  * Environment:
+ *   DOCS_EVAL_PROVIDER             Which provider to benchmark: "local" (default,
+ *                                  the docs-mcp-server SearchTool) or "context7"
+ *                                  (the public Context7 API for side-by-side
+ *                                  comparison). Each provider has its own
+ *                                  baseline file: baseline.json for local,
+ *                                  baseline.<provider>.json otherwise.
  *   DOCS_EVAL_JUDGE                Override default judge model (validated against allowlist).
  *   DOCS_EVAL_CROSS_JUDGE          Optional secondary judge (different provider).
  *   DOCS_EVAL_CROSS_JUDGE_N        Sample size for cross-judge (default 10).
@@ -49,26 +55,74 @@ const PATHS = {
   crossJudge: resolve("tests/search-eval/results/cross-judge.json"),
 };
 
+interface ProviderSpec {
+  /** The `exec:./...` id promptfoo invokes per query. */
+  promptfooId: string;
+  /** Human-readable name shown in promptfoo's report. */
+  label: string;
+  /** Whether the provider requires the local docs store to be indexed. */
+  needsPreflight: boolean;
+}
+
 /**
- * Each dataset gets its own baseline file, so running smoke in `--baseline`
- * mode doesn't silently overwrite the checked-in main baseline.
- *   dataset.yaml         -> baseline.json
- *   dataset.smoke.yaml   -> baseline.smoke.json
- *   custom/foo.yaml      -> custom/foo.baseline.json   (sits next to dataset)
+ * Registry of provider implementations. Adding a new provider means dropping
+ * an exec-provider script next to it and adding an entry here.
  */
-function baselinePathFor(datasetPath: string): string {
+const PROVIDERS: Record<string, ProviderSpec> = {
+  local: {
+    promptfooId: "exec:./run-provider.sh",
+    label: "docs-mcp-server",
+    needsPreflight: true,
+  },
+  context7: {
+    promptfooId: "exec:./run-context7-provider.sh",
+    label: "Context7",
+    needsPreflight: false,
+  },
+};
+
+function resolveProvider(): { name: string; spec: ProviderSpec } {
+  const name = (process.env.DOCS_EVAL_PROVIDER ?? "local").trim() || "local";
+  const spec = PROVIDERS[name];
+  if (!spec) {
+    console.error(
+      `Unknown DOCS_EVAL_PROVIDER="${name}". Known: ${Object.keys(PROVIDERS).join(", ")}.`,
+    );
+    process.exit(2);
+  }
+  return { name, spec };
+}
+
+/**
+ * Each (dataset × provider) pair gets its own baseline file, so:
+ *   - smoke runs don't overwrite the main baseline
+ *   - Context7 runs don't overwrite the local baseline
+ *
+ * Naming:
+ *   dataset.yaml         + local     -> baseline.json
+ *   dataset.yaml         + context7  -> baseline.context7.json
+ *   dataset.smoke.yaml   + local     -> dataset.smoke.baseline.json
+ *   dataset.smoke.yaml   + context7  -> dataset.smoke.context7.baseline.json
+ *   custom/foo.yaml      + local     -> custom/foo.baseline.json
+ */
+function baselinePathFor(datasetPath: string, provider: string): string {
   const ext = datasetPath.endsWith(".yaml")
     ? ".yaml"
     : datasetPath.endsWith(".yml")
       ? ".yml"
       : "";
   const stem = ext ? datasetPath.slice(0, -ext.length) : datasetPath;
-  // The canonical main dataset gets the canonical baseline name.
-  if (stem.endsWith("/tests/search-eval/dataset") || stem === "tests/search-eval/dataset") {
-    return resolve("tests/search-eval/baseline.json");
+  const providerSuffix = provider === "local" ? "" : `.${provider}`;
+
+  if (
+    stem.endsWith("/tests/search-eval/dataset") ||
+    stem === "tests/search-eval/dataset"
+  ) {
+    // Canonical dataset: keep the canonical baseline name for `local`,
+    // suffix the provider otherwise.
+    return resolve(`tests/search-eval/baseline${providerSuffix}.json`);
   }
-  // Anything else gets a sibling .baseline.json so multiple datasets coexist.
-  return resolve(`${stem}.baseline.json`);
+  return resolve(`${stem}${providerSuffix}.baseline.json`);
 }
 
 async function main() {
@@ -84,9 +138,11 @@ async function main() {
 
   // 1. Validate judge (fails fast on deprecated/unknown).
   const judge = judgeFromEnv();
-  console.log(`🔧 judge=${judge.id}`);
+  // 2. Resolve provider (local default).
+  const { name: providerName, spec: providerSpec } = resolveProvider();
+  console.log(`🔧 judge=${judge.id}  provider=${providerName}`);
 
-  // 2. Resolve dataset path.
+  // 3. Resolve dataset path.
   const datasetPath = process.env.DOCS_EVAL_DATASET ?? resolve("tests/search-eval/dataset.yaml");
   const dataset = loadDataset(datasetPath);
   if (dataset.status === "draft") {
@@ -95,14 +151,16 @@ async function main() {
     );
   }
 
-  // 3. Preflight: every library must be indexed.
-  const pf = await runPreflight(datasetPath);
-  if (!pf.ok) {
-    console.error(`❌ Preflight failed: missing libraries in store:`);
-    for (const lib of pf.missing) {
-      console.error(`   - ${lib}    →    ${scrapeCommandFor(lib)}`);
+  // 4. Preflight: only meaningful for providers that read the local store.
+  if (providerSpec.needsPreflight) {
+    const pf = await runPreflight(datasetPath);
+    if (!pf.ok) {
+      console.error(`❌ Preflight failed: missing libraries in store:`);
+      for (const lib of pf.missing) {
+        console.error(`   - ${lib}    →    ${scrapeCommandFor(lib)}`);
+      }
+      process.exit(1);
     }
-    process.exit(1);
   }
 
   // 4. Emit flat dataset for promptfoo (its `tests:` expects a plain array).
@@ -126,6 +184,10 @@ async function main() {
     DOCS_EVAL_JUDGE_RESOLVED: judge.id,
     DOCS_EVAL_NODE: process.execPath,
     DOCS_EVAL_VITE_NODE: viteNodeCli,
+    // Selected exec-provider for this run. promptfoo.yaml templates these
+    // via {{env.…}} so we can switch providers without parallel configs.
+    DOCS_EVAL_PROMPTFOO_PROVIDER: providerSpec.promptfooId,
+    DOCS_EVAL_PROMPTFOO_LABEL: providerSpec.label,
   };
   // Default concurrency 1: each provider invocation cold-starts vite-node AND
   // re-initialises docService (which runs a schema-migration write through
@@ -194,6 +256,7 @@ async function main() {
     "unknown";
 
   const config: RunConfigSnapshot = {
+    provider: providerName,
     embeddingModel: resolvedEmbeddingModel,
     topK: Number(process.env.DOCS_EVAL_TOP_K ?? 5),
     judge: judge.id,
@@ -225,7 +288,7 @@ async function main() {
   });
 
   // 8. Compare against baseline.
-  const baselinePath = baselinePathFor(datasetPath);
+  const baselinePath = baselinePathFor(datasetPath, providerName);
   const baseline = loadBaseline(baselinePath);
   const cmp = compare(summary, baseline);
 

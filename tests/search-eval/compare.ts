@@ -55,6 +55,7 @@ export interface CompareResult {
  * dataset is the most common case (smoke vs full) and the most dangerous.
  */
 const CONFIG_KEYS_REQUIRING_MATCH = [
+  "provider",
   "datasetFile",
   "datasetEntryCount",
   "embeddingModel",

@@ -208,6 +208,7 @@ export async function aggregateCli(): Promise<void> {
   const appConfig = loadConfig();
 
   const config: RunConfigSnapshot = {
+    provider: process.env.DOCS_EVAL_PROVIDER ?? "local",
     embeddingModel:
       process.env.DOCS_EVAL_EMBEDDING_MODEL ??
       appConfig.app.embeddingModel ??

@@ -97,6 +97,12 @@ export interface AssemblyConfigSnapshot {
 }
 
 export interface RunConfigSnapshot {
+  /**
+   * The retrieval provider under test (e.g. "local" for the docs-mcp-server's
+   * SearchTool, "context7" for the Context7 API). Each provider gets its own
+   * baseline file so they don't overwrite one another.
+   */
+  provider: string;
   embeddingModel: string;
   topK: number;
   judge: string;

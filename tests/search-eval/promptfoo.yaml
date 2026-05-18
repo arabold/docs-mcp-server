@@ -8,9 +8,12 @@ description: docs-mcp-server search benchmark
 
 prompts: ["{{query}}"]
 
+# Provider is selected by run.ts via DOCS_EVAL_PROVIDER (default: local).
+# Set via env vars so we can switch between providers without maintaining
+# parallel config files. See tests/search-eval/run.ts.
 providers:
-  - id: exec:./run-provider.sh
-    label: docs-mcp-server SearchTool
+  - id: "{{env.DOCS_EVAL_PROMPTFOO_PROVIDER}}"
+    label: "{{env.DOCS_EVAL_PROMPTFOO_LABEL}}"
 
 # Default for model-graded assertions: pinned judge, temperature 0.
 # DOCS_EVAL_JUDGE_RESOLVED is set by run.ts after allowlist validation.

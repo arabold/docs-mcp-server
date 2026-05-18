@@ -160,9 +160,53 @@ Refresh it when:
 - a re-scrape or re-index moved scores in a direction you want to keep.
 
 The comparator refuses to gate against a baseline recorded under materially
-different config (different `datasetFile`, `embeddingModel`, `judge`, or `topK`).
-It prints the incompatibility list and exits zero — re-record the baseline if
-this run is the new reference.
+different config (different `datasetFile`, `embeddingModel`, `judge`, `topK`,
+or `provider`). It prints the incompatibility list and exits zero — re-record
+the baseline if this run is the new reference.
+
+## Compare against another retrieval service
+
+The benchmark supports running the same dataset, same judge, same metrics
+against alternative retrieval providers — see how `docs-mcp-server` stacks
+up against the alternatives. Out of the box, `local` (the in-repo
+`SearchTool`) and `context7` ([Context7](https://context7.com/)) are
+supported. Adding another provider is one entry in `tests/search-eval/run.ts`
+plus a small exec-provider script.
+
+```bash
+# Record a baseline for the local provider (default — same as the canonical
+# `npm run evaluate:search:baseline`).
+npm run evaluate:search:baseline
+
+# Record a baseline against Context7. Writes to a separate file so the
+# canonical local baseline is untouched.
+DOCS_EVAL_PROVIDER=context7 DOCS_EVAL_NO_CACHE=1 \
+  npm run evaluate:search:baseline
+# → tests/search-eval/baseline.context7.json
+
+# Side-by-side report (IR / per-intent / LLM-judged / structural).
+npx vite-node tests/search-eval/cli/compare-providers.ts \
+  tests/search-eval/baseline.json \
+  tests/search-eval/baseline.context7.json
+```
+
+The Context7 provider hits Context7's public `/v2/context` endpoint. It works
+anonymously for short runs; set `CONTEXT7_API_KEY` in your environment for
+sustained or CI use.
+
+The comparator refuses to gate one provider's run against another's baseline
+(it'd produce false regressions/improvements). For cross-provider comparison
+always use the dedicated CLI above — it prints both sides and a coarse
+"wins per metric" tally without pretending the deltas are regressions.
+
+> **Asymmetry to know about.** Our IR metrics (MRR, Recall@k, nDCG@k, Hit@k)
+> match by URL string against the dataset's qrels. For most libraries Context7
+> returns per-page source URLs that match our qrels directly. TailwindCSS is
+> the exception — Context7 attributes Tailwind chunks to GitHub source paths;
+> the provider normalises these back to `tailwindcss.com/docs/...` URLs so the
+> comparison is fair. Some Context7 info-snippets carry only a library-level
+> `llms.txt` placeholder URL; the provider drops those rather than letting
+> them poison IR metrics with always-wrong URLs.
 
 ### Performance note
 
