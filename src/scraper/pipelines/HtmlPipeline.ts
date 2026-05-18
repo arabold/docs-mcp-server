@@ -5,7 +5,6 @@ import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
-import { HtmlDefuddleMiddleware } from "../middleware/HtmlDefuddleMiddleware";
 import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
 import { HtmlMetadataExtractorMiddleware } from "../middleware/HtmlMetadataExtractorMiddleware";
 import { HtmlNormalizationMiddleware } from "../middleware/HtmlNormalizationMiddleware";
@@ -36,9 +35,14 @@ export class HtmlPipeline extends BasePipeline {
     const minChunkSize = config.splitter.minChunkSize;
 
     this.playwrightMiddleware = new HtmlPlaywrightMiddleware(config.scraper);
+    // Pick the extractor. When the default (`cheerio`) is selected we never
+    // touch the Defuddle module — its `defuddle` + `linkedom` dependencies
+    // (~2.4 MB combined) stay off the import graph entirely. The Defuddle
+    // path lazy-imports on first page, so the cost is paid once when the
+    // flag is enabled and never otherwise.
     const extractor: ContentProcessorMiddleware =
       config.scraper.htmlExtractor === "defuddle"
-        ? new HtmlDefuddleMiddleware()
+        ? createLazyDefuddleMiddleware()
         : new HtmlSanitizerMiddleware();
     logger.debug(`HtmlPipeline using extractor: ${config.scraper.htmlExtractor}`);
     this.standardMiddleware = [
@@ -130,4 +134,23 @@ export class HtmlPipeline extends BasePipeline {
       logger.warn(`⚠️  Error during browser cleanup: ${error}`);
     }
   }
+}
+
+/**
+ * Build a middleware wrapper that defers loading `HtmlDefuddleMiddleware`
+ * (and transitively `defuddle/node` + `linkedom`) until the first HTML page
+ * is processed with the `defuddle` extractor selected. Keeps the default
+ * `cheerio` path free of the extra dependency cost.
+ */
+function createLazyDefuddleMiddleware(): ContentProcessorMiddleware {
+  let real: ContentProcessorMiddleware | null = null;
+  return {
+    async process(context, next) {
+      if (!real) {
+        const mod = await import("../middleware/HtmlDefuddleMiddleware");
+        real = new mod.HtmlDefuddleMiddleware();
+      }
+      await real.process(context, next);
+    },
+  };
 }
