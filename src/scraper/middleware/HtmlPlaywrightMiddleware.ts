@@ -104,7 +104,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
    * Consider making this more robust (e.g., lazy initialization, singleton).
    */
   private async ensureBrowser(): Promise<Browser> {
-    if (!this.browser || !this.browser.isConnected()) {
+    if (!this.browser?.isConnected()) {
       logger.debug("Launching new Playwright browser instance (Chromium)");
       this.browser = await BrowserFetcher.launchBrowser();
       this.browser.on("disconnected", () => {
@@ -564,6 +564,222 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return false;
   }
 
+  private isTargetClosedError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return error.message.includes("Target page, context or browser has been closed");
+  }
+
+  private formatRouteError(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.split("\n")[0] || message;
+  }
+
+  private isSpeculativePrefetch(route: Route): boolean {
+    const headers = route.request().headers();
+    return (
+      headers["next-router-prefetch"] === "1" ||
+      headers.purpose?.toLowerCase() === "prefetch" ||
+      headers["sec-purpose"]?.toLowerCase().includes("prefetch") === true
+    );
+  }
+
+  private isCacheableResponseContent(contentType: string): boolean {
+    const { mimeType } = MimeTypeUtils.parseContentType(contentType);
+    return (
+      MimeTypeUtils.isHtml(mimeType) ||
+      MimeTypeUtils.isMarkdown(mimeType) ||
+      MimeTypeUtils.isSafeForTextProcessing(mimeType)
+    );
+  }
+
+  private getRequestOrigin(url: string): string | null {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  private ignoreRouteLifecycleError(
+    error: unknown,
+    action: string,
+    reqUrl: string,
+  ): boolean {
+    if (this.isRouteAlreadyHandledError(error)) {
+      logger.debug(`Route already handled (${action}): ${reqUrl}`);
+      return true;
+    }
+    if (this.isTargetClosedError(error)) {
+      logger.debug(`Route target closed (${action}): ${reqUrl}`);
+      return true;
+    }
+    return false;
+  }
+
+  private async abortRoute(
+    route: Route,
+    reqUrl: string,
+    action: string,
+    reason?: Parameters<Route["abort"]>[0],
+  ): Promise<void> {
+    try {
+      await route.abort(reason);
+    } catch (error) {
+      if (this.ignoreRouteLifecycleError(error, action, reqUrl)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async fulfillRoute(
+    route: Route,
+    reqUrl: string,
+    options: Parameters<Route["fulfill"]>[0],
+    action: string,
+  ): Promise<void> {
+    try {
+      await route.fulfill(options);
+    } catch (error) {
+      if (this.ignoreRouteLifecycleError(error, action, reqUrl)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async continueRoute(
+    route: Route,
+    reqUrl: string,
+    resourceType: string,
+    options: Parameters<Route["continue"]>[0],
+  ): Promise<void> {
+    try {
+      await route.continue(options);
+    } catch (error) {
+      if (this.ignoreRouteLifecycleError(error, "continue", reqUrl)) {
+        return;
+      }
+
+      const errorMessage = this.formatRouteError(error);
+      logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
+      await this.abortRoute(route, reqUrl, "abort after continue error", "failed");
+    }
+  }
+
+  private async cacheResponseIfEligible(
+    reqUrl: string,
+    resourceType: string,
+    response: Awaited<ReturnType<Route["fetch"]>>,
+  ): Promise<void> {
+    const contentType = response.headers()["content-type"] || "application/octet-stream";
+
+    if (response.status() < 200 || response.status() >= 300) {
+      return;
+    }
+
+    if (!this.isCacheableResponseContent(contentType)) {
+      logger.debug(
+        `Skipping cache for unsupported content type "${contentType}" (${resourceType}): ${reqUrl}`,
+      );
+      return;
+    }
+
+    const body = await response.text();
+    if (body.length === 0) {
+      return;
+    }
+
+    const contentSizeBytes = Buffer.byteLength(body, "utf8");
+    const maxCacheItemSizeBytes =
+      this.config?.fetcher?.maxCacheItemSizeBytes ??
+      defaults.scraper.fetcher.maxCacheItemSizeBytes;
+
+    if (contentSizeBytes > maxCacheItemSizeBytes) {
+      logger.debug(
+        `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${maxCacheItemSizeBytes} bytes limit)`,
+      );
+      return;
+    }
+
+    HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
+    logger.debug(
+      `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
+    );
+  }
+
+  private async handleSubresourceRoute(
+    route: Route,
+    customHeaders: Record<string, string>,
+    credentials?: { username: string; password: string },
+    origin?: string,
+  ): Promise<void> {
+    const reqUrl = route.request().url();
+    const reqOrigin = this.getRequestOrigin(reqUrl);
+    const resourceType = route.request().resourceType();
+
+    if (!(await this.isRequestAllowed(reqUrl))) {
+      await this.abortRoute(route, reqUrl, "policy abort", "blockedbyclient");
+      return;
+    }
+
+    if (await this.tryBlocklistAbort(route, reqUrl)) {
+      return;
+    }
+
+    if (this.isSpeculativePrefetch(route)) {
+      logger.debug(`Aborting speculative prefetch ${resourceType}: ${reqUrl}`);
+      await this.abortRoute(route, reqUrl, "prefetch abort", "aborted");
+      return;
+    }
+
+    if (["image", "font", "media"].includes(resourceType)) {
+      await this.abortRoute(route, reqUrl, "abort");
+      return;
+    }
+
+    const headers = mergePlaywrightHeaders(
+      route.request().headers(),
+      customHeaders,
+      credentials,
+      origin,
+      reqOrigin ?? undefined,
+    );
+
+    if (route.request().method() !== "GET") {
+      await this.continueRoute(route, reqUrl, resourceType, { headers });
+      return;
+    }
+
+    const cached = HtmlPlaywrightMiddleware.resourceCache.get(reqUrl);
+    if (cached !== undefined) {
+      logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
+      await this.fulfillRoute(
+        route,
+        reqUrl,
+        { status: 200, contentType: cached.contentType, body: cached.body },
+        "fulfill cached",
+      );
+      return;
+    }
+
+    try {
+      const response = await route.fetch({ headers });
+      await this.cacheResponseIfEligible(reqUrl, resourceType, response);
+      await this.fulfillRoute(route, reqUrl, { response }, "fulfill");
+    } catch (error) {
+      if (this.ignoreRouteLifecycleError(error, `fetch ${resourceType}`, reqUrl)) {
+        return;
+      }
+
+      const errorMessage = this.formatRouteError(error);
+      logger.debug(`Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`);
+      await this.abortRoute(route, reqUrl, "abort after error", "failed");
+    }
+  }
+
   private async setupCachingRouteInterception(
     page: Page,
     customHeaders: Record<string, string> = {},
@@ -571,152 +787,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     origin?: string,
   ): Promise<void> {
     await page.route("**/*", async (route) => {
-      const reqUrl = route.request().url();
-      const reqOrigin = (() => {
-        try {
-          return new URL(reqUrl).origin;
-        } catch {
-          return null;
-        }
-      })();
-      const resourceType = route.request().resourceType();
-
-      if (!(await this.isRequestAllowed(reqUrl))) {
-        return await route.abort("blockedbyclient");
-      }
-
-      if (await this.tryBlocklistAbort(route, reqUrl)) {
-        return;
-      }
-
-      // Abort non-essential resources
-      if (["image", "font", "media"].includes(resourceType)) {
-        try {
-          return await route.abort();
-        } catch (error) {
-          if (this.isRouteAlreadyHandledError(error)) {
-            logger.debug(`Route already handled (abort): ${reqUrl}`);
-            return;
-          }
-          // Re-throw other errors (page closed, invalid state, etc.)
-          throw error;
-        }
-      }
-
-      // Cache all GET requests to speed up subsequent page loads
-      if (route.request().method() === "GET") {
-        // Check cache first
-        const cached = HtmlPlaywrightMiddleware.resourceCache.get(reqUrl);
-        if (cached !== undefined) {
-          logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
-          try {
-            return await route.fulfill({
-              status: 200,
-              contentType: cached.contentType,
-              body: cached.body,
-            });
-          } catch (error) {
-            if (this.isRouteAlreadyHandledError(error)) {
-              logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
-              return;
-            }
-            // Re-throw other errors (bad response/options, closed page, etc.)
-            throw error;
-          }
-        }
-
-        // Cache miss - fetch and potentially cache the response
-        const headers = mergePlaywrightHeaders(
-          route.request().headers(),
-          customHeaders,
-          credentials,
-          origin,
-          reqOrigin ?? undefined,
-        );
-
-        try {
-          const response = await route.fetch({ headers });
-          const body = await response.text();
-
-          // Only cache if content is small enough and response was successful (2xx status)
-          if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
-            const contentSizeBytes = Buffer.byteLength(body, "utf8");
-            if (contentSizeBytes <= this.config.fetcher.maxCacheItemSizeBytes) {
-              const contentType =
-                response.headers()["content-type"] || "application/octet-stream";
-              HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
-              logger.debug(
-                `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
-              );
-            } else {
-              logger.debug(
-                `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${this.config.fetcher.maxCacheItemSizeBytes} bytes limit)`,
-              );
-            }
-          }
-
-          try {
-            return await route.fulfill({ response });
-          } catch (error) {
-            if (this.isRouteAlreadyHandledError(error)) {
-              logger.debug(`Route already handled (fulfill): ${reqUrl}`);
-              return;
-            }
-            // Re-throw other errors (bad response/options, closed page, etc.)
-            throw error;
-          }
-        } catch (error) {
-          // Handle network errors (DNS, connection refused, timeout, etc.)
-          // Treat these as failed resource requests - abort gracefully
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.debug(
-            `Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`,
-          );
-          try {
-            return await route.abort("failed");
-          } catch (abortError) {
-            if (this.isRouteAlreadyHandledError(abortError)) {
-              logger.debug(`Route already handled (abort after error): ${reqUrl}`);
-              return;
-            }
-            // Re-throw other errors
-            throw abortError;
-          }
-        }
-      }
-
-      // Non-GET requests: just forward with headers
-      const headers = mergePlaywrightHeaders(
-        route.request().headers(),
-        customHeaders,
-        credentials,
-        origin,
-        reqOrigin ?? undefined,
-      );
-
-      try {
-        return await route.continue({ headers });
-      } catch (error) {
-        // If route was already handled, return silently
-        if (this.isRouteAlreadyHandledError(error)) {
-          logger.debug(`Route already handled (continue): ${reqUrl}`);
-          return;
-        }
-
-        // For other errors (network issues, closed page, etc.), try to abort
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
-        try {
-          return await route.abort("failed");
-        } catch (abortError) {
-          if (this.isRouteAlreadyHandledError(abortError)) {
-            logger.debug(`Route already handled (abort after continue error): ${reqUrl}`);
-            return;
-          }
-          // Re-throw other errors
-          throw abortError;
-        }
-      }
+      await this.handleSubresourceRoute(route, customHeaders, credentials, origin);
     });
   }
 
@@ -972,157 +1043,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         }
 
         // For all other requests, use the standard caching logic
-        // We need to manually handle the interception since we can't delegate to another route
-        const reqOrigin = (() => {
-          try {
-            return new URL(reqUrl).origin;
-          } catch {
-            return null;
-          }
-        })();
-        const resourceType = route.request().resourceType();
-
-        if (!(await this.isRequestAllowed(reqUrl))) {
-          return await route.abort("blockedbyclient");
-        }
-
-        if (await this.tryBlocklistAbort(route, reqUrl)) {
-          return;
-        }
-
-        // Abort non-essential resources
-        if (["image", "font", "media"].includes(resourceType)) {
-          try {
-            return await route.abort();
-          } catch (error) {
-            if (this.isRouteAlreadyHandledError(error)) {
-              logger.debug(`Route already handled (abort): ${reqUrl}`);
-              return;
-            }
-            // Re-throw other errors
-            throw error;
-          }
-        }
-
-        // Cache all GET requests to speed up subsequent page loads
-        if (route.request().method() === "GET") {
-          // Check cache first
-          const cached = HtmlPlaywrightMiddleware.resourceCache.get(reqUrl);
-          if (cached !== undefined) {
-            logger.debug(`✓ Cache hit for ${resourceType}: ${reqUrl}`);
-            try {
-              return await route.fulfill({
-                status: 200,
-                contentType: cached.contentType,
-                body: cached.body,
-              });
-            } catch (error) {
-              if (this.isRouteAlreadyHandledError(error)) {
-                logger.debug(`Route already handled (fulfill cached): ${reqUrl}`);
-                return;
-              }
-              // Re-throw other errors
-              throw error;
-            }
-          }
-
-          // Cache miss - fetch and potentially cache the response
-          const headers = mergePlaywrightHeaders(
-            route.request().headers(),
-            customHeaders,
-            credentials ?? undefined,
-            origin ?? undefined,
-            reqOrigin ?? undefined,
-          );
-
-          try {
-            const response = await route.fetch({ headers });
-            const body = await response.text();
-
-            // Only cache if content is small enough and response was successful (2xx status)
-            if (response.status() >= 200 && response.status() < 300 && body.length > 0) {
-              const contentSizeBytes = Buffer.byteLength(body, "utf8");
-              const maxCacheItemSizeBytes =
-                this.config?.fetcher?.maxCacheItemSizeBytes ??
-                defaults.scraper.fetcher.maxCacheItemSizeBytes;
-              if (contentSizeBytes <= maxCacheItemSizeBytes) {
-                const contentType =
-                  response.headers()["content-type"] || "application/octet-stream";
-                HtmlPlaywrightMiddleware.resourceCache.set(reqUrl, { body, contentType });
-                logger.debug(
-                  `Cached ${resourceType}: ${reqUrl} (${contentSizeBytes} bytes, cache size: ${HtmlPlaywrightMiddleware.resourceCache.size})`,
-                );
-              } else {
-                logger.debug(
-                  `Resource too large to cache: ${reqUrl} (${contentSizeBytes} bytes > ${maxCacheItemSizeBytes} bytes limit)`,
-                );
-              }
-            }
-
-            try {
-              return await route.fulfill({ response });
-            } catch (error) {
-              if (this.isRouteAlreadyHandledError(error)) {
-                logger.debug(`Route already handled (fulfill): ${reqUrl}`);
-                return;
-              }
-              // Re-throw other errors
-              throw error;
-            }
-          } catch (error) {
-            // Handle network errors (DNS, connection refused, timeout, etc.)
-            // Treat these as failed resource requests - abort gracefully
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.debug(
-              `Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`,
-            );
-            try {
-              return await route.abort("failed");
-            } catch (abortError) {
-              if (this.isRouteAlreadyHandledError(abortError)) {
-                logger.debug(`Route already handled (abort after error): ${reqUrl}`);
-                return;
-              }
-              // Re-throw other errors
-              throw abortError;
-            }
-          }
-        }
-
-        // Non-GET requests: just forward with headers
-        const headers = mergePlaywrightHeaders(
-          route.request().headers(),
+        await this.handleSubresourceRoute(
+          route,
           customHeaders,
           credentials ?? undefined,
           origin ?? undefined,
-          reqOrigin ?? undefined,
         );
-
-        try {
-          return await route.continue({ headers });
-        } catch (error) {
-          // If route was already handled, return silently
-          if (this.isRouteAlreadyHandledError(error)) {
-            logger.debug(`Route already handled (continue): ${reqUrl}`);
-            return;
-          }
-
-          // For other errors (network issues, closed page, etc.), try to abort
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          logger.debug(`Error continuing ${resourceType} ${reqUrl}: ${errorMessage}`);
-          try {
-            return await route.abort("failed");
-          } catch (abortError) {
-            if (this.isRouteAlreadyHandledError(abortError)) {
-              logger.debug(
-                `Route already handled (abort after continue error): ${reqUrl}`,
-              );
-              return;
-            }
-            // Re-throw other errors
-            throw abortError;
-          }
-        }
       });
 
       // Load initial HTML content
