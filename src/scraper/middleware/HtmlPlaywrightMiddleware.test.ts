@@ -168,6 +168,7 @@ describe("HtmlPlaywrightMiddleware", () => {
       skipKnownTrackers: true,
       pageTimeoutMs: 5000,
       browserTimeoutMs: 30000,
+      htmlExtractor: "cheerio" as const,
       fetcher: {
         maxRetries: 3,
         baseDelayMs: 1000,
@@ -955,6 +956,7 @@ describe("Route handling race condition protection", () => {
       skipKnownTrackers: true,
       pageTimeoutMs: 5000,
       browserTimeoutMs: 30000,
+      htmlExtractor: "cheerio" as const,
       fetcher: {
         maxRetries: 3,
         baseDelayMs: 1000,
@@ -1394,6 +1396,7 @@ describe("Route handling race condition protection", () => {
       skipKnownTrackers: true,
       pageTimeoutMs: 5000,
       browserTimeoutMs: 30000,
+      htmlExtractor: "cheerio" as const,
       fetcher: {
         maxRetries: 3,
         baseDelayMs: 1000,

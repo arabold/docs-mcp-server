@@ -76,6 +76,7 @@ export const DEFAULT_CONFIG = {
     skipKnownTrackers: true,
     pageTimeoutMs: 5000,
     browserTimeoutMs: 30_000,
+    htmlExtractor: "cheerio",
     fetcher: {
       maxRetries: 3,
       baseDelayMs: 1000,
@@ -196,6 +197,9 @@ export const AppConfigSchema = z.object({
         .number()
         .int()
         .default(DEFAULT_CONFIG.scraper.browserTimeoutMs),
+      htmlExtractor: z
+        .enum(["cheerio", "defuddle"])
+        .default(DEFAULT_CONFIG.scraper.htmlExtractor),
       fetcher: z
         .object({
           maxRetries: z.coerce

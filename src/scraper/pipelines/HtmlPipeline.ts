@@ -5,6 +5,7 @@ import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
+import { HtmlDefuddleMiddleware } from "../middleware/HtmlDefuddleMiddleware";
 import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
 import { HtmlMetadataExtractorMiddleware } from "../middleware/HtmlMetadataExtractorMiddleware";
 import { HtmlNormalizationMiddleware } from "../middleware/HtmlNormalizationMiddleware";
@@ -35,11 +36,16 @@ export class HtmlPipeline extends BasePipeline {
     const minChunkSize = config.splitter.minChunkSize;
 
     this.playwrightMiddleware = new HtmlPlaywrightMiddleware(config.scraper);
+    const extractor: ContentProcessorMiddleware =
+      config.scraper.htmlExtractor === "defuddle"
+        ? new HtmlDefuddleMiddleware()
+        : new HtmlSanitizerMiddleware();
+    logger.debug(`HtmlPipeline using extractor: ${config.scraper.htmlExtractor}`);
     this.standardMiddleware = [
       new HtmlCheerioParserMiddleware(),
       new HtmlMetadataExtractorMiddleware(),
       new HtmlLinkExtractorMiddleware(),
-      new HtmlSanitizerMiddleware(),
+      extractor,
       new HtmlNormalizationMiddleware(),
       new HtmlToMarkdownMiddleware(),
     ];

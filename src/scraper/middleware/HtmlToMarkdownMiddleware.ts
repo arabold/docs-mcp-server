@@ -54,11 +54,26 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
           }
         }
 
-        const brElements = Array.from(element.querySelectorAll("br"));
-        for (const br of brElements) {
+        // Clone so we don't mutate the live DOM (Turndown re-visits nodes).
+        const clone = element.cloneNode(true) as HTMLElement;
+
+        // Replace <br> with literal newlines.
+        for (const br of Array.from(clone.querySelectorAll("br"))) {
           br.replaceWith("\n");
         }
-        const text = element.textContent || "";
+
+        // Modern syntax highlighters (Shiki, Prism, highlight.js, etc.) split
+        // each line into a `<span class="line">` or `<div class="line">` with
+        // no surrounding whitespace, relying on CSS `display: block` for the
+        // visual line break. `textContent` collapses those into a single line,
+        // so we splice in newlines between line containers ourselves before
+        // reading the text.
+        const lineNodes = clone.querySelectorAll("span.line, div.line, [data-line]");
+        for (let i = 0; i < lineNodes.length - 1; i++) {
+          lineNodes[i].appendChild(clone.ownerDocument.createTextNode("\n"));
+        }
+
+        const text = clone.textContent || "";
 
         return `\n\`\`\`${language}\n${text.replace(/^\n+|\n+$/g, "")}\n\`\`\`\n`;
       },
