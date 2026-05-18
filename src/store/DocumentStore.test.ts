@@ -458,6 +458,92 @@ describe("DocumentStore - With Embeddings", () => {
         expect(result.score).toBeGreaterThan(0);
       }
     });
+
+    it("should use partition-filtered vector search for hybrid results", async () => {
+      const originalApiKey = process.env.OPENAI_API_KEY;
+      try {
+        process.env.OPENAI_API_KEY = "test-key-for-partition-search";
+        await store.shutdown();
+
+        const cfg = loadConfig();
+        const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
+          "openai:text-embedding-3-small",
+        );
+        cfg.app.embeddingModel = embeddingConfig.modelSpec;
+        store = new DocumentStore(":memory:", cfg);
+        await store.initialize();
+
+        await store.addDocuments(
+          "searchtest",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "JavaScript Programming Guide",
+            "https://example.com/js-guide",
+            "JavaScript programming tutorial with code examples and functions",
+            ["programming", "javascript"],
+          ),
+        );
+        await store.addDocuments(
+          "searchtest",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "JavaScript Frameworks",
+            "https://example.com/js-frameworks",
+            "Advanced JavaScript frameworks like React and Vue for building applications",
+            ["programming", "javascript", "frameworks"],
+          ),
+        );
+
+        // @ts-expect-error Accessing private property for testing
+        const db = store.db;
+        const ddl = db
+          .prepare(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+          )
+          .get() as { sql: string };
+        expect(ddl.sql).toContain("library_id INTEGER partition key");
+        expect(ddl.sql).toContain("version_id INTEGER partition key");
+
+        const results = await store.findByContent(
+          "searchtest",
+          "1.0.0",
+          "application building",
+          10,
+        );
+        // @ts-expect-error Accessing private property for testing
+        const vector = await store.embeddings.embedQuery("application building");
+
+        expect(results.length).toBeGreaterThan(0);
+
+        const vectorResults = db
+          .prepare(`
+            SELECT dv.rowid, dv.distance
+            FROM documents_vec dv
+            WHERE dv.library_id = (
+              SELECT id FROM libraries WHERE name = ?
+            )
+              AND dv.version_id = (
+                SELECT v.id
+                FROM versions v
+                JOIN libraries l ON v.library_id = l.id
+                WHERE l.name = ? AND v.name = ?
+              )
+              AND dv.embedding MATCH ?
+              AND dv.k = ?
+            ORDER BY dv.distance
+          `)
+          .all("searchtest", "searchtest", "1.0.0", JSON.stringify(vector), 10);
+        expect(vectorResults.length).toBeGreaterThan(0);
+      } finally {
+        if (originalApiKey === undefined) {
+          delete process.env.OPENAI_API_KEY;
+        } else {
+          process.env.OPENAI_API_KEY = originalApiKey;
+        }
+      }
+    });
   });
 
   describe("Embedding Batch Processing", () => {
@@ -1777,6 +1863,8 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
         )
         .get() as { sql: string };
       expect(ddl.sql).toContain("768");
+      expect(ddl.sql).toContain("library_id INTEGER partition key");
+      expect(ddl.sql).toContain("version_id INTEGER partition key");
     });
 
     it("should update metadata with new model and dimension", async () => {
@@ -1804,6 +1892,8 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
         .get() as { sql: string };
       expect(ddl).toBeDefined();
       expect(ddl.sql).toContain("1536");
+      expect(ddl.sql).toContain("library_id INTEGER partition key");
+      expect(ddl.sql).toContain("version_id INTEGER partition key");
 
       // Table should be empty (no backfill)
       // @ts-expect-error Accessing private property for testing
@@ -1843,6 +1933,83 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
         .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
         .get() as { cnt: number };
       expect(vecAfter.cnt).toBe(vecBefore.cnt);
+    });
+
+    it("should rebuild old metadata-column vec table and backfill stored embeddings", async () => {
+      store = await createStore("");
+
+      // @ts-expect-error Accessing private property for testing
+      const db = store.db;
+      db.prepare("INSERT INTO libraries (name) VALUES (?)").run("legacyvec");
+      const { id: libraryId } = db
+        .prepare("SELECT id FROM libraries WHERE name = ?")
+        .get("legacyvec") as { id: number };
+      db.prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)").run(
+        libraryId,
+        "1.0.0",
+      );
+      const { id: versionId } = db
+        .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
+        .get(libraryId, "1.0.0") as { id: number };
+      const pageId = db
+        .prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)")
+        .run(versionId, "https://example.com/legacy", "Legacy Vec").lastInsertRowid;
+      const vector = new Array(1536).fill(0).map((_, index) => (index === 0 ? 1 : 0));
+      const docId = db
+        .prepare(
+          "INSERT INTO documents (page_id, content, metadata, sort_order, embedding) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          pageId,
+          "legacy vector content",
+          JSON.stringify({ path: ["legacy"] }),
+          0,
+          JSON.stringify(vector),
+        ).lastInsertRowid;
+
+      db.exec(`
+        DROP TABLE documents_vec;
+        CREATE VIRTUAL TABLE documents_vec USING vec0(
+          library_id INTEGER NOT NULL,
+          version_id INTEGER NOT NULL,
+          embedding FLOAT[1536]
+        );
+      `);
+      db.prepare(
+        "INSERT INTO documents_vec (rowid, library_id, version_id, embedding) VALUES (?, ?, ?, ?)",
+      ).run(BigInt(docId), BigInt(libraryId), BigInt(versionId), JSON.stringify(vector));
+
+      // @ts-expect-error Accessing private method for testing
+      store.ensureVectorTable();
+
+      const ddl = db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("library_id INTEGER partition key");
+      expect(ddl.sql).toContain("version_id INTEGER partition key");
+
+      const vectorRows = db
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
+        .get(docId) as { cnt: number };
+      expect(vectorRows.cnt).toBe(1);
+
+      const result = db
+        .prepare(`
+          SELECT rowid, distance
+          FROM documents_vec
+          WHERE library_id = ?
+            AND version_id = ?
+            AND embedding MATCH ?
+            AND k = 1
+        `)
+        .get(libraryId, versionId, JSON.stringify(vector)) as
+        | { rowid: number; distance: number }
+        | undefined;
+
+      expect(result?.rowid).toBe(Number(docId));
+      expect(result?.distance).toBeCloseTo(0, 6);
     });
   });
 });

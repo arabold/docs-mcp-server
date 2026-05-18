@@ -30,7 +30,7 @@ describe("Database Migrations", () => {
     const tableNames = (tables as TableRow[]).map((t) => t.name);
     expect(tableNames).toContain("documents");
     expect(tableNames).toContain("documents_fts");
-    // documents_vec is created by migration 003 (with fixed 1536 dimension);
+    // documents_vec is created by migrations with a fixed 1536 dimension;
     // DocumentStore.ensureVectorTable() reconciles it at runtime if the configured dimension differs
     expect(tableNames).toContain("documents_vec");
     expect(tableNames).toContain("libraries");
@@ -103,14 +103,16 @@ describe("Database Migrations", () => {
       .get() as { sql: string } | undefined;
     expect(ftsTableInfo?.sql).toContain("VIRTUAL TABLE documents_fts USING fts5");
 
-    // documents_vec is created by migration 003 (with fixed 1536 dimension) and survives through all
-    // subsequent migrations. DocumentStore.ensureVectorTable() reconciles it at runtime if needed.
+    // documents_vec is created by migrations with fixed 1536 dimension and partition keys.
+    // DocumentStore.ensureVectorTable() reconciles it at runtime if needed.
     const vecTableInfo = db
       .prepare(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_vec';",
       )
       .get() as { sql: string } | undefined;
     expect(vecTableInfo).toBeDefined();
+    expect(vecTableInfo?.sql).toContain("library_id INTEGER partition key");
+    expect(vecTableInfo?.sql).toContain("version_id INTEGER partition key");
   });
 
   it("should handle vector search with empty results gracefully", () => {
@@ -160,6 +162,98 @@ describe("Database Migrations", () => {
 
     // Should return empty array, not throw an error
     expect(searchResults).toEqual([]);
+  });
+
+  it("should preserve and backfill vectors when migrating to partition keys", () => {
+    expect(() => applyMigrations(db)).not.toThrow();
+
+    const ddl = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_vec';",
+      )
+      .get() as { sql: string };
+    expect(ddl.sql).toContain("library_id INTEGER partition key");
+    expect(ddl.sql).toContain("version_id INTEGER partition key");
+
+    db.prepare("INSERT INTO libraries (name) VALUES (?)").run("partition-lib");
+    const { id: libraryId } = db
+      .prepare("SELECT id FROM libraries WHERE name = ?")
+      .get("partition-lib") as { id: number };
+    db.prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)").run(
+      libraryId,
+      "1.0.0",
+    );
+    const { id: versionId } = db
+      .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
+      .get(libraryId, "1.0.0") as { id: number };
+
+    const pageId = db
+      .prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)")
+      .run(versionId, "https://example.com/partition", "Partitioned").lastInsertRowid as
+      | number
+      | bigint;
+    const vector = new Array(1536).fill(0).map((_, index) => (index === 0 ? 1 : 0));
+    const docId = db
+      .prepare(
+        "INSERT INTO documents (page_id, content, metadata, sort_order, embedding) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        pageId,
+        "Partitioned vector content",
+        JSON.stringify({ path: "/partition" }),
+        0,
+        JSON.stringify(vector),
+      ).lastInsertRowid as number | bigint;
+
+    db.exec(`
+      CREATE TEMPORARY TABLE temp_existing_vectors AS
+      SELECT rowid, library_id, version_id, embedding FROM documents_vec;
+      DROP TABLE documents_vec;
+      CREATE VIRTUAL TABLE documents_vec USING vec0(
+        library_id INTEGER NOT NULL,
+        version_id INTEGER NOT NULL,
+        embedding FLOAT[1536]
+      );
+      INSERT INTO documents_vec (rowid, library_id, version_id, embedding)
+      SELECT rowid, library_id, version_id, embedding FROM temp_existing_vectors;
+      DROP TABLE temp_existing_vectors;
+      DELETE FROM documents_vec;
+    `);
+
+    db.prepare("DELETE FROM _schema_migrations WHERE id = ?").run(
+      "014-rebuild-vector-partition-keys.sql",
+    );
+
+    expect(() => applyMigrations(db)).not.toThrow();
+
+    const migratedDdl = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_vec';",
+      )
+      .get() as { sql: string };
+    expect(migratedDdl.sql).toContain("library_id INTEGER partition key");
+    expect(migratedDdl.sql).toContain("version_id INTEGER partition key");
+
+    const vectorRows = db
+      .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
+      .get(docId) as { cnt: number };
+    expect(vectorRows.cnt).toBe(1);
+
+    const result = db
+      .prepare(`
+        SELECT rowid, distance
+        FROM documents_vec
+        WHERE library_id = ?
+          AND version_id = ?
+          AND embedding MATCH ?
+          AND k = 1
+      `)
+      .get(libraryId, versionId, JSON.stringify(vector)) as
+      | { rowid: number; distance: number }
+      | undefined;
+
+    expect(result?.rowid).toBe(Number(docId));
+    expect(result?.distance).toBeCloseTo(0, 6);
   });
 
   it("should perform vector search and return similar vectors correctly", () => {

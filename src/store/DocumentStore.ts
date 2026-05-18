@@ -574,13 +574,7 @@ export class DocumentStore {
 
     // Drop and recreate vec table as empty with the new dimension
     this.db.exec("DROP TABLE IF EXISTS documents_vec");
-    this.db.exec(`
-      CREATE VIRTUAL TABLE documents_vec USING vec0(
-        library_id INTEGER NOT NULL,
-        version_id INTEGER NOT NULL,
-        embedding FLOAT[${newDimension}]
-      );
-    `);
+    this.createVectorTable(newDimension);
 
     // Update metadata to reflect the new configuration
     this.setEmbeddingMetadata(newModel, newDimension);
@@ -901,14 +895,15 @@ export class DocumentStore {
   /**
    * Creates or reconciles the documents_vec virtual table with configurable dimension.
    * Called after migrations and model change detection. The table is initially created
-   * by migration 003 with a fixed 1536 dimension; this method reconciles it at runtime
-   * if the configured dimension differs.
-   * Idempotent: if the table already exists with the same dimension, no-op; if dimension
-   * changed in config, drops and recreates so any embedding provider (e.g. 1536 or 3584) works.
+   * by migrations with a fixed 1536 dimension; this method reconciles it at runtime
+   * if the configured dimension or partition-key schema differs.
+   * Idempotent: if the table already has the expected dimension and partition keys,
+   * no-op; otherwise, drops and recreates so any embedding provider works and KNN
+   * queries can use selective partition filters.
    *
-   * Note: No backfill of existing embeddings is performed. Vectors are populated during
-   * scraping, not at startup. Old vectors from a different dimension or model are incompatible
-   * and are handled by the model change detection system (checkEmbeddingModelChange).
+   * Compatible existing vectors are preserved, and missing rows are backfilled from
+   * documents.embedding when available. Old vectors from a different dimension or model
+   * are handled by the model change detection system (checkEmbeddingModelChange).
    */
   private ensureVectorTable(): void {
     const dim = this.config.embeddings.vectorDimension;
@@ -927,19 +922,94 @@ export class DocumentStore {
     if (existingSql) {
       const match = existingSql.sql.match(/embedding\s+FLOAT\s*\[\s*(\d+)\s*]/i);
       const existingDim = match ? Number(match[1]) : null;
-      if (existingDim === dim) {
+      if (existingDim === dim && this.hasVectorPartitionKeys(existingSql.sql)) {
         return;
       }
-      this.db.exec("DROP TABLE documents_vec;");
     }
 
+    logger.info(
+      existingSql
+        ? "🔄 Rebuilding vector index with partition-key schema"
+        : "🔄 Creating vector index with partition-key schema",
+    );
+    this.rebuildVectorTable(dim, Boolean(existingSql));
+  }
+
+  private hasVectorPartitionKeys(sql: string): boolean {
+    return (
+      /library_id\s+INTEGER\s+partition\s+key/i.test(sql) &&
+      /version_id\s+INTEGER\s+partition\s+key/i.test(sql)
+    );
+  }
+
+  private createVectorTable(dimension: number): void {
     this.db.exec(`
       CREATE VIRTUAL TABLE documents_vec USING vec0(
-        library_id INTEGER NOT NULL,
-        version_id INTEGER NOT NULL,
-        embedding FLOAT[${dim}]
+        library_id INTEGER partition key,
+        version_id INTEGER partition key,
+        embedding FLOAT[${dimension}]
       );
     `);
+  }
+
+  private backfillVectorTable(dimension: number): void {
+    this.db
+      .prepare<[number]>(`
+        INSERT OR REPLACE INTO documents_vec (rowid, library_id, version_id, embedding)
+        SELECT
+          d.id,
+          v.library_id,
+          v.id,
+          json_extract(d.embedding, '$')
+        FROM documents d
+        JOIN pages p ON d.page_id = p.id
+        JOIN versions v ON p.version_id = v.id
+        WHERE d.embedding IS NOT NULL
+          AND vec_length(json_extract(d.embedding, '$')) = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM documents_vec existing WHERE existing.rowid = d.id
+          )
+      `)
+      .run(dimension);
+  }
+
+  private rebuildVectorTable(dimension: number, preserveExisting: boolean): void {
+    const transaction = this.db.transaction(() => {
+      this.db.exec("DROP TABLE IF EXISTS temp_documents_vec_migration");
+
+      if (preserveExisting) {
+        this.db
+          .prepare<[number]>(`
+            CREATE TEMPORARY TABLE temp_documents_vec_migration AS
+            SELECT rowid, library_id, version_id, embedding
+            FROM documents_vec
+            WHERE vec_length(embedding) = ?
+          `)
+          .run(dimension);
+        this.db.exec("DROP TABLE documents_vec");
+      } else {
+        this.db.exec(`
+          CREATE TEMPORARY TABLE temp_documents_vec_migration(
+            rowid INTEGER PRIMARY KEY,
+            library_id INTEGER NOT NULL,
+            version_id INTEGER NOT NULL,
+            embedding BLOB NOT NULL
+          )
+        `);
+      }
+
+      this.createVectorTable(dimension);
+
+      this.db.exec(`
+        INSERT OR REPLACE INTO documents_vec (rowid, library_id, version_id, embedding)
+        SELECT rowid, library_id, version_id, embedding
+        FROM temp_documents_vec_migration
+      `);
+      this.backfillVectorTable(dimension);
+      this.db.exec("DROP TABLE temp_documents_vec_migration");
+    });
+
+    transaction();
   }
 
   /**
@@ -1798,7 +1868,7 @@ export class DocumentStore {
         return [];
       }
 
-      const { id: versionId } = versionRow;
+      const { id: versionId, library_id: libraryId } = versionRow;
 
       if (this.isVectorSearchEnabled) {
         // Hybrid search: vector + full-text search with RRF ranking
@@ -1812,17 +1882,13 @@ export class DocumentStore {
         const vectorSearchK = overfetchLimit * this.vectorSearchMultiplier;
 
         const stmt = this.db.prepare(`
-          WITH vec_distances AS (
+          WITH vec_distances AS NOT MATERIALIZED (
             SELECT
               dv.rowid as id,
               dv.distance as vec_distance
             FROM documents_vec dv
-            JOIN documents d ON dv.rowid = d.id
-            JOIN pages p ON d.page_id = p.id
-            JOIN versions v ON p.version_id = v.id
-            JOIN libraries l ON v.library_id = l.id
-            WHERE l.name = ?
-              AND COALESCE(v.name, '') = COALESCE(?, '')
+            WHERE dv.library_id = ?
+              AND dv.version_id = ?
               AND dv.embedding MATCH ?
               AND dv.k = ?
             ORDER BY dv.distance
@@ -1861,8 +1927,8 @@ export class DocumentStore {
         `);
 
         const rawResults = stmt.all(
-          library.toLowerCase(),
-          normalizedVersion,
+          libraryId,
+          versionId,
           JSON.stringify(embedding),
           vectorSearchK,
           versionId,
