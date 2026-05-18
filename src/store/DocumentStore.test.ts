@@ -1935,7 +1935,7 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       expect(vecAfter.cnt).toBe(vecBefore.cnt);
     });
 
-    it("should rebuild old metadata-column vec table and backfill stored embeddings", async () => {
+    it("should rebuild old metadata-column vec table with current partition keys", async () => {
       store = await createStore("");
 
       // @ts-expect-error Accessing private property for testing
@@ -1951,20 +1951,26 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       const { id: versionId } = db
         .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
         .get(libraryId, "1.0.0") as { id: number };
+      db.prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)").run(
+        libraryId,
+        "2.0.0",
+      );
+      const { id: staleVersionId } = db
+        .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
+        .get(libraryId, "2.0.0") as { id: number };
       const pageId = db
         .prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)")
         .run(versionId, "https://example.com/legacy", "Legacy Vec").lastInsertRowid;
       const vector = new Array(1536).fill(0).map((_, index) => (index === 0 ? 1 : 0));
       const docId = db
         .prepare(
-          "INSERT INTO documents (page_id, content, metadata, sort_order, embedding) VALUES (?, ?, ?, ?, ?)",
+          "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, ?, ?, ?)",
         )
         .run(
           pageId,
           "legacy vector content",
           JSON.stringify({ path: ["legacy"] }),
           0,
-          JSON.stringify(vector),
         ).lastInsertRowid;
 
       db.exec(`
@@ -1977,7 +1983,12 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       `);
       db.prepare(
         "INSERT INTO documents_vec (rowid, library_id, version_id, embedding) VALUES (?, ?, ?, ?)",
-      ).run(BigInt(docId), BigInt(libraryId), BigInt(versionId), JSON.stringify(vector));
+      ).run(
+        BigInt(docId),
+        BigInt(libraryId),
+        BigInt(staleVersionId),
+        JSON.stringify(vector),
+      );
 
       // @ts-expect-error Accessing private method for testing
       store.ensureVectorTable();
@@ -1994,6 +2005,11 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
         .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
         .get(docId) as { cnt: number };
       expect(vectorRows.cnt).toBe(1);
+      const partitionKeys = db
+        .prepare("SELECT library_id, version_id FROM documents_vec WHERE rowid = ?")
+        .get(docId) as { library_id: number; version_id: number };
+      expect(partitionKeys.library_id).toBe(libraryId);
+      expect(partitionKeys.version_id).toBe(versionId);
 
       const result = db
         .prepare(`

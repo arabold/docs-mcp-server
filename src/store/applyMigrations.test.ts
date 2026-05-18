@@ -164,8 +164,8 @@ describe("Database Migrations", () => {
     expect(searchResults).toEqual([]);
   });
 
-  it("should preserve and backfill vectors when migrating to partition keys", () => {
-    expect(() => applyMigrations(db)).not.toThrow();
+  it("should preserve and backfill vectors when migrating to partition keys", async () => {
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     const ddl = db
       .prepare(
@@ -192,21 +192,32 @@ describe("Database Migrations", () => {
       .run(versionId, "https://example.com/partition", "Partitioned").lastInsertRowid as
       | number
       | bigint;
-    const vector = new Array(1536).fill(0).map((_, index) => (index === 0 ? 1 : 0));
-    const docId = db
+    const preservedVector = new Array(1536)
+      .fill(0)
+      .map((_, index) => (index === 0 ? 1 : 0));
+    const backfillVector = new Array(1536)
+      .fill(0)
+      .map((_, index) => (index === 1 ? 1 : 0));
+    const preservedDocId = db
+      .prepare(
+        "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, ?, ?, ?)",
+      )
+      .run(pageId, "Preserved vector content", JSON.stringify({ path: "/partition" }), 0)
+      .lastInsertRowid as number | bigint;
+    const backfilledDocId = db
       .prepare(
         "INSERT INTO documents (page_id, content, metadata, sort_order, embedding) VALUES (?, ?, ?, ?, ?)",
       )
       .run(
         pageId,
-        "Partitioned vector content",
+        "Backfilled vector content",
         JSON.stringify({ path: "/partition" }),
-        0,
-        JSON.stringify(vector),
+        1,
+        JSON.stringify(backfillVector),
       ).lastInsertRowid as number | bigint;
 
     db.exec(`
-      CREATE TEMPORARY TABLE temp_existing_vectors AS
+      CREATE TABLE _test_existing_vectors AS
       SELECT rowid, library_id, version_id, embedding FROM documents_vec;
       DROP TABLE documents_vec;
       CREATE VIRTUAL TABLE documents_vec USING vec0(
@@ -215,16 +226,24 @@ describe("Database Migrations", () => {
         embedding FLOAT[1536]
       );
       INSERT INTO documents_vec (rowid, library_id, version_id, embedding)
-      SELECT rowid, library_id, version_id, embedding FROM temp_existing_vectors;
-      DROP TABLE temp_existing_vectors;
+      SELECT rowid, library_id, version_id, embedding FROM _test_existing_vectors;
+      DROP TABLE _test_existing_vectors;
       DELETE FROM documents_vec;
     `);
+    db.prepare(
+      "INSERT INTO documents_vec (rowid, library_id, version_id, embedding) VALUES (?, ?, ?, ?)",
+    ).run(
+      BigInt(preservedDocId),
+      BigInt(libraryId),
+      BigInt(versionId),
+      JSON.stringify(preservedVector),
+    );
 
     db.prepare("DELETE FROM _schema_migrations WHERE id = ?").run(
       "014-rebuild-vector-partition-keys.sql",
     );
 
-    expect(() => applyMigrations(db)).not.toThrow();
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     const migratedDdl = db
       .prepare(
@@ -236,8 +255,13 @@ describe("Database Migrations", () => {
 
     const vectorRows = db
       .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
-      .get(docId) as { cnt: number };
+      .get(preservedDocId) as { cnt: number };
     expect(vectorRows.cnt).toBe(1);
+
+    const backfilledVectorRows = db
+      .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
+      .get(backfilledDocId) as { cnt: number };
+    expect(backfilledVectorRows.cnt).toBe(1);
 
     const result = db
       .prepare(`
@@ -248,11 +272,11 @@ describe("Database Migrations", () => {
           AND embedding MATCH ?
           AND k = 1
       `)
-      .get(libraryId, versionId, JSON.stringify(vector)) as
+      .get(libraryId, versionId, JSON.stringify(preservedVector)) as
       | { rowid: number; distance: number }
       | undefined;
 
-    expect(result?.rowid).toBe(Number(docId));
+    expect(result?.rowid).toBe(Number(preservedDocId));
     expect(result?.distance).toBeCloseTo(0, 6);
   });
 

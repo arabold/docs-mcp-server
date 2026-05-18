@@ -975,21 +975,28 @@ export class DocumentStore {
 
   private rebuildVectorTable(dimension: number, preserveExisting: boolean): void {
     const transaction = this.db.transaction(() => {
-      this.db.exec("DROP TABLE IF EXISTS temp_documents_vec_migration");
+      this.db.exec("DROP TABLE IF EXISTS _documents_vec_migration");
 
       if (preserveExisting) {
         this.db
           .prepare<[number]>(`
-            CREATE TEMPORARY TABLE temp_documents_vec_migration AS
-            SELECT rowid, library_id, version_id, embedding
-            FROM documents_vec
-            WHERE vec_length(embedding) = ?
+            CREATE TABLE _documents_vec_migration AS
+            SELECT
+              d.id AS rowid,
+              v.library_id,
+              v.id AS version_id,
+              dv.embedding
+            FROM documents_vec dv
+            JOIN documents d ON dv.rowid = d.id
+            JOIN pages p ON d.page_id = p.id
+            JOIN versions v ON p.version_id = v.id
+            WHERE vec_length(dv.embedding) = ?
           `)
           .run(dimension);
         this.db.exec("DROP TABLE documents_vec");
       } else {
         this.db.exec(`
-          CREATE TEMPORARY TABLE temp_documents_vec_migration(
+          CREATE TABLE _documents_vec_migration(
             rowid INTEGER PRIMARY KEY,
             library_id INTEGER NOT NULL,
             version_id INTEGER NOT NULL,
@@ -1003,10 +1010,10 @@ export class DocumentStore {
       this.db.exec(`
         INSERT OR REPLACE INTO documents_vec (rowid, library_id, version_id, embedding)
         SELECT rowid, library_id, version_id, embedding
-        FROM temp_documents_vec_migration
+        FROM _documents_vec_migration
       `);
       this.backfillVectorTable(dimension);
-      this.db.exec("DROP TABLE temp_documents_vec_migration");
+      this.db.exec("DROP TABLE _documents_vec_migration");
     });
 
     transaction();
