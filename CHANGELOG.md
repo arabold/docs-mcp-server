@@ -1,3 +1,35 @@
+# [2.4.0](https://github.com/arabold/docs-mcp-server/compare/v2.3.0...v2.4.0) (2026-05-19)
+
+
+### Bug Fixes
+
+* **eval:** address copilot review on provider normalisation ([d5ebb40](https://github.com/arabold/docs-mcp-server/commit/d5ebb40b8410478a5a55aeb70b386d378fb83c92))
+* **eval:** address PR review feedback on search-quality benchmark ([18533f3](https://github.com/arabold/docs-mcp-server/commit/18533f35ed53e13d250061dcf0f8ad7209689176))
+* **eval:** work around bash truncation and normalise URL forms ([09684ce](https://github.com/arabold/docs-mcp-server/commit/09684ce12196c63b133186b20ba0ca1ec4621ad3))
+* **scraper:** address Copilot review on Defuddle middleware ([231cbe2](https://github.com/arabold/docs-mcp-server/commit/231cbe238af0ddbeec1a0f0b5ee54bc85ad98e50))
+* **scraper:** continue from llms seeds on root not found ([7ac577a](https://github.com/arabold/docs-mcp-server/commit/7ac577ab7ea9e3c7c9ad55970c335a9427943a15))
+* **scraper:** keep redirect scope anchored to start path ([a9fbca0](https://github.com/arabold/docs-mcp-server/commit/a9fbca06c644fc4f27055741d8023232695f95b6))
+* **scraper:** scope Carbon link rule to srv. host, add Yahoo tracker pixel ([d35fc3e](https://github.com/arabold/docs-mcp-server/commit/d35fc3e21fa6d184c7ef8a0d90bbfd8ad360ad83))
+* **scraper:** skip speculative playwright prefetches ([1e65812](https://github.com/arabold/docs-mcp-server/commit/1e6581231e28bec7f7510dedac04d8fae37b147c))
+* **scraper:** strip ad networks, search widgets, breadcrumbs, and skip-links ([4898ce9](https://github.com/arabold/docs-mcp-server/commit/4898ce96299e98fdd821fc8d33b2c319315adfd1)), closes [#420](https://github.com/arabold/docs-mcp-server/issues/420)
+* **scraper:** tighten llms markdown handling ([1e88418](https://github.com/arabold/docs-mcp-server/commit/1e884180ba636c46836a2eeeb5171786a20ea3fe))
+* **splitter:** preserve code fence balance across chunk boundaries ([06c7f08](https://github.com/arabold/docs-mcp-server/commit/06c7f083f958054d2440bd674ddf33f570dfdb0a)), closes [#418](https://github.com/arabold/docs-mcp-server/issues/418)
+* **splitter:** preserve fenced code-block info strings verbatim ([a5445bb](https://github.com/arabold/docs-mcp-server/commit/a5445bb1a6fa83fff2c4528c68487fbfddac27e2))
+* **store:** harden vector search test isolation ([0dc51a6](https://github.com/arabold/docs-mcp-server/commit/0dc51a61ff19a40c5f47a34031d6e2375abc482e))
+
+
+### Features
+
+* **eval:** add Context7 provider for cross-system benchmark comparison ([4209af4](https://github.com/arabold/docs-mcp-server/commit/4209af442d1bc94c4a4098dce1b23fe13a1c23c7))
+* **eval:** introduce IR-grounded search-quality benchmark ([6755d08](https://github.com/arabold/docs-mcp-server/commit/6755d08adb6d43a444bd2803d34374869f86612b))
+* **scraper:** add Defuddle as opt-in HTML extractor ([#386](https://github.com/arabold/docs-mcp-server/issues/386)) ([5a89f84](https://github.com/arabold/docs-mcp-server/commit/5a89f84cdfc7302401bd30f6d08a5bf049eb4776))
+* **scraper:** discover llms txt and prefer markdown ([4230917](https://github.com/arabold/docs-mcp-server/commit/42309174fca142d513f326453b2ca568ff7da1e5))
+
+
+### Performance Improvements
+
+* **scraper:** lazy-load Defuddle so default cheerio path is free ([729526f](https://github.com/arabold/docs-mcp-server/commit/729526fdf65c0000ccda966914e48ae6fc6974a8))
+
 # [2.3.0](https://github.com/arabold/docs-mcp-server/compare/v2.2.2...v2.3.0) (2026-05-17)
 
 
