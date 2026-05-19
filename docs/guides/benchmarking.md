@@ -341,25 +341,25 @@ across the table.
 | Metric                       | Pre-fix `main` ¹ | Cheerio + fence/info fixes ² | Defuddle ³ | Context7 (external) ⁴ |
 |------------------------------|------------------|------------------------------|------------|-----------------------|
 | **Structural** (deterministic)                                                                                  |
-| code_block_balance           | 0.746            | **1.000**                    | _TBD_      | 1.000                 |
-| non_empty_content            | 1.000            | 1.000                        | _TBD_      | 1.000                 |
-| url_presence                 | 1.000            | 1.000                        | _TBD_      | 1.000                 |
+| code_block_balance           | 0.746            | **1.000**                    | 0.983      | 1.000                 |
+| non_empty_content            | 1.000            | 1.000                        | 1.000      | 1.000                 |
+| url_presence                 | 1.000            | 1.000                        | 1.000      | 1.000                 |
 | **Headline IR** (deterministic)                                                                                 |
-| MRR                          | 0.756            | 0.747                        | _TBD_      | 0.733                 |
-| Recall@3                     | 0.650            | 0.647                        | _TBD_      | 0.709                 |
-| Recall@5                     | 0.723            | 0.732                        | _TBD_      | 0.726                 |
-| nDCG@5                       | 0.695            | 0.699                        | _TBD_      | 0.704                 |
-| Hit@3                        | 0.847            | 0.831                        | _TBD_      | 0.831                 |
-| Hit@5                        | 0.898            | 0.881                        | _TBD_      | 0.847                 |
+| MRR                          | 0.756            | **0.747**                    | 0.718      | 0.733                 |
+| Recall@3                     | 0.650            | 0.647                        | 0.621      | 0.709                 |
+| Recall@5                     | 0.723            | **0.732**                    | 0.689      | 0.726                 |
+| nDCG@5                       | 0.695            | **0.699**                    | 0.665      | 0.704                 |
+| Hit@3                        | 0.847            | 0.831                        | 0.780      | 0.831                 |
+| Hit@5                        | 0.898            | **0.881**                    | 0.814      | 0.847                 |
 | **Per-intent MRR**                                                                                              |
-| api-lookup (n=18)            | 0.852            | 0.861                        | _TBD_      | 0.824                 |
-| conceptual (n=15)            | 0.839            | 0.794                        | _TBD_      | 0.767                 |
-| comparison (n=12)            | 0.646            | 0.646                        | _TBD_      | 0.563                 |
-| troubleshooting (n=14)       | 0.637            | 0.637                        | _TBD_      | 0.726                 |
+| api-lookup (n=18)            | 0.852            | **0.861**                    | 0.806      | 0.824                 |
+| conceptual (n=15)            | 0.839            | 0.794                        | 0.806      | 0.767                 |
+| comparison (n=12)            | 0.646            | 0.646                        | **0.736**  | 0.563                 |
+| troubleshooting (n=14)       | 0.637            | 0.637                        | 0.494      | **0.726**             |
 | **LLM-judged** (observational, not gating)                                                                      |
-| chunk_coherence              | 3.56             | 3.53                         | _TBD_      | 4.80                  |
-| content_faithfulness         | 3.17             | 3.20                         | _TBD_      | 4.24                  |
-| answerability                | 4.47             | 4.49                         | _TBD_      | 4.49                  |
+| chunk_coherence              | 3.56             | 3.53                         | 3.39       | **4.80**              |
+| content_faithfulness         | 3.17             | 3.20                         | 3.19       | **4.24**              |
+| answerability                | 4.47             | 4.49                         | 4.49       | 4.49                  |
 
 ¹ Snapshot from [`tests/search-eval/baseline.json`](../../tests/search-eval/baseline.json)
   taken on 2026-05-18, against `main` before the fence-balance and info-string
@@ -374,9 +374,19 @@ across the table.
   reflected in the store. `code_block_balance` reaches 100%; headline IR
   metrics move within ±2% relative (well under the 5% regression tolerance).
 
-³ Defuddle extractor selected via `DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle`.
-  Requires re-scraping every library through Defuddle before measuring —
-  see [Comparing HTML extractors](#comparing-html-extractors-cheerio-vs-defuddle).
+³ Defuddle extractor selected via `DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle`,
+  all five libraries re-scraped through Defuddle on 2026-05-18 (1,155 indexed
+  pages total). On this dataset Defuddle is a clear **regression** against the
+  Cheerio + fence/info baseline: headline IR metrics drop 4–6% relative, and
+  `troubleshooting`-intent queries are hit hardest (MRR -22%, nDCG@5 -22%,
+  Hit@3 -20%). `comparison`-intent queries improve (MRR +14%) — Defuddle's
+  main-content pruning helps when the relevant content is the article body.
+  Structural `code_block_balance` slips slightly to 98.3% as Defuddle
+  occasionally collapses VitePress info-string sequences differently than the
+  hand-curated Cheerio sanitiser does. **Recommendation:** keep `cheerio` as
+  the default; Defuddle is worth revisiting per-site when the content is
+  primarily article-shaped and the side-content is noise. See
+  [Comparing HTML extractors](#comparing-html-extractors-cheerio-vs-defuddle).
 
 ⁴ External retrieval service [Context7](https://context7.com) measured via the
   alternate provider in
