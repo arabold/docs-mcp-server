@@ -14,6 +14,7 @@ The root cause sits inside `TextContentSplitter`: when `ListContentSplitter` fal
 - `ListContentSplitter`'s oversized-item fallback path picks up the new behaviour automatically; no change to its own logic is required.
 - `TableContentSplitter` is **unchanged**: it splits on `|`-delimited rows and does not call `TextContentSplitter` mid-cell, so the invariant already holds for normal tables. A characterisation test locks in current behaviour for the unusual case of fenced content inside a cell.
 - `SemanticMarkdownSplitter`'s section-detection is **unchanged**: code nested inside lists, blockquotes, definition lists, `<details>`, or generic wrappers continues to flow through the list or text splitter — but now safely.
+- `CodeContentSplitter` now **preserves the CommonMark info string verbatim**. The previous `\w+` language-extraction regex matched only word characters and fell apart on VitePress/Shiki info strings like `js{15-18} twoslash [server.js]`, leaving the original opener in place and producing a double-wrapped fence (the outer empty-language opener wrapping the still-intact inner opener). The fix captures everything between the fence delimiters and the following newline as a single info string, re-emits it verbatim on every chunk's rewritten opener, and stores the chunk as a faithful copy of the source. Line-highlight ranges, Twoslash hints and filename tabs all survive chunking.
 
 The fence-balance invariant takes precedence over the size invariant in the unavoidable case (a single nested code block on its own exceeds `maxChunkSize`). That outcome is documented as the explicit trade-off; the alternative — synthetic close/reopen fences spliced into stored chunks — was rejected as visible pollution of search output.
 
@@ -21,11 +22,11 @@ The fence-balance invariant takes precedence over the size invariant in the unav
 
 ### Modified Capabilities
 
-- `markdown-features`: adds the **Preserve code fence balance across chunk boundaries** requirement and amends **Support list chunking** to reference it. The fence-balance invariant is now a contractual property of every chunk the splitter emits, not just an emergent property of section detection.
+- `markdown-features`: adds the **Preserve code fence balance across chunk boundaries** and **Preserve fenced code-block info strings verbatim** requirements and amends **Support list chunking** to reference the fence-balance invariant. Fence balance and verbatim info-string preservation are now contractual properties of every chunk the splitter emits.
 
 ## Impact
 
-- **Code**: primary change in `src/splitter/splitters/TextContentSplitter.ts`; new helper `src/splitter/splitters/fenceState.ts`. Test additions in `TextContentSplitter.test.ts`, `ListContentSplitter.test.ts`, `SemanticMarkdownSplitter.test.ts`. No public API or configuration change.
+- **Code**: primary change in `src/splitter/splitters/TextContentSplitter.ts`; new helper `src/splitter/splitters/fenceState.ts`; info-string regex fix in `src/splitter/splitters/CodeContentSplitter.ts`. Test additions in `TextContentSplitter.test.ts`, `ListContentSplitter.test.ts`, `SemanticMarkdownSplitter.test.ts`, `CodeContentSplitter.test.ts`. No public API or configuration change.
 - **Behaviour**: in the rare case where a single nested code block on its own exceeds `maxChunkSize`, the produced chunk also exceeds `maxChunkSize`. The existing oversize-chunk warning fires. This is the trade-off accepted in this change.
 - **Benchmark**: `code_block_balance` is expected to return to 100% on the current dataset and the regression check then gates against future regressions. No baseline refresh expected — only the structural pass-rate moves.
 - **Docs**: one-sentence update to `ARCHITECTURE.md` in the splitter section to record the invariant. No `README.md` change.

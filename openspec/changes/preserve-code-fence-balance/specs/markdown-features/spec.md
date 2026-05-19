@@ -45,6 +45,33 @@ The invariant applies to both backtick (` ``` `) and tilde (`~~~`) fences, and t
 - **AND** the chunk exceeds `maxChunkSize`
 - **AND** a warning is logged identifying the originating splitter and the chunk size
 
+### Requirement: Preserve fenced code-block info strings verbatim
+
+When the splitter re-emits a fenced code block — whether it is small enough to pass through as a single chunk or large enough to be split across multiple chunks — the rewritten opener MUST carry the original CommonMark info string verbatim. The info string is everything between the opening fence delimiters (` ``` ` or `~~~`) and the following newline.
+
+The splitter MUST NOT reduce the info string to a single language token, strip renderer-specific decorations (such as line-highlight ranges like `{15-18}`, Twoslash hints like ` twoslash `, or filename tabs like `[server.js]`), or otherwise rewrite the source-author's intent. The chunk is a faithful copy of the source.
+
+This requirement complements the fence-balance invariant above: an info string containing non-word characters (curly braces, square brackets, whitespace) MUST NOT cause the splitter to fall back to a double-wrapped fence or any other malformed shape.
+
+#### Scenario: VitePress / Shiki line-highlight info string survives chunking
+
+- **GIVEN** a fenced code block opened with `` ```js{15-18} twoslash [server.js] ``
+- **WHEN** the splitter emits one or more chunks for that block
+- **THEN** every chunk's opening fence is `` ```js{15-18} twoslash [server.js] ``
+- **AND** every chunk has balanced fences
+
+#### Scenario: Plain language info string is preserved unchanged
+
+- **GIVEN** a fenced code block opened with `` ```typescript ``
+- **WHEN** the splitter emits chunks for that block
+- **THEN** every chunk's opening fence is `` ```typescript ``
+
+#### Scenario: Empty info string is preserved
+
+- **GIVEN** a fenced code block opened with `` ``` `` (no language tag)
+- **WHEN** the splitter emits chunks for that block
+- **THEN** every chunk's opening fence is `` ``` ``
+
 ## MODIFIED Requirements
 
 ### Requirement: Support list chunking
