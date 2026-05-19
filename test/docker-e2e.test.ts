@@ -18,6 +18,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
+// @ts-expect-error -- @types/archiver@7 lags behind archiver@8's named ESM exports.
+import { ZipArchive } from "archiver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const DOCKER_AVAILABLE = (() => {
@@ -30,12 +33,41 @@ const DOCKER_AVAILABLE = (() => {
 const PREBUILT_TAG = process.env.DOCKER_IMAGE_TAG;
 const IMAGE_TAG = PREBUILT_TAG ?? "docs-mcp-server:e2e-test";
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
+const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
 
 function docker(args: string[], opts: { timeout?: number } = {}) {
   return spawnSync("docker", args, {
     encoding: "utf8",
     timeout: opts.timeout,
   });
+}
+
+async function createZipFixture(zipPath: string): Promise<void> {
+  const output = fs.createWriteStream(zipPath);
+  const archive = new ZipArchive({ zlib: { level: 9 } });
+
+  await new Promise<void>((resolve, reject) => {
+    output.on("close", resolve);
+    archive.on("error", reject);
+    archive.pipe(output);
+    archive.append("archive note from mounted docs", { name: "archive-note.txt" });
+    archive.append("# Archive Guide\n\nNested archive content", {
+      name: "nested/guide.md",
+    });
+    archive.finalize();
+  });
+}
+
+function listIndexedUrls(dbPath: string): string[] {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const rows = db
+      .prepare("SELECT url FROM pages ORDER BY url")
+      .all() as { url: string }[];
+    return rows.map((row) => row.url);
+  } finally {
+    db.close();
+  }
 }
 
 describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
@@ -51,7 +83,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     if (r.status !== 0) {
       throw new Error(`docker build failed with exit code ${r.status}`);
     }
-  }, 600_000);
+  }, DOCKER_BUILD_TIMEOUT_MS);
 
   afterAll(() => {
     if (PREBUILT_TAG) return;
@@ -121,7 +153,9 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
 
   it("extracts a PDF from a mounted volume via Kreuzberg", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-pdf-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-tmp-"));
     fs.chmodSync(dataDir, 0o777);
+    fs.chmodSync(tmpDir, 0o777);
     const fixtureDir = path.join(PROJECT_ROOT, "test", "fixtures");
     try {
       const r = docker(
@@ -132,6 +166,8 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
           `${dataDir}:/data`,
           "-v",
           `${fixtureDir}:/fixtures:ro`,
+          "-v",
+          `${tmpDir}:/tmp`,
           "-e",
           "DOCS_MCP_TELEMETRY=false",
           // Permit /fixtures as a file-access root inside the container, so
@@ -158,32 +194,36 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       ).toMatch(/Successfully scraped\s+([1-9]\d*)\s+pages?/);
       const dbPath = path.join(dataDir, "documents.db");
       expect(fs.existsSync(dbPath), "documents.db should be written").toBe(true);
+      expect(listIndexedUrls(dbPath)).toContain("file:///fixtures/sample.pdf");
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 240_000);
 
-  it("recursively indexes a bind-mounted local docs folder via file:///", () => {
+  it("recursively indexes a bind-mounted local docs folder via file:///", async () => {
     // This is the actual workflow from issue #394: a user bind-mounts a host
     // directory into the container and points the scraper at the directory
     // (not a single file), expecting every supported file inside to be indexed.
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-dir-"));
     const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-docs-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-tmp-"));
     fs.chmodSync(dataDir, 0o777);
+    fs.chmodSync(tmpDir, 0o777);
     // The container reads the docs mount, so it needs to be traversable by
     // the unprivileged runtime user (uid 1000); the writable /data mount
     // above is the only place the app actually writes.
     fs.chmodSync(docsDir, 0o755);
     try {
-      // Mirror the fixture set from local-file-pdf-e2e.test.ts: one PDF
-      // (Kreuzberg path) plus a .md and a .txt (text path) so we catch both
-      // a "silent skip" regression and a permissions/access-policy regression.
+      // Mirror the common Docker workflow: a user bind-mounts a local docs
+      // folder that contains regular files, binary documents, and archives.
       fs.copyFileSync(
         path.join(PROJECT_ROOT, "test", "fixtures", "sample.pdf"),
         path.join(docsDir, "sample.pdf"),
       );
       fs.writeFileSync(path.join(docsDir, "notes.txt"), "plain text note");
       fs.writeFileSync(path.join(docsDir, "readme.md"), "# Readme\n\nbody");
+      await createZipFixture(path.join(docsDir, "archive.zip"));
 
       const r = docker(
         [
@@ -193,6 +233,8 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
           `${dataDir}:/data`,
           "-v",
           `${docsDir}:/docs:ro`,
+          "-v",
+          `${tmpDir}:/tmp`,
           "-e",
           "DOCS_MCP_TELEMETRY=false",
           "-e",
@@ -204,20 +246,37 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
           "--max-pages",
           "10",
           "--max-depth",
+          "2",
+          "--max-concurrency",
           "1",
         ],
         { timeout: 180_000 },
       );
       expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
-      // All three files must land — anything less means a silent skip slipped
-      // back in for one of the file types.
+      // All regular files and archive members must land — anything less means
+      // a silent skip slipped back in for one of the file types.
       const m = (r.stdout + r.stderr).match(/Successfully scraped\s+(\d+)\s+pages?/);
       expect(m, "expected scrape summary line in CLI output").not.toBeNull();
-      expect(Number(m?.[1] ?? 0)).toBeGreaterThanOrEqual(3);
-      expect(fs.existsSync(path.join(dataDir, "documents.db"))).toBe(true);
+      expect(Number(m?.[1] ?? 0)).toBeGreaterThanOrEqual(5);
+
+      const dbPath = path.join(dataDir, "documents.db");
+      expect(fs.existsSync(dbPath)).toBe(true);
+
+      const indexedUrls = listIndexedUrls(dbPath);
+      const formattedUrls = JSON.stringify(indexedUrls, null, 2);
+      expect(indexedUrls, formattedUrls).toContain("file:///docs/sample.pdf");
+      expect(indexedUrls, formattedUrls).toContain("file:///docs/notes.txt");
+      expect(indexedUrls, formattedUrls).toContain("file:///docs/readme.md");
+      expect(indexedUrls, formattedUrls).toContain(
+        "file:///docs/archive.zip/archive-note.txt",
+      );
+      expect(indexedUrls, formattedUrls).toContain(
+        "file:///docs/archive.zip/nested/guide.md",
+      );
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
       fs.rmSync(docsDir, { recursive: true, force: true });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 240_000);
 });
