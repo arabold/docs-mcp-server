@@ -11,11 +11,18 @@ authoritative spec see
 ```
 tests/search-eval/
   dataset.yaml             # Source-of-truth dataset (wrapped form with status/notes).
-  baseline.json            # Checked-in baseline for the main dataset.
-                           # Each dataset writes its own baseline (e.g.
-                           # dataset.smoke.yaml -> dataset.smoke.baseline.json).
+  baseline.json            # Checked-in baseline for the main dataset + local provider.
+                           # Each (dataset, provider) writes its own baseline (e.g.
+                           # dataset.smoke.yaml -> dataset.smoke.baseline.json;
+                           # context7 provider -> baseline.context7.json).
+  baseline.context7.json   # Cross-system baseline against Context7. See
+                           # docs/guides/benchmarking.md → "Compare against
+                           # another retrieval service".
   promptfoo.yaml           # Promptfoo config. Run via run.ts, never directly.
-  run-provider.sh          # Promptfoo exec-provider wrapper around search-provider.ts.
+                           # Provider field is templated by DOCS_EVAL_PROVIDER.
+  run-provider.sh          # Promptfoo exec-provider wrapper around search-provider.ts (local).
+  context7-provider.cjs    # Pure-Node Context7 provider implementation.
+  run-context7-provider.sh # Promptfoo exec-provider wrapper around context7-provider.cjs.
 
   types.ts                 # Shared TypeScript types.
   loader.ts                # Dataset loader + spec-constraint validator.
@@ -40,6 +47,11 @@ tests/search-eval/
     answerability.txt      # (.txt because promptfoo rejects .md file refs.)
   results/                 # Gitignored. Per-run output: promptfoo-raw.json,
                            # summary.json, cross-judge.json, dataset.flat.yaml.
+  cli/
+    preflight.ts           # `npm run evaluate:search:preflight` entry.
+    aggregate.ts           # Stand-alone aggregator entry.
+    cross-judge.ts         # Stand-alone cross-judge entry.
+    compare-providers.ts   # Side-by-side report between two baseline files.
 ```
 
 ## How the pieces fit together

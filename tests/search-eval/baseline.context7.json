@@ -1,0 +1,112 @@
+{
+  "recordedAt": "2026-05-18T23:46:53.743Z",
+  "config": {
+    "provider": "context7",
+    "embeddingModel": "text-embedding-3-small",
+    "topK": 5,
+    "judge": "openai:gpt-5.4-mini",
+    "datasetFile": "tests/search-eval/dataset.yaml",
+    "datasetStatus": "draft",
+    "datasetEntryCount": 59,
+    "assembly": {
+      "childLimit": 3,
+      "precedingSiblingsLimit": 1,
+      "subsequentSiblingsLimit": 2,
+      "maxChunkDistance": 3
+    },
+    "timestamp": "2026-05-18T23:46:53.679Z"
+  },
+  "summary": {
+    "config": {
+      "provider": "context7",
+      "embeddingModel": "text-embedding-3-small",
+      "topK": 5,
+      "judge": "openai:gpt-5.4-mini",
+      "datasetFile": "tests/search-eval/dataset.yaml",
+      "datasetStatus": "draft",
+      "datasetEntryCount": 59,
+      "assembly": {
+        "childLimit": 3,
+        "precedingSiblingsLimit": 1,
+        "subsequentSiblingsLimit": 2,
+        "maxChunkDistance": 3
+      },
+      "timestamp": "2026-05-18T23:46:53.679Z"
+    },
+    "ir": {
+      "mrr": 0.7330508474576272,
+      "recall_at_3": 0.7090395480225989,
+      "recall_at_5": 0.7259887005649718,
+      "recall_at_10": 0.7259887005649718,
+      "ndcg_at_5": 0.7044137796617245,
+      "ndcg_at_10": 0.7044137796617245,
+      "hit_at_1": 0.6440677966101694,
+      "hit_at_3": 0.8305084745762712,
+      "hit_at_5": 0.847457627118644
+    },
+    "perIntent": [
+      {
+        "intent": "api-lookup",
+        "n": 18,
+        "mrr": 0.8240740740740741,
+        "recall_at_5": 0.8333333333333334,
+        "ndcg_at_5": 0.8092756025461355,
+        "hit_at_3": 0.9444444444444444
+      },
+      {
+        "intent": "conceptual",
+        "n": 15,
+        "mrr": 0.7666666666666667,
+        "recall_at_5": 0.7333333333333333,
+        "ndcg_at_5": 0.7150234453108847,
+        "hit_at_3": 0.8666666666666667
+      },
+      {
+        "intent": "comparison",
+        "n": 12,
+        "mrr": 0.5625,
+        "recall_at_5": 0.47222222222222215,
+        "ndcg_at_5": 0.5153802839273666,
+        "hit_at_3": 0.5833333333333334
+      },
+      {
+        "intent": "troubleshooting",
+        "n": 14,
+        "mrr": 0.7261904761904762,
+        "recall_at_5": 0.7976190476190476,
+        "ndcg_at_5": 0.7202526476728315,
+        "hit_at_3": 0.8571428571428571
+      }
+    ],
+    "structuralPassRate": {
+      "code_block_balance": 1,
+      "non_empty_content": 1,
+      "url_presence": 1
+    },
+    "llmJudged": [
+      {
+        "metric": "chunk_coherence",
+        "mean": 4.796610169491525,
+        "n": 59
+      },
+      {
+        "metric": "content_faithfulness",
+        "mean": 4.237288135593221,
+        "n": 59
+      },
+      {
+        "metric": "answerability",
+        "mean": 4.491525423728813,
+        "n": 59
+      }
+    ],
+    "crossJudge": [],
+    "regression": {
+      "hasBaseline": false,
+      "incompatibilities": [],
+      "regressions": [],
+      "improvements": [],
+      "stable": []
+    }
+  }
+}

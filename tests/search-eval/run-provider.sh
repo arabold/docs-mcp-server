@@ -21,12 +21,20 @@ NODE_BIN="${DOCS_EVAL_NODE:-node}"
 # Fallback resolves it from the repo's node_modules.
 VITE_NODE_CLI="${DOCS_EVAL_VITE_NODE:-$PWD/../../node_modules/vite-node/dist/cli.mjs}"
 
+# Use temp files for stdout/stderr instead of command substitution. Bash 3.2
+# (the macOS-shipped /bin/bash that runs this shebang) silently truncates
+# $(...) at 64KB, which broke when the new scraper started returning full
+# markdown chunks — React queries produced ~66KB of provider JSON and the
+# truncation lost the JSON's closing brace, leaving sed with no match and
+# stdout empty. Redirecting straight to a file sidesteps that limit.
+TMP_STDOUT=$(mktemp)
 TMP_STDERR=$(mktemp)
 # shellcheck disable=SC2064
-trap "rm -f '$TMP_STDERR'" EXIT
+trap "rm -f '$TMP_STDOUT' '$TMP_STDERR'" EXIT
 
-if STDOUT=$("$NODE_BIN" "$VITE_NODE_CLI" ../../src/tools/search-provider.ts "$@" 2>"$TMP_STDERR"); then
-  echo "$STDOUT" | sed -n '/^{.*}$/p'
+if "$NODE_BIN" "$VITE_NODE_CLI" ../../src/tools/search-provider.ts "$@" \
+    > "$TMP_STDOUT" 2> "$TMP_STDERR"; then
+  sed -n '/^{.*}$/p' "$TMP_STDOUT"
 else
   rc=$?
   echo "run-provider.sh: vite-node exited $rc" >&2
@@ -35,6 +43,6 @@ else
   echo "----- stderr -----" >&2
   cat "$TMP_STDERR" >&2
   echo "----- stdout (raw) -----" >&2
-  echo "$STDOUT" >&2
+  cat "$TMP_STDOUT" >&2
   exit "$rc"
 fi
