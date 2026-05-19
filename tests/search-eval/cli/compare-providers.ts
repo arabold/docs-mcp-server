@@ -14,6 +14,7 @@
  */
 
 import { readFileSync, existsSync } from "node:fs";
+import { isKnownProvider } from "../providers";
 import type { BaselineFile, RunSummary } from "../types";
 
 function loadBaseline(path: string): BaselineFile {
@@ -81,12 +82,26 @@ function main() {
   }
 
   // Legacy baselines (recorded before the multi-provider work) don't carry a
-  // `provider` field; assume those are `local`. Fall back to the filename for
-  // anything else.
+  // `provider` field. We need a label for the report header, so fall back to
+  // the filename — but only when the suffix matches a known provider name,
+  // otherwise default to "local". This avoids mislabelling files where the
+  // suffix is a dataset variant (e.g. `baseline.smoke.json`) or some other
+  // identifier. Both naming forms emitted by `baselinePathFor()` are
+  // recognised: `baseline[.<provider>].json` for the canonical dataset and
+  // `<stem>[.<provider>].baseline.json` for everything else.
   const inferProvider = (s: RunSummary, path: string): string => {
     if (s.config.provider) return s.config.provider;
-    const m = path.match(/baseline\.(\w+)\.json$/);
-    return m ? m[1] : "local";
+    // Form 1: baseline[.<provider>].json
+    let m = path.match(/(?:^|\/)baseline(?:\.(\w+))?\.json$/);
+    if (m) {
+      const candidate = m[1];
+      if (candidate && isKnownProvider(candidate)) return candidate;
+      return "local";
+    }
+    // Form 2: <stem>[.<provider>].baseline.json
+    m = path.match(/\.(\w+)\.baseline\.json$/);
+    if (m && isKnownProvider(m[1])) return m[1];
+    return "local";
   };
   const lA = inferProvider(a.summary, pathA);
   const lB = inferProvider(b.summary, pathB);

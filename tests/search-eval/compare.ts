@@ -12,6 +12,7 @@
  */
 
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { normalizeProviderName } from "./providers";
 import {
   DEFAULT_TOLERANCES,
   type BaselineFile,
@@ -101,8 +102,17 @@ export function compare(
   const baselineConfig = baseline.summary.config as unknown as Record<string, unknown>;
   const currentConfig = summary.config as unknown as Record<string, unknown>;
   for (const key of CONFIG_KEYS_REQUIRING_MATCH) {
-    const b = baselineConfig[key];
-    const c = currentConfig[key];
+    let b: unknown = baselineConfig[key];
+    let c: unknown = currentConfig[key];
+    // Special case: `provider` was added after the initial benchmark shipped,
+    // so legacy baselines don't carry it. Treat the missing value as the
+    // pre-multi-provider default ("local") so a fresh `context7` run is
+    // correctly flagged as incompatible with a pre-multi-provider baseline,
+    // rather than silently passing the gate and producing false regressions.
+    if (key === "provider") {
+      b = normalizeProviderName(b as string | undefined);
+      c = normalizeProviderName(c as string | undefined);
+    }
     if (b !== undefined && c !== undefined && b !== c) {
       incompatibilities.push(`${key}: baseline=${JSON.stringify(b)} current=${JSON.stringify(c)}`);
     }

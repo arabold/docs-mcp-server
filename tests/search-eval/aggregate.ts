@@ -23,6 +23,7 @@ import {
   type RunSummary,
 } from "./types";
 import { loadDataset } from "./loader";
+import { normalizeProviderName } from "./providers";
 
 const require = createRequire(import.meta.url);
 const { mean } = require("./lib/metrics.cjs") as { mean: (xs: number[]) => number };
@@ -208,7 +209,11 @@ export async function aggregateCli(): Promise<void> {
   const appConfig = loadConfig();
 
   const config: RunConfigSnapshot = {
-    provider: process.env.DOCS_EVAL_PROVIDER ?? "local",
+    // Mirror run.ts's normalisation: trim whitespace and treat empty as
+    // "local", so an explicitly-blank `DOCS_EVAL_PROVIDER=""` env var doesn't
+    // produce a snapshot that fails config-compatibility against a normal
+    // local baseline.
+    provider: normalizeProviderName(process.env.DOCS_EVAL_PROVIDER),
     embeddingModel:
       process.env.DOCS_EVAL_EMBEDDING_MODEL ??
       appConfig.app.embeddingModel ??

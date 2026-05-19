@@ -31,6 +31,7 @@ import { runPreflight, scrapeCommandFor } from "./preflight";
 import { aggregate } from "./aggregate";
 import { compare, loadBaseline, renderSummary, writeBaseline } from "./compare";
 import { loadDataset } from "./loader";
+import { normalizeProviderName } from "./providers";
 import type { RunConfigSnapshot } from "./types";
 
 interface Mode {
@@ -82,7 +83,10 @@ const PROVIDERS: Record<string, ProviderSpec> = {
 };
 
 function resolveProvider(): { name: string; spec: ProviderSpec } {
-  const name = (process.env.DOCS_EVAL_PROVIDER ?? "local").trim() || "local";
+  // Normalisation is shared with aggregate.ts and the comparison CLI via
+  // ./providers, so a blank/whitespace env doesn't produce a snapshot that
+  // mis-compares against a normal local baseline.
+  const name = normalizeProviderName(process.env.DOCS_EVAL_PROVIDER);
   const spec = PROVIDERS[name];
   if (!spec) {
     console.error(
