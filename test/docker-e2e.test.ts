@@ -153,9 +153,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
 
   it("extracts a PDF from a mounted volume via Kreuzberg", () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-pdf-"));
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-tmp-"));
     fs.chmodSync(dataDir, 0o777);
-    fs.chmodSync(tmpDir, 0o777);
     const fixtureDir = path.join(PROJECT_ROOT, "test", "fixtures");
     try {
       const r = docker(
@@ -166,8 +164,6 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
           `${dataDir}:/data`,
           "-v",
           `${fixtureDir}:/fixtures:ro`,
-          "-v",
-          `${tmpDir}:/tmp`,
           "-e",
           "DOCS_MCP_TELEMETRY=false",
           // Permit /fixtures as a file-access root inside the container, so
@@ -197,7 +193,6 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       expect(listIndexedUrls(dbPath)).toContain("file:///fixtures/sample.pdf");
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 240_000);
 
@@ -207,9 +202,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     // (not a single file), expecting every supported file inside to be indexed.
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-dir-"));
     const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-docs-"));
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-tmp-"));
     fs.chmodSync(dataDir, 0o777);
-    fs.chmodSync(tmpDir, 0o777);
     // The container reads the docs mount, so it needs to be traversable by
     // the unprivileged runtime user (uid 1000); the writable /data mount
     // above is the only place the app actually writes.
@@ -233,8 +226,6 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
           `${dataDir}:/data`,
           "-v",
           `${docsDir}:/docs:ro`,
-          "-v",
-          `${tmpDir}:/tmp`,
           "-e",
           "DOCS_MCP_TELEMETRY=false",
           "-e",
@@ -276,7 +267,6 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true });
       fs.rmSync(docsDir, { recursive: true, force: true });
-      fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }, 240_000);
 });
