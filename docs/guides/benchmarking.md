@@ -338,46 +338,41 @@ runs use `openai:gpt-5.4-mini` as judge at `temperature: 0` and
 `text-embedding-3-small` for embeddings; comparisons are apples-to-apples
 across the table.
 
-| Metric                       | Pre-fix `main` ¹ | Cheerio + fence/info fixes ² | Defuddle ³ | Context7 (external) ⁴ |
-|------------------------------|------------------|------------------------------|------------|-----------------------|
-| **Structural** (deterministic)                                                                                  |
-| code_block_balance           | 0.746            | **1.000**                    | 0.983      | 1.000                 |
-| non_empty_content            | 1.000            | 1.000                        | 1.000      | 1.000                 |
-| url_presence                 | 1.000            | 1.000                        | 1.000      | 1.000                 |
-| **Headline IR** (deterministic)                                                                                 |
-| MRR                          | 0.756            | **0.747**                    | 0.718      | 0.733                 |
-| Recall@3                     | 0.650            | 0.647                        | 0.621      | 0.709                 |
-| Recall@5                     | 0.723            | **0.732**                    | 0.689      | 0.726                 |
-| nDCG@5                       | 0.695            | **0.699**                    | 0.665      | 0.704                 |
-| Hit@3                        | 0.847            | 0.831                        | 0.780      | 0.831                 |
-| Hit@5                        | 0.898            | **0.881**                    | 0.814      | 0.847                 |
-| **Per-intent MRR**                                                                                              |
-| api-lookup (n=18)            | 0.852            | **0.861**                    | 0.806      | 0.824                 |
-| conceptual (n=15)            | 0.839            | 0.794                        | 0.806      | 0.767                 |
-| comparison (n=12)            | 0.646            | 0.646                        | **0.736**  | 0.563                 |
-| troubleshooting (n=14)       | 0.637            | 0.637                        | 0.494      | **0.726**             |
-| **LLM-judged** (observational, not gating)                                                                      |
-| chunk_coherence              | 3.56             | 3.53                         | 3.39       | **4.80**              |
-| content_faithfulness         | 3.17             | 3.20                         | 3.19       | **4.24**              |
-| answerability                | 4.47             | 4.49                         | 4.49       | 4.49                  |
+| Metric                       | Cheerio (default) ¹ | Defuddle ² | Context7 (external) ³ |
+|------------------------------|---------------------|------------|-----------------------|
+| **Structural** (deterministic)                                                                  |
+| code_block_balance           | **1.000**           | 0.983      | 1.000                 |
+| non_empty_content            | 1.000               | 1.000      | 1.000                 |
+| url_presence                 | 1.000               | 1.000      | 1.000                 |
+| **Headline IR** (deterministic)                                                                 |
+| MRR                          | **0.747**           | 0.718      | 0.733                 |
+| Recall@3                     | 0.647               | 0.621      | **0.709**             |
+| Recall@5                     | **0.732**           | 0.689      | 0.726                 |
+| nDCG@5                       | 0.699               | 0.665      | **0.704**             |
+| Hit@3                        | **0.831**           | 0.780      | **0.831**             |
+| Hit@5                        | **0.881**           | 0.814      | 0.847                 |
+| **Per-intent MRR**                                                                              |
+| api-lookup (n=18)            | **0.861**           | 0.806      | 0.824                 |
+| conceptual (n=15)            | 0.794               | **0.806**  | 0.767                 |
+| comparison (n=12)            | 0.646               | **0.736**  | 0.563                 |
+| troubleshooting (n=14)       | 0.637               | 0.494      | **0.726**             |
+| **LLM-judged** (observational, not gating)                                                      |
+| chunk_coherence              | 3.53                | 3.39       | **4.80**              |
+| content_faithfulness         | 3.20                | 3.19       | **4.24**              |
+| answerability                | 4.49                | 4.49       | 4.49                  |
 
-¹ Snapshot from [`tests/search-eval/baseline.json`](../../tests/search-eval/baseline.json)
-  taken on 2026-05-18, against `main` before the fence-balance and info-string
-  fixes landed. The local store at the time produced chunks with double-wrapped
-  fences on VitePress/Shiki info strings (`js{15-18} twoslash [server.js]`),
-  driving `code_block_balance` down to 74.6% on a clean Vite re-index.
+¹ Default Cheerio extractor, recorded baseline at
+  [`tests/search-eval/baseline.json`](../../tests/search-eval/baseline.json).
+  This is what the comparator gates against. `code_block_balance` is 100% —
+  fence-aware splitting in `TextContentSplitter` plus verbatim info-string
+  preservation in `CodeContentSplitter` keep every chunk's fences balanced
+  including VitePress/Shiki sequences like `` ```js{15-18} twoslash
+  [server.js] ``.
 
-² Same Cheerio extractor and dataset, after
-  [PR #426](https://github.com/arabold/docs-mcp-server/pull/426)
-  (fence-aware `TextContentSplitter` + verbatim info-string preservation in
-  `CodeContentSplitter`). Vite was re-indexed so the new chunker shape is
-  reflected in the store. `code_block_balance` reaches 100%; headline IR
-  metrics move within ±2% relative (well under the 5% regression tolerance).
-
-³ Defuddle extractor selected via `DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle`,
+² Defuddle extractor selected via `DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle`,
   all five libraries re-scraped through Defuddle on 2026-05-18 (1,155 indexed
-  pages total). On this dataset Defuddle is a clear **regression** against the
-  Cheerio + fence/info baseline: headline IR metrics drop 4–6% relative, and
+  pages total). On this dataset Defuddle is a clear **regression** against
+  the Cheerio default: headline IR metrics drop 4–6% relative, and
   `troubleshooting`-intent queries are hit hardest (MRR -22%, nDCG@5 -22%,
   Hit@3 -20%). `comparison`-intent queries improve (MRR +14%) — Defuddle's
   main-content pruning helps when the relevant content is the article body.
@@ -388,11 +383,14 @@ across the table.
   primarily article-shaped and the side-content is noise. See
   [Comparing HTML extractors](#comparing-html-extractors-cheerio-vs-defuddle).
 
-⁴ External retrieval service [Context7](https://context7.com) measured via the
-  alternate provider in
+³ External retrieval service [Context7](https://context7.com) measured via
+  the alternate provider in
   [`tests/search-eval/baseline.context7.json`](../../tests/search-eval/baseline.context7.json).
-  Includes for comparison only; chunking, embedding, and ranking are not under
-  our control.
+  Included for comparison only; chunking, embedding, and ranking are not
+  under our control. Context7 trades a small MRR deficit (-1.9%) for
+  noticeably higher Recall@3 (+9.6%) and LLM-judged coherence
+  (4.80 vs 3.53) — a hint that chunk semantic boundaries are the next
+  improvement worth chasing locally.
 
 ### How to update this table
 
