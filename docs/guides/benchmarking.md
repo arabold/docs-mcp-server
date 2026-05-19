@@ -244,6 +244,47 @@ subsequent runs. The benchmark is **deliberately not gated on PRs** — variance
 and judge cost make per-PR gating premature. Regressions caught by the scheduled
 run are visible in the workflow summary and uploaded as an artifact.
 
+## Comparing HTML extractors (Cheerio vs. Defuddle)
+
+The HTML pipeline supports two interchangeable content extractors:
+
+- `cheerio` (default): the built-in `HtmlSanitizerMiddleware` with a hand-curated selector blocklist.
+- `defuddle`: [Defuddle](https://github.com/kepano/defuddle), which scores DOM nodes and extracts the main article content.
+
+Select the extractor with the `DOCS_MCP_SCRAPER_HTML_EXTRACTOR` env var (or
+`scraper.htmlExtractor` in `config.yaml`). Both produce a Cheerio DOM that flows
+through the same downstream middleware (normalisation, markdown conversion,
+splitting), so the chunking and embedding behaviour stay identical — only the
+boilerplate-stripping logic changes.
+
+To run a head-to-head benchmark:
+
+```bash
+# 1. Lock in the baseline with the current Cheerio sanitiser.
+DOCS_MCP_SCRAPER_HTML_EXTRACTOR=cheerio \
+  npx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi  # if previously indexed
+# …re-scrape all five libraries (see Prerequisites above)…
+DOCS_MCP_SCRAPER_HTML_EXTRACTOR=cheerio \
+  DOCS_EVAL_DATASET=tests/search-eval/dataset.yaml \
+  npm run evaluate:search:baseline
+
+# 2. Re-index with Defuddle.
+DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle \
+  npx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi
+# …re-scrape all five libraries with the same commands…
+DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle \
+  DOCS_EVAL_NO_CACHE=1 \
+  npm run evaluate:search
+```
+
+The measurement run diffs the Defuddle results against the Cheerio baseline and
+fails on regression. Inspect `tests/search-eval/results/summary.json` for the
+absolute numbers and `compare`'s console report for the per-metric deltas.
+
+> **Why re-index between runs.** The extractor change happens during scraping,
+> so the choice is baked into the stored chunks. Switching the env var without
+> a fresh scrape compares the new code against old data.
+
 ## Related
 
 - [tests/search-eval/README.md](../../tests/search-eval/README.md) — file layout

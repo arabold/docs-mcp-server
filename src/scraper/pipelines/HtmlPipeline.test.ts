@@ -321,6 +321,53 @@ describe("HtmlPipeline", () => {
     expect(result.textContent).toContain("This HTML should be converted to markdown");
   });
 
+  it("processes HTML via Defuddle when htmlExtractor is set to defuddle", async () => {
+    // Verifies the lazy-loading path: HtmlPipeline only imports the Defuddle
+    // module when `htmlExtractor: defuddle` is configured, and the resulting
+    // pipeline produces clean markdown end-to-end on first process() call.
+    const defuddleConfig = {
+      ...appConfig,
+      scraper: { ...appConfig.scraper, htmlExtractor: "defuddle" as const },
+    };
+    const pipeline = new HtmlPipeline(defuddleConfig);
+
+    // Article body needs enough word count for Defuddle to score the main
+    // element above the boilerplate.
+    const lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(40);
+    const html = `
+      <html><head><title>Defuddle pipeline test</title></head>
+      <body>
+        <nav class="site-nav">Top nav links</nav>
+        <main><article>
+          <h1>Defuddle pipeline test</h1>
+          <p>${lorem}</p>
+        </article></main>
+        <footer class="site-footer">Footer copyright</footer>
+      </body></html>`;
+
+    const raw: RawContent = {
+      content: html,
+      mimeType: "text/html",
+      charset: "utf-8",
+      source: "http://test.example.com",
+      status: FetchStatus.SUCCESS,
+    };
+
+    const result = await pipeline.process(raw, {
+      url: "http://test.example.com",
+      library: "example",
+      version: "",
+      scrapeMode: ScrapeMode.Fetch,
+    });
+
+    expect(result.contentType).toBe("text/markdown");
+    expect(result.textContent).toContain("Lorem ipsum");
+    // Boilerplate stripped by Defuddle.
+    expect(result.textContent).not.toContain("Top nav links");
+    expect(result.textContent).not.toContain("Footer copyright");
+    expect(result.errors).toHaveLength(0);
+  });
+
   describe("cleanup", () => {
     it("should call closeBrowser on Playwright middleware when close() is called", async () => {
       const pipeline = new HtmlPipeline(appConfig);

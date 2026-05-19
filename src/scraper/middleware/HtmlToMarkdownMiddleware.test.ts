@@ -295,4 +295,56 @@ Mixed: [Another Valid](http://another.com) and bad one.`;
     expect(context.content).toBe("[![Hero](hero.png)](https://example.com/image)");
     expect(context.errors).toHaveLength(0);
   });
+
+  it("should preserve line breaks in Shiki-tokenized code blocks (span.line)", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    // Real-world output from Shiki (tailwindcss.com, Astro/MDX sites, etc.).
+    // No `\n` or `<br>` between lines — only `<span class="line">` containers
+    // CSS-styled as `display: block`.
+    const html = `
+      <html><body>
+        <pre class="shiki"><code><span class="line"><span>npm</span><span> create vite@latest my-project</span></span><span class="line"><span>cd</span><span> my-project</span></span></code></pre>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(context.content).toContain("npm create vite@latest my-project\ncd my-project");
+    expect(context.errors).toHaveLength(0);
+  });
+
+  it("should preserve line breaks in highlight.js-style code blocks (div.line)", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    const html = `
+      <html><body>
+        <pre><code><div class="line">line one</div><div class="line">line two</div><div class="line">line three</div></code></pre>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(context.content).toContain("line one\nline two\nline three");
+    expect(context.errors).toHaveLength(0);
+  });
+
+  it("should still respect existing newlines / <br> in code blocks", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    const html = `
+      <html><body>
+        <pre><code>line one<br>line two
+line three</code></pre>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(context.content).toContain("line one\nline two\nline three");
+    expect(context.errors).toHaveLength(0);
+  });
 });
