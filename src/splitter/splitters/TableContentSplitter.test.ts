@@ -81,4 +81,36 @@ ${rows.join("\n")}`;
     expect(allContent).toContain("&copy;");
     expect(allContent).toContain("<tag>");
   });
+
+  // Characterisation test for issue #418: tables with cells containing
+  // backticks or fenced-block-like text are unusual but possible. The current
+  // splitter cuts on `|`-delimited row boundaries and does not descend into
+  // cell content, so it never bisects a fence — but it also does NOT promise
+  // semantic preservation of the fence as a multi-line code block (markdown
+  // tables forbid raw newlines in cells anyway). This test locks the current
+  // behaviour so a future change that introduces cell-content splitting
+  // surfaces here.
+  it("does not bisect inline backtick spans within a row (characterisation)", async () => {
+    const splitter = new TableContentSplitter({ chunkSize: 80 });
+    const table = [
+      "| Name | Example |",
+      "|------|---------|",
+      "| body | `const x = 1;` |",
+      "| auth | `Authorization: Bearer <token>` |",
+      "| ping | `curl -s https://example.com/healthz` |",
+    ].join("\n");
+
+    const chunks = await splitter.split(table);
+    // Every chunk's content is composed of complete rows; backticks come in
+    // pairs because the rows are emitted whole.
+    for (const c of chunks) {
+      const backticks = (c.match(/`/g) || []).length;
+      expect(backticks % 2).toBe(0);
+    }
+    // Every chunk preserves the header (TableContentSplitter contract).
+    for (const c of chunks) {
+      const lines = c.split("\n");
+      expect(lines[0]).toBe("| Name | Example |");
+    }
+  });
 });

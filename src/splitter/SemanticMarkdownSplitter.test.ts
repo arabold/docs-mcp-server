@@ -634,4 +634,137 @@ Text paragraph.
     expect(result[3].types).toEqual(["blockquote"]);
     expect(result[4].types).toEqual(["media"]);
   });
+
+  describe("fence balance across nested containers (issue #418)", () => {
+    const longCode = (lang: string, prefix: string, count = 30) =>
+      Array.from(
+        { length: count },
+        (_, i) => `${prefix}${i} = "lorem ipsum dolor sit amet, consectetur";`,
+      ).join("\n");
+
+    const fenceCount = (s: string) => (s.match(/```/g) || []).length;
+
+    const expectAllBalanced = (chunks: { content: string }[]) => {
+      for (const chunk of chunks) {
+        expect(fenceCount(chunk.content) % 2).toBe(0);
+      }
+    };
+
+    it("balances fences for code blocks inside a list item", async () => {
+      const splitter = new SemanticMarkdownSplitter(400, 1200);
+      const markdown = [
+        "# Heading",
+        "",
+        "Intro prose.",
+        "",
+        ...[0, 1, 2].map(
+          (i) =>
+            `- Item ${i} description text that takes some space.\n\n  \`\`\`ts\n  ${longCode("ts", `  const a${i}_`).replace(/\n/g, "\n  ")}\n  \`\`\``,
+        ),
+        "",
+        "Trailing prose.",
+      ].join("\n");
+
+      const result = await splitter.splitText(markdown);
+      expect(result.length).toBeGreaterThan(0);
+      expectAllBalanced(result);
+    });
+
+    it("balances fences for code blocks inside a blockquote", async () => {
+      const splitter = new SemanticMarkdownSplitter(400, 1200);
+      const codeBody = longCode("ts", "const k");
+      const quotedCode = ["```ts", codeBody, "```"]
+        .join("\n")
+        .split("\n")
+        .map((l) => `> ${l}`)
+        .join("\n");
+      const markdown = [
+        "# Heading",
+        "",
+        "Intro.",
+        "",
+        "> NOTE: this is a callout containing a code sample.",
+        ">",
+        quotedCode,
+        "",
+        "Trailing prose.",
+      ].join("\n");
+
+      const result = await splitter.splitText(markdown);
+      expectAllBalanced(result);
+    });
+
+    it("balances fences for code blocks inside a definition list", async () => {
+      const splitter = new SemanticMarkdownSplitter(400, 1200);
+      // remark-parse doesn't render <dl>/<dt>/<dd> from markdown source, so we
+      // simulate by feeding raw HTML with a fenced code block inside <dd>.
+      const codeBody = longCode("ts", "const m");
+      const html = [
+        "<h2>Defs</h2>",
+        "<dl>",
+        "<dt>body</dt>",
+        "<dd>",
+        "<p>The request body example:</p>",
+        '<pre><code class="language-ts">',
+        codeBody,
+        "</code></pre>",
+        "</dd>",
+        "</dl>",
+      ].join("\n");
+
+      const result = await splitter.splitText(html);
+      expectAllBalanced(result);
+    });
+
+    it("balances fences for code blocks inside <details>", async () => {
+      const splitter = new SemanticMarkdownSplitter(400, 1200);
+      const codeBody = longCode("ts", "const d");
+      const html = [
+        "<h2>Optional</h2>",
+        "<details>",
+        "<summary>Show example</summary>",
+        '<pre><code class="language-ts">',
+        codeBody,
+        "</code></pre>",
+        "</details>",
+      ].join("\n");
+
+      const result = await splitter.splitText(html);
+      expectAllBalanced(result);
+    });
+
+    it("balances fences for code blocks inside a generic <div> wrapper", async () => {
+      const splitter = new SemanticMarkdownSplitter(400, 1200);
+      const codeBody = longCode("ts", "const w");
+      const html = [
+        '<div class="example">',
+        "<p>Wrapped:</p>",
+        '<pre><code class="language-ts">',
+        codeBody,
+        "</code></pre>",
+        "</div>",
+      ].join("\n");
+
+      const result = await splitter.splitText(html);
+      expectAllBalanced(result);
+    });
+
+    it("balances fences for code blocks inside a table cell", async () => {
+      const splitter = new SemanticMarkdownSplitter(400, 1200);
+      const codeBody = longCode("ts", "const t", 10);
+      const html = [
+        "<table>",
+        "<thead><tr><th>field</th><th>example</th></tr></thead>",
+        "<tbody>",
+        "<tr><td>request</td><td>",
+        `<pre><code class="language-ts">${codeBody}</code></pre>`,
+        "</td></tr>",
+        "</tbody>",
+        "</table>",
+      ].join("\n");
+
+      const result = await splitter.splitText(html);
+      expectAllBalanced(result);
+    });
+  });
 });

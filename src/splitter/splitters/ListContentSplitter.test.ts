@@ -67,4 +67,31 @@ describe("ListContentSplitter", () => {
     expect(chunks.length).toBe(1);
     expect(chunks[0]).toBe(list);
   });
+
+  it("preserves fence balance when an oversized list item contains a code block", async () => {
+    // Regression for issue #418: when a list item's text exceeds chunkSize,
+    // ListContentSplitter delegates to TextContentSplitter, which must not cut
+    // inside an embedded ``` fence.
+    const splitter = new ListContentSplitter({ chunkSize: 200 });
+    const lines = Array.from(
+      { length: 12 },
+      (_, i) => `      const v${i} = "lorem ipsum dolor sit amet, consectetur";`,
+    ).join("\n");
+    const list = [
+      "-   Short item before.",
+      "-   Item with a code example:",
+      "    ",
+      "    ```ts",
+      lines,
+      "    ```",
+      "-   Short item after.",
+    ].join("\n");
+
+    const chunks = await splitter.split(list);
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      const fences = (c.match(/```/g) || []).length;
+      expect(fences % 2).toBe(0);
+    }
+  });
 });

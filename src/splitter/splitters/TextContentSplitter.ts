@@ -1,5 +1,7 @@
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
+import { logger } from "../../utils/logger";
 import { MinimumChunkSizeError } from "../errors";
+import { hasOpenFenceAtEnd } from "./fenceState";
 import type { ContentSplitter, ContentSplitterOptions } from "./types";
 
 /**
@@ -7,6 +9,12 @@ import type { ContentSplitter, ContentSplitterOptions } from "./types";
  * 1. Try splitting by paragraphs (double newlines)
  * 2. If chunks still too large, split by single newlines
  * 3. Finally, use word boundaries via LangChain's splitter
+ *
+ * Across all strategies the splitter preserves fenced code block balance: if
+ * splitting would leave a chunk ending inside an open ``` or ~~~ fence, that
+ * chunk is merged with the following chunk until the fence closes. When this
+ * merging forces a chunk past `chunkSize`, the splitter accepts the oversize
+ * chunk and emits a warning rather than break the fence.
  */
 export class TextContentSplitter implements ContentSplitter {
   constructor(private options: ContentSplitterOptions) {}
@@ -31,21 +39,66 @@ export class TextContentSplitter implements ContentSplitter {
     }
 
     // First try splitting by paragraphs (double newlines)
-    const paragraphChunks = this.splitByParagraphs(content);
+    const paragraphChunks = this.mergeForFenceBalance(
+      this.splitByParagraphs(content),
+      "",
+    );
     if (this.areChunksValid(paragraphChunks)) {
       // No merging for paragraph chunks; they are already semantically separated
       return paragraphChunks;
     }
 
     // If that doesn't work, try splitting by single newlines
-    const lineChunks = this.splitByLines(content);
+    const lineChunks = this.mergeForFenceBalance(this.splitByLines(content), "");
     if (this.areChunksValid(lineChunks)) {
       return this.mergeChunks(lineChunks, ""); // No separator needed - newlines are preserved in chunks
     }
 
-    // Finally, fall back to word-based splitting using LangChain
-    const wordChunks = await this.splitByWords(content);
-    return this.mergeChunks(wordChunks, " "); // Word chunks still need space separator
+    // Finally, fall back to word-based splitting using LangChain. Re-merge for
+    // fence balance after word splitting, then collapse small chunks. Any chunk
+    // still over `chunkSize` after this step is an oversize-for-fence-balance
+    // case — emit it and warn rather than break the fence.
+    const wordChunks = this.mergeForFenceBalance(await this.splitByWords(content), " ");
+    const merged = this.mergeChunks(wordChunks, " ");
+    this.warnOversize(merged);
+    return merged;
+  }
+
+  /**
+   * Walks `chunks` left to right and merges adjacent chunks whenever the running
+   * buffer ends inside an open fenced code block. Guarantees that every emitted
+   * chunk has balanced fences (i.e. `hasOpenFenceAtEnd` returns false).
+   */
+  private mergeForFenceBalance(chunks: string[], separator: string): string[] {
+    const result: string[] = [];
+    let buffer = "";
+
+    for (const chunk of chunks) {
+      buffer = buffer ? `${buffer}${separator}${chunk}` : chunk;
+      if (!hasOpenFenceAtEnd(buffer)) {
+        result.push(buffer);
+        buffer = "";
+      }
+    }
+
+    if (buffer) {
+      // No closing fence in the rest of the input — emit the dangling buffer as
+      // a single chunk. The fence balance check downstream will catch this and
+      // it will surface in logs as an oversize-chunk warning if applicable.
+      result.push(buffer);
+    }
+
+    return result;
+  }
+
+  private warnOversize(chunks: string[]): void {
+    for (const chunk of chunks) {
+      if (chunk.length > this.options.chunkSize) {
+        logger.warn(
+          `⚠ TextContentSplitter emitted oversize chunk to preserve fence balance: ${chunk.length} > ${this.options.chunkSize}`,
+        );
+      }
+    }
   }
 
   /**

@@ -262,6 +262,8 @@ Content processing follows a modular strategy-pipeline-splitter architecture:
 
 The system uses a two-phase splitting approach: semantic splitting preserves document structure, followed by size optimization for embedding quality. See [Content Processing](docs/concepts/content-processing.md) for detailed processing flows.
 
+Across all splitting strategies, `TextContentSplitter` enforces a fence-balance invariant: no chunk boundary may fall inside an open ` ``` ` or `~~~` fenced code block, even when the block is embedded in a list item, blockquote, or arbitrary wrapper. When honoring this invariant would force a chunk past `maxChunkSize`, the splitter accepts the oversize chunk (logging a warning) rather than break the fence — guaranteeing balanced fences for downstream renderers and LLM consumers.
+
 For web sources, `WebScraperStrategy` performs an ingestion-time `llms.txt` probe during scrapes and refreshes. It checks the input URL's parent directory before the site root, parses curated Markdown links with `llmsTxtParser`, and adds accepted links to the BFS queue only after the depth-0 page establishes the canonical post-redirect scope base. Queue entries seeded this way carry `fromLlmsTxt`, which makes `processItem` try the spec-defined `.md` URL variant before fetching the original page.
 
 HTTP and browser-backed web fetches default to `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller provides an explicit `Accept` header. Markdown MIME responses route directly to `MarkdownPipeline`; HTML continues through `HtmlPipeline`, and generic `text/plain` remains on the text fallback except for accepted llms.txt `.md` variants.
