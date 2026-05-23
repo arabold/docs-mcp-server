@@ -1,12 +1,32 @@
-import { env, type FeatureExtractionPipeline, pipeline } from "@huggingface/transformers";
+import type { FeatureExtractionPipeline } from "@huggingface/transformers";
 import { Embeddings } from "@langchain/core/embeddings";
 
-// Configure Transformers.js global cache directory once at module load time.
-// `env.cacheDir` is a singleton shared across all pipeline instances, so it
-// must be set before any `pipeline()` call — module-level init is the safest.
-const cacheDir = process.env.TRANSFORMERS_CACHE;
-if (cacheDir) {
-  env.cacheDir = cacheDir;
+let transformersJSImportPromise: Promise<typeof import("@huggingface/transformers")> | null = null;
+
+async function getTransformersJS() {
+  if (!transformersJSImportPromise) {
+    transformersJSImportPromise = import("@huggingface/transformers");
+  }
+
+  return transformersJSImportPromise;
+}
+
+async function pipeline(
+  task: "feature-extraction",
+  model: string,
+  options?: { device?: "cpu" | "webgpu" },
+): Promise<FeatureExtractionPipeline> {
+  const { env, pipeline: transformersPipeline } = await getTransformersJS();
+  const cacheDir = process.env.TRANSFORMERS_CACHE;
+
+  // `env.cacheDir` is a singleton shared across all pipeline instances, so it
+  // must be set before any `pipeline()` call. Do it lazily so importing this
+  // module does not eagerly load Transformers.js when it is never used.
+  if (cacheDir) {
+    env.cacheDir = cacheDir;
+  }
+
+  return (await transformersPipeline(task, model, options)) as FeatureExtractionPipeline;
 }
 
 /**
