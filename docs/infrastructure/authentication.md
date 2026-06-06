@@ -98,6 +98,7 @@ npx docs-mcp-server
   --auth-enabled
   --auth-issuer-url "https://auth.your-domain.com"
   --auth-audience "https://mcp.your-domain.com"
+  --public-origin "https://mcp.your-domain.com"
 ```
 
 ### Environment Variables
@@ -111,6 +112,8 @@ export DOCS_MCP_AUTH_AUDIENCE="https://mcp.your-domain.com"
 
 You can also set the same values in `docs-mcp.config.yaml` under `auth.enabled`, `auth.issuerUrl`, and `auth.audience`.
 
+For remote or reverse-proxy deployments, set `server.publicOrigin` (or pass `--public-origin`) to the externally reachable origin clients use. `--host` only controls the local bind interface; OAuth metadata and resource URLs use the public origin when configured.
+
 ### Configuration Options
 
 | Option      | CLI Flag            | Environment Variable       | Description                                             |
@@ -118,6 +121,7 @@ You can also set the same values in `docs-mcp.config.yaml` under `auth.enabled`,
 | Enable Auth | `--auth-enabled`    | `DOCS_MCP_AUTH_ENABLED`    | Enable OAuth2 token validation                          |
 | Issuer URL  | `--auth-issuer-url` | `DOCS_MCP_AUTH_ISSUER_URL` | OAuth2 discovery endpoint of your external provider     |
 | Audience    | `--auth-audience`   | `DOCS_MCP_AUTH_AUDIENCE`   | JWT audience claim (identifies this protected resource) |
+| Public Origin | `--public-origin` | `DOCS_MCP_SERVER_PUBLIC_ORIGIN` | Externally reachable server origin advertised in OAuth metadata |
 
 ## OAuth2 Setup
 

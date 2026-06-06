@@ -5,6 +5,7 @@ import yaml from "yaml";
 import { z } from "zod";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
+import { normalizePublicOrigin } from "./serverOrigin";
 
 const envStringArray = z
   .union([z.array(z.string()), z.string()])
@@ -42,6 +43,26 @@ const envBoolean = z
   })
   .pipe(z.boolean());
 
+const publicOriginSchema = z
+  .preprocess((value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }, z.string().optional())
+  .transform((value, ctx) => {
+    try {
+      return normalizePublicOrigin(value);
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return z.NEVER;
+    }
+  });
+
 // --- Default Global Configuration ---
 
 export const DEFAULT_CONFIG = {
@@ -54,6 +75,7 @@ export const DEFAULT_CONFIG = {
   server: {
     protocol: "auto",
     host: "127.0.0.1",
+    publicOrigin: undefined as string | undefined,
     ports: {
       default: 6280,
       worker: 8080,
@@ -156,6 +178,7 @@ export const AppConfigSchema = z.object({
     .object({
       protocol: z.string().default(DEFAULT_CONFIG.server.protocol),
       host: z.string().default(DEFAULT_CONFIG.server.host),
+      publicOrigin: publicOriginSchema.optional(),
       ports: z
         .object({
           default: z.coerce.number().int().default(DEFAULT_CONFIG.server.ports.default),
@@ -166,7 +189,12 @@ export const AppConfigSchema = z.object({
         .default(DEFAULT_CONFIG.server.ports),
       heartbeatMs: z.coerce.number().int().default(DEFAULT_CONFIG.server.heartbeatMs),
     })
-    .default(DEFAULT_CONFIG.server),
+    .default({
+      protocol: DEFAULT_CONFIG.server.protocol,
+      host: DEFAULT_CONFIG.server.host,
+      ports: DEFAULT_CONFIG.server.ports,
+      heartbeatMs: DEFAULT_CONFIG.server.heartbeatMs,
+    }),
   auth: z
     .object({
       enabled: envBoolean.default(DEFAULT_CONFIG.auth.enabled),
@@ -411,6 +439,11 @@ const configMappings: ConfigMapping[] = [
   },
   { path: ["server", "host"], env: ["DOCS_MCP_HOST", "HOST"], cli: "host" },
   {
+    path: ["server", "publicOrigin"],
+    env: ["DOCS_MCP_SERVER_PUBLIC_ORIGIN"],
+    cli: "publicOrigin",
+  },
+  {
     path: ["app", "embeddingModel"],
     env: ["DOCS_MCP_EMBEDDING_MODEL"],
     cli: "embeddingModel",
@@ -495,6 +528,12 @@ export function loadConfig(
   const parseResult = AppConfigSchema.safeParse(mergedInput);
   if (parseResult.success) {
     return parseResult.data;
+  }
+
+  if (hasParseIssueAtPath(parseResult.error, ["server", "publicOrigin"])) {
+    throw new Error(
+      `Invalid configuration for server.publicOrigin: ${parseResult.error.message}`,
+    );
   }
 
   // The file on disk is structurally wrong (e.g., array fields saved as
@@ -678,6 +717,21 @@ function getAtPath(obj: ConfigObject, pathArr: string[]): unknown {
   return current;
 }
 
+function hasPath(obj: ConfigObject, pathArr: string[]): boolean {
+  let current: unknown = obj;
+  for (const key of pathArr) {
+    if (typeof current !== "object" || current === null || !(key in current)) {
+      return false;
+    }
+    current = (current as ConfigObject)[key];
+  }
+  return true;
+}
+
+function hasParseIssueAtPath(error: z.ZodError, pathArr: string[]): boolean {
+  return error.issues.some((issue) => issue.path.join(".") === pathArr.join("."));
+}
+
 function deepMerge(target: unknown, source: unknown): unknown {
   if (typeof target !== "object" || target === null) return source;
   if (typeof source !== "object" || source === null) return target;
@@ -719,7 +773,7 @@ function deepMerge(target: unknown, source: unknown): unknown {
  */
 export function isValidConfigPath(path: string): boolean {
   const pathArr = path.split(".");
-  return getAtPath(DEFAULT_CONFIG as ConfigObject, pathArr) !== undefined;
+  return hasPath(DEFAULT_CONFIG as ConfigObject, pathArr);
 }
 
 /**
