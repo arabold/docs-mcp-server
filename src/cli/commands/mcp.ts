@@ -47,6 +47,12 @@ export function createMcpCommand(cli: Argv) {
             type: "string",
             description: "Host to bind the MCP server to",
           })
+          .option("public-origin", {
+            type: "string",
+            description:
+              "Public origin advertised to clients (e.g., https://docs.example.com)",
+            alias: "publicOrigin",
+          })
           .option("embedding-model", {
             type: "string",
             description:

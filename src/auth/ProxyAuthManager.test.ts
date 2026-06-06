@@ -482,6 +482,37 @@ describe("ProxyAuthManager", () => {
     });
   });
 
+  describe("authorization-server metadata", () => {
+    beforeEach(async () => {
+      authManager = new ProxyAuthManager(validAuthConfig);
+      await authManager.initialize();
+      authManager.registerRoutes(mockServer, new URL("https://docs.example.com"));
+    });
+
+    it("should advertise OAuth endpoints from the trusted base URL", async () => {
+      const handler = getHandler(
+        mockServer,
+        "get",
+        "/.well-known/oauth-authorization-server",
+      );
+      const reply = createMockReply();
+
+      await handler(
+        { protocol: "https", headers: { host: "attacker.example.com" } },
+        reply,
+      );
+
+      expect(reply.body.issuer).toBe("https://docs.example.com");
+      expect(reply.body.authorization_endpoint).toBe(
+        "https://docs.example.com/oauth/authorize",
+      );
+      expect(reply.body.token_endpoint).toBe("https://docs.example.com/oauth/token");
+      expect(reply.body.registration_endpoint).toBe(
+        "https://docs.example.com/oauth/register",
+      );
+    });
+  });
+
   describe("authentication context creation", () => {
     describe("when auth is disabled", () => {
       beforeEach(() => {

@@ -33,6 +33,12 @@ export function createWorkerCommand(cli: Argv) {
           type: "string",
           description: "Host to bind the worker API to",
         })
+        .option("public-origin", {
+          type: "string",
+          description:
+            "Public origin advertised to clients (e.g., https://docs.example.com)",
+          alias: "publicOrigin",
+        })
         .option("embedding-model", {
           type: "string",
           description:

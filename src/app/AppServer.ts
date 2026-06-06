@@ -24,6 +24,7 @@ import { printBanner } from "../utils/banner";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
+import { getCanonicalServerOrigin, isWildcardBindHost } from "../utils/serverOrigin";
 import type { AppServerConfig } from "./AppServerConfig";
 
 /**
@@ -129,7 +130,7 @@ export class AppServer {
     await this.setupServer();
 
     try {
-      const address = await this.server.listen({
+      await this.server.listen({
         port: this.serverConfig.port,
         host: this.appConfig.server.host,
       });
@@ -145,7 +146,7 @@ export class AppServer {
         this.remoteEventProxy.connect();
       }
 
-      this.logStartupInfo(address);
+      this.logStartupInfo(this.getCanonicalOrigin());
       return this.server;
     } catch (error) {
       logger.error(`❌ Failed to start AppServer: ${error}`);
@@ -504,10 +505,23 @@ export class AppServer {
     }
 
     // ProxyAuthManager handles all OAuth2 endpoints automatically
-    const baseUrl = new URL(`http://localhost:${this.serverConfig.port}`);
+    const baseUrl = new URL(this.getCanonicalOrigin());
     this.authManager.registerRoutes(this.server, baseUrl);
 
+    if (
+      !this.appConfig.server.publicOrigin &&
+      isWildcardBindHost(this.appConfig.server.host)
+    ) {
+      logger.warn(
+        "⚠️  Authentication is enabled with a wildcard bind host and no public origin. Configure server.publicOrigin or --public-origin for remote OAuth clients.",
+      );
+    }
+
     logger.debug("OAuth2 proxy endpoints registered");
+  }
+
+  private getCanonicalOrigin(): string {
+    return getCanonicalServerOrigin(this.appConfig, this.serverConfig.port);
   }
 
   /**

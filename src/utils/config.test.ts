@@ -49,6 +49,7 @@ describe("Configuration Loading", () => {
     delete process.env.DOCS_MCP_READ_ONLY;
     delete process.env.DOCS_MCP_STORE_PATH;
     delete process.env.DOCS_MCP_AUTH_ENABLED;
+    delete process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN;
   });
 
   afterEach(() => {
@@ -67,6 +68,7 @@ describe("Configuration Loading", () => {
       const config = loadConfig({}, {}); // No args -> Default System Path
 
       expect(config.server.host).toBe("127.0.0.1");
+      expect(config.server.publicOrigin).toBeUndefined();
       expect(
         fs.existsSync(path.join(process.cwd(), ".vitest-config-mock", "config.yaml")),
       ).toBe(true);
@@ -126,6 +128,56 @@ describe("Configuration Loading", () => {
       const config = loadConfig({ host: "cli-host" }, { configPath });
 
       expect(config.server.host).toBe("cli-host");
+    });
+
+    it("loads and normalizes server.publicOrigin from config file", () => {
+      const configPath = path.join(tmpDir, "public-origin.yaml");
+      fs.writeFileSync(
+        configPath,
+        "server:\n  publicOrigin: https://docs.example.com/\n",
+      );
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.server.publicOrigin).toBe("https://docs.example.com");
+    });
+
+    it("applies server.publicOrigin precedence from CLI over env and config file", () => {
+      const configPath = path.join(tmpDir, "public-origin-priority.yaml");
+      fs.writeFileSync(configPath, "server:\n  publicOrigin: https://file.example.com\n");
+      process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN = "https://env.example.com";
+
+      const config = loadConfig(
+        { publicOrigin: "https://cli.example.com" },
+        { configPath },
+      );
+
+      expect(config.server.publicOrigin).toBe("https://cli.example.com");
+    });
+
+    it("treats empty server.publicOrigin env var as absent", () => {
+      process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN = "";
+
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "empty-origin.yaml") },
+      );
+
+      expect(config.server.publicOrigin).toBeUndefined();
+    });
+
+    it.each([
+      "ftp://docs.example.com",
+      "https://docs.example.com/path",
+      "https://docs.example.com?x=1",
+      "https://docs.example.com#fragment",
+    ])("rejects invalid server.publicOrigin %s", (publicOrigin) => {
+      expect(() =>
+        loadConfig(
+          { publicOrigin },
+          { configPath: path.join(tmpDir, "invalid-public-origin.yaml") },
+        ),
+      ).toThrow("server.publicOrigin");
     });
   });
 
@@ -234,11 +286,14 @@ describe("Config CLI Helpers", () => {
       expect(isValidConfigPath("scraper.maxPages")).toBe(true);
       expect(isValidConfigPath("scraper.document.maxSize")).toBe(true);
       expect(isValidConfigPath("app.telemetryEnabled")).toBe(true);
+      expect(isValidConfigPath("server.publicOrigin")).toBe(true);
     });
 
     it("returns false for invalid paths", () => {
       expect(isValidConfigPath("invalid.path")).toBe(false);
       expect(isValidConfigPath("scraper.nonexistent")).toBe(false);
+      expect(isValidConfigPath("toString")).toBe(false);
+      expect(isValidConfigPath("server.toString")).toBe(false);
     });
   });
 
