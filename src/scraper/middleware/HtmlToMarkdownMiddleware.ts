@@ -1,9 +1,17 @@
 // @ts-expect-error
 import { gfm } from "@joplin/turndown-plugin-gfm";
+import type * as cheerio from "cheerio";
+import type { Element } from "domhandler";
 import TurndownService from "turndown";
 import { logger } from "../../utils/logger";
 import { fullTrim } from "../../utils/string";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
+
+const maxGfmTableRows = 500;
+const maxGfmTableCells = 1_000;
+const maxGfmTableHtmlLength = 100_000;
+const gfmTableChunkRows = 100;
+const preservedTablePlaceholderAttribute = "data-docs-mcp-preserved-table-id";
 
 /**
  * Middleware to convert the final processed HTML content (from Cheerio object in context.dom)
@@ -11,6 +19,8 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
  */
 export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
   private turndownService: TurndownService;
+  private readonly preservedTableHtml = new Map<string, string>();
+  private preservedTableSequence = 0;
 
   constructor() {
     this.turndownService = new TurndownService({
@@ -94,10 +104,131 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
         return `[${normalizedContent}](${href})`; // Standard link conversion
       },
     });
+    this.turndownService.addRule("preservedOversizedTable", {
+      filter: (node: Node) => {
+        const element = node as HTMLElement;
+        return (
+          element.nodeName === "DIV" &&
+          element.hasAttribute(preservedTablePlaceholderAttribute)
+        );
+      },
+      replacement: (_content: string, node: Node) => {
+        const element = node as HTMLElement;
+        const tableId = element.getAttribute(preservedTablePlaceholderAttribute);
+        const tableHtml = tableId ? this.preservedTableHtml.get(tableId) : undefined;
+        return tableHtml ? `\n\n${tableHtml}\n\n` : "";
+      },
+    });
   }
 
   private normalizeLinkContent(content: string): string {
     return fullTrim(content).replace(/[ \t]*[\r\n]+[ \t]*/g, " ");
+  }
+
+  private splitOversizedTables($: cheerio.CheerioAPI, source: string): void {
+    $("table").each((_index, element) => {
+      const $table = $(element);
+      const rowCount = $table.find("tr").length;
+      const cellCount = $table.find("td, th").length;
+      const htmlLength = $.html(element).length;
+
+      if (
+        rowCount <= maxGfmTableRows &&
+        cellCount <= maxGfmTableCells &&
+        htmlLength <= maxGfmTableHtmlLength
+      ) {
+        return;
+      }
+
+      const replacement = this.buildSplitTableHtml($, $table);
+      if (!replacement) {
+        const tableId = `table-${++this.preservedTableSequence}`;
+        this.preservedTableHtml.set(tableId, $.html(element));
+        logger.warn(
+          `⚠️  Preserving oversized HTML table for ${source} as HTML before GFM conversion: ${rowCount} rows, ${cellCount} cells, ${htmlLength} chars`,
+        );
+        $table.replaceWith(
+          `<div ${preservedTablePlaceholderAttribute}="${tableId}">preserved table</div>`,
+        );
+        return;
+      }
+
+      logger.warn(
+        `⚠️  Splitting oversized HTML table for ${source} before GFM conversion: ${rowCount} rows, ${cellCount} cells, ${htmlLength} chars`,
+      );
+      $table.replaceWith(replacement);
+    });
+  }
+
+  private buildSplitTableHtml(
+    $: cheerio.CheerioAPI,
+    $table: cheerio.Cheerio<Element>,
+  ): string | null {
+    const headerRows = this.getHeaderRows($table);
+    const headerRowSet = new Set(headerRows);
+    const dataRows = $table
+      .find("tr")
+      .toArray()
+      .filter((row): row is Element => row.type === "tag" && !headerRowSet.has(row));
+
+    if (dataRows.length <= gfmTableChunkRows) {
+      return null;
+    }
+
+    const chunks: string[] = [];
+    const headerHtml = headerRows.map((row) => $.html(row)).join("");
+    const preservedChildHtml = this.getPreservedTableChildHtml($, $table);
+
+    for (let index = 0; index < dataRows.length; index += gfmTableChunkRows) {
+      const rowsHtml = dataRows
+        .slice(index, index + gfmTableChunkRows)
+        .map((row) => $.html(row))
+        .join("");
+      const tableParts = ["<table>", preservedChildHtml];
+      if (headerHtml) {
+        tableParts.push("<thead>", headerHtml, "</thead>");
+      }
+      tableParts.push("<tbody>", rowsHtml, "</tbody></table>");
+      chunks.push(tableParts.join(""));
+    }
+
+    return chunks.join("\n");
+  }
+
+  private getPreservedTableChildHtml(
+    $: cheerio.CheerioAPI,
+    $table: cheerio.Cheerio<Element>,
+  ): string {
+    return $table
+      .children("caption, colgroup")
+      .toArray()
+      .filter((child): child is Element => child.type === "tag")
+      .map((child) => $.html(child))
+      .join("");
+  }
+
+  private getHeaderRows($table: cheerio.Cheerio<Element>): Element[] {
+    const theadRows = $table
+      .children("thead")
+      .find("tr")
+      .toArray()
+      .filter((row): row is Element => row.type === "tag");
+
+    if (theadRows.length > 0) {
+      return theadRows;
+    }
+
+    const firstRow = $table.find("tr").first();
+    if (firstRow.length === 0) {
+      return [];
+    }
+
+    const cells = firstRow.children("th, td").toArray();
+    const isHeaderRow =
+      cells.length > 0 &&
+      cells.every((cell) => cell.type === "tag" && cell.tagName === "th");
+
+    return isHeaderRow ? (firstRow.toArray() as Element[]) : [];
   }
 
   /**
@@ -119,6 +250,8 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
     // Only process if we have a Cheerio object (implicitly means it's HTML)
     try {
       logger.debug(`Converting HTML content to Markdown for ${context.source}`);
+      this.preservedTableHtml.clear();
+      this.splitOversizedTables($, context.source);
       // Provide Turndown with the HTML string content from the Cheerio object's body,
       // or the whole document if body is empty/unavailable.
       const htmlToConvert = $("body").html() || $.html();
@@ -147,6 +280,8 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
         ),
       );
       // Decide if pipeline should stop? For now, continue.
+    } finally {
+      this.preservedTableHtml.clear();
     }
 
     // Call the next middleware in the chain regardless of whether conversion happened

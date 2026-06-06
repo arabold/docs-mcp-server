@@ -127,6 +127,128 @@ describe("HtmlToMarkdownMiddleware", () => {
     // No close needed
   });
 
+  it("should split oversized tables before GFM conversion while retaining content", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    const rows = Array.from(
+      { length: 505 },
+      (_, index) =>
+        `<tr><td>Row ${index + 1}</td><td><strong>Value ${index + 1}</strong></td></tr>`,
+    ).join("");
+    const html = `
+      <html><body>
+        <table>
+          <thead><tr><th>Name</th><th>Value</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(context.errors).toHaveLength(0);
+    expect(context.content).toContain("| Row 1 | **Value 1** |");
+    expect(context.content).toContain("| Row 505 | **Value 505** |");
+    expect(context.content.match(/\| Name \| Value \|/g)).toHaveLength(6);
+  });
+
+  it("should preserve captions and colgroups when splitting oversized tables", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    const rows = Array.from(
+      { length: 505 },
+      (_, index) => `<tr><td>Row ${index + 1}</td><td>Value ${index + 1}</td></tr>`,
+    ).join("");
+    const html = `
+      <html><body>
+        <table>
+          <caption>Release matrix</caption>
+          <colgroup><col span="2"></colgroup>
+          <thead><tr><th>Name</th><th>Value</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+    const originalTurndown = TurndownService.prototype.turndown;
+    let convertedHtml = "";
+    const turndownSpy = vi
+      .spyOn(TurndownService.prototype, "turndown")
+      .mockImplementation(function (
+        this: TurndownService,
+        input: Parameters<TurndownService["turndown"]>[0],
+      ) {
+        convertedHtml = String(input);
+        return originalTurndown.call(this, String(input));
+      });
+
+    try {
+      await middleware.process(context, next);
+
+      expect(next).toHaveBeenCalledOnce();
+      expect(context.errors).toHaveLength(0);
+      expect(convertedHtml.match(/<caption>Release matrix<\/caption>/g)).toHaveLength(6);
+      expect(convertedHtml.match(/<colgroup><col span="2"><\/colgroup>/g)).toHaveLength(
+        6,
+      );
+      expect(convertedHtml).toContain(
+        '<table><caption>Release matrix</caption><colgroup><col span="2"></colgroup><thead>',
+      );
+      expect(context.content.match(/Release matrix/g)).toHaveLength(6);
+      expect(context.content).toContain("| Row 505 | Value 505 |");
+    } finally {
+      turndownSpy.mockRestore();
+    }
+  });
+
+  it("should preserve oversized tables as HTML when row splitting is not possible", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    const headerCells = Array.from(
+      { length: 1001 },
+      (_, index) => `<th>Header ${index + 1}</th>`,
+    ).join("");
+    const dataCells = Array.from(
+      { length: 1001 },
+      (_, index) => `<td>Value ${index + 1}</td>`,
+    ).join("");
+    const html = `
+      <html><body>
+        <table>
+          <thead><tr>${headerCells}</tr></thead>
+          <tbody><tr>${dataCells}</tr></tbody>
+        </table>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+    const originalTurndown = TurndownService.prototype.turndown;
+    let convertedHtml = "";
+    const turndownSpy = vi
+      .spyOn(TurndownService.prototype, "turndown")
+      .mockImplementation(function (
+        this: TurndownService,
+        input: Parameters<TurndownService["turndown"]>[0],
+      ) {
+        convertedHtml = String(input);
+        return originalTurndown.call(this, String(input));
+      });
+
+    try {
+      await middleware.process(context, next);
+
+      expect(next).toHaveBeenCalledOnce();
+      expect(context.errors).toHaveLength(0);
+      expect(convertedHtml).toContain("data-docs-mcp-preserved-table-id");
+      expect(convertedHtml).not.toContain("<th>Header 1</th>");
+      expect(context.content).toContain("<table>");
+      expect(context.content).toContain("<th>Header 1</th>");
+      expect(context.content).toContain("<td>Value 1001</td>");
+      expect(context.content).not.toContain("data-docs-mcp-preserved-table-id");
+      expect(context.content).not.toContain("| Header 1 |");
+    } finally {
+      turndownSpy.mockRestore();
+    }
+  });
+
   it("should return empty string and markdown type if conversion results in empty markdown", async () => {
     const middleware = new HtmlToMarkdownMiddleware();
     // HTML that results in empty markdown (only comments)
