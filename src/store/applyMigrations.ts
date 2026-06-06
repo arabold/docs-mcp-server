@@ -8,6 +8,71 @@ import { StoreError } from "./errors";
 // Construct the absolute path to the migrations directory using the project root
 const MIGRATIONS_DIR = path.join(getProjectRoot(), "db", "migrations");
 const MIGRATIONS_TABLE = "_schema_migrations";
+const MIGRATION_STEP_MARKER = /^\s*--\s*@migration-step\s+(.+?)\s*$/;
+
+interface MigrationStep {
+  label: string;
+  sql: string;
+}
+
+/**
+ * Splits migration SQL into executable blocks using full-line migration markers.
+ * SQL before the first marker is treated as an implicit prepare block, and SQL
+ * without markers is treated as a single migration block.
+ *
+ * @param sql The migration SQL file contents.
+ * @returns Executable migration steps in source order.
+ */
+export function parseMigrationSteps(sql: string): MigrationStep[] {
+  const lines = sql.split(/\r?\n/);
+  const steps: MigrationStep[] = [];
+  let currentLabel = "prepare";
+  let currentLines: string[] = [];
+  let hasMarkers = false;
+
+  const pushCurrentStep = () => {
+    const currentSql = currentLines.join("\n").trim();
+    if (hasExecutableSql(currentSql)) {
+      steps.push({
+        label: hasMarkers ? currentLabel : "migration",
+        sql: currentSql,
+      });
+    }
+    currentLines = [];
+  };
+
+  for (const line of lines) {
+    const marker = line.match(MIGRATION_STEP_MARKER);
+    if (marker) {
+      hasMarkers = true;
+      pushCurrentStep();
+      currentLabel = marker[1].trim();
+      continue;
+    }
+
+    currentLines.push(line);
+  }
+
+  pushCurrentStep();
+
+  return steps;
+}
+
+function hasExecutableSql(sql: string): boolean {
+  return sql
+    .split(/\r?\n/)
+    .some((line) => line.trim() !== "" && !line.trim().startsWith("--"));
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 60_000) {
+    return `${(ms / 1000).toFixed(1)}s`;
+  }
+
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = ((ms % 60_000) / 1000).toFixed(1).padStart(4, "0");
+  return `${minutes}m ${seconds}s`;
+}
 
 /**
  * Ensures the migration tracking table exists in the database.
@@ -33,6 +98,44 @@ function getAppliedMigrations(db: Database): Set<string> {
   return new Set(rows.map((row) => row.id));
 }
 
+function executeMigrationSql(
+  db: Database,
+  filename: string,
+  sql: string,
+  migrationIndex: number,
+  migrationTotal: number,
+): void {
+  const steps = parseMigrationSteps(sql);
+  const migrationStartedAt = Date.now();
+
+  logger.info(`🔄 Applying migration ${migrationIndex}/${migrationTotal} ${filename}`);
+
+  try {
+    if (steps.length === 0) {
+      logger.info("  . no executable SQL (0.0s)");
+    }
+
+    for (const step of steps) {
+      const stepStartedAt = Date.now();
+      db.exec(step.sql);
+      logger.info(`  . ${step.label} (${formatDuration(Date.now() - stepStartedAt)})`);
+    }
+
+    logger.info(
+      `✅ Completed migration ${migrationIndex}/${migrationTotal} ${filename} in ${formatDuration(
+        Date.now() - migrationStartedAt,
+      )}`,
+    );
+  } catch (error) {
+    logger.error(
+      `❌ Failed migration ${migrationIndex}/${migrationTotal} ${filename} after ${formatDuration(
+        Date.now() - migrationStartedAt,
+      )}`,
+    );
+    throw error;
+  }
+}
+
 /**
  * Applies pending database migrations found in the migrations directory.
  * Migrations are expected to be .sql files with sequential prefixes (e.g., 001-, 002-).
@@ -51,16 +154,15 @@ export async function applyMigrations(
 ): Promise<void> {
   const maxRetries = options?.maxRetries ?? 5;
   const retryDelayMs = options?.retryDelayMs ?? 300;
-  // Apply performance optimizations for large dataset migrations
+  // Keep journaling enabled so schema migrations can roll back if any DDL step fails.
   try {
-    db.pragma("journal_mode = OFF");
-    db.pragma("synchronous = OFF");
+    db.pragma("synchronous = NORMAL");
     db.pragma("mmap_size = 268435456"); // 256MB memory mapping
     db.pragma("cache_size = -64000"); // 64MB cache (default is ~2MB)
     db.pragma("temp_store = MEMORY"); // Store temporary data in memory
-    logger.debug("Applied performance optimizations for migration");
+    logger.debug("Applied safe migration pragmas");
   } catch (_error) {
-    logger.warn("⚠️  Could not apply all performance optimizations for migration");
+    logger.warn("⚠️  Could not apply all migration pragmas");
   }
 
   const overallTransaction = db.transaction(() => {
@@ -86,14 +188,14 @@ export async function applyMigrations(
     }
 
     let appliedCount = 0;
-    for (const filename of pendingMigrations) {
+    for (const [index, filename] of pendingMigrations.entries()) {
       logger.debug(`Applying migration: ${filename}`);
       const filePath = path.join(MIGRATIONS_DIR, filename);
       const sql = fs.readFileSync(filePath, "utf8");
 
       // Execute migration and record it directly within the overall transaction
       try {
-        db.exec(sql);
+        executeMigrationSql(db, filename, sql, index + 1, pendingMigrations.length);
         const insertStmt = db.prepare(`INSERT INTO ${MIGRATIONS_TABLE} (id) VALUES (?)`);
         insertStmt.run(filename);
         logger.debug(`Applied migration: ${filename}`);

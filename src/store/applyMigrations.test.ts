@@ -1,9 +1,13 @@
 // Integration test for database migrations using a real SQLite database
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyMigrations } from "./applyMigrations";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { logger } from "../utils/logger";
+import { applyMigrations, parseMigrationSteps } from "./applyMigrations";
 
 describe("Database Migrations", () => {
   let db: DatabaseType;
@@ -15,10 +19,75 @@ describe("Database Migrations", () => {
 
   afterEach(() => {
     db.close();
+    vi.restoreAllMocks();
   });
 
-  it("should apply all migrations and create expected tables and columns", () => {
-    expect(() => applyMigrations(db)).not.toThrow();
+  it("should parse migration step markers without splitting SQL statements", () => {
+    const steps = parseMigrationSteps(`
+      CREATE TABLE first(id INTEGER);
+      INSERT INTO first VALUES (1);
+
+      -- @migration-step create trigger
+      CREATE TRIGGER first_after_insert AFTER INSERT ON first BEGIN
+        INSERT INTO first VALUES (NEW.id + 1);
+      END;
+
+      -- @migration-step finish
+      INSERT INTO first VALUES (3);
+    `);
+
+    expect(steps).toEqual([
+      {
+        label: "prepare",
+        sql: "CREATE TABLE first(id INTEGER);\n      INSERT INTO first VALUES (1);",
+      },
+      {
+        label: "create trigger",
+        sql: "CREATE TRIGGER first_after_insert AFTER INSERT ON first BEGIN\n        INSERT INTO first VALUES (NEW.id + 1);\n      END;",
+      },
+      {
+        label: "finish",
+        sql: "INSERT INTO first VALUES (3);",
+      },
+    ]);
+  });
+
+  it("should treat unmarked migrations as a single implicit block", () => {
+    const steps = parseMigrationSteps(`
+      -- Migration without explicit checkpoints
+      CREATE TABLE unmarked(id INTEGER);
+      INSERT INTO unmarked VALUES (1);
+    `);
+
+    expect(steps).toEqual([
+      {
+        label: "migration",
+        sql: "-- Migration without explicit checkpoints\n      CREATE TABLE unmarked(id INTEGER);\n      INSERT INTO unmarked VALUES (1);",
+      },
+    ]);
+  });
+
+  it("should skip comment-only migration blocks", () => {
+    const steps = parseMigrationSteps(`
+      -- @migration-step comment only
+      -- no executable statements here
+
+      -- @migration-step create table
+      CREATE TABLE executable(id INTEGER);
+    `);
+
+    expect(steps).toEqual([
+      {
+        label: "create table",
+        sql: "CREATE TABLE executable(id INTEGER);",
+      },
+    ]);
+  });
+
+  it("should apply all migrations and create expected tables and columns", async () => {
+    const infoSpy = vi.spyOn(logger, "info");
+
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     // Check tables
     const tables = db
@@ -113,11 +182,21 @@ describe("Database Migrations", () => {
     expect(vecTableInfo).toBeDefined();
     expect(vecTableInfo?.sql).toContain("library_id INTEGER partition key");
     expect(vecTableInfo?.sql).toContain("version_id INTEGER partition key");
+
+    const infoMessages = infoSpy.mock.calls.map(([message]) => message).join("\n");
+    expect(infoMessages).toMatch(/Applying migration 1\/\d+ 000-initial-schema\.sql/);
+    expect(infoMessages).toContain("  . migration");
+    expect(infoMessages).toMatch(
+      /Applying migration \d+\/\d+ 014-rebuild-vector-partition-keys\.sql/,
+    );
+    expect(infoMessages).toContain("  . preserve existing vectors");
+    expect(infoMessages).toContain("  . cleanup staging data");
+    expect(infoMessages).toMatch(/Completed migration \d+\/\d+ .* in \d+\.\d+s/);
   });
 
-  it("should handle vector search with empty results gracefully", () => {
+  it("should handle vector search with empty results gracefully", async () => {
     // Apply all migrations (documents_vec exists from migration 003 with 1536d)
-    expect(() => applyMigrations(db)).not.toThrow();
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     // Insert a library and version but no documents
     db.prepare("INSERT INTO libraries (name) VALUES (?)").run("empty-lib");
@@ -183,9 +262,16 @@ describe("Database Migrations", () => {
       libraryId,
       "1.0.0",
     );
+    db.prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)").run(
+      libraryId,
+      "2.0.0",
+    );
     const { id: versionId } = db
       .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
       .get(libraryId, "1.0.0") as { id: number };
+    const { id: staleVersionId } = db
+      .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
+      .get(libraryId, "2.0.0") as { id: number };
 
     const pageId = db
       .prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)")
@@ -235,7 +321,7 @@ describe("Database Migrations", () => {
     ).run(
       BigInt(preservedDocId),
       BigInt(libraryId),
-      BigInt(versionId),
+      BigInt(staleVersionId),
       JSON.stringify(preservedVector),
     );
 
@@ -257,6 +343,12 @@ describe("Database Migrations", () => {
       .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
       .get(preservedDocId) as { cnt: number };
     expect(vectorRows.cnt).toBe(1);
+
+    const partitionKeys = db
+      .prepare("SELECT library_id, version_id FROM documents_vec WHERE rowid = ?")
+      .get(preservedDocId) as { library_id: number; version_id: number };
+    expect(partitionKeys.library_id).toBe(libraryId);
+    expect(partitionKeys.version_id).toBe(versionId);
 
     const backfilledVectorRows = db
       .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
@@ -280,9 +372,133 @@ describe("Database Migrations", () => {
     expect(result?.distance).toBeCloseTo(0, 6);
   });
 
-  it("should perform vector search and return similar vectors correctly", () => {
+  it("should preserve the old vector table if partition migration fails", async () => {
+    const tempDir = mkdtempSync(path.join(tmpdir(), "docs-mcp-migration-"));
+    const dbPath = path.join(tempDir, "migration.sqlite");
+    const migrationDb = new Database(dbPath);
+    sqliteVec.load(migrationDb);
+
+    try {
+      await expect(applyMigrations(migrationDb)).resolves.toBeUndefined();
+
+      migrationDb.prepare("INSERT INTO libraries (name) VALUES (?)").run("rollback-lib");
+      const { id: libraryId } = migrationDb
+        .prepare("SELECT id FROM libraries WHERE name = ?")
+        .get("rollback-lib") as { id: number };
+      migrationDb
+        .prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)")
+        .run(libraryId, "1.0.0");
+      const { id: versionId } = migrationDb
+        .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
+        .get(libraryId, "1.0.0") as { id: number };
+      const pageId = migrationDb
+        .prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)")
+        .run(versionId, "https://example.com/rollback", "Rollback").lastInsertRowid as
+        | number
+        | bigint;
+      const preservedVector = new Array(1536)
+        .fill(0)
+        .map((_, index) => (index === 0 ? 1 : 0));
+      const preservedDocId = migrationDb
+        .prepare(
+          "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, ?, ?, ?)",
+        )
+        .run(pageId, "Preserved vector content", JSON.stringify({ path: "/rollback" }), 0)
+        .lastInsertRowid as number | bigint;
+
+      migrationDb.exec(`
+        CREATE TABLE _test_existing_vectors AS
+        SELECT rowid, library_id, version_id, embedding FROM documents_vec;
+        DROP TABLE documents_vec;
+        CREATE VIRTUAL TABLE documents_vec USING vec0(
+          library_id INTEGER NOT NULL,
+          version_id INTEGER NOT NULL,
+          embedding FLOAT[1536]
+        );
+        INSERT INTO documents_vec (rowid, library_id, version_id, embedding)
+        SELECT rowid, library_id, version_id, embedding FROM _test_existing_vectors;
+        DROP TABLE _test_existing_vectors;
+        DELETE FROM documents_vec;
+        DROP TRIGGER IF EXISTS documents_vec_after_insert;
+        DROP TRIGGER IF EXISTS documents_vec_after_update;
+        DROP TRIGGER IF EXISTS documents_vec_after_delete;
+      `);
+      migrationDb
+        .prepare(
+          "INSERT INTO documents_vec (rowid, library_id, version_id, embedding) VALUES (?, ?, ?, ?)",
+        )
+        .run(
+          BigInt(preservedDocId),
+          BigInt(libraryId),
+          BigInt(versionId),
+          JSON.stringify(preservedVector),
+        );
+      migrationDb
+        .prepare(
+          "INSERT INTO documents (page_id, content, metadata, sort_order, embedding) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          pageId,
+          "Malformed embedding content",
+          JSON.stringify({ path: "/rollback-malformed" }),
+          1,
+          "not-json",
+        );
+      migrationDb
+        .prepare("DELETE FROM _schema_migrations WHERE id = ?")
+        .run("014-rebuild-vector-partition-keys.sql");
+
+      const errorSpy = vi.spyOn(logger, "error");
+      await expect(applyMigrations(migrationDb)).rejects.toThrow(
+        "Migration failed: 014-rebuild-vector-partition-keys.sql",
+      );
+      const errorMessages = errorSpy.mock.calls.map(([message]) => message).join("\n");
+      expect(errorMessages).toMatch(
+        /Failed migration 1\/1 014-rebuild-vector-partition-keys\.sql after \d+\.\d+s/,
+      );
+
+      const migrationMarker = migrationDb
+        .prepare("SELECT id FROM _schema_migrations WHERE id = ?")
+        .get("014-rebuild-vector-partition-keys.sql");
+      expect(migrationMarker).toBeUndefined();
+
+      const ddl = migrationDb
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_vec';",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).not.toContain("partition key");
+
+      const vectorRows = migrationDb
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
+        .get(preservedDocId) as { cnt: number };
+      expect(vectorRows.cnt).toBe(1);
+
+      const stagingTable = migrationDb
+        .prepare("SELECT name FROM sqlite_master WHERE name = ?")
+        .get("_documents_vec_partition_migration");
+      expect(stagingTable).toBeUndefined();
+
+      migrationDb
+        .prepare("UPDATE documents SET embedding = NULL WHERE content = ?")
+        .run("Malformed embedding content");
+
+      await expect(applyMigrations(migrationDb)).resolves.toBeUndefined();
+      const retriedMigrationMarker = migrationDb
+        .prepare("SELECT id FROM _schema_migrations WHERE id = ?")
+        .get("014-rebuild-vector-partition-keys.sql");
+      expect(retriedMigrationMarker).toEqual({
+        id: "014-rebuild-vector-partition-keys.sql",
+      });
+    } finally {
+      migrationDb.close();
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("should perform vector search and return similar vectors correctly", async () => {
     // Apply all migrations (documents_vec exists from migration 003 with 1536d)
-    expect(() => applyMigrations(db)).not.toThrow();
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     // Insert test library and version
     db.prepare("INSERT INTO libraries (name) VALUES (?)").run("test-lib");
@@ -488,9 +704,9 @@ describe("Database Migrations", () => {
     expect(allDistances[1]).toBeLessThan(allDistances[2]); // Worst match has highest distance
   });
 
-  it("should perform FTS search and return relevant text matches correctly", () => {
+  it("should perform FTS search and return relevant text matches correctly", async () => {
     // Apply all migrations (documents_vec exists from migration 003; triggers from 011 sync on document insert)
-    expect(() => applyMigrations(db)).not.toThrow();
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     // Insert test library and version
     db.prepare("INSERT INTO libraries (name) VALUES (?)").run("docs-lib");

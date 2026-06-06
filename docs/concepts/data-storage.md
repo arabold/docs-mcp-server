@@ -315,6 +315,26 @@ Database transactions ensure consistency:
 - Batch operations for performance
 - Automatic rollback on errors
 
+### Migration Safety
+
+Schema migrations run inside an IMMEDIATE transaction with rollback-capable
+SQLite journaling enabled. The migration runner does not use `journal_mode =
+OFF` during migration execution because destructive migrations may need to drop
+and recreate tables or virtual tables, and rollback must preserve the
+pre-migration database if a later step fails.
+
+The runner still applies rollback-safe tuning for large migrations, including
+cache, memory mapping, temporary storage, and `synchronous = NORMAL` settings.
+After migrations finish, it configures production settings such as WAL mode,
+bounded WAL checkpointing, busy timeout, foreign keys, and normal synchronous
+durability.
+
+Large or destructive migrations should be validated against a copy of important
+local databases before running them against the live store. Use SQLite's backup
+API or an application-level export/copy workflow so the copy is consistent, then
+run the new version against that copy and verify expected table counts and
+search behavior before migrating high-value data.
+
 ### Concurrent Access
 
 Safe concurrent database access:
