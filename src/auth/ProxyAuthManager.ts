@@ -83,6 +83,7 @@ export class ProxyAuthManager {
     userinfoUrl?: string;
   } | null = null;
   private jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+  private resourceOrigin: string | null = null;
 
   constructor(private config: AuthConfig) {}
 
@@ -159,6 +160,8 @@ export class ProxyAuthManager {
     if (!this.proxyProvider) {
       throw new Error("Proxy provider not initialized");
     }
+
+    this.resourceOrigin = baseUrl.origin;
 
     // OAuth2 Authorization Server Metadata (RFC 8414)
     server.get("/.well-known/oauth-authorization-server", async (_request, reply) => {
@@ -432,13 +435,14 @@ export class ProxyAuthManager {
    * Get supported resource URLs for this MCP server instance.
    * This enables self-discovering resource validation per MCP Authorization spec.
    */
-  private getSupportedResources(request: FastifyRequest): string[] {
-    const baseUrl = `${request.protocol}://${request.headers.host}`;
-
+  private getSupportedResources(): string[] {
+    if (!this.resourceOrigin) {
+      return [];
+    }
     return [
-      `${baseUrl}/sse`, // SSE transport
-      `${baseUrl}/mcp`, // Streaming HTTP transport
-      `${baseUrl}`, // Server root
+      `${this.resourceOrigin}/sse`, // SSE transport
+      `${this.resourceOrigin}/mcp`, // Streaming HTTP transport
+      this.resourceOrigin, // Server root
     ];
   }
 
@@ -510,7 +514,7 @@ export class ProxyAuthManager {
 
         // Optional: Resource validation if MCP Authorization spec requires it
         if (request) {
-          const supportedResources = this.getSupportedResources(request);
+          const supportedResources = this.getSupportedResources();
           logger.debug(`Supported resources: ${JSON.stringify(supportedResources)}`);
           // For now, we allow access if the token is valid - binary authentication
         }

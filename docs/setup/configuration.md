@@ -114,6 +114,7 @@ Common settings have dedicated CLI flags:
 
 ```bash
 docs-mcp-server --port 8080 --host 0.0.0.0
+docs-mcp-server --host 0.0.0.0 --public-origin https://docs.example.com
 docs-mcp-server --store-path /data/docs --read-only
 ```
 
@@ -165,7 +166,8 @@ Settings for the API and MCP servers.
 | Option | Default | Description |
 |:-------|:--------|:------------|
 | `protocol` | `auto` | Server protocol (`stdio`, `http`, or `auto`). |
-| `host` | `127.0.0.1` | Host interface to bind to. |
+| `host` | `127.0.0.1` | Host interface to bind to. Use `0.0.0.0` to listen on all IPv4 interfaces. |
+| `publicOrigin` | - | Externally reachable origin advertised to clients, such as `https://docs.example.com`. Set this when the bind host is not the URL clients should use. |
 | `heartbeatMs` | `30000` | MCP protocol heartbeat interval (ms). |
 | `ports.default` | `6280` | Default port for the main server. |
 | `ports.worker` | `8080` | Port for the background worker service. |

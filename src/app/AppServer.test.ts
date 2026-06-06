@@ -4,11 +4,12 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import { type AppConfig, loadConfig } from "../utils/config";
+import { logger } from "../utils/logger";
 import { AppServer } from "./AppServer";
 import type { AppServerConfig } from "./AppServerConfig";
 
@@ -18,6 +19,7 @@ const mockFastify = vi.hoisted(() => ({
   listen: vi.fn(),
   close: vi.fn(),
   setErrorHandler: vi.fn(), // Add missing mock method
+  addHook: vi.fn(),
   server: {
     on: vi.fn(), // Mock HTTP server for WebSocket upgrade handling
     closeAllConnections: vi.fn(), // Mock for forcing connection closure
@@ -43,6 +45,11 @@ const mockWorkerService = vi.hoisted(() => ({
   stopWorkerService: vi.fn(),
 }));
 
+const mockProxyAuthManager = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  registerRoutes: vi.fn(),
+}));
+
 // Apply mocks using hoisted values
 vi.mock("fastify", () => ({
   default: vi.fn(() => mockFastify),
@@ -52,6 +59,9 @@ vi.mock("../services/mcpService", () => mockMcpService);
 vi.mock("../services/trpcService", () => mockTrpcService);
 vi.mock("../services/webService", () => mockWebService);
 vi.mock("../services/workerService", () => mockWorkerService);
+vi.mock("../auth", () => ({
+  ProxyAuthManager: vi.fn(() => mockProxyAuthManager),
+}));
 vi.mock("../utils/paths", () => ({
   getProjectRoot: vi.fn(() => "/mock/project/root"),
 }));
@@ -85,12 +95,19 @@ describe("AppServer Behavior Tests", () => {
     mockFastify.register.mockResolvedValue(undefined);
     mockFastify.listen.mockResolvedValue("http://localhost:3000");
     mockFastify.close.mockResolvedValue(undefined);
+    mockFastify.addHook.mockReturnValue(undefined);
     mockMcpService.registerMcpService.mockResolvedValue(mockMcpServer as McpServer);
     mockMcpService.cleanupMcpService.mockResolvedValue(undefined);
     mockTrpcService.registerTrpcService.mockResolvedValue(undefined);
     mockWebService.registerWebService.mockResolvedValue(undefined);
     mockWorkerService.registerWorkerService.mockResolvedValue(undefined);
     mockWorkerService.stopWorkerService.mockResolvedValue(undefined);
+    mockProxyAuthManager.initialize.mockResolvedValue(undefined);
+    mockProxyAuthManager.registerRoutes.mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe("Configuration Validation", () => {
@@ -428,6 +445,195 @@ describe("AppServer Behavior Tests", () => {
         host: "0.0.0.0",
       });
       expect(fastifyInstance).toBe(mockFastify);
+    });
+
+    it("should log startup URLs using configured bind host instead of listen address", async () => {
+      const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => undefined);
+      const config: AppServerConfig = {
+        enableWebInterface: true,
+        enableMcpServer: true,
+        enableApiServer: true,
+        enableWorker: true,
+        port: 6280,
+        showLogo: false,
+      };
+      const appConfigWithHost: AppConfig = JSON.parse(JSON.stringify(appConfig));
+      appConfigWithHost.server.host = "0.0.0.0";
+      mockFastify.listen.mockResolvedValue("http://127.0.0.1:6280");
+
+      const server = new AppServer(
+        mockDocService as DocumentManagementService,
+        mockPipeline as IPipeline,
+        eventBus,
+        config,
+        appConfigWithHost,
+      );
+
+      await server.start();
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        "🚀 Grounded Docs available at http://0.0.0.0:6280",
+      );
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "MCP endpoints: http://0.0.0.0:6280/mcp, http://0.0.0.0:6280/sse",
+        ),
+      );
+      expect(infoSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("http://127.0.0.1:6280"),
+      );
+    });
+
+    it("should prefer public origin in startup URLs", async () => {
+      const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => undefined);
+      const config: AppServerConfig = {
+        enableWebInterface: true,
+        enableMcpServer: true,
+        enableApiServer: true,
+        enableWorker: true,
+        port: 6280,
+        showLogo: false,
+      };
+      const appConfigWithPublicOrigin: AppConfig = JSON.parse(JSON.stringify(appConfig));
+      appConfigWithPublicOrigin.server.host = "0.0.0.0";
+      appConfigWithPublicOrigin.server.publicOrigin = "https://docs.example.com";
+
+      const server = new AppServer(
+        mockDocService as DocumentManagementService,
+        mockPipeline as IPipeline,
+        eventBus,
+        config,
+        appConfigWithPublicOrigin,
+      );
+
+      await server.start();
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        "🚀 Grounded Docs available at https://docs.example.com",
+      );
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "MCP endpoints: https://docs.example.com/mcp, https://docs.example.com/sse",
+        ),
+      );
+    });
+
+    it("should register OAuth metadata with public origin when configured", async () => {
+      const config: AppServerConfig = {
+        enableWebInterface: false,
+        enableMcpServer: true,
+        enableApiServer: false,
+        enableWorker: true,
+        port: 6280,
+        showLogo: false,
+      };
+      const appConfigWithAuth: AppConfig = JSON.parse(JSON.stringify(appConfig));
+      appConfigWithAuth.auth.enabled = true;
+      appConfigWithAuth.auth.issuerUrl = "https://auth.example.com";
+      appConfigWithAuth.auth.audience = "https://docs.example.com";
+      appConfigWithAuth.server.host = "0.0.0.0";
+      appConfigWithAuth.server.publicOrigin = "https://docs.example.com";
+
+      const server = new AppServer(
+        mockDocService as DocumentManagementService,
+        mockPipeline as IPipeline,
+        eventBus,
+        config,
+        appConfigWithAuth,
+      );
+
+      await server.start();
+
+      expect(mockProxyAuthManager.registerRoutes).toHaveBeenCalledWith(
+        mockFastify,
+        new URL("https://docs.example.com"),
+      );
+    });
+
+    it("should register OAuth metadata with bind-derived origin when public origin is absent", async () => {
+      const config: AppServerConfig = {
+        enableWebInterface: false,
+        enableMcpServer: true,
+        enableApiServer: false,
+        enableWorker: true,
+        port: 6280,
+        showLogo: false,
+      };
+      const appConfigWithAuth: AppConfig = JSON.parse(JSON.stringify(appConfig));
+      appConfigWithAuth.auth.enabled = true;
+      appConfigWithAuth.auth.issuerUrl = "https://auth.example.com";
+      appConfigWithAuth.auth.audience = "https://docs.example.com";
+      appConfigWithAuth.server.host = "0.0.0.0";
+
+      const server = new AppServer(
+        mockDocService as DocumentManagementService,
+        mockPipeline as IPipeline,
+        eventBus,
+        config,
+        appConfigWithAuth,
+      );
+
+      await server.start();
+
+      expect(mockProxyAuthManager.registerRoutes).toHaveBeenCalledWith(
+        mockFastify,
+        new URL("http://0.0.0.0:6280"),
+      );
+    });
+
+    it("should warn when auth uses wildcard bind without public origin", async () => {
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+      const config: AppServerConfig = {
+        enableWebInterface: false,
+        enableMcpServer: true,
+        enableApiServer: false,
+        enableWorker: true,
+        port: 6280,
+        showLogo: false,
+      };
+      const appConfigWithAuth: AppConfig = JSON.parse(JSON.stringify(appConfig));
+      appConfigWithAuth.auth.enabled = true;
+      appConfigWithAuth.auth.issuerUrl = "https://auth.example.com";
+      appConfigWithAuth.auth.audience = "https://docs.example.com";
+      appConfigWithAuth.server.host = "::";
+
+      const server = new AppServer(
+        mockDocService as DocumentManagementService,
+        mockPipeline as IPipeline,
+        eventBus,
+        config,
+        appConfigWithAuth,
+      );
+
+      await server.start();
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("public origin"));
+    });
+
+    it("should not warn for wildcard bind when auth is disabled", async () => {
+      const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
+      const config: AppServerConfig = {
+        enableWebInterface: false,
+        enableMcpServer: false,
+        enableApiServer: true,
+        enableWorker: false,
+        port: 6280,
+        showLogo: false,
+      };
+      const appConfigWithHost: AppConfig = JSON.parse(JSON.stringify(appConfig));
+      appConfigWithHost.server.host = "0.0.0.0";
+
+      const server = new AppServer(
+        mockDocService as DocumentManagementService,
+        mockPipeline as IPipeline,
+        eventBus,
+        config,
+        appConfigWithHost,
+      );
+
+      await server.start();
+
+      expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it("should successfully start server with all services enabled", async () => {
