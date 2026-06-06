@@ -2,12 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import yaml from "yaml";
 import { expandConfiguredRoot } from "./accessPolicy";
 import {
   camelToUpperSnake,
   collectLeafPaths,
+  defaults,
   getConfigValue,
   isValidConfigPath,
+  isVectorDimensionExplicit,
   loadConfig,
   parseConfigValue,
   pathToEnvVar,
@@ -17,8 +20,8 @@ import { normalizeEnvValue } from "./env";
 // Mock env-paths to return a controlled system path
 vi.mock("env-paths", () => ({
   default: () => ({
-    config: "/system/config-mock",
-    data: "/system/data-mock",
+    config: `${process.cwd()}/.vitest-config-mock`,
+    data: `${process.cwd()}/.vitest-data-mock`,
   }),
 }));
 
@@ -35,6 +38,10 @@ describe("Configuration Loading", () => {
     // Create temp directory for each test
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-test-"));
     originalEnv = { ...process.env };
+    fs.rmSync(path.join(process.cwd(), ".vitest-config-mock"), {
+      recursive: true,
+      force: true,
+    });
 
     // Clear relevant env vars
     delete process.env.DOCS_MCP_CONFIG;
@@ -42,75 +49,27 @@ describe("Configuration Loading", () => {
     delete process.env.DOCS_MCP_READ_ONLY;
     delete process.env.DOCS_MCP_STORE_PATH;
     delete process.env.DOCS_MCP_AUTH_ENABLED;
-
-    // Redefine system paths to point to our temp dir for testing
-    // Note: We can't easily re-mock env-paths per test because imports are cached.
-    // Instead, we'll use `config.test.ts` logic to simulate system path behavior
-    // by manually ensuring directories exist or passing strict paths.
-
-    // However, the `systemPaths` constant in `config.ts` is initialized at module load time.
-    // To test "system default" behavior properly without writing to actua system paths,
-    // we must ensure `env-paths` returns a path inside `tmpDir` OR we rely on `loadConfig` options.
-    // Since `env-paths` mock relies on static string return, we effectively can't dynamicall change it per test easily.
-
-    // WORKAROUND: We will assume the `env-paths` mock returns "/system/config-mock".
-    // Since we are now using REAL FS, writing to "/system/config-mock" will fail (EACCES or ENOENT).
-    // so we CANNOT test the "default fallback writes to system path" unless we stub proper FS or use `options.searchDir`.
-
-    // Actually, checking `config.ts`:
-    // `const systemPaths = envPaths(...)` is top-level.
-
-    // FOR MERGED TESTING WITH REAL FS:
-    // We should rely on `options.searchDir` for almost everything to keep it safe.
-    // For the specific test "write to system path", we might need to skip or mock `fs` JUST for that test?
-    // Mixing mocked/real fs is hard.
-
-    // ALTERNATIVE: We update the `env-paths` mock to standard `tmpDir`?
-    // No, `tmpDir` changes per test.
-
-    // Let's rely on the strategy of using `options.searchDir` which is what we added in the previous steps.
   });
 
   afterEach(() => {
     // Cleanup
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(path.join(process.cwd(), ".vitest-config-mock"), {
+      recursive: true,
+      force: true,
+    });
     process.env = originalEnv;
     vi.resetAllMocks();
   });
 
   describe("Integration & E2E Scenarios", () => {
     it("should load system defaults and WRITE back when no config provided", () => {
-      // Setup: ensure system config path exists
-      const systemConfigDir = path.join(tmpDir, "system-config-mock");
-      fs.mkdirSync(systemConfigDir, { recursive: true });
-
-      // Mock env-paths to return this temp dir
-      // We can't re-mock, but we can rely on our top-level mock if we can control it?
-      // The top-level mock returns "/system/config-mock".
-      // Since we can't easily change the mock, let's just spy on fs.readFileSync/writeFileSync?
-      // OR, we can use the `configPath` option to simulate "determined system path" if we exposed it, but we don't.
-
-      // Better approach for unit validation:
-      // Since `systemPaths` is hardcoded in the module scope based on the mock,
-      // we can't easily integrate-test the "default path" selection without creating that directory.
-
-      // Let's rely on the fact that `config.ts` imports `env-paths` and we mocked it.
-      // We need to make sure the mocked path is writable.
-      // The mock returns `/system/config-mock`. We can't write there.
-
-      // For this test file, we should probably mock `fs` methods related to the config file
-      // OR mock the `systemPaths` used in `config.ts`? No, that's internal.
-
-      // Strategy:
-      // We will rely on explicit options being passed to `loadConfig` for most tests.
-      // For the "default" case, we accept that it tries to write to `/system/config-mock`
-      // and logs a warning (which we can suppress or inspect).
-
       const config = loadConfig({}, {}); // No args -> Default System Path
 
       expect(config.server.host).toBe("127.0.0.1");
-      // loadConfig should not throw even when the default system config path
-      // is unwritable; it should fall back to in-memory defaults.
+      expect(
+        fs.existsSync(path.join(process.cwd(), ".vitest-config-mock", "config.yaml")),
+      ).toBe(true);
     });
 
     it("should load explicit config from --config and NOT write back", () => {
@@ -567,6 +526,70 @@ describe("Auto-generated Environment Variable Overrides", () => {
     expect(() =>
       loadConfig({}, { configPath: path.join(tmpDir, "dim-neg.yaml") }),
     ).toThrow();
+  });
+
+  describe("embeddings.vectorDimension explicitness", () => {
+    const systemConfigPath = () =>
+      path.join(process.cwd(), ".vitest-config-mock", "config.yaml");
+
+    it("omits generated default vectorDimension from the managed default config", () => {
+      const config = loadConfig({}, {});
+      const content = fs.readFileSync(systemConfigPath(), "utf8");
+      const parsed = yaml.parse(content) as {
+        embeddings?: { vectorDimension?: unknown };
+      };
+
+      expect(isVectorDimensionExplicit(config)).toBe(false);
+      expect(parsed.embeddings?.vectorDimension).toBeUndefined();
+      expect(content).toContain("docs-mcp-server-managed-vector-dimension-omitted");
+    });
+
+    it("treats a default vectorDimension in a managed config as explicit", () => {
+      loadConfig({}, {});
+      const generated = fs.readFileSync(systemConfigPath(), "utf8");
+      const marker = generated
+        .split("\n")
+        .filter((line) => line.startsWith("#"))
+        .join("\n");
+      fs.writeFileSync(
+        systemConfigPath(),
+        `${marker}\nembeddings:\n  vectorDimension: ${defaults.embeddings.vectorDimension}\n`,
+      );
+
+      const config = loadConfig({}, {});
+
+      expect(config.embeddings.vectorDimension).toBe(defaults.embeddings.vectorDimension);
+      expect(isVectorDimensionExplicit(config)).toBe(true);
+      expect(fs.readFileSync(systemConfigPath(), "utf8")).toContain("vectorDimension");
+    });
+
+    it("migrates legacy generated default vectorDimension to implicit omission", () => {
+      fs.mkdirSync(path.dirname(systemConfigPath()), { recursive: true });
+      fs.writeFileSync(systemConfigPath(), yaml.stringify(defaults));
+
+      const config = loadConfig({}, {});
+      const content = fs.readFileSync(systemConfigPath(), "utf8");
+      const parsed = yaml.parse(content) as {
+        embeddings?: { vectorDimension?: unknown };
+      };
+
+      expect(isVectorDimensionExplicit(config)).toBe(false);
+      expect(parsed.embeddings?.vectorDimension).toBeUndefined();
+      expect(content).toContain("docs-mcp-server-managed-vector-dimension-omitted");
+    });
+
+    it("treats a user-authored default vectorDimension as explicit", () => {
+      fs.mkdirSync(path.dirname(systemConfigPath()), { recursive: true });
+      fs.writeFileSync(
+        systemConfigPath(),
+        `embeddings:\n  vectorDimension: ${defaults.embeddings.vectorDimension}\n`,
+      );
+
+      const config = loadConfig({}, {});
+
+      expect(config.embeddings.vectorDimension).toBe(defaults.embeddings.vectorDimension);
+      expect(isVectorDimensionExplicit(config)).toBe(true);
+    });
   });
 
   it("loads scraper security defaults", () => {

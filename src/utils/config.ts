@@ -6,6 +6,16 @@ import { z } from "zod";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
 
+const managedConfigVectorDimensionOmissionMarker =
+  "docs-mcp-server-managed-vector-dimension-omitted";
+const managedConfigHeader = [
+  `# ${managedConfigVectorDimensionOmissionMarker}`,
+  "# embeddings.vectorDimension is omitted when it comes from generated defaults.",
+  "# Add embeddings.vectorDimension explicitly to override native model dimensions.",
+  "",
+].join("\n");
+const vectorDimensionPath = ["embeddings", "vectorDimension"];
+
 const envStringArray = z
   .union([z.array(z.string()), z.string()])
   .transform((value) => {
@@ -472,20 +482,13 @@ export function loadConfig(
 
   // 2. Load Config File (if exists) or use empty object
   const fileConfig = loadConfigFile(configPath) || {};
+  const hasManagedVectorDimensionOmissionMarker =
+    hasManagedConfigVectorDimensionOmissionMarker(configPath);
 
   // 3. Merge Defaults < File
   const baseConfig = deepMerge(defaults, fileConfig) as ConfigObject;
 
-  // 4. Write back to file (Auto-Update) - ONLY if using default path
-  if (!isReadOnlyConfig) {
-    try {
-      saveConfigFile(configPath, baseConfig);
-    } catch (error) {
-      logger.warn(`Failed to save config file to ${configPath}: ${error}`);
-    }
-  }
-
-  // 5. Map Env Vars and CLI Args
+  // 4. Map Env Vars and CLI Args
   const envConfig = mapEnvToConfig();
   const cliConfig = mapCliToConfig(cliArgs);
   const vectorDimensionWasExplicit = wasVectorDimensionExplicit(
@@ -493,7 +496,27 @@ export function loadConfig(
     envConfig,
     cliConfig,
     isReadOnlyConfig,
+    hasManagedVectorDimensionOmissionMarker,
   );
+  const fileVectorDimensionWasExplicit = wasVectorDimensionExplicit(
+    fileConfig,
+    {},
+    {},
+    isReadOnlyConfig,
+    hasManagedVectorDimensionOmissionMarker,
+  );
+
+  // 5. Write back to file (Auto-Update) - ONLY if using default path
+  if (!isReadOnlyConfig) {
+    try {
+      saveConfigFile(configPath, baseConfig, {
+        managedDefaultConfig: true,
+        omitVectorDimension: !fileVectorDimensionWasExplicit,
+      });
+    } catch (error) {
+      logger.warn(`Failed to save config file to ${configPath}: ${error}`);
+    }
+  }
 
   // 6. Merge: Base < Env < CLI
   const mergedInput = deepMerge(
@@ -549,16 +572,31 @@ export function loadConfig(
   const fallback = AppConfigSchema.parse(fallbackInput);
   const fallbackConfig = markVectorDimensionSource(
     fallback as AppConfig,
-    wasVectorDimensionExplicit({}, envConfig, cliConfig, false),
+    wasVectorDimensionExplicit({}, envConfig, cliConfig, false, false),
   );
   if (!isReadOnlyConfig) {
     try {
-      saveConfigFile(configPath, fallbackConfig as unknown as ConfigObject);
+      saveConfigFile(configPath, fallbackConfig as unknown as ConfigObject, {
+        managedDefaultConfig: true,
+        omitVectorDimension: true,
+      });
     } catch (error) {
       logger.warn(`Failed to write fresh config file ${configPath}: ${error}`);
     }
   }
   return fallbackConfig;
+}
+
+function hasManagedConfigVectorDimensionOmissionMarker(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+
+  try {
+    return fs
+      .readFileSync(filePath, "utf8")
+      .includes(managedConfigVectorDimensionOmissionMarker);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -605,35 +643,75 @@ function wasVectorDimensionExplicit(
   envConfig: ConfigObject,
   cliConfig: ConfigObject,
   isReadOnlyConfig: boolean,
+  hasManagedVectorDimensionOmissionMarker: boolean,
 ): boolean {
-  const pathArr = ["embeddings", "vectorDimension"];
   if (
-    getAtPath(envConfig, pathArr) !== undefined ||
-    getAtPath(cliConfig, pathArr) !== undefined
+    getAtPath(envConfig, vectorDimensionPath) !== undefined ||
+    getAtPath(cliConfig, vectorDimensionPath) !== undefined
   ) {
     return true;
   }
 
-  const fileValue = getAtPath(fileConfig, pathArr);
+  const fileValue = getAtPath(fileConfig, vectorDimensionPath);
   if (fileValue === undefined) {
     return false;
   }
 
-  return isReadOnlyConfig || fileValue !== DEFAULT_CONFIG.embeddings.vectorDimension;
+  if (
+    isReadOnlyConfig ||
+    fileValue !== DEFAULT_CONFIG.embeddings.vectorDimension ||
+    hasManagedVectorDimensionOmissionMarker
+  ) {
+    return true;
+  }
+
+  return !looksLikeLegacyGeneratedEmbeddingDefaults(fileConfig);
 }
 
-function saveConfigFile(filePath: string, config: Record<string, unknown>): void {
+function looksLikeLegacyGeneratedEmbeddingDefaults(fileConfig: ConfigObject): boolean {
+  const embeddings = fileConfig.embeddings;
+  if (
+    typeof embeddings !== "object" ||
+    embeddings === null ||
+    Array.isArray(embeddings)
+  ) {
+    return false;
+  }
+
+  return Object.keys(DEFAULT_CONFIG.embeddings).every((key) =>
+    Object.hasOwn(embeddings, key),
+  );
+}
+
+interface SaveConfigOptions {
+  managedDefaultConfig?: boolean;
+  omitVectorDimension?: boolean;
+}
+
+function saveConfigFile(
+  filePath: string,
+  config: Record<string, unknown>,
+  options: SaveConfigOptions = {},
+): void {
   const dir = path.dirname(filePath);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
+  const configToWrite = cloneConfigValue(config) as ConfigObject;
+  if (options.omitVectorDimension) {
+    unsetAtPath(configToWrite, vectorDimensionPath);
+  }
+
   let content: string;
   if (filePath.endsWith(".json")) {
-    content = JSON.stringify(config, null, 2);
+    content = JSON.stringify(configToWrite, null, 2);
   } else {
     // Default to YAML
-    content = yaml.stringify(config);
+    content = yaml.stringify(configToWrite);
+    if (options.managedDefaultConfig) {
+      content = `${managedConfigHeader}${content}`;
+    }
   }
 
   logger.debug(`Updating config file at ${filePath}`);
@@ -743,6 +821,36 @@ function getAtPath(obj: ConfigObject, pathArr: string[]): unknown {
     current = (current as ConfigObject)[key];
   }
   return current;
+}
+
+function unsetAtPath(obj: ConfigObject, pathArr: string[]): void {
+  let current: unknown = obj;
+  for (const key of pathArr.slice(0, -1)) {
+    if (typeof current !== "object" || current === null) {
+      return;
+    }
+    current = (current as ConfigObject)[key];
+  }
+
+  if (typeof current === "object" && current !== null) {
+    delete (current as ConfigObject)[pathArr[pathArr.length - 1]];
+  }
+}
+
+function cloneConfigValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneConfigValue(item));
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const output: ConfigObject = {};
+    for (const [key, child] of Object.entries(value)) {
+      output[key] = cloneConfigValue(child);
+    }
+    return output;
+  }
+
+  return value;
 }
 
 function deepMerge(target: unknown, source: unknown): unknown {

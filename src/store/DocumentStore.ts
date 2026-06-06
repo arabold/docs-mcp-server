@@ -747,6 +747,10 @@ export class DocumentStore {
         stored.model !== config.modelSpec
       ) {
         if (!isVectorDimensionExplicit(this.config) && config.dimensions !== null) {
+          this.validateDetectedVectorDimension(
+            config.dimensions,
+            "known model dimension lookup",
+          );
           this.dbDimension = config.dimensions;
           this.modelDimension = config.dimensions;
         }
@@ -754,10 +758,17 @@ export class DocumentStore {
       }
 
       let nativeDimension = config.dimensions;
+      let nativeDimensionSource = "known model dimension lookup";
 
       if (nativeDimension === null) {
         this.embeddings = this.createEmbeddingClient(this.dbDimension);
         nativeDimension = await this.detectEmbeddingDimension(this.embeddings);
+        nativeDimensionSource = "embedding provider probe";
+      }
+
+      this.validateDetectedVectorDimension(nativeDimension, nativeDimensionSource);
+
+      if (config.dimensions === null) {
         EmbeddingConfig.setKnownModelDimensions(config.model, nativeDimension);
       }
 
@@ -778,6 +789,14 @@ export class DocumentStore {
     if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
       throw new StoreError(
         `Invalid embeddings.vectorDimension: ${dim}. Must be a positive integer.`,
+      );
+    }
+  }
+
+  private validateDetectedVectorDimension(dim: number, source: string): void {
+    if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
+      throw new StoreError(
+        `Invalid detected embedding dimension from ${source}: ${dim}. Must be a positive integer.`,
       );
     }
   }

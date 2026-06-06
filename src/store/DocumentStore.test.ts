@@ -2003,6 +2003,24 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       store = await createStore("");
     });
 
+    it("should reject invalid dimensions from provider probing", async () => {
+      mockEmbeddingDimension.value = 0;
+
+      await expect(createStore("openai:empty-vector-model")).rejects.toThrow(
+        "Invalid detected embedding dimension from embedding provider probe: 0. Must be a positive integer.",
+      );
+      store = await createStore("");
+    });
+
+    it("should reject invalid dimensions from known model lookup", async () => {
+      EmbeddingConfig.setKnownModelDimensions("invalid-known-dimension-model", 0);
+
+      await expect(createStore("openai:invalid-known-dimension-model")).rejects.toThrow(
+        "Invalid detected embedding dimension from known model dimension lookup: 0. Must be a positive integer.",
+      );
+      store = await createStore("");
+    });
+
     it("should be a no-op when dimension matches existing table", async () => {
       store = await createStore("openai:text-embedding-3-small");
 
