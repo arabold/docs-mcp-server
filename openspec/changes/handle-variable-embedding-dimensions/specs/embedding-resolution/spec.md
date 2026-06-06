@@ -3,9 +3,9 @@
 ### Requirement: Known Dimensions Lookup
 The system SHALL maintain a lookup table mapping well-known fixed-output embedding model names to their vector dimensions. The lookup SHALL be case-insensitive and SHALL support common provider aliases when they unambiguously identify the same fixed-output model. When a model is found in the lookup table and is not marked as runtime-detected, the system SHALL use the known dimensions directly without making an API call.
 
-The system SHALL treat known variable-dimension models as runtime-detected models rather than forcing a single table value. Variable-dimension models include models that advertise multiple valid output dimensions, such as Matryoshka/resizable models with selectable projection heads. For these models, the system SHALL generate a test embedding using the string `"test"` to detect the model's actual provider output dimensions.
+The system SHALL treat known variable-dimension models as runtime-detected models rather than forcing a single table value. Variable-dimension models include models that advertise multiple valid output dimensions, such as Matryoshka/resizable models with selectable projection heads.
 
-When a model is not found in the lookup table, the system SHALL generate a test embedding using the string `"test"` to detect the model's output dimensions. This detection SHALL have a configurable timeout (default 30 seconds, `embeddings.initTimeoutMs`). The detected dimensions SHALL be cached for the duration of the session.
+When a model is not found in the lookup table or is marked as variable-dimension, the system SHALL first check persisted embedding metadata. If the stored `embedding_model` exactly matches the current configured model and the stored `embedding_dimension` is present, the system SHALL use the stored dimension without making a provider probe request. If no matching stored dimension exists, the system SHALL generate a test embedding using the string `"test"` to detect the model's output dimensions. This detection SHALL have a configurable timeout (default 30 seconds, `embeddings.initTimeoutMs`). The detected dimensions SHALL be cached for the duration of the session and persisted after successful embedding initialization.
 
 **Code reference:** `src/store/embeddings/EmbeddingConfig.ts:70-260`, `src/store/DocumentStore.ts:508-537`
 
@@ -15,17 +15,35 @@ When a model is not found in the lookup table, the system SHALL generate a test 
 
 #### Scenario: Known variable-dimension model triggers runtime detection
 - **WHEN** the embedding model is `openai:NovaSearch/stella_en_400M_v5`
+- **AND** no stored embedding metadata exists for that model
 - **AND** the provider returns a 6144-dimensional vector for the test input
 - **THEN** the system SHALL detect 6144 as the model's effective dimension
 - **AND** the system SHALL NOT use a hardcoded known-dimension table value for that model
 
+#### Scenario: Known variable-dimension model reuses stored dimension
+- **WHEN** the embedding model is `openai:NovaSearch/stella_en_400M_v5`
+- **AND** stored metadata contains `embedding_model = "openai:NovaSearch/stella_en_400M_v5"`
+- **AND** stored metadata contains `embedding_dimension = "6144"`
+- **THEN** the system SHALL resolve the effective dimension to 6144
+- **AND** the system SHALL NOT generate a test embedding during startup
+
 #### Scenario: Unknown model dimension detection
 - **WHEN** the embedding model is not in the known dimensions lookup table
+- **AND** no stored embedding metadata exists for that model
 - **THEN** the system SHALL generate a test embedding of `"test"` to detect the output dimensions
 - **AND** the system SHALL cache the detected dimensions for the session
+- **AND** the system SHALL persist the detected dimensions after successful initialization
+
+#### Scenario: Unknown model reuses stored dimension
+- **WHEN** the embedding model is `openai:custom-embedding-v1`
+- **AND** stored metadata contains `embedding_model = "openai:custom-embedding-v1"`
+- **AND** stored metadata contains `embedding_dimension = "1024"`
+- **THEN** the system SHALL resolve the effective dimension to 1024
+- **AND** the system SHALL NOT generate a test embedding during startup
 
 #### Scenario: Dimension detection timeout
 - **WHEN** the embedding model is not in the known dimensions lookup table
+- **AND** no stored embedding metadata exists for that model
 - **AND** the test embedding request exceeds the initialization timeout
 - **THEN** the system SHALL fail embedding initialization
 - **AND** the system SHALL fall back to FTS-only mode
@@ -51,7 +69,7 @@ The persistence SHALL occur as the final step of `initializeEmbeddings()`, after
 - **AND** any previously stored metadata SHALL remain unchanged
 
 ### Requirement: Startup Model Mismatch Detection
-During initialization, after migrations are applied and after resolving the current effective vector dimension, the system SHALL read the stored `embedding_model` and `embedding_dimension` from the `metadata` table and compare them against the current model specification and resolved effective dimension. If either value differs, the system SHALL throw a structured `EmbeddingModelChangedError` before proceeding with vector table creation or prepared statement initialization.
+During initialization, after migrations are applied, the system SHALL read the stored `embedding_model` and `embedding_dimension` from the `metadata` table. If the stored model matches the current model and no explicit vector dimension override changed, the system SHALL treat the stored dimension as the current resolved effective dimension without probing the provider. If the current model specification or explicitly configured dimension differs from stored metadata, the system SHALL throw a structured `EmbeddingModelChangedError` before proceeding with vector table creation or prepared statement initialization.
 
 This check SHALL occur only when both conditions are true:
 1. The `metadata` table contains an `embedding_model` key (not a first-run scenario)
@@ -66,8 +84,9 @@ This check SHALL occur only when both conditions are true:
 #### Scenario: Auto-detected dimension matches metadata
 - **WHEN** the stored model is `openai:custom-embedding-v1`
 - **AND** the stored dimension is `"1024"`
-- **AND** the current provider test embedding resolves to 1024 dimensions
+- **AND** the current configured model is `openai:custom-embedding-v1`
 - **THEN** startup SHALL proceed normally without any prompt or error
+- **AND** the system SHALL NOT generate a test embedding during startup
 
 #### Scenario: FTS-only mode skips mismatch check
 - **WHEN** the configured embedding model is empty or credentials are missing

@@ -26,3 +26,10 @@
 - [x] 4.2 Document runtime dimension probing and explicit override behavior in the embedding model guide.
 - [x] 4.3 Add regression tests for unknown models, explicit overrides, non-MRL truncation rejection, and variable-dimension model probing.
 - [x] 4.4 Run targeted tests, typecheck, lint, and build verification.
+
+## 5. Stored Dimension Lock
+
+- [ ] 5.1 Reuse stored `embedding_dimension` without provider probing when stored `embedding_model` matches the current configured model and no explicit vector dimension override changed.
+- [ ] 5.2 Probe unknown and variable-dimension models only on first successful initialization or after an intentional model/dimension change.
+- [ ] 5.3 Update regression tests to prove matching stored metadata skips the startup probe for unknown and variable-dimension models.
+- [ ] 5.4 Update documentation to explain that detected dimensions are locked in database metadata until the user changes model or vector dimension configuration.
