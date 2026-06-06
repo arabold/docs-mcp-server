@@ -372,6 +372,106 @@ describe("Database Migrations", () => {
     expect(result?.distance).toBeCloseTo(0, 6);
   });
 
+  it("should keep a custom vector dimension when rebuilding partition keys", async () => {
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+    db.prepare("INSERT INTO libraries (name) VALUES (?)").run("custom-dim-lib");
+    const { id: libraryId } = db
+      .prepare("SELECT id FROM libraries WHERE name = ?")
+      .get("custom-dim-lib") as { id: number };
+    db.prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)").run(
+      libraryId,
+      "1.0.0",
+    );
+    const { id: versionId } = db
+      .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
+      .get(libraryId, "1.0.0") as { id: number };
+    const pageId = db
+      .prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)")
+      .run(versionId, "https://example.com/custom-dim", "Custom Dimension")
+      .lastInsertRowid as number | bigint;
+
+    db.exec(`
+      DROP TABLE documents_vec;
+      CREATE VIRTUAL TABLE documents_vec USING vec0(
+        library_id INTEGER NOT NULL,
+        version_id INTEGER NOT NULL,
+        embedding FLOAT[4]
+      );
+    `);
+
+    const preservedVector = [1, 0, 0, 0];
+    const backfillVector = [0, 1, 0, 0];
+    const preservedDocId = db
+      .prepare(
+        "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        pageId,
+        "Preserved custom vector content",
+        JSON.stringify({ path: "/custom-preserved" }),
+        0,
+      ).lastInsertRowid as number | bigint;
+    const backfilledDocId = db
+      .prepare(
+        "INSERT INTO documents (page_id, content, metadata, sort_order, embedding) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        pageId,
+        "Backfilled custom vector content",
+        JSON.stringify({ path: "/custom-backfilled" }),
+        1,
+        JSON.stringify(backfillVector),
+      ).lastInsertRowid as number | bigint;
+
+    db.prepare(
+      "INSERT INTO documents_vec (rowid, library_id, version_id, embedding) VALUES (?, ?, ?, ?)",
+    ).run(
+      BigInt(preservedDocId),
+      BigInt(libraryId),
+      BigInt(versionId),
+      JSON.stringify(preservedVector),
+    );
+    db.prepare("DELETE FROM documents_vec WHERE rowid = ?").run(backfilledDocId);
+    db.prepare("DELETE FROM _schema_migrations WHERE id = ?").run(
+      "014-rebuild-vector-partition-keys.sql",
+    );
+
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+    const migratedDdl = db
+      .prepare(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='documents_vec';",
+      )
+      .get() as { sql: string };
+    expect(migratedDdl.sql).toContain("embedding FLOAT[4]");
+    expect(migratedDdl.sql).toContain("library_id INTEGER partition key");
+    expect(migratedDdl.sql).toContain("version_id INTEGER partition key");
+
+    for (const docId of [preservedDocId, backfilledDocId]) {
+      const vectorRows = db
+        .prepare("SELECT COUNT(*) as cnt FROM documents_vec WHERE rowid = ?")
+        .get(docId) as { cnt: number };
+      expect(vectorRows.cnt).toBe(1);
+    }
+
+    const result = db
+      .prepare(`
+        SELECT rowid, distance
+        FROM documents_vec
+        WHERE library_id = ?
+          AND version_id = ?
+          AND embedding MATCH ?
+          AND k = 1
+      `)
+      .get(libraryId, versionId, JSON.stringify(preservedVector)) as
+      | { rowid: number; distance: number }
+      | undefined;
+
+    expect(result?.rowid).toBe(Number(preservedDocId));
+    expect(result?.distance).toBeCloseTo(0, 6);
+  });
+
   it("should preserve the old vector table if partition migration fails", async () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "docs-mcp-migration-"));
     const dbPath = path.join(tempDir, "migration.sqlite");

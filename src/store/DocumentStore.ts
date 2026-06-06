@@ -937,8 +937,24 @@ export class DocumentStore {
 
   private hasVectorPartitionKeys(sql: string): boolean {
     return (
-      /library_id\s+INTEGER\s+partition\s+key/i.test(sql) &&
-      /version_id\s+INTEGER\s+partition\s+key/i.test(sql)
+      this.hasVectorPartitionKeyColumn(sql, "library_id") &&
+      this.hasVectorPartitionKeyColumn(sql, "version_id")
+    );
+  }
+
+  private hasVectorPartitionKeyColumn(sql: string, columnName: string): boolean {
+    const quotedColumnName = columnName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const columnDefinition = sql.match(
+      new RegExp(
+        String.raw`(?:^|[(,])\s*(?:"${quotedColumnName}"|\[${quotedColumnName}\]|${quotedColumnName})\s+([^,]*)`,
+        "i",
+      ),
+    )?.[1];
+
+    return (
+      columnDefinition !== undefined &&
+      /\bINTEGER\b/i.test(columnDefinition) &&
+      /\bpartition\s+key\b/i.test(columnDefinition)
     );
   }
 

@@ -9,6 +9,9 @@ import { StoreError } from "./errors";
 const MIGRATIONS_DIR = path.join(getProjectRoot(), "db", "migrations");
 const MIGRATIONS_TABLE = "_schema_migrations";
 const MIGRATION_STEP_MARKER = /^\s*--\s*@migration-step\s+(.+?)\s*$/;
+const VECTOR_PARTITION_MIGRATION = "014-rebuild-vector-partition-keys.sql";
+const DEFAULT_VECTOR_DIMENSION = 1536;
+const VECTOR_DIMENSION_TOKEN = "__DOCUMENTS_VEC_DIMENSION__";
 
 interface MigrationStep {
   label: string;
@@ -136,6 +139,32 @@ function executeMigrationSql(
   }
 }
 
+function getCurrentVectorDimension(db: Database): number {
+  const row = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec';",
+    )
+    .get() as { sql: string } | undefined;
+  const match = row?.sql.match(/embedding\s+FLOAT\s*\[\s*(\d+)\s*]/i);
+  const dimension = match ? Number(match[1]) : DEFAULT_VECTOR_DIMENSION;
+
+  if (!Number.isInteger(dimension) || dimension < 1) {
+    throw new StoreError(
+      `Invalid documents_vec embedding dimension in schema: ${row?.sql ?? "missing"}`,
+    );
+  }
+
+  return dimension;
+}
+
+function prepareMigrationSql(db: Database, filename: string, sql: string): string {
+  if (filename !== VECTOR_PARTITION_MIGRATION) {
+    return sql;
+  }
+
+  return sql.replaceAll(VECTOR_DIMENSION_TOKEN, String(getCurrentVectorDimension(db)));
+}
+
 /**
  * Applies pending database migrations found in the migrations directory.
  * Migrations are expected to be .sql files with sequential prefixes (e.g., 001-, 002-).
@@ -191,7 +220,7 @@ export async function applyMigrations(
     for (const [index, filename] of pendingMigrations.entries()) {
       logger.debug(`Applying migration: ${filename}`);
       const filePath = path.join(MIGRATIONS_DIR, filename);
-      const sql = fs.readFileSync(filePath, "utf8");
+      const sql = prepareMigrationSql(db, filename, fs.readFileSync(filePath, "utf8"));
 
       // Execute migration and record it directly within the overall transaction
       try {

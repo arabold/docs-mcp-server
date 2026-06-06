@@ -1935,6 +1935,42 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       expect(vecAfter.cnt).toBe(vecBefore.cnt);
     });
 
+    it("should recognize partition-key columns with harmless constraint variations", async () => {
+      store = await createStore("");
+      const hasVectorPartitionKeys = (candidateSql: string) => {
+        // @ts-expect-error Accessing private method for testing
+        return store.hasVectorPartitionKeys(candidateSql) as boolean;
+      };
+
+      expect(
+        hasVectorPartitionKeys(`
+          CREATE VIRTUAL TABLE documents_vec USING vec0(
+            library_id INTEGER NOT NULL partition key,
+            version_id INTEGER partition key NOT NULL,
+            embedding FLOAT[1536]
+          );
+        `),
+      ).toBe(true);
+      expect(
+        hasVectorPartitionKeys(`
+          CREATE VIRTUAL TABLE documents_vec USING vec0(
+            library_id INTEGER NOT NULL,
+            version_id INTEGER partition key,
+            embedding FLOAT[1536]
+          );
+        `),
+      ).toBe(false);
+      expect(
+        hasVectorPartitionKeys(`
+          CREATE VIRTUAL TABLE documents_vec USING vec0(
+            library_id INTEGER partition key,
+            version_id INTEGER NOT NULL,
+            embedding FLOAT[1536]
+          );
+        `),
+      ).toBe(false);
+    });
+
     it("should rebuild old metadata-column vec table with current partition keys", async () => {
       store = await createStore("");
 
