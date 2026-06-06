@@ -33,6 +33,7 @@
     "dev": "npm-run-all --parallel dev:server dev:web",
     "dev:server": "vite-node --watch src/index.ts",
     "dev:web": "vite build --config vite.config.web.ts --watch",
+    "pretest": "npm run build --workspace @arabold/docs-mcp-server-transformers",
     "test": "vitest run --exclude test/docker-e2e.test.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage --exclude test/docker-e2e.test.ts",
