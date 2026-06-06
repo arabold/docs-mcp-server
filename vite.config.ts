@@ -79,6 +79,16 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    // Map the optional Transformers.js companion to a lightweight stub during tests. The real
+    // companion's build output is absent in the test job, and Vitest statically resolves the
+    // dynamic import in transformersLoader.ts; the stub keeps resolution working without
+    // building or loading the heavy package. (Production externalizes the import instead.)
+    alias: {
+      "@arabold/docs-mcp-server-transformers": path.resolve(
+        __dirname,
+        "test/stubs/transformers-companion.ts",
+      ),
+    },
     testTimeout: 30000, // 30 seconds for network operations
     // Include both unit tests and e2e tests
     include: [

@@ -4,10 +4,10 @@
   "description": "Optional companion package providing local, offline embeddings (Transformers.js / ONNX runtime) for @arabold/docs-mcp-server. Install this alongside the server to enable the `transformers:` embedding provider.",
   "type": "module",
   "main": "./dist/index.js",
-  "types": "./src/index.ts",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }
   },
