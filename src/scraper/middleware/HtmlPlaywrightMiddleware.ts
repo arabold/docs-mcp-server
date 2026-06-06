@@ -1098,6 +1098,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     let browserContext: BrowserContext | null = null;
     let renderedHtml: string | null = null;
     let shouldResetBrowser = false;
+    let renderFailed = false;
 
     // Extract credentials and origin using helper
     const { credentials, origin } = extractCredentialsAndOrigin(context.source);
@@ -1204,6 +1205,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         `Playwright: Successfully rendered content for ${context.source} using ${method}`,
       );
     } catch (error) {
+      renderFailed = true;
       shouldResetBrowser = true;
       logger.error(`❌ Playwright failed to render ${context.source}: ${error}`);
       context.errors.push(
@@ -1217,13 +1219,17 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         browserContext,
         context.source,
       );
-      if (!cleanupSucceeded) {
+      const cleanupFailed = !cleanupSucceeded;
+      if (cleanupFailed) {
         shouldResetBrowser = true;
       }
       if (shouldResetBrowser) {
-        await this.closeBrowser(
-          `reset after Playwright render failure for ${context.source}`,
-        );
+        const resetReason = renderFailed
+          ? cleanupFailed
+            ? `reset after Playwright render and cleanup failure for ${context.source}`
+            : `reset after Playwright render failure for ${context.source}`
+          : `reset after Playwright cleanup failure for ${context.source}`;
+        await this.closeBrowser(resetReason);
       }
     }
 

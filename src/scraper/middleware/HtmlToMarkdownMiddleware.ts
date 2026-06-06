@@ -11,6 +11,7 @@ const maxGfmTableRows = 500;
 const maxGfmTableCells = 1_000;
 const maxGfmTableHtmlLength = 100_000;
 const gfmTableChunkRows = 100;
+const preservedTablePlaceholderAttribute = "data-docs-mcp-preserved-table-id";
 
 /**
  * Middleware to convert the final processed HTML content (from Cheerio object in context.dom)
@@ -18,6 +19,8 @@ const gfmTableChunkRows = 100;
  */
 export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
   private turndownService: TurndownService;
+  private readonly preservedTableHtml = new Map<string, string>();
+  private preservedTableSequence = 0;
 
   constructor() {
     this.turndownService = new TurndownService({
@@ -101,6 +104,21 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
         return `[${normalizedContent}](${href})`; // Standard link conversion
       },
     });
+    this.turndownService.addRule("preservedOversizedTable", {
+      filter: (node: Node) => {
+        const element = node as HTMLElement;
+        return (
+          element.nodeName === "DIV" &&
+          element.hasAttribute(preservedTablePlaceholderAttribute)
+        );
+      },
+      replacement: (_content: string, node: Node) => {
+        const element = node as HTMLElement;
+        const tableId = element.getAttribute(preservedTablePlaceholderAttribute);
+        const tableHtml = tableId ? this.preservedTableHtml.get(tableId) : undefined;
+        return tableHtml ? `\n\n${tableHtml}\n\n` : "";
+      },
+    });
   }
 
   private normalizeLinkContent(content: string): string {
@@ -124,6 +142,14 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
 
       const replacement = this.buildSplitTableHtml($, $table);
       if (!replacement) {
+        const tableId = `table-${++this.preservedTableSequence}`;
+        this.preservedTableHtml.set(tableId, $.html(element));
+        logger.warn(
+          `⚠️  Preserving oversized HTML table for ${source} as HTML before GFM conversion: ${rowCount} rows, ${cellCount} cells, ${htmlLength} chars`,
+        );
+        $table.replaceWith(
+          `<div ${preservedTablePlaceholderAttribute}="${tableId}">preserved table</div>`,
+        );
         return;
       }
 
@@ -151,13 +177,14 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
 
     const chunks: string[] = [];
     const headerHtml = headerRows.map((row) => $.html(row)).join("");
+    const preservedChildHtml = this.getPreservedTableChildHtml($, $table);
 
     for (let index = 0; index < dataRows.length; index += gfmTableChunkRows) {
       const rowsHtml = dataRows
         .slice(index, index + gfmTableChunkRows)
         .map((row) => $.html(row))
         .join("");
-      const tableParts = ["<table>"];
+      const tableParts = ["<table>", preservedChildHtml];
       if (headerHtml) {
         tableParts.push("<thead>", headerHtml, "</thead>");
       }
@@ -166,6 +193,18 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
     }
 
     return chunks.join("\n");
+  }
+
+  private getPreservedTableChildHtml(
+    $: cheerio.CheerioAPI,
+    $table: cheerio.Cheerio<Element>,
+  ): string {
+    return $table
+      .children("caption, colgroup")
+      .toArray()
+      .filter((child): child is Element => child.type === "tag")
+      .map((child) => $.html(child))
+      .join("");
   }
 
   private getHeaderRows($table: cheerio.Cheerio<Element>): Element[] {
@@ -211,6 +250,7 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
     // Only process if we have a Cheerio object (implicitly means it's HTML)
     try {
       logger.debug(`Converting HTML content to Markdown for ${context.source}`);
+      this.preservedTableHtml.clear();
       this.splitOversizedTables($, context.source);
       // Provide Turndown with the HTML string content from the Cheerio object's body,
       // or the whole document if body is empty/unavailable.
@@ -240,6 +280,8 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
         ),
       );
       // Decide if pipeline should stop? For now, continue.
+    } finally {
+      this.preservedTableHtml.clear();
     }
 
     // Call the next middleware in the chain regardless of whether conversion happened
