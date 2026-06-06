@@ -2,6 +2,7 @@
 -- This migration introduces a pages table to store page-level metadata once per URL
 -- and links document chunks to their parent pages via page_id foreign key
 
+-- @migration-step create pages table
 -- 1. Create pages table to store unique page-level metadata
 CREATE TABLE IF NOT EXISTS pages (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16,11 +17,13 @@ CREATE TABLE IF NOT EXISTS pages (
   UNIQUE(version_id, url)
 );
 
+-- @migration-step create page indexes
 -- 2. Add indexes for efficient querying
 CREATE INDEX IF NOT EXISTS idx_pages_version_id ON pages(version_id);
 CREATE INDEX IF NOT EXISTS idx_pages_url ON pages(url);
 CREATE INDEX IF NOT EXISTS idx_pages_etag ON pages(etag);
 
+-- @migration-step create page-based documents table
 -- 3. Create new documents table with page_id foreign key
 CREATE TABLE documents_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,10 +35,12 @@ CREATE TABLE documents_new (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- @migration-step create new document indexes
 -- 4. Create indexes for the new documents table
 CREATE INDEX IF NOT EXISTS idx_documents_page_id ON documents_new(page_id);
 CREATE INDEX IF NOT EXISTS idx_documents_sort_order ON documents_new(page_id, sort_order);
 
+-- @migration-step populate pages
 -- 5. Migrate data from old documents table to new structure
 -- First, populate pages table with unique page data from existing documents
 -- Group by version_id and url to ensure uniqueness, using MAX() to handle any duplicates
@@ -49,6 +54,7 @@ SELECT
 FROM documents
 GROUP BY version_id, url;
 
+-- @migration-step migrate document chunks
 -- 6. Migrate document chunks to new table structure
 -- Preserve all existing metadata except page-level fields (url, title, library, version)
 -- that are now stored in pages and versions tables
@@ -72,12 +78,14 @@ SELECT
 FROM documents d
 JOIN pages p ON d.version_id = p.version_id AND d.url = p.url;
 
+-- @migration-step replace documents table
 -- 7. Drop the old documents table
 DROP TABLE documents;
 
 -- 8. Rename the new table to documents
 ALTER TABLE documents_new RENAME TO documents;
 
+-- @migration-step replace fts schema
 -- 9. Recreate FTS5 virtual table to work with new structure
 -- Drop existing FTS table and triggers
 DROP TRIGGER IF EXISTS documents_fts_after_delete;
@@ -94,6 +102,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   tokenize='porter unicode61'
 );
 
+-- @migration-step recreate fts and page triggers
 -- 10. Create new FTS triggers that join with pages table
 CREATE TRIGGER IF NOT EXISTS documents_fts_after_delete AFTER DELETE ON documents BEGIN
   DELETE FROM documents_fts WHERE rowid = old.id;
@@ -117,6 +126,7 @@ CREATE TRIGGER IF NOT EXISTS pages_updated_at_trigger AFTER UPDATE ON pages BEGI
   UPDATE pages SET updated_at = CURRENT_TIMESTAMP WHERE id = new.id;
 END;
 
+-- @migration-step rebuild fts index
 -- 12. Rebuild FTS index from migrated data
 INSERT INTO documents_fts(rowid, content, title, url, path)
 SELECT d.id, d.content, p.title, p.url, json_extract(d.metadata, '$.path')

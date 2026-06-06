@@ -1,5 +1,6 @@
 -- Migration: Normalize schema by introducing libraries and versions tables
 
+-- @migration-step create normalized tables
 -- 1. Create libraries table
 CREATE TABLE IF NOT EXISTS libraries (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16,10 +17,12 @@ CREATE TABLE IF NOT EXISTS versions (
   UNIQUE(library_id, name) -- Allows one NULL version per library
 );
 
+-- @migration-step add document foreign keys
 -- 3. Add foreign key columns to documents
 ALTER TABLE documents ADD COLUMN library_id INTEGER REFERENCES libraries(id);
 ALTER TABLE documents ADD COLUMN version_id INTEGER REFERENCES versions(id);
 
+-- @migration-step populate libraries and versions
 -- 4. Populate libraries table from existing documents
 INSERT OR IGNORE INTO libraries (name)
 SELECT DISTINCT library FROM documents;
@@ -32,6 +35,7 @@ SELECT DISTINCT
 FROM documents d
 JOIN libraries l ON l.name = d.library;
 
+-- @migration-step backfill document references
 -- 6. Update documents with foreign key references
 UPDATE documents
 SET library_id = (SELECT id FROM libraries WHERE libraries.name = documents.library),
@@ -42,6 +46,7 @@ SET library_id = (SELECT id FROM libraries WHERE libraries.name = documents.libr
       AND COALESCE(v.name, '') = COALESCE(documents.version, '')
     );
 
+-- @migration-step create normalization indexes
 -- 7. Add indexes for performance
 CREATE INDEX IF NOT EXISTS idx_documents_library_id ON documents(library_id);
 CREATE INDEX IF NOT EXISTS idx_documents_version_id ON documents(version_id);
