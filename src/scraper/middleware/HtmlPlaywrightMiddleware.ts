@@ -40,6 +40,16 @@ interface CachedResource {
   contentType: string;
 }
 
+interface BrowserProcessHandle {
+  killed: boolean;
+  pid?: number;
+  kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+interface BrowserWithProcessHandle extends Browser {
+  process(): BrowserProcessHandle | null;
+}
+
 /**
  * Middleware to process HTML content using Playwright for rendering dynamic content,
  * *if* the scrapeMode option requires it ('playwright' or 'auto').
@@ -116,25 +126,127 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return this.browser;
   }
 
+  private getPageTimeoutMs(): number {
+    return this.config.pageTimeoutMs ?? defaults.scraper.pageTimeoutMs;
+  }
+
+  private getBrowserTimeoutMs(): number {
+    return this.config.browserTimeoutMs ?? defaults.scraper.browserTimeoutMs;
+  }
+
+  private async withTimeout<T>(
+    operation: Promise<T>,
+    timeoutMs: number,
+    description: string,
+  ): Promise<T> {
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        operation,
+        new Promise<T>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            reject(new Error(`${description} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }
+  }
+
+  private getBrowserProcess(browser: Browser): BrowserProcessHandle | null {
+    if (!("process" in browser) || typeof browser.process !== "function") {
+      return null;
+    }
+
+    return (browser as BrowserWithProcessHandle).process();
+  }
+
+  private killBrowserProcess(browser: Browser, reason: string): void {
+    const browserProcess = this.getBrowserProcess(browser);
+    if (!browserProcess || browserProcess.killed) {
+      return;
+    }
+
+    const pid = browserProcess.pid ? ` pid=${browserProcess.pid}` : "";
+    logger.warn(`⚠️  Force killing Playwright browser process${pid}: ${reason}`);
+    browserProcess.kill("SIGKILL");
+  }
+
   /**
    * Closes the Playwright browser instance if it exists.
    * Should be called during application shutdown.
    * Attempts to close even if the browser is disconnected to ensure proper cleanup of zombie processes.
    */
-  async closeBrowser(): Promise<void> {
+  async closeBrowser(reason = "shutdown"): Promise<void> {
     if (this.browser) {
+      const browser = this.browser;
       try {
-        logger.debug("Closing Playwright browser instance...");
+        logger.debug(`Closing Playwright browser instance (${reason})...`);
         // Always attempt to close, even if disconnected, to reap zombie processes
-        await this.browser.close();
+        await this.withTimeout(
+          browser.close(),
+          this.getPageTimeoutMs(),
+          "Playwright browser close",
+        );
       } catch (error) {
-        // Log error but don't throw - cleanup should be non-fatal
-        logger.warn(`⚠️  Error closing Playwright browser: ${error}`);
+        logger.warn(`⚠️  Error closing Playwright browser (${reason}): ${error}`);
+        this.killBrowserProcess(browser, reason);
       } finally {
         // Always set to null to allow fresh browser on next request
         this.browser = null;
       }
     }
+  }
+
+  private async cleanupPageAndContext(
+    page: Page | null,
+    browserContext: BrowserContext | null,
+    source: string,
+  ): Promise<boolean> {
+    let cleanupSucceeded = true;
+    const timeoutMs = this.getPageTimeoutMs();
+
+    if (page) {
+      try {
+        await this.withTimeout(
+          page.unroute("**/*"),
+          timeoutMs,
+          `Playwright route cleanup for ${source}`,
+        );
+      } catch (error) {
+        cleanupSucceeded = false;
+        logger.warn(`⚠️  Playwright route cleanup failed for ${source}: ${error}`);
+      }
+
+      try {
+        await this.withTimeout(
+          page.close(),
+          timeoutMs,
+          `Playwright page close for ${source}`,
+        );
+      } catch (error) {
+        cleanupSucceeded = false;
+        logger.warn(`⚠️  Playwright page cleanup failed for ${source}: ${error}`);
+      }
+    }
+
+    if (browserContext) {
+      try {
+        await this.withTimeout(
+          browserContext.close(),
+          timeoutMs,
+          `Playwright browser context close for ${source}`,
+        );
+      } catch (error) {
+        cleanupSucceeded = false;
+        logger.warn(`⚠️  Playwright context cleanup failed for ${source}: ${error}`);
+      }
+    }
+
+    return cleanupSucceeded;
   }
 
   /**
@@ -979,6 +1091,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     let page: Page | null = null;
     let browserContext: BrowserContext | null = null;
     let renderedHtml: string | null = null;
+    let shouldResetBrowser = false;
 
     // Extract credentials and origin using helper
     const { credentials, origin } = extractCredentialsAndOrigin(context.source);
@@ -1052,11 +1165,15 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         );
       });
 
-      // Load initial HTML content
-      await page.goto(context.source, { waitUntil: "load" });
-
       // Wait for either body (normal HTML) or frameset (frameset documents) to appear
-      const pageTimeoutMs = this.config.pageTimeoutMs ?? defaults.scraper.pageTimeoutMs;
+      const pageTimeoutMs = this.getPageTimeoutMs();
+
+      // Load initial HTML content
+      await page.goto(context.source, {
+        waitUntil: "load",
+        timeout: this.getBrowserTimeoutMs(),
+      });
+
       await page.waitForSelector("body, frameset", {
         timeout: pageTimeoutMs,
       });
@@ -1081,6 +1198,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         `Playwright: Successfully rendered content for ${context.source} using ${method}`,
       );
     } catch (error) {
+      shouldResetBrowser = true;
       logger.error(`❌ Playwright failed to render ${context.source}: ${error}`);
       context.errors.push(
         error instanceof Error
@@ -1088,13 +1206,18 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           : new Error(`Playwright rendering failed: ${String(error)}`),
       );
     } finally {
-      // Ensure page/context are closed even if subsequent steps fail
-      if (page) {
-        await page.unroute("**/*");
-        await page.close();
+      const cleanupSucceeded = await this.cleanupPageAndContext(
+        page,
+        browserContext,
+        context.source,
+      );
+      if (!cleanupSucceeded) {
+        shouldResetBrowser = true;
       }
-      if (browserContext) {
-        await browserContext.close();
+      if (shouldResetBrowser) {
+        await this.closeBrowser(
+          `reset after Playwright render failure for ${context.source}`,
+        );
       }
     }
 

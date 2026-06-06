@@ -251,6 +251,79 @@ describe("HtmlPlaywrightMiddleware", () => {
       launchSpy.mockRestore();
     });
 
+    it("should reset the browser after a Playwright render timeout", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const context = createPipelineTestContext(initialHtml, "https://example.com/test");
+      const next = vi.fn();
+
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.waitForSelector = vi
+        .fn()
+        .mockRejectedValue(new Error("Timeout 5000ms exceeded"));
+      const contextSpy = {
+        newPage: vi.fn().mockResolvedValue(pageSpy),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      const browserSpy = {
+        newContext: vi.fn().mockResolvedValue(contextSpy),
+        isConnected: vi.fn().mockReturnValue(true),
+        on: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      } as unknown as MockedObject<Browser>;
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(context, next);
+
+      expect(context.errors).toHaveLength(1);
+      expect(context.errors[0].message).toContain("Timeout 5000ms exceeded");
+      expect(pageSpy.close).toHaveBeenCalled();
+      expect(contextSpy.close).toHaveBeenCalled();
+      expect(browserSpy.close).toHaveBeenCalled();
+      expect(next).toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
+    it("should bound hung page cleanup and reset the browser", async () => {
+      vi.useFakeTimers();
+      try {
+        const initialHtml = "<html><body><p>Test</p></body></html>";
+        const context = createPipelineTestContext(
+          initialHtml,
+          "https://example.com/test",
+        );
+        const next = vi.fn();
+
+        const pageSpy = createMockPlaywrightPage(initialHtml);
+        pageSpy.close = vi.fn().mockImplementation(() => new Promise(() => {}));
+        const contextSpy = {
+          newPage: vi.fn().mockResolvedValue(pageSpy),
+          close: vi.fn().mockResolvedValue(undefined),
+        };
+        const browserSpy = {
+          newContext: vi.fn().mockResolvedValue(contextSpy),
+          isConnected: vi.fn().mockReturnValue(true),
+          on: vi.fn(),
+          close: vi.fn().mockResolvedValue(undefined),
+        } as unknown as MockedObject<Browser>;
+        const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+        const processPromise = playwrightMiddleware.process(context, next);
+        await vi.advanceTimersByTimeAsync(5000);
+        await expect(processPromise).resolves.toBeUndefined();
+
+        expect(context.errors).toHaveLength(0);
+        expect(pageSpy.close).toHaveBeenCalled();
+        expect(contextSpy.close).toHaveBeenCalled();
+        expect(browserSpy.close).toHaveBeenCalled();
+        expect(next).toHaveBeenCalled();
+
+        launchSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("should skip processing when scrapeMode is not playwright/auto", async () => {
       const initialHtml = "<html><body><p>Test</p></body></html>";
       const context = createPipelineTestContext(initialHtml, "https://example.com/test", {
