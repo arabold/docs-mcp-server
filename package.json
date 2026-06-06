@@ -20,9 +20,12 @@
     "LICENSE",
     "package.json"
   ],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "prepare": "husky || true",
-    "build": "vite build --config vite.config.web.ts && vite build",
+    "build": "npm run build --workspace @arabold/docs-mcp-server-transformers && vite build --config vite.config.web.ts && vite build",
     "start": "node --enable-source-maps dist/index.js",
     "cli": "node --enable-source-maps dist/index.js",
     "server": "node --enable-source-maps dist/index.ts",
@@ -115,6 +118,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@arabold/docs-mcp-server-transformers": "*",
     "@biomejs/biome": "^2.4.7",
     "@commitlint/cli": "^21.0.1",
     "@commitlint/config-conventional": "^21.0.1",

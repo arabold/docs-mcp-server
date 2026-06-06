@@ -8,6 +8,7 @@ import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
 import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
+import { TransformersJSEmbeddings } from "./TransformersJSEmbeddings";
 
 // Suppress logger output during tests
 
@@ -146,6 +147,16 @@ describe("createEmbeddingModel", () => {
     expect(() => createEmbeddingModel("unknown:model", runtimeConfig)).toThrow(
       UnsupportedProviderError,
     );
+  });
+
+  test("should create Transformers.js embeddings without requiring credentials", () => {
+    // Local embeddings need no API keys, so an empty environment must still work.
+    vi.stubGlobal("process", { env: {} });
+    const model = createEmbeddingModel(
+      "transformers:BAAI/bge-small-en-v1.5",
+      runtimeConfig,
+    );
+    expect(model).toBeInstanceOf(TransformersJSEmbeddings);
   });
 
   test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {

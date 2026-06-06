@@ -54,6 +54,10 @@ export default defineConfig({
       external: [
         /^node:/, // Externalize all node built-ins (e.g., 'node:fs', 'node:path')
         ...Object.keys(packageJson.dependencies || {}),
+        // Optional Transformers.js companion package. It is loaded via a dynamic import only
+        // when local embeddings are used, and must never be bundled. It is a devDependency
+        // (not a runtime dependency) so it is not covered by the dependencies list above.
+        /^@arabold\/docs-mcp-server-transformers(\/.*)?$/,
         // Explicitly externalize potentially problematic packages if needed
         'fingerprint-generator',
         'header-generator',

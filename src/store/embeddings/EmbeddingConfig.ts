@@ -18,7 +18,8 @@ export type EmbeddingProvider =
   | "gemini"
   | "aws"
   | "microsoft"
-  | "sagemaker";
+  | "sagemaker"
+  | "transformers";
 
 /**
  * Embedding model configuration parsed from environment variables.
@@ -203,7 +204,7 @@ export class EmbeddingConfig {
     "intfloat/e5-base": 768,
     "sentence-transformers/static-similarity-mrl-multilingual-v1": 1024,
     "manu/sentence_croissant_alpha_v0.3": 2048,
-    "BAAI/bge-small-en-v1.5": 512,
+    "BAAI/bge-small-en-v1.5": 384,
     "thenlper/gte-small": 384,
     "sdadas/mmlw-e5-small": 384,
     "manu/sentence_croissant_alpha_v0.4": 2048,
@@ -333,6 +334,7 @@ export class EmbeddingConfig {
    * - aws: AWS Bedrock models
    * - microsoft: Azure OpenAI
    * - sagemaker: AWS SageMaker hosted models
+   * - transformers: Local, offline embeddings via the Transformers.js companion package
    *
    * @param modelSpec Model specification (e.g., "openai:text-embedding-3-small"), defaults to "text-embedding-3-small"
    * @returns Parsed embedding model configuration

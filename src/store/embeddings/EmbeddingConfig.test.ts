@@ -75,6 +75,17 @@ describe("EmbeddingConfig", () => {
       expect(result.dimensions).toBe(1536); // Should find the lowercase version
       expect(result.modelSpec).toBe("openai:TEXT-EMBEDDING-3-SMALL");
     });
+
+    it("should parse the transformers provider with its local model dimensions", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse("transformers:BAAI/bge-small-en-v1.5");
+
+      expect(result.provider).toBe("transformers");
+      expect(result.model).toBe("BAAI/bge-small-en-v1.5");
+      // bge-small-en-v1.5 has a hidden size of 384, not 512.
+      expect(result.dimensions).toBe(384);
+      expect(result.modelSpec).toBe("transformers:BAAI/bge-small-en-v1.5");
+    });
   });
 
   describe("getKnownDimensions", () => {
