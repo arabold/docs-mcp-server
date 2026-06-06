@@ -75,6 +75,7 @@ export class EmbeddingConfig {
 
     // Google Vertex AI models
     "text-embedding-004": 768,
+    "text-embedding-005": 768,
     "textembedding-gecko@003": 768,
     "textembedding-gecko@002": 768,
     "textembedding-gecko@001": 768,
@@ -93,9 +94,13 @@ export class EmbeddingConfig {
     // Cohere models
     "cohere.embed-english-v3": 1024,
     "cohere.embed-multilingual-v3": 1024,
+    "Cohere/Cohere-embed-v4.0": 1536,
+    "embed-v4.0": 1536,
 
     // SageMaker models (hosted on AWS SageMaker)
     "intfloat/multilingual-e5-large": 1024,
+    "multilingual-e5-large": 1024,
+    "text-embedding-multilingual-e5-large": 1024,
 
     // Additional AWS models that might be supported
     // Note: Some of these might be placeholders - verify dimensions before use
@@ -138,6 +143,12 @@ export class EmbeddingConfig {
     "intfloat/multilingual-e5-base": 768,
     "voyage-3-lite": 512,
     "voyage-3": 1024,
+    "voyage-3-large": 1024,
+    "voyage-3.5": 1024,
+    "voyage-4": 1024,
+    "voyage-4-large": 1024,
+    "voyage-4-lite": 1024,
+    "voyage-code-3": 1024,
     "intfloat/multilingual-e5-small": 384,
     "Alibaba-NLP/gte-Qwen1.5-7B-instruct": 4096,
     "Snowflake/snowflake-arctic-embed-m-v2.0": 768,
@@ -158,7 +169,11 @@ export class EmbeddingConfig {
     "avsolatorio/GIST-large-Embedding-v0": 1024,
     "sdadas/mmlw-e5-large": 1024,
     "nomic-ai/nomic-embed-text-v1": 768,
+    "nomic-embed-text-v1": 768,
     "nomic-ai/nomic-embed-text-v1-ablated": 768,
+    "nomic-ai/nomic-embed-text-v2-moe": 768,
+    "nomic-ai/modernbert-embed-base": 768,
+    "nomic-ai/nomic-embed-code": 3584,
     "intfloat/e5-base-v2": 768,
     "BAAI/bge-large-en-v1.5": 1024,
     "intfloat/e5-large": 1024,
@@ -179,6 +194,8 @@ export class EmbeddingConfig {
     "avsolatorio/GIST-small-Embedding-v0": 384,
     "sdadas/mmlw-roberta-large": 1024,
     "nomic-ai/nomic-embed-text-v1.5": 768,
+    "nomic-embed-text-v1.5": 768,
+    "text-embedding-nomic-embed-text-v1.5": 768,
     "minishlab/potion-multilingual-128M": 256,
     "shibing624/text2vec-base-multilingual": 384,
     "thenlper/gte-base": 768,
@@ -259,6 +276,16 @@ export class EmbeddingConfig {
     "jinaai/jina-embeddings-v4": 2048,
   };
 
+  private readonly runtimeDetectedDimensionModels = new Set([
+    "novasearch/stella_en_1.5b_v5",
+    "stella_en_1.5b_v5",
+    "novasearch/stella_en_400m_v5",
+    "dunzhang/stella_en_400m_v5",
+    "stella_en_400m_v5",
+    "novasearch/jasper_en_vision_language_v1",
+    "jasper_en_vision_language_v1",
+  ]);
+
   /**
    * Lowercase lookup map for case-insensitive model dimension queries.
    * Built lazily from knownModelDimensions to ensure consistency.
@@ -270,6 +297,29 @@ export class EmbeddingConfig {
     for (const [model, dimensions] of Object.entries(this.knownModelDimensions)) {
       this.modelLookup.set(model.toLowerCase(), dimensions);
     }
+  }
+
+  private findKnownDimension(model: string): number | null {
+    const normalized = model.toLowerCase();
+    if (this.runtimeDetectedDimensionModels.has(normalized)) {
+      return null;
+    }
+
+    const exact = this.modelLookup?.get(normalized);
+    if (exact !== undefined) {
+      return exact;
+    }
+
+    const slashIndex = normalized.lastIndexOf("/");
+    if (slashIndex !== -1) {
+      const suffix = normalized.substring(slashIndex + 1);
+      if (this.runtimeDetectedDimensionModels.has(suffix)) {
+        return null;
+      }
+      return this.modelLookup?.get(suffix) ?? null;
+    }
+
+    return null;
   }
 
   /**
@@ -307,7 +357,7 @@ export class EmbeddingConfig {
     }
 
     // Look up known dimensions (case-insensitive)
-    const dimensions = this.modelLookup?.get(model.toLowerCase()) || null;
+    const dimensions = this.findKnownDimension(model);
 
     return {
       provider,
@@ -326,7 +376,7 @@ export class EmbeddingConfig {
    * @returns Known dimensions or null
    */
   getKnownDimensions(model: string): number | null {
-    return this.modelLookup?.get(model.toLowerCase()) || null;
+    return this.findKnownDimension(model);
   }
 
   /**

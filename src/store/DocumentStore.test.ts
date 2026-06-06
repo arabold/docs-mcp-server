@@ -1,11 +1,17 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
-import { loadConfig } from "../utils/config";
+import { loadConfig, markVectorDimensionSource } from "../utils/config";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
-import { EmbeddingModelChangedError } from "./errors";
+import { DimensionError, EmbeddingModelChangedError } from "./errors";
 import { VersionStatus } from "./types";
+
+const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
+const mockEmbeddingCalls = vi.hoisted(() => ({ query: 0, documents: 0 }));
 
 // Mock only the embedding service to generate deterministic embeddings for testing
 // This allows us to test ranking logic while using real SQLite database
@@ -18,9 +24,10 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
     ...actual,
     createEmbeddingModel: () => ({
       embedQuery: vi.fn(async (text: string) => {
+        mockEmbeddingCalls.query += 1;
         // Generate deterministic embeddings based on text content for consistent testing
         const words = text.toLowerCase().split(/\s+/);
-        const embedding = new Array(1536).fill(0);
+        const embedding = new Array(mockEmbeddingDimension.value).fill(0);
 
         // Create meaningful semantic relationships for testing
         words.forEach((word, wordIndex) => {
@@ -31,7 +38,7 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
           const baseIndex = (wordHash % 100) * 15; // Distribute across embedding dimensions
 
           for (let i = 0; i < 15; i++) {
-            const index = (baseIndex + i) % 1536;
+            const index = (baseIndex + i) % mockEmbeddingDimension.value;
             embedding[index] += 1.0 / (wordIndex + 1); // Earlier words get higher weight
           }
         });
@@ -41,10 +48,11 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
         return magnitude > 0 ? embedding.map((val) => val / magnitude) : embedding;
       }),
       embedDocuments: vi.fn(async (texts: string[]) => {
+        mockEmbeddingCalls.documents += 1;
         // Generate embeddings for each text using the same logic as embedQuery
         return texts.map((text) => {
           const words = text.toLowerCase().split(/\s+/);
-          const embedding = new Array(1536).fill(0);
+          const embedding = new Array(mockEmbeddingDimension.value).fill(0);
 
           words.forEach((word, wordIndex) => {
             const wordHash = Array.from(word).reduce(
@@ -54,7 +62,7 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
             const baseIndex = (wordHash % 100) * 15;
 
             for (let i = 0; i < 15; i++) {
-              const index = (baseIndex + i) % 1536;
+              const index = (baseIndex + i) % mockEmbeddingDimension.value;
               embedding[index] += 1.0 / (wordIndex + 1);
             }
           });
@@ -113,6 +121,7 @@ describe("DocumentStore - With Embeddings", () => {
   let store: DocumentStore;
 
   beforeEach(async () => {
+    mockEmbeddingDimension.value = 1536;
     // Create explicit embedding configuration for tests
     const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
       "openai:text-embedding-3-small",
@@ -464,6 +473,7 @@ describe("DocumentStore - With Embeddings", () => {
     let mockEmbedDocuments: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
+      mockEmbeddingDimension.value = 1536;
       // Get reference to the mocked embedDocuments function if embeddings are enabled
       // @ts-expect-error Accessing private property for testing
       if (store.embeddings?.embedDocuments) {
@@ -1616,8 +1626,13 @@ describe("DocumentStore - Common Functionality", () => {
 describe("DocumentStore - Embedding Model Change Safety", () => {
   let store: DocumentStore;
   let originalApiKey: string | undefined;
+  let tempDir: string;
 
   beforeEach(() => {
+    mockEmbeddingDimension.value = 1536;
+    mockEmbeddingCalls.query = 0;
+    mockEmbeddingCalls.documents = 0;
+    tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-store-"));
     // Set dummy API key so areCredentialsAvailable("openai") returns true
     // and initializeEmbeddings() proceeds (the actual API call is mocked)
     originalApiKey = process.env.OPENAI_API_KEY;
@@ -1634,6 +1649,7 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
     } else {
       process.env.OPENAI_API_KEY = originalApiKey;
     }
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
   /**
@@ -1643,6 +1659,7 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
   async function createStore(
     modelSpec: string,
     dimension?: number,
+    dbPath = ":memory:",
   ): Promise<DocumentStore> {
     const cfg = loadConfig();
     if (modelSpec) {
@@ -1653,8 +1670,9 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
     }
     if (dimension !== undefined) {
       cfg.embeddings.vectorDimension = dimension;
+      markVectorDimensionSource(cfg, true);
     }
-    const s = new DocumentStore(":memory:", cfg);
+    const s = new DocumentStore(dbPath, cfg);
     await s.initialize();
     return s;
   }
@@ -1725,6 +1743,15 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       store = await createStore("openai:text-embedding-3-small");
 
       // Metadata was persisted by initializeEmbeddings — check should pass
+      expect(() => store.checkEmbeddingModelChange()).not.toThrow();
+    });
+
+    it("should not throw after restarting with an auto-detected unknown model dimension", async () => {
+      mockEmbeddingDimension.value = 1024;
+      store = await createStore("openai:custom-1024-model");
+
+      // Metadata was persisted with the resolved dimension, not the default config value.
+      expect(store.getEmbeddingMetadata().dimension).toBe("1024");
       expect(() => store.checkEmbeddingModelChange()).not.toThrow();
     });
 
@@ -1855,6 +1882,143 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
         .prepare("SELECT COUNT(*) as cnt FROM documents_vec")
         .get() as { cnt: number };
       expect(count.cnt).toBe(0);
+    });
+
+    it("should create table with auto-detected dimensions for unknown OpenAI-compatible models", async () => {
+      mockEmbeddingDimension.value = 1024;
+      store = await createStore("openai:custom-1024-model");
+
+      // @ts-expect-error Accessing private property for testing
+      const ddl = store.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("1024");
+
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBe("openai:custom-1024-model");
+      expect(metadata.dimension).toBe("1024");
+    });
+
+    it("should reuse stored dimensions for unknown models without another startup probe", async () => {
+      const dbPath = join(tempDir, "unknown-locked.sqlite");
+      mockEmbeddingDimension.value = 1024;
+      const firstStore = await createStore(
+        "openai:custom-locked-model",
+        undefined,
+        dbPath,
+      );
+      expect(mockEmbeddingCalls.query).toBe(1);
+      expect(firstStore.getEmbeddingMetadata().dimension).toBe("1024");
+      await firstStore.shutdown();
+
+      mockEmbeddingCalls.query = 0;
+      mockEmbeddingDimension.value = 2048;
+      store = await createStore("openai:custom-locked-model", undefined, dbPath);
+
+      expect(mockEmbeddingCalls.query).toBe(0);
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBe("openai:custom-locked-model");
+      expect(metadata.dimension).toBe("1024");
+
+      // @ts-expect-error Accessing private property for testing
+      const ddl = store.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("1024");
+    });
+
+    it("should auto-detect dimensions for variable-dimension known models", async () => {
+      mockEmbeddingDimension.value = 6144;
+      store = await createStore("openai:NovaSearch/stella_en_400M_v5");
+
+      // @ts-expect-error Accessing private property for testing
+      const ddl = store.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("6144");
+
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBe("openai:NovaSearch/stella_en_400M_v5");
+      expect(metadata.dimension).toBe("6144");
+    });
+
+    it("should reuse stored dimensions for variable-dimension known models without another startup probe", async () => {
+      const dbPath = join(tempDir, "variable-locked.sqlite");
+      mockEmbeddingDimension.value = 6144;
+      const firstStore = await createStore(
+        "openai:NovaSearch/stella_en_400M_v5",
+        undefined,
+        dbPath,
+      );
+      expect(mockEmbeddingCalls.query).toBe(1);
+      expect(firstStore.getEmbeddingMetadata().dimension).toBe("6144");
+      await firstStore.shutdown();
+
+      mockEmbeddingCalls.query = 0;
+      mockEmbeddingDimension.value = 8192;
+      store = await createStore("openai:NovaSearch/stella_en_400M_v5", undefined, dbPath);
+
+      expect(mockEmbeddingCalls.query).toBe(0);
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.model).toBe("openai:NovaSearch/stella_en_400M_v5");
+      expect(metadata.dimension).toBe("6144");
+
+      // @ts-expect-error Accessing private property for testing
+      const ddl = store.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("6144");
+    });
+
+    it("should respect explicit vector dimension overrides for unknown models", async () => {
+      mockEmbeddingDimension.value = 1024;
+      store = await createStore("openai:custom-1024-model", 1536);
+
+      // @ts-expect-error Accessing private property for testing
+      const ddl = store.db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("1536");
+
+      const metadata = store.getEmbeddingMetadata();
+      expect(metadata.dimension).toBe("1536");
+    });
+
+    it("should reject explicit dimensions smaller than non-MRL model output", async () => {
+      mockEmbeddingDimension.value = 1024;
+
+      await expect(createStore("openai:custom-1024-model", 256)).rejects.toThrow(
+        DimensionError,
+      );
+      store = await createStore("");
+    });
+
+    it("should reject invalid dimensions from provider probing", async () => {
+      mockEmbeddingDimension.value = 0;
+
+      await expect(createStore("openai:empty-vector-model")).rejects.toThrow(
+        "Invalid detected embedding dimension from embedding provider probe: 0. Must be a positive integer.",
+      );
+      store = await createStore("");
+    });
+
+    it("should reject invalid dimensions from known model lookup", async () => {
+      EmbeddingConfig.setKnownModelDimensions("invalid-known-dimension-model", 0);
+
+      await expect(createStore("openai:invalid-known-dimension-model")).rejects.toThrow(
+        "Invalid detected embedding dimension from known model dimension lookup: 0. Must be a positive integer.",
+      );
+      store = await createStore("");
     });
 
     it("should be a no-op when dimension matches existing table", async () => {

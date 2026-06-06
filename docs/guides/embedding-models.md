@@ -145,4 +145,4 @@ When you change the embedding model or vector dimension after initial setup, exi
 
 ### Vector Dimension Override
 
-The vector dimension defaults to the model's native dimension (e.g., 1536 for `text-embedding-3-small`). You can override it with `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` as an environment variable. The value must be a positive integer (minimum 1).
+The vector dimension defaults to the model's native dimension (e.g., 1536 for `text-embedding-3-small`). For unknown OpenAI-compatible models, the server detects the native dimension with a startup probe on first successful initialization, stores that detected size in database metadata, and reuses it on later startups for the same model without probing again. You can override it with `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` as an environment variable. The value must be a positive integer (minimum 1).
