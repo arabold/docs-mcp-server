@@ -172,7 +172,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
     const pid = browserProcess.pid ? ` pid=${browserProcess.pid}` : "";
     logger.warn(`⚠️  Force killing Playwright browser process${pid}: ${reason}`);
-    browserProcess.kill("SIGKILL");
+    try {
+      if (!browserProcess.kill("SIGKILL")) {
+        logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}`);
+      }
+    } catch (error) {
+      logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}: ${error}`);
+    }
   }
 
   /**
