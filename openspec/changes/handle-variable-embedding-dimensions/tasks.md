@@ -29,7 +29,7 @@
 
 ## 5. Stored Dimension Lock
 
-- [ ] 5.1 Reuse stored `embedding_dimension` without provider probing when stored `embedding_model` matches the current configured model and no explicit vector dimension override changed.
-- [ ] 5.2 Probe unknown and variable-dimension models only on first successful initialization or after an intentional model/dimension change.
-- [ ] 5.3 Update regression tests to prove matching stored metadata skips the startup probe for unknown and variable-dimension models.
-- [ ] 5.4 Update documentation to explain that detected dimensions are locked in database metadata until the user changes model or vector dimension configuration.
+- [x] 5.1 Reuse stored `embedding_dimension` without provider probing when stored `embedding_model` matches the current configured model and no explicit vector dimension override changed.
+- [x] 5.2 Probe unknown and variable-dimension models only on first successful initialization or after an intentional model/dimension change.
+- [x] 5.3 Update regression tests to prove matching stored metadata skips the startup probe for unknown and variable-dimension models.
+- [x] 5.4 Update documentation to explain that detected dimensions are locked in database metadata until the user changes model or vector dimension configuration.

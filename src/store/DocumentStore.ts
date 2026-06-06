@@ -510,6 +510,21 @@ export class DocumentStore {
     stmt.run("embedding_dimension", String(dimension));
   }
 
+  private getStoredDimensionForCurrentModel(): number | null {
+    const config = this.embeddingConfig;
+    if (!config) {
+      return null;
+    }
+
+    const stored = this.getEmbeddingMetadata();
+    if (stored.model !== config.modelSpec || stored.dimension === null) {
+      return null;
+    }
+
+    const dimension = Number(stored.dimension);
+    return Number.isInteger(dimension) && dimension >= 1 ? dimension : null;
+  }
+
   /**
    * Compares the configured embedding model and dimension against stored metadata.
    * Throws EmbeddingModelChangedError if either has changed since the last run.
@@ -537,7 +552,7 @@ export class DocumentStore {
       return;
     }
 
-    const currentModel = this.config.app.embeddingModel;
+    const currentModel = this.embeddingConfig.modelSpec;
     const currentDimension = String(this.dbDimension);
 
     const modelChanged = stored.model !== currentModel;
@@ -696,7 +711,9 @@ export class DocumentStore {
     }
   }
 
-  private async resolveEffectiveEmbeddingDimension(): Promise<void> {
+  private async resolveEffectiveEmbeddingDimension(
+    options: { ignoreStoredMetadata?: boolean } = {},
+  ): Promise<void> {
     this.validateVectorDimension(this.dbDimension);
 
     if (this.embeddingConfig === null || this.embeddingConfig === undefined) {
@@ -709,6 +726,33 @@ export class DocumentStore {
     }
 
     try {
+      const storedDimension = options.ignoreStoredMetadata
+        ? null
+        : this.getStoredDimensionForCurrentModel();
+      if (storedDimension !== null) {
+        if (!isVectorDimensionExplicit(this.config)) {
+          this.dbDimension = storedDimension;
+        }
+        this.modelDimension = this.dbDimension;
+        logger.debug(
+          `Vector dimension loaded from metadata: ${this.dbDimension} for ${config.provider}:${config.model}`,
+        );
+        return;
+      }
+
+      const stored = this.getEmbeddingMetadata();
+      if (
+        !options.ignoreStoredMetadata &&
+        stored.model !== null &&
+        stored.model !== config.modelSpec
+      ) {
+        if (!isVectorDimensionExplicit(this.config) && config.dimensions !== null) {
+          this.dbDimension = config.dimensions;
+          this.modelDimension = config.dimensions;
+        }
+        return;
+      }
+
       let nativeDimension = config.dimensions;
 
       if (nativeDimension === null) {
@@ -929,6 +973,8 @@ export class DocumentStore {
    * completed here after invalidation.
    */
   async resolveModelChange(): Promise<void> {
+    await this.resolveEffectiveEmbeddingDimension({ ignoreStoredMetadata: true });
+
     const currentModel = this.config.app.embeddingModel;
     const currentDimension = this.dbDimension;
 
