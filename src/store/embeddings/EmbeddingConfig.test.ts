@@ -98,6 +98,40 @@ describe("EmbeddingConfig", () => {
       expect(config.getKnownDimensions("TEXT-EMBEDDING-3-SMALL")).toBe(1536);
       expect(config.getKnownDimensions("Text-Embedding-3-Small")).toBe(1536);
     });
+
+    it("should resolve common OpenAI-compatible hosted model aliases", () => {
+      const config = new EmbeddingConfig();
+
+      expect(config.getKnownDimensions("text-embedding-multilingual-e5-large")).toBe(
+        1024,
+      );
+      expect(
+        config.getKnownDimensions("keisuke-miyako/text-embedding-nomic-embed-text-v1.5"),
+      ).toBe(768);
+      expect(config.getKnownDimensions("nomic-embed-text-v1.5")).toBe(768);
+    });
+
+    it("should require runtime detection for variable-dimension MRL entries", () => {
+      const config = new EmbeddingConfig();
+
+      expect(config.getKnownDimensions("NovaSearch/stella_en_1.5B_v5")).toBeNull();
+      expect(config.getKnownDimensions("NovaSearch/stella_en_400M_v5")).toBeNull();
+      expect(config.getKnownDimensions("dunzhang/stella_en_400M_v5")).toBeNull();
+      expect(config.getKnownDimensions("NovaSearch/jasper_en_vision_language_v1")).toBe(
+        null,
+      );
+    });
+
+    it("should include current provider embedding models from upstream", () => {
+      const config = new EmbeddingConfig();
+
+      expect(config.getKnownDimensions("text-embedding-005")).toBe(768);
+      expect(config.getKnownDimensions("Cohere/Cohere-embed-v4.0")).toBe(1536);
+      expect(config.getKnownDimensions("voyage-4-large")).toBe(1024);
+      expect(config.getKnownDimensions("voyage-3.5")).toBe(1024);
+      expect(config.getKnownDimensions("nomic-ai/nomic-embed-text-v2-moe")).toBe(768);
+      expect(config.getKnownDimensions("nomic-ai/nomic-embed-code")).toBe(3584);
+    });
   });
 
   describe("setKnownDimensions", () => {

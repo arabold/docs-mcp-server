@@ -369,10 +369,18 @@ export const AppConfigSchema = z.object({
     .default(DEFAULT_CONFIG.assembly),
 });
 
-export type AppConfig = z.infer<typeof AppConfigSchema>;
+const vectorDimensionExplicit = Symbol("vectorDimensionExplicit");
+
+type ParsedAppConfig = z.infer<typeof AppConfigSchema>;
+
+export type AppConfig = Omit<ParsedAppConfig, "embeddings"> & {
+  embeddings: ParsedAppConfig["embeddings"] & {
+    [vectorDimensionExplicit]?: boolean;
+  };
+};
 
 // Get defaults from the schema
-export const defaults = AppConfigSchema.parse({});
+export const defaults = AppConfigSchema.parse({}) as AppConfig;
 
 // --- Mapping Configuration ---
 // Maps flat env vars and CLI args to the nested config structure
@@ -480,6 +488,12 @@ export function loadConfig(
   // 5. Map Env Vars and CLI Args
   const envConfig = mapEnvToConfig();
   const cliConfig = mapCliToConfig(cliArgs);
+  const vectorDimensionWasExplicit = wasVectorDimensionExplicit(
+    fileConfig,
+    envConfig,
+    cliConfig,
+    isReadOnlyConfig,
+  );
 
   // 6. Merge: Base < Env < CLI
   const mergedInput = deepMerge(
@@ -494,7 +508,10 @@ export function loadConfig(
 
   const parseResult = AppConfigSchema.safeParse(mergedInput);
   if (parseResult.success) {
-    return parseResult.data;
+    return markVectorDimensionSource(
+      parseResult.data as AppConfig,
+      vectorDimensionWasExplicit,
+    );
   }
 
   // The file on disk is structurally wrong (e.g., array fields saved as
@@ -530,14 +547,41 @@ export function loadConfig(
     setAtPath(fallbackInput, ["app", "embeddingModel"], "text-embedding-3-small");
   }
   const fallback = AppConfigSchema.parse(fallbackInput);
+  const fallbackConfig = markVectorDimensionSource(
+    fallback as AppConfig,
+    wasVectorDimensionExplicit({}, envConfig, cliConfig, false),
+  );
   if (!isReadOnlyConfig) {
     try {
-      saveConfigFile(configPath, fallback as unknown as ConfigObject);
+      saveConfigFile(configPath, fallbackConfig as unknown as ConfigObject);
     } catch (error) {
       logger.warn(`Failed to write fresh config file ${configPath}: ${error}`);
     }
   }
-  return fallback;
+  return fallbackConfig;
+}
+
+/**
+ * Returns true when the embedding vector dimension was set by user config,
+ * environment, or CLI rather than coming from generated defaults.
+ */
+export function isVectorDimensionExplicit(config: AppConfig): boolean {
+  return config.embeddings[vectorDimensionExplicit] === true;
+}
+
+/**
+ * Marks an AppConfig as having an explicit or default-derived vector dimension.
+ */
+export function markVectorDimensionSource(
+  config: AppConfig,
+  explicit: boolean,
+): AppConfig {
+  Object.defineProperty(config.embeddings, vectorDimensionExplicit, {
+    value: explicit,
+    enumerable: false,
+    configurable: true,
+  });
+  return config;
 }
 
 function loadConfigFile(filePath: string): Record<string, unknown> | null {
@@ -548,11 +592,34 @@ function loadConfigFile(filePath: string): Record<string, unknown> | null {
     if (filePath.endsWith(".json")) {
       return JSON.parse(content);
     }
+
     return yaml.parse(content) || {};
   } catch (error) {
     logger.warn(`Failed to parse config file ${filePath}: ${error}`);
     return null;
   }
+}
+
+function wasVectorDimensionExplicit(
+  fileConfig: ConfigObject,
+  envConfig: ConfigObject,
+  cliConfig: ConfigObject,
+  isReadOnlyConfig: boolean,
+): boolean {
+  const pathArr = ["embeddings", "vectorDimension"];
+  if (
+    getAtPath(envConfig, pathArr) !== undefined ||
+    getAtPath(cliConfig, pathArr) !== undefined
+  ) {
+    return true;
+  }
+
+  const fileValue = getAtPath(fileConfig, pathArr);
+  if (fileValue === undefined) {
+    return false;
+  }
+
+  return isReadOnlyConfig || fileValue !== DEFAULT_CONFIG.embeddings.vectorDimension;
 }
 
 function saveConfigFile(filePath: string, config: Record<string, unknown>): void {

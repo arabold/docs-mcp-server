@@ -2,7 +2,7 @@ import type { Embeddings } from "@langchain/core/embeddings";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
-import type { AppConfig } from "../utils/config";
+import { type AppConfig, isVectorDimensionExplicit } from "../utils/config";
 import { logger } from "../utils/logger";
 import { compareVersionsDescending } from "../utils/version";
 import { applyMigrations } from "./applyMigrations";
@@ -70,8 +70,8 @@ export class DocumentStore {
   private readonly config: AppConfig;
 
   private readonly db: DatabaseType;
-  private embeddings!: Embeddings;
-  private readonly dbDimension: number;
+  private embeddings: Embeddings | null = null;
+  private dbDimension: number;
   private readonly searchWeightVec: number;
   private readonly searchWeightFts: number;
   private readonly searchOverfetchFactor: number;
@@ -80,7 +80,7 @@ export class DocumentStore {
   private readonly embeddingBatchSize: number;
   private readonly embeddingBatchChars: number;
   private readonly embeddingInitTimeoutMs: number;
-  private modelDimension!: number;
+  private modelDimension: number | null = null;
   private readonly embeddingConfig?: EmbeddingModelConfig | null;
   private isVectorSearchEnabled: boolean = false;
 
@@ -538,7 +538,7 @@ export class DocumentStore {
     }
 
     const currentModel = this.config.app.embeddingModel;
-    const currentDimension = String(this.config.embeddings.vectorDimension);
+    const currentDimension = String(this.dbDimension);
 
     const modelChanged = stored.model !== currentModel;
     const dimensionChanged =
@@ -626,41 +626,11 @@ export class DocumentStore {
 
     // Create embedding model
     try {
-      this.embeddings = createEmbeddingModel(config.modelSpec, {
-        requestTimeoutMs: this.config.embeddings.requestTimeoutMs,
-        vectorDimension: this.dbDimension,
-      });
-
-      // Use known dimensions if available, otherwise detect via test query
-      if (config.dimensions !== null) {
-        this.modelDimension = config.dimensions;
-      } else {
-        // Fallback: determine the model's actual dimension by embedding a test string
-        // Use a timeout to fail fast if the embedding service is unreachable
-        const testPromise = this.embeddings.embedQuery("test");
-        let timeoutId: NodeJS.Timeout | undefined;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(
-              new Error(
-                `Embedding service connection timed out after ${this.embeddingInitTimeoutMs / 1000} seconds`,
-              ),
-            );
-          }, this.embeddingInitTimeoutMs);
-        });
-
-        try {
-          const testVector = await Promise.race([testPromise, timeoutPromise]);
-          this.modelDimension = testVector.length;
-        } finally {
-          if (timeoutId !== undefined) {
-            clearTimeout(timeoutId);
-          }
-        }
-
-        // Cache the discovered dimensions for future use
-        EmbeddingConfig.setKnownModelDimensions(config.model, this.modelDimension);
+      if (this.embeddings === null) {
+        this.embeddings = this.createEmbeddingClient(this.dbDimension);
       }
+
+      const modelDimension = this.modelDimension ?? this.dbDimension;
 
       // For models wrapped in FixedDimensionEmbeddings with truncation enabled
       // (e.g., Gemini with MRL support), the effective output dimension is capped
@@ -669,7 +639,9 @@ export class DocumentStore {
         this.embeddings instanceof FixedDimensionEmbeddings &&
         this.embeddings.allowTruncate
       ) {
-        this.modelDimension = Math.min(this.modelDimension, this.dbDimension);
+        this.modelDimension = Math.min(modelDimension, this.dbDimension);
+      } else {
+        this.modelDimension = modelDimension;
       }
 
       if (this.modelDimension > this.dbDimension) {
@@ -679,56 +651,138 @@ export class DocumentStore {
       // If we reach here, embeddings are successfully initialized
       this.isVectorSearchEnabled = true;
       logger.debug(
-        `Embeddings initialized: ${config.provider}:${config.model} (${this.modelDimension}d)`,
+        `Embeddings initialized: ${config.provider}:${config.model} (${this.dbDimension}d)`,
       );
 
       // Persist the active embedding model identity for change detection on next startup
       this.setEmbeddingMetadata(config.modelSpec, this.dbDimension);
     } catch (error) {
-      // Handle model-related errors with helpful messages
-      if (error instanceof Error) {
-        if (
-          error.message.includes("does not exist") ||
-          error.message.includes("MODEL_NOT_FOUND")
-        ) {
-          throw new ModelConfigurationError(
-            `Invalid embedding model: ${config.model}\n` +
-              `   The model "${config.model}" is not available or you don't have access to it.\n` +
-              "   See README.md for supported models or run with --help for more details.",
-          );
-        }
-        if (
-          error.message.includes("API key") ||
-          error.message.includes("401") ||
-          error.message.includes("authentication")
-        ) {
-          throw new ModelConfigurationError(
-            `Authentication failed for ${config.provider} embedding provider\n` +
-              "   Please check your API key configuration.\n" +
-              "   See README.md for configuration options or run with --help for more details.",
-          );
-        }
-        // Handle network-related errors (timeout, connection refused, etc.)
-        if (
-          error.message.includes("timed out") ||
-          error.message.includes("ECONNREFUSED") ||
-          error.message.includes("ENOTFOUND") ||
-          error.message.includes("ETIMEDOUT") ||
-          error.message.includes("ECONNRESET") ||
-          error.message.includes("network") ||
-          error.message.includes("fetch failed")
-        ) {
-          throw new ModelConfigurationError(
-            `Failed to connect to ${config.provider} embedding service\n` +
-              `   ${error.message}\n` +
-              `   Please check that the embedding service is running and accessible.\n` +
-              `   If using a local model (e.g., Ollama), ensure the service is started.`,
-          );
-        }
-      }
-      // Re-throw other embedding errors (like DimensionError) as-is
-      throw error;
+      this.throwEmbeddingInitializationError(error, config);
     }
+  }
+
+  private createEmbeddingClient(vectorDimension: number): Embeddings {
+    const config = this.embeddingConfig;
+    if (!config) {
+      throw new StoreError("Cannot create embedding client without configuration");
+    }
+
+    return createEmbeddingModel(config.modelSpec, {
+      requestTimeoutMs: this.config.embeddings.requestTimeoutMs,
+      vectorDimension,
+    });
+  }
+
+  private async detectEmbeddingDimension(embeddings: Embeddings): Promise<number> {
+    const testPromise = embeddings.embedQuery("test");
+    let timeoutId: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(
+          new Error(
+            `Embedding service connection timed out after ${this.embeddingInitTimeoutMs / 1000} seconds`,
+          ),
+        );
+      }, this.embeddingInitTimeoutMs);
+    });
+
+    try {
+      const testVector = await Promise.race([testPromise, timeoutPromise]);
+      return testVector.length;
+    } finally {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+      }
+    }
+  }
+
+  private async resolveEffectiveEmbeddingDimension(): Promise<void> {
+    this.validateVectorDimension(this.dbDimension);
+
+    if (this.embeddingConfig === null || this.embeddingConfig === undefined) {
+      return;
+    }
+
+    const config = this.embeddingConfig;
+    if (!areCredentialsAvailable(config.provider)) {
+      return;
+    }
+
+    try {
+      let nativeDimension = config.dimensions;
+
+      if (nativeDimension === null) {
+        this.embeddings = this.createEmbeddingClient(this.dbDimension);
+        nativeDimension = await this.detectEmbeddingDimension(this.embeddings);
+        EmbeddingConfig.setKnownModelDimensions(config.model, nativeDimension);
+      }
+
+      this.modelDimension = nativeDimension;
+
+      if (!isVectorDimensionExplicit(this.config)) {
+        this.dbDimension = nativeDimension;
+        logger.info(
+          `📐 Vector dimension auto-resolved to ${this.dbDimension} for ${config.provider}:${config.model}`,
+        );
+      }
+    } catch (error) {
+      this.throwEmbeddingInitializationError(error, config);
+    }
+  }
+
+  private validateVectorDimension(dim: number): void {
+    if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
+      throw new StoreError(
+        `Invalid embeddings.vectorDimension: ${dim}. Must be a positive integer.`,
+      );
+    }
+  }
+
+  private throwEmbeddingInitializationError(
+    error: unknown,
+    config: EmbeddingModelConfig,
+  ): never {
+    if (error instanceof Error) {
+      if (
+        error.message.includes("does not exist") ||
+        error.message.includes("MODEL_NOT_FOUND")
+      ) {
+        throw new ModelConfigurationError(
+          `Invalid embedding model: ${config.model}\n` +
+            `   The model "${config.model}" is not available or you don't have access to it.\n` +
+            "   See README.md for supported models or run with --help for more details.",
+        );
+      }
+      if (
+        error.message.includes("API key") ||
+        error.message.includes("401") ||
+        error.message.includes("authentication")
+      ) {
+        throw new ModelConfigurationError(
+          `Authentication failed for ${config.provider} embedding provider\n` +
+            "   Please check your API key configuration.\n" +
+            "   See README.md for configuration options or run with --help for more details.",
+        );
+      }
+      if (
+        error.message.includes("timed out") ||
+        error.message.includes("ECONNREFUSED") ||
+        error.message.includes("ENOTFOUND") ||
+        error.message.includes("ETIMEDOUT") ||
+        error.message.includes("ECONNRESET") ||
+        error.message.includes("network") ||
+        error.message.includes("fetch failed")
+      ) {
+        throw new ModelConfigurationError(
+          `Failed to connect to ${config.provider} embedding service\n` +
+            `   ${error.message}\n` +
+            `   Please check that the embedding service is running and accessible.\n` +
+            `   If using a local model (e.g., Ollama), ensure the service is started.`,
+        );
+      }
+    }
+
+    throw error;
   }
 
   /**
@@ -833,21 +887,24 @@ export class DocumentStore {
         retryDelayMs: this.config.db.migrationRetryDelayMs,
       });
 
-      // 3. Check embedding model/dimension metadata for changes
+      // 3. Resolve the effective vector dimension before metadata checks or table DDL.
+      await this.resolveEffectiveEmbeddingDimension();
+
+      // 4. Check embedding model/dimension metadata for changes
       //    Uses inline db.prepare() so it works before prepareStatements().
       //    Throws EmbeddingModelChangedError if mismatch detected.
       //    The CLI layer catches this to prompt (TTY) or fail (non-interactive).
       this.checkEmbeddingModelChange();
 
-      // 4. Create vector table at runtime with configurable dimension
+      // 5. Create vector table at runtime with resolved dimension
       //    Must run before prepareStatements() because triggers on `documents`
       //    reference `documents_vec`.
       this.ensureVectorTable();
 
-      // 5. Initialize prepared statements (after vec table exists)
+      // 6. Initialize prepared statements (after vec table exists)
       this.prepareStatements();
 
-      // 6. Initialize embeddings client (await to catch errors)
+      // 7. Initialize embeddings client (await to catch errors)
       //    On success, persists model identity to metadata table.
       await this.initializeEmbeddings();
     } catch (error) {
@@ -873,7 +930,7 @@ export class DocumentStore {
    */
   async resolveModelChange(): Promise<void> {
     const currentModel = this.config.app.embeddingModel;
-    const currentDimension = this.config.embeddings.vectorDimension;
+    const currentDimension = this.dbDimension;
 
     // Invalidate all existing vectors and update metadata
     this.invalidateAllVectors(currentModel, currentDimension);
@@ -911,12 +968,8 @@ export class DocumentStore {
    * and are handled by the model change detection system (checkEmbeddingModelChange).
    */
   private ensureVectorTable(): void {
-    const dim = this.config.embeddings.vectorDimension;
-    if (typeof dim !== "number" || !Number.isInteger(dim) || dim < 1) {
-      throw new StoreError(
-        `Invalid embeddings.vectorDimension: ${dim}. Must be a positive integer.`,
-      );
-    }
+    const dim = this.dbDimension;
+    this.validateVectorDimension(dim);
 
     const existingSql = this.db
       .prepare(
@@ -1352,7 +1405,11 @@ export class DocumentStore {
 
     try {
       // Try to embed the batch normally
-      return await this.embeddings.embedDocuments(texts);
+      const embeddings = this.embeddings;
+      if (embeddings === null) {
+        throw new StoreError("Embeddings are not initialized");
+      }
+      return await embeddings.embedDocuments(texts);
     } catch (error) {
       // Check if this is a size-related error
       if (this.isInputSizeError(error)) {
@@ -1806,7 +1863,7 @@ export class DocumentStore {
 
       const { id: versionId } = versionRow;
 
-      if (this.isVectorSearchEnabled) {
+      if (this.isVectorSearchEnabled && this.embeddings !== null) {
         // Hybrid search: vector + full-text search with RRF ranking
         const rawEmbedding = await this.embeddings.embedQuery(query);
         const embedding = this.padVector(rawEmbedding);
