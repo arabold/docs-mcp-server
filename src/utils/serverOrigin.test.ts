@@ -28,6 +28,8 @@ describe("server origin helpers", () => {
     "https://docs.example.com/path",
     "https://docs.example.com?x=1",
     "https://docs.example.com#fragment",
+    "https://user@docs.example.com",
+    "https://user:pass@docs.example.com",
     "not a url",
   ])("rejects invalid public origin %s", (origin) => {
     expect(() => normalizePublicOrigin(origin)).toThrow();

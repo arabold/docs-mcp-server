@@ -25,6 +25,10 @@ export function normalizePublicOrigin(origin: string | undefined): string | unde
     throw new Error("server.publicOrigin must use the http or https protocol.");
   }
 
+  if (parsed.username || parsed.password) {
+    throw new Error("server.publicOrigin must not include credentials.");
+  }
+
   if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
     throw new Error(
       "server.publicOrigin must not include a path, query string, or fragment.",

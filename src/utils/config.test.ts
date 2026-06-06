@@ -333,6 +333,8 @@ describe("Config CLI Helpers", () => {
     it("returns false for invalid paths", () => {
       expect(isValidConfigPath("invalid.path")).toBe(false);
       expect(isValidConfigPath("scraper.nonexistent")).toBe(false);
+      expect(isValidConfigPath("toString")).toBe(false);
+      expect(isValidConfigPath("server.toString")).toBe(false);
     });
   });
 

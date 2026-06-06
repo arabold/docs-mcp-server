@@ -4,7 +4,7 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
@@ -104,6 +104,10 @@ describe("AppServer Behavior Tests", () => {
     mockWorkerService.stopWorkerService.mockResolvedValue(undefined);
     mockProxyAuthManager.initialize.mockResolvedValue(undefined);
     mockProxyAuthManager.registerRoutes.mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe("Configuration Validation", () => {

@@ -720,7 +720,7 @@ function getAtPath(obj: ConfigObject, pathArr: string[]): unknown {
 function hasPath(obj: ConfigObject, pathArr: string[]): boolean {
   let current: unknown = obj;
   for (const key of pathArr) {
-    if (typeof current !== "object" || current === null || !(key in current)) {
+    if (typeof current !== "object" || current === null || !Object.hasOwn(current, key)) {
       return false;
     }
     current = (current as ConfigObject)[key];
