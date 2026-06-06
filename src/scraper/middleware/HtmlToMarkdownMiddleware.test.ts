@@ -127,6 +127,32 @@ describe("HtmlToMarkdownMiddleware", () => {
     // No close needed
   });
 
+  it("should split oversized tables before GFM conversion while retaining content", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    const rows = Array.from(
+      { length: 505 },
+      (_, index) =>
+        `<tr><td>Row ${index + 1}</td><td><strong>Value ${index + 1}</strong></td></tr>`,
+    ).join("");
+    const html = `
+      <html><body>
+        <table>
+          <thead><tr><th>Name</th><th>Value</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(context.errors).toHaveLength(0);
+    expect(context.content).toContain("| Row 1 | **Value 1** |");
+    expect(context.content).toContain("| Row 505 | **Value 505** |");
+    expect(context.content.match(/\| Name \| Value \|/g)).toHaveLength(6);
+  });
+
   it("should return empty string and markdown type if conversion results in empty markdown", async () => {
     const middleware = new HtmlToMarkdownMiddleware();
     // HTML that results in empty markdown (only comments)
