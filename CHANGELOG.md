@@ -1,3 +1,18 @@
+## [2.4.1](https://github.com/arabold/docs-mcp-server/compare/v2.4.0...v2.4.1) (2026-06-08)
+
+
+### Bug Fixes
+
+* address embedding dimension review feedback ([dbc7da1](https://github.com/arabold/docs-mcp-server/commit/dbc7da15f3be05c0da9ee5e07a17d913b5bff097))
+* address origin review feedback ([e4f1077](https://github.com/arabold/docs-mcp-server/commit/e4f1077240cb12c775cc15ff58042841a44a07c7))
+* correct advertised server origin ([144fcee](https://github.com/arabold/docs-mcp-server/commit/144fcee99d496fa86da8072a6d9d21e23c8bc5b3))
+* resolve embedding dimensions before vector table creation ([32dead5](https://github.com/arabold/docs-mcp-server/commit/32dead556bb8549301c5aa872de4dd1f272ed0bc))
+* reuse stored embedding dimensions ([428c664](https://github.com/arabold/docs-mcp-server/commit/428c664a357c5ab4be921eaa4f2815b1371d1c82))
+* **scraper:** bound playwright cleanup ([52c5651](https://github.com/arabold/docs-mcp-server/commit/52c5651232534cb938b09b8f1311a4ccb223ae4f))
+* **scraper:** guard browser kill failures ([68ec646](https://github.com/arabold/docs-mcp-server/commit/68ec6465e4ee18015a2568d73939a12491cd62a1))
+* **scraper:** refine table splitting fallback ([dd0f971](https://github.com/arabold/docs-mcp-server/commit/dd0f971895404fdd5f41b291f1700735735db5d2))
+* **scraper:** split oversized markdown tables ([dbafb87](https://github.com/arabold/docs-mcp-server/commit/dbafb87ea60cb9d1b8c405b636cbc84d9a0cdf16))
+
 # [2.4.0](https://github.com/arabold/docs-mcp-server/compare/v2.3.0...v2.4.0) (2026-05-19)
 
 
