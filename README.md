@@ -130,7 +130,7 @@ Using an embedding model is **optional** but dramatically improves search qualit
 OPENAI_API_KEY="sk-proj-..." npx @arabold/docs-mcp-server@latest
 ```
 
-See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ollama**, **Gemini**, **Azure**, and others.
+See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ollama**, **Gemini**, **Azure**, fully **offline/local** embeddings, and others.
 
 ---
 
@@ -142,7 +142,7 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 -   **[Basic Usage](docs/guides/basic-usage.md)**: Using the Web UI, CLI, and scraping local files.
 -   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.
 -   **[Supported Formats](docs/concepts/supported-formats.md)**: Complete file format and MIME type reference.
--   **[Embedding Models](docs/guides/embedding-models.md)**: Configure OpenAI, Ollama, Gemini, and other providers.
+-   **[Embedding Models](docs/guides/embedding-models.md)**: Configure OpenAI, Ollama, Gemini, local/offline, and other providers.
 -   **[Search Quality Benchmark](docs/guides/benchmarking.md)**: Measure retrieval quality with IR metrics + LLM-judged scores; prerequisites, how to run, how to interpret results.
 
 ### Hash-Routed SPAs

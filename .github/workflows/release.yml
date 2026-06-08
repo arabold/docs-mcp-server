@@ -92,12 +92,23 @@ jobs:
           npm version "$version" --no-git-tag-version
           npm publish --access public
 
+      - name: Publish companion package (manual)
+        if: steps.release-mode.outputs.manual_release == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          version='${{ steps.release-mode.outputs.release_version }}'
+          # Keep the optional Transformers.js companion in lockstep with the main package so a
+          # compatible version always exists on npm. prepack builds dist before publishing.
+          npm version "$version" --no-git-tag-version --workspace @arabold/docs-mcp-server-transformers
+          npm publish --workspace @arabold/docs-mcp-server-transformers
+
       - name: Commit manual version bump
         if: steps.release-mode.outputs.manual_release == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
+          git add package.json package-lock.json packages/transformers/package.json
           git commit -m "chore(release): ${{ steps.release-mode.outputs.release_version }} [skip ci]"
           git push origin "HEAD:${GITHUB_REF_NAME}"
 

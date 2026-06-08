@@ -14,6 +14,7 @@ If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults t
 - `gemini:embedding-001` (Google Gemini)
 - `aws:amazon.titan-embed-text-v1` (AWS Bedrock)
 - `microsoft:text-embedding-ada-002` (Azure OpenAI)
+- `transformers:BAAI/bge-small-en-v1.5` (local, offline — requires the optional companion package)
 - Or any OpenAI-compatible model name
 
 ## Provider Configuration
@@ -34,6 +35,8 @@ Provider credentials use the provider-specific environment variables listed belo
 | `AZURE_OPENAI_API_INSTANCE_NAME`   | Azure OpenAI instance name.                           |
 | `AZURE_OPENAI_API_DEPLOYMENT_NAME` | Azure OpenAI deployment name.                         |
 | `AZURE_OPENAI_API_VERSION`         | Azure OpenAI API version.                             |
+| `TRANSFORMERS_DEVICE`              | Device for local embeddings: `cpu` (default) or `webgpu`. |
+| `TRANSFORMERS_CACHE`               | Directory for caching downloaded local models.        |
 
 ### Examples
 
@@ -114,7 +117,29 @@ DOCS_MCP_EMBEDDING_MODEL="microsoft:text-embedding-ada-002" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-## Changing the Embedding Model
+#### Local / Offline (Transformers.js)
+
+Generate embeddings entirely on your machine — no API key, no network calls, no data leaving your host. This uses [Transformers.js](https://huggingface.co/docs/transformers.js) with the ONNX runtime.
+
+Because the runtime is large, it ships as an optional **companion package** that you install alongside the server:
+
+```bash
+npm install -g @arabold/docs-mcp-server @arabold/docs-mcp-server-transformers
+
+DOCS_MCP_EMBEDDING_MODEL="transformers:BAAI/bge-small-en-v1.5" \
+docs-mcp-server
+```
+
+Or run both with `npx` in a single command:
+
+```bash
+DOCS_MCP_EMBEDDING_MODEL="transformers:BAAI/bge-small-en-v1.5" \
+npx -p @arabold/docs-mcp-server -p @arabold/docs-mcp-server-transformers docs-mcp-server
+```
+
+The model is downloaded on first use and cached (set `TRANSFORMERS_CACHE` to choose the directory). Any sentence-transformers model on Hugging Face works; the vector dimension is detected automatically. Set `TRANSFORMERS_DEVICE=webgpu` to enable GPU acceleration on supported hardware.
+
+> The official Docker image already bundles the companion package, so `transformers:` models work out of the box there with no extra install.
 
 When you change the embedding model or vector dimension after initial setup, existing embedding vectors become semantically incompatible with the new configuration. The server detects this automatically by tracking the active model identity in a metadata table.
 

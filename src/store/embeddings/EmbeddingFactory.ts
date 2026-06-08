@@ -11,6 +11,7 @@ import {
 import type { AppConfig } from "../../utils/config";
 import { MissingCredentialsError } from "../errors";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
+import { TransformersJSEmbeddings } from "./TransformersJSEmbeddings";
 
 /**
  * Supported embedding model providers. Each provider requires specific environment
@@ -22,7 +23,8 @@ export type EmbeddingProvider =
   | "gemini"
   | "aws"
   | "microsoft"
-  | "sagemaker";
+  | "sagemaker"
+  | "transformers";
 
 /**
  * Error thrown when an invalid or unsupported embedding provider is specified.
@@ -31,7 +33,7 @@ export class UnsupportedProviderError extends Error {
   constructor(provider: string) {
     super(
       `❌ Unsupported embedding provider: ${provider}\n` +
-        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker\n" +
+        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker, transformers\n" +
         "   See README.md for configuration options or run with --help for more details.",
     );
     this.name = "UnsupportedProviderError";
@@ -92,6 +94,11 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
           (!!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY))
       );
     }
+
+    case "transformers":
+      // Local, offline embeddings require no credentials. Availability of the optional
+      // companion package is verified lazily when the model is first used.
+      return true;
 
     default:
       return false;
@@ -261,6 +268,16 @@ export function createEmbeddingModel(
         azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
         azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION,
         deploymentName: model,
+      });
+    }
+
+    case "transformers": {
+      // Local, offline embeddings via the Transformers.js companion package.
+      // The device can be overridden with the TRANSFORMERS_DEVICE environment variable.
+      const envDevice = process.env.TRANSFORMERS_DEVICE?.toLowerCase();
+      return new TransformersJSEmbeddings({
+        modelName: model,
+        device: envDevice === "webgpu" ? "webgpu" : "cpu",
       });
     }
 

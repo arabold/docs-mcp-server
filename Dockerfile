@@ -18,8 +18,9 @@ FROM base AS builder
 ARG POSTHOG_API_KEY
 ENV POSTHOG_API_KEY=$POSTHOG_API_KEY
 
-# Copy package files
+# Copy package files (root + workspaces so `npm ci` can link the companion package)
 COPY package*.json ./
+COPY packages/transformers/package.json ./packages/transformers/package.json
 
 # Install all dependencies (including dev dependencies for building)
 RUN npm ci
@@ -51,21 +52,27 @@ COPY db db
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/dist ./dist
+# Include the built Transformers.js companion package so the workspace symlink in
+# node_modules resolves and local (offline) embeddings work out of the box.
+COPY --from=builder /app/packages ./packages
 
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
+# Cache directory for Transformers.js models (downloaded on first use).
+ENV TRANSFORMERS_CACHE=/models
 
 # Create the writable runtime directories and hand ownership to the
 # unprivileged `node` user that ships with the base image (uid 1000).
 # `/app` is intentionally left root-owned so the runtime user cannot
 # tamper with code or `node_modules` if it is ever compromised.
-RUN mkdir -p /data /config \
-  && chown node:node /data /config
+RUN mkdir -p /data /config /models \
+  && chown node:node /data /config /models
 
 # Define volumes
 VOLUME /data
 VOLUME /config
+VOLUME /models
 
 # Expose the default port of the application
 EXPOSE 6280
