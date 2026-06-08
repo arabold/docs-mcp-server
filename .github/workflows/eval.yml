@@ -37,9 +37,9 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "22.x"
           cache: "npm"
@@ -53,7 +53,7 @@ jobs:
       # to dataset.yaml or when source docs have changed substantially).
       - name: Restore docs store cache
         id: store-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.local/share/docs-mcp-server
           key: docs-store-v1-${{ hashFiles('tests/search-eval/dataset.yaml') }}
@@ -90,7 +90,7 @@ jobs:
       # regression — we want the data either way.
       - name: Upload summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: search-eval-summary-${{ github.run_id }}
           path: |
