@@ -122,6 +122,8 @@ export class DocumentStore {
     queryVersions: Database.Statement<[string]>;
     checkExists: Database.Statement<[string, string]>;
     queryLibraryVersions: Database.Statement<[]>;
+    sampleChunkContents: Database.Statement<[string, string, number]>;
+    listPageUrls: Database.Statement<[string, string]>;
     getChildChunks: Database.Statement<
       [string, string, string, number, string, bigint, number]
     >;
@@ -363,6 +365,26 @@ export class DocumentStore {
         LEFT JOIN documents d ON d.page_id = p.id
         GROUP BY v.id
         ORDER BY l.name, version`,
+      ),
+      // Quality-gate relevance sampling: up to LIMIT chunk contents for a (library, version).
+      sampleChunkContents: this.db.prepare<[string, string, number]>(
+        `SELECT d.content
+         FROM documents d
+         JOIN pages p ON d.page_id = p.id
+         JOIN versions v ON p.version_id = v.id
+         JOIN libraries l ON v.library_id = l.id
+         WHERE l.name = ?
+         AND COALESCE(v.name, '') = COALESCE(?, '')
+         LIMIT ?`,
+      ),
+      // Quality-gate scope check: distinct indexed page URLs for a (library, version).
+      listPageUrls: this.db.prepare<[string, string]>(
+        `SELECT DISTINCT p.url
+         FROM pages p
+         JOIN versions v ON p.version_id = v.id
+         JOIN libraries l ON v.library_id = l.id
+         WHERE l.name = ?
+         AND COALESCE(v.name, '') = COALESCE(?, '')`,
       ),
       getChildChunks: this.db.prepare<
         [string, string, string, number, string, bigint, number]
@@ -1309,6 +1331,48 @@ export class DocumentStore {
       return result !== undefined;
     } catch (error) {
       throw new ConnectionError("Failed to check document existence", error);
+    }
+  }
+
+  /**
+   * Returns up to `limit` stored chunk contents for a (library, version),
+   * used by the quality gate to sample text for relevance checks.
+   * @param library Library name (matched case-insensitively)
+   * @param version Normalized version string ("" for unversioned)
+   * @param limit Maximum number of chunk contents to return
+   */
+  async sampleChunkContents(
+    library: string,
+    version: string,
+    limit: number,
+  ): Promise<string[]> {
+    try {
+      const rows = this.statements.sampleChunkContents.all(
+        library.toLowerCase(),
+        version,
+        limit,
+      ) as Array<{ content: string }>;
+      return rows.map((row) => row.content);
+    } catch (error) {
+      throw new ConnectionError("Failed to sample chunk contents", error);
+    }
+  }
+
+  /**
+   * Returns the distinct indexed page URLs for a (library, version), used by the
+   * quality gate to compute the in-scope URL ratio.
+   * @param library Library name (matched case-insensitively)
+   * @param version Normalized version string ("" for unversioned)
+   */
+  async listPageUrls(library: string, version: string): Promise<string[]> {
+    try {
+      const rows = this.statements.listPageUrls.all(
+        library.toLowerCase(),
+        version,
+      ) as Array<{ url: string }>;
+      return rows.map((row) => row.url);
+    } catch (error) {
+      throw new ConnectionError("Failed to list page URLs", error);
     }
   }
 

@@ -138,6 +138,9 @@ describe("PipelineManager", () => {
         distinctUrls: 5,
       }),
       removeVersion: vi.fn().mockResolvedValue(undefined),
+      // Relevance-gate methods (only consulted when expectTerms is set).
+      sampleChunks: vi.fn().mockResolvedValue([]),
+      listIndexedUrls: vi.fn().mockResolvedValue([]),
     };
 
     // Mock the worker's executeJob method
@@ -321,6 +324,33 @@ describe("PipelineManager", () => {
     const job = await manager.getJob(jobId);
     expect(removeSpy).not.toHaveBeenCalled();
     expect(job?.outcome).toBe(ScrapeOutcome.INDEXED); // gate skipped for refresh
+  });
+
+  it("fails as OFF_TOPIC when expectTerms are absent from sampled chunks", async () => {
+    (mockStore.getVersionMetrics as Mock).mockResolvedValue({
+      documentCount: 50,
+      distinctUrls: 40,
+    });
+    (mockStore.sampleChunks as Mock).mockResolvedValue([
+      "list-it demo",
+      "mood-food demo",
+    ]);
+    (mockStore.listIndexedUrls as Mock).mockResolvedValue([]);
+    const removeSpy = mockStore.removeVersion as Mock;
+
+    const jobId = await manager.enqueueScrapeJob("gemini", "1.0.0", {
+      url: "https://github.com/google/generative-ai-docs",
+      library: "gemini",
+      version: "1.0.0",
+      expectTerms: ["generateContent"],
+    });
+    await manager.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await manager.waitForJobCompletion(jobId).catch(() => {});
+
+    const job = await manager.getJob(jobId);
+    expect(job?.errorCode).toBe(ScrapeErrorCode.OFF_TOPIC);
+    expect(removeSpy).toHaveBeenCalled();
   });
 
   it("should cancel a job via cancelJob API", async () => {

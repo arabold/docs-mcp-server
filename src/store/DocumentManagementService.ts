@@ -223,6 +223,33 @@ export class DocumentManagementService {
   }
 
   /**
+   * Returns up to `limit` stored chunk contents for sampling-based relevance checks.
+   *
+   * @param library - Library name (matched case-insensitively in the store).
+   * @param version - Version string; null/undefined resolves to the unversioned ("") entry.
+   * @param limit - Maximum number of chunk contents to return.
+   * @returns An array of chunk content strings (possibly empty).
+   */
+  async sampleChunks(
+    library: string,
+    version?: string | null,
+    limit = 20,
+  ): Promise<string[]> {
+    return this.store.sampleChunkContents(library, this.normalizeVersion(version), limit);
+  }
+
+  /**
+   * Returns the distinct indexed page URLs for a (library, version).
+   *
+   * @param library - Library name (matched case-insensitively in the store).
+   * @param version - Version string; null/undefined resolves to the unversioned ("") entry.
+   * @returns The distinct URLs indexed under the (library, version).
+   */
+  async listIndexedUrls(library: string, version?: string | null): Promise<string[]> {
+    return this.store.listPageUrls(library, this.normalizeVersion(version));
+  }
+
+  /**
    * Finds versions that were indexed from the same source URL.
    */
   async findVersionsBySourceUrl(url: string): Promise<DbVersionWithLibrary[]> {

@@ -21,6 +21,7 @@ import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError, QualityGateError } from "./errors";
 import { evaluateOutcome, type OutcomeVerdict } from "./outcomeGate";
 import { PipelineWorker } from "./PipelineWorker"; // Import the worker
+import { computeInScopeRatio, sampleExpectTermsMatch } from "./relevanceGate";
 import type { IPipeline } from "./trpc/interfaces";
 import type { InternalPipelineJob, JobOutcomeMetrics, PipelineJob } from "./types";
 import { PipelineJobStatus, type ScrapeErrorCode, ScrapeOutcome } from "./types";
@@ -652,11 +653,25 @@ export class PipelineManager implements IPipeline {
       return null;
     }
     const counts = await this.store.getVersionMetrics(job.library, job.version);
+    const opts = job.scraperOptions;
+    let inScopeUrlRatio: number | undefined;
+    let expectTermsMatched: boolean | undefined;
+    // Review F6: scope-drift and off-topic are OPT-IN for v1 (rollout is hard-fail-immediate).
+    // Both relevance axes are computed only when the caller signals intent via `expectTerms`.
+    // denyPaths still trims demos/examples for everyone; a future release can promote
+    // scope-drift to default-on once warn-mode telemetry confirms low false-positive rates.
+    if (opts.expectTerms?.length) {
+      const urls = await this.store.listIndexedUrls(job.library, job.version);
+      inScopeUrlRatio = urls.length ? computeInScopeRatio(opts.url, urls) : undefined;
+      const chunks = await this.store.sampleChunks(job.library, job.version, 20);
+      expectTermsMatched = sampleExpectTermsMatch(chunks, opts.expectTerms);
+    }
     const metrics: JobOutcomeMetrics = {
       documentCount: counts.documentCount,
       distinctUrls: counts.distinctUrls,
       pagesScraped: job.progressPages ?? 0,
-      // relevance inputs filled in M4; undefined here means "skip those checks"
+      inScopeUrlRatio,
+      expectTermsMatched,
     };
     const verdict = evaluateOutcome(metrics);
     if (verdict.outcome === ScrapeOutcome.INDEXED) {
