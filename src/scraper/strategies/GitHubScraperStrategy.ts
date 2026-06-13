@@ -1,12 +1,12 @@
 import type { ProgressCallback } from "../../types";
-import type { AppConfig } from "../../utils/config";
+import { type AppConfig, DEFAULT_DENY_PATHS } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
 import { FetchStatus } from "../fetcher/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
-import { shouldIncludeUrl } from "../utils/patternMatcher";
+import { matchesAnyPattern, shouldIncludeUrl } from "../utils/patternMatcher";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 import type {
   GitHubRepoInfo,
@@ -507,6 +507,12 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
    */
   private shouldProcessFile(item: GitHubTreeItem, options: ScraperOptions): boolean {
     if (item.type !== "blob") {
+      return false;
+    }
+
+    // Exclude denied paths (demos/examples by default) before any other check.
+    const denyPaths = options.denyPaths ?? DEFAULT_DENY_PATHS;
+    if (denyPaths.length > 0 && matchesAnyPattern(item.path, denyPaths)) {
       return false;
     }
 

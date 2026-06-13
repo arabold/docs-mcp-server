@@ -130,6 +130,17 @@ export interface ScraperOptions {
    */
   internalAllowedFileRoots?: string[];
   /**
+   * Glob patterns (minimatch) whose matching paths are excluded from indexing,
+   * even when in scope. Applied on top of scope/includePatterns.
+   * @default DEFAULT_DENY_PATHS (demos/examples at any depth)
+   */
+  denyPaths?: string[];
+  /**
+   * Optional terms expected to appear in the indexed docs. When set, the quality gate
+   * samples stored chunks and fails as OFF_TOPIC if none match.
+   */
+  expectTerms?: string[];
+  /**
    * Locale handling for fetched URLs.
    * - 'pin-en': send `Accept-Language: en` and strip `hl`/`lang`/`locale` query params (default)
    * - 'strip': strip locale query params, no Accept-Language override

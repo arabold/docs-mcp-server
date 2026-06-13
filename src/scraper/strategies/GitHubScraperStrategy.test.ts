@@ -688,5 +688,23 @@ describe("GitHubScraperStrategy", () => {
         ),
       ).rejects.toMatchObject({ code: "GITHUB_SUBPATH_NOT_FOUND" });
     });
+
+    it("denyPaths excludes demos/** from a repo-root crawl", async () => {
+      const treeResponse = require("../../../test/fixtures/github-tree-generative-ai-docs.json");
+      vi.spyOn(strategy as any, "fetchRepositoryTree").mockResolvedValue({
+        tree: treeResponse,
+        resolvedBranch: "main",
+      });
+      const res = await strategy.processItem(
+        { url: "https://github.com/google/generative-ai-docs", depth: 0 },
+        {
+          url: "https://github.com/google/generative-ai-docs",
+          denyPaths: ["**/demos/**", "demos/**"],
+        } as any,
+      );
+      const demoLinks = (res.links ?? []).filter((l) => l.includes("/demos/"));
+      expect(demoLinks).toHaveLength(0);
+      expect((res.links ?? []).some((l) => l.includes("/site/"))).toBe(true);
+    });
   });
 });
