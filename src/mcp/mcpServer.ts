@@ -72,11 +72,13 @@ export function createMcpServerInstance(
           .optional()
           .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
         expectTerms: z
-          .array(z.string())
+          .array(z.string().max(200))
+          .max(50)
           .optional()
           .describe("Terms expected in the docs; off-topic scrapes fail with OFF_TOPIC."),
         denyPaths: z
-          .array(z.string())
+          .array(z.string().max(200))
+          .max(50)
           .optional()
           .describe("Glob paths excluded from indexing (default: demos/examples)."),
         localeStrategy: z
