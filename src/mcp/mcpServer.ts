@@ -71,6 +71,18 @@ export function createMcpServerInstance(
           .boolean()
           .optional()
           .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
+        expectTerms: z
+          .array(z.string())
+          .optional()
+          .describe("Terms expected in the docs; off-topic scrapes fail with OFF_TOPIC."),
+        denyPaths: z
+          .array(z.string())
+          .optional()
+          .describe("Glob paths excluded from indexing (default: demos/examples)."),
+        localeStrategy: z
+          .enum(["pin-en", "strip", "passthrough"])
+          .optional()
+          .describe("Locale handling for fetched URLs (default pin-en)."),
       },
       {
         title: "Scrape New Library Documentation",
@@ -86,6 +98,9 @@ export function createMcpServerInstance(
         scope,
         followRedirects,
         preserveHashes,
+        expectTerms,
+        denyPaths,
+        localeStrategy,
       }) => {
         // Track MCP tool usage
         telemetry.track(TelemetryEvent.TOOL_USED, {
@@ -113,6 +128,9 @@ export function createMcpServerInstance(
               scope,
               followRedirects,
               preserveHashes,
+              expectTerms,
+              denyPaths,
+              localeStrategy,
             },
           });
 
