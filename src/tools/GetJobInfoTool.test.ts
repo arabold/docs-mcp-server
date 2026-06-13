@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
-import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
+import {
+  type PipelineJob,
+  PipelineJobStatus,
+  ScrapeErrorCode,
+  ScrapeOutcome,
+} from "../pipeline/types";
 import { ToolError } from "./errors";
 import { GetJobInfoTool } from "./GetJobInfoTool"; // Updated import
 
@@ -65,6 +70,24 @@ describe("GetJobInfoTool", () => {
     expect(result.job?.startedAt).toBe(mockJob.startedAt?.toISOString());
     expect(result.job?.finishedAt).toBeNull(); // Based on mockJob
     expect(result.job?.error).toBeNull(); // Based on mockJob
+  });
+
+  it("exposes outcome and errorCode for a gate-failed job", async () => {
+    const gateFailedJob: PipelineJob = {
+      ...mockJob,
+      id: "gate-failed-job",
+      status: PipelineJobStatus.FAILED,
+      outcome: ScrapeOutcome.EMPTY,
+      errorCode: ScrapeErrorCode.EMPTY_RESULT,
+    };
+    (mockManagerInstance.getJob as ReturnType<typeof vi.fn>).mockResolvedValue(
+      gateFailedJob,
+    );
+
+    const result = await getJobInfoTool.execute({ jobId: "gate-failed-job" });
+
+    expect(result.job.outcome).toBe("empty");
+    expect(result.job.errorCode).toBe("EMPTY_RESULT");
   });
 
   it("should throw ToolError if the job is not found", async () => {
