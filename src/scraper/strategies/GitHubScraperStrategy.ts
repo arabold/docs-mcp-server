@@ -653,6 +653,28 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
         `Discovered ${fileItems.length} processable files in repository (branch: ${resolvedBranch})`,
       );
 
+      // FM-3 guard: a /tree/<branch>/<subPath> URL that matches no files is almost
+      // always a typo or a renamed directory. Failing loudly (with the real top-level
+      // paths) is far more useful than silently indexing only the wiki link.
+      if (repoInfo.subPath && fileItems.length === 0) {
+        const topDirs = [
+          ...new Set(
+            tree.tree
+              .filter((treeItem) => treeItem.type === "blob")
+              .map((treeItem) => treeItem.path.split("/")[0]),
+          ),
+        ]
+          .sort()
+          .slice(0, 20);
+        const err = new ScraperError(
+          `GitHub subpath "${repoInfo.subPath}" matched no files in ` +
+            `${owner}/${repo}@${resolvedBranch}. Available top-level paths: ${topDirs.join(", ")}.`,
+          false,
+        );
+        err.code = "GITHUB_SUBPATH_NOT_FOUND";
+        throw err;
+      }
+
       // Create HTTPS blob URLs for storage in database
       // These are user-friendly, clickable URLs that work outside the system
       const fileUrls = fileItems.map(
