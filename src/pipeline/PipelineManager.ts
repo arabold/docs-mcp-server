@@ -16,12 +16,14 @@ import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { VersionStatus } from "../store/types";
 import type { AppConfig } from "../utils/config";
+import { ScraperError } from "../utils/errors";
 import { logger } from "../utils/logger";
-import { CancellationError, PipelineStateError } from "./errors";
+import { CancellationError, PipelineStateError, QualityGateError } from "./errors";
+import { evaluateOutcome, type OutcomeVerdict } from "./outcomeGate";
 import { PipelineWorker } from "./PipelineWorker"; // Import the worker
 import type { IPipeline } from "./trpc/interfaces";
-import type { InternalPipelineJob, PipelineJob } from "./types";
-import { PipelineJobStatus } from "./types";
+import type { InternalPipelineJob, JobOutcomeMetrics, PipelineJob } from "./types";
+import { PipelineJobStatus, type ScrapeErrorCode, ScrapeOutcome } from "./types";
 
 /**
  * Manages a queue of document processing jobs, controlling concurrency and tracking progress.
@@ -83,6 +85,8 @@ export class PipelineManager implements IPipeline {
       updatedAt: job.updatedAt,
       sourceUrl: job.sourceUrl,
       scraperOptions: job.scraperOptions,
+      outcome: job.outcome,
+      errorCode: job.errorCode,
     };
   }
 
@@ -630,6 +634,46 @@ export class PipelineManager implements IPipeline {
   }
 
   /**
+   * Runs quality gates on a finished job. On a failing verdict, discards the staged
+   * version (gate-then-rollback) and returns the verdict; otherwise returns null.
+   *
+   * @param job - The finished internal job to evaluate.
+   * @returns The failing verdict (after rolling back), or null when the job passed.
+   */
+  private async applyQualityGate(
+    job: InternalPipelineJob,
+  ): Promise<OutcomeVerdict | null> {
+    // SAFETY (review F2): never gate-rollback a refresh or append (clean=false). Those
+    // flows preserve a version that may already hold good docs; removeVersion() would
+    // destroy them (data loss). Refresh only updates changed pages, so a transient thin
+    // re-index must not wipe the prior index. Treat as indexed and skip the gate.
+    if (job.scraperOptions.isRefresh || job.scraperOptions.clean === false) {
+      job.outcome = ScrapeOutcome.INDEXED;
+      return null;
+    }
+    const counts = await this.store.getVersionMetrics(job.library, job.version);
+    const metrics: JobOutcomeMetrics = {
+      documentCount: counts.documentCount,
+      distinctUrls: counts.distinctUrls,
+      pagesScraped: job.progressPages ?? 0,
+      // relevance inputs filled in M4; undefined here means "skip those checks"
+    };
+    const verdict = evaluateOutcome(metrics);
+    if (verdict.outcome === ScrapeOutcome.INDEXED) {
+      job.outcome = ScrapeOutcome.INDEXED;
+      return null;
+    }
+    logger.warn(
+      `❌ Quality gate failed for ${job.library}@${job.version}: ` +
+        `${verdict.outcome} (${verdict.errorCode}) — discarding staged docs`,
+    );
+    await this.store.removeVersion(job.library, job.version);
+    job.outcome = verdict.outcome;
+    job.errorCode = verdict.errorCode;
+    return verdict;
+  }
+
+  /**
    * Executes a single pipeline job by delegating to a PipelineWorker.
    * Handles final status updates and promise resolution/rejection.
    */
@@ -662,6 +706,23 @@ export class PipelineManager implements IPipeline {
         throw new CancellationError("Job cancelled just before completion");
       }
 
+      // Quality gate: only promote to COMPLETED if useful docs were indexed.
+      const gateFailure = await this.applyQualityGate(job);
+      if (gateFailure) {
+        await this.updateJobStatus(
+          job,
+          PipelineJobStatus.FAILED,
+          gateFailure.remediation,
+        );
+        job.errorCode = gateFailure.errorCode;
+        job.finishedAt = new Date();
+        const err = new QualityGateError(gateFailure);
+        job.error = err;
+        logger.info(`❌ Job failed quality gate: ${jobId}: ${gateFailure.errorCode}`);
+        job.rejectCompletion(err);
+        return;
+      }
+
       // Mark as completed
       await this.updateJobStatus(job, PipelineJobStatus.COMPLETED);
       job.finishedAt = new Date();
@@ -684,6 +745,9 @@ export class PipelineManager implements IPipeline {
       } else {
         // Handle other errors
         const errorMessage = error instanceof Error ? error.message : String(error);
+        if (error instanceof ScraperError && error.code) {
+          job.errorCode = error.code as ScrapeErrorCode;
+        }
         await this.updateJobStatus(job, PipelineJobStatus.FAILED, errorMessage);
         job.error = error instanceof Error ? error : new Error(String(error));
         job.finishedAt = new Date();
