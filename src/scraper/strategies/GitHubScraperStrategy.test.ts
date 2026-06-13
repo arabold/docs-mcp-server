@@ -666,5 +666,45 @@ describe("GitHubScraperStrategy", () => {
         /permissions|rate-limited/,
       );
     });
+
+    it("throws GITHUB_SUBPATH_NOT_FOUND when a /tree/ subpath matches no files", async () => {
+      // fetchRepositoryTree returns { tree: <full API response>, resolvedBranch }.
+      // processItem reads tree.tree (the entries array), so the mock's `tree` IS the
+      // whole response object. Do NOT pass fixture.tree here — that double-unwraps.
+      const treeResponse = require("../../../test/fixtures/github-tree-generative-ai-docs.json");
+      vi.spyOn(strategy as any, "fetchRepositoryTree").mockResolvedValue({
+        tree: treeResponse,
+        resolvedBranch: "main",
+      });
+      await expect(
+        strategy.processItem(
+          {
+            url: "https://github.com/google/generative-ai-docs/tree/main/docs",
+            depth: 0,
+          },
+          {
+            url: "https://github.com/google/generative-ai-docs/tree/main/docs",
+          } as any,
+        ),
+      ).rejects.toMatchObject({ code: "GITHUB_SUBPATH_NOT_FOUND" });
+    });
+
+    it("denyPaths excludes demos/** from a repo-root crawl", async () => {
+      const treeResponse = require("../../../test/fixtures/github-tree-generative-ai-docs.json");
+      vi.spyOn(strategy as any, "fetchRepositoryTree").mockResolvedValue({
+        tree: treeResponse,
+        resolvedBranch: "main",
+      });
+      const res = await strategy.processItem(
+        { url: "https://github.com/google/generative-ai-docs", depth: 0 },
+        {
+          url: "https://github.com/google/generative-ai-docs",
+          denyPaths: ["**/demos/**", "demos/**"],
+        } as any,
+      );
+      const demoLinks = (res.links ?? []).filter((l) => l.includes("/demos/"));
+      expect(demoLinks).toHaveLength(0);
+      expect((res.links ?? []).some((l) => l.includes("/site/"))).toBe(true);
+    });
   });
 });

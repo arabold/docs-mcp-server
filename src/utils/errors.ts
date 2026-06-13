@@ -1,4 +1,7 @@
 class ScraperError extends Error {
+  /** Optional machine-readable code surfaced to callers as errorCode. */
+  public code?: string;
+
   constructor(
     message: string,
     public readonly isRetryable: boolean = false,

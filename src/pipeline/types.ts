@@ -17,6 +17,39 @@ export enum PipelineJobStatus {
   CANCELLED = "cancelled",
 }
 
+/** Classification of a finished scrape job's usefulness, beyond raw success/failure. */
+export enum ScrapeOutcome {
+  INDEXED = "indexed",
+  EMPTY = "empty",
+  THIN = "thin",
+  DEGENERATE = "degenerate",
+  FAILED = "failed",
+}
+
+/** Machine-readable reason a job failed a quality gate, with caller remediation. */
+export enum ScrapeErrorCode {
+  EMPTY_RESULT = "EMPTY_RESULT",
+  THIN_RESULT = "THIN_RESULT",
+  OFF_TOPIC = "OFF_TOPIC",
+  SCOPE_DRIFT = "SCOPE_DRIFT",
+  LOCALE_REDIRECT_LOOP = "LOCALE_REDIRECT_LOOP",
+  GITHUB_SUBPATH_NOT_FOUND = "GITHUB_SUBPATH_NOT_FOUND",
+}
+
+/** Counters collected when a job finishes, fed into the quality gate. */
+export interface JobOutcomeMetrics {
+  /** Number of stored chunks for the (library, version). */
+  documentCount: number;
+  /** Number of distinct indexed URLs. */
+  distinctUrls: number;
+  /** Pages the scraper reported processing. */
+  pagesScraped: number;
+  /** Fraction (0..1) of indexed URLs under the requested root path. undefined if not computed. */
+  inScopeUrlRatio?: number;
+  /** Whether sampled chunks matched `expectTerms`. undefined when no expectTerms given. */
+  expectTermsMatched?: boolean;
+}
+
 /**
  * Public interface for pipeline jobs exposed through API boundaries.
  * Contains only serializable fields suitable for JSON transport.
@@ -56,6 +89,10 @@ export interface PipelineJob {
   sourceUrl: string | null;
   /** Stored scraper options for reproducibility. */
   scraperOptions: ScraperOptions | null;
+  /** Quality classification of the finished job (undefined while running). */
+  outcome?: ScrapeOutcome;
+  /** Typed reason when the job failed a quality gate. */
+  errorCode?: ScrapeErrorCode;
 }
 
 /**

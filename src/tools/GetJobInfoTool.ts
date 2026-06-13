@@ -1,5 +1,9 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
-import type { PipelineJobStatus } from "../pipeline/types";
+import type {
+  PipelineJobStatus,
+  ScrapeErrorCode,
+  ScrapeOutcome,
+} from "../pipeline/types";
 import type { VersionStatus } from "../store/types";
 import { ToolError, ValidationError } from "./errors";
 
@@ -33,6 +37,10 @@ export interface JobInfo {
   // Additional database fields
   updatedAt?: string;
   errorMessage?: string; // Database error message
+  /** Quality classification of the finished job. */
+  outcome?: ScrapeOutcome;
+  /** Typed gate-failure reason with remediation in `errorMessage`. */
+  errorCode?: ScrapeErrorCode;
 }
 
 /**
@@ -99,6 +107,8 @@ export class GetJobInfoTool {
           : undefined,
       updatedAt: job.updatedAt?.toISOString(),
       errorMessage: job.errorMessage ?? undefined,
+      outcome: job.outcome,
+      errorCode: job.errorCode,
     };
 
     return { job: jobInfo };
