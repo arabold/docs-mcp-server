@@ -200,6 +200,29 @@ export class DocumentManagementService {
   }
 
   /**
+   * Returns chunk and distinct-URL counts for a specific (library, version).
+   * Reuses the aggregate computed by the store's version listing.
+   *
+   * @param library - Library name (matched case-insensitively).
+   * @param version - Version string; null/undefined resolves to the unversioned ("") entry.
+   * @returns The stored document (chunk) count and distinct indexed-URL count, both 0 if absent.
+   */
+  async getVersionMetrics(
+    library: string,
+    version?: string | null,
+  ): Promise<{ documentCount: number; distinctUrls: number }> {
+    const normalizedVersion = this.normalizeVersion(version);
+    const summaries = await this.store.queryLibraryVersions();
+    const entry = summaries
+      .get(library.toLowerCase())
+      ?.find((v) => (v.version ?? "") === normalizedVersion);
+    return {
+      documentCount: entry?.documentCount ?? 0,
+      distinctUrls: entry?.uniqueUrlCount ?? 0,
+    };
+  }
+
+  /**
    * Finds versions that were indexed from the same source URL.
    */
   async findVersionsBySourceUrl(url: string): Promise<DbVersionWithLibrary[]> {
