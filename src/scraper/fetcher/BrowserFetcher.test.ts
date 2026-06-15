@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
+import { ScraperError } from "../../utils/errors";
 import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 
 vi.mock("playwright", () => ({
@@ -11,144 +12,90 @@ vi.mock("playwright", () => ({
 import { chromium } from "playwright";
 import { BrowserFetcher } from "./BrowserFetcher";
 
+/**
+ * Builds a mocked Playwright page/context/browser tree. `pageOverrides` lets a
+ * test replace individual page methods (e.g. a rejecting `goto`).
+ */
+function mockBrowser(pageOverrides: Record<string, unknown> = {}) {
+  const page = {
+    setViewportSize: vi.fn().mockResolvedValue(undefined),
+    setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
+    route: vi.fn().mockResolvedValue(undefined),
+    unroute: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn().mockResolvedValue(undefined),
+    waitForLoadState: vi.fn().mockResolvedValue(undefined),
+    goto: vi.fn().mockResolvedValue({
+      status: () => 200,
+      headers: () => ({ "content-type": "text/html" }),
+    }),
+    url: vi.fn().mockReturnValue("https://example.com"),
+    content: vi.fn().mockResolvedValue("<html><body>ok</body></html>"),
+    request: { get: vi.fn() },
+    ...pageOverrides,
+  };
+  const context = {
+    newPage: vi.fn().mockResolvedValue(page),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+  const browser = {
+    newContext: vi.fn().mockResolvedValue(context),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+  vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+  return { page, context, browser };
+}
+
 describe("BrowserFetcher", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("uses broad invalid TLS override for the browser context", async () => {
-    const setViewportSize = vi.fn().mockResolvedValue(undefined);
-    const setExtraHTTPHeaders = vi.fn().mockResolvedValue(undefined);
-    const route = vi.fn().mockResolvedValue(undefined);
-    const unroute = vi.fn().mockResolvedValue(undefined);
-    const closePage = vi.fn().mockResolvedValue(undefined);
-    const page = {
-      setViewportSize,
-      setExtraHTTPHeaders,
-      route,
-      unroute,
-      close: closePage,
-      goto: vi.fn().mockResolvedValue({
-        status: () => 200,
-        headers: () => ({ "content-type": "text/html" }),
-      }),
-      url: vi.fn().mockReturnValue("https://example.com"),
-      content: vi.fn().mockResolvedValue("<html><body>ok</body></html>"),
-    };
-    const closeContext = vi.fn().mockResolvedValue(undefined);
-    const newContext = vi.fn().mockResolvedValue({
-      newPage: vi.fn().mockResolvedValue(page),
-      close: closeContext,
-    });
-    const browser = {
-      newContext,
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(chromium.launch).mockResolvedValue(browser as never);
-
+    const { browser } = mockBrowser();
     const config = loadConfig().scraper;
     config.security.network.allowInvalidTls = true;
     const fetcher = new BrowserFetcher(config);
 
     await fetcher.fetch("http://example.com");
 
-    expect(newContext).toHaveBeenCalledWith(
+    expect(browser.newContext).toHaveBeenCalledWith(
       expect.objectContaining({ ignoreHTTPSErrors: true }),
     );
   });
 
   it("restores fingerprint headers and desktop viewport", async () => {
-    const setViewportSize = vi.fn().mockResolvedValue(undefined);
-    const setExtraHTTPHeaders = vi.fn().mockResolvedValue(undefined);
-    const page = {
-      setViewportSize,
-      setExtraHTTPHeaders,
-      route: vi.fn().mockResolvedValue(undefined),
-      unroute: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn().mockResolvedValue(undefined),
-      goto: vi.fn().mockResolvedValue({
-        status: () => 200,
-        headers: () => ({ "content-type": "text/html" }),
-      }),
-      url: vi.fn().mockReturnValue("https://example.com"),
-      content: vi.fn().mockResolvedValue("<html><body>ok</body></html>"),
-    };
-    const browser = {
-      newContext: vi.fn().mockResolvedValue({
-        newPage: vi.fn().mockResolvedValue(page),
-        close: vi.fn().mockResolvedValue(undefined),
-      }),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(chromium.launch).mockResolvedValue(browser as never);
-
+    const { page } = mockBrowser();
     const fetcher = new BrowserFetcher(loadConfig().scraper);
     await fetcher.fetch("https://example.com", { headers: { "X-Test": "1" } });
 
-    expect(setViewportSize).toHaveBeenCalledWith({ width: 1920, height: 1080 });
-    expect(setExtraHTTPHeaders).toHaveBeenCalledWith(
+    expect(page.setViewportSize).toHaveBeenCalledWith({ width: 1920, height: 1080 });
+    expect(page.setExtraHTTPHeaders).toHaveBeenCalledWith(
       expect.objectContaining({ "X-Test": "1", Accept: MARKDOWN_PREFERRED_ACCEPT }),
     );
   });
 
   it("preserves caller-supplied Accept headers", async () => {
-    const setExtraHTTPHeaders = vi.fn().mockResolvedValue(undefined);
-    const page = {
-      setViewportSize: vi.fn().mockResolvedValue(undefined),
-      setExtraHTTPHeaders,
-      route: vi.fn().mockResolvedValue(undefined),
-      unroute: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn().mockResolvedValue(undefined),
-      goto: vi.fn().mockResolvedValue({
-        status: () => 200,
-        headers: () => ({ "content-type": "text/html" }),
-      }),
-      url: vi.fn().mockReturnValue("https://example.com"),
-      content: vi.fn().mockResolvedValue("<html><body>ok</body></html>"),
-    };
-    const browser = {
-      newContext: vi.fn().mockResolvedValue({
-        newPage: vi.fn().mockResolvedValue(page),
-        close: vi.fn().mockResolvedValue(undefined),
-      }),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(chromium.launch).mockResolvedValue(browser as never);
-
+    const { page } = mockBrowser();
     const fetcher = new BrowserFetcher(loadConfig().scraper);
     await fetcher.fetch("https://example.com", { headers: { accept: "text/html" } });
 
-    expect(setExtraHTTPHeaders).toHaveBeenCalledWith(
+    expect(page.setExtraHTTPHeaders).toHaveBeenCalledWith(
       expect.objectContaining({ accept: "text/html" }),
     );
-    expect(setExtraHTTPHeaders).toHaveBeenCalledWith(
+    expect(page.setExtraHTTPHeaders).toHaveBeenCalledWith(
       expect.not.objectContaining({ Accept: MARKDOWN_PREFERRED_ACCEPT }),
     );
   });
 
   it("returns raw response body for Markdown responses instead of rendered HTML", async () => {
-    const page = {
-      setViewportSize: vi.fn().mockResolvedValue(undefined),
-      setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
-      route: vi.fn().mockResolvedValue(undefined),
-      unroute: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn().mockResolvedValue(undefined),
+    const { page } = mockBrowser({
       goto: vi.fn().mockResolvedValue({
         status: () => 200,
         headers: () => ({ "content-type": "text/markdown; charset=utf-8" }),
         body: vi.fn().mockResolvedValue(Buffer.from("# Markdown body")),
       }),
       url: vi.fn().mockReturnValue("https://example.com/readme.md"),
-      content: vi.fn().mockResolvedValue("<html><body># Markdown body</body></html>"),
-    };
-    const browser = {
-      newContext: vi.fn().mockResolvedValue({
-        newPage: vi.fn().mockResolvedValue(page),
-        close: vi.fn().mockResolvedValue(undefined),
-      }),
-      close: vi.fn().mockResolvedValue(undefined),
-    };
-    vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+    });
 
     const fetcher = new BrowserFetcher(loadConfig().scraper);
     const result = await fetcher.fetch("https://example.com/readme.md");
@@ -156,5 +103,56 @@ describe("BrowserFetcher", () => {
     expect(page.content).not.toHaveBeenCalled();
     expect(result.mimeType).toBe("text/markdown");
     expect(result.content.toString()).toBe("# Markdown body");
+  });
+
+  it("falls back to the request API when goto rejects on a non-navigable resource", async () => {
+    // First goto (the .md) rejects as non-navigable; the origin goto (to clear
+    // any challenge) resolves; then the request API returns the markdown bytes.
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          "page.goto: net::ERR_INVALID_ARGUMENT at https://x/automation/index.md",
+        ),
+      )
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({ "content-type": "text/markdown" }),
+      body: vi.fn().mockResolvedValue(Buffer.from("# from request api")),
+    });
+    const { page } = mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const result = await fetcher.fetch("https://example.com/automation/index.md");
+
+    expect(requestGet).toHaveBeenCalledWith(
+      "https://example.com/automation/index.md",
+      expect.any(Object),
+    );
+    expect(goto).toHaveBeenCalledWith("https://example.com", expect.any(Object));
+    expect(page.content).not.toHaveBeenCalled();
+    expect(result.mimeType).toBe("text/markdown");
+    expect(result.content.toString()).toBe("# from request api");
+  });
+
+  it("throws a retryable ScraperError when the request-API fallback is still blocked", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => false,
+      status: () => 403,
+      headers: () => ({ "content-type": "text/html" }),
+      body: vi.fn().mockResolvedValue(Buffer.from("Just a moment...")),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    await expect(
+      fetcher.fetch("https://example.com/automation/index.md"),
+    ).rejects.toBeInstanceOf(ScraperError);
   });
 });

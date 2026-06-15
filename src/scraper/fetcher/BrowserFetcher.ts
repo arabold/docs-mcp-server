@@ -83,12 +83,32 @@ export class BrowserFetcher implements ContentFetcher {
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
 
-      // Navigate to the page and wait for it to load
+      // Navigate to the page. Gate on "load" rather than "networkidle": many
+      // sites keep background connections open indefinitely (analytics,
+      // Cloudflare telemetry, websockets), so "networkidle" never settles and
+      // page.goto times out even though the document is already available.
       logger.debug(`Navigating to ${source} with browser...`);
-      const response = await page.goto(source, {
-        waitUntil: "networkidle",
-        timeout,
-      });
+      let response: Awaited<ReturnType<typeof page.goto>>;
+      try {
+        response = await page.goto(source, { waitUntil: "load", timeout });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Non-navigable resources (Markdown, JSON, plain text, ...) make the
+        // browser begin a download, so page.goto rejects with
+        // ERR_INVALID_ARGUMENT / ERR_ABORTED. Fetch those through the context's
+        // request API instead (see fetchViaRequest): it shares cookies — so any
+        // anti-bot clearance carries over — but does not try to render them.
+        if (/ERR_INVALID_ARGUMENT|ERR_ABORTED/i.test(message)) {
+          return await this.fetchViaRequest(page, source, options, timeout);
+        }
+        throw error;
+      }
+
+      // Best-effort: give the network a moment to settle (e.g. so a JS
+      // challenge can finish) but never fail the fetch if it never goes idle.
+      await page
+        .waitForLoadState("networkidle", { timeout: Math.min(timeout, 5_000) })
+        .catch(() => undefined);
 
       if (!response) {
         throw new ScraperError(`Failed to navigate to ${source}`, false);
@@ -149,6 +169,72 @@ export class BrowserFetcher implements ContentFetcher {
       await page?.close().catch(() => undefined);
       await browserContext?.close().catch(() => undefined);
     }
+  }
+
+  /**
+   * Fetches a resource the browser cannot navigate to (Markdown, JSON, plain
+   * text, ...). Loads the origin first so any JS/anti-bot challenge is solved
+   * and clearance cookies are set on the shared context, then retrieves the
+   * resource bytes via the context's request API (which reuses those cookies
+   * but does not attempt to render the response as a document).
+   *
+   * @param page - The page whose context (and cookies) the request reuses.
+   * @param source - The non-navigable resource URL to fetch.
+   * @param options - The original fetch options (headers, redirect policy).
+   * @param timeout - Navigation/request timeout in milliseconds.
+   * @returns The fetched raw content.
+   */
+  private async fetchViaRequest(
+    page: Page,
+    source: string,
+    options: FetchOptions | undefined,
+    timeout: number,
+  ): Promise<RawContent> {
+    const origin = new URL(source).origin;
+    logger.debug(
+      `Resource ${source} is not browser-navigable; clearing ${origin} then fetching via request API`,
+    );
+    // Visit a navigable page on the same origin so the browser can solve any JS
+    // challenge and set clearance cookies; ignore failures since the request
+    // below still returns a definitive status.
+    await page
+      .goto(origin, { waitUntil: "load", timeout })
+      .then(() =>
+        page
+          .waitForLoadState("networkidle", { timeout: Math.min(timeout, 5_000) })
+          .catch(() => undefined),
+      )
+      .catch(() => undefined);
+
+    const response = await page.request.get(source, {
+      headers: options?.headers,
+      maxRedirects: options?.followRedirects === false ? 0 : undefined,
+      timeout,
+    });
+
+    const finalUrl = source;
+    await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
+
+    if (!response.ok()) {
+      throw new ScraperError(
+        `Browser request for ${source} returned status ${response.status()}`,
+        true,
+      );
+    }
+
+    const contentType = response.headers()["content-type"] || "application/octet-stream";
+    const { mimeType, charset } = MimeTypeUtils.parseContentType(contentType);
+    const content = Buffer.from(await response.body());
+
+    return {
+      content,
+      mimeType,
+      charset,
+      encoding: undefined,
+      source: finalUrl,
+      etag: response.headers().etag,
+      status: FetchStatus.SUCCESS,
+    } satisfies RawContent;
   }
 
   public static async launchBrowser(): Promise<Browser> {
