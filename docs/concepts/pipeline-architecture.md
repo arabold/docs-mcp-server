@@ -276,10 +276,10 @@ Increase worker concurrency within its single process:
 
 The worker is a single process that owns the in-memory job queue and the SQLite-backed document store — it does not scale horizontally. What scales horizontally is the coordinator tier:
 
-- Run multiple `web`/`mcp` coordinator replicas, each pointed at the same worker's `--server-url`
+- Run multiple `web`/`mcp` coordinator replicas, each started with `--server-url` pointing at the same worker
 - Coordinators are stateless; both document reads (`DocumentManagementClient`) and job dispatch (`PipelineClient`) proxy to the one worker over tRPC
 - Load balance across coordinator replicas, not worker replicas
 
 ### Deployment Modes Are Exclusive
 
-A deployment runs with either an embedded worker (`enableWorker: true`, standalone mode) or a single external worker (`--server-url`, distributed mode) — not both at once.
+A deployment runs with either an embedded worker (`enableWorker: true`, standalone mode) or a single external worker started separately and reached via the coordinator's `--server-url` flag (distributed mode) — not both at once.

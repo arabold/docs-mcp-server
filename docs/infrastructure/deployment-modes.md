@@ -31,7 +31,7 @@ Services can be selectively enabled via AppServerConfig:
 
 ## Distributed Mode
 
-Separate coordinator and worker processes for scaling. The coordinator handles interfaces while workers process jobs.
+Separate coordinator and worker processes for scaling. The coordinator handles interfaces while the worker processes jobs.
 
 ### Architecture
 
@@ -48,7 +48,7 @@ Separate coordinator and worker processes for scaling. The coordinator handles i
 
 ### Worker Management
 
-Workers may expose a simple `/health` or container-level healthcheck for monitoring. Coordinators communicate with workers via Pipeline RPC.
+The worker may expose a simple `/health` or container-level healthcheck for monitoring. Coordinators communicate with the worker via Pipeline RPC.
 
 ## Protocol Auto-Detection
 
@@ -98,9 +98,9 @@ Job recovery behavior depends on deployment mode:
 
 ### Distributed Mode
 
-- Workers handle their own job recovery
+- The worker handles its own job recovery
 - Coordinators do not recover jobs to avoid conflicts
-- Each worker maintains independent job state
+- The worker maintains its own job state, independent of any coordinator
 
 ### CLI Commands
 
@@ -137,7 +137,7 @@ services:
 
 ### Coordinators Scale Horizontally
 
-Coordinator (`web`/`mcp`) processes are stateless: both document reads and job dispatch proxy to the worker over tRPC. Run multiple coordinator replicas behind a load balancer (or DNS), each configured with the same worker's `--server-url`.
+Coordinator (`web`/`mcp`) processes are stateless: both document reads and job dispatch proxy to the worker over tRPC. Run multiple coordinator replicas behind a load balancer (or DNS), each started with `--server-url` pointing at the same worker.
 
 ### The Worker Does Not Scale Horizontally
 
