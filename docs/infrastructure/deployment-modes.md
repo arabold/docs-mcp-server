@@ -35,15 +35,15 @@ Separate coordinator and worker processes for scaling. The coordinator handles i
 
 ### Architecture
 
-- **Coordinator**: Runs MCP server, web interface, and API
-- **Workers**: Execute document processing jobs
-- **Communication**: Coordinator uses the API (tRPC over HTTP) to talk to workers
+- **Coordinator**: Runs MCP server, web interface, and API; stateless, so multiple replicas can run at once
+- **Worker**: A single process that executes document processing jobs and owns the SQLite-backed document store
+- **Communication**: Coordinators use the API (tRPC over HTTP) to talk to the worker
 
 ### Use Cases
 
 - High-volume processing
 - Container orchestration (Kubernetes, Docker Swarm)
-- Horizontal scaling requirements
+- Scaling coordinator (web/MCP) replicas independently of the worker
 - Resource isolation
 
 ### Worker Management
@@ -133,18 +133,21 @@ services:
     command: ["worker", "--port", "8080"]
 ```
 
-## Load Balancing
+## Scaling
 
-### Multiple Workers
+### Coordinators Scale Horizontally
 
-Use a load balancer (or DNS) in front of multiple worker instances. The coordinator is configured with a single `--server-url` that points to the balancer.
+Coordinator (`web`/`mcp`) processes are stateless: both document reads and job dispatch proxy to the worker over tRPC. Run multiple coordinator replicas behind a load balancer (or DNS), each configured with the same worker's `--server-url`.
+
+### The Worker Does Not Scale Horizontally
+
+The worker owns the in-memory job queue and the SQLite-backed document store. There is no supported way to run multiple worker replicas against shared state today: a second worker has no visibility into jobs queued on the first, and SQLite's WAL-based locking model is designed for concurrent processes on one host's local filesystem, not multiple hosts sharing a file over a network volume. Scale the worker vertically instead.
 
 ### Health Checks
 
-Expose a lightweight `/health` endpoint or container healthcheck for load balancers and monitoring.
+Expose a lightweight `/health` endpoint or container healthcheck for coordinator and worker monitoring.
 
 ### Scaling Strategies
 
-- Horizontal: Add more worker containers
-- Vertical: Increase worker resource allocation
-- Hybrid: Combine both strategies based on workload
+- Horizontal: Add more coordinator (`web`/`mcp`) replicas in front of the one worker
+- Vertical: Increase worker concurrency (`maxConcurrency`) and resource allocation
