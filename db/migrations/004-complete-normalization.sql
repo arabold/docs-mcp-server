@@ -2,6 +2,7 @@
 -- This migration finalizes the schema normalization process
 -- Note: Must recreate table because obsolete columns are part of UNIQUE constraint
 
+-- @migration-step create normalized documents table
 -- 1. Create new documents table with only foreign key references
 CREATE TABLE documents_new (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15,22 +16,26 @@ CREATE TABLE documents_new (
   UNIQUE(url, library_id, version_id, sort_order)
 );
 
+-- @migration-step copy normalized documents
 -- 2. Copy data from old table (excluding obsolete library and version columns)
 INSERT INTO documents_new (id, library_id, version_id, url, content, metadata, sort_order, indexed_at)
 SELECT id, library_id, version_id, url, content, metadata, sort_order, indexed_at
 FROM documents;
 
+-- @migration-step replace documents table
 -- 3. Drop the old documents table
 DROP TABLE documents;
 
 -- 4. Rename the new table to documents
 ALTER TABLE documents_new RENAME TO documents;
 
+-- @migration-step recreate document indexes
 -- 5. Recreate indexes that were lost when dropping the table
 CREATE INDEX IF NOT EXISTS idx_documents_library_id ON documents(library_id);
 CREATE INDEX IF NOT EXISTS idx_documents_version_id ON documents(version_id);
 CREATE INDEX IF NOT EXISTS idx_documents_lib_ver_id ON documents(library_id, version_id);
 
+-- @migration-step recreate fts schema
 -- 6. Recreate FTS5 virtual table (gets dropped when main table is dropped)
 -- Using external content approach - FTS index is maintained entirely through triggers
 CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
@@ -41,6 +46,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
   tokenize='porter unicode61'
 );
 
+-- @migration-step recreate fts triggers
 -- 7. Recreate FTS triggers to maintain the index
 -- Note: Triggers work directly with documents table, no JOIN needed for FTS content
 CREATE TRIGGER IF NOT EXISTS documents_fts_after_delete AFTER DELETE ON documents BEGIN
@@ -60,6 +66,7 @@ CREATE TRIGGER IF NOT EXISTS documents_fts_after_insert AFTER INSERT ON document
   VALUES(new.id, new.content, json_extract(new.metadata, '$.title'), new.url, json_extract(new.metadata, '$.path'));
 END;
 
+-- @migration-step rebuild fts index
 -- 8. Rebuild FTS index from existing documents data
 -- Manually populate the FTS index since we're using external content approach
 INSERT INTO documents_fts(rowid, content, title, url, path)

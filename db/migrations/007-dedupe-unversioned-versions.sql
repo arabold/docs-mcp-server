@@ -14,6 +14,7 @@
 -- across multiple subsequent statements. All TEMP objects are connection-scoped
 -- and vanish automatically; safe for repeated runs (we DROP IF EXISTS first).
 
+-- @migration-step collect null-name versions
 DROP TABLE IF EXISTS temp_null_versions;
 CREATE TEMP TABLE temp_null_versions AS
 SELECT v.id, v.library_id,
@@ -21,6 +22,7 @@ SELECT v.id, v.library_id,
 FROM versions v
 WHERE v.name IS NULL;
 
+-- @migration-step choose canonical versions
 -- Build canonical mapping per library (one row per library_id)
 DROP TABLE IF EXISTS temp_canonical_versions;
 CREATE TEMP TABLE temp_canonical_versions AS
@@ -40,6 +42,7 @@ SELECT nv.library_id,
 FROM temp_null_versions nv
 GROUP BY nv.library_id;
 
+-- @migration-step repoint documents to canonical versions
 -- Repoint documents from non-canonical NULL-name versions
 UPDATE documents
 SET version_id = (
@@ -49,12 +52,14 @@ SET version_id = (
 WHERE version_id IN (SELECT id FROM versions WHERE name IS NULL)
   AND version_id NOT IN (SELECT keep_id FROM temp_canonical_versions);
 
+-- @migration-step remove surplus versions
 -- 3: Delete surplus NULL-name rows now unreferenced
 DELETE FROM versions
 WHERE name IS NULL
   AND id NOT IN (SELECT keep_id FROM temp_canonical_versions)
   AND (SELECT COUNT(*) FROM documents d WHERE d.version_id = versions.id) = 0;
 
+-- @migration-step normalize remaining version names
 -- 4: Normalize remaining NULL names to ''
 UPDATE versions SET name = '' WHERE name IS NULL;
 
