@@ -1,7 +1,7 @@
 import { type Browser, chromium, type Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
-import { ScraperError } from "../../utils/errors";
+import { RedirectError, ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
@@ -12,6 +12,13 @@ import {
   FetchStatus,
   type RawContent,
 } from "./types";
+
+/**
+ * Maximum redirects to follow via the request API. Matches Playwright's own
+ * default (20) — redirects are followed manually only so every hop can be
+ * revalidated against the access policy, not to change the allowed depth.
+ */
+const MAX_REQUEST_REDIRECTS = 20;
 
 /**
  * Fetches content using a headless browser (Playwright).
@@ -69,26 +76,53 @@ export class BrowserFetcher implements ContentFetcher {
         return await route.continue();
       });
 
-      // Set custom headers if provided
-      await page.setExtraHTTPHeaders(
-        withMarkdownPreferredAccept(
-          {
-            ...fingerprintHeaders,
-            ...options?.headers,
-          },
-          options?.headers,
-        ),
+      // Compose the browser-like fingerprint headers used both for the page's
+      // own navigation and (if needed) the non-navigable request-API fallback,
+      // so the two look like the same client to anti-bot checks.
+      const requestHeaders = withMarkdownPreferredAccept(
+        {
+          ...fingerprintHeaders,
+          ...options?.headers,
+        },
+        options?.headers,
       );
+      await page.setExtraHTTPHeaders(requestHeaders);
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
 
-      // Navigate to the page and wait for it to load
+      // Navigate to the page. Gate on "load" rather than "networkidle": many
+      // sites keep background connections open indefinitely (analytics,
+      // Cloudflare telemetry, websockets), so "networkidle" never settles and
+      // page.goto times out even though the document is already available.
       logger.debug(`Navigating to ${source} with browser...`);
-      const response = await page.goto(source, {
-        waitUntil: "networkidle",
-        timeout,
-      });
+      let response: Awaited<ReturnType<typeof page.goto>>;
+      try {
+        response = await page.goto(source, { waitUntil: "load", timeout });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        // Non-navigable resources (Markdown, JSON, plain text, ...) make the
+        // browser begin a download, so page.goto rejects with
+        // ERR_INVALID_ARGUMENT / ERR_ABORTED. Fetch those through the context's
+        // request API instead (see fetchViaRequest): it shares cookies — so any
+        // anti-bot clearance carries over — but does not try to render them.
+        if (/ERR_INVALID_ARGUMENT|ERR_ABORTED/i.test(message)) {
+          return await this.fetchViaRequest(
+            page,
+            source,
+            options,
+            timeout,
+            requestHeaders,
+          );
+        }
+        throw error;
+      }
+
+      // Best-effort: give the network a moment to settle (e.g. so a JS
+      // challenge can finish) but never fail the fetch if it never goes idle.
+      await page
+        .waitForLoadState("networkidle", { timeout: Math.min(timeout, 5_000) })
+        .catch(() => undefined);
 
       if (!response) {
         throw new ScraperError(`Failed to navigate to ${source}`, false);
@@ -102,7 +136,7 @@ export class BrowserFetcher implements ContentFetcher {
       ) {
         const location = response.headers().location;
         if (location) {
-          throw new ScraperError(`Redirect blocked: ${source} -> ${location}`, false);
+          throw new RedirectError(source, location, response.status());
         }
       }
 
@@ -138,6 +172,13 @@ export class BrowserFetcher implements ContentFetcher {
         throw new ScraperError("Browser fetch cancelled", false);
       }
 
+      // Preserve already-typed ScraperErrors (and their isRetryable flag) thrown
+      // earlier in this method or in fetchViaRequest, rather than re-wrapping
+      // them into a new, always-non-retryable error.
+      if (error instanceof ScraperError) {
+        throw error;
+      }
+
       logger.error(`❌ Browser fetch failed for ${source}: ${error}`);
       throw new ScraperError(
         `Browser fetch failed for ${source}: ${error instanceof Error ? error.message : String(error)}`,
@@ -148,6 +189,128 @@ export class BrowserFetcher implements ContentFetcher {
       await page?.unroute("**/*").catch(() => undefined);
       await page?.close().catch(() => undefined);
       await browserContext?.close().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Fetches a resource the browser cannot navigate to (Markdown, JSON, plain
+   * text, ...). Loads the origin first so any JS/anti-bot challenge is solved
+   * and clearance cookies are set on the shared context, then retrieves the
+   * resource bytes via the context's request API (which reuses those cookies
+   * but does not attempt to render the response as a document).
+   *
+   * @param page - The page whose context (and cookies) the request reuses.
+   * @param source - The non-navigable resource URL to fetch.
+   * @param options - The original fetch options (headers, redirect policy).
+   * @param timeout - Navigation/request timeout in milliseconds.
+   * @param headers - The same composed fingerprint/Accept headers set on the
+   * page via `setExtraHTTPHeaders`, so the request-API call presents the same
+   * client identity as the browser that (potentially) just solved a challenge.
+   * @returns The fetched raw content.
+   */
+  private async fetchViaRequest(
+    page: Page,
+    source: string,
+    options: FetchOptions | undefined,
+    timeout: number,
+    headers: Record<string, string>,
+  ): Promise<RawContent> {
+    const origin = new URL(source).origin;
+    logger.debug(
+      `Resource ${source} is not browser-navigable; clearing ${origin} then fetching via request API`,
+    );
+    // Visit a navigable page on the same origin so the browser can solve any JS
+    // challenge and set clearance cookies; ignore failures since the request
+    // below still returns a definitive status.
+    await page
+      .goto(origin, { waitUntil: "load", timeout })
+      .then(() =>
+        page
+          .waitForLoadState("networkidle", { timeout: Math.min(timeout, 5_000) })
+          .catch(() => undefined),
+      )
+      .catch(() => undefined);
+
+    const { response, finalUrl } = await this.requestWithValidatedRedirects(
+      page,
+      source,
+      options,
+      timeout,
+      headers,
+    );
+
+    if (!response.ok()) {
+      throw new ScraperError(
+        `Browser request for ${source} returned status ${response.status()}`,
+        true,
+      );
+    }
+
+    const contentType = response.headers()["content-type"] || "application/octet-stream";
+    const { mimeType, charset } = MimeTypeUtils.parseContentType(contentType);
+    const content = Buffer.from(await response.body());
+
+    return {
+      content,
+      mimeType,
+      charset,
+      encoding: undefined,
+      source: finalUrl,
+      etag: response.headers().etag,
+      status: FetchStatus.SUCCESS,
+    } satisfies RawContent;
+  }
+
+  /**
+   * Fetches `source` via the context's request API, following redirects
+   * manually so every hop can be revalidated against the access policy before
+   * it's followed — `page.request` bypasses the `page.route` handler that
+   * guards browser-driven navigation, so this is the only SSRF check a
+   * redirect target gets.
+   *
+   * @param page - The page whose context the request reuses.
+   * @param source - The resource URL to fetch.
+   * @param options - The original fetch options (redirect policy).
+   * @param timeout - Request timeout in milliseconds, applied per hop.
+   * @param headers - Headers to send with every hop (see `fetchViaRequest`).
+   * @returns The final response and the URL it was fetched from.
+   */
+  private async requestWithValidatedRedirects(
+    page: Page,
+    source: string,
+    options: FetchOptions | undefined,
+    timeout: number,
+    headers: Record<string, string>,
+  ): Promise<{
+    response: Awaited<ReturnType<Page["request"]["get"]>>;
+    finalUrl: string;
+  }> {
+    let currentUrl = source;
+
+    for (let redirectCount = 0; ; redirectCount++) {
+      const response = await page.request.get(currentUrl, {
+        headers,
+        maxRedirects: 0,
+        timeout,
+      });
+
+      const status = response.status();
+      const location = response.headers().location;
+      if (status < 300 || status >= 400 || !location) {
+        return { response, finalUrl: currentUrl };
+      }
+
+      if (options?.followRedirects === false) {
+        throw new RedirectError(currentUrl, location, status);
+      }
+
+      if (redirectCount >= MAX_REQUEST_REDIRECTS) {
+        throw new ScraperError(`Too many redirects while fetching ${source}`, false);
+      }
+
+      const redirectUrl = new URL(location, currentUrl).href;
+      await this.accessPolicy.assertNetworkUrlAllowed(redirectUrl);
+      currentUrl = redirectUrl;
     }
   }
 
