@@ -266,26 +266,20 @@ Job execution metrics:
 
 ### Vertical Scaling
 
-Increase worker concurrency within single process:
+Increase worker concurrency within its single process:
 
-- Higher concurrency limits
+- Higher `maxConcurrency` limits
 - More memory allocation
 - Faster storage backend
 
-### Horizontal Scaling
+### Horizontal Scaling (Coordinators Only)
 
-Distribute workers across processes:
+The worker is a single process that owns the in-memory job queue and the SQLite-backed document store — it does not scale horizontally. What scales horizontally is the coordinator tier:
 
-- External worker deployment
-- Load balancer coordination
-- Independent worker scaling
-- Database connection pooling
+- Run multiple `web`/`mcp` coordinator replicas, each started with `--server-url` pointing at the same worker
+- Coordinators are stateless; both document reads (`DocumentManagementClient`) and job dispatch (`PipelineClient`) proxy to the one worker over tRPC
+- Load balance across coordinator replicas, not worker replicas
 
-### Hybrid Deployment
+### Deployment Modes Are Exclusive
 
-Combine embedded and external workers:
-
-- Coordinator with embedded workers
-- Additional external workers for peak load
-- Flexible resource allocation
-- Cost-optimized scaling
+A deployment runs with either an embedded worker (`enableWorker: true`, standalone mode) or a single external worker started separately and reached via the coordinator's `--server-url` flag (distributed mode) — not both at once.
