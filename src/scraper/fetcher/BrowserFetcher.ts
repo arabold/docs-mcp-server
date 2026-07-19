@@ -1,7 +1,7 @@
 import { type Browser, chromium, type Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
-import { ScraperError } from "../../utils/errors";
+import { RedirectError, ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
@@ -76,16 +76,17 @@ export class BrowserFetcher implements ContentFetcher {
         return await route.continue();
       });
 
-      // Set custom headers if provided
-      await page.setExtraHTTPHeaders(
-        withMarkdownPreferredAccept(
-          {
-            ...fingerprintHeaders,
-            ...options?.headers,
-          },
-          options?.headers,
-        ),
+      // Compose the browser-like fingerprint headers used both for the page's
+      // own navigation and (if needed) the non-navigable request-API fallback,
+      // so the two look like the same client to anti-bot checks.
+      const requestHeaders = withMarkdownPreferredAccept(
+        {
+          ...fingerprintHeaders,
+          ...options?.headers,
+        },
+        options?.headers,
       );
+      await page.setExtraHTTPHeaders(requestHeaders);
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
@@ -106,7 +107,13 @@ export class BrowserFetcher implements ContentFetcher {
         // request API instead (see fetchViaRequest): it shares cookies — so any
         // anti-bot clearance carries over — but does not try to render them.
         if (/ERR_INVALID_ARGUMENT|ERR_ABORTED/i.test(message)) {
-          return await this.fetchViaRequest(page, source, options, timeout);
+          return await this.fetchViaRequest(
+            page,
+            source,
+            options,
+            timeout,
+            requestHeaders,
+          );
         }
         throw error;
       }
@@ -129,7 +136,7 @@ export class BrowserFetcher implements ContentFetcher {
       ) {
         const location = response.headers().location;
         if (location) {
-          throw new ScraperError(`Redirect blocked: ${source} -> ${location}`, false);
+          throw new RedirectError(source, location, response.status());
         }
       }
 
@@ -196,6 +203,9 @@ export class BrowserFetcher implements ContentFetcher {
    * @param source - The non-navigable resource URL to fetch.
    * @param options - The original fetch options (headers, redirect policy).
    * @param timeout - Navigation/request timeout in milliseconds.
+   * @param headers - The same composed fingerprint/Accept headers set on the
+   * page via `setExtraHTTPHeaders`, so the request-API call presents the same
+   * client identity as the browser that (potentially) just solved a challenge.
    * @returns The fetched raw content.
    */
   private async fetchViaRequest(
@@ -203,6 +213,7 @@ export class BrowserFetcher implements ContentFetcher {
     source: string,
     options: FetchOptions | undefined,
     timeout: number,
+    headers: Record<string, string>,
   ): Promise<RawContent> {
     const origin = new URL(source).origin;
     logger.debug(
@@ -225,6 +236,7 @@ export class BrowserFetcher implements ContentFetcher {
       source,
       options,
       timeout,
+      headers,
     );
 
     if (!response.ok()) {
@@ -258,8 +270,9 @@ export class BrowserFetcher implements ContentFetcher {
    *
    * @param page - The page whose context the request reuses.
    * @param source - The resource URL to fetch.
-   * @param options - The original fetch options (headers, redirect policy).
+   * @param options - The original fetch options (redirect policy).
    * @param timeout - Request timeout in milliseconds, applied per hop.
+   * @param headers - Headers to send with every hop (see `fetchViaRequest`).
    * @returns The final response and the URL it was fetched from.
    */
   private async requestWithValidatedRedirects(
@@ -267,6 +280,7 @@ export class BrowserFetcher implements ContentFetcher {
     source: string,
     options: FetchOptions | undefined,
     timeout: number,
+    headers: Record<string, string>,
   ): Promise<{
     response: Awaited<ReturnType<Page["request"]["get"]>>;
     finalUrl: string;
@@ -275,7 +289,7 @@ export class BrowserFetcher implements ContentFetcher {
 
     for (let redirectCount = 0; ; redirectCount++) {
       const response = await page.request.get(currentUrl, {
-        headers: options?.headers,
+        headers,
         maxRedirects: 0,
         timeout,
       });
@@ -287,7 +301,7 @@ export class BrowserFetcher implements ContentFetcher {
       }
 
       if (options?.followRedirects === false) {
-        throw new ScraperError(`Redirect blocked: ${currentUrl} -> ${location}`, false);
+        throw new RedirectError(currentUrl, location, status);
       }
 
       if (redirectCount >= MAX_REQUEST_REDIRECTS) {

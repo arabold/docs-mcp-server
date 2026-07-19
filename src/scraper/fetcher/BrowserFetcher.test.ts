@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
-import { ScraperError } from "../../utils/errors";
+import { RedirectError, ScraperError } from "../../utils/errors";
 import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 
 vi.mock("playwright", () => ({
@@ -213,7 +213,7 @@ describe("BrowserFetcher", () => {
     expect(result.content.toString()).toBe("# redirected content");
   });
 
-  it("throws a non-retryable Redirect blocked error for request-API redirects when followRedirects is false", async () => {
+  it("throws a non-retryable RedirectError for request-API redirects when followRedirects is false", async () => {
     const goto = vi
       .fn()
       .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
@@ -231,9 +231,54 @@ describe("BrowserFetcher", () => {
       .fetch("https://example.com/automation/index.md", { followRedirects: false })
       .catch((e) => e);
 
-    expect(error).toBeInstanceOf(ScraperError);
+    expect(error).toBeInstanceOf(RedirectError);
     expect((error as InstanceType<typeof ScraperError>).isRetryable).toBe(false);
-    expect((error as Error).message).toContain("Redirect blocked");
+    expect((error as RedirectError).redirectUrl).toBe(
+      "https://example.com/redirected.md",
+    );
     expect(requestGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws a non-retryable RedirectError from the main navigation path when followRedirects is false", async () => {
+    const { page } = mockBrowser({
+      goto: vi.fn().mockResolvedValue({
+        status: () => 302,
+        headers: () => ({ location: "https://example.com/other" }),
+      }),
+    });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const error = await fetcher
+      .fetch("https://example.com", { followRedirects: false })
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(RedirectError);
+    expect((error as InstanceType<typeof ScraperError>).isRetryable).toBe(false);
+    expect((error as RedirectError).redirectUrl).toBe("https://example.com/other");
+    expect(page.content).not.toHaveBeenCalled();
+  });
+
+  it("sends the same fingerprint/Accept headers to the request-API fallback as the page navigation", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({ "content-type": "text/markdown" }),
+      body: vi.fn().mockResolvedValue(Buffer.from("# from request api")),
+    });
+    const { page } = mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    await fetcher.fetch("https://example.com/automation/index.md", {
+      headers: { "X-Test": "1" },
+    });
+
+    const [pageHeaders] = page.setExtraHTTPHeaders.mock.calls[0];
+    const [, requestOptions] = requestGet.mock.calls[0];
+    expect(requestOptions.headers).toEqual(pageHeaders);
+    expect(requestOptions.headers).toEqual(expect.objectContaining({ "X-Test": "1" }));
   });
 });
