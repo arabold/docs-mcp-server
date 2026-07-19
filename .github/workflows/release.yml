@@ -26,12 +26,12 @@ jobs:
       - name: Checkout code
         # Need fetch-depth: 0 for semantic-release to analyze all relevant commits
         # and commit package.json/CHANGELOG.md changes
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22.x" # Match engines requirement in package.json
           registry-url: "https://registry.npmjs.org" # Specify npm registry
@@ -61,7 +61,7 @@ jobs:
       - name: Determine next version (dry-run)
         id: semantic-dry
         if: steps.release-mode.outputs.manual_release != 'true'
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v6
         with:
           dry_run: true
         env:
@@ -78,7 +78,7 @@ jobs:
       - name: Run semantic-release
         id: semantic # Give step an ID to reference its outputs
         if: steps.release-mode.outputs.manual_release != 'true'
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -110,7 +110,7 @@ jobs:
 
       - name: Create GitHub release (manual)
         if: steps.release-mode.outputs.manual_release == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.release-mode.outputs.release_version }}
           generate_release_notes: true
@@ -143,16 +143,16 @@ jobs:
     steps:
       - name: Checkout code
         # Checkout the specific commit tagged by semantic-release
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           # Use the tag name determined by the release job
           ref: v${{ needs.release.outputs.new_release_version }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -160,7 +160,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           # Use the version from the semantic-release output
@@ -173,7 +173,7 @@ jobs:
 
       - name: Build and push Docker image
         id: push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: true
@@ -186,7 +186,7 @@ jobs:
             POSTHOG_API_KEY=${{ secrets.POSTHOG_API_KEY }}
 
       - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.push.outputs.digest }}
