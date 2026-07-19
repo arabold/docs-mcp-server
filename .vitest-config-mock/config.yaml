@@ -1,0 +1,81 @@
+# docs-mcp-server-managed-vector-dimension-omitted
+# embeddings.vectorDimension is omitted when it comes from generated defaults.
+# Add embeddings.vectorDimension explicitly to override native model dimensions.
+app:
+  storePath: ""
+  telemetryEnabled: true
+  readOnly: false
+  embeddingModel: text-embedding-3-small
+server:
+  protocol: auto
+  host: 127.0.0.1
+  ports:
+    default: 6280
+    worker: 8080
+    mcp: 6280
+    web: 6281
+  heartbeatMs: 30000
+auth:
+  enabled: false
+  issuerUrl: ""
+  audience: ""
+scraper:
+  maxPages: 1000
+  maxDepth: 3
+  maxConcurrency: 3
+  abortOnFailureRate: 0.5
+  preserveHashes: false
+  skipKnownTrackers: true
+  pageTimeoutMs: 5000
+  browserTimeoutMs: 30000
+  htmlExtractor: cheerio
+  fetcher:
+    maxRetries: 3
+    baseDelayMs: 1000
+    maxCacheItems: 200
+    maxCacheItemSizeBytes: 512000
+  document:
+    maxSize: 10485760
+  security:
+    network:
+      mode: open
+      allowPrivateNetworks: false
+      allowedHosts: []
+      allowedCidrs: []
+      allowInvalidTls: false
+    fileAccess:
+      mode: allowedRoots
+      allowedRoots:
+        - $DOCUMENTS
+      followSymlinks: false
+      includeHidden: false
+splitter:
+  minChunkSize: 500
+  preferredChunkSize: 1500
+  maxChunkSize: 5000
+  treeSitterSizeLimit: 30000
+  json:
+    maxNestingDepth: 5
+    maxChunks: 1000
+embeddings:
+  batchSize: 100
+  batchChars: 50000
+  requestTimeoutMs: 30000
+  initTimeoutMs: 30000
+  vectorDimension: 1536
+db:
+  migrationMaxRetries: 5
+  migrationRetryDelayMs: 300
+search:
+  overfetchFactor: 2
+  weightVec: 1
+  weightFts: 1
+  vectorMultiplier: 10
+sandbox:
+  defaultTimeoutMs: 5000
+assembly:
+  maxParentChainDepth: 10
+  childLimit: 3
+  precedingSiblingsLimit: 1
+  subsequentSiblingsLimit: 2
+  maxChunkDistance: 3
