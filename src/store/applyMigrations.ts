@@ -218,19 +218,18 @@ export async function applyMigrations(
 
     let appliedCount = 0;
     for (const [index, filename] of pendingMigrations.entries()) {
-      logger.debug(`Applying migration: ${filename}`);
       const filePath = path.join(MIGRATIONS_DIR, filename);
       const sql = prepareMigrationSql(db, filename, fs.readFileSync(filePath, "utf8"));
 
-      // Execute migration and record it directly within the overall transaction
+      // Execute migration and record it directly within the overall transaction.
+      // executeMigrationSql() already logs progress and failure with timing info,
+      // so avoid re-logging the same event here.
       try {
         executeMigrationSql(db, filename, sql, index + 1, pendingMigrations.length);
         const insertStmt = db.prepare(`INSERT INTO ${MIGRATIONS_TABLE} (id) VALUES (?)`);
         insertStmt.run(filename);
-        logger.debug(`Applied migration: ${filename}`);
         appliedCount++;
       } catch (error) {
-        logger.error(`❌ Failed to apply migration: ${filename} - ${error}`);
         // Re-throw to ensure the overall transaction rolls back
         throw new StoreError(`Migration failed: ${filename}`, error);
       }
