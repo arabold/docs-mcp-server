@@ -14,6 +14,13 @@ import {
 } from "./types";
 
 /**
+ * Maximum redirects to follow via the request API. Matches Playwright's own
+ * default (20) — redirects are followed manually only so every hop can be
+ * revalidated against the access policy, not to change the allowed depth.
+ */
+const MAX_REQUEST_REDIRECTS = 20;
+
+/**
  * Fetches content using a headless browser (Playwright).
  * This fetcher can handle JavaScript-heavy pages and bypass anti-scraping measures.
  */
@@ -158,6 +165,13 @@ export class BrowserFetcher implements ContentFetcher {
         throw new ScraperError("Browser fetch cancelled", false);
       }
 
+      // Preserve already-typed ScraperErrors (and their isRetryable flag) thrown
+      // earlier in this method or in fetchViaRequest, rather than re-wrapping
+      // them into a new, always-non-retryable error.
+      if (error instanceof ScraperError) {
+        throw error;
+      }
+
       logger.error(`❌ Browser fetch failed for ${source}: ${error}`);
       throw new ScraperError(
         `Browser fetch failed for ${source}: ${error instanceof Error ? error.message : String(error)}`,
@@ -206,14 +220,12 @@ export class BrowserFetcher implements ContentFetcher {
       )
       .catch(() => undefined);
 
-    const response = await page.request.get(source, {
-      headers: options?.headers,
-      maxRedirects: options?.followRedirects === false ? 0 : undefined,
+    const { response, finalUrl } = await this.requestWithValidatedRedirects(
+      page,
+      source,
+      options,
       timeout,
-    });
-
-    const finalUrl = source;
-    await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
+    );
 
     if (!response.ok()) {
       throw new ScraperError(
@@ -235,6 +247,57 @@ export class BrowserFetcher implements ContentFetcher {
       etag: response.headers().etag,
       status: FetchStatus.SUCCESS,
     } satisfies RawContent;
+  }
+
+  /**
+   * Fetches `source` via the context's request API, following redirects
+   * manually so every hop can be revalidated against the access policy before
+   * it's followed — `page.request` bypasses the `page.route` handler that
+   * guards browser-driven navigation, so this is the only SSRF check a
+   * redirect target gets.
+   *
+   * @param page - The page whose context the request reuses.
+   * @param source - The resource URL to fetch.
+   * @param options - The original fetch options (headers, redirect policy).
+   * @param timeout - Request timeout in milliseconds, applied per hop.
+   * @returns The final response and the URL it was fetched from.
+   */
+  private async requestWithValidatedRedirects(
+    page: Page,
+    source: string,
+    options: FetchOptions | undefined,
+    timeout: number,
+  ): Promise<{
+    response: Awaited<ReturnType<Page["request"]["get"]>>;
+    finalUrl: string;
+  }> {
+    let currentUrl = source;
+
+    for (let redirectCount = 0; ; redirectCount++) {
+      const response = await page.request.get(currentUrl, {
+        headers: options?.headers,
+        maxRedirects: 0,
+        timeout,
+      });
+
+      const status = response.status();
+      const location = response.headers().location;
+      if (status < 300 || status >= 400 || !location) {
+        return { response, finalUrl: currentUrl };
+      }
+
+      if (options?.followRedirects === false) {
+        throw new ScraperError(`Redirect blocked: ${currentUrl} -> ${location}`, false);
+      }
+
+      if (redirectCount >= MAX_REQUEST_REDIRECTS) {
+        throw new ScraperError(`Too many redirects while fetching ${source}`, false);
+      }
+
+      const redirectUrl = new URL(location, currentUrl).href;
+      await this.accessPolicy.assertNetworkUrlAllowed(redirectUrl);
+      currentUrl = redirectUrl;
+    }
   }
 
   public static async launchBrowser(): Promise<Browser> {

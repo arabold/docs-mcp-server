@@ -151,8 +151,89 @@ describe("BrowserFetcher", () => {
     mockBrowser({ goto, request: { get: requestGet } });
 
     const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const error = await fetcher
+      .fetch("https://example.com/automation/index.md")
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(ScraperError);
+    expect((error as InstanceType<typeof ScraperError>).isRetryable).toBe(true);
+  });
+
+  it("rejects a request-API redirect to a disallowed host before fetching it", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => false,
+      status: () => 302,
+      headers: () => ({ location: "http://127.0.0.1/secret" }),
+      body: vi.fn(),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
     await expect(
       fetcher.fetch("https://example.com/automation/index.md"),
-    ).rejects.toBeInstanceOf(ScraperError);
+    ).rejects.toThrow();
+    expect(requestGet).toHaveBeenCalledTimes(1);
+  });
+
+  it("follows an allowed request-API redirect and reports the redirect target as source", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: () => false,
+        status: () => 302,
+        headers: () => ({ location: "https://example.com/redirected.md" }),
+        body: vi.fn(),
+      })
+      .mockResolvedValueOnce({
+        ok: () => true,
+        status: () => 200,
+        headers: () => ({ "content-type": "text/markdown" }),
+        body: vi.fn().mockResolvedValue(Buffer.from("# redirected content")),
+      });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const result = await fetcher.fetch("https://example.com/automation/index.md");
+
+    expect(requestGet).toHaveBeenCalledTimes(2);
+    expect(requestGet).toHaveBeenNthCalledWith(
+      2,
+      "https://example.com/redirected.md",
+      expect.any(Object),
+    );
+    expect(result.source).toBe("https://example.com/redirected.md");
+    expect(result.content.toString()).toBe("# redirected content");
+  });
+
+  it("throws a non-retryable Redirect blocked error for request-API redirects when followRedirects is false", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => false,
+      status: () => 302,
+      headers: () => ({ location: "https://example.com/redirected.md" }),
+      body: vi.fn(),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const error = await fetcher
+      .fetch("https://example.com/automation/index.md", { followRedirects: false })
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(ScraperError);
+    expect((error as InstanceType<typeof ScraperError>).isRetryable).toBe(false);
+    expect((error as Error).message).toContain("Redirect blocked");
+    expect(requestGet).toHaveBeenCalledTimes(1);
   });
 });
