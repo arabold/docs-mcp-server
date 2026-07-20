@@ -13,7 +13,9 @@ const mockPostHogInstance = {
 };
 
 vi.mock("posthog-node", () => ({
-  PostHog: vi.fn(() => mockPostHogInstance),
+  PostHog: vi.fn(function () {
+    return mockPostHogInstance;
+  }),
 }));
 
 // Set the global __POSTHOG_API_KEY__ for testing

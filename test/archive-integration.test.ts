@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-// @ts-expect-error -- @types/archiver@7 lags behind archiver@8's named ESM exports.
 import { ZipArchive } from "archiver";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { LocalFileStrategy } from "../src/scraper/strategies/LocalFileStrategy";

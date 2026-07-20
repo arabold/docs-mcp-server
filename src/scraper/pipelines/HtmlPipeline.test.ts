@@ -1,5 +1,5 @@
 // Copyright (c) 2025
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
@@ -19,6 +19,13 @@ describe("HtmlPipeline", () => {
     vi.spyOn(HtmlLinkExtractorMiddleware.prototype, "process");
     vi.spyOn(HtmlSanitizerMiddleware.prototype, "process");
     vi.spyOn(HtmlToMarkdownMiddleware.prototype, "process");
+  });
+
+  afterEach(() => {
+    // Vitest 4 reuses an existing spy instead of resetting it when the same
+    // prototype method is re-spied, so call counts would otherwise leak
+    // across tests in this file.
+    vi.restoreAllMocks();
   });
 
   it("canProcess returns true for text/html", () => {

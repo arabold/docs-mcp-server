@@ -636,7 +636,7 @@ Text paragraph.
   });
 
   describe("fence balance across nested containers (issue #418)", () => {
-    const longCode = (lang: string, prefix: string, count = 30) =>
+    const longCode = (_lang: string, prefix: string, count = 30) =>
       Array.from(
         { length: count },
         (_, i) => `${prefix}${i} = "lorem ipsum dolor sit amet, consectetur";`,

@@ -10,24 +10,23 @@ describe("executeJsInSandbox", () => {
     // Reset mocks before each test
     vi.clearAllMocks();
     // Provide a default minimal implementation for JSDOM mock if needed for other tests
-    vi.mocked(JSDOM).mockImplementation(
-      (html, _options) =>
-        ({
-          window: {
-            document: {
-              querySelectorAll: vi.fn(() => []), // Mock querySelectorAll
-              // Add other necessary document/window mocks if tests rely on them
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout, // Use global timers
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
-            // Mock other window properties accessed by the sandbox context
+    vi.mocked(JSDOM).mockImplementation(function (html, _options) {
+      return {
+        window: {
+          document: {
+            querySelectorAll: vi.fn(() => []), // Mock querySelectorAll
+            // Add other necessary document/window mocks if tests rely on them
           },
-          serialize: vi.fn(() => html as string), // Mock serialize
-        }) as unknown as JSDOM,
-    );
+          close: vi.fn(),
+          setTimeout: global.setTimeout, // Use global timers
+          clearTimeout: global.clearTimeout,
+          setInterval: global.setInterval,
+          clearInterval: global.clearInterval,
+          // Mock other window properties accessed by the sandbox context
+        },
+        serialize: vi.fn(() => html as string), // Mock serialize
+      } as unknown as JSDOM;
+    });
   });
 
   it("should execute inline script and modify the DOM", async () => {
@@ -64,17 +63,16 @@ describe("executeJsInSandbox", () => {
       setInterval: global.setInterval,
       clearInterval: global.clearInterval,
     };
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: mockWindow,
-          serialize: vi.fn(
-            () =>
-              // Use template literal to fix Biome error
-              `${initialHtml.replace("Initial content", "Modified by script")}<div id="added"></div>`,
-          ), // Simulate serialization after modification
-        }) as unknown as JSDOM,
-    );
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: mockWindow,
+        serialize: vi.fn(
+          () =>
+            // Use template literal to fix Biome error
+            `${initialHtml.replace("Initial content", "Modified by script")}<div id="added"></div>`,
+        ), // Simulate serialization after modification
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,
@@ -99,24 +97,23 @@ describe("executeJsInSandbox", () => {
       </html>
     `;
     // Specific mock for this test
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: {
-            document: {
-              querySelectorAll: vi.fn(() => [
-                { textContent: "throw new Error('Test script error');", src: "" },
-              ]),
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout,
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: {
+          document: {
+            querySelectorAll: vi.fn(() => [
+              { textContent: "throw new Error('Test script error');", src: "" },
+            ]),
           },
-          serialize: vi.fn(() => initialHtml), // Serialize returns original on error during script exec
-        }) as unknown as JSDOM,
-    );
+          close: vi.fn(),
+          setTimeout: global.setTimeout,
+          clearTimeout: global.clearTimeout,
+          setInterval: global.setInterval,
+          clearInterval: global.clearInterval,
+        },
+        serialize: vi.fn(() => initialHtml), // Serialize returns original on error during script exec
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,
@@ -146,28 +143,27 @@ describe("executeJsInSandbox", () => {
       </html>
     `;
     // Specific mock for this test
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: {
-            document: {
-              querySelectorAll: vi.fn(() => [
-                {
-                  textContent:
-                    "const start = Date.now(); while (Date.now() - start < 200) { /* busy wait */ } throw new Error('Should not reach here if timeout works');",
-                  src: "",
-                },
-              ]),
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout,
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: {
+          document: {
+            querySelectorAll: vi.fn(() => [
+              {
+                textContent:
+                  "const start = Date.now(); while (Date.now() - start < 200) { /* busy wait */ } throw new Error('Should not reach here if timeout works');",
+                src: "",
+              },
+            ]),
           },
-          serialize: vi.fn(() => initialHtml),
-        }) as unknown as JSDOM,
-    );
+          close: vi.fn(),
+          setTimeout: global.setTimeout,
+          clearTimeout: global.clearTimeout,
+          setInterval: global.setInterval,
+          clearInterval: global.clearInterval,
+        },
+        serialize: vi.fn(() => initialHtml),
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,
@@ -190,23 +186,22 @@ describe("executeJsInSandbox", () => {
       </html>
     `;
     // Specific mock for this test
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: {
-            document: {
-              // Simulate finding the external script tag
-              querySelectorAll: vi.fn(() => [{ textContent: "", src: "external.js" }]),
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout,
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: {
+          document: {
+            // Simulate finding the external script tag
+            querySelectorAll: vi.fn(() => [{ textContent: "", src: "external.js" }]),
           },
-          serialize: vi.fn(() => initialHtml),
-        }) as unknown as JSDOM,
-    );
+          close: vi.fn(),
+          setTimeout: global.setTimeout,
+          clearTimeout: global.clearTimeout,
+          setInterval: global.setInterval,
+          clearInterval: global.clearInterval,
+        },
+        serialize: vi.fn(() => initialHtml),
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,
@@ -222,7 +217,7 @@ describe("executeJsInSandbox", () => {
     const setupError = new Error("JSDOM constructor failed");
 
     // Mock JSDOM constructor to throw an error *specifically for this test*
-    vi.mocked(JSDOM).mockImplementation(() => {
+    vi.mocked(JSDOM).mockImplementation(function () {
       throw setupError;
     });
 
@@ -270,14 +265,13 @@ describe("executeJsInSandbox", () => {
       setInterval: global.setInterval,
       clearInterval: global.clearInterval,
     };
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: mockWindow,
-          // Simulate serialization after modification by external script
-          serialize: vi.fn(() => initialHtml.replace("Initial", "Modified by external")),
-        }) as unknown as JSDOM,
-    );
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: mockWindow,
+        // Simulate serialization after modification by external script
+        serialize: vi.fn(() => initialHtml.replace("Initial", "Modified by external")),
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,
@@ -303,22 +297,21 @@ describe("executeJsInSandbox", () => {
     const mockFetch = vi.fn().mockResolvedValue(null); // Simulate fetch failure
 
     // Mock JSDOM to find the script tag
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: {
-            document: {
-              querySelectorAll: vi.fn(() => [{ textContent: "", src: "fetch-fail.js" }]),
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout,
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: {
+          document: {
+            querySelectorAll: vi.fn(() => [{ textContent: "", src: "fetch-fail.js" }]),
           },
-          serialize: vi.fn(() => initialHtml), // HTML remains unchanged
-        }) as unknown as JSDOM,
-    );
+          close: vi.fn(),
+          setTimeout: global.setTimeout,
+          clearTimeout: global.clearTimeout,
+          setInterval: global.setInterval,
+          clearInterval: global.clearInterval,
+        },
+        serialize: vi.fn(() => initialHtml), // HTML remains unchanged
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,
@@ -347,22 +340,21 @@ describe("executeJsInSandbox", () => {
     const mockFetch = vi.fn().mockRejectedValue(fetchError); // Simulate fetch throwing
 
     // Mock JSDOM to find the script tag
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: {
-            document: {
-              querySelectorAll: vi.fn(() => [{ textContent: "", src: "fetch-throw.js" }]),
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout,
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: {
+          document: {
+            querySelectorAll: vi.fn(() => [{ textContent: "", src: "fetch-throw.js" }]),
           },
-          serialize: vi.fn(() => initialHtml), // HTML remains unchanged
-        }) as unknown as JSDOM,
-    );
+          close: vi.fn(),
+          setTimeout: global.setTimeout,
+          clearTimeout: global.clearTimeout,
+          setInterval: global.setInterval,
+          clearInterval: global.clearInterval,
+        },
+        serialize: vi.fn(() => initialHtml), // HTML remains unchanged
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,
@@ -394,24 +386,23 @@ describe("executeJsInSandbox", () => {
     const mockFetch = vi.fn().mockRejectedValue(fetchError);
 
     // Mock JSDOM to find the script tag
-    vi.mocked(JSDOM).mockImplementation(
-      () =>
-        ({
-          window: {
-            document: {
-              querySelectorAll: vi.fn(() => [
-                { textContent: "", src: "http://invalid-url" },
-              ]),
-            },
-            close: vi.fn(),
-            setTimeout: global.setTimeout,
-            clearTimeout: global.clearTimeout,
-            setInterval: global.setInterval,
-            clearInterval: global.clearInterval,
+    vi.mocked(JSDOM).mockImplementation(function () {
+      return {
+        window: {
+          document: {
+            querySelectorAll: vi.fn(() => [
+              { textContent: "", src: "http://invalid-url" },
+            ]),
           },
-          serialize: vi.fn(() => initialHtml), // HTML remains unchanged
-        }) as unknown as JSDOM,
-    );
+          close: vi.fn(),
+          setTimeout: global.setTimeout,
+          clearTimeout: global.clearTimeout,
+          setInterval: global.setInterval,
+          clearInterval: global.clearInterval,
+        },
+        serialize: vi.fn(() => initialHtml), // HTML remains unchanged
+      } as unknown as JSDOM;
+    });
 
     const result = await executeJsInSandbox({
       html: initialHtml,

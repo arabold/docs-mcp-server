@@ -161,7 +161,18 @@ export class DocumentPipeline extends BasePipeline {
     result: Awaited<ReturnType<typeof extractBytes>>,
     mimeType: string,
   ): string | null {
-    const tableContent = result.tables.map((t) => t.markdown).join("\n\n");
+    // Kreuzberg's per-table markdown no longer includes the sheet name as a
+    // heading, so reconstruct it here using the workbook-level sheet name
+    // list. Only trust the 1:1 positional mapping when the counts agree —
+    // a sheet can contain zero or multiple tables.
+    const sheetNames = result.metadata?.sheetNames;
+    const tableContent = result.tables
+      .map((t, i) => {
+        const sheetName =
+          sheetNames?.length === result.tables.length ? sheetNames[i] : null;
+        return sheetName ? `# ${sheetName}\n\n${t.markdown}` : t.markdown;
+      })
+      .join("\n\n");
     const hasTableContent = tableContent.trim().length > 0;
     const content = result.content ?? "";
     const hasContent = content.trim().length > 0;

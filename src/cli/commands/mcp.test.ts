@@ -23,14 +23,18 @@ vi.mock("../../mcp/tools", () => ({
 }));
 
 vi.mock("../../store", () => ({
-  DocumentManagementService: vi.fn().mockImplementation(() => ({
-    initialize: vi.fn().mockResolvedValue(undefined),
-    shutdown: vi.fn(),
-  })),
-  DocumentManagementClient: vi.fn().mockImplementation(() => ({
-    initialize: vi.fn().mockResolvedValue(undefined),
-    shutdown: vi.fn(),
-  })),
+  DocumentManagementService: vi.fn().mockImplementation(function () {
+    return {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn(),
+    };
+  }),
+  DocumentManagementClient: vi.fn().mockImplementation(function () {
+    return {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn(),
+    };
+  }),
 }));
 vi.mock("../../store/errors", () => ({
   EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {

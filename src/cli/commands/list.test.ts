@@ -14,9 +14,9 @@ vi.mock("../../store", () => ({
   })),
 }));
 vi.mock("../../tools", () => ({
-  ListLibrariesTool: vi
-    .fn()
-    .mockImplementation(() => ({ execute: vi.fn(async () => ({ libraries: [] })) })),
+  ListLibrariesTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn(async () => ({ libraries: [] })) };
+  }),
 }));
 vi.mock("../utils", () => ({
   getGlobalOptions: vi.fn(() => ({ storePath: undefined })),

@@ -14,12 +14,11 @@
  * will use that image instead of building one.
  */
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-// @ts-expect-error -- @types/archiver@7 lags behind archiver@8's named ESM exports.
 import { ZipArchive } from "archiver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -35,10 +34,46 @@ const IMAGE_TAG = PREBUILT_TAG ?? "docs-mcp-server:e2e-test";
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
 const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
 
-function docker(args: string[], opts: { timeout?: number } = {}) {
-  return spawnSync("docker", args, {
-    encoding: "utf8",
-    timeout: opts.timeout,
+interface DockerResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+// Runs `docker` asynchronously rather than via spawnSync. These commands can
+// run for minutes (image build, Playwright scrapes); a synchronous call
+// blocks Node's event loop for that whole time, which starves Vitest's
+// worker <-> main-thread RPC heartbeat and trips its 60s "onTaskUpdate"
+// timeout as a false-positive unhandled error.
+function docker(args: string[], opts: { timeout?: number } = {}): Promise<DockerResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", args, { timeout: opts.timeout });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (status) => {
+      resolve({ status, stdout, stderr });
+    });
+  });
+}
+
+// Same rationale as docker() above, but streams to the parent's stdio
+// (for the live-scrolling `docker build` output) instead of capturing it.
+function dockerBuild(args: string[], opts: { cwd?: string; timeout?: number } = {}): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("docker", args, {
+      cwd: opts.cwd,
+      timeout: opts.timeout,
+      stdio: "inherit",
+    });
+    child.on("error", reject);
+    child.on("close", (status) => resolve(status));
   });
 }
 
@@ -71,17 +106,17 @@ function listIndexedUrls(dbPath: string): string[] {
 }
 
 describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     if (PREBUILT_TAG) return;
     // Pass the tag as an argv element rather than building a shell string, so
     // a `DOCKER_IMAGE_TAG` containing spaces or metacharacters cannot be
     // interpreted by a shell.
-    const r = spawnSync("docker", ["build", "-t", IMAGE_TAG, "."], {
+    const status = await dockerBuild(["build", "-t", IMAGE_TAG, "."], {
       cwd: PROJECT_ROOT,
-      stdio: "inherit",
+      timeout: DOCKER_BUILD_TIMEOUT_MS,
     });
-    if (r.status !== 0) {
-      throw new Error(`docker build failed with exit code ${r.status}`);
+    if (status !== 0) {
+      throw new Error(`docker build failed with exit code ${status}`);
     }
   }, DOCKER_BUILD_TIMEOUT_MS);
 
@@ -91,16 +126,16 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     spawnSync("docker", ["image", "rm", "-f", IMAGE_TAG], { stdio: "ignore" });
   });
 
-  it("runs the entrypoint as a non-root user", () => {
-    const r = docker(["run", "--rm", "--entrypoint", "id", IMAGE_TAG, "-u"]);
+  it("runs the entrypoint as a non-root user", async () => {
+    const r = await docker(["run", "--rm", "--entrypoint", "id", IMAGE_TAG, "-u"]);
     expect(r.status, `id -u failed: ${r.stderr}`).toBe(0);
     const uid = r.stdout.trim();
     expect(uid).not.toBe("0");
     expect(uid).toBe("1000"); // the `node` user shipped by the base image
   });
 
-  it("ships Chromium where the Playwright runtime expects it", () => {
-    const r = docker([
+  it("ships Chromium where the Playwright runtime expects it", async () => {
+    const r = await docker([
       "run",
       "--rm",
       "--entrypoint",
@@ -113,12 +148,12 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(r.stdout).toContain("OK");
   });
 
-  it("scrapes a live web page through the Playwright pipeline", () => {
+  it("scrapes a live web page through the Playwright pipeline", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-web-"));
     // Make sure the host-side dir is writable by uid 1000 (the container user).
     fs.chmodSync(dataDir, 0o777);
     try {
-      const r = docker(
+      const r = await docker(
         [
           "run",
           "--rm",
@@ -151,12 +186,12 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     }
   }, 240_000);
 
-  it("extracts a PDF from a mounted volume via Kreuzberg", () => {
+  it("extracts a PDF from a mounted volume via Kreuzberg", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-pdf-"));
     fs.chmodSync(dataDir, 0o777);
     const fixtureDir = path.join(PROJECT_ROOT, "test", "fixtures");
     try {
-      const r = docker(
+      const r = await docker(
         [
           "run",
           "--rm",
@@ -218,7 +253,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       fs.writeFileSync(path.join(docsDir, "readme.md"), "# Readme\n\nbody");
       await createZipFixture(path.join(docsDir, "archive.zip"));
 
-      const r = docker(
+      const r = await docker(
         [
           "run",
           "--rm",

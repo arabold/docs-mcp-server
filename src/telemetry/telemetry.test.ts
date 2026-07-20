@@ -17,12 +17,14 @@ vi.mock("./TelemetryConfig", () => ({
 
 // Mock PostHogClient
 vi.mock("./postHogClient", () => ({
-  PostHogClient: vi.fn().mockImplementation(() => ({
-    capture: vi.fn(),
-    captureException: vi.fn(),
-    shutdown: vi.fn().mockResolvedValue(undefined),
-    isEnabled: vi.fn(() => true),
-  })),
+  PostHogClient: vi.fn().mockImplementation(function () {
+    return {
+      capture: vi.fn(),
+      captureException: vi.fn(),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+      isEnabled: vi.fn(() => true),
+    };
+  }),
 }));
 
 describe("Telemetry", () => {

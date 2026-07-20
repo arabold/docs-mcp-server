@@ -1,5 +1,5 @@
 // Copyright (c) 2025
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { MarkdownLinkExtractorMiddleware } from "../middleware/MarkdownLinkExtractorMiddleware";
@@ -13,6 +13,13 @@ describe("MarkdownPipeline", () => {
     // Set up spies without mock implementations to use real middleware
     vi.spyOn(MarkdownMetadataExtractorMiddleware.prototype, "process");
     vi.spyOn(MarkdownLinkExtractorMiddleware.prototype, "process");
+  });
+
+  afterEach(() => {
+    // Vitest 4 reuses an existing spy instead of resetting it when the same
+    // prototype method is re-spied, so call counts would otherwise leak
+    // across tests in this file.
+    vi.restoreAllMocks();
   });
 
   it("canProcess returns true for text/markdown", () => {

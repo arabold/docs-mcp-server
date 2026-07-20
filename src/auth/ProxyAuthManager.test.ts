@@ -18,9 +18,10 @@ const mockJwtVerify = vi.mocked(jwtVerify);
 
 // Mock the MCP SDK
 vi.mock("@modelcontextprotocol/sdk/server/auth/providers/proxyProvider.js", () => ({
-  ProxyOAuthServerProvider: vi.fn().mockImplementation(() => ({
+  ProxyOAuthServerProvider: vi.fn().mockImplementation(function () {
     // Mock implementation
-  })),
+    return {};
+  }),
 }));
 
 // Mock jose library
@@ -423,30 +424,31 @@ describe("ProxyAuthManager", () => {
           headers: { "Content-Type": "application/json" },
         }),
       },
-    ])("should return a 502 JSON error when the upstream returns $name", async ({
-      response: upstreamResponse,
-    }) => {
-      // Defends against upstream non-object responses (HTML pages, empty
-      // bodies, bare `null`) turning into an unhandled 500 or a misleading
-      // `null` payload. Clients must always see a parseable OAuth-style
-      // error envelope.
-      server.use(
-        http.post("https://auth.example.com/oauth/token", () => upstreamResponse),
-      );
+    ])(
+      "should return a 502 JSON error when the upstream returns $name",
+      async ({ response: upstreamResponse }) => {
+        // Defends against upstream non-object responses (HTML pages, empty
+        // bodies, bare `null`) turning into an unhandled 500 or a misleading
+        // `null` payload. Clients must always see a parseable OAuth-style
+        // error envelope.
+        server.use(
+          http.post("https://auth.example.com/oauth/token", () => upstreamResponse),
+        );
 
-      const handler = getHandler(mockServer, "post", "/oauth/token");
-      const reply = createMockReply();
-      const request = {
-        protocol: "https",
-        headers: { host: "server.example.com" },
-        body: { grant_type: "authorization_code", code: "abc" },
-      };
+        const handler = getHandler(mockServer, "post", "/oauth/token");
+        const reply = createMockReply();
+        const request = {
+          protocol: "https",
+          headers: { host: "server.example.com" },
+          body: { grant_type: "authorization_code", code: "abc" },
+        };
 
-      await handler(request, reply);
+        await handler(request, reply);
 
-      expect(reply.status).toHaveBeenCalledWith(502);
-      expect(reply.body.error).toBe("server_error");
-    });
+        expect(reply.status).toHaveBeenCalledWith(502);
+        expect(reply.body.error).toBe("server_error");
+      },
+    );
   });
 
   describe("/.well-known/oauth-protected-resource metadata", () => {

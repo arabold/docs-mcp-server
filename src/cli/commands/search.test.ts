@@ -11,9 +11,9 @@ vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
 vi.mock("../../tools", () => ({
-  SearchTool: vi
-    .fn()
-    .mockImplementation(() => ({ execute: vi.fn(async () => ({ results: [] })) })),
+  SearchTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn(async () => ({ results: [] })) };
+  }),
 }));
 vi.mock("../utils", () => ({
   getGlobalOptions: vi.fn(() => ({ storePath: undefined })),
