@@ -21,12 +21,14 @@ vi.mock("./utils", async () => {
 });
 
 vi.mock("../events", () => ({
-  EventBusService: vi.fn().mockImplementation(() => ({
-    emitter: {},
-    emit: vi.fn(),
-    on: vi.fn(),
-    off: vi.fn(),
-  })),
+  EventBusService: vi.fn().mockImplementation(function () {
+    return {
+      emitter: {},
+      emit: vi.fn(),
+      on: vi.fn(),
+      off: vi.fn(),
+    };
+  }),
 }));
 
 // Mock telemetry to prevent side effects and timeouts
@@ -34,9 +36,11 @@ vi.mock("../telemetry", async () => {
   return {
     initTelemetry: vi.fn(),
     shouldEnableTelemetry: vi.fn().mockReturnValue(false),
-    TelemetryService: vi.fn().mockImplementation(() => ({
-      shutdown: vi.fn(),
-    })),
+    TelemetryService: vi.fn().mockImplementation(function () {
+      return {
+        shutdown: vi.fn(),
+      };
+    }),
     telemetry: {
       isEnabled: vi.fn().mockReturnValue(false),
       setGlobalContext: vi.fn(),
@@ -73,12 +77,14 @@ vi.mock("../tools", async () => {
   const actual = await vi.importActual<any>("../tools");
   return {
     ...actual,
-    ListLibrariesTool: vi.fn().mockImplementation(() => ({
-      execute: vi.fn(async () => {
-        listToolExecuteCalled = true;
-        return { libraries: [] };
-      }),
-    })),
+    ListLibrariesTool: vi.fn().mockImplementation(function () {
+      return {
+        execute: vi.fn(async () => {
+          listToolExecuteCalled = true;
+          return { libraries: [] };
+        }),
+      };
+    }),
   };
 });
 
@@ -126,10 +132,12 @@ vi.mock("../store", async () => {
       capturedCreateArgs.push(opts);
       return { shutdown: vi.fn() } as any;
     }),
-    DocumentManagementService: vi.fn().mockImplementation(() => ({
-      initialize: vi.fn().mockResolvedValue(undefined),
-      shutdown: vi.fn(),
-    })),
+    DocumentManagementService: vi.fn().mockImplementation(function () {
+      return {
+        initialize: vi.fn().mockResolvedValue(undefined),
+        shutdown: vi.fn(),
+      };
+    }),
   };
 });
 vi.mock("../store/errors", () => ({

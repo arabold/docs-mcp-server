@@ -304,7 +304,7 @@ document.body.addEventListener("htmx:afterRequest", (event) => {
   const detail = (event as CustomEvent).detail;
   const xhr = detail?.xhr;
 
-  if (!xhr || !xhr.getResponseHeader) return;
+  if (!xhr?.getResponseHeader) return;
 
   // Check for HX-Trigger header with toast data
   const hxTrigger = xhr.getResponseHeader("HX-Trigger");

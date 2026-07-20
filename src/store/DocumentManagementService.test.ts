@@ -56,7 +56,9 @@ const mockStore = {
 // Mock the DocumentStore module
 vi.mock("./DocumentStore", () => {
   // Create the mock constructor *inside* the factory function
-  const MockDocumentStore = vi.fn(() => mockStore);
+  const MockDocumentStore = vi.fn(function () {
+    return mockStore;
+  });
   return { DocumentStore: MockDocumentStore };
 });
 
@@ -73,13 +75,17 @@ const mockRetriever = vi.hoisted(() => ({
 }));
 
 vi.mock("./DocumentRetrieverService", () => ({
-  DocumentRetrieverService: vi.fn().mockImplementation(() => mockRetriever),
+  DocumentRetrieverService: vi.fn().mockImplementation(function () {
+    return mockRetriever;
+  }),
 }));
 
 // Mock DocumentManagementClient for factory tests
 const mockClientInitialize = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const MockDocumentManagementClient = vi.hoisted(() =>
-  vi.fn().mockImplementation((_url: string) => ({ initialize: mockClientInitialize })),
+  vi.fn().mockImplementation(function (_url: string) {
+    return { initialize: mockClientInitialize };
+  }),
 );
 
 vi.mock("./DocumentManagementClient", () => ({

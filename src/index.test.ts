@@ -30,10 +30,12 @@ vi.mock("./app", () => ({
 }));
 
 vi.mock("./store/DocumentManagementService", () => ({
-  DocumentManagementService: vi.fn().mockImplementation((_eventBus, _appConfig) => ({
-    initialize: mockDocServiceInitialize,
-    shutdown: mockDocServiceShutdown,
-  })),
+  DocumentManagementService: vi.fn().mockImplementation(function (_eventBus, _appConfig) {
+    return {
+      initialize: mockDocServiceInitialize,
+      shutdown: mockDocServiceShutdown,
+    };
+  }),
 }));
 
 vi.mock("./pipeline/PipelineFactory", () => ({

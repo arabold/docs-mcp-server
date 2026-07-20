@@ -31,18 +31,13 @@ describe("getArchiveAdapter", () => {
   });
 
   describe("ZIP-based document formats must not be treated as archives", () => {
-    it.each([
-      ".docx",
-      ".xlsx",
-      ".pptx",
-      ".epub",
-      ".odt",
-      ".ods",
-      ".odp",
-    ])("should return null for %s files", async (ext) => {
-      const adapter = await getArchiveAdapter(path.join(FIXTURES_DIR, `sample${ext}`));
-      expect(adapter).toBeNull();
-    });
+    it.each([".docx", ".xlsx", ".pptx", ".epub", ".odt", ".ods", ".odp"])(
+      "should return null for %s files",
+      async (ext) => {
+        const adapter = await getArchiveAdapter(path.join(FIXTURES_DIR, `sample${ext}`));
+        expect(adapter).toBeNull();
+      },
+    );
 
     it("should return null for real .docx fixture (ZIP-based)", async () => {
       // Verify with a real .docx file that starts with PK magic bytes

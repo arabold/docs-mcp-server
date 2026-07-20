@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { logger } from "../../utils/logger";
 import { hasOpenFenceAtEnd } from "./fenceState";
 import { TextContentSplitter } from "./TextContentSplitter";
@@ -127,7 +127,7 @@ Line 6 with multiple blank lines above`;
   });
 
   describe("fence balance", () => {
-    let warnSpy: ReturnType<typeof vi.spyOn>;
+    let warnSpy: Mock<typeof logger.warn>;
 
     beforeEach(() => {
       warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);

@@ -60,7 +60,9 @@ vi.mock("../services/trpcService", () => mockTrpcService);
 vi.mock("../services/webService", () => mockWebService);
 vi.mock("../services/workerService", () => mockWorkerService);
 vi.mock("../auth", () => ({
-  ProxyAuthManager: vi.fn(() => mockProxyAuthManager),
+  ProxyAuthManager: vi.fn(function () {
+    return mockProxyAuthManager;
+  }),
 }));
 vi.mock("../utils/paths", () => ({
   getProjectRoot: vi.fn(() => "/mock/project/root"),

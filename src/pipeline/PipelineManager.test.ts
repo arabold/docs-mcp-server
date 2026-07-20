@@ -138,7 +138,9 @@ describe("PipelineManager", () => {
       executeJob: vi.fn().mockResolvedValue(undefined), // Default success
     };
     // Mock the constructor of PipelineWorker to return our mock instance
-    (PipelineWorker as Mock).mockImplementation(() => mockWorkerInstance);
+    (PipelineWorker as Mock).mockImplementation(function () {
+      return mockWorkerInstance;
+    });
 
     mockCallbacks = {
       onJobStatusChange: vi.fn().mockResolvedValue(undefined),
@@ -208,54 +210,57 @@ describe("PipelineManager", () => {
     ["queued", PipelineJobStatus.QUEUED],
     ["running", PipelineJobStatus.RUNNING],
     ["unversioned", PipelineJobStatus.QUEUED],
-  ])("should abort existing %s job for same library+version before enqueuing new job", async (desc, initialStatus) => {
-    const options1 = {
-      url: "http://a.com",
-      library: "libA",
-      version: desc === "unversioned" ? "" : "1.0",
-    };
-    let resolveJob: (() => void) | undefined;
-    if (initialStatus === PipelineJobStatus.RUNNING) {
-      mockWorkerInstance.executeJob.mockReturnValue(
-        new Promise<void>((r) => {
-          resolveJob = () => r();
-        }),
+  ])(
+    "should abort existing %s job for same library+version before enqueuing new job",
+    async (desc, initialStatus) => {
+      const options1 = {
+        url: "http://a.com",
+        library: "libA",
+        version: desc === "unversioned" ? "" : "1.0",
+      };
+      let resolveJob: (() => void) | undefined;
+      if (initialStatus === PipelineJobStatus.RUNNING) {
+        mockWorkerInstance.executeJob.mockReturnValue(
+          new Promise<void>((r) => {
+            resolveJob = () => r();
+          }),
+        );
+      }
+      const jobId1 = await manager.enqueueScrapeJob(
+        "libA",
+        desc === "unversioned" ? undefined : "1.0",
+        options1,
       );
-    }
-    const jobId1 = await manager.enqueueScrapeJob(
-      "libA",
-      desc === "unversioned" ? undefined : "1.0",
-      options1,
-    );
-    if (initialStatus === PipelineJobStatus.RUNNING) {
-      await manager.start();
-      await vi.advanceTimersByTimeAsync(1);
-    }
-    const cancelSpy = vi.spyOn(manager, "cancelJob");
-    const options2 = {
-      url: "http://b.com",
-      library: "libA",
-      version: desc === "unversioned" ? "" : "1.0",
-    };
-    const jobId2 = await manager.enqueueScrapeJob(
-      "libA",
-      desc === "unversioned" ? undefined : "1.0",
-      options2,
-    );
-    // Now wait for cancellation to propagate
-    if (resolveJob) resolveJob();
-    await manager.waitForJobCompletion(jobId1).catch(() => {});
-    const job1 = await manager.getJob(jobId1);
-    expect(cancelSpy).toHaveBeenCalledWith(jobId1);
-    expect(jobId2).not.toBe(jobId1);
-    expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
-    const job2 = await manager.getJob(jobId2);
-    expect([
-      PipelineJobStatus.QUEUED,
-      PipelineJobStatus.RUNNING,
-      PipelineJobStatus.COMPLETED,
-    ]).toContain(job2?.status);
-  });
+      if (initialStatus === PipelineJobStatus.RUNNING) {
+        await manager.start();
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      const cancelSpy = vi.spyOn(manager, "cancelJob");
+      const options2 = {
+        url: "http://b.com",
+        library: "libA",
+        version: desc === "unversioned" ? "" : "1.0",
+      };
+      const jobId2 = await manager.enqueueScrapeJob(
+        "libA",
+        desc === "unversioned" ? undefined : "1.0",
+        options2,
+      );
+      // Now wait for cancellation to propagate
+      if (resolveJob) resolveJob();
+      await manager.waitForJobCompletion(jobId1).catch(() => {});
+      const job1 = await manager.getJob(jobId1);
+      expect(cancelSpy).toHaveBeenCalledWith(jobId1);
+      expect(jobId2).not.toBe(jobId1);
+      expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
+      const job2 = await manager.getJob(jobId2);
+      expect([
+        PipelineJobStatus.QUEUED,
+        PipelineJobStatus.RUNNING,
+        PipelineJobStatus.COMPLETED,
+      ]).toContain(job2?.status);
+    },
+  );
 
   it("should transition job to FAILED if worker throws", async () => {
     mockWorkerInstance.executeJob.mockRejectedValue(new Error("fail"));

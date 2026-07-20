@@ -22,7 +22,9 @@ describe("GitHubScraperStrategy", () => {
     httpFetcherInstance = {
       fetch: vi.fn(),
     };
-    mockHttpFetcher.mockImplementation(() => httpFetcherInstance);
+    mockHttpFetcher.mockImplementation(function () {
+      return httpFetcherInstance;
+    });
 
     strategy = new GitHubScraperStrategy(appConfig);
   });

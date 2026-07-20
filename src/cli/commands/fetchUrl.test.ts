@@ -8,22 +8,28 @@ import { createFetchUrlCommand } from "./fetchUrl";
 const stdoutWriteMock = vi.fn();
 
 vi.mock("../../scraper/fetcher", () => ({
-  HttpFetcher: vi.fn().mockImplementation(() => ({})),
-  FileFetcher: vi.fn().mockImplementation(() => ({})),
-  AutoDetectFetcher: vi.fn().mockImplementation(() => ({
-    canFetch: vi.fn().mockReturnValue(true),
-    fetch: vi.fn().mockResolvedValue({
-      content: "<h1>Test</h1>",
-      mimeType: "text/html",
-      source: "https://example.com",
-    }),
-    close: vi.fn().mockResolvedValue(undefined),
-  })),
+  HttpFetcher: vi.fn().mockImplementation(function () {
+    return {};
+  }),
+  FileFetcher: vi.fn().mockImplementation(function () {
+    return {};
+  }),
+  AutoDetectFetcher: vi.fn().mockImplementation(function () {
+    return {
+      canFetch: vi.fn().mockReturnValue(true),
+      fetch: vi.fn().mockResolvedValue({
+        content: "<h1>Test</h1>",
+        mimeType: "text/html",
+        source: "https://example.com",
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }),
 }));
 vi.mock("../../tools", () => ({
-  FetchUrlTool: vi
-    .fn()
-    .mockImplementation(() => ({ execute: vi.fn(async () => "# md") })),
+  FetchUrlTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn(async () => "# md") };
+  }),
 }));
 vi.mock("../utils", () => ({ setupLogging: vi.fn(), parseHeaders: () => ({}) }));
 vi.mock("../../utils/config", async (importOriginal) => {

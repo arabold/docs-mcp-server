@@ -14,9 +14,9 @@ vi.mock("../../store", () => ({
   createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
 vi.mock("../../tools/RefreshVersionTool", () => ({
-  RefreshVersionTool: vi
-    .fn()
-    .mockImplementation(() => ({ execute: vi.fn(async () => ({ pagesRefreshed: 5 })) })),
+  RefreshVersionTool: vi.fn().mockImplementation(function () {
+    return { execute: vi.fn(async () => ({ pagesRefreshed: 5 })) };
+  }),
 }));
 vi.mock("../../pipeline", () => ({
   PipelineFactory: {
@@ -24,10 +24,12 @@ vi.mock("../../pipeline", () => ({
   },
 }));
 vi.mock("../../events", () => ({
-  EventBusService: vi.fn().mockImplementation(() => ({
-    on: vi.fn(),
-    emit: vi.fn(),
-  })),
+  EventBusService: vi.fn().mockImplementation(function () {
+    return {
+      on: vi.fn(),
+      emit: vi.fn(),
+    };
+  }),
   EventType: {
     JOB_STATUS_CHANGE: "JOB_STATUS_CHANGE",
     JOB_PROGRESS: "JOB_PROGRESS",
