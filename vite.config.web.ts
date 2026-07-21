@@ -8,10 +8,10 @@ import { defineConfig } from "vite";
 // and the existing favicon/manifest files untouched by this build.
 export default defineConfig({
   root: path.resolve(__dirname, "src/web/client"),
-  // Point publicDir at the project-root public/ folder (rather than the
-  // default `<root>/public`) so favicons and manifest.json already living
-  // there are treated as this build's static assets instead of being ignored.
-  publicDir: path.resolve(__dirname, "public"),
+  // Disable Vite's public-dir copy step. The favicons/manifest.json this build
+  // serves already live in the output dir (public/), so there's nothing to
+  // copy — and pointing publicDir at outDir triggers a warning + copy ambiguity.
+  publicDir: false,
   plugins: [react()],
   resolve: {
     extensions: [".ts", ".tsx", ".js", ".jsx", ".json"],

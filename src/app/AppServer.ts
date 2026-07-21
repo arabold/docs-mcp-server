@@ -523,10 +523,16 @@ export class AppServer {
   private createSpaShellHandler(
     indexHtmlPath: string,
   ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
+    // Cache the built index.html after the first successful read — it never
+    // changes while the server is running, so re-reading it from disk on every
+    // deep-link/refresh is wasted I/O.
+    let cachedHtml: string | null = null;
     return async (_request, reply) => {
       try {
-        const html = await readFile(indexHtmlPath, "utf-8");
-        reply.type("text/html").send(html);
+        if (cachedHtml === null) {
+          cachedHtml = await readFile(indexHtmlPath, "utf-8");
+        }
+        reply.type("text/html").send(cachedHtml);
       } catch (error) {
         logger.error(`❌ Failed to serve SPA shell from ${indexHtmlPath}: ${error}`);
         reply.code(404).send({ error: "Not Found" });
