@@ -3,19 +3,25 @@
  * This replaces the separate server implementations with a single, modular approach.
  */
 
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import formBody from "@fastify/formbody";
 import fastifyStatic from "@fastify/static";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import Fastify, { type FastifyError, type FastifyInstance } from "fastify";
+import Fastify, {
+  type FastifyError,
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import { WebSocketServer } from "ws";
 import { ProxyAuthManager } from "../auth";
 import type { EventBusService } from "../events";
 import { RemoteEventProxy } from "../events/RemoteEventProxy";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { cleanupMcpService, registerMcpService } from "../services/mcpService";
+import { buildSystemInfo, type SystemInfo } from "../services/systemInfo";
 import { applyTrpcWebSocketHandler, registerTrpcService } from "../services/trpcService";
-import { registerWebService } from "../services/webService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../telemetry";
@@ -36,6 +42,7 @@ export class AppServer {
   private authManager: ProxyAuthManager | null = null;
   private serverConfig: AppServerConfig;
   private readonly appConfig: AppConfig;
+  private readonly systemInfo: SystemInfo;
   private remoteEventProxy: RemoteEventProxy | null = null;
   private wss: WebSocketServer | null = null;
 
@@ -48,9 +55,22 @@ export class AppServer {
   ) {
     this.serverConfig = serverConfig;
     this.appConfig = appConfig;
+    this.systemInfo = buildSystemInfo(serverConfig, appConfig);
     this.server = Fastify({
       logger: false, // Use our own logger
     });
+  }
+
+  /**
+   * Builds a cheap, synchronous connectivity check for the remote worker.
+   * Returns `undefined` when the worker is embedded (the field is only
+   * meaningful — and only ever populated — in remote worker mode).
+   */
+  private buildIsWorkerConnected(): (() => boolean) | undefined {
+    if (!this.serverConfig.externalWorkerUrl) {
+      return undefined;
+    }
+    return () => this.remoteEventProxy?.isActive() ?? false;
   }
 
   /**
@@ -343,10 +363,6 @@ export class AppServer {
     }
 
     // Conditionally enable services based on configuration
-    if (this.serverConfig.enableWebInterface) {
-      await this.enableWebInterface();
-    }
-
     if (this.serverConfig.enableMcpServer) {
       await this.enableMcpServer();
     }
@@ -359,7 +375,10 @@ export class AppServer {
       await this.enableWorker();
     }
 
-    // Setup static file serving as fallback (must be last)
+    // Enable the web interface (must be last): the React SPA is served as a
+    // static asset with a catch-all fallback for client-side routing, so
+    // "enabling" it just means registering the static file handler after
+    // every other route is in place. See setupStaticFiles/setNotFoundHandler.
     if (this.serverConfig.enableWebInterface) {
       await this.setupStaticFiles();
     }
@@ -383,22 +402,6 @@ export class AppServer {
   }
 
   /**
-   * Enable web interface service.
-   */
-  private async enableWebInterface(): Promise<void> {
-    await registerWebService(
-      this.server,
-      this.docService,
-      this.pipeline,
-      this.eventBus,
-      this.appConfig,
-      this.serverConfig.externalWorkerUrl,
-    );
-
-    logger.debug("Web interface service enabled");
-  }
-
-  /**
    * Enable MCP server service.
    */
   private async enableMcpServer(): Promise<void> {
@@ -416,7 +419,14 @@ export class AppServer {
    * Enable Pipeline RPC (tRPC) service.
    */
   private async enableTrpcApi(): Promise<void> {
-    await registerTrpcService(this.server, this.pipeline, this.docService, this.eventBus);
+    await registerTrpcService(
+      this.server,
+      this.pipeline,
+      this.docService,
+      this.eventBus,
+      this.systemInfo,
+      this.buildIsWorkerConnected(),
+    );
     logger.debug("API server (tRPC) enabled");
   }
 
@@ -448,7 +458,14 @@ export class AppServer {
     });
 
     // Apply tRPC WebSocket handler to enable subscriptions
-    applyTrpcWebSocketHandler(this.wss, this.pipeline, this.docService, this.eventBus);
+    applyTrpcWebSocketHandler(
+      this.wss,
+      this.pipeline,
+      this.docService,
+      this.eventBus,
+      this.systemInfo,
+      this.buildIsWorkerConnected(),
+    );
 
     logger.debug("WebSocket server initialized for tRPC subscriptions");
   }
@@ -462,14 +479,59 @@ export class AppServer {
   }
 
   /**
-   * Setup static file serving with root prefix as fallback.
+   * Setup static file serving with root prefix as fallback, plus a SPA
+   * fallback so client-side routing works for the React admin dashboard.
    */
   private async setupStaticFiles(): Promise<void> {
+    const publicRoot = path.join(getProjectRoot(), "public");
+    const indexHtmlPath = path.join(publicRoot, "index.html");
+    const serveSpaShell = this.createSpaShellHandler(indexHtmlPath);
+
     await this.server.register(fastifyStatic, {
-      root: path.join(getProjectRoot(), "public"),
+      root: publicRoot,
       prefix: "/",
       index: false,
     });
+
+    // @fastify/static's wildcard route treats an exact "/" request as a
+    // directory listing attempt and answers 403 (not 404) when index is
+    // disabled, so it never reaches setNotFoundHandler below. Register an
+    // explicit literal route for "/" - Fastify's router always prefers a
+    // literal match over the plugin's "/*" wildcard, so this takes priority
+    // without conflicting with it.
+    this.server.get("/", serveSpaShell);
+
+    // SPA fallback: serve index.html for any other unmatched GET request
+    // (client-side routes like /libraries or /jobs), excluding /api calls,
+    // so deep links and page refreshes work. Non-GET or /api requests still
+    // receive a plain 404.
+    this.server.setNotFoundHandler(async (request, reply) => {
+      if (request.method !== "GET" || request.url.startsWith("/api")) {
+        reply.code(404).send({ error: "Not Found" });
+        return;
+      }
+
+      await serveSpaShell(request, reply);
+    });
+  }
+
+  /**
+   * Creates a request handler that responds with the built SPA's
+   * `index.html`, falling back to a 404 if the file cannot be read (e.g. the
+   * frontend has not been built yet).
+   */
+  private createSpaShellHandler(
+    indexHtmlPath: string,
+  ): (request: FastifyRequest, reply: FastifyReply) => Promise<void> {
+    return async (_request, reply) => {
+      try {
+        const html = await readFile(indexHtmlPath, "utf-8");
+        reply.type("text/html").send(html);
+      } catch (error) {
+        logger.error(`❌ Failed to serve SPA shell from ${indexHtmlPath}: ${error}`);
+        reply.code(404).send({ error: "Not Found" });
+      }
+    };
   }
 
   /**

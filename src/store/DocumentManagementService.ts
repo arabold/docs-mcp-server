@@ -23,12 +23,16 @@ import type {
   DbVersionWithLibrary,
   FindVersionResult,
   LibrarySummary,
+  ListVersionChunksOptions,
+  ListVersionChunksResult,
   ScraperConfig,
   StoreSearchResult,
+  VersionChunkStats,
   VersionRef,
   VersionStatus,
   VersionSummary,
 } from "./types";
+import { normalizeVersionRef } from "./types";
 
 /**
  * Provides semantic search capabilities across different versions of library documentation.
@@ -535,5 +539,33 @@ export class DocumentManagementService {
    */
   async getLibraryById(libraryId: number) {
     return this.store.getLibraryById(libraryId);
+  }
+
+  /**
+   * Lists stored chunks for a library version with pagination and an optional
+   * content filter. Powers the admin dashboard's chunk explorer.
+   * @param ref Library/version reference; normalized before querying the store.
+   * @param options Pagination (`limit`, defaults to 50; `offset`) and optional content `filter`.
+   */
+  async listVersionChunks(
+    ref: VersionRef,
+    options: Partial<ListVersionChunksOptions> = {},
+  ): Promise<ListVersionChunksResult> {
+    const normalized = normalizeVersionRef(ref);
+    return this.store.listVersionChunks(normalized.library, normalized.version, {
+      limit: options.limit ?? 50,
+      offset: options.offset,
+      filter: options.filter,
+    });
+  }
+
+  /**
+   * Computes aggregate chunk/page/embedding statistics for a library version,
+   * for the chunk explorer's header strip.
+   * @param ref Library/version reference; normalized before querying the store.
+   */
+  async getVersionStats(ref: VersionRef): Promise<VersionChunkStats> {
+    const normalized = normalizeVersionRef(ref);
+    return this.store.getVersionStats(normalized.library, normalized.version);
   }
 }

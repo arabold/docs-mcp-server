@@ -1,0 +1,230 @@
+/**
+ * Design tokens + base/reset rules for the admin dashboard.
+ *
+ * Ported verbatim from the admin mockup's `<style>` block (grounded.tools
+ * palette). Four token blocks define every CSS custom property consumed by
+ * `components.css` and component inline styles:
+ *   1. `:root`                      - light theme (default, no explicit choice)
+ *   2. `@media (prefers-color-scheme: dark)` - dark theme when the OS prefers it
+ *   3. `:root[data-theme="light"]`  - explicit light override (wins over OS)
+ *   4. `:root[data-theme="dark"]`   - explicit dark override (wins over OS)
+ *
+ * `useTheme` (see `hooks/useTheme.ts`) stamps `data-theme` on `<html>` for
+ * explicit choices and removes the attribute for "auto", letting block 1/2
+ * govern via the OS preference.
+ *
+ * Import this file once, before `components.css`, from `main.tsx`.
+ */
+
+:root {
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", "SFMono-Regular", Menlo, Consolas,
+    monospace;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+
+  /* Light theme (default) — grounded.tools palette, light variant */
+  --canvas: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f8fafb;
+  --surface-3: #eef1f4;
+  --border: #e3e7ec;
+  --border-strong: #c8d0d9;
+  --text: #171b21;
+  --text-muted: #5b636e;
+  --text-faint: #97a0ab;
+
+  --primary: #1976c2;
+  --primary-hover: #145d99;
+  --primary-ink: #ffffff;
+  --primary-soft: #e8f2fb;
+  --accent: #f59e0b;
+
+  --ok: #16a34a;
+  --ok-soft: #ecfdf3;
+  --run: #1976c2;
+  --run-soft: #e8f2fb;
+  --queued: #c2760a;
+  --queued-soft: #fdf4e5;
+  --err: #dc2626;
+  --err-soft: #fef2f2;
+  --idle: #5b636e;
+  --idle-soft: #eef1f4;
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06), 0 2px 4px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 24px 48px -12px rgba(15, 23, 42, 0.18);
+
+  --r-card: 12px;
+  --r-ctl: 8px;
+  --sidebar-w: 244px;
+  --topbar-h: 60px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* grounded.tools native dark palette */
+    --canvas: #12151b;
+    --surface: #171b21;
+    --surface-2: #1c212a;
+    --surface-3: #242b35;
+    --border: #2a313c;
+    --border-strong: #3a4350;
+    --text: #e0e0e0;
+    --text-muted: #a3a3a3;
+    --text-faint: #6f7681;
+
+    --primary: #4a9eea;
+    --primary-hover: #6fb2ef;
+    --primary-ink: #0a0e14;
+    --primary-soft: rgba(74, 158, 234, 0.14);
+    --accent: #ffaa00;
+
+    --ok: #4ade80;
+    --ok-soft: rgba(74, 222, 128, 0.13);
+    --run: #4a9eea;
+    --run-soft: rgba(74, 158, 234, 0.14);
+    --queued: #fbbf24;
+    --queued-soft: rgba(251, 191, 36, 0.13);
+    --err: #f87171;
+    --err-soft: rgba(248, 113, 113, 0.13);
+    --idle: #a3a3a3;
+    --idle-soft: rgba(163, 163, 163, 0.12);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.6);
+  }
+}
+
+/* Explicit toggle overrides — must win over media query in both directions */
+:root[data-theme="light"] {
+  --canvas: #f4f6f8;
+  --surface: #ffffff;
+  --surface-2: #f8fafb;
+  --surface-3: #eef1f4;
+  --border: #e3e7ec;
+  --border-strong: #c8d0d9;
+  --text: #171b21;
+  --text-muted: #5b636e;
+  --text-faint: #97a0ab;
+  --primary: #1976c2;
+  --primary-hover: #145d99;
+  --primary-ink: #ffffff;
+  --primary-soft: #e8f2fb;
+  --accent: #f59e0b;
+  --ok: #16a34a;
+  --ok-soft: #ecfdf3;
+  --run: #1976c2;
+  --run-soft: #e8f2fb;
+  --queued: #c2760a;
+  --queued-soft: #fdf4e5;
+  --err: #dc2626;
+  --err-soft: #fef2f2;
+  --idle: #5b636e;
+  --idle-soft: #eef1f4;
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06), 0 2px 4px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 24px 48px -12px rgba(15, 23, 42, 0.18);
+}
+:root[data-theme="dark"] {
+  --canvas: #12151b;
+  --surface: #171b21;
+  --surface-2: #1c212a;
+  --surface-3: #242b35;
+  --border: #2a313c;
+  --border-strong: #3a4350;
+  --text: #e0e0e0;
+  --text-muted: #a3a3a3;
+  --text-faint: #6f7681;
+  --primary: #4a9eea;
+  --primary-hover: #6fb2ef;
+  --primary-ink: #0a0e14;
+  --primary-soft: rgba(74, 158, 234, 0.14);
+  --accent: #ffaa00;
+  --ok: #4ade80;
+  --ok-soft: rgba(74, 222, 128, 0.13);
+  --run: #4a9eea;
+  --run-soft: rgba(74, 158, 234, 0.14);
+  --queued: #fbbf24;
+  --queued-soft: rgba(251, 191, 36, 0.13);
+  --err: #f87171;
+  --err-soft: rgba(248, 113, 113, 0.13);
+  --idle: #a3a3a3;
+  --idle-soft: rgba(163, 163, 163, 0.12);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.6);
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+#root {
+  height: 100%;
+}
+
+.icon {
+  width: 20px;
+  height: 20px;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex: none;
+}
+.icon-sm {
+  width: 16px;
+  height: 16px;
+}
+.icon-xs {
+  width: 14px;
+  height: 14px;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--run) 45%, transparent);
+  }
+  50% {
+    opacity: 0.75;
+    box-shadow: 0 0 0 4px transparent;
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

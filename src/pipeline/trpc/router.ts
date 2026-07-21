@@ -28,10 +28,15 @@ const nonEmptyTrimmed = z
   .transform((s) => s.trim())
   .refine((s) => s.length > 0, "must not be empty");
 
-const optionalTrimmed = z.preprocess(
-  (v) => (typeof v === "string" ? v.trim() : v),
-  z.string().min(1).optional().nullable(),
-);
+// Optional library version. An empty or whitespace-only string is the domain's
+// representation of "unversioned" (see VersionRef), so it is coerced to
+// undefined rather than rejected — callers (CLI, web UI) can pass "" for an
+// unversioned library and the pipeline treats it the same as omitting it.
+const optionalTrimmed = z.preprocess((v) => {
+  if (typeof v !== "string") return v;
+  const trimmed = v.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}, z.string().min(1).optional().nullable());
 
 const enqueueScrapeInput = z.object({
   library: nonEmptyTrimmed,

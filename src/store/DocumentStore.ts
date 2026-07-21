@@ -20,7 +20,15 @@ import {
   EmbeddingModelChangedError,
   StoreError,
 } from "./errors";
-import type { DbChunkMetadata, DbChunkRank, StoredScraperOptions } from "./types";
+import type {
+  DbChunkMetadata,
+  DbChunkRank,
+  ListVersionChunksOptions,
+  ListVersionChunksResult,
+  StoredScraperOptions,
+  VersionChunkListItem,
+  VersionChunkStats,
+} from "./types";
 import {
   type DbChunk,
   type DbLibraryVersion,
@@ -928,6 +936,15 @@ export class DocumentStore {
     const termsQuery = escapedTokens.join(" OR ");
 
     return `${exactMatch} OR ${termsQuery}`;
+  }
+
+  /**
+   * Escapes SQL LIKE wildcard characters (`%`, `_`) and the escape character
+   * itself so a user-supplied filter is matched as a literal substring rather
+   * than interpreted as a pattern. Pair with `LIKE ? ESCAPE '\'`.
+   */
+  private escapeLikePattern(value: string): string {
+    return value.replace(/[\\%_]/g, (match) => `\\${match}`);
   }
 
   /**
@@ -2374,6 +2391,156 @@ export class DocumentStore {
       return this.parseMetadataArray(rows);
     } catch (error) {
       throw new ConnectionError(`Failed to fetch documents by URL ${url}`, error);
+    }
+  }
+
+  /**
+   * Lists stored chunks for a library version with pagination and an optional
+   * case-insensitive content filter. Powers the admin dashboard's chunk explorer.
+   *
+   * Position (`chunkIndex`/`pageChunkCount`) is computed with window functions
+   * over `sort_order` rather than trusted verbatim, so results stay correct
+   * even if a page's chunks were ever stored with non-contiguous ordering.
+   * Token counts are never fabricated: the current schema has no per-chunk
+   * token column, so every item's `tokenCount` is `null`.
+   *
+   * @param library Library name (case-insensitive).
+   * @param version Version string (empty string for unversioned).
+   * @param options Pagination (`limit`/`offset`) and optional content `filter`.
+   * @returns The requested page of chunks plus the total count matching the filter.
+   */
+  async listVersionChunks(
+    library: string,
+    version: string,
+    options: ListVersionChunksOptions,
+  ): Promise<ListVersionChunksResult> {
+    try {
+      const normalizedVersion = version.toLowerCase();
+      const versionRow = this.statements.getVersionId.get(
+        library.toLowerCase(),
+        normalizedVersion,
+      ) as { id: number; library_id: number } | undefined;
+
+      if (!versionRow) {
+        return { chunks: [], total: 0 };
+      }
+
+      const offset = options.offset ?? 0;
+      const trimmedFilter = options.filter?.trim();
+
+      const whereParams: (string | number)[] = [versionRow.id];
+      let whereClause = "WHERE p.version_id = ?";
+      if (trimmedFilter) {
+        whereClause += " AND LOWER(d.content) LIKE LOWER(?) ESCAPE '\\'";
+        whereParams.push(`%${this.escapeLikePattern(trimmedFilter)}%`);
+      }
+
+      const countStmt = this.db.prepare(
+        `SELECT COUNT(*) as count
+         FROM documents d
+         JOIN pages p ON d.page_id = p.id
+         ${whereClause}`,
+      );
+      const countRow = countStmt.get(...whereParams) as { count: number };
+      const total = countRow.count;
+
+      const dataStmt = this.db.prepare(
+        `SELECT
+           d.id,
+           d.content,
+           (d.embedding IS NOT NULL) as has_embedding,
+           p.url as url,
+           p.content_type as mime_type,
+           ROW_NUMBER() OVER (PARTITION BY d.page_id ORDER BY d.sort_order, d.id) as chunk_index,
+           COUNT(*) OVER (PARTITION BY d.page_id) as page_chunk_count
+         FROM documents d
+         JOIN pages p ON d.page_id = p.id
+         ${whereClause}
+         ORDER BY p.url, d.sort_order, d.id
+         LIMIT ? OFFSET ?`,
+      );
+      const rows = dataStmt.all(...whereParams, options.limit, offset) as Array<{
+        id: number;
+        content: string;
+        has_embedding: number;
+        url: string;
+        mime_type: string | null;
+        chunk_index: number;
+        page_chunk_count: number;
+      }>;
+
+      const chunks: VersionChunkListItem[] = rows.map((row) => ({
+        id: String(row.id),
+        url: row.url,
+        content: row.content,
+        mimeType: row.mime_type,
+        chunkIndex: row.chunk_index,
+        pageChunkCount: row.page_chunk_count,
+        charCount: row.content.length,
+        tokenCount: null,
+        hasEmbedding: Boolean(row.has_embedding),
+      }));
+
+      return { chunks, total };
+    } catch (error) {
+      throw new ConnectionError("Failed to list version chunks", error);
+    }
+  }
+
+  /**
+   * Computes aggregate chunk/page/embedding statistics for a library version,
+   * for the chunk explorer's header strip.
+   *
+   * `avgTokensPerChunk` is always `null`: the schema does not persist
+   * per-chunk token counts, so this is reported as unavailable rather than
+   * fabricated from character counts.
+   *
+   * @param library Library name (case-insensitive).
+   * @param version Version string (empty string for unversioned).
+   * @returns Aggregate statistics, or all-zero/`null` values if the version doesn't exist.
+   */
+  async getVersionStats(library: string, version: string): Promise<VersionChunkStats> {
+    try {
+      const normalizedVersion = version.toLowerCase();
+      const versionRow = this.statements.getVersionId.get(
+        library.toLowerCase(),
+        normalizedVersion,
+      ) as { id: number; library_id: number } | undefined;
+
+      if (!versionRow) {
+        return {
+          pageCount: 0,
+          chunkCount: 0,
+          avgChunksPerPage: null,
+          avgTokensPerChunk: null,
+          embeddedChunkCount: 0,
+        };
+      }
+
+      const stmt = this.db.prepare(
+        `SELECT
+           COUNT(DISTINCT p.id) as page_count,
+           COUNT(d.id) as chunk_count,
+           SUM(CASE WHEN d.embedding IS NOT NULL THEN 1 ELSE 0 END) as embedded_chunk_count
+         FROM pages p
+         LEFT JOIN documents d ON d.page_id = p.id
+         WHERE p.version_id = ?`,
+      );
+      const row = stmt.get(versionRow.id) as {
+        page_count: number;
+        chunk_count: number;
+        embedded_chunk_count: number | null;
+      };
+
+      return {
+        pageCount: row.page_count,
+        chunkCount: row.chunk_count,
+        avgChunksPerPage: row.page_count > 0 ? row.chunk_count / row.page_count : null,
+        avgTokensPerChunk: null,
+        embeddedChunkCount: row.embedded_chunk_count ?? 0,
+      };
+    } catch (error) {
+      throw new ConnectionError("Failed to get version stats", error);
     }
   }
 }

@@ -16,9 +16,11 @@ import type { AppServerConfig } from "./AppServerConfig";
 // Mock implementations - use vi.hoisted to ensure they're available at the top level
 const mockFastify = vi.hoisted(() => ({
   register: vi.fn(),
+  get: vi.fn(), // Mock for the explicit SPA "/" route
   listen: vi.fn(),
   close: vi.fn(),
   setErrorHandler: vi.fn(), // Add missing mock method
+  setNotFoundHandler: vi.fn(), // Mock for the SPA fallback handler
   addHook: vi.fn(),
   server: {
     on: vi.fn(), // Mock HTTP server for WebSocket upgrade handling
@@ -34,10 +36,6 @@ const mockMcpService = vi.hoisted(() => ({
 const mockTrpcService = vi.hoisted(() => ({
   registerTrpcService: vi.fn(),
   applyTrpcWebSocketHandler: vi.fn(),
-}));
-
-const mockWebService = vi.hoisted(() => ({
-  registerWebService: vi.fn(),
 }));
 
 const mockWorkerService = vi.hoisted(() => ({
@@ -57,7 +55,6 @@ vi.mock("fastify", () => ({
 
 vi.mock("../services/mcpService", () => mockMcpService);
 vi.mock("../services/trpcService", () => mockTrpcService);
-vi.mock("../services/webService", () => mockWebService);
 vi.mock("../services/workerService", () => mockWorkerService);
 vi.mock("../auth", () => ({
   ProxyAuthManager: vi.fn(function () {
@@ -101,7 +98,6 @@ describe("AppServer Behavior Tests", () => {
     mockMcpService.registerMcpService.mockResolvedValue(mockMcpServer as McpServer);
     mockMcpService.cleanupMcpService.mockResolvedValue(undefined);
     mockTrpcService.registerTrpcService.mockResolvedValue(undefined);
-    mockWebService.registerWebService.mockResolvedValue(undefined);
     mockWorkerService.registerWorkerService.mockResolvedValue(undefined);
     mockWorkerService.stopWorkerService.mockResolvedValue(undefined);
     mockProxyAuthManager.initialize.mockResolvedValue(undefined);
@@ -243,7 +239,6 @@ describe("AppServer Behavior Tests", () => {
 
       // Only core plugins should be registered
       expect(mockFastify.register).toHaveBeenCalledTimes(1); // Just formbody
-      expect(mockWebService.registerWebService).not.toHaveBeenCalled();
       expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
       expect(mockTrpcService.registerTrpcService).not.toHaveBeenCalled();
       expect(mockWorkerService.registerWorkerService).not.toHaveBeenCalled();
@@ -268,17 +263,13 @@ describe("AppServer Behavior Tests", () => {
 
       await server.start();
 
-      expect(mockWebService.registerWebService).toHaveBeenCalledWith(
-        mockFastify,
-        mockDocService,
-        mockPipeline,
-        eventBus,
-        appConfig,
-        undefined,
-      );
+      // Web interface is now just the SPA static file handler + catch-all,
+      // registered after every other route.
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
       expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
       expect(mockTrpcService.registerTrpcService).not.toHaveBeenCalled();
+      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
+      expect(mockFastify.setNotFoundHandler).toHaveBeenCalled();
     });
 
     it("should register only MCP server when enabled", async () => {
@@ -308,7 +299,8 @@ describe("AppServer Behavior Tests", () => {
         undefined, // authManager
       );
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
-      expect(mockWebService.registerWebService).not.toHaveBeenCalled();
+      // Web interface is disabled: no SPA static handler should be registered
+      expect(mockFastify.setNotFoundHandler).not.toHaveBeenCalled();
       // tRPC service should not be registered in this mode
       expect(mockTrpcService.registerTrpcService).not.toHaveBeenCalled();
     });
@@ -337,10 +329,13 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline,
         mockDocService,
         expect.any(Object), // eventBus
+        expect.any(Object), // systemInfo
+        undefined, // isWorkerConnected (embedded worker mode)
       );
-      expect(mockWebService.registerWebService).not.toHaveBeenCalled();
       expect(mockMcpService.registerMcpService).not.toHaveBeenCalled();
       expect(mockWorkerService.registerWorkerService).not.toHaveBeenCalled();
+      // Web interface is disabled: no SPA static handler should be registered
+      expect(mockFastify.setNotFoundHandler).not.toHaveBeenCalled();
     });
 
     it("should register all services when all are enabled", async () => {
@@ -362,14 +357,6 @@ describe("AppServer Behavior Tests", () => {
 
       await server.start();
 
-      expect(mockWebService.registerWebService).toHaveBeenCalledWith(
-        mockFastify,
-        mockDocService,
-        mockPipeline,
-        eventBus,
-        appConfig,
-        undefined,
-      );
       expect(mockMcpService.registerMcpService).toHaveBeenCalledWith(
         mockFastify,
         mockDocService,
@@ -382,8 +369,13 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline,
         mockDocService,
         expect.any(Object), // eventBus
+        expect.any(Object), // systemInfo
+        undefined, // isWorkerConnected (embedded worker mode)
       );
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
+      // Web interface: SPA static handler registered last
+      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
+      expect(mockFastify.setNotFoundHandler).toHaveBeenCalled();
     });
 
     it("should register static files only when web interface is enabled", async () => {
@@ -665,10 +657,11 @@ describe("AppServer Behavior Tests", () => {
       });
 
       // Verify all services were registered
-      expect(mockWebService.registerWebService).toHaveBeenCalled();
       expect(mockMcpService.registerMcpService).toHaveBeenCalled();
       expect(mockTrpcService.registerTrpcService).toHaveBeenCalled();
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalled();
+      // Web interface: SPA static handler registered
+      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
     });
 
     it("should successfully start server with external worker configured", async () => {
@@ -695,8 +688,9 @@ describe("AppServer Behavior Tests", () => {
       expect(fastifyInstance).toBe(mockFastify);
       expect(mockFastify.listen).toHaveBeenCalled();
 
-      // Verify web service was registered but not embedded worker
-      expect(mockWebService.registerWebService).toHaveBeenCalled();
+      // Verify web interface (SPA static handler) was set up but not the
+      // embedded worker
+      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
       expect(mockWorkerService.registerWorkerService).not.toHaveBeenCalled();
     });
 
@@ -831,6 +825,8 @@ describe("AppServer Behavior Tests", () => {
         mockPipeline,
         mockDocService,
         expect.any(Object), // eventBus
+        expect.any(Object), // systemInfo
+        undefined, // isWorkerConnected (embedded worker mode)
       );
     });
 
@@ -856,6 +852,38 @@ describe("AppServer Behavior Tests", () => {
 
       // Worker should take precedence - external worker should not be registered
       expect(mockWorkerService.registerWorkerService).toHaveBeenCalledWith(mockPipeline);
+    });
+
+    it("should thread a remote worker mode and connectivity check into the tRPC context when using an external worker", async () => {
+      const config: AppServerConfig = {
+        enableWebInterface: false,
+        enableMcpServer: false,
+        enableApiServer: true,
+        enableWorker: false,
+        port: 3000,
+        externalWorkerUrl: "http://worker.example.com",
+      };
+
+      const server = new AppServer(
+        mockDocService as DocumentManagementService,
+        mockPipeline as IPipeline,
+        eventBus,
+        config,
+        appConfig,
+      );
+
+      await server.start();
+
+      expect(mockTrpcService.registerTrpcService).toHaveBeenCalledWith(
+        mockFastify,
+        mockPipeline,
+        mockDocService,
+        expect.any(Object), // eventBus
+        expect.objectContaining({
+          worker: { mode: "remote", url: "http://worker.example.com" },
+        }),
+        expect.any(Function), // isWorkerConnected, only populated in remote mode
+      );
     });
 
     it("should validate port number boundaries", async () => {

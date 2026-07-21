@@ -249,6 +249,56 @@ export function createDataRouter(trpc: unknown) {
           return { ok: true } as const;
         },
       ),
+
+    // Chunk explorer support (admin UI)
+
+    listVersionChunks: tt.procedure
+      .input(
+        z.object({
+          library: nonEmpty,
+          version: optionalVersion,
+          limit: z.number().int().positive().max(200).optional(),
+          offset: z.number().int().nonnegative().optional(),
+          filter: z.string().optional(),
+        }),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: {
+            library: string;
+            version: string | null | undefined;
+            limit?: number;
+            offset?: number;
+            filter?: string;
+          };
+        }) => {
+          return await ctx.docService.listVersionChunks(
+            { library: input.library, version: input.version ?? "" },
+            { limit: input.limit ?? 50, offset: input.offset, filter: input.filter },
+          );
+        },
+      ),
+
+    getVersionStats: tt.procedure
+      .input(z.object({ library: nonEmpty, version: optionalVersion }))
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: { library: string; version: string | null | undefined };
+        }) => {
+          return await ctx.docService.getVersionStats({
+            library: input.library,
+            version: input.version ?? "",
+          });
+        },
+      ),
   });
 }
 

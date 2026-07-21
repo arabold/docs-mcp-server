@@ -1,40 +1,30 @@
-import { defineConfig } from "vite";
 import path from "node:path";
-import tailwindcss from '@tailwindcss/vite'
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
-// Vite configuration specifically for building frontend assets (CSS, JS)
+// Vite configuration for building the React admin dashboard SPA.
+// The app lives under src/web/client and builds to the project-root `public/`
+// directory so a single Fastify static handler can serve both the SPA shell
+// and the existing favicon/manifest files untouched by this build.
 export default defineConfig({
-  // No need for dts plugin for frontend assets
-  plugins: [tailwindcss()],
+  root: path.resolve(__dirname, "src/web/client"),
+  // Point publicDir at the project-root public/ folder (rather than the
+  // default `<root>/public`) so favicons and manifest.json already living
+  // there are treated as this build's static assets instead of being ignored.
+  publicDir: path.resolve(__dirname, "public"),
+  plugins: [react()],
   resolve: {
-    // Keep existing resolve extensions
     extensions: [".ts", ".tsx", ".js", ".jsx", ".json"],
   },
   build: {
-    // Output assets to public/assets, so they can be served statically
-    outDir: path.resolve(__dirname, "public/assets"),
-    sourcemap: true, // Generate sourcemaps for easier debugging
-    emptyOutDir: true, // Clean the output directory before build
-    // Define the frontend entry point
-    lib: {
-      entry: path.resolve(__dirname, "src/web/main.client.ts"), // Updated entry point
-      // Use 'es' format for modern browsers
-      formats: ["es"],
-      // Define a fixed output filename for the JS bundle
-      fileName: () => "main.js",
-    },
-    rollupOptions: {
-      // Unlike the backend build, we DO NOT externalize frontend dependencies
-      // They should be bundled into main.js
-      external: [], // Ensure no dependencies are externalized
-      output: {
-        // Ensure CSS is output as a separate file named main.css
-        assetFileNames: "main.css", // Directly name the CSS output
-      },
-    },
-    // Target modern browsers
+    // Output directly into public/ so AppServer's existing static file
+    // handler serves index.html and hashed assets without further wiring.
+    outDir: path.resolve(__dirname, "public"),
+    assetsDir: "assets",
+    // Never wipe public/ - it already holds favicons and manifest.json that
+    // this build does not (re)generate.
+    emptyOutDir: false,
+    sourcemap: true,
     target: "esnext",
-    // This is NOT an SSR build
-    ssr: false,
   },
 });

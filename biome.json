@@ -23,11 +23,11 @@
     "lineEnding": "lf"
   },
   "files": {
-    "includes": ["**/src/**/*.ts"]
+    "includes": ["**/src/**/*.ts", "**/src/**/*.tsx"]
   },
   "overrides": [
     {
-      "includes": ["**/src/**/*.test.ts"],
+      "includes": ["**/src/**/*.test.ts", "**/src/**/*.test.tsx"],
       "linter": {
         "rules": {
           "style": {
@@ -38,6 +38,23 @@
           },
           "complexity": {
             "useArrowFunction": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["**/src/web/client/**/*.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noLabelWithoutControl": "off",
+            "useSemanticElements": "off"
+          },
+          "suspicious": {
+            "noArrayIndexKey": "off"
+          },
+          "correctness": {
+            "useExhaustiveDependencies": "off"
           }
         }
       }

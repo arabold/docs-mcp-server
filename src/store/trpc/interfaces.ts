@@ -8,8 +8,12 @@ import type {
   DbVersionWithLibrary,
   FindVersionResult,
   LibrarySummary,
+  ListVersionChunksOptions,
+  ListVersionChunksResult,
   StoredScraperOptions,
   StoreSearchResult,
+  VersionChunkStats,
+  VersionRef,
   VersionStatus,
 } from "../types";
 
@@ -51,4 +55,11 @@ export interface IDocumentManagement {
 
   // Embedding configuration
   getActiveEmbeddingConfig(): EmbeddingModelConfig | null;
+
+  // Chunk explorer support (admin UI)
+  listVersionChunks(
+    ref: VersionRef,
+    options?: Partial<ListVersionChunksOptions>,
+  ): Promise<ListVersionChunksResult>;
+  getVersionStats(ref: VersionRef): Promise<VersionChunkStats>;
 }
