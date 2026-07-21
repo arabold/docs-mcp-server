@@ -52,7 +52,7 @@ export function SegmentedControl<T extends string>({
     .join(" ");
   return (
     <div>
-      <div className={groupClass} role="group" aria-label={ariaLabel}>
+      <fieldset className={groupClass} aria-label={ariaLabel}>
         {options.map((option) => (
           <button
             key={option.value}
@@ -64,7 +64,7 @@ export function SegmentedControl<T extends string>({
             {option.label}
           </button>
         ))}
-      </div>
+      </fieldset>
       {hint ? <div style={{ marginTop: 8 }}>{hint}</div> : null}
     </div>
   );

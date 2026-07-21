@@ -53,11 +53,7 @@ export function formatRelative(now: number, date: Date | null | undefined): stri
   return `${diffDay} days ago`;
 }
 
-/** Strips the protocol from a URL for compact display (e.g. in job cards). */
-export function displayUrl(url: string | null | undefined): string {
-  if (!url) return "";
-  return url.replace(/^https?:\/\//, "");
-}
+export { displayUrl } from "../../utils/format";
 
 /** Formats a 0-100 progress percentage from raw page counts, clamped and safe against division by zero. */
 export function progressPercent(

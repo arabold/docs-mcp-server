@@ -41,23 +41,6 @@
           }
         }
       }
-    },
-    {
-      "includes": ["**/src/web/client/**/*.tsx"],
-      "linter": {
-        "rules": {
-          "a11y": {
-            "noLabelWithoutControl": "off",
-            "useSemanticElements": "off"
-          },
-          "suspicious": {
-            "noArrayIndexKey": "off"
-          },
-          "correctness": {
-            "useExhaustiveDependencies": "off"
-          }
-        }
-      }
     }
   ]
 }

@@ -72,6 +72,8 @@ const DEFAULT_EXCLUDE_PATTERNS = "**/changelog*\n**/blog/**\n**/community/**\n**
 type Scope = "subpages" | "hostname" | "domain";
 
 interface HeaderRow {
+  /** Stable identity for React keys — header names aren't unique or stable. */
+  id: string;
   name: string;
   value: string;
 }
@@ -101,7 +103,11 @@ function parsePositiveInt(raw: string): number | undefined {
 }
 
 function headersToRows(headers: Record<string, string> | undefined): HeaderRow[] {
-  return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }));
+  return Object.entries(headers ?? {}).map(([name, value]) => ({
+    id: crypto.randomUUID(),
+    name,
+    value,
+  }));
 }
 
 function rowsToHeaders(rows: HeaderRow[]): Record<string, string> | undefined {
@@ -235,7 +241,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
     setPreserveHashes(false);
     setFollowRedirects(true);
     setIgnoreErrors(true);
-  }, [open, library, version, mode]);
+  }, [open, library, version]);
 
   // Overlay stored scraper options once they resolve, for "edit" mode.
   useEffect(() => {
@@ -260,7 +266,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
   const scopeHint = useMemo(() => scopeHintFor(url, scope), [url, scope]);
 
   const addHeaderRow = useCallback(() => {
-    setHeaders((prev) => [...prev, { name: "", value: "" }]);
+    setHeaders((prev) => [...prev, { id: crypto.randomUUID(), name: "", value: "" }]);
   }, []);
   const removeHeaderRow = useCallback((index: number) => {
     setHeaders((prev) => prev.filter((_, i) => i !== index));
@@ -417,12 +423,12 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
       </div>
 
       <div className="form-row">
-        <label>
+        <span className="form-label">
           What to index{" "}
           <span className="muted" style={{ fontWeight: 400 }}>
             · scope
           </span>
-        </label>
+        </span>
         <SegmentedControl
           variant="full"
           aria-label="Indexing scope"
@@ -496,7 +502,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
           />
 
           <div className="form-row">
-            <label>Scrape mode</label>
+            <span className="form-label">Scrape mode</span>
             <SegmentedControl
               variant="full"
               aria-label="Scrape mode"
@@ -513,10 +519,10 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
           </div>
 
           <div className="form-row">
-            <label>Custom HTTP headers</label>
+            <span className="form-label">Custom HTTP headers</span>
             <div>
               {headers.map((row, index) => (
-                <div className="hdr-row" key={`${index}-${row.name}`}>
+                <div className="hdr-row" key={row.id}>
                   <input
                     className="input mono"
                     placeholder="Header name"

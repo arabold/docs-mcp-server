@@ -171,7 +171,10 @@ export default function Search() {
               const isOpen = expanded[index] ?? false;
               const badge = result.sourceMimeType || result.mimeType || "unknown";
               return (
-                <div className="doc-result" key={`${result.url}-${index}`}>
+                <div
+                  className="doc-result"
+                  key={`${result.url}::${result.content.slice(0, 48)}`}
+                >
                   <div className="doc-head">
                     <a href={result.url} target="_blank" rel="noreferrer">
                       {result.url}

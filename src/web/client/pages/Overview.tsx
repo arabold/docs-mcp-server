@@ -17,6 +17,7 @@ import { Pill } from "../components/Pill";
 import { ProgressBar } from "../components/ProgressBar";
 import { Loading } from "../components/Spinner";
 import { StatusDot, type StatusVariant } from "../components/StatusDot";
+import { displayUrl } from "../utils/format";
 
 /** Formats a `Date` (or `null`) as a short relative-time string, e.g. "2m ago". */
 function formatRelativeTime(date: Date | null): string {
@@ -27,12 +28,6 @@ function formatRelativeTime(date: Date | null): string {
   const diffHr = Math.round(diffMin / 60);
   if (diffHr < 24) return `${diffHr}h ago`;
   return `${Math.round(diffHr / 24)}d ago`;
-}
-
-/** Strips the protocol from a URL for compact display. */
-function displayUrl(url: string | null | undefined): string {
-  if (!url) return "";
-  return url.replace(/^https?:\/\//, "");
 }
 
 /** One tile in the top KPI row. No deltas/sparklines are shown — there is no historical data to back them. */

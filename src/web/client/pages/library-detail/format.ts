@@ -52,11 +52,7 @@ export function formatRelativeTime(iso: string | null): string {
   return `${Math.round(diffDay / 7)}w ago`;
 }
 
-/** Strips the protocol from a URL for compact display, e.g. `"react.dev/reference"`. */
-export function displayUrl(url: string | null | undefined): string {
-  if (!url) return "";
-  return url.replace(/^https?:\/\//, "");
-}
+export { displayUrl } from "../../utils/format";
 
 /** Labels a version for the Library Detail page's tab switcher; the empty string ("unversioned") reads as "Latest". */
 export function versionTabLabel(version: string): string {

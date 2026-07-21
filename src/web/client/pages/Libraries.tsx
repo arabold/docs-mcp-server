@@ -9,7 +9,7 @@
  * on the Library Detail page.
  */
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useEnqueueRefreshJob, useListLibraries } from "../api/hooks";
 import { trpc } from "../api/trpc";
 import { useDocumentationDrawer } from "../components/AddEditDocumentationDrawer";
@@ -150,25 +150,16 @@ export default function Libraries() {
               return (
                 <tr key={lib.library}>
                   <Td>
-                    <div
+                    <Link
                       className="lib-cell"
-                      style={{ cursor: "pointer" }}
-                      onClick={() =>
-                        navigate(`/libraries/${encodeURIComponent(lib.library)}`)
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter")
-                          navigate(`/libraries/${encodeURIComponent(lib.library)}`);
-                      }}
-                      role="button"
-                      tabIndex={0}
+                      to={`/libraries/${encodeURIComponent(lib.library)}`}
                     >
                       <LibIcon name={lib.library} url={sourceUrl} />
                       <div>
                         <div className="lib-name">{lib.library}</div>
                         <div className="lib-url">{displayUrl(sourceUrl)}</div>
                       </div>
-                    </div>
+                    </Link>
                   </Td>
                   <Td>
                     <div className="ver-list">

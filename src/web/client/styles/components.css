@@ -509,6 +509,9 @@
   border-radius: 7px;
   padding: 2px;
   gap: 2px;
+  margin: 0;
+  border: 0;
+  min-inline-size: 0;
 }
 .seg button {
   font-family: var(--mono);
@@ -654,6 +657,9 @@ table.tbl {
   display: flex;
   align-items: center;
   gap: 11px;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
 }
 .lib-ico {
   width: 30px;
@@ -1709,7 +1715,8 @@ details.chunk[open] > summary {
   flex-direction: column;
   gap: 6px;
 }
-.form-row > label {
+.form-row > label,
+.form-row > .form-label {
   font-size: 12.5px;
   font-weight: 600;
 }
@@ -1730,6 +1737,9 @@ details.chunk[open] > summary {
   border-radius: var(--r-ctl);
   padding: 3px;
   gap: 3px;
+  margin: 0;
+  border: 0;
+  min-inline-size: 0;
 }
 .seg-full button {
   font-family: var(--mono);
