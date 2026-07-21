@@ -39,18 +39,9 @@ real data for every feature that has a backing API today.
 
 ## Open — frontend polish & hygiene
 
-- **Accessibility.** The cleanup pass narrowly disabled four Biome rules for
-  `src/web/client/**/*.tsx` (`a11y/noLabelWithoutControl`, `a11y/useSemanticElements`,
-  `suspicious/noArrayIndexKey`, `correctness/useExhaustiveDependencies`) because
-  their auto-fixes needed structural edits during live QA. Fix the underlying code
-  (proper `label`/`for` + native semantics, stable list keys, correct effect deps)
-  and remove the override.
 - **Verify live job cards.** The running/failed/`cancelling` job cards weren't
   exercised against real live jobs (store was idle during QA). Confirm progress,
   `currentUrl`, error surfacing, and Retry / Edit-&-retry against an actual index.
-- **Shared `utils` module.** Dedupe `formatRelativeTime` / `displayUrl` / percent
-  helpers duplicated across Overview, Jobs, and library-detail into
-  `src/web/client/utils/`.
 - **Bundle size.** SPA is ~560 kB (167 kB gzip), over Vite's 500 kB warning.
   Route-level `React.lazy` code-splitting if it matters.
 - **Version-tab deep-linking.** The active version tab on Library Detail is
@@ -79,3 +70,11 @@ real data for every feature that has a backing API today.
   deleted SSE endpoint.
 - Added `.claude/launch.json` so run/preview tooling can boot the app
   (`node dist/index.js web --port <port>`).
+- Re-enabled the four temporarily-suppressed Biome rules and fixed the code:
+  `SegmentedControl` renders a `<fieldset>`, the Libraries row is a real
+  `<Link>`, header rows / search results use stable keys, and the chunk-explorer
+  offset resets during render (not via an unread-dep effect). Override removed.
+- Deduped the one identical cross-page helper (`displayUrl`) into
+  `src/web/client/utils/format.ts`. The relative-time formatters intentionally
+  differ per page (short vs. verbose, `Date` vs. ISO vs. `now`-param), so they
+  are not true duplication and stay page-local.
