@@ -1,3 +1,5 @@
+import type { OutcomeVerdict } from "./outcomeGate";
+
 export class PipelineError extends Error {
   constructor(
     message: string,
@@ -12,6 +14,17 @@ export class PipelineError extends Error {
 }
 
 export class PipelineStateError extends PipelineError {}
+
+/**
+ * Raised when a scrape finished but failed a quality gate (empty/thin/degenerate).
+ * Carries the full verdict (outcome, errorCode, remediation) for callers.
+ */
+export class QualityGateError extends Error {
+  constructor(public readonly verdict: OutcomeVerdict) {
+    super(verdict.remediation ?? `Quality gate failed: ${verdict.outcome}`);
+    this.name = "QualityGateError";
+  }
+}
 
 /**
  * Error indicating that an operation was cancelled.

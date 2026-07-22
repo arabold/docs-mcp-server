@@ -1,12 +1,12 @@
 import type { ProgressCallback } from "../../types";
-import type { AppConfig } from "../../utils/config";
+import { type AppConfig, DEFAULT_DENY_PATHS } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
 import { FetchStatus } from "../fetcher/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
-import { shouldIncludeUrl } from "../utils/patternMatcher";
+import { matchesAnyPattern, shouldIncludeUrl } from "../utils/patternMatcher";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 import type {
   GitHubRepoInfo,
@@ -510,6 +510,12 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       return false;
     }
 
+    // Exclude denied paths (demos/examples by default) before any other check.
+    const denyPaths = options.denyPaths ?? DEFAULT_DENY_PATHS;
+    if (denyPaths.length > 0 && matchesAnyPattern(item.path, denyPaths)) {
+      return false;
+    }
+
     const filePath = item.path;
     const pathLower = filePath.toLowerCase();
 
@@ -652,6 +658,28 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       logger.debug(
         `Discovered ${fileItems.length} processable files in repository (branch: ${resolvedBranch})`,
       );
+
+      // FM-3 guard: a /tree/<branch>/<subPath> URL that matches no files is almost
+      // always a typo or a renamed directory. Failing loudly (with the real top-level
+      // paths) is far more useful than silently indexing only the wiki link.
+      if (repoInfo.subPath && fileItems.length === 0) {
+        const topDirs = [
+          ...new Set(
+            tree.tree
+              .filter((treeItem) => treeItem.type === "blob")
+              .map((treeItem) => treeItem.path.split("/")[0]),
+          ),
+        ]
+          .sort()
+          .slice(0, 20);
+        const err = new ScraperError(
+          `GitHub subpath "${repoInfo.subPath}" matched no files in ` +
+            `${owner}/${repo}@${resolvedBranch}. Available top-level paths: ${topDirs.join(", ")}.`,
+          false,
+        );
+        err.code = "GITHUB_SUBPATH_NOT_FOUND";
+        throw err;
+      }
 
       // Create HTTPS blob URLs for storage in database
       // These are user-friendly, clickable URLs that work outside the system

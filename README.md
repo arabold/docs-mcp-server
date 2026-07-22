@@ -155,6 +155,39 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 -   Web requests send `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` by default. Servers that support Markdown content negotiation, including Cloudflare Markdown for Agents, can return Markdown directly so the scraper bypasses HTML-to-Markdown conversion for cleaner output.
 -   This behavior is automatic and requires no configuration. Custom `Accept` headers are preserved when provided.
 
+### Scrape Quality Gates
+
+A scrape is marked `completed` only when it indexed usable documentation. When a quality gate fails, the job is marked `failed`, the half-indexed version is rolled back (gate-then-rollback), and a machine-readable `errorCode` is reported through `get_job_info` / `list_jobs`.
+
+`scrape_docs` accepts these additional optional parameters:
+
+| Parameter | Type | Description |
+|---|---|---|
+| `expectTerms` | `string[]` | Terms expected to appear in the indexed docs. When set, sampled chunks are checked; an off-topic result fails with `OFF_TOPIC` (also enables scope-drift checks). |
+| `denyPaths` | `string[]` | Glob patterns (minimatch) excluded from indexing even when in scope. Defaults to `demos/**` and `examples/**` at any depth. |
+| `localeStrategy` | `"pin-en" \| "strip" \| "passthrough"` | Locale handling for fetched URLs. `pin-en` (default) sends `Accept-Language: en` and strips `hl`/`lang`/`locale` query params; `strip` only removes those params; `passthrough` leaves URL and headers unchanged. |
+
+Each finished job carries an `outcome` classification, and a failing gate also sets an `errorCode`:
+
+| `outcome` | Meaning |
+|---|---|
+| `indexed` | Useful documentation was indexed (success). |
+| `empty` | The crawl finished but indexed no content. |
+| `thin` | Fewer chunks than the minimum threshold were indexed. |
+| `degenerate` | Content was indexed but failed a relevance check (off-topic or scope drift). |
+| `failed` | The job failed before classification (scraper error). |
+
+`errorCode` values surfaced on failed jobs:
+
+-   `EMPTY_RESULT` — crawl indexed no content (check reachability, JS gating, redirect/anti-bot walls).
+-   `THIN_RESULT` — too few chunks indexed (widen `maxPages`/`maxDepth` or point at a richer docs root).
+-   `OFF_TOPIC` — indexed content did not contain the expected terms (pick a more specific URL).
+-   `SCOPE_DRIFT` — too few indexed URLs fall under the requested path (narrow the URL or set `denyPaths`).
+-   `LOCALE_REDIRECT_LOOP` — a cyclic locale redirect (e.g. `?hl=` ping-pong) was detected.
+-   `GITHUB_SUBPATH_NOT_FOUND` — a GitHub `/tree/` subpath matched no files (the error lists available top-level paths).
+
+The remediation hint for a failed gate is included in the job's `errorMessage`.
+
 ### Key Concepts & Architecture
 -   **[Deployment Modes](docs/infrastructure/deployment-modes.md)**: Standalone vs. Distributed (Docker Compose).
 -   **[Authentication](docs/infrastructure/authentication.md)**: Securing your server with OAuth2/OIDC.

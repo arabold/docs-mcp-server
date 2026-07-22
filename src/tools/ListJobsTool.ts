@@ -62,6 +62,8 @@ export class ListJobsTool {
             : undefined,
         updatedAt: job.updatedAt?.toISOString(),
         errorMessage: job.errorMessage ?? undefined,
+        outcome: job.outcome,
+        errorCode: job.errorCode,
       };
     });
 

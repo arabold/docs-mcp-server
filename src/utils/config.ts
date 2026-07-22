@@ -173,6 +173,20 @@ export const DEFAULT_CONFIG = {
   },
 } as const;
 
+/**
+ * Default glob patterns (minimatch) excluded from indexing across all scrapes.
+ *
+ * Covers demo/example directories that bloat the index with non-documentation
+ * code. Both top-level (`demos/**`) and nested (`**\/demos/**`) forms are listed
+ * because minimatch's `**\/demos/**` does not match a top-level `demos/...` path.
+ */
+export const DEFAULT_DENY_PATHS = [
+  "demos/**",
+  "**/demos/**",
+  "examples/**",
+  "**/examples/**",
+];
+
 // --- Configuration Schema (Nested) ---
 
 export const AppConfigSchema = z.object({

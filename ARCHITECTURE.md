@@ -248,6 +248,16 @@ The pipeline system manages asynchronous job processing with persistent state an
 
 Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED. All state transitions persist to database and emit events, enabling both recovery after restart and real-time monitoring. See [Event Bus Architecture](docs/concepts/eventbus-architecture.md) for detailed event flow diagrams.
 
+#### Quality Gates
+
+Before promoting a finished job to `COMPLETED`, `PipelineManager` runs a quality gate at a single seam (the spot that previously set `COMPLETED` unconditionally). The gate classifies the scrape from its stored metrics and, on a failing verdict, discards the staged version and marks the job `FAILED` with a typed `errorCode` — a **gate-then-rollback** flow:
+
+1. **Classify** — `evaluateOutcome()` (a pure function in `src/pipeline/outcomeGate.ts`) maps `JobOutcomeMetrics` (document count, distinct URLs, in-scope ratio, expect-terms match) to a `ScrapeOutcome` and optional `ScrapeErrorCode`. Order: empty → thin → off-topic → scope-drift → indexed.
+2. **Relevance signals** — when the caller supplies `expectTerms`, `src/pipeline/relevanceGate.ts` computes a ref-agnostic in-scope URL ratio (`computeInScopeRatio`, aligning a GitHub `/tree/` root with its `/blob/` children) and samples stored chunks for the expected terms (`sampleExpectTermsMatch`). These relevance axes are opt-in for this release; `denyPaths` exclusions apply to every scrape.
+3. **Rollback** — on a non-`indexed` verdict the manager calls `removeVersion()` to delete the half-indexed docs, then rejects job completion with a `QualityGateError` carrying the remediation hint. **Refresh and append jobs (`isRefresh` / `clean === false`) skip the gate entirely** so a transient thin re-index can never wipe pre-existing good docs.
+
+The resulting `outcome` and `errorCode` are surfaced on the public `PipelineJob` and exposed through `get_job_info` and `list_jobs`. Error codes: `EMPTY_RESULT`, `THIN_RESULT`, `OFF_TOPIC`, `SCOPE_DRIFT`, `LOCALE_REDIRECT_LOOP` (cyclic locale redirect detected in `HttpFetcher`), and `GITHUB_SUBPATH_NOT_FOUND` (a GitHub `/tree/` subpath matched no files).
+
 ### Content Processing
 
 Content processing follows a modular strategy-pipeline-splitter architecture:

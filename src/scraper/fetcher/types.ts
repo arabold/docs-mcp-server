@@ -92,6 +92,14 @@ export interface FetchOptions {
   etag?: string | null;
   /** Internal-only allowlist roots for application-managed temporary files. */
   internalAllowedFileRoots?: string[];
+  /**
+   * Locale handling for fetched URLs.
+   * - 'pin-en': send `Accept-Language: en` and strip `hl`/`lang`/`locale` query params (default)
+   * - 'strip': strip locale query params, no Accept-Language override
+   * - 'passthrough': leave URL and headers unchanged
+   * @default 'pin-en'
+   */
+  localeStrategy?: "pin-en" | "strip" | "passthrough";
 }
 
 /**

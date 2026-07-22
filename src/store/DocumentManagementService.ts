@@ -200,6 +200,56 @@ export class DocumentManagementService {
   }
 
   /**
+   * Returns chunk and distinct-URL counts for a specific (library, version).
+   * Reuses the aggregate computed by the store's version listing.
+   *
+   * @param library - Library name (matched case-insensitively).
+   * @param version - Version string; null/undefined resolves to the unversioned ("") entry.
+   * @returns The stored document (chunk) count and distinct indexed-URL count, both 0 if absent.
+   */
+  async getVersionMetrics(
+    library: string,
+    version?: string | null,
+  ): Promise<{ documentCount: number; distinctUrls: number }> {
+    const normalizedVersion = this.normalizeVersion(version);
+    const summaries = await this.store.queryLibraryVersions();
+    const entry = summaries
+      .get(library.toLowerCase())
+      ?.find((v) => (v.version ?? "") === normalizedVersion);
+    return {
+      documentCount: entry?.documentCount ?? 0,
+      distinctUrls: entry?.uniqueUrlCount ?? 0,
+    };
+  }
+
+  /**
+   * Returns up to `limit` stored chunk contents for sampling-based relevance checks.
+   *
+   * @param library - Library name (matched case-insensitively in the store).
+   * @param version - Version string; null/undefined resolves to the unversioned ("") entry.
+   * @param limit - Maximum number of chunk contents to return.
+   * @returns An array of chunk content strings (possibly empty).
+   */
+  async sampleChunks(
+    library: string,
+    version?: string | null,
+    limit = 20,
+  ): Promise<string[]> {
+    return this.store.sampleChunkContents(library, this.normalizeVersion(version), limit);
+  }
+
+  /**
+   * Returns the distinct indexed page URLs for a (library, version).
+   *
+   * @param library - Library name (matched case-insensitively in the store).
+   * @param version - Version string; null/undefined resolves to the unversioned ("") entry.
+   * @returns The distinct URLs indexed under the (library, version).
+   */
+  async listIndexedUrls(library: string, version?: string | null): Promise<string[]> {
+    return this.store.listPageUrls(library, this.normalizeVersion(version));
+  }
+
+  /**
    * Finds versions that were indexed from the same source URL.
    */
   async findVersionsBySourceUrl(url: string): Promise<DbVersionWithLibrary[]> {

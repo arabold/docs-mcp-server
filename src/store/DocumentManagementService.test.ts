@@ -1063,6 +1063,69 @@ describe("DocumentManagementService", () => {
       });
     });
 
+    describe("getVersionMetrics", () => {
+      it("getVersionMetrics returns document and distinct-url counts", async () => {
+        const metricsMap = new Map<string, any[]>([
+          [
+            "lib",
+            [
+              {
+                version: "1.0.0",
+                versionId: 1,
+                status: "completed",
+                progressPages: 5,
+                progressMaxPages: 5,
+                sourceUrl: null,
+                documentCount: 12,
+                uniqueUrlCount: 4,
+                indexedAt: "2024-01-01T00:00:00.000Z",
+              },
+            ],
+          ],
+        ]);
+        mockStore.queryLibraryVersions.mockResolvedValue(metricsMap);
+
+        const m = await docService.getVersionMetrics("lib", "1.0.0");
+        expect(m.documentCount).toBeGreaterThan(0);
+        expect(m.distinctUrls).toBeGreaterThan(0);
+        expect(m.documentCount).toBe(12);
+        expect(m.distinctUrls).toBe(4);
+      });
+
+      it("getVersionMetrics returns zero counts for an unknown version", async () => {
+        mockStore.queryLibraryVersions.mockResolvedValue(new Map());
+        const m = await docService.getVersionMetrics("missing", "1.0.0");
+        expect(m).toEqual({ documentCount: 0, distinctUrls: 0 });
+      });
+
+      it("getVersionMetrics normalizes library casing and version", async () => {
+        const metricsMap = new Map<string, any[]>([
+          [
+            "lib",
+            [
+              {
+                version: "",
+                versionId: 2,
+                status: "completed",
+                progressPages: 1,
+                progressMaxPages: 1,
+                sourceUrl: null,
+                documentCount: 3,
+                uniqueUrlCount: 2,
+                indexedAt: null,
+              },
+            ],
+          ],
+        ]);
+        mockStore.queryLibraryVersions.mockResolvedValue(metricsMap);
+
+        // Uppercase library + null version should resolve the lowercased,
+        // empty-string ("") entry.
+        const m = await docService.getVersionMetrics("LIB", null);
+        expect(m).toEqual({ documentCount: 3, distinctUrls: 2 });
+      });
+    });
+
     describe("cleanup", () => {
       it("should shutdown without errors", async () => {
         const eventBus = new EventBusService();
