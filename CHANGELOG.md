@@ -1,3 +1,10 @@
+## [2.4.4](https://github.com/arabold/docs-mcp-server/compare/v2.4.3...v2.4.4) (2026-07-22)
+
+
+### Bug Fixes
+
+* **ci:** strip inline comments from docker metadata tags block ([2926cc6](https://github.com/arabold/docs-mcp-server/commit/2926cc672c8827aabad00ef01477bf09c0114df1))
+
 ## [2.4.3](https://github.com/arabold/docs-mcp-server/compare/v2.4.2...v2.4.3) (2026-07-22)
 
 
