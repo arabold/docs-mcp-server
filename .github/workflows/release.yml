@@ -163,13 +163,21 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
-          # Use the version from the semantic-release output
+          # Use the version from the semantic-release output.
+          # NOTE: this is a YAML literal block scalar (`|`), so `#` here is NOT a YAML
+          # comment - it would be passed to the action as literal text and break tag
+          # parsing. Keep these lines free of inline comments.
+          #   type=raw,value=<version>              e.g. 2.4.3
+          #   type=semver,pattern={{version}}        e.g. 2.4.3
+          #   type=semver,pattern=v{{major}}.{{minor}}  e.g. v2.4
+          #   type=semver,pattern=v{{major}}         e.g. v2
+          #   type=raw,value=latest,enable=true      always tag latest on main branch release
           tags: |
-            type=raw,value=${{ needs.release.outputs.new_release_version }} # e.g., v1.4.1
-            type=semver,pattern={{version}},value=${{ needs.release.outputs.new_release_version }} # e.g., 1.4.1
-            type=semver,pattern=v{{major}}.{{minor}},value=${{ needs.release.outputs.new_release_version }} # e.g., v1.4
-            type=semver,pattern=v{{major}},value=${{ needs.release.outputs.new_release_version }} # e.g., v1
-            type=raw,value=latest,enable=true # Always tag latest on main branch release
+            type=raw,value=${{ needs.release.outputs.new_release_version }}
+            type=semver,pattern={{version}},value=${{ needs.release.outputs.new_release_version }}
+            type=semver,pattern=v{{major}}.{{minor}},value=${{ needs.release.outputs.new_release_version }}
+            type=semver,pattern=v{{major}},value=${{ needs.release.outputs.new_release_version }}
+            type=raw,value=latest,enable=true
 
       - name: Build and push Docker image
         id: push
