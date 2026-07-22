@@ -1,3 +1,17 @@
+## [2.4.3](https://github.com/arabold/docs-mcp-server/compare/v2.4.2...v2.4.3) (2026-07-22)
+
+
+### Bug Fixes
+
+* **scraper:** make browser fetcher robust to non-navigable urls and idle hangs ([8e0a06b](https://github.com/arabold/docs-mcp-server/commit/8e0a06b93e864c62e98b317dcd456865183eef6d))
+* **scraper:** preserve retryable errors and validate redirects in browser fetcher ([20db343](https://github.com/arabold/docs-mcp-server/commit/20db34399970964c75c5624ffd2f2a3008fb7e57)), closes [#442](https://github.com/arabold/docs-mcp-server/issues/442)
+* **scraper:** use RedirectError and consistent headers in browser fetcher ([74e0edf](https://github.com/arabold/docs-mcp-server/commit/74e0edf1a819d2e04155ece4ad1b0a780931753a))
+* **store:** derive vector partition keys during rebuild ([4b010de](https://github.com/arabold/docs-mcp-server/commit/4b010dee0d6f567d41382019071a7772a993f4fb))
+* **store:** handle vector schema variations ([7d900c3](https://github.com/arabold/docs-mcp-server/commit/7d900c36766b6a2afe1263587faa24e911158923))
+* **store:** harden migration workflow ([96b5ce2](https://github.com/arabold/docs-mcp-server/commit/96b5ce2c0f6a305aa0bb332336752c6e60d73632))
+* **store:** migrate vectors to partition keys ([2b4e886](https://github.com/arabold/docs-mcp-server/commit/2b4e886c4dc4e1ccab7ef4f50843fb4557015207))
+* **store:** remove duplicate migration logging ([7890084](https://github.com/arabold/docs-mcp-server/commit/7890084166cd35813963018762cc99c5a007a351))
+
 ## [2.4.1](https://github.com/arabold/docs-mcp-server/compare/v2.4.0...v2.4.1) (2026-06-08)
 
 
