@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "docs-mcp-web",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--enable-source-maps", "dist/index.js", "web", "--port", "6280"],
+      "port": 6280
+    }
+  ]
+}

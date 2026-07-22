@@ -99,7 +99,7 @@ export function createWebCommand(cli: Argv) {
         const config = createAppServerConfig({
           enableWebInterface: true,
           enableMcpServer: false,
-          enableApiServer: false,
+          enableApiServer: true,
           enableWorker: !serverUrl,
           port: appConfig.server.ports.web,
           externalWorkerUrl: serverUrl,

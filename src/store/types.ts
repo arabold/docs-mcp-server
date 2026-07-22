@@ -292,3 +292,73 @@ export interface DbLibraryVersion {
   uniqueUrlCount: number;
   indexedAt: string | null;
 }
+
+/**
+ * A single stored chunk as returned by the admin dashboard's chunk explorer.
+ * Combines chunk content with its position within the parent page and basic
+ * size/embedding metadata, for debugging and insight into how data is stored.
+ */
+export interface VersionChunkListItem {
+  /** Stable identifier for the chunk (the underlying row id, as a string). */
+  id: string;
+  /** URL of the page this chunk belongs to. */
+  url: string;
+  /** Raw chunk content as stored. */
+  content: string;
+  /** Processed MIME type of the page (e.g. "text/html"), if known. */
+  mimeType: string | null;
+  /** 1-based position of this chunk within its page (e.g. 3 of 12). */
+  chunkIndex: number;
+  /** Total number of chunks stored for this chunk's page. */
+  pageChunkCount: number;
+  /** Character count of `content` (JS string length). */
+  charCount: number;
+  /**
+   * Token count for this chunk, if the store has ever recorded one.
+   * The current schema does not persist per-chunk token counts, so this is
+   * always `null` today. The field is kept so a future migration can populate
+   * it without changing the API shape; consumers must treat `null` as
+   * "unavailable", never as zero.
+   */
+  tokenCount: number | null;
+  /** Whether this chunk has a stored embedding vector. */
+  hasEmbedding: boolean;
+}
+
+/** Options for paginating and filtering {@link VersionChunkListItem} results. */
+export interface ListVersionChunksOptions {
+  /** Maximum number of chunks to return. */
+  limit: number;
+  /** Number of matching chunks to skip before returning results. Defaults to 0. */
+  offset?: number;
+  /** Case-insensitive substring filter applied to chunk content. */
+  filter?: string;
+}
+
+/** Paginated result of listing a version's stored chunks. */
+export interface ListVersionChunksResult {
+  /** The requested page of chunks. */
+  chunks: VersionChunkListItem[];
+  /** Total number of chunks matching the filter (ignoring pagination), for computing page counts. */
+  total: number;
+}
+
+/**
+ * Aggregate chunk/page/embedding statistics for a single library version,
+ * used by the chunk explorer's header strip.
+ */
+export interface VersionChunkStats {
+  /** Number of distinct pages (unique URLs) indexed for this version. */
+  pageCount: number;
+  /** Total number of stored chunks for this version. */
+  chunkCount: number;
+  /** Average chunks per page, or `null` when the version has no pages. */
+  avgChunksPerPage: number | null;
+  /**
+   * Average token count per chunk, or `null` when token data isn't tracked.
+   * Always `null` today since the schema doesn't persist per-chunk token counts.
+   */
+  avgTokensPerChunk: number | null;
+  /** Number of chunks that have a stored embedding vector. */
+  embeddedChunkCount: number;
+}

@@ -51,6 +51,9 @@ const mockStore = {
   // Library management methods
   getLibrary: vi.fn(),
   deleteLibrary: vi.fn(),
+  // Chunk explorer methods
+  listVersionChunks: vi.fn(),
+  getVersionStats: vi.fn(),
 };
 
 // Mock the DocumentStore module
@@ -206,6 +209,61 @@ describe("DocumentManagementService", () => {
       expect(b).toBe(10);
       expect(c).toBe(10);
       expect(mockStore.resolveVersionId).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe("listVersionChunks", () => {
+    it("normalizes the library/version ref and applies a default limit", async () => {
+      const storeResult = { chunks: [], total: 0 };
+      mockStore.listVersionChunks.mockResolvedValue(storeResult);
+
+      const result = await docService.listVersionChunks({
+        library: "  React  ",
+        version: "18.2.0",
+      });
+
+      expect(result).toBe(storeResult);
+      expect(mockStore.listVersionChunks).toHaveBeenCalledWith("react", "18.2.0", {
+        limit: 50,
+        offset: undefined,
+        filter: undefined,
+      });
+    });
+
+    it("normalizes unversioned refs to an empty string and forwards pagination/filter", async () => {
+      mockStore.listVersionChunks.mockResolvedValue({ chunks: [], total: 0 });
+
+      await docService.listVersionChunks(
+        { library: "Lodash", version: "" },
+        { limit: 10, offset: 20, filter: "TODO" },
+      );
+
+      expect(mockStore.listVersionChunks).toHaveBeenCalledWith("lodash", "", {
+        limit: 10,
+        offset: 20,
+        filter: "TODO",
+      });
+    });
+  });
+
+  describe("getVersionStats", () => {
+    it("normalizes the library/version ref before delegating to the store", async () => {
+      const stats = {
+        pageCount: 2,
+        chunkCount: 4,
+        avgChunksPerPage: 2,
+        avgTokensPerChunk: null,
+        embeddedChunkCount: 4,
+      };
+      mockStore.getVersionStats.mockResolvedValue(stats);
+
+      const result = await docService.getVersionStats({
+        library: "  Express  ",
+        version: "  ",
+      });
+
+      expect(result).toBe(stats);
+      expect(mockStore.getVersionStats).toHaveBeenCalledWith("express", "");
     });
   });
 

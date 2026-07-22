@@ -3,6 +3,7 @@ node_modules/
 dist/
 .store/
 public/assets/
+public/index.html
 *.log
 .env*
 !*.env.example

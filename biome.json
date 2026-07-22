@@ -23,11 +23,11 @@
     "lineEnding": "lf"
   },
   "files": {
-    "includes": ["**/src/**/*.ts"]
+    "includes": ["**/src/**/*.ts", "**/src/**/*.tsx"]
   },
   "overrides": [
     {
-      "includes": ["**/src/**/*.test.ts"],
+      "includes": ["**/src/**/*.test.ts", "**/src/**/*.test.tsx"],
       "linter": {
         "rules": {
           "style": {

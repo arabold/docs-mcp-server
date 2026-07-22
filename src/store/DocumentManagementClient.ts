@@ -13,8 +13,12 @@ import type {
   DbVersionWithLibrary,
   FindVersionResult,
   LibrarySummary,
+  ListVersionChunksOptions,
+  ListVersionChunksResult,
   StoredScraperOptions,
   StoreSearchResult,
+  VersionChunkStats,
+  VersionRef,
   VersionStatus,
 } from "./types";
 
@@ -124,5 +128,25 @@ export class DocumentManagementClient implements IDocumentManagement {
     // The remote server's embedding status cannot be synchronously queried.
     // Return null to indicate embeddings status is unknown/unavailable.
     return null;
+  }
+
+  async listVersionChunks(
+    ref: VersionRef,
+    options?: Partial<ListVersionChunksOptions>,
+  ): Promise<ListVersionChunksResult> {
+    return this.client.listVersionChunks.query({
+      library: ref.library,
+      version: ref.version,
+      limit: options?.limit,
+      offset: options?.offset,
+      filter: options?.filter,
+    });
+  }
+
+  async getVersionStats(ref: VersionRef): Promise<VersionChunkStats> {
+    return this.client.getVersionStats.query({
+      library: ref.library,
+      version: ref.version,
+    });
   }
 }
