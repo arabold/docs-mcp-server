@@ -1,5 +1,7 @@
 # Grounded Docs: Your AI's Up-to-Date Documentation Expert
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Farabold%2Fdocs-mcp-server.svg)](https://mcptoplist.com/server/glama%2Farabold%2Fdocs-mcp-server)
+
 **Docs MCP Server** solves the problem of AI hallucinations and outdated knowledge by providing a personal, always-current documentation index for your AI coding assistant. It fetches official docs from websites, GitHub, npm, PyPI, and local files, allowing your AI to query the exact version you are using.
 
 ![Docs MCP Server Web Interface](docs/docs-mcp-server.png)
