@@ -887,6 +887,24 @@ describe("PipelineManager", () => {
       expect(job?.scraperOptions?.preserveHashes).toBe(true);
     });
 
+    it("should reuse stored respectGitignore during refresh", async () => {
+      const mockPages = [
+        { id: 1, url: "file:///docs/secret.md", depth: 1, etag: "etag1" },
+      ];
+
+      (mockStore.ensureVersion as Mock).mockResolvedValue(891);
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "file:///docs",
+        options: { respectGitignore: true },
+      });
+
+      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0");
+      const job = await manager.getJob(jobId);
+
+      expect(job?.scraperOptions?.respectGitignore).toBe(true);
+    });
+
     it("should override stored preserveHashes during refresh when explicitly provided", async () => {
       const mockPages = [
         { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },

@@ -239,6 +239,7 @@ export function registerLibraryDetailRoutes(
           followRedirects?: boolean;
           ignoreErrors?: boolean;
           preserveHashes?: boolean;
+          respectGitignore?: boolean;
         } = {
           library: libraryName,
         };
@@ -279,6 +280,7 @@ export function registerLibraryDetailRoutes(
                   followRedirects: opts.followRedirects,
                   ignoreErrors: opts.ignoreErrors,
                   preserveHashes: opts.preserveHashes,
+                  respectGitignore: opts.respectGitignore,
                 };
               }
             }

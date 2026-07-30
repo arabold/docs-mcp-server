@@ -20,6 +20,7 @@ export interface ScrapeFormInitialValues {
   followRedirects?: boolean;
   ignoreErrors?: boolean;
   preserveHashes?: boolean;
+  respectGitignore?: boolean;
 }
 
 interface ScrapeFormContentProps {
@@ -57,6 +58,7 @@ const ScrapeFormContent = ({
   const ignoreErrorsValue = initialValues?.ignoreErrors ?? true;
   const preserveHashesValue =
     initialValues?.preserveHashes ?? scraperConfig?.preserveHashes ?? false;
+  const respectGitignoreValue = initialValues?.respectGitignore ?? false;
 
   // Format exclude patterns - use initial values if provided, otherwise use defaults
   const excludePatternsText =
@@ -251,7 +253,8 @@ const ScrapeFormContent = ({
               includePatternsValue ||
               excludePatternsText ||
               scrapeModeValue !== ScrapeMode.Auto ||
-              preserveHashesValue)
+              preserveHashesValue ||
+              respectGitignoreValue)
                ? "true"
                : "false"
           }
@@ -481,6 +484,22 @@ const ScrapeFormContent = ({
                 Preserve Hash Routes
               </label>
               <Tooltip text="Enable this for documentation sites that use hash fragments as client-side routes rather than same-page anchors." />
+            </div>
+            <div class="flex items-center">
+              <input
+                id="respectGitignore"
+                name="respectGitignore"
+                type="checkbox"
+                checked={respectGitignoreValue}
+                class="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700"
+              />
+              <label
+                for="respectGitignore"
+                class="ml-1 block text-sm text-gray-900 dark:text-gray-300"
+              >
+                Respect .gitignore
+              </label>
+              <Tooltip text="For local directories, skip files and folders matched by .gitignore rules in the selected directory and its subdirectories." />
             </div>
             <div>
               <div class="flex items-center mb-1">
