@@ -89,7 +89,25 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     try {
       try {
-        stats = await fs.stat(filePath);
+        if (this.gitignoreFilter) {
+          const pathStats = await fs.lstat(filePath);
+          if (pathStats.isSymbolicLink()) {
+            if (await this.gitignoreFilter.isIgnored(filePath, false)) {
+              logger.debug(`Skipping gitignored path: ${filePath}`);
+              return {
+                url: item.url,
+                links: [],
+                status:
+                  item.pageId === undefined ? FetchStatus.SUCCESS : FetchStatus.NOT_FOUND,
+              };
+            }
+            stats = await fs.stat(filePath);
+          } else {
+            stats = pathStats;
+          }
+        } else {
+          stats = await fs.stat(filePath);
+        }
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT" || code === "ENOTDIR") {
@@ -165,6 +183,10 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
               let isDirectory = entryStats.isDirectory();
               if (followSymlinks && entryStats.isSymbolicLink()) {
+                if (await this.gitignoreFilter.isIgnored(entryPath, false)) {
+                  logger.debug(`Skipping gitignored path: ${entryPath}`);
+                  return null;
+                }
                 try {
                   isDirectory = (await fs.stat(entryPath)).isDirectory();
                 } catch (error) {

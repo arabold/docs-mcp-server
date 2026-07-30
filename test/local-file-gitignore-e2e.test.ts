@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LocalFileStrategy } from "../src/scraper/strategies/LocalFileStrategy";
 import type { ScraperOptions, ScraperProgressEvent } from "../src/scraper/types";
 import type { ProgressCallback } from "../src/types";
@@ -135,6 +135,38 @@ describe("LocalFileStrategy - .gitignore integration (issue #438)", () => {
         deleted: true,
       }),
     );
+  });
+
+  it("does not follow a gitignored symlink before reporting a refresh deletion", async () => {
+    await write(".gitignore", "ignored-link\n");
+    await write(path.join(".target", "secret.md"), "# Must not be reached\n");
+    const linkPath = path.join(rootDirectory, "ignored-link");
+    await fs.symlink(
+      path.join(rootDirectory, ".target"),
+      linkPath,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const linkUrl = pathToFileURL(linkPath).href;
+    const statSpy = vi.spyOn(fs, "stat");
+
+    try {
+      const events = await scrape({
+        respectGitignore: true,
+        initialQueue: [{ url: linkUrl, depth: 1, pageId: 440 }],
+      });
+
+      expect(statSpy).not.toHaveBeenCalledWith(linkPath);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          currentUrl: linkUrl,
+          pageId: 440,
+          result: null,
+          deleted: true,
+        }),
+      );
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   it("reports archived pages as deleted after their physical archive becomes ignored", async () => {
