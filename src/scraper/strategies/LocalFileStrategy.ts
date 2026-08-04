@@ -92,7 +92,10 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         if (this.gitignoreFilter) {
           const pathStats = await fs.lstat(filePath);
           if (pathStats.isSymbolicLink()) {
-            if (await this.gitignoreFilter.isIgnored(filePath, false)) {
+            if (
+              (await this.gitignoreFilter.isIgnored(filePath, false)) ||
+              (await this.gitignoreFilter.isIgnored(filePath, true))
+            ) {
               logger.debug(`Skipping gitignored path: ${filePath}`);
               return {
                 url: item.url,
@@ -183,7 +186,10 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
               let isDirectory = entryStats.isDirectory();
               if (followSymlinks && entryStats.isSymbolicLink()) {
-                if (await this.gitignoreFilter.isIgnored(entryPath, false)) {
+                if (
+                  (await this.gitignoreFilter.isIgnored(entryPath, false)) ||
+                  (await this.gitignoreFilter.isIgnored(entryPath, true))
+                ) {
                   logger.debug(`Skipping gitignored path: ${entryPath}`);
                   return null;
                 }
