@@ -23,6 +23,7 @@ import {
   aggregateStatus,
   displayUrl,
   formatRelativeTime,
+  isLocalFileUrl,
   MASKED_HEADER_VALUE,
 } from "./format";
 
@@ -212,6 +213,18 @@ export function ScrapeConfigPanel({
           <div className="v">
             {(options?.preserveHashes ?? version.preserveHashes) ? "yes" : "no"}
           </div>
+
+          {/* Local-only, so hidden for web sources — unless a value is stored
+              anyway (the CLI and MCP tool accept it for any URL), which must
+              stay visible rather than silently disappear. */}
+          {isLocalFileUrl(sourceUrl) || options?.respectGitignore ? (
+            <>
+              <div className="k">
+                <b>Respect .gitignore</b>
+              </div>
+              <div className="v">{options?.respectGitignore ? "yes" : "no"}</div>
+            </>
+          ) : null}
 
           <div className="k">
             <b>Indexed</b>

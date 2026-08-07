@@ -42,6 +42,7 @@ import {
   useListLibraries,
 } from "../api/hooks";
 import { trpc } from "../api/trpc";
+import { isLocalFileUrl } from "../utils/format";
 import { Button } from "./Button";
 import { Checkbox } from "./Checkbox";
 import { Drawer } from "./Drawer";
@@ -224,6 +225,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
   const [preserveHashes, setPreserveHashes] = useState(false);
   const [followRedirects, setFollowRedirects] = useState(true);
   const [ignoreErrors, setIgnoreErrors] = useState(true);
+  const [respectGitignore, setRespectGitignore] = useState(false);
 
   // Reset to blank/basic defaults every time the drawer is (re)opened.
   useEffect(() => {
@@ -241,6 +243,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
     setPreserveHashes(false);
     setFollowRedirects(true);
     setIgnoreErrors(true);
+    setRespectGitignore(false);
   }, [open, library, version]);
 
   // Overlay stored scraper options once they resolve, for "edit" mode.
@@ -261,9 +264,15 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
     setPreserveHashes(stored.options.preserveHashes ?? false);
     setFollowRedirects(stored.options.followRedirects ?? true);
     setIgnoreErrors(stored.options.ignoreErrors ?? true);
+    setRespectGitignore(stored.options.respectGitignore ?? false);
   }, [open, mode, stored]);
 
   const scopeHint = useMemo(() => scopeHintFor(url, scope), [url, scope]);
+  // Only the *visibility* of local-only controls keys off the scheme. Their
+  // values are still submitted for web URLs, matching every other option in
+  // this form, so editing a version never silently drops a setting that was
+  // stored by the CLI or MCP tool.
+  const isLocalFile = isLocalFileUrl(url);
 
   const addHeaderRow = useCallback(() => {
     setHeaders((prev) => [...prev, { id: crypto.randomUUID(), name: "", value: "" }]);
@@ -302,6 +311,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
           includePatterns: parsePatterns(includePatterns),
           excludePatterns: parsePatterns(excludePatterns),
           preserveHashes,
+          respectGitignore,
           headers: rowsToHeaders(headers),
         },
       });
@@ -333,6 +343,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
     includePatterns,
     excludePatterns,
     preserveHashes,
+    respectGitignore,
     headers,
     utils,
     toast,
@@ -575,6 +586,21 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
             checked={ignoreErrors}
             onChange={(e) => setIgnoreErrors(e.target.checked)}
           />
+          {isLocalFile ? (
+            <Checkbox
+              label="Respect .gitignore"
+              hint={
+                <>
+                  Skip files and folders matched by{" "}
+                  <span className="mono">.gitignore</span> rules in the indexed folder and
+                  below. Rules from parent folders, global excludes, and{" "}
+                  <span className="mono">.git/info/exclude</span> are not applied.
+                </>
+              }
+              checked={respectGitignore}
+              onChange={(e) => setRespectGitignore(e.target.checked)}
+            />
+          ) : null}
         </div>
       </details>
     </Drawer>

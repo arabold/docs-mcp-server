@@ -103,6 +103,14 @@ export function createScrapeCommand(cli: Argv) {
           alias: "excludePattern",
           default: [] as string[],
         })
+        .option("respect-gitignore", {
+          type: "boolean",
+          description:
+            "For file:// directories, skip files matched by .gitignore rules in the " +
+            "indexed folder and below (parent-folder and global rules are not applied)",
+          alias: "respectGitignore",
+          default: false,
+        })
         .option("header", {
           type: "string",
           array: true,
@@ -177,6 +185,7 @@ export function createScrapeCommand(cli: Argv) {
         hasHeaders: (argv.header as string[]).length > 0,
         hasIncludePatterns: (argv.includePattern as string[]).length > 0,
         hasExcludePatterns: (argv.excludePattern as string[]).length > 0,
+        respectGitignore: argv.respectGitignore as boolean,
         useServerUrl: !!serverUrl,
       });
 
@@ -257,6 +266,7 @@ export function createScrapeCommand(cli: Argv) {
               (argv.excludePattern as string[])?.length > 0
                 ? (argv.excludePattern as string[])
                 : undefined,
+            respectGitignore: argv.respectGitignore as boolean,
             headers: Object.keys(headers).length > 0 ? headers : undefined,
             clean: argv.clean as boolean,
           },

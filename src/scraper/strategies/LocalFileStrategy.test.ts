@@ -429,6 +429,100 @@ describe("LocalFileStrategy", () => {
     expect(calledUrls).not.toContain("file:///testdir/file3.txt");
   });
 
+  it("should keep current behavior when respectGitignore is not enabled", async () => {
+    const strategy = new LocalFileStrategy(appConfig);
+    const options: ScraperOptions = {
+      url: "file:///testdir",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 1,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    vol.fromJSON(
+      {
+        "/testdir/.gitignore": "ignored.md\n",
+        "/testdir/ignored.md": "# Still indexed",
+      },
+      "/",
+    );
+
+    await strategy.scrape(options, progressCallback);
+
+    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(progressCallback.mock.calls[0][0].currentUrl).toBe(
+      "file:///testdir/ignored.md",
+    );
+  });
+
+  it("should skip files and prune directories matched by the root .gitignore", async () => {
+    const strategy = new LocalFileStrategy(appConfig);
+    const options: ScraperOptions = {
+      url: "file:///testdir",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 3,
+      respectGitignore: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    vol.fromJSON(
+      {
+        "/testdir/.gitignore": "ignored.md\nbuild/\nartifact.md/\n",
+        "/testdir/keep.md": "# Keep",
+        "/testdir/ignored.md": "# Ignore",
+        "/testdir/build/.gitignore": "!keep.md\n",
+        "/testdir/build/keep.md": "# Cannot be restored",
+        "/testdir/artifact.md": "# A file, not a directory",
+        "/testdir/nested/artifact.md/inside.md": "# Ignore directory contents",
+      },
+      "/",
+    );
+
+    await strategy.scrape(options, progressCallback);
+
+    const calledUrls = progressCallback.mock.calls.map((call) => call[0].currentUrl);
+    expect(calledUrls).toEqual([
+      "file:///testdir/artifact.md",
+      "file:///testdir/keep.md",
+    ]);
+  });
+
+  it("should apply nested negation and anchored patterns relative to each .gitignore", async () => {
+    const strategy = new LocalFileStrategy(appConfig);
+    const options: ScraperOptions = {
+      url: "file:///testdir",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 3,
+      respectGitignore: true,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    vol.fromJSON(
+      {
+        "/testdir/.gitignore": "*.generated.md\n",
+        "/testdir/nested/.gitignore": "!keep.generated.md\n/only-here.md\n",
+        "/testdir/nested/drop.generated.md": "# Ignore",
+        "/testdir/nested/keep.generated.md": "# Keep",
+        "/testdir/nested/only-here.md": "# Ignore here",
+        "/testdir/nested/deeper/only-here.md": "# Keep deeper",
+      },
+      "/",
+    );
+
+    await strategy.scrape(options, progressCallback);
+
+    const calledUrls = progressCallback.mock.calls.map((call) => call[0].currentUrl);
+    expect(calledUrls).toEqual([
+      "file:///testdir/nested/keep.generated.md",
+      "file:///testdir/nested/deeper/only-here.md",
+    ]);
+  });
+
   it("should process files and folders with spaces in their names (percent-encoded in file:// URL)", async () => {
     const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {
@@ -896,6 +990,94 @@ describe("LocalFileStrategy", () => {
       expect(docCalls[0][0].depth).toBe(3);
       expect(docCalls[0][0].pageId).toBe(555);
       expect(docCalls[0][0].result?.textContent).toContain("Updated content");
+    });
+
+    it("should delete a previously indexed file that is now gitignored", async () => {
+      const strategy = new LocalFileStrategy(appConfig);
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      vol.fromJSON(
+        {
+          "/testdir/.gitignore": "secret.md\n",
+          "/testdir/secret.md": "# Secret",
+        },
+        "/",
+      );
+
+      const options: ScraperOptions = {
+        url: "file:///testdir",
+        library: "test",
+        version: "1.0",
+        maxPages: 10,
+        maxDepth: 1,
+        maxConcurrency: 2,
+        respectGitignore: true,
+        initialQueue: [
+          {
+            url: "file:///testdir/secret.md",
+            depth: 1,
+            pageId: 777,
+          },
+        ],
+      };
+
+      await strategy.scrape(options, progressCallback);
+
+      expect(progressCallback).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentUrl: "file:///testdir/secret.md",
+          pageId: 777,
+          result: null,
+          deleted: true,
+        }),
+      );
+    });
+
+    it("skips an unreadable entry instead of failing the whole directory", async () => {
+      const strategy = new LocalFileStrategy(appConfig);
+      const options: ScraperOptions = {
+        url: "file:///testdir",
+        library: "test",
+        version: "1.0",
+        maxPages: 10,
+        maxDepth: 2,
+        respectGitignore: true,
+      };
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      vol.fromJSON(
+        {
+          "/testdir/.gitignore": "ignored.md\n",
+          "/testdir/keep.md": "# Keep",
+          "/testdir/locked.md": "# Unreadable",
+        },
+        "/",
+      );
+
+      // A directory can be listable but not searchable, which makes lstat on
+      // one of its entries fail even though readdir succeeded. memfs backs the
+      // mocked node:fs/promises, so spying here is what the strategy sees.
+      const realLstat = vol.promises.lstat.bind(vol.promises);
+      const lstatSpy = vi.spyOn(vol.promises, "lstat").mockImplementation((async (
+        target: string,
+      ) => {
+        if (String(target) === "/testdir/locked.md") {
+          throw Object.assign(new Error("EACCES: permission denied"), {
+            code: "EACCES",
+          });
+        }
+        return realLstat(target);
+      }) as typeof vol.promises.lstat);
+
+      try {
+        await strategy.scrape(options, progressCallback);
+      } finally {
+        lstatSpy.mockRestore();
+      }
+
+      expect(progressCallback.mock.calls.map((call) => call[0].currentUrl)).toEqual([
+        "file:///testdir/keep.md",
+      ]);
     });
   });
 });

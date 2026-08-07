@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ProgressCallback } from "../../types";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type ArchiveAdapter, getArchiveAdapter } from "../../utils/archive";
 import type { AppConfig } from "../../utils/config";
@@ -9,7 +10,8 @@ import { FileFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
-import type { QueueItem, ScraperOptions } from "../types";
+import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
+import { findRepositoryRootAbove, GitignoreFilter } from "../utils/gitignore";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 /**
@@ -28,6 +30,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly fileFetcher: FileFetcher;
   private readonly pipelines: ContentPipeline[];
   private readonly accessPolicy: ScraperAccessPolicy;
+  private gitignoreFilter: GitignoreFilter | null = null;
 
   constructor(config: AppConfig) {
     super(config);
@@ -38,6 +41,93 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
   canHandle(url: string): boolean {
     return url.startsWith("file://");
+  }
+
+  async scrape(
+    options: ScraperOptions,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.gitignoreFilter = null;
+
+    if (options.respectGitignore) {
+      const resolvedRoot = await this.accessPolicy.resolveFileAccess(
+        options.url,
+        options.internalAllowedFileRoots,
+      );
+      try {
+        const rootStats = await fs.stat(resolvedRoot.filePath);
+        if (rootStats.isDirectory()) {
+          this.gitignoreFilter = new GitignoreFilter(resolvedRoot.filePath);
+          await this.warnAboutRulesAboveRoot(resolvedRoot.filePath);
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          throw error;
+        }
+      }
+    }
+
+    await super.scrape(options, progressCallback, signal);
+  }
+
+  /**
+   * Warns when the indexed folder sits below a repository root, because the
+   * rules in that repository's own `.gitignore` will not be applied. Only
+   * `.gitignore` files at or below the indexed folder are read, so this is the
+   * case where results differ most visibly from what `git status` would show.
+   */
+  private async warnAboutRulesAboveRoot(rootDirectory: string): Promise<void> {
+    const repositoryRoot = await findRepositoryRootAbove(rootDirectory);
+    if (!repositoryRoot) {
+      return;
+    }
+
+    logger.warn(
+      `⚠️  ${rootDirectory} is inside the Git repository at ${repositoryRoot}. ` +
+        `Only .gitignore files at or below the indexed folder are applied, so any ` +
+        `rules higher up in that repository are ignored. Index the repository root ` +
+        `to apply them.`,
+    );
+  }
+
+  /**
+   * Whether a path is excluded by the active `.gitignore` cascade.
+   *
+   * Git records a symlink as a blob and never as a directory, so a
+   * directory-only rule (`link/`) never matches one however it resolves —
+   * only a plain path rule (`link`) does. Testing links as paths therefore
+   * both matches Git and means a gitignored link is skipped without its
+   * target ever being touched.
+   *
+   * A symlink to a directory that the crawler does follow still has its
+   * *contents* pruned by a directory-only rule, because the enclosing
+   * directory is matched as a directory when its rule context is built.
+   */
+  private async isGitignored(
+    targetPath: string,
+    stats: Awaited<ReturnType<typeof fs.lstat>>,
+  ): Promise<boolean> {
+    return (
+      this.gitignoreFilter?.isIgnored(
+        targetPath,
+        !stats.isSymbolicLink() && stats.isDirectory(),
+      ) ?? false
+    );
+  }
+
+  /**
+   * Result for a path skipped by `.gitignore`. A page already in the index
+   * reports as deleted so the refresh removes it; one that was never indexed
+   * simply contributes nothing.
+   */
+  private gitignoredResult(item: QueueItem): ProcessItemResult {
+    return {
+      url: item.url,
+      links: [],
+      status: item.pageId === undefined ? FetchStatus.SUCCESS : FetchStatus.NOT_FOUND,
+    };
   }
 
   async processItem(
@@ -58,7 +148,18 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     try {
       try {
-        stats = await fs.stat(filePath);
+        // With filtering on, look at the link itself first: a gitignored
+        // symlink must be skipped without resolving what it points at.
+        const pathStats = this.gitignoreFilter
+          ? await fs.lstat(filePath)
+          : await fs.stat(filePath);
+
+        if (await this.isGitignored(filePath, pathStats)) {
+          logger.debug(`Skipping gitignored path: ${filePath}`);
+          return this.gitignoredResult(item);
+        }
+
+        stats = pathStats.isSymbolicLink() ? await fs.stat(filePath) : pathStats;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT" || code === "ENOTDIR") {
@@ -82,6 +183,18 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         }
       }
 
+      // An archive member has no filesystem entry of its own, so the physical
+      // archive decides for everything inside it.
+      if (
+        !stats &&
+        archivePath &&
+        this.gitignoreFilter &&
+        (await this.gitignoreFilter.isIgnored(archivePath, false))
+      ) {
+        logger.debug(`Skipping gitignored path: ${archivePath}`);
+        return this.gitignoredResult(item);
+      }
+
       // Handle physical directory
       if (stats?.isDirectory()) {
         const contents = await fs.readdir(filePath);
@@ -92,9 +205,28 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         const linkEntries = await Promise.all(
           visibleContents.map(async (name) => {
             const entryPath = path.join(filePath, name);
-            if (!this.config.scraper.security.fileAccess.followSymlinks) {
-              const entryStats = await fs.lstat(entryPath).catch(() => null);
-              if (entryStats?.isSymbolicLink()) {
+            const followSymlinks = this.config.scraper.security.fileAccess.followSymlinks;
+            let entryStats: Awaited<ReturnType<typeof fs.lstat>> | null = null;
+
+            if (!followSymlinks || this.gitignoreFilter) {
+              entryStats = await fs.lstat(entryPath).catch(() => null);
+            }
+
+            if (!followSymlinks && entryStats?.isSymbolicLink()) {
+              return null;
+            }
+
+            if (this.gitignoreFilter) {
+              // An entry we cannot stat is skipped rather than failing the
+              // whole directory: it may have been removed mid-crawl, or sit in
+              // a directory that is listable but not searchable.
+              if (!entryStats) {
+                logger.debug(`Skipping unreadable directory entry: ${entryPath}`);
+                return null;
+              }
+
+              if (await this.isGitignored(entryPath, entryStats)) {
+                logger.debug(`Skipping gitignored path: ${entryPath}`);
                 return null;
               }
             }

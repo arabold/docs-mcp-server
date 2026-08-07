@@ -216,4 +216,23 @@ describe("ScrapeTool", () => {
       }),
     );
   });
+
+  it("should pass respectGitignore to the pipeline manager", async () => {
+    const options: ScrapeToolOptions = {
+      ...getBaseOptions("2.0.0"),
+      options: {
+        respectGitignore: true,
+      },
+    };
+
+    await scrapeTool.execute(options);
+
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
+      "test-lib",
+      "2.0.0",
+      expect.objectContaining({
+        respectGitignore: true,
+      }),
+    );
+  });
 });

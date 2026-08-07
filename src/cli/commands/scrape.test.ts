@@ -107,4 +107,25 @@ describe("scrape command", () => {
       }),
     );
   });
+
+  it("passes respectGitignore through to ScrapeTool", async () => {
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse([
+      "scrape",
+      "local-docs",
+      "file:///workspace/docs",
+      "--respect-gitignore",
+    ]);
+
+    const execute = vi.mocked(ScrapeTool).mock.results[0]?.value.execute;
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          respectGitignore: true,
+        }),
+      }),
+    );
+  });
 });

@@ -44,7 +44,7 @@ export function formatRelativeTime(iso: string | null): string {
   return iso ? formatRelativeShort(new Date(iso)) : "—";
 }
 
-export { displayUrl } from "../../utils/format";
+export { displayUrl, isLocalFileUrl } from "../../utils/format";
 
 /** Labels a version for the Library Detail page's tab switcher; the empty string ("unversioned") reads as "Latest". */
 export function versionTabLabel(version: string): string {

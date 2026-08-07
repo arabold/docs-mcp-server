@@ -71,6 +71,14 @@ export function createMcpServerInstance(
           .boolean()
           .optional()
           .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
+        respectGitignore: z
+          .boolean()
+          .optional()
+          .describe(
+            "For file:// directories, skip files matched by .gitignore rules in the " +
+              "indexed folder and below. Rules in parent folders, global excludes, and " +
+              ".git/info/exclude are not applied.",
+          ),
       },
       {
         title: "Scrape New Library Documentation",
@@ -86,6 +94,7 @@ export function createMcpServerInstance(
         scope,
         followRedirects,
         preserveHashes,
+        respectGitignore,
       }) => {
         // Track MCP tool usage
         telemetry.track(TelemetryEvent.TOOL_USED, {
@@ -97,6 +106,7 @@ export function createMcpServerInstance(
           maxPages,
           maxDepth,
           scope,
+          respectGitignore,
         });
 
         try {
@@ -113,6 +123,7 @@ export function createMcpServerInstance(
               scope,
               followRedirects,
               preserveHashes,
+              respectGitignore,
             },
           });
 

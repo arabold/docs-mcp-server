@@ -47,6 +47,8 @@ export interface ScrapeToolOptions {
      * Regex patterns must be wrapped in slashes, e.g. /pattern/.
      */
     excludePatterns?: string[];
+    /** Respect per-directory `.gitignore` rules when crawling local directories. */
+    respectGitignore?: boolean;
     /** Preserve URL hash fragments for hash-routed SPA documentation sites. */
     preserveHashes?: boolean;
     /**
@@ -151,6 +153,7 @@ export class ScrapeTool {
       scrapeMode: scraperOptions?.scrapeMode ?? ScrapeMode.Auto, // Pass scrapeMode enum
       includePatterns: scraperOptions?.includePatterns,
       excludePatterns: scraperOptions?.excludePatterns,
+      respectGitignore: scraperOptions?.respectGitignore,
       preserveHashes: scraperOptions?.preserveHashes,
       headers: scraperOptions?.headers, // <-- propagate headers
       clean: scraperOptions?.clean, // <-- propagate clean option
