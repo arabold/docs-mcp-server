@@ -135,6 +135,8 @@ You can index documentation from your local filesystem using `file://` URLs. Thi
 -   `file:///Users/me/docs/index.html` (Single file)
 -   `file:///Users/me/docs/my-library` (Directory)
 
+#### Respecting .gitignore
+
 To skip files and directories matched by `.gitignore`, enable **Respect .gitignore**
 in the Web UI or pass `--respect-gitignore` to the CLI:
 
@@ -142,9 +144,18 @@ in the Web UI or pass `--respect-gitignore` to the CLI:
 npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/project --respect-gitignore
 ```
 
-The option reads `.gitignore` files from the selected directory and its
-subdirectories. It does not read parent-directory rules, `.git/info/exclude`, or
-global Git excludes.
+Rules are read from `.gitignore` files in the indexed folder and its
+subdirectories, and applied with Git's own precedence: nested files override
+their parents, negations re-include, and a rule that excludes a directory
+excludes everything beneath it. The `.git` directory is never indexed.
+
+Rules that live *above* the indexed folder are not applied, and neither are
+`.git/info/exclude` or global Git excludes. Indexing a subdirectory of a
+repository therefore indexes files the repository's own `.gitignore` excludes;
+the server logs a warning when it detects this. Index the repository root to
+apply those rules.
+
+On a refresh, files that have since become ignored are removed from the index.
 
 **Docker Example:**
 

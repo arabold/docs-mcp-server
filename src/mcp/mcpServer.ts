@@ -74,9 +74,10 @@ export function createMcpServerInstance(
         respectGitignore: z
           .boolean()
           .optional()
-          .default(false)
           .describe(
-            "Respect per-directory .gitignore rules when scraping a local directory.",
+            "For file:// directories, skip files matched by .gitignore rules in the " +
+              "indexed folder and below. Rules in parent folders, global excludes, and " +
+              ".git/info/exclude are not applied.",
           ),
       },
       {

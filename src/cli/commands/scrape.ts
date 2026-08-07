@@ -106,7 +106,8 @@ export function createScrapeCommand(cli: Argv) {
         .option("respect-gitignore", {
           type: "boolean",
           description:
-            "Respect per-directory .gitignore rules when scraping a local directory",
+            "For file:// directories, skip files matched by .gitignore rules in the " +
+            "indexed folder and below (parent-folder and global rules are not applied)",
           alias: "respectGitignore",
           default: false,
         })

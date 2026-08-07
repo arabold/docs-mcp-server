@@ -1032,5 +1032,52 @@ describe("LocalFileStrategy", () => {
         }),
       );
     });
+
+    it("skips an unreadable entry instead of failing the whole directory", async () => {
+      const strategy = new LocalFileStrategy(appConfig);
+      const options: ScraperOptions = {
+        url: "file:///testdir",
+        library: "test",
+        version: "1.0",
+        maxPages: 10,
+        maxDepth: 2,
+        respectGitignore: true,
+      };
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+      vol.fromJSON(
+        {
+          "/testdir/.gitignore": "ignored.md\n",
+          "/testdir/keep.md": "# Keep",
+          "/testdir/locked.md": "# Unreadable",
+        },
+        "/",
+      );
+
+      // A directory can be listable but not searchable, which makes lstat on
+      // one of its entries fail even though readdir succeeded. memfs backs the
+      // mocked node:fs/promises, so spying here is what the strategy sees.
+      const realLstat = vol.promises.lstat.bind(vol.promises);
+      const lstatSpy = vi.spyOn(vol.promises, "lstat").mockImplementation((async (
+        target: string,
+      ) => {
+        if (String(target) === "/testdir/locked.md") {
+          throw Object.assign(new Error("EACCES: permission denied"), {
+            code: "EACCES",
+          });
+        }
+        return realLstat(target);
+      }) as typeof vol.promises.lstat);
+
+      try {
+        await strategy.scrape(options, progressCallback);
+      } finally {
+        lstatSpy.mockRestore();
+      }
+
+      expect(progressCallback.mock.calls.map((call) => call[0].currentUrl)).toEqual([
+        "file:///testdir/keep.md",
+      ]);
+    });
   });
 });

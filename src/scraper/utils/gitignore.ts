@@ -20,6 +20,9 @@ interface LoadedPatterns {
 
 const GITIGNORE_SPECIAL_CHARACTERS = new Set(["\\", "*", "?", "[", "]", "!", "#"]);
 
+/** Repository metadata directory, which Git never walks and never lets a pattern re-include. */
+const GIT_DIRECTORY = ".git";
+
 function createMatcher(ignoreCase: boolean): IgnoreMatcher {
   return ignore({ ignorecase: ignoreCase });
 }
@@ -46,6 +49,10 @@ export class GitignoreFilter {
 
   /**
    * Returns whether a path is ignored by the applicable `.gitignore` cascade.
+   *
+   * Repository metadata (`.git` and everything under it) is always ignored:
+   * Git excludes it from traversal unconditionally, and no pattern — not even
+   * a negation — can bring it back.
    * @param targetPath Absolute filesystem path to test.
    * @param isDirectory Whether the target is a directory.
    * @returns True when the path should be skipped.
@@ -54,6 +61,10 @@ export class GitignoreFilter {
     const resolvedTarget = path.resolve(targetPath);
     if (!this.isInsideRoot(resolvedTarget) || resolvedTarget === this.rootDirectory) {
       return false;
+    }
+
+    if (this.containsGitDirectory(resolvedTarget)) {
+      return true;
     }
 
     const context = await this.getContext(path.dirname(resolvedTarget));
@@ -195,6 +206,48 @@ export class GitignoreFilter {
   private isInsideRoot(targetPath: string): boolean {
     const relativePath = path.relative(this.rootDirectory, targetPath);
     return relativePath === "" || !isOutsideDirectory(relativePath);
+  }
+
+  /** Whether the path is, or lives under, a `.git` directory below the root. */
+  private containsGitDirectory(targetPath: string): boolean {
+    const relativePath = path.relative(this.rootDirectory, targetPath);
+    return relativePath.split(path.sep).includes(GIT_DIRECTORY);
+  }
+}
+
+/**
+ * Finds the Git repository root containing `directory`, looking only at
+ * *ancestor* directories.
+ *
+ * Used to warn that a crawl rooted below a repository root cannot see that
+ * repository's ignore rules. Probes for the existence of `.git` (a directory
+ * in a normal clone, a file in a worktree or submodule) and never reads
+ * anything, so it stays within what the access policy allows for a path the
+ * crawl will not touch.
+ * @param directory Absolute path of the crawl root.
+ * @returns The repository root above `directory`, or null when there is none.
+ */
+export async function findRepositoryRootAbove(directory: string): Promise<string | null> {
+  let current = path.dirname(path.resolve(directory));
+
+  while (true) {
+    try {
+      await fs.lstat(path.join(current, GIT_DIRECTORY));
+      return current;
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        // Unreadable ancestor (permissions, or a path we are not allowed to
+        // traverse) — treat as "no repository found" rather than failing the
+        // crawl over a diagnostic.
+        return null;
+      }
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
   }
 }
 

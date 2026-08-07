@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { GitignoreFilter } from "./gitignore";
+import { findRepositoryRootAbove, GitignoreFilter } from "./gitignore";
 
 describe("GitignoreFilter", () => {
   let rootDirectory: string;
@@ -330,5 +330,67 @@ describe("GitignoreFilter", () => {
     await expect(
       filter.isIgnored(path.join(path.dirname(rootDirectory), "outside.md"), false),
     ).resolves.toBe(false);
+  });
+
+  it("always ignores repository metadata, even against a re-including rule", async () => {
+    await write(".gitignore", "!.git\n!.git/**\n");
+    const filter = new GitignoreFilter(rootDirectory);
+
+    await expect(filter.isIgnored(path.join(rootDirectory, ".git"), true)).resolves.toBe(
+      true,
+    );
+    await expect(
+      filter.isIgnored(path.join(rootDirectory, ".git", "config"), false),
+    ).resolves.toBe(true);
+    await expect(
+      filter.isIgnored(path.join(rootDirectory, "nested", ".git", "HEAD"), false),
+    ).resolves.toBe(true);
+  });
+
+  it("does not confuse repository metadata with similarly named paths", async () => {
+    const filter = new GitignoreFilter(rootDirectory);
+
+    await expect(
+      filter.isIgnored(path.join(rootDirectory, ".github", "workflow.md"), false),
+    ).resolves.toBe(false);
+    await expect(
+      filter.isIgnored(path.join(rootDirectory, "not.git", "notes.md"), false),
+    ).resolves.toBe(false);
+  });
+});
+
+describe("findRepositoryRootAbove", () => {
+  let rootDirectory: string;
+
+  beforeEach(async () => {
+    rootDirectory = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "docs-mcp-repo-root-")),
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(rootDirectory, { recursive: true, force: true });
+  });
+
+  it("finds a repository root above the given directory", async () => {
+    await fs.mkdir(path.join(rootDirectory, ".git"));
+    const nested = path.join(rootDirectory, "docs", "guides");
+    await fs.mkdir(nested, { recursive: true });
+
+    await expect(findRepositoryRootAbove(nested)).resolves.toBe(rootDirectory);
+  });
+
+  it("detects a worktree or submodule, where .git is a file", async () => {
+    await fs.writeFile(path.join(rootDirectory, ".git"), "gitdir: /elsewhere\n");
+    const nested = path.join(rootDirectory, "docs");
+    await fs.mkdir(nested);
+
+    await expect(findRepositoryRootAbove(nested)).resolves.toBe(rootDirectory);
+  });
+
+  it("ignores a repository rooted at the directory itself", async () => {
+    await fs.mkdir(path.join(rootDirectory, ".git"));
+
+    await expect(findRepositoryRootAbove(rootDirectory)).resolves.toBeNull();
   });
 });

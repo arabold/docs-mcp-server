@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +14,11 @@ describe("LocalFileStrategy - .gitignore integration (issue #438)", () => {
   let rootDirectory: string;
 
   beforeEach(async () => {
-    rootDirectory = await fs.mkdtemp(path.join(process.cwd(), ".gitignore-e2e-"));
+    // realpath so the crawl root matches the resolved paths the strategy sees
+    // (macOS puts the temp dir behind a /var -> /private/var symlink).
+    rootDirectory = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "gitignore-e2e-")),
+    );
   });
 
   afterEach(async () => {
@@ -28,11 +33,13 @@ describe("LocalFileStrategy - .gitignore integration (issue #438)", () => {
 
   async function scrape(
     options: Omit<ScraperOptions, "url" | "library" | "version">,
+    fileAccess: { includeHidden?: boolean } = {},
   ): Promise<ScraperProgressEvent[]> {
     const appConfig = loadConfig();
     appConfig.scraper.security.fileAccess.allowedRoots = [rootDirectory];
     appConfig.scraper.security.fileAccess.followSymlinks = true;
-    appConfig.scraper.security.fileAccess.includeHidden = false;
+    appConfig.scraper.security.fileAccess.includeHidden =
+      fileAccess.includeHidden ?? false;
 
     const strategy = new LocalFileStrategy(appConfig);
     const events: ScraperProgressEvent[] = [];
@@ -137,43 +144,85 @@ describe("LocalFileStrategy - .gitignore integration (issue #438)", () => {
     );
   });
 
-  it.each([
-    { description: "path rule", ignoreRule: "ignored-link\n" },
-    { description: "directory-only rule", ignoreRule: "ignored-link/\n" },
-  ])(
-    "does not follow a symlink ignored by a $description before reporting a refresh deletion",
-    async ({ ignoreRule }) => {
-      await write(".gitignore", ignoreRule);
-      await write(path.join(".target", "secret.md"), "# Must not be reached\n");
-      const linkPath = path.join(rootDirectory, "ignored-link");
-      await fs.symlink(
-        path.join(rootDirectory, ".target"),
-        linkPath,
-        process.platform === "win32" ? "junction" : "dir",
+  it("does not resolve a symlink ignored by a path rule before reporting a refresh deletion", async () => {
+    await write(".gitignore", "ignored-link\n");
+    await write(path.join(".target", "secret.md"), "# Must not be reached\n");
+    const linkPath = path.join(rootDirectory, "ignored-link");
+    await fs.symlink(
+      path.join(rootDirectory, ".target"),
+      linkPath,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const linkUrl = pathToFileURL(linkPath).href;
+    const statSpy = vi.spyOn(fs, "stat");
+
+    try {
+      const events = await scrape({
+        respectGitignore: true,
+        initialQueue: [{ url: linkUrl, depth: 1, pageId: 440 }],
+      });
+
+      expect(statSpy).not.toHaveBeenCalledWith(linkPath);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          currentUrl: linkUrl,
+          pageId: 440,
+          result: null,
+          deleted: true,
+        }),
       );
-      const linkUrl = pathToFileURL(linkPath).href;
-      const statSpy = vi.spyOn(fs, "stat");
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
 
-      try {
-        const events = await scrape({
-          respectGitignore: true,
-          initialQueue: [{ url: linkUrl, depth: 1, pageId: 440 }],
-        });
+  it("applies a directory-only rule to a symlinked directory", async () => {
+    await write(".gitignore", "ignored-link/\n");
+    await write(path.join(".target", "secret.md"), "# Must not be indexed\n");
+    const linkPath = path.join(rootDirectory, "ignored-link");
+    await fs.symlink(
+      path.join(rootDirectory, ".target"),
+      linkPath,
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
-        expect(statSpy).not.toHaveBeenCalledWith(linkPath);
-        expect(events).toContainEqual(
-          expect.objectContaining({
-            currentUrl: linkUrl,
-            pageId: 440,
-            result: null,
-            deleted: true,
-          }),
-        );
-      } finally {
-        statSpy.mockRestore();
-      }
-    },
-  );
+    const events = await scrape({
+      respectGitignore: true,
+      initialQueue: [{ url: pathToFileURL(linkPath).href, depth: 1, pageId: 441 }],
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({ pageId: 441, result: null, deleted: true }),
+    );
+  });
+
+  // Git treats a directory-only rule as matching directories only, and a
+  // symlink to a file is not one — so the link stays indexed.
+  it("keeps a symlink to a file that only a directory-only rule matches", async () => {
+    await write(".gitignore", "notes.md/\n");
+    await write("target.md", "# Keep\n");
+    const linkPath = path.join(rootDirectory, "notes.md");
+    await fs.symlink(path.join(rootDirectory, "target.md"), linkPath, "file");
+
+    const events = await scrape({ respectGitignore: true });
+
+    expect(events.map((event) => event.currentUrl)).toContain(
+      pathToFileURL(linkPath).href,
+    );
+  });
+
+  it("never indexes repository metadata under .git", async () => {
+    await write(".gitignore", "ignored.md\n");
+    await write("keep.md", "# Keep\n");
+    await write(path.join(".git", "config.md"), "# Must not be indexed\n");
+    await write(path.join(".git", "objects", "info", "packs.md"), "# Nor this\n");
+
+    const events = await scrape({ respectGitignore: true }, { includeHidden: true });
+
+    expect(events.map((event) => event.currentUrl)).toEqual([
+      pathToFileURL(path.join(rootDirectory, "keep.md")).href,
+    ]);
+  });
 
   it("reports archived pages as deleted after their physical archive becomes ignored", async () => {
     await write(".gitignore", "archive.zip\n");
