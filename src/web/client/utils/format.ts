@@ -28,6 +28,18 @@ export function formatRelativeShort(date: Date): string {
 }
 
 /**
+ * Whether a source URL points at the local filesystem, and so is handled by
+ * `LocalFileStrategy` rather than a web strategy. Deliberately an exact,
+ * case-sensitive prefix test: it must agree with the server-side routing in
+ * `ScraperRegistry`, which would not send `FILE://…` to the local strategy.
+ * @param url Source URL to test; `null`/`undefined`/empty read as non-local.
+ * @returns True when the URL is a local `file://` URL.
+ */
+export function isLocalFileUrl(url: string | null | undefined): boolean {
+  return Boolean(url?.trim().startsWith("file://"));
+}
+
+/**
  * Returns a URL's host (host:port), dropping protocol and path — e.g.
  * `http://127.0.0.1:8080/api` → "127.0.0.1:8080". Falls back to the
  * protocol-stripped string when the input isn't a parseable URL.
