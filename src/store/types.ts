@@ -113,6 +113,7 @@ export interface VersionScraperOptions {
   excludeSelectors?: string[];
   includePatterns?: string[];
   excludePatterns?: string[];
+  respectGitignore?: boolean;
 
   // Processing options
   preserveHashes?: boolean;

@@ -97,6 +97,8 @@ export interface ScraperOptions {
    * Patterns for excluding URLs during scraping. Exclude takes precedence over include.
    */
   excludePatterns?: string[];
+  /** Respect per-directory `.gitignore` rules when crawling local directories. Defaults to false. */
+  respectGitignore?: boolean;
   /**
    * Custom HTTP headers to send with each HTTP request (e.g., for authentication).
    * Keys are header names, values are header values.

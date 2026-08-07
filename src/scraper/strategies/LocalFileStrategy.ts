@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ProgressCallback } from "../../types";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type ArchiveAdapter, getArchiveAdapter } from "../../utils/archive";
 import type { AppConfig } from "../../utils/config";
@@ -9,7 +10,8 @@ import { FileFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
-import type { QueueItem, ScraperOptions } from "../types";
+import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
+import { GitignoreFilter } from "../utils/gitignore";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 /**
@@ -28,6 +30,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
   private readonly fileFetcher: FileFetcher;
   private readonly pipelines: ContentPipeline[];
   private readonly accessPolicy: ScraperAccessPolicy;
+  private gitignoreFilter: GitignoreFilter | null = null;
 
   constructor(config: AppConfig) {
     super(config);
@@ -38,6 +41,34 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
   canHandle(url: string): boolean {
     return url.startsWith("file://");
+  }
+
+  async scrape(
+    options: ScraperOptions,
+    progressCallback: ProgressCallback<ScraperProgressEvent>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.gitignoreFilter = null;
+
+    if (options.respectGitignore) {
+      const resolvedRoot = await this.accessPolicy.resolveFileAccess(
+        options.url,
+        options.internalAllowedFileRoots,
+      );
+      try {
+        const rootStats = await fs.stat(resolvedRoot.filePath);
+        if (rootStats.isDirectory()) {
+          this.gitignoreFilter = new GitignoreFilter(resolvedRoot.filePath);
+        }
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") {
+          throw error;
+        }
+      }
+    }
+
+    await super.scrape(options, progressCallback, signal);
   }
 
   async processItem(
@@ -58,7 +89,28 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     try {
       try {
-        stats = await fs.stat(filePath);
+        if (this.gitignoreFilter) {
+          const pathStats = await fs.lstat(filePath);
+          if (pathStats.isSymbolicLink()) {
+            if (
+              (await this.gitignoreFilter.isIgnored(filePath, false)) ||
+              (await this.gitignoreFilter.isIgnored(filePath, true))
+            ) {
+              logger.debug(`Skipping gitignored path: ${filePath}`);
+              return {
+                url: item.url,
+                links: [],
+                status:
+                  item.pageId === undefined ? FetchStatus.SUCCESS : FetchStatus.NOT_FOUND,
+              };
+            }
+            stats = await fs.stat(filePath);
+          } else {
+            stats = pathStats;
+          }
+        } else {
+          stats = await fs.stat(filePath);
+        }
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "ENOENT" || code === "ENOTDIR") {
@@ -82,6 +134,23 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         }
       }
 
+      const gitignorePath = stats ? filePath : archivePath;
+      if (
+        gitignorePath &&
+        this.gitignoreFilter &&
+        (await this.gitignoreFilter.isIgnored(
+          gitignorePath,
+          stats?.isDirectory() ?? false,
+        ))
+      ) {
+        logger.debug(`Skipping gitignored path: ${gitignorePath}`);
+        return {
+          url: item.url,
+          links: [],
+          status: item.pageId === undefined ? FetchStatus.SUCCESS : FetchStatus.NOT_FOUND,
+        };
+      }
+
       // Handle physical directory
       if (stats?.isDirectory()) {
         const contents = await fs.readdir(filePath);
@@ -92,9 +161,51 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         const linkEntries = await Promise.all(
           visibleContents.map(async (name) => {
             const entryPath = path.join(filePath, name);
-            if (!this.config.scraper.security.fileAccess.followSymlinks) {
-              const entryStats = await fs.lstat(entryPath).catch(() => null);
-              if (entryStats?.isSymbolicLink()) {
+            const followSymlinks = this.config.scraper.security.fileAccess.followSymlinks;
+            let entryStats: Awaited<ReturnType<typeof fs.lstat>> | null = null;
+
+            if (!followSymlinks || this.gitignoreFilter) {
+              try {
+                entryStats = await fs.lstat(entryPath);
+              } catch (error) {
+                const code = (error as NodeJS.ErrnoException).code;
+                if (this.gitignoreFilter && code !== "ENOENT" && code !== "ENOTDIR") {
+                  throw error;
+                }
+              }
+            }
+
+            if (!followSymlinks && entryStats?.isSymbolicLink()) {
+              return null;
+            }
+
+            if (this.gitignoreFilter) {
+              if (!entryStats) {
+                return null;
+              }
+
+              let isDirectory = entryStats.isDirectory();
+              if (followSymlinks && entryStats.isSymbolicLink()) {
+                if (
+                  (await this.gitignoreFilter.isIgnored(entryPath, false)) ||
+                  (await this.gitignoreFilter.isIgnored(entryPath, true))
+                ) {
+                  logger.debug(`Skipping gitignored path: ${entryPath}`);
+                  return null;
+                }
+                try {
+                  isDirectory = (await fs.stat(entryPath)).isDirectory();
+                } catch (error) {
+                  const code = (error as NodeJS.ErrnoException).code;
+                  if (code === "ENOENT" || code === "ENOTDIR") {
+                    return null;
+                  }
+                  throw error;
+                }
+              }
+
+              if (await this.gitignoreFilter.isIgnored(entryPath, isDirectory)) {
+                logger.debug(`Skipping gitignored path: ${entryPath}`);
                 return null;
               }
             }

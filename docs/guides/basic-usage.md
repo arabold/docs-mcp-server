@@ -135,6 +135,17 @@ You can index documentation from your local filesystem using `file://` URLs. Thi
 -   `file:///Users/me/docs/index.html` (Single file)
 -   `file:///Users/me/docs/my-library` (Directory)
 
+To skip files and directories matched by `.gitignore`, enable **Respect .gitignore**
+in the Web UI or pass `--respect-gitignore` to the CLI:
+
+```bash
+npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/project --respect-gitignore
+```
+
+The option reads `.gitignore` files from the selected directory and its
+subdirectories. It does not read parent-directory rules, `.git/info/exclude`, or
+global Git excludes.
+
 **Docker Example:**
 
 If your docs are in `/absolute/path/to/docs` on your host:

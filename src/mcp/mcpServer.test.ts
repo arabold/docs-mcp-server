@@ -104,4 +104,30 @@ describe("MCP Server Read-Only Mode", () => {
       }),
     );
   });
+
+  it("should register scrape_docs with respectGitignore support and propagate it", async () => {
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const scrapeTool = (server as any)._registeredTools.scrape_docs;
+
+    const parsed = scrapeTool.inputSchema.parse({
+      url: "file:///workspace/docs",
+      library: "local-docs",
+      respectGitignore: true,
+    });
+    expect(parsed.respectGitignore).toBe(true);
+
+    await scrapeTool.handler({
+      url: "file:///workspace/docs",
+      library: "local-docs",
+      respectGitignore: true,
+    });
+
+    expect(mockTools.scrape.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          respectGitignore: true,
+        }),
+      }),
+    );
+  });
 });
