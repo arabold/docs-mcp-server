@@ -6,16 +6,16 @@
 - [x] 1.4 Cache one context per directory and reuse the parent's matcher for directories that carry no rules.
 - [x] 1.5 Detect the filesystem's case behavior the way Git does, and honour an explicit override.
 - [x] 1.6 Always ignore `.git` and everything beneath it, ahead of any pattern evaluation.
-- [x] 1.7 Add `findRepositoryRootAbove` as an existence-only upward probe, returning null for an unreadable or absent ancestor repository.
+- [x] 1.7 Add `findRepositoryRootAbove` as an existence-only upward probe that steps over unreadable ancestors and never throws.
 - [x] 1.8 Add unit tests covering scoping, negation, anchoring, globstars, whitespace and BOM handling, casing, `.git`, and the repository probe.
-- [x] 1.9 Verify the cascade differentially against real `git` output across the pattern forms the rewriting touches.
+- [x] 1.9 Commit a differential test that compares the filter's visible file set against real `git` output, over curated pattern forms and a generated corpus.
 
 ## 2. Local Crawl Integration
 
 - [x] 2.1 Build the filter in `LocalFileStrategy.scrape` when `respectGitignore` is set and the crawl root is a directory.
 - [x] 2.2 Warn when the crawl root sits below a repository root.
 - [x] 2.3 Prune ignored entries during directory enumeration so ignored directories are never descended into.
-- [x] 2.4 Test a symlink as a path first and resolve its target only to decide whether a directory-only rule applies.
+- [x] 2.4 Test symlinks as paths only, never as directories, matching how Git records them.
 - [x] 2.5 Skip entries that cannot be stat'ed instead of failing the containing directory.
 - [x] 2.6 Check ignored paths again when an item is processed, so refresh-seeded queue items are covered.
 - [x] 2.7 Report newly ignored indexed pages as deleted, and ignored unindexed paths as contributing nothing.

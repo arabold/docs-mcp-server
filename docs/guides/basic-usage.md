@@ -147,7 +147,8 @@ npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/project --resp
 Rules are read from `.gitignore` files in the indexed folder and its
 subdirectories, and applied with Git's own precedence: nested files override
 their parents, negations re-include, and a rule that excludes a directory
-excludes everything beneath it. The `.git` directory is never indexed.
+excludes everything beneath it. With the option on, the `.git` directory is
+never indexed.
 
 Rules that live *above* the indexed folder are not applied, and neither are
 `.git/info/exclude` or global Git excludes. Indexing a subdirectory of a

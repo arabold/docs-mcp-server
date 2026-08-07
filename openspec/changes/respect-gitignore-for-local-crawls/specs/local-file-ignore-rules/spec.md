@@ -68,7 +68,7 @@ The scraper SHALL prune ignored directories during traversal rather than descend
 
 ### Requirement: Repository metadata is never indexed
 
-The scraper SHALL treat `.git` and every path beneath it as ignored whenever `respectGitignore` is enabled, regardless of the configured hidden-file behavior. No `.gitignore` rule, including a negation, SHALL re-include it.
+The scraper SHALL treat `.git` and every path beneath it as ignored whenever `respectGitignore` is enabled, regardless of the configured hidden-file behavior. The name SHALL be matched case-insensitively, mirroring Git's own protection of the spelling. No `.gitignore` rule, including a negation, SHALL re-include it.
 
 #### Scenario: .git is skipped even when hidden files are indexed
 - **WHEN** a directory is crawled with `respectGitignore` enabled and hidden files included
@@ -78,28 +78,32 @@ The scraper SHALL treat `.git` and every path beneath it as ignored whenever `re
 - **WHEN** the root `.gitignore` contains `!.git` and `!.git/**`
 - **THEN** the system SHALL still skip every path under `.git/`
 
+#### Scenario: Alternate spellings are also treated as metadata
+- **WHEN** the crawled directory contains `.GIT/`
+- **THEN** the system SHALL NOT index its contents
+
 #### Scenario: Similarly named paths are unaffected
 - **WHEN** the crawled directory contains `.github/` and `not.git/`
 - **THEN** the system SHALL index their contents normally
 
-### Requirement: Symlink rules follow Git's file semantics
+### Requirement: Symlinks match as paths, never as directories
 
-The scraper SHALL test a symlink against path rules before resolving its target, so that a gitignored link is skipped without the target being touched. A directory-only rule SHALL apply to a symlink only when the link resolves to a directory and the security policy permits following symlinks.
+Git records a symlink as a blob and never as a directory, so a directory-only rule never matches one however it resolves. The scraper SHALL test a symlink against the path form of the rules only, which also means a gitignored link is skipped without its target being touched. The contents of a followed symlink to a directory SHALL still be pruned by a directory-only rule naming the link, because the enclosing directory is matched as a directory when its rule context is built.
 
 #### Scenario: Path rule skips a link without resolving it
 - **WHEN** the root `.gitignore` contains `ignored-link`
 - **AND** `ignored-link` is a symlink to a directory
 - **THEN** the system SHALL skip the link without resolving its target
 
-#### Scenario: Directory-only rule applies to a symlinked directory
-- **WHEN** the root `.gitignore` contains `ignored-link/`
-- **AND** `ignored-link` is a symlink to a directory
-- **THEN** the system SHALL skip the link
-
-#### Scenario: Directory-only rule does not apply to a symlinked file
+#### Scenario: Directory-only rule does not match a symlink
 - **WHEN** the root `.gitignore` contains `notes.md/`
 - **AND** `notes.md` is a symlink to a file
 - **THEN** the system SHALL index the link
+
+#### Scenario: Contents of a symlinked directory are still pruned
+- **WHEN** the root `.gitignore` contains `linkdir/`
+- **AND** `linkdir` is a followed symlink to a directory containing `inner.md`
+- **THEN** the system SHALL NOT index `linkdir/inner.md`
 
 ### Requirement: Newly ignored pages are removed on refresh
 

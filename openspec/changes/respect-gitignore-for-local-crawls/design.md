@@ -16,8 +16,9 @@ The cost is that indexing a subdirectory of a repository indexes files that
 repository's own `.gitignore` excludes. That is the behaviour most likely to
 surprise, so the crawl probes upward for a `.git` entry and logs a warning
 naming the repository root when it finds one. The probe is an existence check
-only — it never reads a file outside the indexed folder — and a failure to
-resolve an ancestor is treated as "no repository", never as a crawl error.
+only — it never reads a file outside the indexed folder — and an ancestor it
+cannot read is stepped over rather than ending the walk, so a diagnostic can
+never fail a crawl.
 
 ## Rule evaluation: pattern rewriting over per-directory matchers
 
@@ -40,8 +41,15 @@ and if so the context is marked blocked and every descendant is ignored without
 consulting patterns at all.
 
 Correctness here is verified differentially rather than by reasoning about the
-rewrites: the test suite compares the filter's verdicts against real `git`
-behaviour across the pattern forms that the rewriting touches.
+rewrites. `gitignore.test.ts` builds throwaway repositories, walks them with the
+same prune-ignored-directories rule the crawler uses, and compares the resulting
+file set against `git ls-files --others --exclude-standard` — over both a curated
+set of pattern forms and a deterministic generated corpus.
+
+Its scope is the rewriting and the cascade, and nothing else: the walk models
+directory pruning over regular files, not symlinks, hidden-file filtering,
+archives, or the refresh-time re-check. Those are pinned by the strategy and
+end-to-end tests instead.
 
 ## Case sensitivity
 
@@ -51,16 +59,31 @@ whether `.GITIGNORE` and `.gitignore` resolve to the same inode — so a crawl o
 case-insensitive volume matches the way Git on that volume does, without reading
 Git configuration.
 
+The `.git` name is the exception: it is matched case-insensitively regardless.
+Git guards that spelling itself on case-insensitive volumes rather than deferring
+to `core.ignoreCase`, and skipping an unrelated `.GIT` directory on a
+case-sensitive volume is a far cheaper mistake than indexing a repository's
+internals. Only the case dimension is covered — Git also rejects `git~1`,
+`.git.` and other filesystem-specific spellings, which a crawl is unlikely to
+meet.
+
 ## Symlinks
 
-A symlink is tested as a plain path first, so a rule naming it skips it without
-ever resolving the target. Only when that does not match is the target resolved,
-and only to answer whether a directory-only rule applies. Testing both forms up
-front would be cheaper but would skip a symlink pointing at a *file* whose name
-matches a directory-only rule, which Git does not do.
+Git records a symlink as a blob, never as a directory. A directory-only rule
+(`link/`) therefore never matches one, however it resolves — only a plain path
+rule (`link`) does. Verified with `git check-ignore`: with `linkdir/` in
+`.gitignore`, a `linkdir` symlink pointing at a real directory is reported as
+not ignored.
 
-Symlinks are only resolved at all when the security policy allows following
-them; otherwise a link that is not matched by a path rule is simply kept.
+Testing links as paths falls out of that, and carries a second benefit: a
+gitignored link is skipped without its target ever being resolved, so a rule
+naming a link is enough to keep the crawler away from whatever it points at.
+
+The contents of a followed symlink to a directory are still pruned by a
+directory-only rule naming the link, because the enclosing directory is matched
+as a directory when its rule context is built. The net effect matches Git
+closely: Git lists the link itself and never descends; the crawler descends but
+indexes nothing inside.
 
 ## Refresh semantics
 

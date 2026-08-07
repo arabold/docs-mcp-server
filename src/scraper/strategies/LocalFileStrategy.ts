@@ -86,47 +86,35 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
     logger.warn(
       `⚠️  ${rootDirectory} is inside the Git repository at ${repositoryRoot}. ` +
-        `Only .gitignore files at or below the indexed folder are applied — rules in ` +
-        `${repositoryRoot} are not. Index the repository root to apply them.`,
+        `Only .gitignore files at or below the indexed folder are applied, so any ` +
+        `rules higher up in that repository are ignored. Index the repository root ` +
+        `to apply them.`,
     );
   }
 
   /**
    * Whether a path is excluded by the active `.gitignore` cascade.
    *
-   * A symlink is tested as a plain path first, so a rule that names it
-   * (`link`) skips it without ever resolving the target. Only when that does
-   * not match is the target resolved, and only to answer whether a
-   * directory-only rule (`link/`) applies. Testing both forms up front would
-   * skip a symlink pointing at a *file* whose name happens to match a
-   * directory-only rule, which Git does not do.
+   * Git records a symlink as a blob and never as a directory, so a
+   * directory-only rule (`link/`) never matches one however it resolves —
+   * only a plain path rule (`link`) does. Testing links as paths therefore
+   * both matches Git and means a gitignored link is skipped without its
+   * target ever being touched.
+   *
+   * A symlink to a directory that the crawler does follow still has its
+   * *contents* pruned by a directory-only rule, because the enclosing
+   * directory is matched as a directory when its rule context is built.
    */
   private async isGitignored(
     targetPath: string,
     stats: Awaited<ReturnType<typeof fs.lstat>>,
   ): Promise<boolean> {
-    const filter = this.gitignoreFilter;
-    if (!filter) {
-      return false;
-    }
-
-    if (!stats.isSymbolicLink()) {
-      return filter.isIgnored(targetPath, stats.isDirectory());
-    }
-
-    if (await filter.isIgnored(targetPath, false)) {
-      return true;
-    }
-
-    // Only a directory-only rule can still match, and only if the link really
-    // resolves to a directory. Links are not traversed at all unless the
-    // security policy allows it, so there is nothing left to check otherwise.
-    if (!this.config.scraper.security.fileAccess.followSymlinks) {
-      return false;
-    }
-
-    const resolved = await fs.stat(targetPath).catch(() => null);
-    return resolved?.isDirectory() ? filter.isIgnored(targetPath, true) : false;
+    return (
+      this.gitignoreFilter?.isIgnored(
+        targetPath,
+        !stats.isSymbolicLink() && stats.isDirectory(),
+      ) ?? false
+    );
   }
 
   /**

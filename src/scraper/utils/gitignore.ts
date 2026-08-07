@@ -208,10 +208,22 @@ export class GitignoreFilter {
     return relativePath === "" || !isOutsideDirectory(relativePath);
   }
 
-  /** Whether the path is, or lives under, a `.git` directory below the root. */
+  /**
+   * Whether the path is, or lives under, a `.git` directory below the root.
+   *
+   * Matched case-insensitively: on a case-insensitive volume `.GIT` *is* the
+   * metadata directory, and Git guards that spelling itself rather than
+   * consulting `core.ignoreCase`. Git rejects further variants too (`git~1`,
+   * `.git.`, and other filesystem-specific spellings); this covers only the
+   * case dimension, which is the one a crawl realistically meets. On a
+   * case-sensitive volume it can skip an unrelated directory named `.GIT`, a
+   * far cheaper mistake than indexing a repository's internals.
+   */
   private containsGitDirectory(targetPath: string): boolean {
-    const relativePath = path.relative(this.rootDirectory, targetPath);
-    return relativePath.split(path.sep).includes(GIT_DIRECTORY);
+    return path
+      .relative(this.rootDirectory, targetPath)
+      .split(path.sep)
+      .some((segment) => segment.toLowerCase() === GIT_DIRECTORY);
   }
 }
 
@@ -234,13 +246,10 @@ export async function findRepositoryRootAbove(directory: string): Promise<string
     try {
       await fs.lstat(path.join(current, GIT_DIRECTORY));
       return current;
-    } catch (error) {
-      if (!isMissingPathError(error)) {
-        // Unreadable ancestor (permissions, or a path we are not allowed to
-        // traverse) — treat as "no repository found" rather than failing the
-        // crawl over a diagnostic.
-        return null;
-      }
+    } catch {
+      // Absent, or an ancestor we may not read. Either way keep walking: a
+      // repository root can still sit above it, and a diagnostic must never
+      // fail the crawl.
     }
 
     const parent = path.dirname(current);

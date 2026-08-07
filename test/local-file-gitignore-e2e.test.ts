@@ -7,6 +7,7 @@ import { LocalFileStrategy } from "../src/scraper/strategies/LocalFileStrategy";
 import type { ScraperOptions, ScraperProgressEvent } from "../src/scraper/types";
 import type { ProgressCallback } from "../src/types";
 import { loadConfig } from "../src/utils/config";
+import { logger } from "../src/utils/logger";
 
 const FIXTURE_ARCHIVE = path.join(process.cwd(), "test", "fixtures", "archive.zip");
 
@@ -176,28 +177,10 @@ describe("LocalFileStrategy - .gitignore integration (issue #438)", () => {
     }
   });
 
-  it("applies a directory-only rule to a symlinked directory", async () => {
-    await write(".gitignore", "ignored-link/\n");
-    await write(path.join(".target", "secret.md"), "# Must not be indexed\n");
-    const linkPath = path.join(rootDirectory, "ignored-link");
-    await fs.symlink(
-      path.join(rootDirectory, ".target"),
-      linkPath,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-
-    const events = await scrape({
-      respectGitignore: true,
-      initialQueue: [{ url: pathToFileURL(linkPath).href, depth: 1, pageId: 441 }],
-    });
-
-    expect(events).toContainEqual(
-      expect.objectContaining({ pageId: 441, result: null, deleted: true }),
-    );
-  });
-
-  // Git treats a directory-only rule as matching directories only, and a
-  // symlink to a file is not one — so the link stays indexed.
+  // Git records a symlink as a blob, never a directory, so a directory-only
+  // rule does not match one. Confirmed against `git check-ignore`: with
+  // `notes.md/` in .gitignore, a `notes.md` symlink is reported as NOT
+  // ignored whether it points at a file or at a real directory.
   it("keeps a symlink to a file that only a directory-only rule matches", async () => {
     await write(".gitignore", "notes.md/\n");
     await write("target.md", "# Keep\n");
@@ -208,6 +191,70 @@ describe("LocalFileStrategy - .gitignore integration (issue #438)", () => {
 
     expect(events.map((event) => event.currentUrl)).toContain(
       pathToFileURL(linkPath).href,
+    );
+  });
+
+  it("prunes the contents of a symlinked directory matched by a directory-only rule", async () => {
+    await write(".gitignore", "linkdir/\n");
+    await write(path.join(".target", "inner.md"), "# Must not be indexed\n");
+    const linkPath = path.join(rootDirectory, "linkdir");
+    await fs.symlink(
+      path.join(rootDirectory, ".target"),
+      linkPath,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const readdirSpy = vi.spyOn(fs, "readdir");
+
+    try {
+      const events = await scrape({ respectGitignore: true });
+
+      // The link is not matched — Git would list it — so the crawler still
+      // descends. Reading it is what distinguishes "kept, then pruned from
+      // within" from "skipped as ignored"; neither indexes anything, so the
+      // event list alone cannot tell them apart.
+      expect(readdirSpy).toHaveBeenCalledWith(linkPath);
+      expect(events.map((event) => event.currentUrl)).not.toContain(
+        pathToFileURL(path.join(linkPath, "inner.md")).href,
+      );
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
+  it("warns that rules above the indexed folder are not applied", async () => {
+    const repositoryRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "gitignore-repo-")),
+    );
+    const previousRoot = rootDirectory;
+    try {
+      await fs.mkdir(path.join(repositoryRoot, ".git"));
+      rootDirectory = path.join(repositoryRoot, "docs");
+      await fs.mkdir(rootDirectory);
+      await write("keep.md", "# Keep\n");
+      vi.mocked(logger.warn).mockClear();
+
+      await scrape({ respectGitignore: true });
+
+      // The indexed folder is a path *under* repositoryRoot, so matching the
+      // root alone would also match a message that only names the folder.
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining(`is inside the Git repository at ${repositoryRoot}`),
+      );
+    } finally {
+      rootDirectory = previousRoot;
+      await fs.rm(repositoryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not warn when the indexed folder is the repository root", async () => {
+    await fs.mkdir(path.join(rootDirectory, ".git"));
+    await write("keep.md", "# Keep\n");
+    vi.mocked(logger.warn).mockClear();
+
+    await scrape({ respectGitignore: true });
+
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("is inside the Git repository at"),
     );
   });
 
