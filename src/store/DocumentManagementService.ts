@@ -268,7 +268,11 @@ export class DocumentManagementService {
    */
   async listVersions(library: string): Promise<string[]> {
     const versions = await this.store.queryUniqueVersions(library);
-    const validVersions = versions.filter((v) => semver.valid(v));
+    // Accept anything coercible to semver (e.g. "1.20", "5"), not just strict
+    // X.Y.Z strings — otherwise real-world partial versions are silently
+    // dropped and become invisible to findBestVersion(). Non-version labels
+    // like "stable"/"latest" correctly still fail coercion and stay excluded.
+    const validVersions = versions.filter((v) => semver.coerce(v) !== null);
     return sortVersionsDescending(validVersions);
   }
 
@@ -320,8 +324,22 @@ export class DocumentManagementService {
 
     let bestMatch: string | null = null;
 
+    // semver.maxSatisfying() requires every candidate to itself be a fully
+    // valid X.Y.Z semver string — a stored version like "1.20" fails that
+    // even though listVersions() now accepts it. Match on coerced versions,
+    // then map the winner back to its original stored string so downstream
+    // lookups (e.g. checkDocumentExists) use the string that's actually in
+    // the store.
+    const coercedToOriginal = new Map<string, string>();
+    for (const v of versionStrings) {
+      const coerced = semver.coerce(v);
+      if (coerced) coercedToOriginal.set(coerced.version, v);
+    }
+    const coercedCandidates = Array.from(coercedToOriginal.keys());
+
     if (!targetVersion || targetVersion === "latest") {
-      bestMatch = semver.maxSatisfying(versionStrings, "*");
+      const coercedBest = semver.maxSatisfying(coercedCandidates, "*");
+      bestMatch = coercedBest ? (coercedToOriginal.get(coercedBest) ?? null) : null;
     } else {
       const versionRegex = /^(\d+)(?:\.(?:x(?:\.x)?|\d+(?:\.(?:x|\d+))?))?$|^$/;
       if (!semver.valid(targetVersion) && !versionRegex.test(targetVersion)) {
@@ -338,7 +356,8 @@ export class DocumentManagementService {
           range = `${range} || <=${targetVersion}`;
         }
         // If it was already a valid range (like '1.x'), use it directly
-        bestMatch = semver.maxSatisfying(versionStrings, range);
+        const coercedBest = semver.maxSatisfying(coercedCandidates, range);
+        bestMatch = coercedBest ? (coercedToOriginal.get(coercedBest) ?? null) : null;
       }
     }
 
