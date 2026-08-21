@@ -429,6 +429,17 @@ describe("DocumentManagementService", () => {
         expect(versions).toEqual(["2.0.0", "2.0.0-beta", "1.0.0"]);
         expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library); // Fix: Use mockStoreInstance
       });
+
+      it("should include partial versions coercible to semver (e.g. '1.20', '5'), sorted descending", async () => {
+        const library = "test-lib";
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "5", "stable", "2.0.0"]);
+
+        const versions = await docService.listVersions(library);
+        // "stable" is not coercible to semver and stays excluded; "1.20" and
+        // "5" are real partial versions (major.minor / major-only) and must
+        // not be silently dropped just because they aren't full X.Y.Z.
+        expect(versions).toEqual(["5", "2.0.0", "1.20"]);
+      });
     });
 
     describe("findBestVersion", () => {
@@ -544,6 +555,34 @@ describe("DocumentManagementService", () => {
         await expect(
           docService.findBestVersion(library, "invalid-format"),
         ).rejects.toThrow(VersionNotFoundInStoreError);
+      });
+
+      it("should resolve a partial version like '1.20' stored exactly as-is", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "2.0.0"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        const result = await docService.findBestVersion(library, "1.20");
+        // Must return the original stored string ("1.20"), not a coerced
+        // "1.20.0" — downstream lookups key off what's actually in the store.
+        expect(result).toEqual({ bestMatch: "1.20", hasUnversioned: false });
+      });
+
+      it("should pick the highest partial version when no target is given", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "5", "2.0.0"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "5", hasUnversioned: false });
+      });
+
+      it("should still fall through to unversioned for a non-semver label like 'stable'", async () => {
+        // "stable" is not a version at all — it should never resolve as a
+        // bestMatch, with or without the partial-version fix.
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "stable"]);
+        mockStore.checkDocumentExists.mockResolvedValue(true);
+
+        const result = await docService.findBestVersion(library, "stable");
+        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
       });
     });
 
