@@ -466,6 +466,10 @@ export class DocumentManagementService {
       logger.info(
         `🧹 Compacted store: ${formatBytes(result.beforeBytes)} → ${formatBytes(result.afterBytes)} (reclaimed ${formatBytes(result.reclaimedBytes)})`,
       );
+    } else if (result.reclaimedBytes > 0) {
+      logger.info(
+        `🧹 Checkpointed store: ${formatBytes(result.beforeBytes)} → ${formatBytes(result.afterBytes)} (reclaimed ${formatBytes(result.reclaimedBytes)})`,
+      );
     } else if (options?.vacuum === false) {
       logger.info("🧹 Checkpointed WAL after delete");
     } else {
