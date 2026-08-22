@@ -10,6 +10,7 @@ import type { Chunk } from "../splitter/types";
 import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import { formatBytes } from "../utils/string";
 import { sortVersionsDescending } from "../utils/version";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
@@ -21,6 +22,7 @@ import {
 } from "./errors";
 import type {
   ActivityHistory,
+  CompactResult,
   DbVersionWithLibrary,
   EmbeddingConfigInfo,
   FindVersionResult,
@@ -377,6 +379,7 @@ export class DocumentManagementService {
     );
     const count = await this.store.deletePages(library, normalizedVersion);
     logger.info(`🗑️ Deleted ${count} documents`);
+    await this.compactAfterDelete();
 
     // Emit library change event
     this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
@@ -442,8 +445,47 @@ export class DocumentManagementService {
       }
     }
 
+    await this.compactAfterDelete();
+
     // Emit library change event
     this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+  }
+
+  /**
+   * Reclaims unused SQLite pages and truncates the WAL file.
+   * VACUUM takes an exclusive lock; use the CLI/`compact` mutation when idle.
+   *
+   * @param options.force Always VACUUM even if no free pages are detected
+   * @param options.vacuum When `false`, only run a non-blocking WAL checkpoint
+   */
+  async compact(options?: { force?: boolean; vacuum?: boolean }): Promise<CompactResult> {
+    const result = await this.store.compact(options);
+    if (result.skipped) {
+      logger.info("🧹 Skipped compaction for in-memory store");
+    } else if (result.vacuumed) {
+      logger.info(
+        `🧹 Compacted store: ${formatBytes(result.beforeBytes)} → ${formatBytes(result.afterBytes)} (reclaimed ${formatBytes(result.reclaimedBytes)})`,
+      );
+    } else if (options?.vacuum === false) {
+      logger.info("🧹 Checkpointed WAL after delete");
+    } else {
+      logger.info("🧹 No free pages to reclaim");
+    }
+    return result;
+  }
+
+  /**
+   * Best-effort WAL checkpoint after a bulk delete. Does not VACUUM, so readers
+   * stay unblocked. Remove succeeds even if the checkpoint fails.
+   */
+  private async compactAfterDelete(): Promise<void> {
+    try {
+      await this.compact({ force: false, vacuum: false });
+    } catch (error) {
+      logger.error(
+        `❌ Failed to checkpoint store after delete: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**

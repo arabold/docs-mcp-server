@@ -14,6 +14,7 @@ import {
 import { loadConfig } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
 // Commands
+import { createCompactCommand } from "./commands/compact";
 import { createConfigCommand } from "./commands/config";
 import { createDefaultAction } from "./commands/default";
 import { createFetchUrlCommand } from "./commands/fetchUrl";
@@ -164,6 +165,7 @@ export function createCli(argv: string[]): Argv {
     .showHelpOnFail(true);
 
   // Register Commands
+  createCompactCommand(cli);
   createConfigCommand(cli);
   createDefaultAction(cli);
   createFetchUrlCommand(cli);

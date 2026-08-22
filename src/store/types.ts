@@ -423,3 +423,19 @@ export interface VersionComposition {
   /** Pages grouped by MIME type, most common first. */
   mimeTypes: CompositionBucket[];
 }
+
+/**
+ * Result of reclaiming unused SQLite pages and truncating the WAL.
+ */
+export interface CompactResult {
+  /** True when the store is in-memory and cannot reclaim disk space. */
+  skipped: boolean;
+  /** True when VACUUM ran. */
+  vacuumed: boolean;
+  /** Combined size of the database, WAL, and SHM files before compaction. */
+  beforeBytes: number;
+  /** Combined size of the database, WAL, and SHM files after compaction. */
+  afterBytes: number;
+  /** Bytes reclaimed (`beforeBytes - afterBytes`, floored at 0). */
+  reclaimedBytes: number;
+}

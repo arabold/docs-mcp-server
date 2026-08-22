@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import type { Embeddings } from "@langchain/core/embeddings";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
@@ -22,6 +23,7 @@ import {
 } from "./errors";
 import type {
   ActivityHistory,
+  CompactResult,
   DbChunkMetadata,
   DbChunkRank,
   ListVersionChunksOptions,
@@ -78,6 +80,7 @@ interface EmbeddingBatchContext {
  */
 export class DocumentStore {
   private readonly config: AppConfig;
+  private readonly dbPath: string;
 
   private readonly db: DatabaseType;
   private embeddings: Embeddings | null = null;
@@ -220,6 +223,7 @@ export class DocumentStore {
     if (!dbPath) {
       throw new StoreError("Missing required database path");
     }
+    this.dbPath = dbPath;
     this.config = appConfig;
     this.dbDimension = this.config.embeddings.vectorDimension;
     this.searchWeightVec = this.config.search.weightVec;
@@ -1037,6 +1041,82 @@ export class DocumentStore {
    */
   async shutdown(): Promise<void> {
     this.db.close();
+  }
+
+  /**
+   * Combined on-disk size of the database file plus WAL and SHM sidecars.
+   */
+  private getOnDiskSizeBytes(): number {
+    if (this.dbPath === ":memory:") {
+      return 0;
+    }
+
+    let total = 0;
+    for (const filePath of [this.dbPath, `${this.dbPath}-wal`, `${this.dbPath}-shm`]) {
+      if (existsSync(filePath)) {
+        total += statSync(filePath).size;
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Reclaims unused SQLite pages and truncates the WAL file.
+   * In-memory databases are skipped.
+   *
+   * VACUUM takes an exclusive lock and blocks readers, so it runs only when
+   * `vacuum` is not `false` (the explicit compact path). After deletes, pass
+   * `{ vacuum: false }` to checkpoint with PASSIVE, which never waits on
+   * readers or writers.
+   *
+   * @param options.force Always VACUUM even if no free pages are detected
+   * @param options.vacuum When `false`, only run a non-blocking WAL checkpoint
+   * @returns Size before/after compaction and whether VACUUM ran
+   */
+  async compact(options?: { force?: boolean; vacuum?: boolean }): Promise<CompactResult> {
+    if (this.dbPath === ":memory:") {
+      return {
+        skipped: true,
+        vacuumed: false,
+        beforeBytes: 0,
+        afterBytes: 0,
+        reclaimedBytes: 0,
+      };
+    }
+
+    try {
+      const force = options?.force === true;
+      const allowVacuum = options?.vacuum !== false;
+      const beforeBytes = this.getOnDiskSizeBytes();
+
+      // PASSIVE never waits; TRUNCATE is reserved for the exclusive compact path.
+      this.db.pragma(
+        allowVacuum ? "wal_checkpoint(TRUNCATE)" : "wal_checkpoint(PASSIVE)",
+      );
+
+      const freelistCount = Number(
+        this.db.pragma("freelist_count", { simple: true }) ?? 0,
+      );
+      const shouldVacuum = allowVacuum && (force || freelistCount > 0);
+
+      if (shouldVacuum) {
+        this.db.exec("VACUUM");
+        this.db.pragma("journal_mode = WAL");
+        this.db.pragma("wal_autocheckpoint = 1000");
+        this.db.pragma("wal_checkpoint(TRUNCATE)");
+      }
+
+      const afterBytes = this.getOnDiskSizeBytes();
+      return {
+        skipped: false,
+        vacuumed: shouldVacuum,
+        beforeBytes,
+        afterBytes,
+        reclaimedBytes: Math.max(0, beforeBytes - afterBytes),
+      };
+    } catch (error) {
+      throw new ConnectionError("Failed to compact document store", error);
+    }
   }
 
   /**

@@ -3,8 +3,9 @@ name: docs-manage
 description: >-
   Manage the Grounded Docs MCP Server documentation index. Covers scraping
   and indexing documentation from URLs or local files, refreshing existing
-  indexes with changed content, and removing libraries from the index.
-  Use when you need to add, update, or delete indexed documentation.
+  indexes with changed content, removing libraries from the index, and
+  compacting the SQLite store. Use when you need to add, update, or delete
+  indexed documentation, or reclaim disk space after removals.
 compatibility: Requires Node.js 22+ and npx
 metadata:
   author: grounded.tools
@@ -21,6 +22,7 @@ on stdout.
 - A library is not yet indexed and you need its docs available for search.
 - Documentation may be stale and you want to pull in updated pages.
 - You want to remove a library or version from the index to free space.
+- The store file is still large after removals and you want to compact it.
 
 ## Commands
 
@@ -123,6 +125,34 @@ npx @arabold/docs-mcp-server@latest remove react --version 18.3.1
 ```
 
 This is destructive and cannot be undone. Re-run `scrape` to re-index.
+Bulk deletes checkpoint the WAL without locking readers. Use `compact` when
+idle if the main store file is still large.
+
+### compact
+
+Reclaim unused SQLite pages and truncate the WAL file so the store shrinks
+on disk. This takes an exclusive lock and may block searches until it
+finishes.
+
+```bash
+npx @arabold/docs-mcp-server@latest compact [options]
+```
+
+| Flag | Alias | Description |
+|------|-------|-------------|
+| `--server-url <url>` | | Remote pipeline worker URL |
+| `--quiet` | | Suppress non-error diagnostics |
+| `--verbose` | | Enable debug logging |
+
+Example:
+
+```bash
+npx @arabold/docs-mcp-server@latest compact
+```
+
+Removing documentation does not shrink the main SQLite file. Bulk deletes
+only run a non-blocking WAL checkpoint. Run this command when the store is
+idle to VACUUM and reclaim free pages.
 
 ## Output behaviour
 
@@ -145,6 +175,9 @@ npx @arabold/docs-mcp-server@latest refresh react --version 19.0.0
 
 # 3. Clean up old versions
 npx @arabold/docs-mcp-server@latest remove react --version 18.3.1
+
+# 4. Reclaim unused store space if needed
+npx @arabold/docs-mcp-server@latest compact
 ```
 
 ## Important notes

@@ -81,6 +81,7 @@ npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/
 | `find-version <library>` | Resolve the best matching version for a library |
 | `refresh <library>` | Re-scrape an existing library, skipping unchanged pages |
 | `remove <library>` | Delete a library or version from the index |
+| `compact` | Reclaim unused SQLite pages and shrink the store. Takes an exclusive lock and may block searches until it finishes. |
 
 Run `npx @arabold/docs-mcp-server@latest --help` for the full command reference.
 
@@ -88,7 +89,7 @@ Run `npx @arabold/docs-mcp-server@latest --help` for the full command reference.
 
 - Structured commands (`list`, `search`, `find-version`) default to **JSON** on stdout in non-interactive runs.
 - Use `--output json|yaml|toon` to pick a format.
-- Plain-text commands (`fetch-url`, `scrape`, `refresh`, `remove`) write their output directly to stdout.
+- Plain-text commands (`fetch-url`, `scrape`, `refresh`, `remove`, `compact`) write their output directly to stdout.
 - Use `--quiet` to suppress non-error diagnostics or `--verbose` for debug output.
 - In non-interactive runs, diagnostics stay off stdout so agents and scripts can parse results safely.
 

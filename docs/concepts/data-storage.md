@@ -419,9 +419,14 @@ Health monitoring capabilities:
 
 ### Maintenance Operations
 
-Regular maintenance tasks:
+SQLite does not shrink the database file when documents are deleted. Deleted rows become free pages, and WAL mode records those deletes in `documents.db-wal`, so the on-disk size can grow even after a remove.
 
-- VACUUM operations for space recovery
+After bulk deletes (`removeVersion` and `removeAllDocuments`) the store runs `wal_checkpoint(PASSIVE)`. That never waits on readers or writers, so search stays available. It truncates WAL frames when nothing else is using the file. It does not shrink `documents.db`.
+
+`VACUUM` takes an exclusive lock and blocks readers. Run `docs-mcp-server compact` (or `compact` against a remote worker with `--server-url`) when the store is idle to rewrite the file and reclaim free pages. In-memory databases skip compaction. Single-page deletes during refresh do not checkpoint or vacuum.
+
+Other regular maintenance:
+
 - Index rebuilding via REINDEX
 - Orphaned record cleanup via foreign key constraints
 - Performance analysis using EXPLAIN QUERY PLAN

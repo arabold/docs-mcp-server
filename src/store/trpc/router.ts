@@ -133,6 +133,24 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
+    compact: tt.procedure
+      .input(
+        z
+          .object({ force: z.boolean().optional(), vacuum: z.boolean().optional() })
+          .optional(),
+      )
+      .mutation(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: { force?: boolean; vacuum?: boolean } | undefined;
+        }) => {
+          return await ctx.docService.compact(input);
+        },
+      ),
+
     // Status and version helpers
 
     getVersionsByStatus: tt.procedure
