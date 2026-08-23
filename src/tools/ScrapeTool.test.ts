@@ -198,6 +198,30 @@ describe("ScrapeTool", () => {
     );
   });
 
+  it("forwards expectTerms, denyPaths, and localeStrategy into the scraper options", async () => {
+    const options: ScrapeToolOptions = {
+      ...getBaseOptions("1.0.0"),
+      waitForCompletion: false,
+      options: {
+        expectTerms: ["generateContent"],
+        denyPaths: ["**/demos/**"],
+        localeStrategy: "pin-en",
+      },
+    };
+
+    await scrapeTool.execute(options);
+
+    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
+      "test-lib",
+      "1.0.0",
+      expect.objectContaining({
+        expectTerms: ["generateContent"],
+        denyPaths: ["**/demos/**"],
+        localeStrategy: "pin-en",
+      }),
+    );
+  });
+
   it("should pass preserveHashes to the pipeline manager", async () => {
     const options: ScrapeToolOptions = {
       ...getBaseOptions("2.0.0"),

@@ -110,18 +110,49 @@ export class HttpFetcher implements ContentFetcher {
     baseDelay: number = this.baseDelayDefaultMs,
     followRedirects: boolean = true,
   ): Promise<RawContent> {
-    await this.accessPolicy.assertNetworkUrlAllowed(source);
+    // Locale normalization: strip locale query params (hl/lang/locale) so the
+    // crawler does not get redirected into a localized variant, and optionally pin
+    // Accept-Language to English. 'passthrough' leaves both the URL and headers as-is.
+    const localeStrategy = options?.localeStrategy ?? "pin-en";
+    let normalizedSource = source;
+    if (localeStrategy !== "passthrough") {
+      try {
+        const u = new URL(source);
+        let removedLocaleParam = false;
+        for (const p of ["hl", "lang", "locale"]) {
+          if (u.searchParams.has(p)) {
+            u.searchParams.delete(p);
+            removedLocaleParam = true;
+          }
+        }
+        // Only rewrite the URL when a locale param was actually stripped, so the
+        // common no-locale case keeps its exact original form (no added trailing slash).
+        if (removedLocaleParam) {
+          normalizedSource = u.toString();
+        }
+      } catch {
+        // Non-absolute/unparseable URLs (e.g. tests) pass through unchanged.
+      }
+    }
+    const localeHeaders: Record<string, string> =
+      localeStrategy === "pin-en" ? { "Accept-Language": "en" } : {};
+
+    await this.accessPolicy.assertNetworkUrlAllowed(normalizedSource);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        let currentUrl = source;
+        let currentUrl = normalizedSource;
         let redirectCount = 0;
+        // Track normalized Locations to detect a cyclic redirect (e.g. a locale
+        // ping-pong) within the existing MAX_REDIRECTS cap.
+        const seenLocations = new Set<string>([currentUrl]);
 
         while (true) {
           const fingerprint = this.fingerprintGenerator.generateHeaders();
           const headers = withMarkdownPreferredAccept(
             {
               ...fingerprint,
+              ...localeHeaders, // Accept-Language pin (pin-en) before user overrides
               ...options?.headers, // User-provided headers override generated ones
             },
             options?.headers,
@@ -194,6 +225,19 @@ export class HttpFetcher implements ContentFetcher {
             }
 
             const redirectUrl = new URL(location, currentUrl).href;
+
+            // Detect a cyclic redirect (commonly a locale ping-pong, e.g.
+            // ?hl=pt -> ?hl=en -> ?hl=pt) before exhausting the redirect budget.
+            if (seenLocations.has(redirectUrl)) {
+              const err = new ScraperError(
+                `Redirect loop detected at ${redirectUrl} (cyclic Location).`,
+                false,
+              );
+              err.code = "LOCALE_REDIRECT_LOOP";
+              throw err;
+            }
+            seenLocations.add(redirectUrl);
+
             await this.accessPolicy.assertNetworkUrlAllowed(redirectUrl);
 
             currentUrl = redirectUrl;

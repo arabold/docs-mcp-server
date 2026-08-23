@@ -60,6 +60,21 @@ export interface ScrapeToolOptions {
      * @default true
      */
     clean?: boolean;
+    /**
+     * Terms expected to appear in the indexed docs. When set, the quality gate
+     * samples stored chunks and fails the job as OFF_TOPIC if none match.
+     */
+    expectTerms?: string[];
+    /**
+     * Glob patterns (minimatch) whose matching paths are excluded from indexing,
+     * even when in scope (default: demos/examples).
+     */
+    denyPaths?: string[];
+    /**
+     * Locale handling for fetched URLs ('pin-en' | 'strip' | 'passthrough').
+     * @default 'pin-en'
+     */
+    localeStrategy?: "pin-en" | "strip" | "passthrough";
   };
   /** If false, returns jobId immediately without waiting. Defaults to true. */
   waitForCompletion?: boolean;
@@ -154,6 +169,9 @@ export class ScrapeTool {
       preserveHashes: scraperOptions?.preserveHashes,
       headers: scraperOptions?.headers, // <-- propagate headers
       clean: scraperOptions?.clean, // <-- propagate clean option
+      expectTerms: scraperOptions?.expectTerms, // <-- quality gate: off-topic check
+      denyPaths: scraperOptions?.denyPaths, // <-- quality gate: path exclusions
+      localeStrategy: scraperOptions?.localeStrategy, // <-- locale normalization
     });
 
     // Conditionally wait for completion

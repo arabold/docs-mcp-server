@@ -95,6 +95,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       followRedirects: options.followRedirects,
       headers: options.headers,
       etag: item.etag,
+      localeStrategy: options.localeStrategy,
       ...(item.internalAllowedFileRoots
         ? { internalAllowedFileRoots: item.internalAllowedFileRoots }
         : {}),

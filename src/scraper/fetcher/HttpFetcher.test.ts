@@ -649,4 +649,52 @@ describe("HttpFetcher", () => {
       expect(resultWithoutEtag.etag).toBeUndefined();
     });
   });
+
+  describe("LOCALE handling", () => {
+    beforeEach(() => {
+      mockedAxios.get.mockReset();
+    });
+
+    it("aborts with LOCALE_REDIRECT_LOOP on a cyclic ?hl redirect", async () => {
+      const fetcher = createFetcher();
+      // The harness mocks axios (no live server). Simulate a server that ping-pongs
+      // between two locale variants: /docs?hl=pt <-> /docs?hl=en. passthrough keeps the
+      // query params, so the manual redirect loop revisits a normalized Location.
+      mockedAxios.get.mockImplementation((requestUrl: string) => {
+        const u = new URL(requestUrl);
+        const hl = u.searchParams.get("hl");
+        const next = hl === "pt" ? "en" : "pt";
+        return Promise.resolve({
+          status: 302,
+          data: Buffer.from(""),
+          headers: { location: `https://example.com/docs?hl=${next}` },
+        });
+      });
+
+      await expect(
+        fetcher.fetch("https://example.com/docs?hl=pt", {
+          localeStrategy: "passthrough",
+        }),
+      ).rejects.toMatchObject({ code: "LOCALE_REDIRECT_LOOP" });
+    });
+
+    it("pins Accept-Language and strips hl with pin-en", async () => {
+      const fetcher = createFetcher();
+      // RawContent has no requestHeaders/finalUrl; assert via the axios-captured config
+      // (request URL + Accept-Language header) and res.source for the final URL.
+      mockedAxios.get.mockResolvedValue({
+        data: Buffer.from("<html><body>OK</body></html>", "utf-8"),
+        headers: { "content-type": "text/html" },
+      });
+
+      const res = await fetcher.fetch("https://example.com/docs?hl=pt-br", {
+        localeStrategy: "pin-en",
+      });
+
+      const [requestedUrl, config] = mockedAxios.get.mock.calls[0];
+      expect(requestedUrl).not.toMatch(/hl=/);
+      expect((config?.headers as Record<string, string>)["Accept-Language"]).toBe("en");
+      expect(res.source).not.toMatch(/hl=/);
+    });
+  });
 });

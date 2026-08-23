@@ -23,7 +23,7 @@ import { type AppConfig, loadConfig } from "../utils/config";
 import { PipelineManager } from "./PipelineManager";
 import { PipelineWorker } from "./PipelineWorker";
 import type { InternalPipelineJob, PipelineJob, PipelineManagerCallbacks } from "./types";
-import { PipelineJobStatus } from "./types";
+import { PipelineJobStatus, ScrapeErrorCode, ScrapeOutcome } from "./types";
 
 // Mock dependencies
 vi.mock("../store/DocumentManagementService");
@@ -131,6 +131,16 @@ describe("PipelineManager", () => {
         id: 1,
         name: "test-lib",
       }),
+      // Quality-gate methods: default to a healthy result so existing happy-path
+      // jobs still transition to COMPLETED.
+      getVersionMetrics: vi.fn().mockResolvedValue({
+        documentCount: 10,
+        distinctUrls: 5,
+      }),
+      removeVersion: vi.fn().mockResolvedValue(undefined),
+      // Relevance-gate methods (only consulted when expectTerms is set).
+      sampleChunks: vi.fn().mockResolvedValue([]),
+      listIndexedUrls: vi.fn().mockResolvedValue([]),
     };
 
     // Mock the worker's executeJob method
@@ -272,6 +282,80 @@ describe("PipelineManager", () => {
     const jobAfter = await manager.getJob(jobId);
     expect(jobAfter?.status).toBe(PipelineJobStatus.FAILED);
     expect(jobAfter?.error?.message).toBe("fail");
+  });
+
+  it("rolls back and fails the job when the gate returns empty", async () => {
+    // Arrange: a store whose getVersionMetrics reports zero docs after scrape.
+    (mockStore.getVersionMetrics as Mock).mockResolvedValue({
+      documentCount: 0,
+      distinctUrls: 0,
+    });
+    const removeSpy = mockStore.removeVersion as Mock;
+
+    const jobId = await manager.enqueueScrapeJob("lib", "1.0.0", {
+      url: "https://x/tree",
+      library: "lib",
+      version: "1.0.0",
+    });
+    await manager.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await manager.waitForJobCompletion(jobId).catch(() => {}); // gate failure rejects
+
+    const job = await manager.getJob(jobId);
+    expect(job?.status).toBe(PipelineJobStatus.FAILED);
+    expect(job?.outcome).toBe(ScrapeOutcome.EMPTY);
+    expect(job?.errorCode).toBe(ScrapeErrorCode.EMPTY_RESULT);
+    expect(removeSpy).toHaveBeenCalledWith("lib", "1.0.0");
+  });
+
+  it("does NOT roll back a refresh job that fails the gate (no data loss)", async () => {
+    // A refresh preserves pre-existing good docs; a failing gate must never removeVersion.
+    (mockStore.getVersionMetrics as Mock).mockResolvedValue({
+      documentCount: 0,
+      distinctUrls: 0,
+    });
+    const removeSpy = mockStore.removeVersion as Mock;
+
+    const jobId = await manager.enqueueScrapeJob("lib", "1.0.0", {
+      url: "https://x/tree",
+      library: "lib",
+      version: "1.0.0",
+      isRefresh: true,
+    });
+    await manager.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await manager.waitForJobCompletion(jobId).catch(() => {});
+
+    const job = await manager.getJob(jobId);
+    expect(removeSpy).not.toHaveBeenCalled();
+    expect(job?.outcome).toBe(ScrapeOutcome.INDEXED); // gate skipped for refresh
+  });
+
+  it("fails as OFF_TOPIC when expectTerms are absent from sampled chunks", async () => {
+    (mockStore.getVersionMetrics as Mock).mockResolvedValue({
+      documentCount: 50,
+      distinctUrls: 40,
+    });
+    (mockStore.sampleChunks as Mock).mockResolvedValue([
+      "list-it demo",
+      "mood-food demo",
+    ]);
+    (mockStore.listIndexedUrls as Mock).mockResolvedValue([]);
+    const removeSpy = mockStore.removeVersion as Mock;
+
+    const jobId = await manager.enqueueScrapeJob("gemini", "1.0.0", {
+      url: "https://github.com/google/generative-ai-docs",
+      library: "gemini",
+      version: "1.0.0",
+      expectTerms: ["generateContent"],
+    });
+    await manager.start();
+    await vi.advanceTimersByTimeAsync(1);
+    await manager.waitForJobCompletion(jobId).catch(() => {});
+
+    const job = await manager.getJob(jobId);
+    expect(job?.errorCode).toBe(ScrapeErrorCode.OFF_TOPIC);
+    expect(removeSpy).toHaveBeenCalled();
   });
 
   it("should cancel a job via cancelJob API", async () => {

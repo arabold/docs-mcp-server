@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import { CancellationError } from "../../pipeline/errors";
 import type { ProgressCallback } from "../../types";
 import { fileUrlToPathLoose } from "../../utils/accessPolicy";
-import type { AppConfig } from "../../utils/config";
+import { type AppConfig, DEFAULT_DENY_PATHS } from "../../utils/config";
 import { ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { normalizeUrl, type UrlNormalizerOptions } from "../../utils/url";
@@ -17,7 +17,7 @@ import type {
   ScraperStrategy,
 } from "../types";
 import { isLlmsTxtUrl } from "../utils/llmsTxtParser";
-import { shouldIncludeUrl } from "../utils/patternMatcher";
+import { matchesAnyPattern, shouldIncludeUrl } from "../utils/patternMatcher";
 import { isInScope } from "../utils/scope";
 
 export interface BaseScraperStrategyOptions {
@@ -141,6 +141,18 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         return false;
       }
     }
+
+    // Exclude denied paths (demos/examples by default) matched against the URL pathname.
+    const denyPaths = options.denyPaths ?? DEFAULT_DENY_PATHS;
+    if (denyPaths.length > 0) {
+      try {
+        const pathname = new URL(url).pathname;
+        if (matchesAnyPattern(pathname, denyPaths)) return false;
+      } catch {
+        // Non-parseable URL: fall through to include/exclude handling.
+      }
+    }
+
     return shouldIncludeUrl(url, options.includePatterns, options.excludePatterns);
   }
 
