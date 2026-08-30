@@ -134,6 +134,15 @@ describe("EmbeddingConfig", () => {
     });
   });
 
+  it("should treat namespaced models with quantization suffixes as OpenAI-compatible", () => {
+    expect(
+      EmbeddingConfig.parseEmbeddingConfig("second-state/jina-embeddings-v3-GGUF:Q4_K_M"),
+    ).toMatchObject({
+      provider: "openai",
+      model: "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+    });
+  });
+
   describe("setKnownDimensions", () => {
     it("should cache new model dimensions", () => {
       const config = new EmbeddingConfig();

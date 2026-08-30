@@ -20,6 +20,10 @@ export type EmbeddingProvider =
   | "microsoft"
   | "sagemaker";
 
+function isModelNamespace(value: string): boolean {
+  return value.includes("/");
+}
+
 /**
  * Embedding model configuration parsed from environment variables.
  */
@@ -346,7 +350,7 @@ export class EmbeddingConfig {
     let provider: EmbeddingProvider;
     let model: string;
 
-    if (colonIndex === -1) {
+    if (colonIndex === -1 || isModelNamespace(spec.substring(0, colonIndex))) {
       // No colon found, default to OpenAI
       provider = "openai";
       model = spec;

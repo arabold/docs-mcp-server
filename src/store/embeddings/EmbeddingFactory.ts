@@ -136,8 +136,10 @@ export function createEmbeddingModel(
   // Parse provider and model name
   const [providerOrModel, ...modelNameParts] = providerAndModel.split(":");
   const modelName = modelNameParts.join(":");
-  const provider = modelName ? (providerOrModel as EmbeddingProvider) : "openai";
-  const model = modelName || providerOrModel;
+  const isNamespacedModel = providerOrModel.includes("/");
+  const provider =
+    modelName && !isNamespacedModel ? (providerOrModel as EmbeddingProvider) : "openai";
+  const model = modelName && !isNamespacedModel ? modelName : providerAndModel;
 
   // Default configuration for each provider
   const baseConfig = { stripNewLines: true };
