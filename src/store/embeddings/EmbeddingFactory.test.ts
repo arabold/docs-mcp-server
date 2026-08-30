@@ -86,6 +86,17 @@ describe("createEmbeddingModel", () => {
     });
   });
 
+  test("should create OpenAI-compatible embeddings for namespaced quantized models", () => {
+    const model = createEmbeddingModel(
+      "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+      runtimeConfig,
+    );
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({
+      modelName: "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+    });
+  });
+
   test("should create Google Vertex AI embeddings", () => {
     const model = createEmbeddingModel("vertex:text-embedding-004", runtimeConfig);
     expect(model).toBeInstanceOf(VertexAIEmbeddings);
