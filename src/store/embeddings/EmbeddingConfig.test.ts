@@ -249,6 +249,7 @@ describe("EmbeddingConfig", () => {
       "aws",
       "microsoft",
       "sagemaker",
+      "orcarouter",
     ];
 
     it("should accept all valid providers", () => {

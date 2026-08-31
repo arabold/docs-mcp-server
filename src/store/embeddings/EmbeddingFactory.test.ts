@@ -34,6 +34,7 @@ beforeEach(() => {
       AZURE_OPENAI_API_INSTANCE_NAME: "test-instance",
       AZURE_OPENAI_API_DEPLOYMENT_NAME: "test-deployment",
       AZURE_OPENAI_API_VERSION: "2024-02-01",
+      ORCAROUTER_API_KEY: "test-orcarouter-key",
     },
   });
 });
@@ -148,6 +149,47 @@ describe("createEmbeddingModel", () => {
     expect(() => createEmbeddingModel("unknown:model", runtimeConfig)).toThrow(
       UnsupportedProviderError,
     );
+  });
+
+  test("should create OrcaRouter embeddings via OpenAI-compatible endpoint", () => {
+    const model = createEmbeddingModel(
+      "orcarouter:openai/text-embedding-3-small",
+      runtimeConfig,
+    );
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({
+      modelName: "openai/text-embedding-3-small",
+      encodingFormat: "float",
+    });
+    const clientConfig = (model as unknown as { clientConfig?: { baseURL?: string } })
+      .clientConfig;
+    expect(clientConfig?.baseURL).toBe("https://api.orcarouter.ai/v1");
+  });
+
+  test("should honor ORCAROUTER_API_BASE for OrcaRouter embeddings", () => {
+    vi.stubGlobal("process", {
+      env: {
+        ORCAROUTER_API_KEY: "test-orcarouter-key",
+        ORCAROUTER_API_BASE: "https://orcarouter.example.com/v1",
+      },
+    });
+    const model = createEmbeddingModel("orcarouter:test-model", runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    const clientConfig = (model as unknown as { clientConfig?: { baseURL?: string } })
+      .clientConfig;
+    expect(clientConfig?.baseURL).toBe("https://orcarouter.example.com/v1");
+  });
+
+  test("should throw MissingCredentialsError for OrcaRouter without ORCAROUTER_API_KEY", () => {
+    vi.stubGlobal("process", {
+      env: {
+        // Missing ORCAROUTER_API_KEY
+      },
+    });
+
+    expect(() =>
+      createEmbeddingModel("orcarouter:openai/text-embedding-3-small", runtimeConfig),
+    ).toThrow(MissingCredentialsError);
   });
 
   test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {

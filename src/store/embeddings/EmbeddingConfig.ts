@@ -18,7 +18,8 @@ export type EmbeddingProvider =
   | "gemini"
   | "aws"
   | "microsoft"
-  | "sagemaker";
+  | "sagemaker"
+  | "orcarouter";
 
 /**
  * Embedding model configuration parsed from environment variables.
@@ -333,6 +334,7 @@ export class EmbeddingConfig {
    * - aws: AWS Bedrock models
    * - microsoft: Azure OpenAI
    * - sagemaker: AWS SageMaker hosted models
+   * - orcarouter: OrcaRouter (OpenAI-compatible AI gateway)
    *
    * @param modelSpec Model specification (e.g., "openai:text-embedding-3-small"), defaults to "text-embedding-3-small"
    * @returns Parsed embedding model configuration

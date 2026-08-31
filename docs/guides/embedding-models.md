@@ -14,6 +14,7 @@ If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults t
 - `gemini:embedding-001` (Google Gemini)
 - `aws:amazon.titan-embed-text-v1` (AWS Bedrock)
 - `microsoft:text-embedding-ada-002` (Azure OpenAI)
+- `orcarouter:openai/text-embedding-3-small` (OrcaRouter)
 - Or any OpenAI-compatible model name
 
 ## Provider Configuration
@@ -34,6 +35,8 @@ Provider credentials use the provider-specific environment variables listed belo
 | `AZURE_OPENAI_API_INSTANCE_NAME`   | Azure OpenAI instance name.                           |
 | `AZURE_OPENAI_API_DEPLOYMENT_NAME` | Azure OpenAI deployment name.                         |
 | `AZURE_OPENAI_API_VERSION`         | Azure OpenAI API version.                             |
+| `ORCAROUTER_API_KEY`               | OrcaRouter API key for embeddings.                    |
+| `ORCAROUTER_API_BASE`              | Optional OrcaRouter endpoint override (defaults to `https://api.orcarouter.ai/v1`). |
 
 ### Examples
 
@@ -113,6 +116,18 @@ AZURE_OPENAI_API_VERSION="2024-02-01" \
 DOCS_MCP_EMBEDDING_MODEL="microsoft:text-embedding-ada-002" \
 npx @arabold/docs-mcp-server@latest
 ```
+
+#### OrcaRouter
+
+Use embeddings through the OrcaRouter OpenAI-compatible gateway. Model names follow the OrcaRouter model catalog (e.g., `openai/text-embedding-3-small`).
+
+```bash
+ORCAROUTER_API_KEY="your-orcarouter-api-key" \
+DOCS_MCP_EMBEDDING_MODEL="orcarouter:openai/text-embedding-3-small" \
+npx @arabold/docs-mcp-server@latest
+```
+
+Set `ORCAROUTER_API_BASE` to override the default endpoint (`https://api.orcarouter.ai/v1`).
 
 ## Changing the Embedding Model
 

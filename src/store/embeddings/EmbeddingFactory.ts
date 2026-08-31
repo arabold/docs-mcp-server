@@ -22,7 +22,8 @@ export type EmbeddingProvider =
   | "gemini"
   | "aws"
   | "microsoft"
-  | "sagemaker";
+  | "sagemaker"
+  | "orcarouter";
 
 /**
  * Error thrown when an invalid or unsupported embedding provider is specified.
@@ -31,7 +32,7 @@ export class UnsupportedProviderError extends Error {
   constructor(provider: string) {
     super(
       `❌ Unsupported embedding provider: ${provider}\n` +
-        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker\n" +
+        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker, orcarouter\n" +
         "   See README.md for configuration options or run with --help for more details.",
     );
     this.name = "UnsupportedProviderError";
@@ -93,6 +94,9 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
       );
     }
 
+    case "orcarouter":
+      return !!process.env.ORCAROUTER_API_KEY;
+
     default:
       return false;
   }
@@ -110,6 +114,7 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
  * - Google GenAI (Gemini): GOOGLE_API_KEY
  * - AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION (or BEDROCK_AWS_REGION)
  * - Microsoft: AZURE_OPENAI_API_KEY, AZURE_OPENAI_API_INSTANCE_NAME, AZURE_OPENAI_API_DEPLOYMENT_NAME, AZURE_OPENAI_API_VERSION
+ * - OrcaRouter: ORCAROUTER_API_KEY (and optionally ORCAROUTER_API_BASE)
  *
  * @param providerAndModel - The provider and model name in the format "provider:model_name"
  *                          or just "model_name" for OpenAI models.
@@ -268,6 +273,34 @@ export function createEmbeddingModel(
         azureOpenAIApiDeploymentName: process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME,
         azureOpenAIApiVersion: process.env.AZURE_OPENAI_API_VERSION,
         deploymentName: model,
+      });
+    }
+
+    case "orcarouter": {
+      if (!process.env.ORCAROUTER_API_KEY) {
+        throw new MissingCredentialsError("orcarouter", ["ORCAROUTER_API_KEY"]);
+      }
+      // OrcaRouter exposes an OpenAI-compatible embeddings API on the same
+      // endpoint as its chat/agent gateway, so the OpenAI SDK path applies.
+      // The "float" encoding format keeps OpenAI-compatible providers that
+      // ignore the parameter from silently corrupting the returned vectors.
+      const config: Partial<OpenAIEmbeddingsParams> & { configuration?: ClientOptions } =
+        {
+          ...baseConfig,
+          modelName: model,
+          batchSize: 512,
+          timeout: requestTimeoutMs,
+          encodingFormat: "float",
+        };
+      // Custom base URL if specified, otherwise the default OrcaRouter endpoint
+      const baseURL = process.env.ORCAROUTER_API_BASE || "https://api.orcarouter.ai/v1";
+      config.configuration = {
+        baseURL,
+        timeout: requestTimeoutMs,
+      };
+      return new OpenAIEmbeddings({
+        ...config,
+        apiKey: process.env.ORCAROUTER_API_KEY,
       });
     }
 
