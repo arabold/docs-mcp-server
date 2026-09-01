@@ -4,7 +4,7 @@ description: >-
   Fetch a single URL and convert its content to Markdown. Use when you
   need to read a web page, documentation page, or API reference without
   indexing it. The content is returned as plain Markdown text on stdout.
-compatibility: Requires Node.js 22+ and npx
+compatibility: Requires Node.js 22+
 metadata:
   author: grounded.tools
 ---
@@ -26,7 +26,7 @@ skill (`scrape` command) instead.
 ## Command
 
 ```bash
-npx @arabold/docs-mcp-server@latest fetch-url <url> [options]
+docs-mcp-server fetch-url <url> [options]
 ```
 
 | Flag | Default | Description |
@@ -50,17 +50,17 @@ npx @arabold/docs-mcp-server@latest fetch-url <url> [options]
 
 ```bash
 # Fetch a documentation page
-npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+docs-mcp-server fetch-url https://react.dev/reference/react/useEffect
 
 # Fetch with custom auth header
-npx @arabold/docs-mcp-server@latest fetch-url https://docs.internal.com/api \
+docs-mcp-server fetch-url https://docs.internal.com/api \
   --header "Authorization: Bearer tok_xxx"
 
 # Force Playwright for a JS-heavy page
-npx @arabold/docs-mcp-server@latest fetch-url https://some-spa.dev/docs --scrape-mode playwright
+docs-mcp-server fetch-url https://some-spa.dev/docs --scrape-mode playwright
 
 # Disable redirect following
-npx @arabold/docs-mcp-server@latest fetch-url https://example.com/old-page --no-follow-redirects
+docs-mcp-server fetch-url https://example.com/old-page --no-follow-redirects
 ```
 
 ## Output
@@ -77,7 +77,7 @@ regardless of session type.
 ## Tips
 
 - Pipe the output to a file if you want to save it:
-  `npx @arabold/docs-mcp-server@latest fetch-url <url> > page.md`
+  `docs-mcp-server fetch-url <url> > page.md`
 - Combine with search: fetch a page to read its full content after `search`
   returns a relevant URL.
 - For pages behind authentication, use `--header` to pass cookies or tokens.
