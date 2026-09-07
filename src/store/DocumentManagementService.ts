@@ -336,6 +336,10 @@ export class DocumentManagementService {
           logger.warn(`⚠️  Invalid target version format: ${targetVersion}`);
           if (hasLatestNamed) {
             bestMatch = "latest";
+          } else if (versionStrings.length > 0) {
+            // Prefer the latest semver version — allVersions is only
+            // lexicographically ordered and can point at an arbitrary entry
+            bestMatch = versionStrings[0];
           } else if (allVersions.length > 0 && allVersions[0] !== "") {
             bestMatch = allVersions[0];
           }
@@ -360,10 +364,10 @@ export class DocumentManagementService {
       logger.warn(`⚠️  No matching semver version found for ${libraryAndVersion}`);
     }
 
-    // If no semver match found, but unversioned exists, return that info.
-    // If a semver match was found, return it along with unversioned status.
-    // If no semver match AND no unversioned AND no named version, throw error.
-    if (!bestMatch && !hasUnversioned && !hasLatestNamed && allVersions.length === 0) {
+    // If no match was found and there are no unversioned docs to fall back to,
+    // throw an error so callers don't silently search unversioned docs that
+    // don't exist.
+    if (!bestMatch && !hasUnversioned) {
       const allLibraryDetails = await this.store.queryLibraryVersions();
       const libraryDetails = allLibraryDetails.get(library) ?? [];
       const availableVersions = libraryDetails.map((v) => v.version);

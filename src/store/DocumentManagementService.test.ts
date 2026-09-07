@@ -443,7 +443,7 @@ describe("DocumentManagementService", () => {
       it("should return null bestMatch and hasUnversioned=true when only unversioned exists", async () => {
         mockStore.queryUniqueVersions.mockResolvedValue([""]); // listVersions filters this out // Fix: Use mockStoreInstance
         mockStore.checkDocumentExists.mockImplementation(
-          (lib: string, ver: string) => Promise.resolve(ver === ""), // Only unversioned documents exist
+          (_lib: string, ver: string) => Promise.resolve(ver === ""), // Only unversioned documents exist
         );
 
         const result = await docService.findBestVersion(library);
@@ -496,7 +496,7 @@ describe("DocumentManagementService", () => {
       it("should fall back to the latest available version for invalid target format if unversioned exists", async () => {
         mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]); // Has semver // Fix: Use mockStoreInstance
         mockStore.checkDocumentExists.mockImplementation(
-          (lib: string, ver: string) => Promise.resolve(ver === ""), // Has unversioned documents
+          (_lib: string, ver: string) => Promise.resolve(ver === ""), // Has unversioned documents
         );
 
         // Invalid format falls back to the latest available version
@@ -511,6 +511,27 @@ describe("DocumentManagementService", () => {
         // Invalid format, no unversioned fallback -> use latest available semver version
         const result = await docService.findBestVersion(library, "invalid-format");
         expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
+      });
+
+      it("should prefer the semver-sorted latest version for invalid target format fallbacks", async () => {
+        // queryUniqueVersions returns lexicographically ordered names, where
+        // "1.10.0" < "1.2.0"; the fallback must still pick the semver latest
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.10.0", "1.2.0", "9.0.0"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        const result = await docService.findBestVersion(library, "invalid-format");
+        expect(result).toEqual({ bestMatch: "9.0.0", hasUnversioned: false });
+      });
+
+      it("should throw VersionNotFoundInStoreError when a specified version has no match and no unversioned docs exist", async () => {
+        // Only a named (non-semver) version exists; requesting a specific semver
+        // version must not silently return bestMatch=null
+        mockStore.queryUniqueVersions.mockResolvedValue(["canary"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
+          VersionNotFoundInStoreError,
+        );
       });
     });
 
