@@ -61,6 +61,16 @@ describe("buildSystemInfo", () => {
     });
   });
 
+  it("reports scraper limits for clients that use the configured defaults", () => {
+    const customConfig: AppConfig = JSON.parse(JSON.stringify(appConfig));
+    customConfig.scraper.maxPages = 250;
+    customConfig.scraper.maxDepth = 0;
+
+    const info = buildSystemInfo(baseServerConfig(), customConfig);
+
+    expect(info.scraper).toEqual({ maxPages: 250, maxDepth: 0 });
+  });
+
   it("includes MCP endpoints only when the MCP server is enabled", () => {
     const enabled = buildSystemInfo(
       baseServerConfig({ enableMcpServer: true }),

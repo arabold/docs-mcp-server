@@ -13,6 +13,7 @@ function baseSystemInfo(overrides: Partial<SystemInfo> = {}): SystemInfo {
     worker: { mode: "embedded", maxConcurrency: 3 },
     mcp: { enabled: true, endpoints: ["/mcp", "/sse"] },
     auth: { enabled: false },
+    scraper: { maxPages: 1000, maxDepth: 3 },
     ...overrides,
   };
 }
@@ -128,7 +129,7 @@ describe("systemHealthRouter.getSystemHealth", () => {
     });
   });
 
-  it("passes through version, readOnly, telemetryEnabled, services, mcp, and auth unchanged", async () => {
+  it("passes through version, readOnly, telemetryEnabled, services, mcp, auth, and scraper unchanged", async () => {
     const systemInfo = baseSystemInfo({
       version: "9.9.9",
       readOnly: true,
@@ -136,6 +137,7 @@ describe("systemHealthRouter.getSystemHealth", () => {
       services: { web: false, mcp: true, api: true, worker: false },
       mcp: { enabled: true, endpoints: ["/mcp", "/sse"] },
       auth: { enabled: true, issuer: "https://auth.example.com" },
+      scraper: { maxPages: 250, maxDepth: 0 },
     });
     const ctx = buildContext({ systemInfo });
     const caller = systemHealthRouter.createCaller(ctx);
@@ -148,5 +150,6 @@ describe("systemHealthRouter.getSystemHealth", () => {
     expect(health.services).toEqual({ web: false, mcp: true, api: true, worker: false });
     expect(health.mcp).toEqual({ enabled: true, endpoints: ["/mcp", "/sse"] });
     expect(health.auth).toEqual({ enabled: true, issuer: "https://auth.example.com" });
+    expect(health.scraper).toEqual({ maxPages: 250, maxDepth: 0 });
   });
 });

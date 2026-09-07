@@ -42,6 +42,12 @@ export interface SystemInfoAuth {
   issuer?: string;
 }
 
+/** Scrape limits used when a job leaves these options unspecified. */
+export interface SystemInfoScraper {
+  maxPages: number;
+  maxDepth: number;
+}
+
 /**
  * Distilled, serializable snapshot of the server's startup configuration.
  * Safe to assemble a single time at service-registration and share across
@@ -55,6 +61,7 @@ export interface SystemInfo {
   worker: SystemInfoWorker;
   mcp: SystemInfoMcp;
   auth: SystemInfoAuth;
+  scraper: SystemInfoScraper;
 }
 
 /**
@@ -91,6 +98,10 @@ export function buildSystemInfo(
       enabled: authEnabled,
       issuer:
         authEnabled && appConfig.auth.issuerUrl ? appConfig.auth.issuerUrl : undefined,
+    },
+    scraper: {
+      maxPages: appConfig.scraper.maxPages,
+      maxDepth: appConfig.scraper.maxDepth,
     },
   };
 }

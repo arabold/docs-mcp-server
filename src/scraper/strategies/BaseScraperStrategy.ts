@@ -297,6 +297,11 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 ),
             );
 
+            // Only the user's actual requested root should be fatal on 404 — an
+            // llms.txt-seeded depth-0 item is just one of several discovery seeds
+            // and a dead entry there shouldn't abort a scrape whose real root URL
+            // resolved fine (see llmstxt-discovery spec: llms.txt link failures
+            // are not supposed to fail the overall scrape).
             if (
               item.depth === 0 &&
               !item.fromLlmsTxt &&

@@ -205,6 +205,44 @@ describe("BaseScraperStrategy", () => {
     expect(progressCallback).toHaveBeenCalled();
   });
 
+  it("should not abort the scrape when only an llms.txt-seeded url returns NOT_FOUND", async () => {
+    // The real requested root succeeds and seeds a depth-0 llms.txt URL that
+    // 404s. A dead llms.txt entry must not abort a scrape whose actual root
+    // resolved fine.
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 5,
+      maxDepth: 1,
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem
+      .mockResolvedValueOnce({
+        content: {
+          textContent: "root content",
+          metadata: {},
+          links: [],
+          errors: [],
+          chunks: [],
+        },
+        links: [],
+        status: FetchStatus.SUCCESS,
+        queueItems: [
+          { url: "https://example.com/llms-seed", depth: 0, fromLlmsTxt: true },
+        ],
+      })
+      .mockResolvedValueOnce({
+        url: "https://example.com/llms-seed",
+        links: [],
+        status: FetchStatus.NOT_FOUND,
+      });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.not.toThrow();
+    expect(strategy.processItem).toHaveBeenCalledTimes(2);
+  });
+
   it("should treat a tracked root page returning NOT_FOUND during refresh as a deletion", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",

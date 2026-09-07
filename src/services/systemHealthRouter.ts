@@ -50,6 +50,7 @@ export interface SystemHealth {
   embeddings: SystemHealthEmbeddings | null;
   mcp: SystemInfo["mcp"];
   auth: SystemInfo["auth"];
+  scraper: SystemInfo["scraper"];
 }
 
 /**
@@ -93,6 +94,7 @@ export function createSystemHealthRouter(trpc: unknown) {
           embeddings,
           mcp: systemInfo.mcp,
           auth: systemInfo.auth,
+          scraper: systemInfo.scraper,
         };
       },
     ),

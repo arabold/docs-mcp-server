@@ -10,6 +10,62 @@ import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
 
 /**
+ * Splits a comma-separated pattern string into an array of patterns. Commas
+ * inside `{}`, `[]`, or `()` (regex quantifiers, glob brace expansion,
+ * character classes) and escaped commas (`\,`) are preserved so that a single
+ * regex or glob pattern is never torn apart. This keeps the argument
+ * renderable as one string for MCP clients that only display primitive tool
+ * arguments.
+ * @param value The raw pattern string.
+ * @returns An array of trimmed, non-empty patterns.
+ */
+function splitPatterns(value: string): string[] {
+  const patterns: string[] = [];
+  let current = "";
+  let braces = 0;
+  let brackets = 0;
+  let parens = 0;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "\\") {
+      if (i + 1 < value.length) {
+        current += ch + value[i + 1];
+        i++;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+    if (ch === "{") braces++;
+    else if (ch === "}") braces = Math.max(0, braces - 1);
+    else if (ch === "[") brackets++;
+    else if (ch === "]") brackets = Math.max(0, brackets - 1);
+    else if (ch === "(") parens++;
+    else if (ch === ")") parens = Math.max(0, parens - 1);
+    if (ch === "," && braces === 0 && brackets === 0 && parens === 0) {
+      patterns.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  patterns.push(current.trim());
+  return patterns.filter(Boolean);
+}
+
+/**
+ * Schema for URL pattern arguments. Accepts a single pattern as a string or
+ * multiple patterns as an array of strings, and normalizes both to an array
+ * of trimmed, non-empty patterns. A string is split on top-level commas while
+ * commas inside `{}`, `[]`, or `()` are preserved, so regex quantifiers and
+ * glob brace expansion survive.
+ */
+const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((value) => {
+  if (typeof value === "string") return splitPatterns(value);
+  return value.map((p) => p.trim()).filter(Boolean);
+});
+
+/**
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
@@ -71,6 +127,16 @@ export function createMcpServerInstance(
           .boolean()
           .optional()
           .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
+        includePatterns: patternsSchema
+          .optional()
+          .describe(
+            "Patterns for including URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Regex patterns must be wrapped in slashes, e.g. /pattern/. If not set, all are included by default.",
+          ),
+        excludePatterns: patternsSchema
+          .optional()
+          .describe(
+            "Patterns for excluding URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Exclude takes precedence over include. Regex patterns must be wrapped in slashes, e.g. /pattern/.",
+          ),
       },
       {
         title: "Scrape New Library Documentation",
@@ -86,6 +152,8 @@ export function createMcpServerInstance(
         scope,
         followRedirects,
         preserveHashes,
+        includePatterns,
+        excludePatterns,
       }) => {
         // Track MCP tool usage
         telemetry.track(TelemetryEvent.TOOL_USED, {
@@ -113,6 +181,8 @@ export function createMcpServerInstance(
               scope,
               followRedirects,
               preserveHashes,
+              includePatterns,
+              excludePatterns,
             },
           });
 

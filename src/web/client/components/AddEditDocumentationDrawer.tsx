@@ -40,6 +40,7 @@ import {
   useEnqueueScrapeJob,
   useGetScraperOptions,
   useListLibraries,
+  useSystemHealth,
 } from "../api/hooks";
 import { trpc } from "../api/trpc";
 import { Button } from "./Button";
@@ -98,8 +99,13 @@ function parsePatterns(raw: string): string[] | undefined {
 }
 
 function parsePositiveInt(raw: string): number | undefined {
-  const n = Number.parseInt(raw.trim(), 10);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
+  const value = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function parseNonNegativeInt(raw: string): number | undefined {
+  const value = Number.parseInt(raw.trim(), 10);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function headersToRows(headers: Record<string, string> | undefined): HeaderRow[] {
@@ -200,6 +206,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
   const toast = useToast();
   const utils = trpc.useUtils();
   const { data: libraries } = useListLibraries();
+  const { data: systemHealth } = useSystemHealth();
   const matchedVersion = useMemo(
     () => findVersion(libraries, library, version),
     [libraries, library, version],
@@ -296,7 +303,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
           scope,
           followRedirects,
           maxPages: parsePositiveInt(maxPages),
-          maxDepth: parsePositiveInt(maxDepth),
+          maxDepth: parseNonNegativeInt(maxDepth),
           ignoreErrors,
           scrapeMode,
           includePatterns: parsePatterns(includePatterns),
@@ -458,7 +465,9 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
                 id="doc-drawer-max-pages"
                 className="input mono"
                 inputMode="numeric"
-                placeholder="1000"
+                placeholder={
+                  systemHealth ? String(systemHealth.scraper.maxPages) : "Server default"
+                }
                 value={maxPages}
                 onChange={(e) => setMaxPages(e.target.value)}
               />
@@ -469,7 +478,9 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
                 id="doc-drawer-max-depth"
                 className="input mono"
                 inputMode="numeric"
-                placeholder="3"
+                placeholder={
+                  systemHealth ? String(systemHealth.scraper.maxDepth) : "Server default"
+                }
                 value={maxDepth}
                 onChange={(e) => setMaxDepth(e.target.value)}
               />

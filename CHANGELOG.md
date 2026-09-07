@@ -1,3 +1,18 @@
+# [3.1.0](https://github.com/arabold/docs-mcp-server/compare/v3.0.1...v3.1.0) (2026-08-29)
+
+
+### Bug Fixes
+
+* **mcp:** preserve commas in scrape pattern arguments ([95086f3](https://github.com/arabold/docs-mcp-server/commit/95086f31ac41e0cd2fd659b16141161ba794fa4e))
+* **scraper:** don't abort scrape when only an llms.txt-seeded url 404s ([ea61589](https://github.com/arabold/docs-mcp-server/commit/ea61589ff85ebc7c85741320b9e0e9c506e5e066)), closes [#478](https://github.com/arabold/docs-mcp-server/issues/478)
+* **web:** preserve zero max depth ([6b246aa](https://github.com/arabold/docs-mcp-server/commit/6b246aabb2fa9b275465e572a0455929c053b0c9))
+
+
+### Features
+
+* **mcp:** expose include/exclude patterns as comma-separated strings in scrape_docs ([8506fd6](https://github.com/arabold/docs-mcp-server/commit/8506fd6851348898184a7bb21ed49191c1420ef1))
+* **mcp:** split pattern strings only on top-level commas ([bd1723f](https://github.com/arabold/docs-mcp-server/commit/bd1723f312ad659647ec1db04effa7aefa067275))
+
 ## [3.0.1](https://github.com/arabold/docs-mcp-server/compare/v3.0.0...v3.0.1) (2026-08-14)
 
 
