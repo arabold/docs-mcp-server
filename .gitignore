@@ -11,3 +11,4 @@ public/index.html
 .tsbuildinfo
 .claude/worktrees/
 .opencode/package-lock.json
+.playwright-mcp/

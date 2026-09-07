@@ -1110,19 +1110,24 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       const browser = await this.ensureBrowser();
 
       // Always create a browser context (with or without credentials)
+      const defaultUserAgent =
+        customHeaders["User-Agent"] ||
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
+      const baseContextOptions = {
+        userAgent: defaultUserAgent,
+        viewport: { width: 1920, height: 1080 },
+        ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
+          "https://browser-context.local",
+        ),
+      };
+
       if (credentials) {
         browserContext = await browser.newContext({
+          ...baseContextOptions,
           httpCredentials: credentials,
-          ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
-            "https://browser-context.local",
-          ),
         });
       } else {
-        browserContext = await browser.newContext({
-          ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
-            "https://browser-context.local",
-          ),
-        });
+        browserContext = await browser.newContext(baseContextOptions);
       }
       page = await browserContext.newPage();
 

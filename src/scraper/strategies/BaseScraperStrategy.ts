@@ -159,7 +159,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     item: QueueItem,
     result?: ProcessItemResult,
   ): boolean {
-    return item.depth > 0 && !this.isRefreshDeletion(item, result);
+    return (
+      (item.depth > 0 || item.fromLlmsTxt === true) &&
+      !this.isRefreshDeletion(item, result)
+    );
   }
 
   private isRefreshDeletion(item: QueueItem, result?: ProcessItemResult): boolean {
@@ -175,7 +178,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   }
 
   private recordChildPageFailure(item: QueueItem): void {
-    if (item.depth === 0) {
+    if (item.depth === 0 && !item.fromLlmsTxt) {
       return;
     }
 
@@ -294,7 +297,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 ),
             );
 
-            if (item.depth === 0 && !isRefreshDeletion && !hasNewFallbackQueueItem) {
+            if (
+              item.depth === 0 &&
+              !item.fromLlmsTxt &&
+              !isRefreshDeletion &&
+              !hasNewFallbackQueueItem
+            ) {
               throw new ScraperError(`Root page not found: ${item.url}`, false);
             }
 
@@ -408,7 +416,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
           // Never ignore errors for the root URL (depth 0) - if it fails, the job should fail
           // There's no point in "successfully" completing with 0 documents
-          if (item.depth === 0) {
+          if (item.depth === 0 && !item.fromLlmsTxt) {
             throw error;
           }
 

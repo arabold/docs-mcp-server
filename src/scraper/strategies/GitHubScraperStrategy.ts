@@ -574,6 +574,37 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     return normalizedPath.startsWith(`${trimmedSubPath}/`);
   }
 
+  protected override shouldProcessUrl(
+    url: string,
+    options: ScraperOptions,
+    context: { internalAllowedFileRoots?: string[] } = {},
+  ): boolean {
+    try {
+      const base = this.canonicalBaseUrl ?? new URL(options.url);
+      const target = new URL(url);
+
+      if (
+        ["github.com", "www.github.com"].includes(base.hostname) &&
+        ["github.com", "www.github.com"].includes(target.hostname)
+      ) {
+        const baseInfo = this.parseGitHubUrl(options.url);
+        const targetMatch = target.pathname.match(/^\/([^/]+)\/([^/]+)/);
+        if (!targetMatch) return false;
+        const [, targetOwner, targetRepo] = targetMatch;
+        if (
+          targetOwner.toLowerCase() !== baseInfo.owner.toLowerCase() ||
+          targetRepo.toLowerCase() !== baseInfo.repo.toLowerCase()
+        ) {
+          return false;
+        }
+        return shouldIncludeUrl(url, options.includePatterns, options.excludePatterns);
+      }
+    } catch {
+      return false;
+    }
+    return super.shouldProcessUrl(url, options, context);
+  }
+
   async processItem(
     item: QueueItem,
     options: ScraperOptions,

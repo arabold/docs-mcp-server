@@ -167,20 +167,34 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   }
 
   private getLlmsTxtCandidates(baseUrl: string, inputUrl: string): string[] {
+    const candidates: string[] = [];
+
     const input = new URL(inputUrl);
+    // Direct subpath candidate (e.g. /paymob-docs -> /paymob-docs/llms.txt)
+    const directSubpath = new URL(inputUrl);
+    directSubpath.pathname = `${input.pathname.replace(/\/+$/, "")}/llms.txt`.replace(/\/+/g, "/");
+    directSubpath.search = "";
+    directSubpath.hash = "";
+    candidates.push(directSubpath.toString());
+
+    // Parent path candidate (e.g. /docs/v1/page.html -> /docs/v1/llms.txt)
     const parentPath = input.pathname.endsWith("/")
       ? input.pathname
       : input.pathname.slice(0, input.pathname.lastIndexOf("/") + 1);
-    input.pathname = `${parentPath}llms.txt`.replace(/\/+/g, "/");
-    input.search = "";
-    input.hash = "";
+    const parent = new URL(inputUrl);
+    parent.pathname = `${parentPath}llms.txt`.replace(/\/+/g, "/");
+    parent.search = "";
+    parent.hash = "";
+    candidates.push(parent.toString());
 
+    // Root candidate (e.g. /llms.txt)
     const root = new URL(baseUrl);
     root.pathname = "/llms.txt";
     root.search = "";
     root.hash = "";
+    candidates.push(root.toString());
 
-    return [...new Set([input.toString(), root.toString()])];
+    return [...new Set(candidates)];
   }
 
   /**
@@ -316,8 +330,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.debug(`Processing ${url} with stored ETag: ${item.etag}`);
       }
 
-      // Check for Archive Root URL (only if depth 0)
-      if (item.depth === 0) {
+      // Check for Archive Root URL (only if initial root URL)
+      if (item.depth === 0 && !item.fromLlmsTxt) {
         const isArchive = /\.(zip|tar|gz|tgz)$/i.test(new URL(url).pathname);
         if (isArchive) {
           return this.processRootArchive(item, options, signal);
@@ -329,7 +343,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       const effectiveSource = options.preserveHashes
         ? this.restorePreservedHash(url, rawContent.source)
         : rawContent.source;
-      if (item.depth === 0) {
+      if (item.depth === 0 && !item.fromLlmsTxt) {
         this.updateCanonicalBaseUrl(effectiveSource, options);
       }
       const llmsTxtQueueItems = this.consumePendingLlmsTxtQueueItems(item, options);

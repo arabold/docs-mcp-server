@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { type Browser, chromium, type Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
@@ -60,6 +61,11 @@ export class BrowserFetcher implements ContentFetcher {
       const browser = await this.ensureBrowserReady();
       const fingerprintHeaders = this.fingerprintGenerator.generateHeaders();
       browserContext = await browser.newContext({
+        userAgent:
+          options?.headers?.["User-Agent"] ||
+          fingerprintHeaders["user-agent"] ||
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        viewport: { width: 1920, height: 1080 },
         ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
           "https://browser-context.local",
         ),
@@ -315,10 +321,25 @@ export class BrowserFetcher implements ContentFetcher {
   }
 
   public static async launchBrowser(): Promise<Browser> {
+    const defaultChromiumPaths = [
+      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+      "/usr/lib/chromium/chromium",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ].filter(Boolean) as string[];
+
+    const executablePath = defaultChromiumPaths.find((p) => fs.existsSync(p));
+
     return chromium.launch({
       headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
-      args: ["--no-sandbox"],
+      executablePath,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled",
+        "--headless=new",
+      ],
     });
   }
 

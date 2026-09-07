@@ -147,9 +147,12 @@ export function createEmbeddingModel(
       if (!process.env.OPENAI_API_KEY) {
         throw new MissingCredentialsError("openai", ["OPENAI_API_KEY"]);
       }
+      const apiKey = process.env.OPENAI_API_KEY;
+      const baseURL = process.env.OPENAI_API_BASE;
       const config: Partial<OpenAIEmbeddingsParams> & { configuration?: ClientOptions } =
         {
           ...baseConfig,
+          openAIApiKey: apiKey,
           modelName: model,
           batchSize: 512, // OpenAI supports large batches
           timeout: requestTimeoutMs,
@@ -160,12 +163,12 @@ export function createEmbeddingModel(
           // floats, which the decoder mangles into a silently corrupted vector of a
           // quarter the length and every element zero.
           encodingFormat: "float",
+          configuration: {
+            apiKey,
+            ...(baseURL ? { baseURL } : {}),
+            timeout: requestTimeoutMs,
+          },
         };
-      // Add custom base URL if specified
-      const baseURL = process.env.OPENAI_API_BASE;
-      config.configuration = baseURL
-        ? { baseURL, timeout: requestTimeoutMs }
-        : { timeout: requestTimeoutMs };
       return new OpenAIEmbeddings(config);
     }
 

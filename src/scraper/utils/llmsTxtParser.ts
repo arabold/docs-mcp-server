@@ -24,7 +24,8 @@ const emptyLlmsTxtResult = (): LlmsTxtResult => ({
   links: [],
 });
 
-const markdownLinkPattern = /^\s*[-*+]\s+\[([^\]\n]+)]\(([^)\s]+)\)\s*(?::\s*(.+?)\s*)?$/;
+const markdownLinkPattern =
+  /^\s*[-*+•]\s+\[([^\]\n]+)]\(([^)\s]+)\)\s*(?::\s*(.+?)\s*)?$/;
 
 /**
  * Returns true when a URL points to an llms.txt meta-file.
@@ -50,17 +51,24 @@ export function parseLlmsTxt(content: string): LlmsTxtResult {
     return emptyLlmsTxtResult();
   }
 
-  if (/^\s*<(?:!doctype\s+html|html|body|head)(?:\s|>)/i.test(content)) {
+  // If content was fetched via browser and wrapped in HTML <pre>, unwrap it
+  const preMatch = content.match(/<pre[^>]*>([\s\S]*?)<\/pre>/i);
+  const rawText = preMatch ? preMatch[1] : content;
+
+  if (/^\s*<(?:!doctype\s+html|html|body|head)(?:\s|>)/i.test(rawText)) {
     return emptyLlmsTxtResult();
   }
 
-  const lines = content.split(/\r?\n/);
+  const lines = rawText.split(/\r?\n/);
   const firstH1Index = lines.findIndex((line) => /^#\s+\S/.test(line));
-  if (firstH1Index === -1) {
+  const firstNonEmptyIndex = lines.findIndex((line) => line.trim().length > 0 && !line.startsWith("<"));
+
+  const startIndex = firstH1Index !== -1 ? firstH1Index : firstNonEmptyIndex;
+  if (startIndex === -1) {
     return emptyLlmsTxtResult();
   }
 
-  const projectName = lines[firstH1Index].replace(/^#\s+/, "").trim();
+  const projectName = lines[startIndex].replace(/^#\s+/, "").trim();
   if (!projectName) {
     return emptyLlmsTxtResult();
   }
@@ -75,7 +83,7 @@ export function parseLlmsTxt(content: string): LlmsTxtResult {
   const summaryLines: string[] = [];
   let collectingSummary = true;
 
-  for (const line of lines.slice(firstH1Index + 1)) {
+  for (const line of lines.slice(startIndex + 1)) {
     if (/^#\s+\S/.test(line)) {
       collectingSummary = false;
       continue;

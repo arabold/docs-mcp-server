@@ -159,6 +159,52 @@ describe("BaseScraperStrategy", () => {
     );
   });
 
+  it("should not throw Root page not found when a fromLlmsTxt item returns NOT_FOUND", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 2,
+      maxDepth: 1,
+      ignoreErrors: true,
+      initialQueue: [
+        {
+          url: "https://example.com/broken-doc",
+          depth: 0,
+          fromLlmsTxt: true,
+        },
+        {
+          url: "https://example.com/valid-doc",
+          depth: 0,
+          fromLlmsTxt: true,
+        },
+      ],
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockImplementation(async (item) => {
+      if (item.url === "https://example.com/broken-doc") {
+        return {
+          url: item.url,
+          links: [],
+          status: FetchStatus.NOT_FOUND,
+        };
+      }
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: {
+          textContent: "Valid document content",
+          chunks: [{ content: "Valid document content" }],
+        },
+      };
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.not.toThrow();
+    expect(progressCallback).toHaveBeenCalled();
+  });
+
   it("should treat a tracked root page returning NOT_FOUND during refresh as a deletion", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",
