@@ -56,22 +56,25 @@ export class AutoDetectFetcher implements ContentFetcher {
     // For HTTP(S) URLs, try HttpFetcher first, fallback to BrowserFetcher on challenge or anti-bot blocks
     if (this.httpFetcher.canFetch(source)) {
       if (options?.scrapeMode === "playwright") {
-        logger.debug(`Using BrowserFetcher directly (scrapeMode=playwright) for: ${source}`);
+        logger.debug(
+          `Using BrowserFetcher directly (scrapeMode=playwright) for: ${source}`,
+        );
         return this.browserFetcher.fetch(source, options);
       }
 
       try {
         logger.debug(`Using HttpFetcher for: ${source}`);
         return await this.httpFetcher.fetch(source, options);
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : undefined;
         const isAntiBotOrChallenge =
           error instanceof ChallengeError ||
-          (typeof error?.message === "string" &&
-            (error.message.includes("403") || error.message.includes("429")));
+          (typeof message === "string" &&
+            (message.includes("403") || message.includes("429")));
 
         if (isAntiBotOrChallenge) {
           logger.info(
-            `🔄 Anti-bot/Challenge detected (${error?.message ?? "block"}) for ${source}, falling back to browser fetcher...`,
+            `🔄 Anti-bot/Challenge detected (${message ?? "block"}) for ${source}, falling back to browser fetcher...`,
           );
           return this.browserFetcher.fetch(source, options);
         }

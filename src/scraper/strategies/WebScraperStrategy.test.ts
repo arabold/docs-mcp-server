@@ -185,6 +185,7 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).toHaveBeenCalledWith(testUrl, {
       signal: undefined, // scrape doesn't pass signal in this basic call
       followRedirects: options.followRedirects, // Check default from options
+      scrapeMode: ScrapeMode.Fetch,
     });
 
     // Verify that the pipeline processed and called the callback with a document
@@ -208,6 +209,7 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", {
       signal: undefined,
       followRedirects: false, // Explicitly false from options
+      scrapeMode: ScrapeMode.Fetch,
     });
     // Also check that processing still happened
     expect(progressCallback).toHaveBeenCalled();

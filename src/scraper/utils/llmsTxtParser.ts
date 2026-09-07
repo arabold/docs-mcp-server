@@ -61,7 +61,9 @@ export function parseLlmsTxt(content: string): LlmsTxtResult {
 
   const lines = rawText.split(/\r?\n/);
   const firstH1Index = lines.findIndex((line) => /^#\s+\S/.test(line));
-  const firstNonEmptyIndex = lines.findIndex((line) => line.trim().length > 0 && !line.startsWith("<"));
+  const firstNonEmptyIndex = lines.findIndex(
+    (line) => line.trim().length > 0 && !line.startsWith("<"),
+  );
 
   const startIndex = firstH1Index !== -1 ? firstH1Index : firstNonEmptyIndex;
   if (startIndex === -1) {

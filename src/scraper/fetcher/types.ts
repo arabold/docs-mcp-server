@@ -1,3 +1,5 @@
+import type { ScrapeMode } from "../types";
+
 /**
  * Semantic status of a fetch operation, abstracting HTTP status codes
  * into meaningful states for content processing.
@@ -92,6 +94,12 @@ export interface FetchOptions {
   etag?: string | null;
   /** Internal-only allowlist roots for application-managed temporary files. */
   internalAllowedFileRoots?: string[];
+  /**
+   * Preferred scrape mode. When set to `playwright`, fetchers that support
+   * browser rendering (e.g. {@link AutoDetectFetcher}) should use the browser
+   * directly instead of trying plain HTTP first.
+   */
+  scrapeMode?: ScrapeMode;
 }
 
 /**

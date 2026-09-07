@@ -95,6 +95,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       followRedirects: options.followRedirects,
       headers: options.headers,
       etag: item.etag,
+      scrapeMode: options.scrapeMode,
       ...(item.internalAllowedFileRoots
         ? { internalAllowedFileRoots: item.internalAllowedFileRoots }
         : {}),
@@ -172,7 +173,10 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     const input = new URL(inputUrl);
     // Direct subpath candidate (e.g. /paymob-docs -> /paymob-docs/llms.txt)
     const directSubpath = new URL(inputUrl);
-    directSubpath.pathname = `${input.pathname.replace(/\/+$/, "")}/llms.txt`.replace(/\/+/g, "/");
+    directSubpath.pathname = `${input.pathname.replace(/\/+$/, "")}/llms.txt`.replace(
+      /\/+/g,
+      "/",
+    );
     directSubpath.search = "";
     directSubpath.hash = "";
     candidates.push(directSubpath.toString());

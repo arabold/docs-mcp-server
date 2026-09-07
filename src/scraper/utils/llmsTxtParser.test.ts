@@ -84,13 +84,18 @@ describe("parseLlmsTxt", () => {
     expect(result.links[1]?.description).toBeUndefined();
   });
 
-  it("returns an empty result for empty or invalid content", () => {
+  it("returns an empty result for empty or truly invalid content", () => {
     expect(parseLlmsTxt("")).toEqual({ sections: [], links: [] });
-    expect(parseLlmsTxt("No heading\n- [Link](https://example.com)")).toEqual({
-      sections: [],
-      links: [],
-    });
+    expect(parseLlmsTxt("   \n\t\n")).toEqual({ sections: [], links: [] });
     expect(parseLlmsTxt("# Project\n\nNo links")).toEqual({ sections: [], links: [] });
+  });
+
+  it("accepts content without an H1 heading, using the first line as the project name", () => {
+    expect(parseLlmsTxt("No heading\n- [Link](https://example.com)")).toEqual({
+      projectName: "No heading",
+      sections: [],
+      links: [{ title: "Link", url: "https://example.com", optional: false }],
+    });
   });
 
   it("returns an empty result for HTML and binary-like content", () => {
