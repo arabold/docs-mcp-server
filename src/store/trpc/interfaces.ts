@@ -12,6 +12,7 @@ import type {
   LibrarySummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageChunks,
   StoredScraperOptions,
   StoreSearchResult,
   VersionChunkStats,
@@ -37,6 +38,11 @@ export interface IDocumentManagement {
     query: string,
     limit?: number,
   ): Promise<StoreSearchResult[]>;
+  getDocumentsByUrl(
+    library: string,
+    version: string | null | undefined,
+    urlSuffix: string,
+  ): Promise<PageChunks | null>;
   removeAllDocuments(library: string, version?: string | null): Promise<void>;
   removeVersion(library: string, version?: string | null): Promise<void>;
 

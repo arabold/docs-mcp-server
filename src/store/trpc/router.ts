@@ -103,6 +103,35 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
+    getDocumentsByUrl: tt.procedure
+      .input(
+        z.object({
+          library: nonEmpty,
+          version: optionalVersion,
+          urlSuffix: nonEmpty,
+        }),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: {
+            library: string;
+            version: string | null | undefined;
+            urlSuffix: string;
+          };
+        }) => {
+          const page = await ctx.docService.getDocumentsByUrl(
+            input.library,
+            input.version ?? null,
+            input.urlSuffix,
+          );
+          return page;
+        },
+      ),
+
     removeVersion: tt.procedure
       .input(z.object({ library: nonEmpty, version: optionalVersion }))
       .mutation(

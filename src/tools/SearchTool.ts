@@ -10,6 +10,8 @@ export interface SearchToolOptions {
   query: string;
   limit?: number;
   exactMatch?: boolean;
+  /** "cards" returns a compact digest per result unit instead of full content. */
+  detail?: "cards" | "full";
 }
 
 export interface SearchToolResultError {
@@ -25,6 +27,44 @@ export interface SearchToolResultError {
 
 export interface SearchToolResult {
   results: StoreSearchResult[];
+  cards?: CardSearchResult[];
+}
+
+export interface CardSearchResult {
+  url: string;
+  /** Repo-relative unit path, e.g. `cases/04-text-input-controls.md`. */
+  unitPath: string;
+  layer: string | null;
+  topic: string | null;
+  /** Digest block for pyramid units; trimmed excerpt for generic pages. */
+  card: string;
+  score: number | null;
+}
+
+// Digest block is anchored by its heading: HTML comments do not survive the
+// markdown splitter, so we slice "## API 摘要" up to the next H2.
+const DIGEST_RE = /## API 摘要\s*\n([\s\S]*?)(?=\n## |\n$)/;
+const H1_TITLE_RE = /^# (.+?)\s*(?:\(L[123][^)]*\))?\s*$/m;
+
+/** Derives a short, stable unit path from a page URL. */
+function unitPathFromUrl(url: string, library: string): string {
+  const marker = `/${library}/`;
+  const at = url.indexOf(marker);
+  if (at >= 0) {
+    return url.slice(at + marker.length);
+  }
+  const parts = url.split("/").filter(Boolean);
+  return parts.slice(-2).join("/");
+}
+
+function trimExcerpt(text: string, maxChars: number): string {
+  const clean = text.replace(/<!--digest:(start|end)-->/g, "").trim();
+  if (clean.length <= maxChars) {
+    return clean;
+  }
+  const cut = clean.slice(0, maxChars);
+  const stop = Math.max(cut.lastIndexOf("\n\n"), cut.lastIndexOf("\n"));
+  return `${cut.slice(0, stop > maxChars * 0.5 ? stop : maxChars)}\n…`;
 }
 
 /**
@@ -110,13 +150,26 @@ export class SearchTool {
 
       // Note: versionToSearch can be string | null | undefined here.
       // searchStore handles null/undefined by normalizing to "".
+      // Card mode dedupes to one card per unit, so overfetch raw chunks to
+      // keep `limit` unique units visible instead of wasting slots on
+      // duplicate chunks of the same page.
+      const fetchLimit =
+        options.detail === "cards" ? Math.min((limit ?? 5) * 2, 50) : limit;
       const results = await this.docService.searchStore(
         library,
         versionToSearch,
         query,
-        limit,
+        fetchLimit,
       );
       logger.info(`✅ Found ${results.length} matching results`);
+
+      if (options.detail === "cards") {
+        const cards = (await this.buildCards(library, versionToSearch, results)).slice(
+          0,
+          limit ?? 5,
+        );
+        return { results: results.slice(0, limit ?? 5), cards };
+      }
 
       return { results };
     } catch (error) {
@@ -125,5 +178,63 @@ export class SearchTool {
       );
       throw error;
     }
+  }
+
+  /**
+   * Builds one digest card per result unit (pyramid-aware progressive
+   * disclosure). Pyramid units carry a generated digest block between
+   * digest markers; generic pages fall back to a trimmed excerpt.
+   */
+  private async buildCards(
+    library: string,
+    version: string | null | undefined,
+    results: StoreSearchResult[],
+  ): Promise<CardSearchResult[]> {
+    const cards: CardSearchResult[] = [];
+    const seen = new Set<string>();
+    for (const r of results) {
+      const unitPath = unitPathFromUrl(r.url, library);
+      // One card per unit: search may return several chunks of the same page.
+      if (seen.has(unitPath)) {
+        continue;
+      }
+      seen.add(unitPath);
+      const layer = unitPath.startsWith("cases/")
+        ? "L2"
+        : unitPath.startsWith("api/")
+          ? "L3"
+          : unitPath.endsWith("index.md")
+            ? "L1"
+            : null;
+      let card: string | null = null;
+      let topic: string | null = null;
+      try {
+        const page = await this.docService.getDocumentsByUrl(library, version, unitPath);
+        if (page) {
+          const full = page.chunks.map((c) => c.content).join("\n\n");
+          const digest = full.match(DIGEST_RE);
+          if (digest) {
+            card = digest[1].trim();
+          }
+          topic = full.match(H1_TITLE_RE)?.[1]?.trim() ?? null;
+          if (!card) {
+            card = trimExcerpt(full, 700);
+          }
+        }
+      } catch (error) {
+        logger.warn(
+          `card build failed for ${unitPath}: ${error instanceof Error ? error.message : "unknown"}`,
+        );
+      }
+      cards.push({
+        url: r.url,
+        unitPath,
+        layer,
+        topic,
+        card: card ?? trimExcerpt(r.content, 700),
+        score: r.score,
+      });
+    }
+    return cards;
   }
 }

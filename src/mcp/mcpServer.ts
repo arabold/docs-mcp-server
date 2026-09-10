@@ -270,13 +270,21 @@ export function createMcpServerInstance(
         .describe("Library version (exact or X-Range, optional)."),
       query: z.string().trim().describe("Documentation search query."),
       limit: z.number().optional().default(5).describe("Maximum number of results."),
+      detail: z
+        .enum(["cards", "full"])
+        .optional()
+        .default("cards")
+        .describe(
+          "cards: compact digest per unit with a read_section pointer (default, token-efficient). " +
+            "full: legacy assembled content.",
+        ),
     },
     {
       title: "Search Library Documentation",
       readOnlyHint: true,
       destructiveHint: false,
     },
-    async ({ library, version, query, limit }) => {
+    async ({ library, version, query, limit, detail }) => {
       // Track MCP tool usage
       telemetry.track(TelemetryEvent.TOOL_USED, {
         tool: "search_docs",
@@ -293,23 +301,100 @@ export function createMcpServerInstance(
           version,
           query,
           limit,
+          detail,
           exactMatch: false, // Always false for MCP interface
         });
 
-        const formattedResults = result.results.map(
-          (r: { url: string; content: string }, i: number) => `
-------------------------------------------------------------
-Result ${i + 1}: ${r.url}
-
-${r.content}\n`,
-        );
-
-        if (formattedResults.length === 0) {
+        if (result.results.length === 0) {
           return createResponse(
             `No results found for '${query}' in ${library}. Try to use a different or more general query.`,
           );
         }
-        return createResponse(formattedResults.join(""));
+
+        if (detail === "full" || !result.cards) {
+          const formattedResults = result.results.map(
+            (r: { url: string; content: string }, i: number) => `
+------------------------------------------------------------
+Result ${i + 1}: ${r.url}
+
+${r.content}\n`,
+          );
+          return createResponse(formattedResults.join(""));
+        }
+
+        // Card mode (pyramid-aware progressive disclosure): one digest card
+        // per unit plus a read_section pointer for on-demand full content.
+        const formattedCards = result.cards.map(
+          (
+            c: {
+              unitPath: string;
+              layer: string | null;
+              topic: string | null;
+              card: string;
+              score: number | null;
+            },
+            i: number,
+          ) =>
+            `\n[${i + 1}] ${c.unitPath}` +
+            `${c.layer ? ` · ${c.layer}` : ""}${c.topic ? ` · ${c.topic}` : ""}\n` +
+            `${c.card}\n` +
+            `full content: read_section({library: "${library}", path: "${c.unitPath}", section: "<anchor>"})\n`,
+        );
+        return createResponse(formattedCards.join(""));
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
+  // Read section tool (pyramid-aware progressive disclosure)
+  server.tool(
+    "read_section",
+    "Fetch one documentation unit in full, or a single anchored section of it. " +
+      "Use after search_docs (cards mode) returned a unit path; section anchors " +
+      "are listed on the `{#anchor}` markers in the digest.",
+    {
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      path: z
+        .string()
+        .trim()
+        .describe("Unit path from a search card, e.g. cases/04-text-input-controls.md."),
+      section: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Section anchor (optional); omit for the whole unit."),
+    },
+    {
+      title: "Read Documentation Section",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
+    async ({ library, version, path, section }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "read_section",
+        context: "mcp_server",
+        library,
+        path,
+        section,
+      });
+
+      try {
+        const result = await tools.readSection.execute({
+          library,
+          version,
+          path,
+          section,
+        });
+        const header =
+          `# ${result.title ?? path}${section ? ` — section: ${section}` : ""}` +
+          `${result.sections.length ? `\navailable sections: ${result.sections.join(", ")}` : ""}\n\n`;
+        return createResponse(header + result.content);
       } catch (error) {
         return createError(error);
       }

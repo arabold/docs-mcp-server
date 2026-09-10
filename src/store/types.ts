@@ -83,6 +83,20 @@ export interface StoreSearchResult {
 }
 
 /**
+ * A page resolved by URL suffix with its chunks in reading order.
+ * Returned by the pyramid-aware read_section path.
+ */
+export interface PageChunks {
+  url: string;
+  title: string | null;
+  chunks: Array<{
+    content: string;
+    metadata: Record<string, unknown> | null;
+    sortOrder: number;
+  }>;
+}
+
+/**
  * Represents the possible states of a version's indexing status.
  * These statuses are stored in the database and persist across server restarts.
  */

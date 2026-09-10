@@ -27,6 +27,7 @@ import type {
   LibrarySummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageChunks,
   ScraperConfig,
   StoreSearchResult,
   VersionChunkStats,
@@ -520,6 +521,19 @@ export class DocumentManagementService {
   ): Promise<StoreSearchResult[]> {
     const normalizedVersion = this.normalizeVersion(version);
     return this.documentRetriever.search(library, normalizedVersion, query, limit);
+  }
+
+  /**
+   * Resolves a page by URL suffix and returns its chunks in reading order
+   * (pyramid-aware read_section path).
+   */
+  async getDocumentsByUrl(
+    library: string,
+    version: string | null | undefined,
+    urlSuffix: string,
+  ): Promise<PageChunks | null> {
+    const normalizedVersion = this.normalizeVersion(version);
+    return this.store.getDocumentsByUrlSuffix(library, normalizedVersion, urlSuffix);
   }
 
   // Deprecated simple listing removed: enriched listLibraries() is canonical

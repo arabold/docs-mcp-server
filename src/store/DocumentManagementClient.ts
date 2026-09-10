@@ -17,6 +17,7 @@ import type {
   LibrarySummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageChunks,
   StoredScraperOptions,
   StoreSearchResult,
   VersionChunkStats,
@@ -82,6 +83,18 @@ export class DocumentManagementClient implements IDocumentManagement {
     limit?: number,
   ): Promise<StoreSearchResult[]> {
     return this.client.search.query({ library, version: version ?? null, query, limit });
+  }
+
+  async getDocumentsByUrl(
+    library: string,
+    version: string | null | undefined,
+    urlSuffix: string,
+  ): Promise<PageChunks | null> {
+    return this.client.getDocumentsByUrl.query({
+      library,
+      version: version ?? null,
+      urlSuffix,
+    });
   }
 
   async removeVersion(library: string, version?: string | null): Promise<void> {

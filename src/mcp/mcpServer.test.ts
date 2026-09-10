@@ -27,6 +27,9 @@ const mockTools: McpServerTools = {
   findVersion: {
     execute: vi.fn(async () => "Version found"),
   } as any,
+  readSection: {
+    execute: vi.fn(async () => ({ url: "", title: null, content: "", sections: [] })),
+  } as any,
   search: {
     execute: vi.fn(async () => ({ results: [] })),
   } as any,

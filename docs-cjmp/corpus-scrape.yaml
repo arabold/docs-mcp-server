@@ -1,0 +1,7 @@
+scraper:
+  security:
+    fileAccess:
+      mode: allowedRoots
+      allowedRoots:
+        - /Users/user/Desktop/CJMP/VibeCoding/bench/.cache/cjmp-docs-corpus
+        - /Users/user/Desktop/CJMP/VibeCoding/skills

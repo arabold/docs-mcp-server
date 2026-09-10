@@ -26,6 +26,7 @@ import type {
   DbChunkRank,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageChunks,
   StoredScraperOptions,
   VersionChunkListItem,
   VersionChunkStats,
@@ -164,6 +165,9 @@ export class DocumentStore {
     countVersionsByLibraryId: Database.Statement<[number]>;
     getVersionId: Database.Statement<[string, string]>;
     getPagesByVersionId: Database.Statement<[number]>;
+    // Pyramid-aware retrieval: resolve a unit page by URL suffix and fetch its chunks
+    getPageUrlsBySuffix: Database.Statement<[string, string, string]>;
+    getDocumentsForUrl: Database.Statement<[string, string, string]>;
   };
 
   /**
@@ -473,6 +477,27 @@ export class DocumentStore {
       getPagesByVersionId: this.db.prepare<[number]>(
         "SELECT * FROM pages WHERE version_id = ?",
       ),
+      getPageUrlsBySuffix: this.db.prepare<[string, string, string]>(`
+        SELECT p.url FROM pages p
+        JOIN versions v ON p.version_id = v.id
+        JOIN libraries l ON v.library_id = l.id
+        WHERE l.name = ?
+          AND COALESCE(v.name, '') = COALESCE(?, '')
+          AND p.url LIKE '%' || ?
+        ORDER BY LENGTH(p.url) ASC
+        LIMIT 5
+      `),
+      getDocumentsForUrl: this.db.prepare<[string, string, string]>(`
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title
+        FROM documents d
+        JOIN pages p ON d.page_id = p.id
+        JOIN versions v ON p.version_id = v.id
+        JOIN libraries l ON v.library_id = l.id
+        WHERE l.name = ?
+          AND COALESCE(v.name, '') = COALESCE(?, '')
+          AND p.url = ?
+        ORDER BY d.sort_order
+      `),
     };
     this.statements = statements;
   }
@@ -1899,6 +1924,54 @@ export class DocumentStore {
       return result;
     } catch (error) {
       throw new ConnectionError("Failed to get pages by version ID", error);
+    }
+  }
+
+  /**
+   * Resolves a page by URL suffix and returns its chunks in reading order.
+   * Used by the pyramid-aware `read_section` tool: units are addressed by
+   * repo-relative paths (e.g. `cases/04-text-input-controls.md`) rather than
+   * full file:// URLs. When several URLs match the suffix, the shortest
+   * (most exact) match wins.
+   */
+  async getDocumentsByUrlSuffix(
+    library: string,
+    version: string,
+    urlSuffix: string,
+  ): Promise<PageChunks | null> {
+    try {
+      const urls = this.statements.getPageUrlsBySuffix.all(
+        library,
+        version,
+        urlSuffix,
+      ) as Array<{ url: string }>;
+      if (urls.length === 0) {
+        return null;
+      }
+      const rows = this.statements.getDocumentsForUrl.all(
+        library,
+        version,
+        urls[0].url,
+      ) as Array<{
+        content: string;
+        metadata: string | null;
+        sort_order: number;
+        url: string;
+        title: string | null;
+      }>;
+      return {
+        url: urls[0].url,
+        title: rows[0]?.title ?? null,
+        chunks: rows.map((r) => ({
+          content: r.content,
+          metadata: r.metadata
+            ? (JSON.parse(r.metadata) as Record<string, unknown>)
+            : null,
+          sortOrder: r.sort_order,
+        })),
+      };
+    } catch (error) {
+      throw new ConnectionError("Failed to get documents by URL suffix", error);
     }
   }
 

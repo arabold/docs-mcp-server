@@ -1,0 +1,15 @@
+{
+  "store": "/tmp/test-corpus-store",
+  "library": "cj-ui-docs",
+  "limit": 3,
+  "n": 114,
+  "recall": 0.9386,
+  "recall_by_src": {
+    "real": 0.7812,
+    "syn": 1.0
+  },
+  "payload_median": 5429.0,
+  "payload_p90": 10663,
+  "payload_mean": 6229,
+  "elapsed_s": 81.7
+}

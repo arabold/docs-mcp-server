@@ -44,6 +44,12 @@ export function createSearchCommand(cli: Argv) {
           default: false,
           alias: ["e", "exactMatch"],
         })
+        .option("detail", {
+          type: "string",
+          choices: ["cards", "full"] as const,
+          description: "cards: compact digest per unit; full: assembled content",
+          default: "full",
+        })
         .option("embedding-model", {
           type: "string",
           description:
@@ -104,9 +110,13 @@ export function createSearchCommand(cli: Argv) {
           query,
           limit,
           exactMatch: argv.exactMatch as boolean,
+          detail: argv.detail as "cards" | "full",
         });
 
-        renderStructuredOutput(result.results, argv);
+        renderStructuredOutput(
+          argv.detail === "cards" && result.cards ? result.cards : result.results,
+          argv,
+        );
       } finally {
         await docService.shutdown();
       }

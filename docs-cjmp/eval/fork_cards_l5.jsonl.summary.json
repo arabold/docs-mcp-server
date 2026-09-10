@@ -1,0 +1,16 @@
+{
+  "store": "/Users/user/Desktop/CJMP/VibeCoding/bench/.cache/cjmp-docs-fork-store",
+  "library": "cj-ui-docs",
+  "limit": 5,
+  "detail": "cards",
+  "n": 114,
+  "recall": 0.9474,
+  "recall_by_src": {
+    "real": 0.8125,
+    "syn": 1.0
+  },
+  "payload_median": 671.5,
+  "payload_p90": 742,
+  "payload_mean": 669,
+  "elapsed_s": 86.5
+}
