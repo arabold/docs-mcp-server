@@ -37,6 +37,28 @@ If an embedding vector is shorter than the resolved effective dimension, the sys
 - **THEN** the system SHALL create `documents_vec` for 768-dimensional vectors
 - **AND** generated embeddings SHALL be validated and normalized against 768 dimensions
 
+#### Scenario: Gemini model with MRL truncation
+- **WHEN** a Gemini embedding model returns 768-dimensional vectors
+- **AND** the resolved effective dimension is 1536
+- **THEN** the system SHALL zero-pad the vector to 1536 dimensions
+
+#### Scenario: Model returns oversized vector without MRL support
+- **WHEN** an embedding model returns 2048-dimensional vectors
+- **AND** MRL truncation is not enabled for the model
+- **AND** the resolved effective dimension is 1536
+- **THEN** the system SHALL raise a `DimensionError`
+
+#### Scenario: Model returns exact target dimensions
+- **WHEN** an embedding model returns 1536-dimensional vectors
+- **AND** the resolved effective dimension is 1536
+- **THEN** the system SHALL store the vector as-is without modification
+
+#### Scenario: Custom vector dimension configuration
+- **WHEN** `embeddings.vectorDimension` is set to 768
+- **AND** the embedding model returns 768-dimensional vectors
+- **THEN** the system SHALL store the vector as-is without modification
+- **AND** the `documents_vec` table SHALL use `embedding FLOAT[768]`
+
 ### Requirement: Dimension Detection
 The system SHALL determine the effective embedding dimension during initialization when embeddings are enabled. The system SHALL skip runtime probing for known fixed-output models unless an explicit dimension override is configured. The system SHALL also skip runtime probing for unknown and variable-dimension models when stored metadata contains the same `embedding_model` as the current configuration and a stored `embedding_dimension`.
 
@@ -77,3 +99,16 @@ Runtime probing SHALL use the configured embedding provider to generate an embed
 - **AND** `embeddings.vectorDimension` is explicitly configured as 1024
 - **THEN** the effective dimension SHALL be 1024
 - **AND** generated embeddings SHALL be validated against 1024 dimensions
+
+#### Scenario: Known model skips test embedding
+- **WHEN** the model is `text-embedding-3-small` (in the known dimensions table)
+- **THEN** the system SHALL resolve dimensions to 1536 without making an API call
+
+#### Scenario: Unknown model triggers test embedding
+- **WHEN** the model is `openai:custom-embedding-v1` (not in the known dimensions table)
+- **AND** the model returns a 384-dimensional vector for the test input
+- **THEN** the system SHALL detect 384 as the model's dimension and cache it
+
+#### Scenario: Test embedding timeout
+- **WHEN** the test embedding request does not complete within `initTimeoutMs`
+- **THEN** the system SHALL fail embedding initialization and fall back to FTS-only mode

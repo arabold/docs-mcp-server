@@ -22,6 +22,16 @@ The persisted dimension SHALL be the same dimension used for `documents_vec` tab
 - **THEN** the system SHALL NOT overwrite existing embedding metadata
 - **AND** the system SHALL NOT write new embedding metadata
 
+#### Scenario: Metadata stored after successful embedding init
+- **WHEN** the embedding model `openai:text-embedding-3-small` with dimension 1536 initializes successfully
+- **THEN** the system SHALL store `embedding_model = "openai:text-embedding-3-small"` in the `metadata` table
+- **AND** the system SHALL store `embedding_dimension = "1536"` in the `metadata` table
+
+#### Scenario: No metadata stored in FTS-only mode
+- **WHEN** embeddings are disabled (no model configured or missing credentials)
+- **THEN** the system SHALL NOT store any embedding metadata
+- **AND** the `metadata` table SHALL remain empty (for embedding keys)
+
 ### Requirement: Model Change Detection
 The system SHALL compare the stored embedding model metadata against the current configured model specification and any explicit vector dimension override during startup. The comparison SHALL happen after database migrations but before vector table creation, vector table mutation, prepared statement initialization, provider startup probing, or vector search use.
 
@@ -48,6 +58,33 @@ If the stored model specification differs from the current configured model, or 
 - **THEN** startup SHALL proceed without model-change confirmation
 - **AND** the system SHALL NOT probe the provider during startup
 
+#### Scenario: Model changed, same dimension
+- **WHEN** the stored `embedding_model` is `openai:text-embedding-3-small`
+- **AND** the configured model is `openai:text-embedding-ada-002`
+- **AND** both models use dimension 1536
+- **THEN** the system SHALL detect a model change and throw `EmbeddingModelChangedError`
+
+#### Scenario: Dimension changed, same model
+- **WHEN** the stored `embedding_dimension` is `"1536"`
+- **AND** the configured dimension is `768`
+- **AND** the model has not changed
+- **THEN** the system SHALL detect a dimension change and throw `EmbeddingModelChangedError`
+
+#### Scenario: Both model and dimension changed
+- **WHEN** the stored model is `openai:text-embedding-3-small` with dimension `"1536"`
+- **AND** the configured model is `gemini:embedding-001` with dimension `768`
+- **THEN** the system SHALL detect the change and throw `EmbeddingModelChangedError`
+
+#### Scenario: No change detected
+- **WHEN** the stored `embedding_model` matches the configured model
+- **AND** the stored `embedding_dimension` matches the configured dimension
+- **THEN** startup SHALL proceed normally without any prompt or error
+
+#### Scenario: No stored metadata (first run)
+- **WHEN** no `embedding_model` key exists in the `metadata` table
+- **THEN** the system SHALL NOT treat this as a change
+- **AND** startup SHALL proceed normally (silent initialization applies)
+
 ### Requirement: Runtime-Configurable Vector Table
 The system SHALL create the SQLite vector table with the current resolved effective vector dimension. The table DDL SHALL use `float[N]` where `N` is the resolved effective dimension. The system SHALL create the table only after the effective dimension has been resolved and model-change safety checks have passed.
 
@@ -73,3 +110,18 @@ If the resolved effective dimension changes relative to stored embedding metadat
 #### Scenario: Create vector table with explicit override dimension
 - **WHEN** `embeddings.vectorDimension` is explicitly configured as 768
 - **THEN** the system SHALL create `documents_vec` with `embedding float[768]`
+
+#### Scenario: First startup creates vector table
+- **WHEN** `documents_vec` does not exist
+- **AND** `vectorDimension` is configured as 1536
+- **THEN** the system SHALL create `documents_vec` with `embedding FLOAT[1536]`
+- **AND** the table SHALL be empty
+
+#### Scenario: Matching dimension is a no-op
+- **WHEN** `documents_vec` exists with dimension 1536
+- **AND** `vectorDimension` is configured as 1536
+- **THEN** `ensureVectorTable()` SHALL make no changes
+
+#### Scenario: Invalid dimension rejected
+- **WHEN** `vectorDimension` is 0 or negative
+- **THEN** the system SHALL throw a `StoreError`

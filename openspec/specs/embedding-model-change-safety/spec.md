@@ -1,7 +1,11 @@
 # embedding-model-change-safety Specification
 
 ## Purpose
-TBD - created by archiving change add-embedding-model-change-safety. Update Purpose after archive.
+Protects the vector index from silent corruption when the configured embedding model or vector
+dimension changes between runs. The system persists the active embedding configuration as
+metadata, detects mismatches against the currently configured model/dimension on startup, and
+maintains a vector table whose schema matches the configured dimension so that stale or
+incompatible embeddings are never mixed with new ones.
 ## Requirements
 ### Requirement: Embedding Metadata Persistence
 The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:

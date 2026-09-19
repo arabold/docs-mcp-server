@@ -1,7 +1,11 @@
 # outbound-access-control Specification
 
 ## Purpose
-TBD - created by archiving change add-fetch-access-controls. Update Purpose after archive.
+Prevents the scraper and one-shot URL fetches from being used to reach private, loopback,
+link-local, or otherwise disallowed network targets, guarding against SSRF-style abuse. The
+system enforces a configurable outbound network access policy (`open` or `allowlist` mode) that
+validates hostnames, redirect targets, and DNS-resolved IPs before establishing HTTP(S)
+connections.
 ## Requirements
 ### Requirement: Outbound Network Targets Must Respect Access Policy
 The system SHALL enforce a shared outbound network access policy for one-shot URL fetches and scrape workflows before establishing HTTP(S) connections. Redirect-target validation and DNS-resolved IP validation SHALL always be applied during HTTP(S) access.
