@@ -3,7 +3,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { compareVersionsDescending, sortVersionsDescending } from "./version";
+import {
+  compareVersionsDescending,
+  sortVersionsDescending,
+  toVersionCandidate,
+  toVersionCandidates,
+} from "./version";
 
 describe("compareVersionsDescending", () => {
   it("should place unversioned (empty string) first", () => {
@@ -78,5 +83,62 @@ describe("sortVersionsDescending", () => {
     const sorted = sortVersionsDescending(versions);
     // Expected: unversioned first, then 19.0.0-rc.1, 18.2.0, 18.0.0, 17.0.2
     expect(sorted).toEqual(["", "19.0.0-rc.1", "18.2.0", "18.0.0", "17.0.2"]);
+  });
+});
+
+describe("toVersionCandidate", () => {
+  it("should keep strict semver verbatim", () => {
+    expect(toVersionCandidate("1.2.3")).toEqual({
+      stored: "1.2.3",
+      normalized: "1.2.3",
+      strict: true,
+    });
+  });
+
+  it("should coerce partial versions to full semver", () => {
+    expect(toVersionCandidate("1.20")).toEqual({
+      stored: "1.20",
+      normalized: "1.20.0",
+      strict: false,
+    });
+    expect(toVersionCandidate("5")).toEqual({
+      stored: "5",
+      normalized: "5.0.0",
+      strict: false,
+    });
+  });
+
+  it("should preserve prerelease tags instead of collapsing them", () => {
+    expect(toVersionCandidate("2.0.0-beta")).toEqual({
+      stored: "2.0.0-beta",
+      normalized: "2.0.0-beta",
+      strict: true,
+    });
+    // Coercion path: not strict semver, but the tag must survive.
+    expect(toVersionCandidate("v2.0.0-beta.1")).toMatchObject({
+      stored: "v2.0.0-beta.1",
+      normalized: "2.0.0-beta.1",
+    });
+  });
+
+  it("should reject strings that are not versions", () => {
+    expect(toVersionCandidate("")).toBeNull();
+    expect(toVersionCandidate("stable")).toBeNull();
+    expect(toVersionCandidate("latest")).toBeNull();
+  });
+});
+
+describe("toVersionCandidates", () => {
+  it("should drop non-versions and keep input order", () => {
+    expect(toVersionCandidates(["1.20", "stable", "2.0.0"]).map((c) => c.stored)).toEqual(
+      ["1.20", "2.0.0"],
+    );
+  });
+
+  it("should keep both forms when a partial and its full version coexist", () => {
+    const candidates = toVersionCandidates(["1.20", "1.20.0"]);
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every((c) => c.normalized === "1.20.0")).toBe(true);
+    expect(candidates.map((c) => c.strict)).toEqual([false, true]);
   });
 });

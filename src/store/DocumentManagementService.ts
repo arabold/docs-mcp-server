@@ -11,7 +11,12 @@ import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { formatBytes } from "../utils/string";
-import { sortVersionsDescending } from "../utils/version";
+import {
+  sortVersionsDescending,
+  toVersionCandidate,
+  toVersionCandidates,
+  type VersionCandidate,
+} from "../utils/version";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import type { EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
@@ -270,11 +275,11 @@ export class DocumentManagementService {
    */
   async listVersions(library: string): Promise<string[]> {
     const versions = await this.store.queryUniqueVersions(library);
-    // Accept anything coercible to semver (e.g. "1.20", "5"), not just strict
-    // X.Y.Z strings — otherwise real-world partial versions are silently
-    // dropped and become invisible to findBestVersion(). Non-version labels
-    // like "stable"/"latest" correctly still fail coercion and stay excluded.
-    const validVersions = versions.filter((v) => semver.coerce(v) !== null);
+    // Accept anything recognizable as a version (e.g. "1.20", "5"), not just
+    // strict X.Y.Z strings — otherwise real-world partial versions are
+    // silently dropped and become invisible to findBestVersion(). Non-version
+    // labels like "stable"/"latest" are not versions and stay excluded.
+    const validVersions = versions.filter((v) => toVersionCandidate(v) !== null);
     return sortVersionsDescending(validVersions);
   }
 
@@ -285,6 +290,30 @@ export class DocumentManagementService {
   async exists(library: string, version?: string | null): Promise<boolean> {
     const normalizedVersion = this.normalizeVersion(version);
     return this.store.checkDocumentExists(library, normalizedVersion);
+  }
+
+  /**
+   * Resolves a matched semver back to the version label stored in the database.
+   *
+   * Several stored labels can normalize to the same semver — `"1.20"` and
+   * `"1.20.0"`, or `"2.0.0"` and `"v2.0.0"`, are distinct rows that both
+   * normalize to `1.20.0` / `2.0.0`. The caller's own request wins first, so
+   * asking for either form returns that form; otherwise a strict semver label
+   * is preferred over a coerced one.
+   *
+   * @param candidates Candidates built from the library's stored versions.
+   * @param normalized The normalized semver chosen by range matching.
+   * @param targetVersion The version the caller requested, if any.
+   * @returns The stored version label, or `undefined` if nothing normalized to it.
+   */
+  private selectStoredVersion(
+    candidates: VersionCandidate[],
+    normalized: string,
+    targetVersion?: string,
+  ): string | undefined {
+    const matches = candidates.filter((c) => c.normalized === normalized);
+    const exact = matches.find((c) => c.stored === targetVersion);
+    return (exact ?? matches.find((c) => c.strict) ?? matches[0])?.stored;
   }
 
   /**
@@ -328,20 +357,18 @@ export class DocumentManagementService {
 
     // semver.maxSatisfying() requires every candidate to itself be a fully
     // valid X.Y.Z semver string — a stored version like "1.20" fails that
-    // even though listVersions() now accepts it. Match on coerced versions,
-    // then map the winner back to its original stored string so downstream
-    // lookups (e.g. checkDocumentExists) use the string that's actually in
-    // the store.
-    const coercedToOriginal = new Map<string, string>();
-    for (const v of versionStrings) {
-      const coerced = semver.coerce(v);
-      if (coerced) coercedToOriginal.set(coerced.version, v);
-    }
-    const coercedCandidates = Array.from(coercedToOriginal.keys());
+    // even though listVersions() now accepts it. Match on the normalized
+    // forms, then resolve the winner back to the label that is actually in
+    // the store so downstream lookups (e.g. checkDocumentExists) use it.
+    const candidates = toVersionCandidates(versionStrings);
+    const normalizedCandidates = candidates.map((c) => c.normalized);
+    const resolveStored = (normalized: string | null): string | null =>
+      normalized === null
+        ? null
+        : (this.selectStoredVersion(candidates, normalized, targetVersion) ?? null);
 
     if (!targetVersion || targetVersion === "latest") {
-      const coercedBest = semver.maxSatisfying(coercedCandidates, "*");
-      bestMatch = coercedBest ? (coercedToOriginal.get(coercedBest) ?? null) : null;
+      bestMatch = resolveStored(semver.maxSatisfying(normalizedCandidates, "*"));
     } else {
       const versionRegex = /^(\d+)(?:\.(?:x(?:\.x)?|\d+(?:\.(?:x|\d+))?))?$|^$/;
       if (!semver.valid(targetVersion) && !versionRegex.test(targetVersion)) {
@@ -358,8 +385,7 @@ export class DocumentManagementService {
           range = `${range} || <=${targetVersion}`;
         }
         // If it was already a valid range (like '1.x'), use it directly
-        const coercedBest = semver.maxSatisfying(coercedCandidates, range);
-        bestMatch = coercedBest ? (coercedToOriginal.get(coercedBest) ?? null) : null;
+        bestMatch = resolveStored(semver.maxSatisfying(normalizedCandidates, range));
       }
     }
 

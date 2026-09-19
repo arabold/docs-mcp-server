@@ -435,10 +435,20 @@ describe("DocumentManagementService", () => {
         mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "5", "stable", "2.0.0"]);
 
         const versions = await docService.listVersions(library);
-        // "stable" is not coercible to semver and stays excluded; "1.20" and
-        // "5" are real partial versions (major.minor / major-only) and must
-        // not be silently dropped just because they aren't full X.Y.Z.
+        // "stable" is not a version and stays excluded; "1.20" and "5" are
+        // real partial versions (major.minor / major-only) and must not be
+        // silently dropped just because they aren't full X.Y.Z.
         expect(versions).toEqual(["5", "2.0.0", "1.20"]);
+      });
+
+      it("should keep prerelease labels distinct from their release, alongside partials", async () => {
+        const library = "test-lib";
+        mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta", "1.20", "2.0.0"]);
+
+        const versions = await docService.listVersions(library);
+        // Normalizing partials must not strip prerelease tags: "2.0.0-beta"
+        // stays its own entry and sorts below the real 2.0.0 release.
+        expect(versions).toEqual(["2.0.0", "2.0.0-beta", "1.20"]);
       });
     });
 
@@ -583,6 +593,54 @@ describe("DocumentManagementService", () => {
 
         const result = await docService.findBestVersion(library, "stable");
         expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+      });
+
+      it("should resolve each stored form when a partial and its full version coexist", async () => {
+        // "1.20" and "1.20.0" are two distinct rows that normalize to the same
+        // semver; each must resolve to itself rather than to the other.
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        await expect(docService.findBestVersion(library, "1.20")).resolves.toEqual({
+          bestMatch: "1.20",
+          hasUnversioned: false,
+        });
+        await expect(docService.findBestVersion(library, "1.20.0")).resolves.toEqual({
+          bestMatch: "1.20.0",
+          hasUnversioned: false,
+        });
+      });
+
+      it("should prefer the strict label when a partial and its full version tie for latest", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
+      });
+
+      it("should resolve a prerelease without collapsing it into its release", async () => {
+        // Normalization must keep the prerelease tag: "2.0.0-beta" and "2.0.0"
+        // are different versions and each must resolve to itself.
+        mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0", "2.0.0-beta"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        await expect(docService.findBestVersion(library, "2.0.0-beta")).resolves.toEqual({
+          bestMatch: "2.0.0-beta",
+          hasUnversioned: false,
+        });
+        await expect(docService.findBestVersion(library, "2.0.0")).resolves.toEqual({
+          bestMatch: "2.0.0",
+          hasUnversioned: false,
+        });
+      });
+
+      it("should not let a prerelease win 'latest' over the real release", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0", "2.0.0-beta"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        const result = await docService.findBestVersion(library, "latest");
+        expect(result).toEqual({ bestMatch: "2.0.0", hasUnversioned: false });
       });
     });
 

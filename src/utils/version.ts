@@ -29,11 +29,10 @@ export function compareVersionsDescending(
   if (aIsUnversioned) return -1;
   if (bIsUnversioned) return 1;
 
-  // Both have versions - try semver comparison
-  // First try exact semver validation (preserves prerelease tags)
-  // Then fall back to coercion for loose versions like "v1.0.0"
-  const aSemver = semver.valid(a) ?? semver.valid(semver.coerce(a));
-  const bSemver = semver.valid(b) ?? semver.valid(semver.coerce(b));
+  // Both have versions - normalize via the same rules used for range matching,
+  // so sort order and version resolution never disagree.
+  const aSemver = toVersionCandidate(a)?.normalized;
+  const bSemver = toVersionCandidate(b)?.normalized;
 
   if (aSemver && bSemver) {
     // Both are valid semver - compare descending (higher version first)
@@ -55,4 +54,57 @@ export function compareVersionsDescending(
  */
 export function sortVersionsDescending(versions: string[]): string[] {
   return [...versions].sort(compareVersionsDescending);
+}
+
+/**
+ * A stored version string paired with the strict semver used to match it.
+ *
+ * Version labels in the store are whatever a project publishes — `"1.20"`,
+ * `"5"`, `"v2.0.0"` or `"2.0.0-beta"` — but semver range matching only accepts
+ * full `X.Y.Z` strings. A candidate keeps both forms side by side so matches
+ * can be resolved back to the label that is actually in the store.
+ */
+export type VersionCandidate = {
+  /** The version string exactly as stored in the database. */
+  stored: string;
+  /** Strict `X.Y.Z[-prerelease]` semver used for range matching and sorting. */
+  normalized: string;
+  /** True when `stored` was already valid semver and needed no coercion. */
+  strict: boolean;
+};
+
+/**
+ * Normalizes a stored version string into a {@link VersionCandidate}.
+ *
+ * Strict semver is preserved verbatim. Partial versions such as `"1.20"` or
+ * `"5"` are coerced to full semver with prerelease tags kept, so a label like
+ * `"2.0.0-beta"` never collapses into `"2.0.0"` and outranks the real release.
+ *
+ * @param stored Version string as stored in the database.
+ * @returns The candidate, or `null` when the string is not a version at all
+ *   (e.g. `""`, `"stable"`, `"latest"`).
+ */
+export function toVersionCandidate(stored: string): VersionCandidate | null {
+  const strict = semver.valid(stored);
+  if (strict) {
+    return { stored, normalized: strict, strict: true };
+  }
+  const coerced = semver.coerce(stored, { includePrerelease: true });
+  if (coerced) {
+    return { stored, normalized: coerced.version, strict: false };
+  }
+  return null;
+}
+
+/**
+ * Maps stored version strings to {@link VersionCandidate}s, dropping the
+ * entries that are not versions at all.
+ *
+ * @param versions Version strings as stored in the database.
+ * @returns One candidate per recognizable version, in input order.
+ */
+export function toVersionCandidates(versions: string[]): VersionCandidate[] {
+  return versions
+    .map(toVersionCandidate)
+    .filter((candidate): candidate is VersionCandidate => candidate !== null);
 }
