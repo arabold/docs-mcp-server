@@ -22,6 +22,14 @@ export enum FetchStatus {
    * this indicates the page should be removed from the index.
    */
   NOT_FOUND = "not_found",
+
+  /**
+   * The resource was fetched but its content type cannot be processed by any
+   * configured pipeline, so the body was abandoned without being read.
+   * The content field will be empty. This is neither a success nor a failure:
+   * it produces no page and does not count toward the child-page failure rate.
+   */
+  SKIPPED = "skipped",
 }
 
 /**
@@ -92,6 +100,15 @@ export interface FetchOptions {
   etag?: string | null;
   /** Internal-only allowlist roots for application-managed temporary files. */
   internalAllowedFileRoots?: string[];
+  /**
+   * Decides whether a response's content type is worth downloading.
+   *
+   * Supplied by the caller so the fetcher never needs to know about pipelines.
+   * When provided, a response whose type is rejected is abandoned before its body
+   * is read and reported as {@link FetchStatus.SKIPPED}. When omitted, no
+   * content-type gating occurs and every successful response is read in full.
+   */
+  acceptsMimeType?: (mimeType: string) => boolean;
 }
 
 /**

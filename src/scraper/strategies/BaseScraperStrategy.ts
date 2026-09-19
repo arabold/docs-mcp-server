@@ -338,6 +338,25 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             return fallbackQueueItems;
           }
 
+          if (result.status === FetchStatus.SKIPPED) {
+            // The resource was fetched but nothing can read its content type, so
+            // the body was abandoned at the headers. This is neither a success nor
+            // a failure: no page is stored, and the child-page failure rate is left
+            // untouched so an asset-heavy site cannot trip abortOnFailureRate.
+            // Only the user's actual requested root is fatal, matching the 404
+            // branch above. An llms.txt seed is one of several discovery seeds,
+            // and a refresh replays stored pages at their stored depth — neither
+            // should abort a scrape whose real root resolved fine.
+            if (item.depth === 0 && !item.fromLlmsTxt && item.pageId === undefined) {
+              throw new ScraperError(
+                `Cannot process content type of ${item.url}: no pipeline can read it`,
+                false,
+              );
+            }
+            logger.debug(`Skipped (unprocessable content): ${item.url}`);
+            return result.queueItems ?? [];
+          }
+
           if (result.status !== FetchStatus.SUCCESS) {
             logger.error(`❌ Unknown fetch status: ${result.status}`);
             return [];

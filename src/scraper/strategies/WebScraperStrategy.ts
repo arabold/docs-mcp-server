@@ -13,6 +13,10 @@ import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import type { UrlNormalizerOptions } from "../../utils/url";
 import { AutoDetectFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
+import {
+  createMimeTypeCapabilityPredicate,
+  type MimeTypeCapabilityPredicate,
+} from "../pipelines/capability";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
@@ -27,6 +31,22 @@ export interface WebScraperStrategyOptions {
   shouldFollowLink?: (baseUrl: URL, targetUrl: URL) => boolean;
 }
 
+/**
+ * Matches paths naming an archive we know how to unpack.
+ *
+ * This is a policy statement, not a capability one, which is why it is not
+ * expressed through the pipeline capability predicate: archives are readable —
+ * `processRootArchive` unpacks one when it is the start URL — but following them
+ * mid-crawl is deliberately declined. The two call sites act on the same test in
+ * opposite directions, so they share this helper rather than the literal.
+ *
+ * @param pathname The URL pathname to test.
+ * @returns True when the path names a supported archive.
+ */
+function isArchivePath(pathname: string): boolean {
+  return /\.(zip|tar|gz|tgz)$/i.test(pathname);
+}
+
 interface LlmsTxtProbeResult {
   url: string;
   result: LlmsTxtResult;
@@ -36,6 +56,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private readonly fetcher: AutoDetectFetcher;
   private readonly shouldFollowLinkFn?: (baseUrl: URL, targetUrl: URL) => boolean;
   private readonly pipelines: ContentPipeline[];
+  private readonly canProcessMimeType: MimeTypeCapabilityPredicate;
   private readonly localFileStrategy: LocalFileStrategy;
   private tempFiles: string[] = [];
   private siblingwiseRedirectWarned = false;
@@ -46,6 +67,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     this.shouldFollowLinkFn = options.shouldFollowLink;
     this.fetcher = new AutoDetectFetcher(config.scraper);
     this.pipelines = PipelineFactory.createStandardPipelines(config);
+    this.canProcessMimeType = createMimeTypeCapabilityPredicate(this.pipelines);
     this.localFileStrategy = new LocalFileStrategy(config);
   }
 
@@ -95,6 +117,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       followRedirects: options.followRedirects,
       headers: options.headers,
       etag: item.etag,
+      // Fetch-time gate. The fetcher stays ignorant of pipelines; it is simply
+      // told what this strategy is able to read.
+      acceptsMimeType: this.canProcessMimeType,
       ...(item.internalAllowedFileRoots
         ? { internalAllowedFileRoots: item.internalAllowedFileRoots }
         : {}),
@@ -126,6 +151,38 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private isMarkdownUrl(url: string): boolean {
     const mimeType = MimeTypeUtils.detectMimeTypeFromPath(url);
     return mimeType ? MimeTypeUtils.isMarkdown(mimeType) : false;
+  }
+
+  /**
+   * Queue-time gate: rejects a discovered link whose path extension names binary
+   * media that no configured pipeline can process, before any request is made.
+   *
+   * Two conditions must both hold, and they answer different questions. The binary
+   * media check decides how far to trust an extension; the capability predicate
+   * decides what can be processed. Keeping them separate means adding an image
+   * pipeline still widens this gate automatically, while a `.csh` or `.tcl` file the
+   * `mime` package files under `application/*` is never rejected on its name alone.
+   *
+   * A null detection means "no opinion" — the link is admitted so the fetch-time
+   * gate can decide against the server's actual `Content-Type`. That covers
+   * extensionless URLs, unknown extensions, and paths whose only dots sit in a
+   * directory segment.
+   *
+   * @param targetUrl The resolved absolute URL of the discovered link.
+   * @returns True when the link should continue through the remaining filters.
+   */
+  private canProcessDiscoveredLink(targetUrl: URL): boolean {
+    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(targetUrl.pathname);
+    const isUnreadableMedia =
+      !!mimeType &&
+      MimeTypeUtils.isBinaryMediaType(mimeType) &&
+      !this.canProcessMimeType(mimeType);
+
+    if (!isUnreadableMedia) {
+      return true;
+    }
+    logger.debug(`Skipping ${targetUrl.href}: ${mimeType} is not processable`);
+    return false;
   }
 
   private async fetchItemContent(
@@ -199,10 +256,12 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   ): Promise<LlmsTxtProbeResult | null> {
     for (const candidate of this.getLlmsTxtCandidates(baseUrl, inputUrl)) {
       try {
-        const rawContent = await this.fetcher.fetch(
-          candidate,
-          this.createFetchOptions({ url: candidate, depth: 0 }, options, signal),
+        const { acceptsMimeType: _gate, ...probeOptions } = this.createFetchOptions(
+          { url: candidate, depth: 0 },
+          options,
+          signal,
         );
+        const rawContent = await this.fetcher.fetch(candidate, probeOptions);
         if (rawContent.status !== FetchStatus.SUCCESS) {
           logger.debug(`llms.txt probe failed for ${candidate}: ${rawContent.status}`);
           continue;
@@ -318,8 +377,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       // Check for Archive Root URL (only if depth 0)
       if (item.depth === 0) {
-        const isArchive = /\.(zip|tar|gz|tgz)$/i.test(new URL(url).pathname);
-        if (isArchive) {
+        if (isArchivePath(new URL(url).pathname)) {
           return this.processRootArchive(item, options, signal);
         }
       }
@@ -411,8 +469,17 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           try {
             const targetUrl = new URL(link, effectiveSource);
 
-            // Check for archive links during crawl - ignore them
-            if (/\.(zip|tar|gz|tgz)$/i.test(targetUrl.pathname)) {
+            // Archives are readable but deliberately not followed mid-crawl.
+            // This is policy, so it stays separate from the capability gate below.
+            if (isArchivePath(targetUrl.pathname)) {
+              return [];
+            }
+
+            // Reject links whose extension names content no pipeline can read, before
+            // any request is issued. Detection is deliberately given the pathname only:
+            // passing the href would let a host like `example.zip` or `example.mov`
+            // resolve to an archive or video MIME type off its TLD.
+            if (!this.canProcessDiscoveredLink(targetUrl)) {
               return [];
             }
 

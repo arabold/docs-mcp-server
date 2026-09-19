@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CancellationError } from "../../pipeline/errors";
 import { DEFAULT_CONFIG } from "../../utils/config";
@@ -10,6 +11,7 @@ import axios from "axios";
 const mockedAxios = vi.mocked(axios, true);
 
 import { HttpFetcher } from "./HttpFetcher";
+import { FetchStatus } from "./types";
 
 const createFetcher = () => new HttpFetcher(DEFAULT_CONFIG.scraper);
 
@@ -35,45 +37,28 @@ describe("HttpFetcher", () => {
   });
 
   describe("data type handling", () => {
-    it("should handle ArrayBuffer response data", async () => {
+    it("should read a single-chunk stream body", async () => {
       const fetcher = createFetcher();
       const textContent = "Hello World";
-      const arrayBuffer = new TextEncoder().encode(textContent).buffer;
-      const mockResponse = {
-        data: arrayBuffer,
+      mockedAxios.get.mockResolvedValue({
+        data: Readable.from(Buffer.from(textContent, "utf-8")),
         headers: { "content-type": "text/plain" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
+      });
 
       const result = await fetcher.fetch("https://example.com");
       expect(result.content).toEqual(Buffer.from(textContent, "utf-8"));
     });
 
-    it("should handle string response data", async () => {
+    it("should concatenate a multi-chunk stream body", async () => {
       const fetcher = createFetcher();
-      const textContent = "Hello World";
       const mockResponse = {
-        data: textContent,
-        headers: { "content-type": "text/plain" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
-
-      const result = await fetcher.fetch("https://example.com");
-      expect(result.content).toEqual(Buffer.from(textContent, "utf-8"));
-    });
-
-    it("should handle other data types as fallback", async () => {
-      const fetcher = createFetcher();
-      // Use an array instead of object to avoid Buffer.from() issues
-      const arrayData = [1, 2, 3];
-      const mockResponse = {
-        data: arrayData,
+        data: Readable.from([Buffer.from('{"a":'), Buffer.from("1}")]),
         headers: { "content-type": "application/json" },
       };
       mockedAxios.get.mockResolvedValue(mockResponse);
 
       const result = await fetcher.fetch("https://example.com");
-      expect(result.content).toBeInstanceOf(Buffer);
+      expect(result.content.toString()).toBe('{"a":1}');
       expect(result.mimeType).toBe("application/json");
     });
   });
@@ -164,7 +149,7 @@ describe("HttpFetcher", () => {
     it("should pass timeout option to axios", async () => {
       const fetcher = createFetcher();
       const mockResponse = {
-        data: Buffer.from("test", "utf-8"),
+        data: Readable.from(Buffer.from("test", "utf-8")),
         headers: { "content-type": "text/plain" },
       };
       mockedAxios.get.mockResolvedValue(mockResponse);
@@ -184,7 +169,7 @@ describe("HttpFetcher", () => {
     const fetcher = createFetcher();
     const htmlContent = "<html><body><h1>Hello</h1></body></html>";
     const mockResponse = {
-      data: Buffer.from(htmlContent, "utf-8"), // HttpFetcher expects buffer from axios
+      data: Readable.from(Buffer.from(htmlContent, "utf-8")), // HttpFetcher expects buffer from axios
       headers: { "content-type": "text/html; charset=utf-8" },
     };
     mockedAxios.get.mockResolvedValue(mockResponse);
@@ -200,7 +185,7 @@ describe("HttpFetcher", () => {
     const fetcher = createFetcher();
     const textContent = "abc";
     const mockResponse = {
-      data: Buffer.from(textContent, "utf-8"),
+      data: Readable.from(Buffer.from(textContent, "utf-8")),
       headers: { "content-type": "text/plain; charset=iso-8859-1" },
     };
     mockedAxios.get.mockResolvedValue(mockResponse);
@@ -214,7 +199,7 @@ describe("HttpFetcher", () => {
     const fetcher = createFetcher();
     const textContent = "abc";
     const mockResponse = {
-      data: Buffer.from(textContent, "utf-8"),
+      data: Readable.from(Buffer.from(textContent, "utf-8")),
       headers: { "content-type": "text/plain" },
     };
     mockedAxios.get.mockResolvedValue(mockResponse);
@@ -228,7 +213,7 @@ describe("HttpFetcher", () => {
     const fetcher = createFetcher();
     const textContent = "abc";
     const mockResponse = {
-      data: Buffer.from(textContent, "utf-8"),
+      data: Readable.from(Buffer.from(textContent, "utf-8")),
       headers: {
         "content-type": "text/plain; charset=utf-8",
         "content-encoding": "gzip",
@@ -245,7 +230,7 @@ describe("HttpFetcher", () => {
   it("should default mimeType to application/octet-stream if content-type header is missing", async () => {
     const fetcher = createFetcher();
     const mockResponse = {
-      data: Buffer.from([1, 2, 3]),
+      data: Readable.from(Buffer.from([1, 2, 3])),
       headers: {},
     };
     mockedAxios.get.mockResolvedValue(mockResponse);
@@ -258,13 +243,13 @@ describe("HttpFetcher", () => {
   it("should handle different content types", async () => {
     const fetcher = createFetcher();
     const mockResponse = {
-      data: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      data: Readable.from(Buffer.from([0x89, 0x50, 0x4e, 0x47])),
       headers: { "content-type": "image/png" },
     };
     mockedAxios.get.mockResolvedValue(mockResponse);
 
     const result = await fetcher.fetch("https://example.com/image.png");
-    expect(result.content).toEqual(mockResponse.data);
+    expect(result.content).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
     expect(result.mimeType).toBe("image/png");
   });
 
@@ -277,7 +262,7 @@ describe("HttpFetcher", () => {
         mockedAxios.get.mockReset();
         mockedAxios.get.mockRejectedValueOnce({ response: { status } });
         mockedAxios.get.mockResolvedValueOnce({
-          data: Buffer.from("success", "utf-8"),
+          data: Readable.from(Buffer.from("success", "utf-8")),
           headers: { "content-type": "text/plain" },
         });
 
@@ -346,7 +331,9 @@ describe("HttpFetcher", () => {
   it("should generate fingerprint headers", async () => {
     const fetcher = createFetcher();
     const mockResponse = {
-      data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+      data: Readable.from(
+        Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+      ),
       headers: { "content-type": "text/html" },
     };
     mockedAxios.get.mockResolvedValue(mockResponse);
@@ -359,7 +346,7 @@ describe("HttpFetcher", () => {
     expect(mockedAxios.get).toHaveBeenCalledWith(
       "https://example.com",
       expect.objectContaining({
-        responseType: "arraybuffer",
+        responseType: "stream",
         headers: expect.objectContaining({
           "user-agent": expect.any(String),
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.8",
@@ -378,7 +365,9 @@ describe("HttpFetcher", () => {
   it("should respect custom headers", async () => {
     const fetcher = createFetcher();
     const mockResponse = {
-      data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+      data: Readable.from(
+        Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+      ),
       headers: { "content-type": "text/html" },
     };
     mockedAxios.get.mockResolvedValue(mockResponse);
@@ -390,7 +379,7 @@ describe("HttpFetcher", () => {
     expect(mockedAxios.get).toHaveBeenCalledWith(
       "https://example.com",
       expect.objectContaining({
-        responseType: "arraybuffer",
+        responseType: "stream",
         headers: expect.objectContaining(headers),
         timeout: undefined,
         maxRedirects: 0,
@@ -403,7 +392,7 @@ describe("HttpFetcher", () => {
   it("should preserve caller-supplied Accept headers", async () => {
     const fetcher = createFetcher();
     mockedAxios.get.mockResolvedValue({
-      data: Buffer.from("ok", "utf-8"),
+      data: Readable.from(Buffer.from("ok", "utf-8")),
       headers: { "content-type": "text/plain" },
     });
 
@@ -431,7 +420,9 @@ describe("HttpFetcher", () => {
     it("should follow redirects by default", async () => {
       const fetcher = createFetcher();
       const mockResponse = {
-        data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+        data: Readable.from(
+          Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+        ),
         headers: { "content-type": "text/html" },
       };
       mockedAxios.get.mockResolvedValue(mockResponse);
@@ -456,7 +447,9 @@ describe("HttpFetcher", () => {
     it("should follow redirects when followRedirects is true", async () => {
       const fetcher = createFetcher();
       const mockResponse = {
-        data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+        data: Readable.from(
+          Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+        ),
         headers: { "content-type": "text/html" },
       };
       mockedAxios.get.mockResolvedValue(mockResponse);
@@ -480,7 +473,9 @@ describe("HttpFetcher", () => {
     it("should not follow redirects when followRedirects is false", async () => {
       const fetcher = createFetcher();
       const mockResponse = {
-        data: Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+        data: Readable.from(
+          Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
+        ),
         headers: { "content-type": "text/html" },
       };
       mockedAxios.get.mockResolvedValue(mockResponse);
@@ -533,7 +528,7 @@ describe("HttpFetcher", () => {
 
       // Simulate axios response object after redirects (follow-redirects style)
       mockedAxios.get.mockResolvedValue({
-        data: Buffer.from("<html><body>OK</body></html>", "utf-8"),
+        data: Readable.from(Buffer.from("<html><body>OK</body></html>", "utf-8")),
         headers: { "content-type": "text/html" },
         request: { res: { responseUrl: finalUrl } },
         config: { url: finalUrl },
@@ -554,7 +549,7 @@ describe("HttpFetcher", () => {
     it("should send If-None-Match header when etag is provided", async () => {
       const fetcher = createFetcher();
       const mockResponse = {
-        data: Buffer.from("content", "utf-8"),
+        data: Readable.from(Buffer.from("content", "utf-8")),
         headers: { "content-type": "text/plain" },
       };
       mockedAxios.get.mockResolvedValue(mockResponse);
@@ -574,7 +569,7 @@ describe("HttpFetcher", () => {
     it("should NOT send If-None-Match header when etag is not provided", async () => {
       const fetcher = createFetcher();
       const mockResponse = {
-        data: Buffer.from("content", "utf-8"),
+        data: Readable.from(Buffer.from("content", "utf-8")),
         headers: { "content-type": "text/plain" },
       };
       mockedAxios.get.mockResolvedValue(mockResponse);
@@ -604,7 +599,7 @@ describe("HttpFetcher", () => {
       // 304 is treated as successful by validateStatus, so axios resolves (not rejects)
       mockedAxios.get.mockResolvedValue({
         status: 304,
-        data: Buffer.from(""), // 304 typically has no body
+        data: Readable.from(Buffer.from("")), // 304 typically has no body
         headers: { etag },
         config: {},
         statusText: "Not Modified",
@@ -630,7 +625,7 @@ describe("HttpFetcher", () => {
 
       // Test with etag present
       mockedAxios.get.mockResolvedValue({
-        data: Buffer.from("content", "utf-8"),
+        data: Readable.from(Buffer.from("content", "utf-8")),
         headers: { "content-type": "text/plain", etag },
       });
 
@@ -641,12 +636,293 @@ describe("HttpFetcher", () => {
 
       // Test with etag missing
       mockedAxios.get.mockResolvedValue({
-        data: Buffer.from("content", "utf-8"),
+        data: Readable.from(Buffer.from("content", "utf-8")),
         headers: { "content-type": "text/plain" },
       });
 
       const resultWithoutEtag = await fetcher.fetch("https://example.com");
       expect(resultWithoutEtag.etag).toBeUndefined();
     });
+  });
+});
+
+describe("HttpFetcher fetch-time unprocessable-content gate", () => {
+  /** A Readable that records whether it was destroyed before being drained. */
+  const streamOf = (body: string) => {
+    let delivered = false;
+    const stream = new Readable({
+      read() {
+        delivered = true;
+        this.push(body);
+        this.push(null);
+      },
+    });
+    return { stream, wasDrained: () => delivered };
+  };
+
+  const respond = (mimeType: string, body: string, status = 200) => {
+    const { stream, wasDrained } = streamOf(body);
+    mockedAxios.get.mockResolvedValue({
+      status,
+      headers: { "content-type": mimeType },
+      data: stream,
+      request: { res: { responseUrl: "https://example.com/resource" } },
+    });
+    return { stream, wasDrained };
+  };
+
+  beforeEach(() => {
+    mockedAxios.get.mockReset();
+  });
+
+  it("reads a processable response in full from a real stream", async () => {
+    respond("text/html", "<html><body>hello</body></html>");
+
+    const result = await createFetcher().fetch("https://example.com/resource", {
+      acceptsMimeType: (m) => m === "text/html",
+    });
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.content.toString()).toBe("<html><body>hello</body></html>");
+    expect(result.mimeType).toBe("text/html");
+  });
+
+  it("abandons an unprocessable response without draining the body", async () => {
+    const { stream, wasDrained } = respond("image/png", "PNGDATA".repeat(1000));
+
+    const result = await createFetcher().fetch("https://example.com/resource", {
+      acceptsMimeType: (m) => m !== "image/png",
+    });
+
+    expect(result.status).toBe(FetchStatus.SKIPPED);
+    expect(result.content.toString()).toBe("");
+    expect(result.mimeType).toBe("image/png");
+    expect(wasDrained()).toBe(false);
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("treats a missing Content-Type as unprocessable", async () => {
+    const { stream } = streamOf("body");
+    mockedAxios.get.mockResolvedValue({
+      status: 200,
+      headers: {},
+      data: stream,
+      request: { res: { responseUrl: "https://example.com/resource" } },
+    });
+
+    const result = await createFetcher().fetch("https://example.com/resource", {
+      // parseContentType resolves an absent header to application/octet-stream,
+      // which no pipeline claims — the same outcome as today, reached sooner.
+      acceptsMimeType: (m) => m !== "application/octet-stream",
+    });
+
+    expect(result.status).toBe(FetchStatus.SKIPPED);
+    expect(result.mimeType).toBe("application/octet-stream");
+  });
+
+  it("does no gating when no predicate is supplied", async () => {
+    respond("image/png", "PNGDATA");
+
+    const result = await createFetcher().fetch("https://example.com/resource");
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.content.toString()).toBe("PNGDATA");
+  });
+
+  it("does not consult the gate for 304 Not Modified", async () => {
+    mockedAxios.get.mockResolvedValue({
+      status: 304,
+      headers: {},
+      data: null,
+      request: { res: { responseUrl: "https://example.com/resource" } },
+    });
+    const predicate = vi.fn().mockReturnValue(false);
+
+    const result = await createFetcher().fetch("https://example.com/resource", {
+      etag: '"abc"',
+      acceptsMimeType: predicate,
+    });
+
+    expect(result.status).toBe(FetchStatus.NOT_MODIFIED);
+    expect(predicate).not.toHaveBeenCalled();
+  });
+
+  it("does not consult the gate for 404 Not Found", async () => {
+    mockedAxios.get.mockRejectedValue(
+      Object.assign(new Error("Not Found"), {
+        isAxiosError: true,
+        response: { status: 404, headers: {}, data: null },
+      }),
+    );
+    const predicate = vi.fn().mockReturnValue(false);
+
+    const result = await createFetcher().fetch("https://example.com/resource", {
+      acceptsMimeType: predicate,
+    });
+
+    expect(result.status).toBe(FetchStatus.NOT_FOUND);
+    expect(predicate).not.toHaveBeenCalled();
+  });
+
+  it("gates on the final hop of a redirect chain", async () => {
+    const { stream, wasDrained } = streamOf("PNGDATA");
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        status: 301,
+        headers: { location: "https://example.com/final.png" },
+        data: null,
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: { "content-type": "image/png" },
+        data: stream,
+        request: { res: { responseUrl: "https://example.com/final.png" } },
+      });
+
+    const result = await createFetcher().fetch("https://example.com/start", {
+      acceptsMimeType: (m) => m !== "image/png",
+    });
+
+    expect(result.status).toBe(FetchStatus.SKIPPED);
+    expect(result.source).toBe("https://example.com/final.png");
+    expect(wasDrained()).toBe(false);
+    expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry a skipped response", async () => {
+    respond("image/png", "PNGDATA");
+
+    const result = await createFetcher().fetch("https://example.com/resource", {
+      acceptsMimeType: () => false,
+    });
+
+    expect(result.status).toBe(FetchStatus.SKIPPED);
+    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("HttpFetcher Cloudflare challenge detection", () => {
+  beforeEach(() => {
+    mockedAxios.get.mockReset();
+  });
+
+  it("detects a challenge from the response body when headers are absent", async () => {
+    // Regression guard for the streaming conversion: under responseType "stream"
+    // the error body is a Readable, so it must be drained before the body-text
+    // markers can match. Without this the three content checks silently no-op and
+    // only header-based detection survives.
+    mockedAxios.get.mockRejectedValue(
+      Object.assign(new Error("Forbidden"), {
+        isAxiosError: true,
+        response: {
+          status: 403,
+          headers: {},
+          data: Readable.from("<html><body>Just a moment...</body></html>"),
+        },
+      }),
+    );
+
+    await expect(createFetcher().fetch("https://example.com")).rejects.toThrow(
+      /challenge/i,
+    );
+  });
+
+  it("detects a challenge from the cf_chl_opt marker", async () => {
+    mockedAxios.get.mockRejectedValue(
+      Object.assign(new Error("Forbidden"), {
+        isAxiosError: true,
+        response: {
+          status: 403,
+          headers: {},
+          data: Readable.from("<script>window._cf_chl_opt={};</script>"),
+        },
+      }),
+    );
+
+    await expect(createFetcher().fetch("https://example.com")).rejects.toThrow(
+      /challenge/i,
+    );
+  });
+
+  it("does not treat an ordinary 403 as a challenge", async () => {
+    mockedAxios.get.mockRejectedValue(
+      Object.assign(new Error("Forbidden"), {
+        isAxiosError: true,
+        response: {
+          status: 403,
+          headers: { server: "nginx" },
+          data: Readable.from("<html><body>Access denied</body></html>"),
+        },
+      }),
+    );
+
+    await expect(createFetcher().fetch("https://example.com")).rejects.toThrow(
+      /Failed to fetch/,
+    );
+  });
+});
+
+describe("HttpFetcher response stream cleanup", () => {
+  // A body that is never read pins its socket, because Node will not return a
+  // partially-consumed response to the keep-alive pool. Only the success path
+  // consumes the stream, so every other exit must tear it down.
+  beforeEach(() => {
+    mockedAxios.get.mockReset();
+  });
+
+  it("destroys the body of a 304 response", async () => {
+    const body = Readable.from("unused");
+    mockedAxios.get.mockResolvedValue({
+      status: 304,
+      headers: {},
+      data: body,
+      request: { res: { responseUrl: "https://example.com" } },
+    });
+
+    const result = await createFetcher().fetch("https://example.com", {
+      etag: '"abc"',
+    });
+
+    expect(result.status).toBe(FetchStatus.NOT_MODIFIED);
+    expect(body.destroyed).toBe(true);
+  });
+
+  it("destroys the body of each redirect hop", async () => {
+    const hop = Readable.from("redirect body");
+    const final = Readable.from("<html>done</html>");
+    mockedAxios.get
+      .mockResolvedValueOnce({
+        status: 301,
+        headers: { location: "https://example.com/final" },
+        data: hop,
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        headers: { "content-type": "text/html" },
+        data: final,
+        request: { res: { responseUrl: "https://example.com/final" } },
+      });
+
+    const result = await createFetcher().fetch("https://example.com/start");
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(hop.destroyed).toBe(true);
+  });
+
+  it("destroys the body when the content-type gate rejects it", async () => {
+    const body = Readable.from("PNGDATA");
+    mockedAxios.get.mockResolvedValue({
+      status: 200,
+      headers: { "content-type": "image/png" },
+      data: body,
+      request: { res: { responseUrl: "https://example.com/x" } },
+    });
+
+    const result = await createFetcher().fetch("https://example.com/x", {
+      acceptsMimeType: () => false,
+    });
+
+    expect(result.status).toBe(FetchStatus.SKIPPED);
+    expect(body.destroyed).toBe(true);
   });
 });

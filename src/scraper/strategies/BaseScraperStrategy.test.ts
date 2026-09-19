@@ -1516,3 +1516,146 @@ describe("BaseScraperStrategy", () => {
     });
   });
 });
+
+describe("BaseScraperStrategy skipped (unprocessable) items", () => {
+  const baseOptions = (): ScraperOptions => ({
+    url: "https://example.com",
+    library: "test",
+    version: "1.0",
+    maxPages: 2000,
+    maxDepth: 2,
+    ignoreErrors: true,
+  });
+
+  it("does not count skips toward the child-page failure rate", async () => {
+    // 900 skips against 100 successes. If skips counted as failures the observed
+    // rate would be 0.9 and the crawl would abort at the 0.5 threshold.
+    const strategy = new TestScraperStrategy(
+      createTestConfig({ abortOnFailureRate: 0.5 }),
+    );
+    const links = Array.from({ length: 1000 }, (_, i) => `https://example.com/p${i}`);
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) {
+        return { url: item.url, links, status: FetchStatus.SUCCESS };
+      }
+      const index = Number(item.url.split("/p")[1]);
+      if (index < 900) {
+        return { url: item.url, links: [], status: FetchStatus.SKIPPED };
+      }
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: { textContent: "ok", chunks: [], links: [], errors: [] },
+      };
+    });
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still aborts when genuine failures exceed the threshold alongside skips", async () => {
+    const strategy = new TestScraperStrategy(
+      createTestConfig({ abortOnFailureRate: 0.5 }),
+    );
+    const links = Array.from({ length: 40 }, (_, i) => `https://example.com/p${i}`);
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) {
+        return { url: item.url, links, status: FetchStatus.SUCCESS };
+      }
+      const index = Number(item.url.split("/p")[1]);
+      if (index < 20) {
+        return { url: item.url, links: [], status: FetchStatus.SKIPPED };
+      }
+      throw new Error("boom");
+    });
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).rejects.toThrow(/Scrape aborted/);
+  });
+
+  it("produces no content and no progress result for a skipped child", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      item.depth === 0
+        ? {
+            url: item.url,
+            links: ["https://example.com/asset"],
+            status: FetchStatus.SUCCESS,
+            content: { textContent: "root", chunks: [], links: [], errors: [] },
+          }
+        : { url: item.url, links: [], status: FetchStatus.SKIPPED },
+    );
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(baseOptions(), progressCallback);
+
+    const results = progressCallback.mock.calls.map((c) => c[0].result);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(
+      progressCallback.mock.calls.some(
+        (c) => c[0].currentUrl === "https://example.com/asset",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not fail the job when an llms.txt seed is unprocessable", async () => {
+    // llms.txt seeds are queued at depth 0 but are one of several discovery
+    // seeds, so one unreadable entry must not abort the whole scrape.
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      item.fromLlmsTxt
+        ? { url: item.url, links: [], status: FetchStatus.SKIPPED }
+        : {
+            url: item.url,
+            links: [],
+            status: FetchStatus.SUCCESS,
+            content: { textContent: "root", chunks: [], links: [], errors: [] },
+            queueItems: [
+              { url: "https://example.com/seed", depth: 0, fromLlmsTxt: true },
+            ],
+          },
+    );
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not fail a refresh when a stored depth-0 page becomes unprocessable", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "https://example.com",
+      links: [],
+      status: FetchStatus.SKIPPED,
+    });
+
+    await expect(
+      strategy.scrape(
+        {
+          ...baseOptions(),
+          initialQueue: [{ url: "https://example.com", depth: 0, pageId: 42 }],
+          isRefresh: true,
+        },
+        vi.fn<ProgressCallback<ScraperProgressEvent>>(),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails the job when the start URL itself is unprocessable", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "https://example.com",
+      links: [],
+      status: FetchStatus.SKIPPED,
+    });
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).rejects.toThrow(/Cannot process content type/);
+  });
+});

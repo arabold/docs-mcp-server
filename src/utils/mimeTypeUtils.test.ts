@@ -620,3 +620,76 @@ describe("MimeTypeUtils", () => {
     });
   });
 });
+
+describe("MimeTypeUtils.isBinaryMediaType", () => {
+  it.each([
+    "image/png",
+    "image/jpeg",
+    "image/svg+xml",
+    "video/mp4",
+    "video/quicktime",
+    "audio/mpeg",
+    "font/woff2",
+    "IMAGE/PNG",
+  ])("classifies %s as binary media", (mimeType) => {
+    expect(MimeTypeUtils.isBinaryMediaType(mimeType)).toBe(true);
+  });
+
+  // The application/* rows matter most: the mime package resolves real script
+  // extensions (.csh, .tcl, .bat, .scm, .ps) to those types, and treating the
+  // family as binary media would make the crawl gate reject pages that index
+  // correctly today (issue #490).
+  it.each([
+    "text/html",
+    "text/plain",
+    "text/x-python",
+    "application/pdf",
+    "application/json",
+    "application/zip",
+    "application/octet-stream",
+    "application/x-csh",
+    "application/x-tcl",
+    "application/x-msdownload",
+    "application/vnd.lotus-screencam",
+    "application/postscript",
+  ])("does not classify %s as binary media", (mimeType) => {
+    expect(MimeTypeUtils.isBinaryMediaType(mimeType)).toBe(false);
+  });
+
+  it("returns false for an empty MIME type", () => {
+    expect(MimeTypeUtils.isBinaryMediaType("")).toBe(false);
+  });
+});
+
+describe("MimeTypeUtils.detectMimeTypeFromPath dot handling", () => {
+  // The crawl's queue-time gate acts on this result before making any request, so
+  // a dot inside a directory segment must not be read as a file extension. That
+  // currently holds because the token after the last dot contains a "/" and cannot
+  // match the extension table. These cases pin the behaviour against a refactor.
+  it.each([
+    "/docs/v1.0/guide",
+    "/api/v2.0",
+    "/2024.01.15/post",
+    "/some.dir/index",
+    "/node.js/api",
+    "/lib/jquery.min/docs",
+    "/u.s.a/history",
+    "/spring.io/guides",
+    "/rails-7.1/intro",
+    "/archive.2019/index",
+    "/pkg/[email protected]/readme",
+    "/docs/getting-started",
+    "/",
+  ])("returns null for %s", (pathname) => {
+    expect(MimeTypeUtils.detectMimeTypeFromPath(pathname)).toBeNull();
+  });
+
+  it.each([
+    ["/assets/diagram.png", "image/png"],
+    ["/assets/flame.svg", "image/svg+xml"],
+    ["/x.mov", "video/quicktime"],
+    ["/rust.rs", "text/x-rust"],
+  ])("detects %s from the final path segment", (pathname, expected) => {
+    expect(MimeTypeUtils.detectMimeTypeFromPath(pathname)).toBe(expected);
+  });
+});
