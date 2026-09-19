@@ -1,6 +1,6 @@
 import type { ProgressCallback } from "../../types";
 import type { AppConfig } from "../../utils/config";
-import { ScraperError } from "../../utils/errors";
+import { ChallengeError, HttpStatusError, ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { HttpFetcher } from "../fetcher";
@@ -386,23 +386,7 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       try {
         repoContent = await this.httpFetcher.fetch(repoUrl, { signal, headers });
       } catch (error) {
-        // Convert HTTP auth errors to user-friendly messages
-        if (error instanceof ScraperError) {
-          if (error.message.includes("401")) {
-            throw new ScraperError(
-              `GitHub authentication failed for "${owner}/${repo}". Your token is invalid or expired. Please check your GITHUB_TOKEN or GH_TOKEN environment variable.`,
-              false,
-              error,
-            );
-          }
-          if (error.message.includes("403")) {
-            throw new ScraperError(
-              `GitHub access denied for "${owner}/${repo}". Your token may lack the required permissions, or you may be rate-limited. Please check your GITHUB_TOKEN or GH_TOKEN.`,
-              false,
-              error,
-            );
-          }
-        }
+        this.rethrowAsGitHubAuthError(error, owner, repo);
         throw error;
       }
 
@@ -448,23 +432,7 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     try {
       rawContent = await this.httpFetcher.fetch(treeUrl, { signal, headers });
     } catch (error) {
-      // Convert HTTP auth errors to user-friendly messages
-      if (error instanceof ScraperError) {
-        if (error.message.includes("401")) {
-          throw new ScraperError(
-            `GitHub authentication failed for "${owner}/${repo}". Your token is invalid or expired. Please check your GITHUB_TOKEN or GH_TOKEN environment variable.`,
-            false,
-            error,
-          );
-        }
-        if (error.message.includes("403")) {
-          throw new ScraperError(
-            `GitHub access denied for "${owner}/${repo}". Your token may lack the required permissions, or you may be rate-limited. Please check your GITHUB_TOKEN or GH_TOKEN.`,
-            false,
-            error,
-          );
-        }
-      }
+      this.rethrowAsGitHubAuthError(error, owner, repo);
       throw error;
     }
 
@@ -572,6 +540,44 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     }
 
     return normalizedPath.startsWith(`${trimmedSubPath}/`);
+  }
+
+  /**
+   * Replaces a GitHub API auth failure with a message naming the likely cause.
+   *
+   * Keyed off the response status rather than the message text, which embeds
+   * the API url — a repo named e.g. "error-403" would otherwise make every
+   * failure for it read as access denied.
+   *
+   * GitHub answers a rate limit with 403 rather than 429, so 403 deliberately
+   * covers both permissions and rate limiting here.
+   *
+   * @param error The error the fetch threw.
+   * @param owner Repository owner, for the message.
+   * @param repo Repository name, for the message.
+   * @throws A {@link ScraperError} when the status identifies an auth failure.
+   */
+  private rethrowAsGitHubAuthError(error: unknown, owner: string, repo: string): void {
+    // HttpFetcher raises ChallengeError rather than HttpStatusError for a 403
+    // carrying Cloudflare challenge markers, and it carries a status too.
+    if (!(error instanceof HttpStatusError || error instanceof ChallengeError)) {
+      return;
+    }
+    const { statusCode } = error;
+    if (statusCode === 401) {
+      throw new ScraperError(
+        `GitHub authentication failed for "${owner}/${repo}". Your token is invalid or expired. Please check your GITHUB_TOKEN or GH_TOKEN environment variable.`,
+        false,
+        error,
+      );
+    }
+    if (statusCode === 403) {
+      throw new ScraperError(
+        `GitHub access denied for "${owner}/${repo}". Your token may lack the required permissions, or you may be rate-limited. Please check your GITHUB_TOKEN or GH_TOKEN.`,
+        false,
+        error,
+      );
+    }
   }
 
   async processItem(

@@ -84,13 +84,18 @@ describe("parseLlmsTxt", () => {
     expect(result.links[1]?.description).toBeUndefined();
   });
 
-  it("returns an empty result for empty or invalid content", () => {
+  it("returns an empty result for empty or truly invalid content", () => {
     expect(parseLlmsTxt("")).toEqual({ sections: [], links: [] });
-    expect(parseLlmsTxt("No heading\n- [Link](https://example.com)")).toEqual({
-      sections: [],
-      links: [],
-    });
+    expect(parseLlmsTxt("   \n\t\n")).toEqual({ sections: [], links: [] });
     expect(parseLlmsTxt("# Project\n\nNo links")).toEqual({ sections: [], links: [] });
+  });
+
+  it("accepts content without an H1 heading, using the first line as the project name", () => {
+    expect(parseLlmsTxt("No heading\n- [Link](https://example.com)")).toEqual({
+      projectName: "No heading",
+      sections: [],
+      links: [{ title: "Link", url: "https://example.com", optional: false }],
+    });
   });
 
   it("returns an empty result for HTML and binary-like content", () => {
@@ -102,6 +107,74 @@ describe("parseLlmsTxt", () => {
       sections: [],
       links: [],
     });
+  });
+
+  it("unwraps llms.txt that a browser rendered as plain text in a <pre>", () => {
+    const rendered = `<html><head><meta name="color-scheme" content="light dark"></head><body><pre style="word-wrap: break-word; white-space: pre-wrap;"># Project
+
+&gt; A summary
+
+- [Guide](https://example.com/guide?a=1&amp;b=2): The guide
+</pre></body></html>`;
+
+    const result = parseLlmsTxt(rendered);
+    expect(result.projectName).toBe("Project");
+    expect(result.summary).toBe("A summary");
+    expect(result.links).toEqual([
+      {
+        title: "Guide",
+        url: "https://example.com/guide?a=1&b=2",
+        description: "The guide",
+        optional: false,
+      },
+    ]);
+  });
+
+  it("rejects an HTML page whose body merely contains a <pre> code block", () => {
+    // A soft-404 documentation page must not be mistaken for an llms.txt index.
+    const softNotFound = `<!doctype html>
+<html><head><title>Docs</title></head><body>
+<h1>Page not found</h1>
+<p>Try one of these instead:</p>
+<pre><code>
+Quickstart
+- [Guide](https://example.com/guide)
+- [API](https://example.com/api)
+</code></pre>
+</body></html>`;
+
+    expect(parseLlmsTxt(softNotFound)).toEqual({ sections: [], links: [] });
+  });
+
+  it("rejects an HTML page that merely wraps a <pre> in another element", () => {
+    const wrapped = `<!doctype html><html><body><div class="content"><pre>Docs
+- [Guide](https://example.com/guide)</pre></div></body></html>`;
+
+    expect(parseLlmsTxt(wrapped)).toEqual({ sections: [], links: [] });
+  });
+
+  it("rejects an empty SPA shell whose only text sits in a <pre>", () => {
+    // The shell renders no visible text of its own, so a text-only check would
+    // mistake this soft-404 for a browser-rendered plain-text response.
+    const shell = `<!doctype html><html><head><title>App</title></head><body><div id="root"></div><pre>Index
+- [A](https://example.com/a)</pre><script>boot()</script></body></html>`;
+
+    expect(parseLlmsTxt(shell)).toEqual({ sections: [], links: [] });
+  });
+
+  it("rejects an indented tag line as a headerless project name", () => {
+    expect(
+      parseLlmsTxt("  <div>Page not found</div>\n- [Guide](https://example.com/g)\n"),
+    ).toEqual({ sections: [], links: [] });
+  });
+
+  it("rejects an HTML page containing multiple <pre> blocks", () => {
+    const page = `<!doctype html><html><body>
+<pre>- [One](https://example.com/one)</pre>
+<pre>- [Two](https://example.com/two)</pre>
+</body></html>`;
+
+    expect(parseLlmsTxt(page)).toEqual({ sections: [], links: [] });
   });
 
   it("ignores multiple H1s and malformed links", () => {

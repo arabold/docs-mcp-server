@@ -123,7 +123,7 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 | `telemetry-e2e.test.ts` | `DOCS_MCP_TELEMETRY` env var controls PostHog init | none (parses debug logs) | yes |
 | `html-pipeline-basic-e2e.test.ts` | HTML scrape pipeline against stable endpoints (httpbin.org) | network | yes |
 | `html-pipeline-nonhtml-e2e.test.ts` | Non-HTML content (text/plain) bypasses Playwright cleanly | none | yes |
-| `html-pipeline-live-e2e.test.ts` | HTML pipeline against real documentation sites (anti-scrape, JS-heavy) | network; slow & flaky | **no** — `npm run test:live` |
+| `html-pipeline-live-e2e.test.ts` | HTML pipeline against real documentation sites (anti-scrape, JS-heavy) | network; slow & flaky | **no** — `npm run test:live` (uses `vite.config.live.ts`) |
 | `refresh-pipeline-e2e.test.ts` | Refresh handling: 200/304/404, broken links, etag flow | none (mock server) | yes |
 | `archive-integration.test.ts` | `LocalFileStrategy` archive (zip) traversal and extraction | fixture archive | yes |
 | `local-file-pdf-e2e.test.ts` | PDF in a `file://` directory is indexed alongside `.txt`/`.md` (regression for issue #394) | Xberg native deps | yes |
@@ -134,5 +134,6 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 
 Notes:
 - The "live" and "docker" suites are excluded from `npm test` / `npm run test:e2e` because they need external network or a Docker daemon. CI runs `docker-e2e.test.ts` in a dedicated `docker-test` job.
+- The live suite is excluded in `vite.config.ts` so a bare `vitest` (and watch mode) never hits real sites. `--exclude` only *adds* globs and `mergeConfig` concatenates them, so nothing on the CLI can undo that — `npm run test:live` therefore points at `vite.config.live.ts`, which replaces the exclude list and drops the MSW mock-server setup that would otherwise intercept the real requests.
 - Suites that "skip gracefully" check for their required env at startup and short-circuit when it's missing — safe to leave in the default run.
 - Fixtures (sample PDF, docx, xlsx, archive, etc.) live in `test/fixtures/`. Reuse them rather than generating new files on the fly.

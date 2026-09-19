@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
-import { RedirectError, ScraperError } from "../../utils/errors";
+import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
 import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 
 vi.mock("playwright", () => ({
@@ -11,6 +11,7 @@ vi.mock("playwright", () => ({
 
 import { chromium } from "playwright";
 import { BrowserFetcher } from "./BrowserFetcher";
+import { FetchStatus } from "./types";
 
 /**
  * Builds a mocked Playwright page/context/browser tree. `pageOverrides` lets a
@@ -24,6 +25,9 @@ function mockBrowser(pageOverrides: Record<string, unknown> = {}) {
     unroute: vi.fn().mockResolvedValue(undefined),
     close: vi.fn().mockResolvedValue(undefined),
     waitForLoadState: vi.fn().mockResolvedValue(undefined),
+    // Navigation-response listener used to read the final main-frame status.
+    on: vi.fn(),
+    mainFrame: vi.fn().mockReturnValue({}),
     goto: vi.fn().mockResolvedValue({
       status: () => 200,
       headers: () => ({ "content-type": "text/html" }),
@@ -280,5 +284,130 @@ describe("BrowserFetcher", () => {
     const [, requestOptions] = requestGet.mock.calls[0];
     expect(requestOptions.headers).toEqual(pageHeaders);
     expect(requestOptions.headers).toEqual(expect.objectContaining({ "X-Test": "1" }));
+  });
+
+  it("rejects a blocked page instead of returning the block page as content", async () => {
+    // The 403/429 fallback sends blocked urls here; if the browser does not get
+    // through either, its error page must not be indexed as documentation.
+    mockBrowser({
+      goto: vi.fn().mockResolvedValue({
+        status: () => 403,
+        headers: () => ({ "content-type": "text/html" }),
+      }),
+      content: vi.fn().mockResolvedValue("<html><body>Access denied</body></html>"),
+    });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    await expect(fetcher.fetch("https://example.com")).rejects.toThrow(/status 403/);
+  });
+
+  it("reports a browser 404 as NOT_FOUND rather than success", async () => {
+    mockBrowser({
+      goto: vi.fn().mockResolvedValue({
+        status: () => 404,
+        headers: () => ({ "content-type": "text/html" }),
+      }),
+    });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const result = await fetcher.fetch("https://example.com");
+
+    expect(result.status).toBe(FetchStatus.NOT_FOUND);
+  });
+
+  it("honors a caller User-Agent given in lowercase", async () => {
+    // Header names are case-insensitive, so the context user agent must match
+    // the value the caller actually sends.
+    const { browser } = mockBrowser();
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    await fetcher.fetch("https://example.com", {
+      headers: { "user-agent": "CustomAgent/1.0" },
+    });
+
+    expect(browser.newContext).toHaveBeenCalledWith(
+      expect.objectContaining({ userAgent: "CustomAgent/1.0" }),
+    );
+  });
+
+  it("reports a request-API 404 as NOT_FOUND, matching the navigation path", async () => {
+    // Refresh uses a 404 to delete a stale page and llms.txt seeds treat it as
+    // non-fatal; surfacing it as a generic failure breaks both.
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => false,
+      status: () => 404,
+      headers: () => ({ "content-type": "text/html" }),
+      body: vi.fn().mockResolvedValue(Buffer.from("not found")),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const result = await fetcher.fetch("https://example.com/docs/page.md");
+
+    expect(result.status).toBe(FetchStatus.NOT_FOUND);
+  });
+
+  it("carries the request-API status on the thrown error", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => false,
+      status: () => 403,
+      headers: () => ({ "content-type": "text/html" }),
+      body: vi.fn().mockResolvedValue(Buffer.from("blocked")),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const error = await fetcher.fetch("https://example.com/docs/page.md").catch((e) => e);
+
+    expect(error).toBeInstanceOf(HttpStatusError);
+    expect((error as InstanceType<typeof HttpStatusError>).statusCode).toBe(403);
+  });
+
+  it("extracts from the document a challenge navigated to, not the challenge itself", async () => {
+    // page.goto() returns the challenge response; the page that ends up loaded
+    // is a later main-frame response, and it owns the real content type/etag.
+    const challengeResponse = {
+      status: () => 503,
+      headers: () => ({ "content-type": "text/html", etag: "challenge-etag" }),
+    };
+    const destinationResponse = {
+      status: () => 200,
+      headers: () => ({ "content-type": "text/html", etag: "real-etag" }),
+    };
+    const listeners: Array<(r: unknown) => void> = [];
+    const mainFrame = {};
+    const { page } = mockBrowser({
+      goto: vi.fn().mockResolvedValue(challengeResponse),
+      mainFrame: vi.fn().mockReturnValue(mainFrame),
+      on: vi.fn((event: string, handler: (r: unknown) => void) => {
+        if (event === "response") listeners.push(handler);
+      }),
+    });
+    // The navigation that clears the challenge.
+    page.waitForLoadState = vi.fn().mockImplementation(async () => {
+      for (const handler of listeners) {
+        handler({
+          ...destinationResponse,
+          request: () => ({
+            isNavigationRequest: () => true,
+            frame: () => mainFrame,
+          }),
+        });
+      }
+    });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const result = await fetcher.fetch("https://example.com");
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.etag).toBe("real-etag");
   });
 });

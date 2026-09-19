@@ -166,6 +166,93 @@ describe("BaseScraperStrategy", () => {
     );
   });
 
+  it("should not abort via the failure-rate threshold when many llms.txt seeds fail", async () => {
+    // A dead llms.txt index must not fail the scrape by the back door: past the
+    // 10-attempt minimum sample, counting seeds as failures would trip
+    // abortOnFailureRate even though these 404s are deliberately non-fatal.
+    const seedCount = 20;
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: seedCount + 1,
+      maxDepth: 1,
+      ignoreErrors: true,
+      initialQueue: [
+        { url: "https://example.com/", depth: 0 },
+        ...Array.from({ length: seedCount }, (_, i) => ({
+          url: `https://example.com/dead-${i}`,
+          depth: 0,
+          fromLlmsTxt: true,
+        })),
+      ],
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockImplementation(async (item) => {
+      if (item.url === "https://example.com/") {
+        return {
+          url: item.url,
+          links: [],
+          status: FetchStatus.SUCCESS,
+          content: {
+            textContent: "Root content",
+            chunks: [{ content: "Root content" }],
+          },
+        };
+      }
+      return { url: item.url, links: [], status: FetchStatus.NOT_FOUND };
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.not.toThrow();
+  });
+
+  it("should not throw Root page not found when a fromLlmsTxt item returns NOT_FOUND", async () => {
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 2,
+      maxDepth: 1,
+      ignoreErrors: true,
+      initialQueue: [
+        {
+          url: "https://example.com/broken-doc",
+          depth: 0,
+          fromLlmsTxt: true,
+        },
+        {
+          url: "https://example.com/valid-doc",
+          depth: 0,
+          fromLlmsTxt: true,
+        },
+      ],
+    };
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    strategy.processItem.mockImplementation(async (item) => {
+      if (item.url === "https://example.com/broken-doc") {
+        return {
+          url: item.url,
+          links: [],
+          status: FetchStatus.NOT_FOUND,
+        };
+      }
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: {
+          textContent: "Valid document content",
+          chunks: [{ content: "Valid document content" }],
+        },
+      };
+    });
+
+    await expect(strategy.scrape(options, progressCallback)).resolves.not.toThrow();
+    expect(progressCallback).toHaveBeenCalled();
+  });
+
   it("should not abort the scrape when only an llms.txt-seeded url returns NOT_FOUND", async () => {
     // The real requested root succeeds and seeds a depth-0 llms.txt URL that
     // 404s. A dead llms.txt entry must not abort a scrape whose actual root

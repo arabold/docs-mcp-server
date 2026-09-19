@@ -1,3 +1,5 @@
+import * as cheerio from "cheerio";
+
 export interface LlmsTxtLink {
   title: string;
   url: string;
@@ -24,7 +26,56 @@ const emptyLlmsTxtResult = (): LlmsTxtResult => ({
   links: [],
 });
 
-const markdownLinkPattern = /^\s*[-*+]\s+\[([^\]\n]+)]\(([^)\s]+)\)\s*(?::\s*(.+?)\s*)?$/;
+const markdownLinkPattern =
+  /^\s*[-*+•]\s+\[([^\]\n]+)]\(([^)\s]+)\)\s*(?::\s*(.+?)\s*)?$/;
+
+const htmlDocumentPattern = /^\s*<(?:!doctype\s+html|html|body|head)(?:\s|>)/i;
+
+/**
+ * Unwraps llms.txt content that a browser rendered as HTML.
+ *
+ * Browsers wrap a `text/plain` response in a single `<pre>` element, so that
+ * shape still carries a valid llms.txt. Only that shape is unwrapped: a real
+ * HTML page whose body merely contains a `<pre>` code block must keep failing
+ * the HTML check, otherwise a soft-404 documentation page would be accepted as
+ * an llms.txt index.
+ *
+ * @param content The raw fetched content.
+ * @returns The unwrapped text, or null when the content is not a bare `<pre>` wrapper.
+ */
+function unwrapPlainTextPre(content: string): string | null {
+  const $ = cheerio.load(content);
+  const body = $("body");
+  if (body.length !== 1) {
+    return null;
+  }
+
+  // Structure, not leftover text: a page whose visible text all sits inside a
+  // <pre> still fails this when anything wraps or accompanies it. An empty SPA
+  // shell (<div id="root"></div>) renders no text but is not a plain-text
+  // response, and must not be read as an llms.txt index.
+  const children = body
+    .children()
+    .filter((_, el) => el.tagName?.toLowerCase() !== "script");
+  if (children.length !== 1) {
+    return null;
+  }
+
+  const pre = children.first();
+  if (pre.prop("tagName")?.toLowerCase() !== "pre") {
+    return null;
+  }
+
+  // Only whitespace may surround it, and a head carries nothing renderable.
+  const bodyClone = body.clone();
+  bodyClone.children().remove();
+  if (bodyClone.text().trim().length > 0) {
+    return null;
+  }
+
+  // .text() resolves entities and drops the nested <code> a browser may add.
+  return pre.text();
+}
 
 /**
  * Returns true when a URL points to an llms.txt meta-file.
@@ -50,17 +101,28 @@ export function parseLlmsTxt(content: string): LlmsTxtResult {
     return emptyLlmsTxtResult();
   }
 
-  if (/^\s*<(?:!doctype\s+html|html|body|head)(?:\s|>)/i.test(content)) {
+  // A server may render plain text as HTML; unwrap that, but keep rejecting
+  // genuine HTML documents.
+  const unwrapped = unwrapPlainTextPre(content);
+  if (unwrapped === null && htmlDocumentPattern.test(content)) {
     return emptyLlmsTxtResult();
   }
+  const rawText = unwrapped ?? content;
 
-  const lines = content.split(/\r?\n/);
+  const lines = rawText.split(/\r?\n/);
   const firstH1Index = lines.findIndex((line) => /^#\s+\S/.test(line));
-  if (firstH1Index === -1) {
+  // A tag line is never a title: the HTML check above only catches documents
+  // that *start* with one, so a bare fragment still reaches here.
+  const isPlausibleTitle = (line: string) =>
+    line.trim().length > 0 && !line.trim().startsWith("<");
+
+  const startIndex =
+    firstH1Index !== -1 ? firstH1Index : lines.findIndex(isPlausibleTitle);
+  if (startIndex === -1) {
     return emptyLlmsTxtResult();
   }
 
-  const projectName = lines[firstH1Index].replace(/^#\s+/, "").trim();
+  const projectName = lines[startIndex].replace(/^#\s+/, "").trim();
   if (!projectName) {
     return emptyLlmsTxtResult();
   }
@@ -75,7 +137,7 @@ export function parseLlmsTxt(content: string): LlmsTxtResult {
   const summaryLines: string[] = [];
   let collectingSummary = true;
 
-  for (const line of lines.slice(firstH1Index + 1)) {
+  for (const line of lines.slice(startIndex + 1)) {
     if (/^#\s+\S/.test(line)) {
       collectingSummary = false;
       continue;

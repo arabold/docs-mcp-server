@@ -5,6 +5,7 @@ import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
 import {
   ChallengeError,
+  HttpStatusError,
   RedirectError,
   ScraperError,
   TlsCertificateError,
@@ -372,13 +373,12 @@ export class HttpFetcher implements ContentFetcher {
         }
 
         // Not a 5xx error or max retries reached
-        throw new ScraperError(
-          `Failed to fetch ${source} after ${
-            attempt + 1
-          } attempts: ${axiosError.message ?? "Unknown error"}`,
-          true,
-          errorCause,
-        );
+        const failureMessage = `Failed to fetch ${source} after ${
+          attempt + 1
+        } attempts: ${axiosError.message ?? "Unknown error"}`;
+        throw status === undefined
+          ? new ScraperError(failureMessage, true, errorCause)
+          : new HttpStatusError(failureMessage, true, status, errorCause);
       }
     }
     throw new ScraperError(
