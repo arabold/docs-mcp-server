@@ -21,6 +21,16 @@ import semver from "semver";
  */
 const PARTIAL_VERSION_PATTERN = /^v?\d+(?:\.\d+)?$/;
 
+/**
+ * Version shapes accepted in a *request*: `major`, `major.minor`, `major.minor.patch`,
+ * and their X-range forms (`1.x`, `1.2.x`, `1.x.x`).
+ *
+ * Wider than {@link PARTIAL_VERSION_PATTERN} because a request may be a range,
+ * which a stored label never is. Full semver requests are recognized by
+ * `semver.valid` before this pattern is consulted.
+ */
+export const VERSION_REQUEST_PATTERN = /^\d+(?:\.(?:x(?:\.x)?|\d+(?:\.(?:x|\d+))?))?$/;
+
 /** A stored label that is a semantic version, usable for ordering and ranges. */
 export interface SemanticVersionCandidate {
   kind: "version";
@@ -33,7 +43,7 @@ export interface SemanticVersionCandidate {
 }
 
 /** A stored label that is not a version and can only be matched literally. */
-export interface TagCandidate {
+interface TagCandidate {
   kind: "tag";
   /** The label exactly as stored in the database. */
   stored: string;

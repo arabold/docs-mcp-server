@@ -194,7 +194,7 @@ describe("SearchTool", () => {
     );
   });
 
-  it("should use 'latest' for findBestVersion if version is omitted and exactMatch is false", async () => {
+  it("should pass an omitted version through to findBestVersion unchanged", async () => {
     const options: SearchToolOptions = { ...baseOptions }; // No version
     const findVersionResult = { bestMatch: "1.2.0", hasUnversioned: false };
     (mockDocService.findBestVersion as Mock).mockResolvedValue(findVersionResult);
@@ -202,8 +202,9 @@ describe("SearchTool", () => {
 
     await searchTool.execute(options);
 
-    // The resolver receives exactly what the log line reports as being searched.
-    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("test-lib", "latest");
+    // The request is passed through as given: substituting "latest" would make
+    // an omitted version match a stored tag literally named "latest".
+    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("test-lib", undefined);
     expect(mockDocService.searchStore).toHaveBeenCalledWith(
       "test-lib",
       "1.2.0",

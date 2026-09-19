@@ -236,8 +236,7 @@ export class PipelineManager implements IPipeline {
     version: string | undefined | null,
     options: ScraperOptions,
   ): Promise<string> {
-    // Apply the shared version label contract (trim, lowercase, "" = unversioned)
-    // so a job is deduped against the bucket it will actually be stored under.
+    // Normalized so the job is deduped against the bucket it will be stored under.
     const normalizedVersion = normalizeVersionLabel(version);
 
     // Abort any existing QUEUED or RUNNING job for the same library+version
@@ -324,8 +323,6 @@ export class PipelineManager implements IPipeline {
     version: string | undefined | null,
     options?: Pick<ScraperOptions, "preserveHashes">,
   ): Promise<string> {
-    // Apply the shared version label contract (trim, lowercase, "" = unversioned)
-    // so a job is deduped against the bucket it will actually be stored under.
     const normalizedVersion = normalizeVersionLabel(version);
 
     try {

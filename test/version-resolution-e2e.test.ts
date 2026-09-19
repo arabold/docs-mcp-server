@@ -9,15 +9,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initTRPC } from "@trpc/server";
-import superjson from "superjson";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
-import {
-  createPipelineRouter,
-  type PipelineTrpcContext,
-} from "../src/pipeline/trpc/router";
+import { pipelineRouter } from "../src/pipeline/trpc/router";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { normalizeVersionLabel } from "../src/store/types";
 import { VersionNotFoundInStoreError } from "../src/store/errors";
@@ -62,20 +57,6 @@ describe("Version resolution end-to-end", () => {
       version: string | null,
     ): Promise<string | null> => {
       let jobId: string;
-      if (entryPoint === "refreshTool") {
-        // Refreshing requires the version to exist with stored scraper options.
-        // Seed it under the label the write contract produces, so a normalizer
-        // regression makes the refresh miss the bucket it just created.
-        const versionId = await docService.ensureVersion({
-          library,
-          version: normalizeVersionLabel(version),
-        });
-        await docService.storeScraperOptions(versionId, {
-          url: "https://example.com/docs",
-          library,
-          version: normalizeVersionLabel(version),
-        } as never);
-      }
       switch (entryPoint) {
         case "scrapeTool":
           jobId = (
@@ -87,7 +68,17 @@ describe("Version resolution end-to-end", () => {
             })) as { jobId: string }
           ).jobId;
           break;
-        case "refreshTool":
+        case "refreshTool": {
+          // Refreshing requires the version to exist with stored scraper
+          // options. Seed it under the label the write contract produces, so a
+          // normalizer regression makes the refresh miss the bucket it created.
+          const label = normalizeVersionLabel(version);
+          const versionId = await docService.ensureVersion({ library, version: label });
+          await docService.storeScraperOptions(versionId, {
+            url: "https://example.com/docs",
+            library,
+            version: label,
+          } as never);
           jobId = (
             (await new RefreshVersionTool(pipeline).execute({
               library,
@@ -96,13 +87,11 @@ describe("Version resolution end-to-end", () => {
             })) as { jobId: string }
           ).jobId;
           break;
+        }
         case "trpc": {
           // The web UI and any external worker reach the pipeline this way.
-          const caller = createPipelineRouter(
-            initTRPC.context<PipelineTrpcContext>().create({ transformer: superjson }),
-          ).createCaller({ pipeline });
           jobId = (
-            await caller.enqueueScrapeJob({
+            await pipelineRouter.createCaller({ pipeline }).enqueueScrapeJob({
               library,
               version,
               options: { url: "https://example.com/docs", library } as never,

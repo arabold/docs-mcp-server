@@ -32,9 +32,7 @@ export class RefreshVersionTool {
   async execute(options: RefreshVersionToolOptions): Promise<RefreshExecuteResult> {
     const { library, version, preserveHashes, waitForCompletion = true } = options;
 
-    // A version label is stored verbatim: normalize it (trim, lowercase, empty
-    // means unversioned) and store what the caller typed. Labels that are not
-    // semantic versions, such as "stable", are legitimate and resolve literally.
+    // Labels that are not semantic versions, such as "stable", are legitimate.
     const internalVersion = normalizeVersionLabel(version);
 
     // Use the injected pipeline instance

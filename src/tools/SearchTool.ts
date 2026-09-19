@@ -81,7 +81,8 @@ export class SearchTool {
       );
     }
 
-    // Default to 'latest' only when exactMatch is false
+    // Only for the log line and the exactMatch path; resolution takes `version`
+    // as given so an omitted version stays distinct from a literal "latest".
     const resolvedVersion = version || "latest";
 
     logger.info(
@@ -96,12 +97,12 @@ export class SearchTool {
       let versionToSearch: string | null | undefined = resolvedVersion;
 
       if (!exactMatch) {
-        // Resolve against what was logged as being searched, so the request the
-        // resolver sees and the one reported above cannot drift apart.
-        const versionResult = await this.docService.findBestVersion(
-          library,
-          resolvedVersion,
-        );
+        // Pass the request through untouched. Substituting "latest" here would
+        // change the answer, not just the wording: since labels resolve
+        // literally first, a library holding a bucket named "latest" would
+        // match that tag instead of its newest version, and search_docs would
+        // disagree with find_version for the same request.
+        const versionResult = await this.docService.findBestVersion(library, version);
         // bestMatch is null only when nothing resolved and unversioned content
         // exists; searchStore normalizes null to "" and searches that bucket.
         versionToSearch = versionResult.bestMatch;

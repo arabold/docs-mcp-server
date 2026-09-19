@@ -110,14 +110,21 @@ it is permanent behavior rather than a transitional shim.
 *Alternative considered:* a migration canonicalizing existing labels. Rejected — it would merge buckets a
 user deliberately created, and it contradicts D1's verbatim rule.
 
-### D7: One comparator for every listing surface
+### D7: One comparator, owned by one layer
 
-`queryLibraryVersions` orders lexicographically in SQL, which puts `1.10.0` before `1.9.0`; the web UI
-consumes that order unsorted and defaults to `versions[0]`. Semver ordering cannot be expressed in SQLite
-`ORDER BY`, so sorting moves to the service layer using the same comparator the resolver uses, extended
-to place unversioned first and opaque tags last in alphabetical order.
+`queryLibraryVersions` already sorts each library's versions with `compareVersionsDescending` after
+reading them, so the SQL `ORDER BY version` never reaches a consumer and semver ordering was already
+correct. What was wrong is the comparator itself: it fell back to *reverse* string comparison for
+anything non-semver, so an opaque tag sorted ahead of the real versions and became the web UI's default
+selection (`versions[0]`).
 
-*Alternative considered:* sort in each consumer. Rejected — that is how the two orderings diverged.
+The fix is therefore in `compareVersionsDescending` alone — unversioned first, semantic versions
+newest-first, opaque tags last alphabetically, with a deterministic tie-break for labels normalizing to
+the same version. Every listing surface picks it up for free, because the store is the single place that
+sorts.
+
+*Alternative considered:* also sorting in `listLibraries`. Rejected — it duplicates an invariant the
+store already guarantees and cannot change any order, while creating two places that must agree.
 
 ## Risks / Trade-offs
 
@@ -132,9 +139,9 @@ to place unversioned first and opaque tags last in alphabetical order.
 - **A stored tag can shadow a request that looks like a range** → A library with a literal `1.x` bucket
   answers a `1.x` request with that bucket rather than range-matching. Deliberate and specified; it is the
   same mechanism that makes a stored `latest` reachable.
-- **Tag ordering is newly defined** → `compareVersionsDescending` currently falls back to *reverse* string
-  comparison for non-semver labels, so tags sort Z→A and interleave with versions. D7 changes that to
-  alphabetical and grouped last; any snapshot of listing order will shift.
+- **Tag ordering is newly defined** → `compareVersionsDescending` previously fell back to *reverse* string
+  comparison for non-semver labels, so tags sorted Z→A and ahead of the versions they should follow. D7
+  changes that to alphabetical and grouped last; any snapshot of listing order will shift.
 - **Rung 3 fires only when no semantic version exists** → A library with both `1.0.0` and `stable` and no
   explicit request resolves to `1.0.0`. A caller wanting the tag must name it.
 
@@ -145,7 +152,7 @@ No data migration. Rollout is behavioral:
 1. Land the shared normalizer and route every write path through it; existing rows are unaffected.
 2. Remove the duplicated gates in `ScrapeTool` and `RefreshVersionTool`, updating their tests.
 3. Land the classification and resolution ladder, superseding `selectStoredVersion`.
-4. Move listing order into the service layer.
+4. Correct the comparator; the store's existing sort propagates it to every surface.
 
 Rollback is a straight revert at any step; nothing on disk changes shape, so a downgraded build reads the
 same rows it wrote. The only user-visible regression on rollback is that labels written as `stable` while

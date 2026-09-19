@@ -1353,6 +1353,26 @@ describe("DocumentStore - Common Functionality", () => {
     });
   });
 
+  describe("Version Listing Order", () => {
+    it("orders each library's versions newest first, with tags last", async () => {
+      // queryLibraryVersions owns this ordering; SQL sorts lexicographically,
+      // so the JS comparator is what keeps 1.10.0 ahead of 1.9.0 and stops a
+      // tag sorting into the version run.
+      for (const version of ["1.9.0", "1.10.0", "stable", "2.0.0-beta", ""]) {
+        await store.resolveVersionId("orderlib", version);
+      }
+
+      const versions = (await store.queryLibraryVersions()).get("orderlib") ?? [];
+      expect(versions.map((v) => v.version)).toEqual([
+        "",
+        "2.0.0-beta",
+        "1.10.0",
+        "1.9.0",
+        "stable",
+      ]);
+    });
+  });
+
   describe("Version Label Normalization", () => {
     it("collapses surrounding whitespace into a single version id", async () => {
       const padded = await store.resolveVersionId("wslib", " 1.0.0 ");

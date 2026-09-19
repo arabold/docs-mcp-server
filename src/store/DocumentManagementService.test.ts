@@ -831,71 +831,6 @@ describe("DocumentManagementService", () => {
     });
 
     describe("listLibraries", () => {
-      it("should agree with the resolver on which version is newest", async () => {
-        // The web UI selects lib.versions[0]; the resolver answers an unversioned
-        // request. Both must name the same version, which they did not when the
-        // listing came back in SQL lexicographic order.
-        const row = (version: string, versionId: number) => ({
-          version,
-          versionId,
-          status: "completed",
-          progressPages: 1,
-          progressMaxPages: 1,
-          sourceUrl: null,
-          documentCount: 1,
-          uniqueUrlCount: 1,
-          indexedAt: "2024-01-01T00:00:00.000Z",
-        });
-        mockStore.queryLibraryVersions.mockResolvedValue(
-          new Map([["agreelib", [row("1.9.0", 1), row("1.10.0", 2)]]]) as never,
-        );
-        mockStore.getScraperOptions.mockResolvedValue(null);
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.9.0", "1.10.0"]);
-        mockStore.checkDocumentExists.mockResolvedValue(false);
-
-        const [summary] = await docService.listLibraries();
-        const listingNewest = summary.versions[0].ref.version;
-        const { bestMatch } = await docService.findBestVersion("agreelib");
-
-        expect(listingNewest).toBe("1.10.0");
-        expect(bestMatch).toBe("1.10.0");
-        expect(listingNewest).toBe(bestMatch);
-      });
-
-      it("should order versions newest first, not lexicographically", async () => {
-        // queryLibraryVersions returns SQL lexicographic order, which puts
-        // "1.10.0" before "1.9.0"; the service re-sorts so every listing
-        // surface agrees with the resolver on which version is newest.
-        const row = (version: string, versionId: number) => ({
-          version,
-          versionId,
-          status: "completed",
-          progressPages: 1,
-          progressMaxPages: 1,
-          sourceUrl: null,
-          documentCount: 1,
-          uniqueUrlCount: 1,
-          indexedAt: "2024-01-01T00:00:00.000Z",
-        });
-        mockStore.queryLibraryVersions.mockResolvedValue(
-          new Map([
-            [
-              "sortlib",
-              [row("", 1), row("1.10.0", 2), row("1.9.0", 3), row("stable", 4)],
-            ],
-          ]) as never,
-        );
-        mockStore.getScraperOptions.mockResolvedValue(null);
-
-        const [summary] = await docService.listLibraries();
-        expect(summary.versions.map((v) => v.ref.version)).toEqual([
-          "",
-          "1.10.0",
-          "1.9.0",
-          "stable",
-        ]);
-      });
-
       it("should list libraries with enriched version metadata", async () => {
         const mockLibraryMap = new Map([
           [
@@ -1001,19 +936,19 @@ describe("DocumentManagementService", () => {
         ).toEqual([
           {
             library: "lib1",
-            // Newest first, regardless of the order the store returned them in.
+            // Order comes from the store, which sorts in queryLibraryVersions.
             versions: [
-              {
-                ref: { library: "lib1", version: "1.1.0" },
-                status: "completed",
-                counts: { documents: 15, uniqueUrls: 7 },
-                indexedAt: "2024-02-01T00:00:00.000Z",
-              },
               {
                 ref: { library: "lib1", version: "1.0.0" },
                 status: "completed",
                 counts: { documents: 10, uniqueUrls: 5 },
                 indexedAt: "2024-01-01T00:00:00.000Z",
+              },
+              {
+                ref: { library: "lib1", version: "1.1.0" },
+                status: "completed",
+                counts: { documents: 15, uniqueUrls: 7 },
+                indexedAt: "2024-02-01T00:00:00.000Z",
               },
             ],
           },

@@ -12,12 +12,11 @@ import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { formatBytes } from "../utils/string";
 import {
-  compareVersionsDescending,
   isSemanticVersion,
   type SemanticVersionCandidate,
   sortVersionsDescending,
-  toVersionCandidate,
   toVersionCandidates,
+  VERSION_REQUEST_PATTERN,
   type VersionCandidate,
 } from "../utils/version";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
@@ -212,10 +211,6 @@ export class DocumentManagementService {
           } satisfies VersionSummary;
         }),
       );
-      // queryLibraryVersions orders lexicographically in SQL, which puts
-      // "1.10.0" before "1.9.0". Sort here with the comparator the resolver
-      // uses so every listing surface agrees on which version is newest.
-      vs.sort((a, b) => compareVersionsDescending(a.ref.version, b.ref.version));
       summaries.push({ library, versions: vs });
     }
     return summaries;
@@ -266,17 +261,16 @@ export class DocumentManagementService {
   }
 
   /**
-   * Returns a list of all available semantic versions for a library.
-   * Sorted in descending order (latest first).
+   * Returns every label stored for a library — semantic versions and opaque tags
+   * alike — in canonical display order.
+   *
+   * Dropping tags here is what made documentation indexed as "latest" or
+   * "stable" unreachable. The empty label is excluded because it represents
+   * unversioned content, which is tracked separately.
    */
   async listVersions(library: string): Promise<string[]> {
     const versions = await this.store.queryUniqueVersions(library);
-    // Every non-empty label is kept, whether it is a semantic version or an
-    // opaque tag — dropping tags here is what made documentation indexed as
-    // "latest" or "stable" unreachable. The empty label is excluded because it
-    // represents unversioned content, which is tracked separately.
-    const labels = versions.filter((v) => toVersionCandidate(v) !== null);
-    return sortVersionsDescending(labels);
+    return sortVersionsDescending(versions.filter((v) => v !== ""));
   }
 
   /**
@@ -299,9 +293,7 @@ export class DocumentManagementService {
    * @returns Every stored label, including the empty unversioned label.
    */
   private async listAvailableLabels(library: string): Promise<string[]> {
-    const allLibraryDetails = await this.store.queryLibraryVersions();
-    const libraryDetails = allLibraryDetails.get(library) ?? [];
-    return libraryDetails.map((v) => v.version);
+    return this.store.queryUniqueVersions(library);
   }
 
   /**
@@ -345,12 +337,10 @@ export class DocumentManagementService {
     }
 
     // Rung 3: a lone opaque tag, only when the caller expressed no preference
-    // and there is no semantic version to rank ahead of it.
-    if (requested === "" && versions.length === 0) {
-      const tags = candidates.filter((c) => c.kind === "tag");
-      if (tags.length === 1) {
-        return tags[0].stored;
-      }
+    // and there is no semantic version to rank ahead of it. With no semantic
+    // versions every candidate is a tag, so one candidate means one tag.
+    if (requested === "" && versions.length === 0 && candidates.length === 1) {
+      return candidates[0].stored;
     }
 
     return null;
@@ -379,22 +369,15 @@ export class DocumentManagementService {
     let range: string;
     if (requested === "" || requested === "latest") {
       range = "*";
+    } else if (semver.valid(requested)) {
+      // An exact version: allow matching it OR any older version
+      range = `${requested} || <=${requested}`;
+    } else if (VERSION_REQUEST_PATTERN.test(requested)) {
+      // A partial version or X-range ("1", "1.2", "1.x"): already a valid range
+      range = requested;
     } else {
-      const versionRegex = /^(\d+)(?:\.(?:x(?:\.x)?|\d+(?:\.(?:x|\d+))?))?$|^$/;
-      if (!semver.valid(requested) && !versionRegex.test(requested)) {
-        logger.warn(`⚠️  Invalid target version format: ${requested}`);
-        return null;
-      }
-      if (!semver.validRange(requested)) {
-        // Not a range (like '1.2' or '1'): treat it like a tilde range
-        range = `~${requested}`;
-      } else if (semver.valid(requested)) {
-        // An exact version: allow matching it OR any older version
-        range = `${requested} || <=${requested}`;
-      } else {
-        // Already a valid range (like '1.x'): use it directly
-        range = requested;
-      }
+      logger.warn(`⚠️  Invalid target version format: ${requested}`);
+      return null;
     }
 
     const best = semver.maxSatisfying(normalizedCandidates, range, options);
@@ -410,17 +393,18 @@ export class DocumentManagementService {
   }
 
   /**
-   * Finds the most appropriate version of documentation based on the requested version.
-   * When no target version is specified, returns the latest version.
+   * Finds the most appropriate stored label for a requested version.
    *
-   * Version matching behavior:
-   * - Exact versions (e.g., "18.0.0"): Matches that version or any earlier version
-   * - X-Range patterns (e.g., "5.x", "5.2.x"): Matches within the specified range
-   * - "latest" or no version: Returns the latest available version
+   * Resolution itself lives in {@link resolveVersionLabel}; this adds the
+   * unversioned bucket, which a resolved label always outranks, and the error
+   * raised when neither produces anything.
    *
-   * For documentation, we prefer matching older versions over no match at all,
-   * since older docs are often still relevant and useful.
-   * Also checks if unversioned documents exist for the library.
+   * @param library Library name.
+   * @param targetVersion The version requested, if any.
+   * @returns The resolved label (or `null`) and whether unversioned docs exist.
+   * @throws {VersionNotFoundInStoreError} When nothing resolves and no
+   *   unversioned documentation exists.
+   * @throws {LibraryNotFoundInStoreError} When the library has no content.
    */
   async findBestVersion(
     library: string,

@@ -61,7 +61,6 @@ which is why two consecutive fixes to that method each introduced a regression.
 - `src/tools/SearchTool.ts`, `src/tools/FindVersionTool.ts` — resolution outcome surfaced
 - `src/pipeline/PipelineManager.ts`, `src/pipeline/trpc/router.ts`, `src/store/DocumentStore.ts` —
   single shared normalizer at the store boundary
-- `src/store/DocumentStore.ts` — `queryLibraryVersions` ordering, which the web UI consumes unsorted
 
 **Defects closed**
 - #475 — documentation under a non-semver version is unreachable over MCP

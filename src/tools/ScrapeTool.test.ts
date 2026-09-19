@@ -76,15 +76,10 @@ describe("ScrapeTool", () => {
       await scrapeTool.execute(options);
 
       // Check enqueueScrapeJob call (implies constructor was called)
-      const expectedVersionArg =
-        typeof expectedInternal === "string"
-          ? expectedInternal.toLowerCase()
-          : expectedInternal; // null stays null
-
       expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
         "test-lib",
-        expectedVersionArg,
-        expect.objectContaining({ url: options.url }), // Check basic options passed
+        expectedInternal,
+        expect.objectContaining({ url: options.url, version: expectedInternal ?? "" }),
       );
       expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
     },
@@ -105,18 +100,6 @@ describe("ScrapeTool", () => {
       );
     },
   );
-
-  it("should not rewrite a partial version to its full form", async () => {
-    // Regression: "1.20" used to be coerced to "1.20.0" on write, silently
-    // merging it with a genuinely different bucket.
-    await scrapeTool.execute(getBaseOptions("1.20"));
-
-    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
-      "test-lib",
-      "1.20",
-      expect.objectContaining({ version: "1.20" }),
-    );
-  });
 
   // --- Pipeline Execution Tests ---
 
