@@ -16,12 +16,18 @@ export function createCompactCommand(cli: Argv) {
     "compact",
     "Reclaim unused space in the document store (exclusive lock; may block searches)",
     (yargs) => {
-      return yargs.option("server-url", {
-        type: "string",
-        description:
-          "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
-        alias: "serverUrl",
-      });
+      return yargs
+        .option("force", {
+          type: "boolean",
+          description: "Run VACUUM even when SQLite reports no free pages",
+          default: false,
+        })
+        .option("server-url", {
+          type: "string",
+          description:
+            "URL of external pipeline worker RPC (e.g., http://localhost:8080/api)",
+          alias: "serverUrl",
+        });
     },
     async (argv) => {
       await telemetry.track(TelemetryEvent.CLI_COMMAND, {
@@ -43,7 +49,7 @@ export function createCompactCommand(cli: Argv) {
         appConfig,
       });
       try {
-        const result = await docService.compact({ force: true });
+        const result = await docService.compact({ force: argv.force === true });
 
         if (result.skipped) {
           renderTextOutput("Skipped compaction for in-memory store.");

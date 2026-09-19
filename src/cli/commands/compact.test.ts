@@ -53,15 +53,24 @@ describe("compact command", () => {
     stdoutWriteSpy.mockRestore();
   });
 
-  it("calls compact with force and reports reclaimed space", async () => {
+  it("compacts when free pages exist and reports reclaimed space", async () => {
     const parser = yargs().scriptName("test");
     createCompactCommand(parser);
 
     await parser.parse("compact");
 
-    expect(compactFn).toHaveBeenCalledWith({ force: true });
+    expect(compactFn).toHaveBeenCalledWith({ force: false });
     expect(stdoutWriteMock).toHaveBeenCalledWith(
       "Compacted store from 2.0 KB to 1.0 KB (reclaimed 1.0 KB).\n",
     );
+  });
+
+  it("forces vacuum when requested", async () => {
+    const parser = yargs().scriptName("test");
+    createCompactCommand(parser);
+
+    await parser.parse("compact --force");
+
+    expect(compactFn).toHaveBeenCalledWith({ force: true });
   });
 });

@@ -1065,6 +1065,20 @@ export class DocumentStore {
   }
 
   /**
+   * Runs VACUUM with temp storage on disk so large stores do not duplicate the
+   * compacted database in process memory.
+   */
+  private vacuumWithFileTempStore(): void {
+    const prevTempStore = Number(this.db.pragma("temp_store", { simple: true }) ?? 0);
+    this.db.pragma("temp_store = FILE");
+    try {
+      this.db.exec("VACUUM");
+    } finally {
+      this.db.pragma(`temp_store = ${prevTempStore}`);
+    }
+  }
+
+  /**
    * Reclaims unused SQLite pages and truncates the WAL file.
    * In-memory databases are skipped.
    *
@@ -1104,7 +1118,7 @@ export class DocumentStore {
       const shouldVacuum = allowVacuum && (force || freelistCount > 0);
 
       if (shouldVacuum) {
-        this.db.exec("VACUUM");
+        this.vacuumWithFileTempStore();
         this.db.pragma("journal_mode = WAL");
         this.db.pragma("wal_autocheckpoint = 1000");
         this.db.pragma("wal_checkpoint(TRUNCATE)");

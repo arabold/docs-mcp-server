@@ -81,7 +81,7 @@ npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/
 | `find-version <library>` | Resolve the best matching version for a library |
 | `refresh <library>` | Re-scrape an existing library, skipping unchanged pages |
 | `remove <library>` | Delete a library or version from the index |
-| `compact` | Reclaim unused SQLite pages and shrink the store. Takes an exclusive lock and may block searches until it finishes. |
+| `compact` | Reclaim unused SQLite pages and shrink the store. Takes an exclusive lock, may block searches, and needs temporary disk space while it runs. |
 
 Run `npx @arabold/docs-mcp-server@latest --help` for the full command reference.
 

@@ -423,7 +423,7 @@ SQLite does not shrink the database file when documents are deleted. Deleted row
 
 After bulk deletes (`removeVersion` and `removeAllDocuments`) the store runs `wal_checkpoint(PASSIVE)`. That never waits on readers or writers, so search stays available. It truncates WAL frames when nothing else is using the file. It does not shrink `documents.db`.
 
-`VACUUM` takes an exclusive lock and blocks readers. Run `docs-mcp-server compact` (or `compact` against a remote worker with `--server-url`) when the store is idle to rewrite the file and reclaim free pages. In-memory databases skip compaction. Single-page deletes during refresh do not checkpoint or vacuum.
+`VACUUM` takes an exclusive lock and blocks readers. Run `docs-mcp-server compact` (or `compact` against a remote worker with `--server-url`) when the store is idle to rewrite the file and reclaim free pages. The compact command stores SQLite temporary data on disk instead of in process memory, so it keeps RSS low but needs enough free disk space for SQLite's temporary copy of the database. In-memory databases skip compaction. Single-page deletes during refresh do not checkpoint or vacuum.
 
 Other regular maintenance:
 

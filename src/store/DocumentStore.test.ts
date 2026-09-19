@@ -2601,6 +2601,10 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
 describe("DocumentStore - compaction", () => {
   let store: DocumentStore | undefined;
   let tempDir: string;
+  type TestDb = {
+    pragma(sql: string, options?: { simple?: boolean }): unknown;
+    exec(sql: string): unknown;
+  };
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-compact-"));
@@ -2675,5 +2679,29 @@ describe("DocumentStore - compaction", () => {
     const result = await store.compact({ force: false, vacuum: false });
     expect(result.skipped).toBe(false);
     expect(result.vacuumed).toBe(false);
+  });
+
+  it("uses file temp storage during vacuum and restores the previous setting", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(join(tempDir, "documents.db"), cfg);
+    await store.initialize();
+
+    const db = (store as unknown as { db: TestDb }).db;
+    db.pragma("temp_store = MEMORY");
+
+    const originalExec = db.exec.bind(db);
+    let tempStoreDuringVacuum: number | undefined;
+    db.exec = (sql: string): unknown => {
+      if (sql === "VACUUM") {
+        tempStoreDuringVacuum = Number(db.pragma("temp_store", { simple: true }));
+      }
+      return originalExec(sql);
+    };
+
+    await store.compact({ force: true });
+
+    expect(tempStoreDuringVacuum).toBe(1);
+    expect(Number(db.pragma("temp_store", { simple: true }))).toBe(2);
   });
 });

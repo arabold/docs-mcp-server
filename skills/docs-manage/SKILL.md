@@ -132,7 +132,8 @@ idle if the main store file is still large.
 
 Reclaim unused SQLite pages and truncate the WAL file so the store shrinks
 on disk. This takes an exclusive lock and may block searches until it
-finishes.
+finishes. VACUUM uses temporary files to keep memory usage low, so make sure
+there is enough free disk space for SQLite's temporary copy of the database.
 
 ```bash
 npx @arabold/docs-mcp-server@latest compact [options]
@@ -140,6 +141,7 @@ npx @arabold/docs-mcp-server@latest compact [options]
 
 | Flag | Alias | Description |
 |------|-------|-------------|
+| `--force` | | Run VACUUM even when SQLite reports no free pages |
 | `--server-url <url>` | | Remote pipeline worker URL |
 | `--quiet` | | Suppress non-error diagnostics |
 | `--verbose` | | Enable debug logging |
@@ -152,7 +154,8 @@ npx @arabold/docs-mcp-server@latest compact
 
 Removing documentation does not shrink the main SQLite file. Bulk deletes
 only run a non-blocking WAL checkpoint. Run this command when the store is
-idle to VACUUM and reclaim free pages.
+idle to VACUUM and reclaim free pages. Add `--force` only when you want to
+rewrite the store even if SQLite reports no free pages.
 
 ## Output behaviour
 
