@@ -74,22 +74,37 @@ export type VersionCandidate = {
 };
 
 /**
+ * Partial versions accepted as stored labels: `major` or `major.minor`, with an
+ * optional `v` prefix (e.g. `"5"`, `"1.20"`, `"v1.20"`).
+ *
+ * Coercion is gated on this shape because `semver.coerce()` pulls the first
+ * number out of arbitrary text — it turns `"stable-2024"` into `2024.0.0` and
+ * `"node18"` into `18.0.0`, which would make non-version labels sort and match
+ * as if they were releases.
+ */
+const PARTIAL_VERSION_PATTERN = /^v?\d+(?:\.\d+)?$/;
+
+/**
  * Normalizes a stored version string into a {@link VersionCandidate}.
  *
- * Strict semver is preserved verbatim. Partial versions such as `"1.20"` or
- * `"5"` are coerced to full semver with prerelease tags kept, so a label like
- * `"2.0.0-beta"` never collapses into `"2.0.0"` and outranks the real release.
+ * Strict semver is matched first and preserved verbatim, so prerelease and
+ * build metadata survive and a label like `"2.0.0-beta"` never collapses into
+ * `"2.0.0"` and outranks the real release. Only the partial shapes in
+ * {@link PARTIAL_VERSION_PATTERN} fall back to coercion.
  *
  * @param stored Version string as stored in the database.
  * @returns The candidate, or `null` when the string is not a version at all
- *   (e.g. `""`, `"stable"`, `"latest"`).
+ *   (e.g. `""`, `"stable"`, `"latest"`, `"stable-2024"`).
  */
 export function toVersionCandidate(stored: string): VersionCandidate | null {
   const strict = semver.valid(stored);
   if (strict) {
     return { stored, normalized: strict, strict: true };
   }
-  const coerced = semver.coerce(stored, { includePrerelease: true });
+  if (!PARTIAL_VERSION_PATTERN.test(stored)) {
+    return null;
+  }
+  const coerced = semver.coerce(stored);
   if (coerced) {
     return { stored, normalized: coerced.version, strict: false };
   }

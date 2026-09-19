@@ -108,16 +108,25 @@ describe("toVersionCandidate", () => {
     });
   });
 
-  it("should preserve prerelease tags instead of collapsing them", () => {
+  it("should preserve prerelease and build metadata instead of collapsing it", () => {
     expect(toVersionCandidate("2.0.0-beta")).toEqual({
       stored: "2.0.0-beta",
       normalized: "2.0.0-beta",
       strict: true,
     });
-    // Coercion path: not strict semver, but the tag must survive.
-    expect(toVersionCandidate("v2.0.0-beta.1")).toMatchObject({
+    // The "v" prefix is still strict semver, and the tag must survive.
+    expect(toVersionCandidate("v2.0.0-beta.1")).toEqual({
       stored: "v2.0.0-beta.1",
       normalized: "2.0.0-beta.1",
+      strict: true,
+    });
+  });
+
+  it("should accept a 'v' prefix on partial versions", () => {
+    expect(toVersionCandidate("v1.20")).toEqual({
+      stored: "v1.20",
+      normalized: "1.20.0",
+      strict: false,
     });
   });
 
@@ -125,6 +134,24 @@ describe("toVersionCandidate", () => {
     expect(toVersionCandidate("")).toBeNull();
     expect(toVersionCandidate("stable")).toBeNull();
     expect(toVersionCandidate("latest")).toBeNull();
+  });
+
+  it("should reject labels that merely contain a number", () => {
+    // semver.coerce() on its own pulls the first number out of arbitrary text
+    // ("stable-2024" -> 2024.0.0), which would let a branch or channel name
+    // sort and match as if it were a release. Only bare major[.minor] shapes
+    // may fall back to coercion.
+    expect(toVersionCandidate("stable-2024")).toBeNull();
+    expect(toVersionCandidate("release-2024")).toBeNull();
+    expect(toVersionCandidate("docs-v3")).toBeNull();
+    expect(toVersionCandidate("node18")).toBeNull();
+    expect(toVersionCandidate("alpha-1")).toBeNull();
+    expect(toVersionCandidate("2024-01-15")).toBeNull();
+  });
+
+  it("should reject range syntax, which is a query and not a stored version", () => {
+    expect(toVersionCandidate("1.x")).toBeNull();
+    expect(toVersionCandidate("1.2.x")).toBeNull();
   });
 });
 

@@ -441,6 +441,21 @@ describe("DocumentManagementService", () => {
         expect(versions).toEqual(["5", "2.0.0", "1.20"]);
       });
 
+      it("should exclude labels that merely contain a number", async () => {
+        const library = "test-lib";
+        mockStore.queryUniqueVersions.mockResolvedValue([
+          "stable-2024",
+          "node18",
+          "1.0.0",
+        ]);
+
+        const versions = await docService.listVersions(library);
+        // "stable-2024" and "node18" are channel/branch labels, not releases —
+        // they must not be normalized into 2024.0.0 / 18.0.0 and outrank the
+        // real 1.0.0.
+        expect(versions).toEqual(["1.0.0"]);
+      });
+
       it("should keep prerelease labels distinct from their release, alongside partials", async () => {
         const library = "test-lib";
         mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta", "1.20", "2.0.0"]);
@@ -593,6 +608,14 @@ describe("DocumentManagementService", () => {
 
         const result = await docService.findBestVersion(library, "stable");
         expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+      });
+
+      it("should not let a label that merely contains a number win 'latest'", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["stable-2024", "1.0.0"]);
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+
+        const result = await docService.findBestVersion(library, "latest");
+        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
       });
 
       it("should resolve each stored form when a partial and its full version coexist", async () => {
