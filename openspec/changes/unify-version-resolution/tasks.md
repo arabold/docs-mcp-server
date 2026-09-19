@@ -93,8 +93,8 @@ none were missed.
 
 ## 9. Reconcile with PR #497
 
-- [ ] 9.1 Rebase or re-target PR [#497](https://github.com/arabold/docs-mcp-server/pull/497) onto this
+- [x] 9.1 Rebase or re-target PR [#497](https://github.com/arabold/docs-mcp-server/pull/497) onto this
       work, keeping its `toVersionCandidate` gating and dropping its `selectStoredVersion` tie-break;
       verify its regression tests still pass against the new ladder
-- [ ] 9.2 Update the PR description to note that #475 and #480 are both closed here; verify the linked
+- [x] 9.2 Update the PR description to note that #475 and #480 are both closed here; verify the linked
       issues reference the final change
