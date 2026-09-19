@@ -141,9 +141,9 @@ If an embedding vector is shorter than the resolved effective dimension, the sys
 - **AND** the `documents_vec` table SHALL use `embedding FLOAT[768]`
 
 ### Requirement: Dimension Detection
-The system SHALL determine the effective embedding dimension during initialization when embeddings are enabled. The system SHALL skip runtime probing for known fixed-output models unless an explicit dimension override is configured. The system SHALL also skip runtime probing for unknown and variable-dimension models when stored metadata contains the same `embedding_model` as the current configuration and a stored `embedding_dimension`.
+The system SHALL determine the effective embedding dimension during initialization when embeddings are enabled. The system SHALL skip runtime probing for known fixed-output models regardless of whether an explicit dimension override is configured. The system SHALL also skip runtime probing for unknown and variable-dimension models when stored metadata contains the same `embedding_model` as the current configuration and a stored `embedding_dimension`, regardless of whether an explicit dimension override is configured.
 
-Runtime probing SHALL use the configured embedding provider to generate an embedding for the string `"test"` and measure the returned vector length only when no matching stored dimension exists and no explicit dimension override is configured. The system SHALL use the detected or stored length consistently for vector table sizing, normalization, metadata persistence, and model-change checks during that session.
+Runtime probing SHALL use the configured embedding provider to generate an embedding for the string `"test"` and measure the returned vector length whenever the configured model is unknown or variable-dimension and no matching stored dimension exists, regardless of whether an explicit dimension override is configured; the resulting native dimension is used for validation even when an explicit override determines the stored database dimension. The system SHALL use the detected or stored length consistently for vector table sizing, normalization, metadata persistence, and model-change checks during that session.
 
 #### Scenario: Known fixed-output model avoids probing
 - **WHEN** the configured model is `openai:text-embedding-3-small`

@@ -138,10 +138,6 @@ When a model is not found in the lookup table or is marked as variable-dimension
 - **WHEN** the embedding model is `text-embedding-3-small`
 - **THEN** the system SHALL resolve the dimensions to 1536 without making any API call
 
-#### Scenario: Well-known model dimensions
-- **WHEN** the embedding model is `text-embedding-3-small`
-- **THEN** the system SHALL resolve the dimensions to 1536 without making any API call
-
 #### Scenario: Known variable-dimension model triggers runtime detection
 - **WHEN** the embedding model is `openai:NovaSearch/stella_en_400M_v5`
 - **AND** no stored embedding metadata exists for that model

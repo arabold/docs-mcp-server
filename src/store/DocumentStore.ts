@@ -522,8 +522,11 @@ export class DocumentStore {
     const stmt = this.db.prepare<[string, string]>(
       "INSERT INTO metadata (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     );
-    stmt.run("embedding_model", model);
-    stmt.run("embedding_dimension", String(dimension));
+    const persist = this.db.transaction(() => {
+      stmt.run("embedding_model", model);
+      stmt.run("embedding_dimension", String(dimension));
+    });
+    persist();
   }
 
   private getStoredDimensionForCurrentModel(): number | null {
