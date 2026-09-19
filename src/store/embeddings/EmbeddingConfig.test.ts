@@ -294,14 +294,7 @@ describe("EmbeddingConfig", () => {
   });
 
   describe("provider validation", () => {
-    const validProviders = [
-      "openai",
-      "vertex",
-      "gemini",
-      "aws",
-      "microsoft",
-      "sagemaker",
-    ];
+    const validProviders = ["openai", "vertex", "gemini", "aws", "microsoft"];
 
     it("should accept all valid providers", () => {
       const config = new EmbeddingConfig();

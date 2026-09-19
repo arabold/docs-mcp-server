@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
+import type { EmbeddingProvider } from "./EmbeddingConfig";
 import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
@@ -155,20 +156,30 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should throw UnsupportedProviderError for a provider without a creation branch", () => {
-    // `sagemaker` is a supported prefix with a credential check but no creation
-    // branch, so it is the remaining path to the switch's default case.
-    vi.stubGlobal("process", {
-      env: {
-        AWS_REGION: "us-east-1",
-        AWS_ACCESS_KEY_ID: "test-key",
-        AWS_SECRET_ACCESS_KEY: "test-secret",
-      },
-    });
+  // Typed as a complete record so that adding a provider without adding it here
+  // fails typecheck. This is the testable form of "every supported provider has a
+  // model-creation branch" — the invariant `sagemaker` violated for a year.
+  const PROVIDER_SPECS: Record<EmbeddingProvider, string> = {
+    openai: "openai:text-embedding-3-small",
+    vertex: "vertex:text-embedding-004",
+    gemini: "gemini:embedding-001",
+    aws: "aws:amazon.titan-embed-text-v1",
+    microsoft: "microsoft:test-deployment",
+  };
 
-    expect(() => createEmbeddingModel("sagemaker:my-endpoint", runtimeConfig)).toThrow(
-      UnsupportedProviderError,
-    );
+  test.each(Object.entries(PROVIDER_SPECS))(
+    "should construct a client for the %s provider",
+    (_provider, spec) => {
+      expect(() => createEmbeddingModel(spec, runtimeConfig)).not.toThrow(
+        UnsupportedProviderError,
+      );
+    },
+  );
+
+  test("should treat the withdrawn sagemaker prefix as an OpenAI-compatible model name", () => {
+    const model = createEmbeddingModel("sagemaker:my-endpoint", runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({ modelName: "sagemaker:my-endpoint" });
   });
 
   test("should match a provider prefix case-insensitively", () => {

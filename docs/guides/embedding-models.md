@@ -19,7 +19,7 @@ If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults t
 - Or any OpenAI-compatible model name
 
 A prefix is read as a provider only when it is one of the provider names above
-(`openai`, `vertex`, `gemini`, `aws`, `microsoft`, `sagemaker`), matched
+(`openai`, `vertex`, `gemini`, `aws`, `microsoft`), matched
 case-insensitively. Any other model name is passed through to your
 OpenAI-compatible endpoint unchanged, so names carrying a namespace, tag, or
 quantization suffix — the form Ollama, LM Studio, and llama.cpp use — work as

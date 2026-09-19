@@ -54,6 +54,8 @@ This is accepted. The old error is precisely what users with correctly configure
 
 `UnsupportedProviderError` is retained and still reachable. `sagemaker` is in the provider union and in `areCredentialsAvailable`, but `createEmbeddingModel` has no `sagemaker` branch, so `sagemaker:my-endpoint` passes credential validation and lands in the `default` case. The error's handling in `src/cli/main.ts` and `src/store/DocumentStore.ts` stays live, and the `default` branch additionally guards a provider added to the union without a matching factory branch.
 
+**Superseded by `remove-sagemaker-provider`.** That change withdraws `sagemaker`, after which every supported provider has a creation branch and the `default` case is unreachable through `splitModelSpec`. The runtime guard argued for here becomes a compile-time one (`const unhandled: never = provider`), which catches the same mistake at build time instead of at a user's startup. The reasoning above describes the state at this commit; it is not the end state.
+
 ## The provider list is now load-bearing
 
 Before this change the provider list was descriptive — it recorded which `switch` cases existed. It is now normative: it decides which prefixes claim the provider slot, so editing it changes how existing configuration strings parse.

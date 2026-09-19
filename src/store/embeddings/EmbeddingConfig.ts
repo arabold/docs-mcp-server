@@ -21,14 +21,7 @@ import { normalizeEnvValue } from "../../utils/env";
  *
  * `EmbeddingProvider` is derived from this array so the two cannot drift apart.
  */
-const SUPPORTED_PROVIDERS = [
-  "openai",
-  "vertex",
-  "gemini",
-  "aws",
-  "microsoft",
-  "sagemaker",
-] as const;
+const SUPPORTED_PROVIDERS = ["openai", "vertex", "gemini", "aws", "microsoft"] as const;
 
 /**
  * Supported embedding model providers.
@@ -145,7 +138,7 @@ export class EmbeddingConfig {
     "Cohere/Cohere-embed-v4.0": 1536,
     "embed-v4.0": 1536,
 
-    // SageMaker models (hosted on AWS SageMaker)
+    // Open-weight multilingual models, servable from any OpenAI-compatible endpoint
     "intfloat/multilingual-e5-large": 1024,
     "multilingual-e5-large": 1024,
     "text-embedding-multilingual-e5-large": 1024,
@@ -400,7 +393,6 @@ export class EmbeddingConfig {
    * - gemini: Google Generative AI
    * - aws: AWS Bedrock models
    * - microsoft: Azure OpenAI
-   * - sagemaker: AWS SageMaker hosted models
    *
    * @param modelSpec Model specification (e.g., "openai:text-embedding-3-small"), defaults to "text-embedding-3-small"
    * @returns Parsed embedding model configuration

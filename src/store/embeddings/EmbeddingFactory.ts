@@ -20,7 +20,7 @@ export class UnsupportedProviderError extends Error {
   constructor(provider: string) {
     super(
       `❌ Unsupported embedding provider: ${provider}\n` +
-        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker\n" +
+        "   Supported providers: openai, vertex, gemini, aws, microsoft\n" +
         "   See README.md for configuration options or run with --help for more details.",
     );
     this.name = "UnsupportedProviderError";
@@ -72,15 +72,6 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
         process.env.AZURE_OPENAI_API_DEPLOYMENT_NAME &&
         process.env.AZURE_OPENAI_API_VERSION
       );
-
-    case "sagemaker": {
-      const region = process.env.AWS_REGION;
-      return (
-        !!region &&
-        (!!process.env.AWS_PROFILE ||
-          (!!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY))
-      );
-    }
 
     default:
       return false;
@@ -257,10 +248,12 @@ export function createEmbeddingModel(
       });
     }
 
-    // Reachable today via `sagemaker:*`, which passes credential validation above but
-    // has no creation branch here. Also guards a provider added to EmbeddingProvider
-    // without a matching case. Do not remove as dead code.
-    default:
-      throw new UnsupportedProviderError(provider);
+    // Every supported provider has a branch above, so this is unreachable through
+    // splitModelSpec. Assigning to `never` makes adding a provider without a branch
+    // fail typecheck rather than a user's startup; the throw is the runtime backstop.
+    default: {
+      const unhandled: never = provider;
+      throw new UnsupportedProviderError(unhandled);
+    }
   }
 }
