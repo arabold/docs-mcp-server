@@ -453,13 +453,23 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       // Check if content processing resulted in usable content
       if (!processed.textContent?.trim()) {
+        const pipelineFailed = (processed.errors?.length ?? 0) > 0;
         logger.warn(
           `⚠️  No processable content found for ${url} after pipeline execution.`,
         );
         return {
           url: effectiveSource,
+          title: processed.title ?? null,
+          sourceContentType: rawContent.mimeType,
+          contentType: processed.contentType || rawContent.mimeType,
+          etag: rawContent.etag,
+          lastModified: rawContent.lastModified,
           links: processed.links,
           queueItems: llmsTxtQueueItems,
+          // A clean run that extracted nothing means the page is empty. An errored
+          // run means we learned nothing about it, which is a different fact and
+          // gets different handling downstream.
+          pipelineFailed,
           status: FetchStatus.SUCCESS,
         };
       }

@@ -143,12 +143,28 @@ QUEUED → RUNNING → COMPLETED
 
 ### Progress Tracking
 
-Jobs report progress through callback mechanism:
+Jobs report progress through a callback, once per queued item, carrying four
+counters and the outcome that item reached. The `scrape-progress-reporting`
+capability defines them normatively; in short:
 
-- Pages discovered and processed
-- Current processing status
-- Error messages and warnings
-- Estimated completion time
+| Counter | Meaning |
+|---|---|
+| `totalDiscovered` | URLs admitted to the crawl queue, unbounded |
+| `totalPages` | Items the job expects to process — the denominator |
+| `pagesScraped` | Items dequeued and given an outcome — the numerator |
+| `pagesIndexed` | Items that produced stored content |
+
+`pagesScraped` converges on `totalPages`, because every queued item is
+eventually dequeued and reaches exactly one outcome. `totalPages` is **not** the
+configured `maxPages`: it is the number of queued URLs, clamped at the point the
+crawl will stop. Since `maxPages` bounds indexed pages rather than attempts, that
+stopping point is `maxPages` plus however many items produced nothing.
+
+Each event names its outcome — stored, unchanged, absent, empty, skipped or
+failed — rather than leaving consumers to infer one from a null result. A null
+result alone cannot distinguish a page that is unchanged from one that is now
+empty, and those call for opposite handling: the first says keep what is stored,
+the second says the page exists and holds nothing.
 
 ## Write-Through Architecture
 

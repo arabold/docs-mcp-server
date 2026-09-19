@@ -3,13 +3,14 @@ import type { ProgressCallback } from "../../types";
 import { type AppConfig, loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { FetchStatus } from "../fetcher/types";
-import type {
-  QueueItem,
-  ScrapeResult,
-  ScraperOptions,
-  ScraperProgressEvent,
-} from "../types";
-import { ScrapeMode } from "../types"; // Import ScrapeMode
+import {
+  PageOutcome,
+  type QueueItem,
+  ScrapeMode,
+  type ScrapeResult,
+  type ScraperOptions,
+  type ScraperProgressEvent,
+} from "../types"; // Import ScrapeMode
 import type { ProcessItemResult } from "./BaseScraperStrategy";
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
@@ -2655,5 +2656,49 @@ describe("WebScraperStrategy queue-time unprocessable-content gate", () => {
     // Root plus the one processable link. The three images never enter the queue.
     expect(last?.totalDiscovered).toBe(2);
     expect(last?.pagesScraped).toBe(2);
+  });
+});
+
+describe("WebScraperStrategy empty extraction", () => {
+  let strategy: WebScraperStrategy;
+  let options: ScraperOptions;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    strategy = new WebScraperStrategy(loadConfig());
+    options = {
+      url: "https://example.com/page",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 0,
+      scrapeMode: ScrapeMode.Fetch,
+    };
+  });
+
+  it("reports a clean empty extraction as an empty page carrying its etag", async () => {
+    // A 200 whose pipeline runs cleanly and extracts nothing is a statement that
+    // the page is empty, so the validator accurately describes that state.
+    mockFetchFn.mockResolvedValue({
+      content: "<html><body></body></html>",
+      mimeType: "text/html",
+      source: "https://example.com/page",
+      etag: '"v2"',
+      lastModified: "2026-01-01T00:00:00.000Z",
+      status: FetchStatus.SUCCESS,
+    });
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(options, progressCallback);
+
+    const event = progressCallback.mock.calls.at(-1)?.[0];
+    expect(event?.outcome).toBe(PageOutcome.Empty);
+    expect(event?.emptyPage).toMatchObject({
+      url: "https://example.com/page",
+      etag: '"v2"',
+      lastModified: "2026-01-01T00:00:00.000Z",
+      pipelineFailed: false,
+    });
+    expect(event?.pagesIndexed).toBe(0);
   });
 });

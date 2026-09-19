@@ -34,7 +34,7 @@ export function FailedJobCard({
   onEditAndRetry,
   retryPending = false,
 }: FailedJobCardProps) {
-  const { pages, maxPages } = jobPageCounts(job);
+  const { processed, expected, indexed } = jobPageCounts(job);
   const depth = job.progress?.depth;
 
   return (
@@ -63,8 +63,12 @@ export function FailedJobCard({
       <div className="jobc__error">
         <span className="t">Error</span> — {job.errorMessage ?? "Unknown error"}
         <span className="m">
-          Failed at depth {depth ?? 0} · {pages.toLocaleString()} of{" "}
-          {maxPages ? maxPages.toLocaleString() : "?"} pages indexed
+          Failed at depth {depth ?? 0} ·{" "}
+          {indexed !== null
+            ? `${indexed.toLocaleString()} pages indexed`
+            : "pages indexed unknown"}{" "}
+          after {processed.toLocaleString()} of{" "}
+          {expected ? expected.toLocaleString() : "?"} processed
         </span>
       </div>
     </div>

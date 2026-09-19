@@ -1,3 +1,4 @@
+import { PageOutcome } from "../scraper/types";
 /**
  * Unit tests for EventBusService.
  *
@@ -390,6 +391,8 @@ describe("EventBusService", () => {
         pagesScraped: 10,
         totalPages: 100,
         totalDiscovered: 150,
+        pagesIndexed: 0,
+        outcome: PageOutcome.Unchanged,
         currentUrl: "https://example.com/page-10",
         depth: 1,
         maxDepth: 3,

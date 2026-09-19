@@ -412,3 +412,25 @@ and is not wired into PR-required checks.
 
 - **Operator guide:** [docs/guides/benchmarking.md](docs/guides/benchmarking.md) — prerequisites, how to run, how to interpret results.
 - **Developer internals:** [tests/search-eval/README.md](tests/search-eval/README.md) — file layout and extension points.
+
+#### Scrape progress counters
+
+A scrape reports four counters. `totalDiscovered` counts URLs admitted to the
+queue; `totalPages` is how many items the job expects to process; `pagesScraped`
+counts items dequeued and given an outcome; `pagesIndexed` counts those that
+produced stored content. The first two move at enqueue, the last two at outcome.
+
+`pagesScraped` converges on `totalPages` because every queued item reaches
+exactly one outcome — depth, scope, patterns and content type are all filtered
+before admission, so nothing is queued and then silently discarded. `maxPages`
+bounds `pagesIndexed` rather than attempts, so asking for 100 pages yields 100
+pages; the denominator stretches by the number of items that produced nothing,
+which keeps the fraction able to complete.
+
+Every event names its outcome — stored, unchanged, absent, empty, skipped or
+failed. This matters most for the two that both arrive without content: a `304`
+is unchanged and the stored page is kept, while an empty `200` means the page
+exists and holds nothing, and its stored content is replaced. When a pipeline
+*errors* while producing nothing we have learned nothing about the page, so the
+previous content is left alone and the response validator withheld, which keeps
+the next refresh unconditional instead of caching a failure forever.

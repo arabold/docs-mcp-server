@@ -27,6 +27,8 @@ export interface JobInfo {
   // Progress information from database
   progress?: {
     pages: number;
+    /** Pages that produced stored content. Null for jobs predating this counter. */
+    pagesIndexed: number | null;
     totalPages: number;
     totalDiscovered: number;
   };
@@ -93,6 +95,8 @@ export class GetJobInfoTool {
         job.progressMaxPages && job.progressMaxPages > 0
           ? {
               pages: job.progressPages || 0,
+              pagesIndexed:
+                job.progress?.pagesIndexed ?? job.progressPagesIndexed ?? null,
               totalPages: job.progressMaxPages,
               totalDiscovered: job.progress?.totalDiscovered || job.progressMaxPages,
             }

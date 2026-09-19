@@ -1,3 +1,5 @@
+import { PageOutcome } from "../scraper/types";
+
 // Patch: Move UUID mock to top-level before imports
 vi.mock("uuid", () => {
   let uuidCall = 0;
@@ -93,6 +95,8 @@ describe("PipelineManager", () => {
     depth: 1,
     maxDepth: 3,
     totalDiscovered: 0,
+    pagesIndexed: 0,
+    outcome: PageOutcome.Stored,
     result: {
       url: `https://example.com/page-${pagesScraped}`,
       title: `Page ${pagesScraped}`,
@@ -318,6 +322,8 @@ describe("PipelineManager", () => {
         maxDepth: 1,
         document: undefined,
         totalDiscovered: 1,
+        pagesIndexed: 0,
+        outcome: PageOutcome.Stored,
       });
     });
     const options = {
@@ -371,7 +377,7 @@ describe("PipelineManager", () => {
       expect(job.updatedAt).toBeInstanceOf(Date);
 
       // Verify database sync
-      expect(mockStore.updateVersionProgress).toHaveBeenCalledWith(456, 50, 300);
+      expect(mockStore.updateVersionProgress).toHaveBeenCalledWith(456, 50, 300, 0);
     });
 
     it("should handle database errors gracefully during progress updates", async () => {
@@ -408,6 +414,7 @@ describe("PipelineManager", () => {
       expect(uiJob).toBeDefined();
       expect(uiJob!.progress).toEqual({
         pages: 75,
+        pagesIndexed: 0,
         totalPages: 200,
         totalDiscovered: 200,
       });

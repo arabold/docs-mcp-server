@@ -2,8 +2,23 @@ import { vol } from "memfs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
 import { loadConfig } from "../../utils/config";
-import type { ScrapeResult, ScraperOptions, ScraperProgressEvent } from "../types";
+import {
+  PageOutcome,
+  type ScrapeResult,
+  type ScraperOptions,
+  type ScraperProgressEvent,
+} from "../types";
 import { LocalFileStrategy } from "./LocalFileStrategy";
+
+/**
+ * Progress events that produced stored content.
+ *
+ * Every dequeued item now reports an outcome, including directories and files
+ * that yield nothing, so a raw callback count no longer equals the number of
+ * documents indexed.
+ */
+const storedCalls = (cb: { mock: { calls: [ScraperProgressEvent][] } }) =>
+  cb.mock.calls.filter(([event]) => event.outcome === PageOutcome.Stored);
 
 vi.mock("node:fs/promises", () => ({ default: vol.promises }));
 vi.mock("node:fs");
@@ -54,7 +69,7 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
 
-    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(storedCalls(progressCallback)).toHaveLength(1);
 
     const firstCall = progressCallback.mock.calls[0][0];
     expect(firstCall).toMatchObject({
@@ -112,7 +127,7 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
     // Should process file1.md, file2.html, and file3.txt (in subdir, depth=2)
-    expect(progressCallback).toHaveBeenCalledTimes(3);
+    expect(storedCalls(progressCallback)).toHaveLength(3);
   });
 
   it("should process different file types correctly", async () => {
@@ -138,13 +153,27 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
     // All 3 files are page: file1.md, file2.html, and file3.txt (as markdown)
-    expect(progressCallback).toHaveBeenCalledTimes(3);
-
-    // Validate .md
+    // Four queued items — the directory plus three files — and all four are
+    // processed, so the fraction completes. Only the files produce content.
+    expect(progressCallback).toHaveBeenCalledTimes(4);
+    const final = progressCallback.mock.calls.at(-1)?.[0];
+    expect(final).toMatchObject({ pagesScraped: 4, totalPages: 4, pagesIndexed: 3 });
     expect(progressCallback).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
+        outcome: PageOutcome.Empty,
+        currentUrl: "file:///testdir",
         pagesScraped: 1,
+        pagesIndexed: 0,
+      } satisfies Partial<ScraperProgressEvent>),
+    );
+
+    // Validate .md
+    expect(progressCallback).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        pagesScraped: 2,
+        pagesIndexed: 1,
         currentUrl: "file:///testdir/file1.md",
         depth: 1,
         maxDepth: 1,
@@ -161,9 +190,10 @@ describe("LocalFileStrategy", () => {
     );
     // Validate .html
     expect(progressCallback).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
-        pagesScraped: 2,
+        pagesScraped: 3,
+        pagesIndexed: 2,
         currentUrl: "file:///testdir/file2.html",
         depth: 1,
         maxDepth: 1,
@@ -180,9 +210,10 @@ describe("LocalFileStrategy", () => {
     );
     // Validate .txt
     expect(progressCallback).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.objectContaining({
-        pagesScraped: 3,
+        pagesScraped: 4,
+        pagesIndexed: 3,
         currentUrl: "file:///testdir/file3.txt",
         depth: 1,
         maxDepth: 1,
@@ -228,7 +259,7 @@ describe("LocalFileStrategy", () => {
     await strategy.scrape(options, progressCallback);
 
     // Expect 8 files to be processed
-    expect(progressCallback).toHaveBeenCalledTimes(8);
+    expect(storedCalls(progressCallback)).toHaveLength(8);
 
     // Check TypeScript file
     expect(progressCallback).toHaveBeenCalledWith(
@@ -346,10 +377,11 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
 
-    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(storedCalls(progressCallback)).toHaveLength(1);
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
-        pagesScraped: 1,
+        // The directory itself is item 1; the file is item 2.
+        pagesScraped: 2,
         currentUrl: "file:///testdir/empty.md",
         result: expect.objectContaining({
           textContent: "",
@@ -390,14 +422,14 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
     // Only .md, .txt, and .html should be processed
-    expect(progressCallback).toHaveBeenCalledTimes(3);
-    const calledUrls = progressCallback.mock.calls.map((call) => call[0].currentUrl);
-    expect(calledUrls).toContain("file:///testdir/file1.md");
-    expect(calledUrls).toContain("file:///testdir/file3.txt");
-    expect(calledUrls).toContain("file:///testdir/file5.html");
-    // Should NOT process binary/image files
-    expect(calledUrls).not.toContain("file:///testdir/file2.png");
-    expect(calledUrls).not.toContain("file:///testdir/file4.bin");
+    expect(storedCalls(progressCallback)).toHaveLength(3);
+    const storedUrls = storedCalls(progressCallback).map(([e]) => e.currentUrl);
+    expect(storedUrls).toContain("file:///testdir/file1.md");
+    expect(storedUrls).toContain("file:///testdir/file3.txt");
+    expect(storedUrls).toContain("file:///testdir/file5.html");
+    // Binary files are dequeued and reported, but never produce content
+    expect(storedUrls).not.toContain("file:///testdir/file2.png");
+    expect(storedUrls).not.toContain("file:///testdir/file4.bin");
   });
 
   it("should respect include and exclude patterns for local crawling", async () => {
@@ -422,7 +454,7 @@ describe("LocalFileStrategy", () => {
     );
     await strategy.scrape(options, progressCallback);
     // Only file1.md should be processed
-    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(storedCalls(progressCallback)).toHaveLength(1);
     const calledUrls = progressCallback.mock.calls.map((call) => call[0].currentUrl);
     expect(calledUrls).toContain("file:///testdir/file1.md");
     expect(calledUrls).not.toContain("file:///testdir/file2.html");
@@ -446,7 +478,7 @@ describe("LocalFileStrategy", () => {
       "/",
     );
     await strategy.scrape(options, progressCallback);
-    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(storedCalls(progressCallback)).toHaveLength(1);
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
         pagesScraped: 1,
@@ -481,7 +513,7 @@ describe("LocalFileStrategy", () => {
     );
     await strategy.scrape(options, progressCallback);
     // Both files should be processed
-    expect(progressCallback).toHaveBeenCalledTimes(2);
+    expect(storedCalls(progressCallback)).toHaveLength(2);
     const calledUrls = progressCallback.mock.calls.map((call) => call[0].currentUrl);
     expect(calledUrls).toContain("file:///test%20dir/file%20with%20space.md");
     expect(calledUrls).toContain("file:///test%20dir/normal.md");
@@ -542,7 +574,7 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
 
-    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(storedCalls(progressCallback)).toHaveLength(1);
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
         pagesScraped: 1,
@@ -583,7 +615,7 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
 
-    expect(progressCallback).toHaveBeenCalledTimes(1);
+    expect(storedCalls(progressCallback)).toHaveLength(1);
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
         pagesScraped: 1,
@@ -621,7 +653,7 @@ describe("LocalFileStrategy", () => {
       };
 
       await strategy.scrape(initialOptions, progressCallback);
-      expect(progressCallback).toHaveBeenCalledTimes(1);
+      expect(storedCalls(progressCallback)).toHaveLength(1);
 
       // Get the etag from the first scrape
       const firstCall = progressCallback.mock.calls[0][0];
@@ -657,11 +689,13 @@ describe("LocalFileStrategy", () => {
       // Verify file was checked but returned NOT_MODIFIED (no result with content)
       // The root URL at depth 0 is always processed to check for changes
       expect(progressCallback).toHaveBeenCalledTimes(1);
+      expect(storedCalls(progressCallback)).toHaveLength(0);
       expect(progressCallback).toHaveBeenCalledWith(
         expect.objectContaining({
           pagesScraped: 1,
           currentUrl: "file:///test.md",
           depth: 0,
+          outcome: PageOutcome.Unchanged,
           result: null, // NOT_MODIFIED returns null result
           pageId: 123,
         }),
@@ -801,7 +835,7 @@ describe("LocalFileStrategy", () => {
       };
 
       await strategy.scrape(initialOptions, progressCallback);
-      expect(progressCallback).toHaveBeenCalledTimes(1);
+      expect(storedCalls(progressCallback)).toHaveLength(1);
 
       // Add a new file to the directory
       vol.fromJSON(
@@ -826,7 +860,7 @@ describe("LocalFileStrategy", () => {
       await strategy.scrape(refreshOptions, progressCallback);
 
       // Should process both files
-      expect(progressCallback).toHaveBeenCalledTimes(2);
+      expect(storedCalls(progressCallback)).toHaveLength(2);
       const calledUrls = progressCallback.mock.calls.map((call) => call[0].currentUrl);
       expect(calledUrls).toContain("file:///testdir/file1.md");
       expect(calledUrls).toContain("file:///testdir/file2.md");
@@ -853,8 +887,8 @@ describe("LocalFileStrategy", () => {
       };
 
       await strategy.scrape(initialOptions, progressCallback);
-      expect(progressCallback).toHaveBeenCalledTimes(1);
-      const firstCall = progressCallback.mock.calls[0][0];
+      expect(storedCalls(progressCallback)).toHaveLength(1);
+      const firstCall = storedCalls(progressCallback)[0][0];
       expect(firstCall.depth).toBe(3); // File discovered at depth 3
       const etag = firstCall.result?.etag;
 

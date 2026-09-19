@@ -1205,7 +1205,12 @@ describe("DocumentManagementService", () => {
 
         // Test updateVersionProgress
         await docService.updateVersionProgress(versionId, 5, 10);
-        expect(mockStore.updateVersionProgress).toHaveBeenCalledWith(versionId, 5, 10);
+        expect(mockStore.updateVersionProgress).toHaveBeenCalledWith(
+          versionId,
+          5,
+          10,
+          null,
+        );
 
         // Test getVersionsByStatus
         mockStore.getVersionsByStatus.mockResolvedValue([]);
