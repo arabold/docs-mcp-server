@@ -160,10 +160,23 @@ export function normalizeVersionLabel(version?: string | null): string {
   return (version ?? "").trim().toLowerCase();
 }
 
+/**
+ * Normalizes a library name for storage and lookup.
+ *
+ * The counterpart to {@link normalizeVersionLabel}: trim and lowercase, so a
+ * library is one row however its name was typed.
+ *
+ * @param library Library name as supplied by a caller.
+ * @returns The normalized name.
+ */
+export function normalizeLibraryName(library: string): string {
+  return library.trim().toLowerCase();
+}
+
 /** Normalize a VersionRef (lowercase, trim; empty string for unversioned). */
 export function normalizeVersionRef(ref: VersionRef): VersionRef {
   return {
-    library: ref.library.trim().toLowerCase(),
+    library: normalizeLibraryName(ref.library),
     version: normalizeVersionLabel(ref.version),
   };
 }

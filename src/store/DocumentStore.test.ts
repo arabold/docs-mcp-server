@@ -1353,6 +1353,51 @@ describe("DocumentStore - Common Functionality", () => {
     });
   });
 
+  describe("Version Label Lookup Parity", () => {
+    it("finds, counts and deletes a version by a padded or uppercased label", async () => {
+      // Writes normalized but reads did not, so a label that differed only by
+      // whitespace or case created the right row and then missed on every
+      // subsequent lookup, delete and search.
+      await store.addDocuments(
+        "paritylib",
+        "1.0.0",
+        1,
+        createScrapeResult("Doc", "https://example.com/p", "content", ["p"]),
+      );
+
+      for (const variant of ["1.0.0", " 1.0.0 ", "1.0.0 ", " 1.0.0"]) {
+        await expect(store.checkDocumentExists("paritylib", variant)).resolves.toBe(true);
+      }
+      await expect(store.checkDocumentExists(" PARITYLIB ", " 1.0.0 ")).resolves.toBe(
+        true,
+      );
+
+      // A tag differing only in case is the same bucket; "v1.0.0" is not,
+      // because labels are stored verbatim rather than coerced.
+      await store.addDocuments(
+        "paritylib",
+        "Stable",
+        1,
+        createScrapeResult("Tag", "https://example.com/t", "content", ["t"]),
+      );
+      await expect(store.checkDocumentExists("paritylib", " STABLE ")).resolves.toBe(
+        true,
+      );
+      await expect(store.checkDocumentExists("paritylib", "v1.0.0")).resolves.toBe(false);
+
+      // The delete path must reach the same row the lookup found.
+      await expect(store.deletePages("paritylib", " 1.0.0 ")).resolves.toBeGreaterThan(0);
+      await expect(store.checkDocumentExists("paritylib", "1.0.0")).resolves.toBe(false);
+    });
+
+    it("resolves a library by a padded name", async () => {
+      await store.resolveVersionId("padlib", "1.0.0");
+      await expect(store.getLibrary(" PADLIB ")).resolves.toMatchObject({
+        name: "padlib",
+      });
+    });
+  });
+
   describe("Version Listing Order", () => {
     it("orders each library's versions newest first, with tags last", async () => {
       // queryLibraryVersions owns this ordering; SQL sorts lexicographically,

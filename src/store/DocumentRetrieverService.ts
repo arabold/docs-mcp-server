@@ -1,7 +1,12 @@
 import type { AppConfig } from "../utils/config";
 import { createContentAssemblyStrategy } from "./assembly/ContentAssemblyStrategyFactory";
 import type { DocumentStore } from "./DocumentStore";
-import type { DbChunkRank, DbPageChunk, StoreSearchResult } from "./types";
+import {
+  type DbChunkRank,
+  type DbPageChunk,
+  normalizeVersionLabel,
+  type StoreSearchResult,
+} from "./types";
 
 export class DocumentRetrieverService {
   private documentStore: DocumentStore;
@@ -26,8 +31,7 @@ export class DocumentRetrieverService {
     query: string,
     limit?: number,
   ): Promise<StoreSearchResult[]> {
-    // Normalize version: null/undefined becomes empty string, then lowercase
-    const normalizedVersion = (version ?? "").toLowerCase();
+    const normalizedVersion = normalizeVersionLabel(version);
 
     const initialResults = await this.documentStore.findByContent(
       library,

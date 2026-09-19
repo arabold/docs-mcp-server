@@ -59,8 +59,9 @@ which is why two consecutive fixes to that method each introduced a regression.
 - `src/utils/version.ts` — `toVersionCandidate`, `VersionCandidate`, `sortVersionsDescending`
 - `src/tools/ScrapeTool.ts`, `src/tools/RefreshVersionTool.ts` — duplicated write gates removed
 - `src/tools/SearchTool.ts`, `src/tools/FindVersionTool.ts` — resolution outcome surfaced
-- `src/pipeline/PipelineManager.ts`, `src/pipeline/trpc/router.ts`, `src/store/DocumentStore.ts` —
-  single shared normalizer at the store boundary
+- `src/pipeline/PipelineManager.ts`, `src/pipeline/PipelineClient.ts`, `src/store/DocumentStore.ts`,
+  `src/store/DocumentRetrieverService.ts`, `src/tools/RemoveTool.ts` and the web UI's version matcher —
+  shared `normalizeVersionLabel` / `normalizeLibraryName` applied on read as well as write
 
 **Defects closed**
 - #475 — documentation under a non-semver version is unreachable over MCP

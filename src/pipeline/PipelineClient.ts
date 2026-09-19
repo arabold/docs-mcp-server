@@ -15,6 +15,7 @@ import superjson from "superjson";
 import type { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
+import { normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
 import type { IPipeline } from "./trpc/interfaces";
 import type { PipelineRouter } from "./trpc/router";
@@ -88,10 +89,7 @@ export class PipelineClient implements IPipeline {
     options: ScraperOptions,
   ): Promise<string> {
     try {
-      const normalizedVersion =
-        typeof version === "string" && version.trim().length === 0
-          ? null
-          : (version ?? null);
+      const normalizedVersion = normalizeVersionLabel(version) || null;
       const result = await this.client.enqueueScrapeJob.mutate({
         library,
         version: normalizedVersion,
@@ -112,10 +110,7 @@ export class PipelineClient implements IPipeline {
     options?: { preserveHashes?: boolean },
   ): Promise<string> {
     try {
-      const normalizedVersion =
-        typeof version === "string" && version.trim().length === 0
-          ? null
-          : (version ?? null);
+      const normalizedVersion = normalizeVersionLabel(version) || null;
       const result = await this.client.enqueueRefreshJob.mutate({
         library,
         version: normalizedVersion,

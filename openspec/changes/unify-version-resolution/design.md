@@ -37,16 +37,22 @@ See proposal.md — Why. The relevant current state:
 
 ## Decisions
 
-### D1: A single normalizer, enforced at the store boundary
+### D1: A single normalizer, applied by the whole store
 
-Promote the version half of `normalizeVersionRef` into a shared `normalizeVersionLabel(version)` —
-trim, lowercase, empty means unversioned — and call it from `DocumentStore.resolveVersionId`, the last
-point every write passes through. Upstream layers (tools, pipeline, tRPC) call the same function so that
-lookups and dedup agree with what will be stored, but correctness does not depend on them doing so.
+Promote the version half of `normalizeVersionRef` into a shared `normalizeVersionLabel(version)` — trim,
+lowercase, empty means unversioned — with `normalizeLibraryName(library)` as its counterpart, and apply
+both in **every** `DocumentStore` method that takes a `(library, version)` pair, not only the one that
+creates rows.
 
-*Alternative considered:* keep normalization at the tool layer and add it to the web UI path. Rejected —
-that is the current architecture, and it fails exactly when a new entry point is added, which is how the
-web UI diverged in the first place.
+Normalizing on write alone is not enough: writes trimmed while reads only lowercased, so a padded label
+created the correct row and then missed on every subsequent lookup, delete and search. `DocumentStore`,
+`DocumentRetrieverService`, `RemoveTool`, `PipelineClient` and the web UI's version matcher all apply the
+same two functions, so the class is the boundary and upstream calls are genuinely belt-and-braces.
+
+*Alternative considered:* normalize only at `resolveVersionId`, the last point a write passes through.
+Rejected — it makes the contract true for creation and false for everything else, which is how the
+read/write drift arose. Also rejected: keeping normalization at the tool layer, which fails as soon as a
+new entry point is added, exactly how the web UI diverged.
 
 ### D2: Delete the write gates rather than relocate them
 
@@ -149,7 +155,8 @@ store already guarantees and cannot change any order, while creating two places 
 
 No data migration. Rollout is behavioral:
 
-1. Land the shared normalizer and route every write path through it; existing rows are unaffected.
+1. Land the shared normalizers and apply them in every `DocumentStore` method that takes a library or
+   version, plus the remaining hand-rolled copies; existing rows are unaffected.
 2. Remove the duplicated gates in `ScrapeTool` and `RefreshVersionTool`, updating their tests.
 3. Land the classification and resolution ladder, superseding `selectStoredVersion`.
 4. Correct the comparator; the store's existing sort propagates it to every surface.
