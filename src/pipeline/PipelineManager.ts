@@ -14,7 +14,7 @@ import { ScraperRegistry, ScraperService } from "../scraper";
 import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
-import { VersionStatus } from "../store/types";
+import { normalizeVersionLabel, VersionStatus } from "../store/types";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError } from "./errors";
@@ -236,15 +236,15 @@ export class PipelineManager implements IPipeline {
     version: string | undefined | null,
     options: ScraperOptions,
   ): Promise<string> {
-    // Normalize version: treat undefined/null as "" (unversioned)
-    const normalizedVersion = version ?? "";
+    // Normalized so the job is deduped against the bucket it will be stored under.
+    const normalizedVersion = normalizeVersionLabel(version);
 
     // Abort any existing QUEUED or RUNNING job for the same library+version
     const allJobs = await this.getJobs();
     const duplicateJobs = allJobs.filter(
       (job) =>
         job.library === library &&
-        (job.version ?? "") === normalizedVersion && // Normalize null to empty string for comparison
+        normalizeVersionLabel(job.version) === normalizedVersion &&
         [PipelineJobStatus.QUEUED, PipelineJobStatus.RUNNING].includes(job.status),
     );
     for (const job of duplicateJobs) {
@@ -323,8 +323,7 @@ export class PipelineManager implements IPipeline {
     version: string | undefined | null,
     options?: Pick<ScraperOptions, "preserveHashes">,
   ): Promise<string> {
-    // Normalize version: treat undefined/null as "" (unversioned)
-    const normalizedVersion = version ?? "";
+    const normalizedVersion = normalizeVersionLabel(version);
 
     try {
       // First, check if the library version exists
@@ -419,7 +418,7 @@ export class PipelineManager implements IPipeline {
     version: string | undefined | null,
     options?: Pick<ScraperOptions, "preserveHashes">,
   ): Promise<string> {
-    const normalizedVersion = version ?? "";
+    const normalizedVersion = normalizeVersionLabel(version);
 
     try {
       // Get the version ID to retrieve stored options

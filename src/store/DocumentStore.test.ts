@@ -1353,6 +1353,108 @@ describe("DocumentStore - Common Functionality", () => {
     });
   });
 
+  describe("Version Label Lookup Parity", () => {
+    it("finds, counts and deletes a version by a padded or uppercased label", async () => {
+      // Writes normalized but reads did not, so a label that differed only by
+      // whitespace or case created the right row and then missed on every
+      // subsequent lookup, delete and search.
+      await store.addDocuments(
+        "paritylib",
+        "1.0.0",
+        1,
+        createScrapeResult("Doc", "https://example.com/p", "content", ["p"]),
+      );
+
+      for (const variant of ["1.0.0", " 1.0.0 ", "1.0.0 ", " 1.0.0"]) {
+        await expect(store.checkDocumentExists("paritylib", variant)).resolves.toBe(true);
+      }
+      await expect(store.checkDocumentExists(" PARITYLIB ", " 1.0.0 ")).resolves.toBe(
+        true,
+      );
+
+      // A tag differing only in case is the same bucket; "v1.0.0" is not,
+      // because labels are stored verbatim rather than coerced.
+      await store.addDocuments(
+        "paritylib",
+        "Stable",
+        1,
+        createScrapeResult("Tag", "https://example.com/t", "content", ["t"]),
+      );
+      await expect(store.checkDocumentExists("paritylib", " STABLE ")).resolves.toBe(
+        true,
+      );
+      await expect(store.checkDocumentExists("paritylib", "v1.0.0")).resolves.toBe(false);
+
+      // The delete path must reach the same row the lookup found.
+      await expect(store.deletePages("paritylib", " 1.0.0 ")).resolves.toBeGreaterThan(0);
+      await expect(store.checkDocumentExists("paritylib", "1.0.0")).resolves.toBe(false);
+    });
+
+    it("resolves a library by a padded name", async () => {
+      await store.resolveVersionId("padlib", "1.0.0");
+      await expect(store.getLibrary(" PADLIB ")).resolves.toMatchObject({
+        name: "padlib",
+      });
+    });
+  });
+
+  describe("Version Listing Order", () => {
+    it("orders each library's versions newest first, with tags last", async () => {
+      // queryLibraryVersions owns this ordering; SQL sorts lexicographically,
+      // so the JS comparator is what keeps 1.10.0 ahead of 1.9.0 and stops a
+      // tag sorting into the version run.
+      for (const version of ["1.9.0", "1.10.0", "stable", "2.0.0-beta", ""]) {
+        await store.resolveVersionId("orderlib", version);
+      }
+
+      const versions = (await store.queryLibraryVersions()).get("orderlib") ?? [];
+      expect(versions.map((v) => v.version)).toEqual([
+        "",
+        "2.0.0-beta",
+        "1.10.0",
+        "1.9.0",
+        "stable",
+      ]);
+      // Unversioned leads the listing; it is not the newest *version*.
+      expect(versions.filter((v) => v.version !== "")[0].version).toBe("2.0.0-beta");
+    });
+  });
+
+  describe("Version Label Normalization", () => {
+    it("collapses surrounding whitespace into a single version id", async () => {
+      const padded = await store.resolveVersionId("wslib", " 1.0.0 ");
+      const bare = await store.resolveVersionId("wslib", "1.0.0");
+      expect(padded).toBe(bare);
+    });
+
+    it("treats a whitespace-only label as unversioned", async () => {
+      const blank = await store.resolveVersionId("wslib2", "   ");
+      const empty = await store.resolveVersionId("wslib2", "");
+      expect(blank).toBe(empty);
+    });
+
+    it("keeps a partial version distinct from its full form", async () => {
+      // "1.20" is stored verbatim, never coerced to "1.20.0" — they are
+      // separate buckets that each remain addressable.
+      const partial = await store.resolveVersionId("partiallib", "1.20");
+      const full = await store.resolveVersionId("partiallib", "1.20.0");
+      expect(partial).not.toBe(full);
+    });
+
+    it("accepts a non-version label without rejecting it", async () => {
+      const tag = await store.resolveVersionId("taglib", "stable");
+      expect(typeof tag).toBe("number");
+      const versions = await store.queryUniqueVersions("taglib");
+      expect(versions).toContain("stable");
+    });
+
+    it("collapses surrounding whitespace on the library name too", async () => {
+      const padded = await store.resolveVersionId(" spacedlib ", "1.0.0");
+      const bare = await store.resolveVersionId("spacedlib", "1.0.0");
+      expect(padded).toBe(bare);
+    });
+  });
+
   describe("Version Isolation", () => {
     it("should search within specific versions only", async () => {
       await store.addDocuments(

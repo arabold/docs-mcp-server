@@ -1,6 +1,7 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { PipelineJobStatus } from "../pipeline/types";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
+import { normalizeLibraryName, normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
 import { ToolError, ValidationError } from "./errors";
 
@@ -47,10 +48,12 @@ export class RemoveTool {
 
       // Abort any QUEUED or RUNNING job for this library+version
       const allJobs = await this.pipeline.getJobs();
+      const normalizedLibrary = normalizeLibraryName(library);
+      const normalizedVersion = normalizeVersionLabel(version);
       const jobs = allJobs.filter(
         (job) =>
-          job.library === library &&
-          job.version === (version ?? "") &&
+          normalizeLibraryName(job.library) === normalizedLibrary &&
+          normalizeVersionLabel(job.version) === normalizedVersion &&
           (job.status === PipelineJobStatus.QUEUED ||
             job.status === PipelineJobStatus.RUNNING),
       );

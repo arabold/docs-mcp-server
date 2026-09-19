@@ -152,6 +152,30 @@ describe("RemoveTool", () => {
     expect(result.message).toContain("Successfully removed libX@1.0.0");
   });
 
+  it("should abort a job whose label differs only by case or whitespace", async () => {
+    // The job is stored under the normalized label; remove_docs used to compare
+    // the caller's raw string, so " 1.0.0 " silently aborted nothing and the
+    // running job kept writing into the version being deleted.
+    const mockLocalPipeline = {
+      getJobs: vi
+        .fn()
+        .mockResolvedValue([
+          { id: "job-9", library: "libx", version: "1.0.0", status: "queued" },
+        ]),
+      cancelJob: vi.fn().mockResolvedValue(undefined),
+      waitForJobCompletion: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IPipeline;
+
+    const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
+    mockDocService.validateLibraryExists.mockResolvedValue(undefined);
+    mockDocService.removeVersion.mockResolvedValue(undefined);
+
+    await removeToolWithPipeline.execute({ library: " LibX ", version: " 1.0.0 " });
+
+    expect(mockLocalPipeline.cancelJob).toHaveBeenCalledWith("job-9");
+    expect(mockLocalPipeline.waitForJobCompletion).toHaveBeenCalledWith("job-9");
+  });
+
   it("should abort and wait for RUNNING job for same library+version before deletion", async () => {
     const mockLocalPipeline = {
       getJobs: vi

@@ -173,7 +173,28 @@ describe("SearchTool", () => {
     expect(result.results).toEqual(mockSearchResults);
   });
 
-  it("should use 'latest' for findBestVersion if version is omitted and exactMatch is false", async () => {
+  it("should search a resolved tag bucket rather than falling back to unversioned", async () => {
+    // Regression for issue #475: a library indexed only as "latest" answered
+    // search_docs with "Library not found in store", because the tag never
+    // reached the resolver. It now resolves literally and is searched.
+    const options: SearchToolOptions = { ...baseOptions };
+    (mockDocService.findBestVersion as Mock).mockResolvedValue({
+      bestMatch: "latest",
+      hasUnversioned: false,
+    });
+    (mockDocService.searchStore as Mock).mockResolvedValue(mockSearchResults);
+
+    await searchTool.execute(options);
+
+    expect(mockDocService.searchStore).toHaveBeenCalledWith(
+      "test-lib",
+      "latest",
+      "test query",
+      5,
+    );
+  });
+
+  it("should pass an omitted version through to findBestVersion unchanged", async () => {
     const options: SearchToolOptions = { ...baseOptions }; // No version
     const findVersionResult = { bestMatch: "1.2.0", hasUnversioned: false };
     (mockDocService.findBestVersion as Mock).mockResolvedValue(findVersionResult);
@@ -181,7 +202,8 @@ describe("SearchTool", () => {
 
     await searchTool.execute(options);
 
-    // The implementation passes undefined, which is defaulted to "latest" in the method
+    // The request is passed through as given: substituting "latest" would make
+    // an omitted version match a stored tag literally named "latest".
     expect(mockDocService.findBestVersion).toHaveBeenCalledWith("test-lib", undefined);
     expect(mockDocService.searchStore).toHaveBeenCalledWith(
       "test-lib",

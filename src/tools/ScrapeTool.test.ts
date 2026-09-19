@@ -60,40 +60,44 @@ describe("ScrapeTool", () => {
   it.each([
     { input: "1.2.3", expectedInternal: "1.2.3" },
     { input: "1.2.3-beta.1", expectedInternal: "1.2.3-beta.1" },
-    { input: "1", expectedInternal: "1.0.0" }, // Coerced
-    { input: "1.2", expectedInternal: "1.2.0" }, // Coerced
+    { input: "1", expectedInternal: "1" }, // Verbatim - not coerced to 1.0.0
+    { input: "1.2", expectedInternal: "1.2" }, // Verbatim - not coerced to 1.2.0
+    { input: "1.20", expectedInternal: "1.20" }, // Verbatim - distinct from 1.20.0
+    { input: " 1.2.3 ", expectedInternal: "1.2.3" }, // Trimmed
+    { input: "V2.0.0", expectedInternal: "v2.0.0" }, // Lowercased
     { input: null, expectedInternal: null }, // Null -> Unversioned (normalize to null for pipeline)
     { input: undefined, expectedInternal: null }, // Undefined -> Unversioned (normalize to null for pipeline)
+    { input: "", expectedInternal: null }, // Empty -> Unversioned
+    { input: "   ", expectedInternal: null }, // Whitespace-only -> Unversioned
   ])(
-    "should handle valid version input '$input' correctly",
+    "should handle version input '$input' correctly",
     async ({ input, expectedInternal }) => {
       const options = getBaseOptions(input);
       await scrapeTool.execute(options);
 
       // Check enqueueScrapeJob call (implies constructor was called)
-      const expectedVersionArg =
-        typeof expectedInternal === "string"
-          ? expectedInternal.toLowerCase()
-          : expectedInternal; // null stays null
-
       expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
         "test-lib",
-        expectedVersionArg,
-        expect.objectContaining({ url: options.url }), // Check basic options passed
+        expectedInternal,
+        expect.objectContaining({ url: options.url, version: expectedInternal ?? "" }),
       );
       expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
     },
   );
 
-  it.each(["latest", "1.x", "invalid-version"])(
-    "should throw error for invalid version format '%s'",
-    async (invalidVersion) => {
-      const options = getBaseOptions(invalidVersion);
+  it.each(["latest", "stable", "1.x", "main", "release-2024"])(
+    "should accept the non-semver label '%s' and store it verbatim",
+    async (label) => {
+      // A version label is not required to be a semantic version. Labels like
+      // "stable" are stored as typed and resolved literally on read.
+      const options = getBaseOptions(label);
 
-      await expect(scrapeTool.execute(options)).rejects.toThrow(
-        /Invalid version format for scraping/,
+      await expect(scrapeTool.execute(options)).resolves.toBeDefined();
+      expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
+        "test-lib",
+        label,
+        expect.objectContaining({ url: options.url }),
       );
-      expect(mockManagerInstance.enqueueScrapeJob).not.toHaveBeenCalled();
     },
   );
 

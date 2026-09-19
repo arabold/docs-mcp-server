@@ -81,7 +81,8 @@ export class SearchTool {
       );
     }
 
-    // Default to 'latest' only when exactMatch is false
+    // Only for the log line and the exactMatch path; resolution takes `version`
+    // as given so an omitted version stays distinct from a literal "latest".
     const resolvedVersion = version || "latest";
 
     logger.info(
@@ -96,15 +97,15 @@ export class SearchTool {
       let versionToSearch: string | null | undefined = resolvedVersion;
 
       if (!exactMatch) {
-        // If not exact match, find the best version (which might be null)
+        // Pass the request through untouched. Substituting "latest" here would
+        // change the answer, not just the wording: since labels resolve
+        // literally first, a library holding a bucket named "latest" would
+        // match that tag instead of its newest version, and search_docs would
+        // disagree with find_version for the same request.
         const versionResult = await this.docService.findBestVersion(library, version);
-        // Use the bestMatch from the result, which could be null
+        // bestMatch is null only when nothing resolved and unversioned content
+        // exists; searchStore normalizes null to "" and searches that bucket.
         versionToSearch = versionResult.bestMatch;
-
-        // If findBestVersion returned null (no matching semver) AND unversioned docs exist,
-        // should we search unversioned? The current logic passes null to searchStore,
-        // which gets normalized to "" (unversioned). This seems reasonable.
-        // If findBestVersion threw VersionNotFoundInStoreError, it's caught below.
       }
       // If exactMatch is true, versionToSearch remains the originally provided version.
 

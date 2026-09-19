@@ -42,6 +42,8 @@ import {
   type DbVersion,
   type DbVersionWithLibrary,
   denormalizeVersionName,
+  normalizeLibraryName,
+  normalizeVersionLabel,
   normalizeVersionName,
   type VersionScraperOptions,
   type VersionStatus,
@@ -1284,8 +1286,11 @@ export class DocumentStore {
    * Creates library and version records if they don't exist.
    */
   async resolveVersionId(library: string, version: string): Promise<number> {
-    const normalizedLibrary = library.toLowerCase();
-    const normalizedVersion = denormalizeVersionName(version.toLowerCase());
+    const normalizedLibrary = normalizeLibraryName(library);
+    // Last point every write passes through: apply the single version label
+    // contract here so an entry point that forgets to normalize cannot create a
+    // duplicate bucket (e.g. " 1.0.0 " alongside "1.0.0").
+    const normalizedVersion = denormalizeVersionName(normalizeVersionLabel(version));
 
     // Insert or get library_id
     this.statements.insertLibrary.run(normalizedLibrary);
@@ -1318,7 +1323,9 @@ export class DocumentStore {
    */
   async queryUniqueVersions(library: string): Promise<string[]> {
     try {
-      const rows = this.statements.queryVersions.all(library.toLowerCase()) as Array<{
+      const rows = this.statements.queryVersions.all(
+        normalizeLibraryName(library),
+      ) as Array<{
         name: string | null;
       }>;
       return rows.map((row) => normalizeVersionName(row.name));
@@ -1417,7 +1424,7 @@ export class DocumentStore {
    */
   async getLibrary(name: string): Promise<{ id: number; name: string } | null> {
     try {
-      const normalizedName = name.toLowerCase();
+      const normalizedName = normalizeLibraryName(name);
       const row = this.statements.getLibraryIdByName.get(normalizedName) as
         | { id: number }
         | undefined;
@@ -1520,9 +1527,9 @@ export class DocumentStore {
    */
   async checkDocumentExists(library: string, version: string): Promise<boolean> {
     try {
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
       const result = this.statements.checkExists.get(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
       );
       return result !== undefined;
@@ -1948,16 +1955,16 @@ export class DocumentStore {
    */
   async deletePages(library: string, version: string): Promise<number> {
     try {
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
 
       // First delete documents
       const result = this.statements.deleteDocuments.run(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
       );
 
       // Then delete the pages (after documents are gone, due to foreign key constraints)
-      this.statements.deletePages.run(library.toLowerCase(), normalizedVersion);
+      this.statements.deletePages.run(normalizeLibraryName(library), normalizedVersion);
 
       return result.changes;
     } catch (error) {
@@ -2021,8 +2028,8 @@ export class DocumentStore {
     libraryDeleted: boolean;
   }> {
     try {
-      const normalizedLibrary = library.toLowerCase();
-      const normalizedVersion = version.toLowerCase();
+      const normalizedLibrary = normalizeLibraryName(library);
+      const normalizedVersion = normalizeVersionLabel(version);
 
       // First, get the version ID and library ID
       const versionResult = this.statements.getVersionId.get(
@@ -2135,12 +2142,12 @@ export class DocumentStore {
       }
 
       const ftsQuery = this.escapeFtsQuery(query);
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
 
       // Resolve library/version upfront so we can short-circuit missing versions
       // and constrain FTS queries by version_id.
       const versionRow = this.statements.getVersionId.get(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
       ) as { id: number; library_id: number } | undefined;
 
@@ -2322,10 +2329,10 @@ export class DocumentStore {
       }
 
       const parentPath = parent.metadata.path ?? [];
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
 
       const result = this.statements.getChildChunks.all(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
         parent.url,
         parentPath.length + 1,
@@ -2355,10 +2362,10 @@ export class DocumentStore {
         return [];
       }
 
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
 
       const result = this.statements.getPrecedingSiblings.all(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
         reference.url,
         BigInt(id),
@@ -2390,10 +2397,10 @@ export class DocumentStore {
         return [];
       }
 
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
 
       const result = this.statements.getSubsequentSiblings.all(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
         reference.url,
         BigInt(id),
@@ -2433,9 +2440,9 @@ export class DocumentStore {
         return null;
       }
 
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
       const result = this.statements.getParentChunk.get(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
         child.url,
         JSON.stringify(parentPath),
@@ -2464,7 +2471,7 @@ export class DocumentStore {
   ): Promise<DbPageChunk[]> {
     if (!ids.length) return [];
     try {
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
       // Use parameterized query for variable number of IDs
       const placeholders = ids.map(() => "?").join(",");
       const stmt = this.db.prepare(
@@ -2478,7 +2485,7 @@ export class DocumentStore {
          ORDER BY d.sort_order`,
       );
       const rows = stmt.all(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
         ...ids,
       ) as DbPageChunk[];
@@ -2498,7 +2505,7 @@ export class DocumentStore {
     url: string,
   ): Promise<DbPageChunk[]> {
     try {
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
       const stmt = this.db.prepare(
         `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
          JOIN pages p ON d.page_id = p.id
@@ -2510,7 +2517,7 @@ export class DocumentStore {
          ORDER BY d.sort_order`,
       );
       const rows = stmt.all(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
         url,
       ) as DbPageChunk[];
@@ -2541,9 +2548,9 @@ export class DocumentStore {
     options: ListVersionChunksOptions,
   ): Promise<ListVersionChunksResult> {
     try {
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
       const versionRow = this.statements.getVersionId.get(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
       ) as { id: number; library_id: number } | undefined;
 
@@ -2627,9 +2634,9 @@ export class DocumentStore {
    */
   async getVersionStats(library: string, version: string): Promise<VersionChunkStats> {
     try {
-      const normalizedVersion = version.toLowerCase();
+      const normalizedVersion = normalizeVersionLabel(version);
       const versionRow = this.statements.getVersionId.get(
-        library.toLowerCase(),
+        normalizeLibraryName(library),
         normalizedVersion,
       ) as { id: number; library_id: number } | undefined;
 
@@ -2756,8 +2763,8 @@ export class DocumentStore {
   ): Promise<VersionComposition> {
     try {
       const versionRow = this.statements.getVersionId.get(
-        library.toLowerCase(),
-        version.toLowerCase(),
+        normalizeLibraryName(library),
+        normalizeVersionLabel(version),
       ) as { id: number } | undefined;
 
       if (!versionRow) return { mimeTypes: [] };

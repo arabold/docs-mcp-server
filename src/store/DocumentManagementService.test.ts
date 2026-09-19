@@ -375,6 +375,17 @@ describe("DocumentManagementService", () => {
       expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
     });
 
+    it("should trim as well as lowercase a version on every normalized path", async () => {
+      // normalizeVersion used to lowercase but not trim, so " 1.0.0 " reached the
+      // store as its own row. All six call sites now share the write contract.
+      mockStore.checkDocumentExists.mockResolvedValue(true);
+      await docService.exists("test-lib", " 1.0.0 ");
+      expect(mockStore.checkDocumentExists).toHaveBeenCalledWith("test-lib", "1.0.0");
+
+      await docService.removeAllDocuments("test-lib", " LATEST ");
+      expect(mockStore.deletePages).toHaveBeenCalledWith("test-lib", "latest");
+    });
+
     it("should still remove documents when compaction fails", async () => {
       mockStore.compact.mockRejectedValueOnce(new Error("checkpoint busy"));
 
@@ -397,37 +408,65 @@ describe("DocumentManagementService", () => {
       await expect(docService.compact({ force: true })).resolves.toEqual(compactResult);
       expect(mockStore.compact).toHaveBeenCalledWith({ force: true });
     });
-
     describe("listVersions", () => {
       it("should return an empty array if the library has no documents", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue([]); // Fix: Use mockStoreInstance
+        mockStore.queryUniqueVersions.mockResolvedValue([]);
         const versions = await docService.listVersions("nonexistent-lib");
         expect(versions).toEqual([]);
       });
 
-      it("should return an array versions sorted descending (latest first)", async () => {
+      it("should return an array of versions sorted descending (latest first)", async () => {
         const library = "test-lib";
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0", "1.2.0"]); // Fix: Use mockStoreInstance
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0", "1.2.0"]);
 
         const versions = await docService.listVersions(library);
         expect(versions).toEqual(["1.2.0", "1.1.0", "1.0.0"]);
-        expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library); // Fix: Use mockStoreInstance
+        expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library);
       });
 
-      it("should filter out empty string and non-semver versions, sorted descending", async () => {
-        const library = "test-lib";
+      it("should exclude the empty label, which represents unversioned content", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "", "2.0.0"]);
+
+        const versions = await docService.listVersions("test-lib");
+        expect(versions).toEqual(["2.0.0", "1.0.0"]);
+      });
+
+      it("should include partial versions, sorted by value", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "5", "2.0.0"]);
+
+        const versions = await docService.listVersions("test-lib");
+        // "1.20" and "5" are real partial versions and must not be dropped just
+        // because they aren't full X.Y.Z, nor sorted as text.
+        expect(versions).toEqual(["5", "2.0.0", "1.20"]);
+      });
+
+      it("should keep opaque tags, sorted after versions", async () => {
         mockStore.queryUniqueVersions.mockResolvedValue([
-          // Fix: Use mockStoreInstance
+          "stable",
           "1.0.0",
-          "",
-          "invalid-version",
-          "2.0.0-beta", // Valid semver, should be included
+          "next",
           "2.0.0",
         ]);
 
-        const versions = await docService.listVersions(library);
-        expect(versions).toEqual(["2.0.0", "2.0.0-beta", "1.0.0"]);
-        expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library); // Fix: Use mockStoreInstance
+        const versions = await docService.listVersions("test-lib");
+        // Dropping tags here is what made documentation indexed as "latest" or
+        // "stable" permanently unreachable.
+        expect(versions).toEqual(["2.0.0", "1.0.0", "next", "stable"]);
+      });
+
+      it("should keep prerelease labels distinct from their release", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta", "1.20", "2.0.0"]);
+
+        const versions = await docService.listVersions("test-lib");
+        // Normalizing partials must not strip prerelease tags.
+        expect(versions).toEqual(["2.0.0", "2.0.0-beta", "1.20"]);
+      });
+
+      it("should sort semantic versions newest first, not lexicographically", async () => {
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.9.0", "1.10.0", "2.0.0"]);
+
+        const versions = await docService.listVersions("test-lib");
+        expect(versions).toEqual(["2.0.0", "1.10.0", "1.9.0"]);
       });
     });
 
@@ -435,115 +474,370 @@ describe("DocumentManagementService", () => {
       const library = "test-lib";
 
       beforeEach(() => {
-        // Reset mocks for checkDocumentExists for each test
-        mockStore.checkDocumentExists.mockResolvedValue(false); // Fix: Use mockStoreInstance
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+        // vi.clearAllMocks() clears calls but keeps implementations, so reset
+        // the shared default here rather than leaking one test's library list
+        // into the next.
+        mockStore.queryLibraryVersions.mockResolvedValue(new Map());
       });
 
-      it("should return best match and hasUnversioned=false when only semver exists", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0", "2.0.0"]); // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(false); // No unversioned // Fix: Use mockStoreInstance
+      // --- Literal Label Resolution -------------------------------------------
 
-        const result = await docService.findBestVersion(library, "1.5.0");
-        expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: false });
-        expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library); // Fix: Use mockStoreInstance
-        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
+      describe("literal label resolution", () => {
+        it("should resolve an opaque tag by its own name", async () => {
+          // Regression for issue #475: a library indexed as "latest" was
+          // unreachable over MCP because tags never reached the resolver.
+          mockStore.queryUniqueVersions.mockResolvedValue(["latest"]);
+
+          const result = await docService.findBestVersion(library, "latest");
+          expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
+        });
+
+        it("should match literally regardless of case and surrounding whitespace", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["stable"]);
+
+          const result = await docService.findBestVersion(library, " STABLE ");
+          expect(result).toEqual({ bestMatch: "stable", hasUnversioned: false });
+        });
+
+        it("should resolve a partial version to itself when its full form also exists", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
+
+          const result = await docService.findBestVersion(library, "1.20");
+          expect(result).toEqual({ bestMatch: "1.20", hasUnversioned: false });
+        });
+
+        it("should resolve a full version to itself when its partial form also exists", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
+
+          const result = await docService.findBestVersion(library, "1.20.0");
+          expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
+        });
+
+        it("should resolve a prerelease by its own name without the release taking its place", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0", "2.0.0-beta"]);
+
+          const result = await docService.findBestVersion(library, "2.0.0-beta");
+          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+        });
+
+        it("should resolve a stored label that looks like a range by its own name", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.x", "1.0.0"]);
+
+          const result = await docService.findBestVersion(library, "1.x");
+          expect(result).toEqual({ bestMatch: "1.x", hasUnversioned: false });
+        });
       });
 
-      it("should return latest match and hasUnversioned=false for 'latest'", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0", "3.0.0"]); // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(false); // Fix: Use mockStoreInstance
+      // --- Semantic Version Resolution ----------------------------------------
 
-        const latestResult = await docService.findBestVersion(library, "latest");
-        expect(latestResult).toEqual({ bestMatch: "3.0.0", hasUnversioned: false });
+      describe("semantic version resolution", () => {
+        it("should select a prerelease when it is the only version indexed", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta"]);
 
-        const defaultResult = await docService.findBestVersion(library); // No target version
-        expect(defaultResult).toEqual({ bestMatch: "3.0.0", hasUnversioned: false });
+          await expect(docService.findBestVersion(library)).resolves.toEqual({
+            bestMatch: "2.0.0-beta",
+            hasUnversioned: false,
+          });
+          await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
+            bestMatch: "2.0.0-beta",
+            hasUnversioned: false,
+          });
+        });
+
+        it("should let the newest version win even when it is a prerelease", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
+
+          await expect(docService.findBestVersion(library)).resolves.toEqual({
+            bestMatch: "2.0.0-beta",
+            hasUnversioned: false,
+          });
+          await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
+            bestMatch: "2.0.0-beta",
+            hasUnversioned: false,
+          });
+        });
+
+        it("should let a released version supersede its own prerelease", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue([
+            "1.0.0",
+            "2.0.0-beta",
+            "2.0.0",
+          ]);
+
+          const result = await docService.findBestVersion(library, "latest");
+          expect(result).toEqual({ bestMatch: "2.0.0", hasUnversioned: false });
+        });
+
+        it("should prefer a prerelease of the requested version over an older major", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
+
+          const result = await docService.findBestVersion(library, "2.0.0");
+          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+        });
+
+        it("should select a prerelease within an X-range", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
+
+          const result = await docService.findBestVersion(library, "2.x");
+          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+        });
+
+        it("should select a prerelease for a major-only request", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
+
+          const result = await docService.findBestVersion(library, "2");
+          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+        });
+
+        it("should fall back below the request and may select a prerelease", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
+
+          const result = await docService.findBestVersion(library, "3.0.0");
+          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+        });
+
+        it("should not select a newer prerelease for an older request", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.0.1-beta"]);
+
+          const result = await docService.findBestVersion(library, "1.0.0");
+          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
+        });
+
+        it("should order prereleases of the same version among themselves", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-rc.1", "2.0.0-rc.2"]);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "2.0.0-rc.2", hasUnversioned: false });
+        });
+
+        it("should not match when nothing sits at or below the request", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library, "1.20");
+          expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+        });
+
+        it("should match partial stored versions", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "5"]);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "5", hasUnversioned: false });
+        });
+
+        it("should exclude opaque tags from semantic matching", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue([
+            "1.0.0",
+            "stable-2024",
+            "node18",
+          ]);
+
+          // "stable-2024" must not be read as 2024.0.0, nor "node18" as 18.0.0.
+          const result = await docService.findBestVersion(library, "latest");
+          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
+        });
+
+        it("should prefer the strict label when a partial and its full version tie", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
+        });
+
+        it("should return best match and hasUnversioned=false when only semver exists", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0", "2.0.0"]);
+
+          const result = await docService.findBestVersion(library, "1.5.0");
+          expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: false });
+          expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
+        });
+
+        it("should return the latest match for 'latest' and for no target", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0", "3.0.0"]);
+
+          await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
+            bestMatch: "3.0.0",
+            hasUnversioned: false,
+          });
+          await expect(docService.findBestVersion(library)).resolves.toEqual({
+            bestMatch: "3.0.0",
+            hasUnversioned: false,
+          });
+        });
+
+        it("should honour an X-range request", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library, "1.0.x");
+          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+        });
+
+        it("should fall back to the latest available when the target is higher", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0"]);
+
+          await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
+            bestMatch: "1.1.0",
+            hasUnversioned: false,
+          });
+
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+          await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
+            bestMatch: "1.1.0",
+            hasUnversioned: true,
+          });
+        });
       });
 
-      it("should return best match and hasUnversioned=true when both exist", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0"]); // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(true); // Unversioned exists // Fix: Use mockStoreInstance
+      // --- Tag-Only Library Resolution ----------------------------------------
 
-        const result = await docService.findBestVersion(library, "1.0.x");
-        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+      describe("tag-only library resolution", () => {
+        it("should resolve a single tag without an explicit request", async () => {
+          // Regression for issue #475: search_docs with no version argument.
+          mockStore.queryUniqueVersions.mockResolvedValue(["latest"]);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
+        });
+
+        it("should refuse to rank multiple tags", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["stable", "next"]);
+          mockStore.queryLibraryVersions.mockResolvedValue(
+            new Map([[library, [{ version: "stable" }, { version: "next" }]]]) as never,
+          );
+
+          const error = (await docService
+            .findBestVersion(library)
+            .catch((e) => e)) as VersionNotFoundInStoreError;
+          expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
+          expect(error.availableVersions).toEqual(["stable", "next"]);
+        });
+
+        it("should fall through to unversioned when tags are ambiguous", async () => {
+          // Ambiguous tags mean no tag resolves, but erroring while the library
+          // holds usable unversioned documentation would be worse than handing
+          // it back. find_version still reports that no version matched.
+          mockStore.queryUniqueVersions.mockResolvedValue(["stable", "next"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+        });
+
+        it("should not let a single tag outrank a semantic version", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "stable"]);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
+        });
       });
 
-      it("should return latest match and hasUnversioned=true when both exist (latest)", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0"]); // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(true); // Fix: Use mockStoreInstance
+      // --- Unversioned Documentation Resolution -------------------------------
 
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: "2.0.0", hasUnversioned: true });
+      describe("unversioned documentation", () => {
+        it("should report unversioned availability alongside a match", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library, "1.0.0");
+          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+        });
+
+        it("should use unversioned documentation when nothing resolves", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue([]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          await expect(docService.findBestVersion(library)).resolves.toEqual({
+            bestMatch: null,
+            hasUnversioned: true,
+          });
+          await expect(docService.findBestVersion(library, "9.9.9")).resolves.toEqual({
+            bestMatch: null,
+            hasUnversioned: true,
+          });
+        });
+
+        it("should not silently skip a prerelease in favour of unversioned", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: true });
+        });
+
+        it("should not make unversioned the resolver's default just because it lists first", async () => {
+          // The canonical listing order puts unversioned first, which the web UI
+          // uses as its default selection. Resolution answers a different
+          // question and picks the newest semantic version.
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+        });
+
+        it("should not silently skip a tag in favour of unversioned", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["latest"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library, "latest");
+          expect(result).toEqual({ bestMatch: "latest", hasUnversioned: true });
+        });
       });
 
-      it("should return null bestMatch and hasUnversioned=true when only unversioned exists", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue([""]); // listVersions filters this out // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(true); // Unversioned exists // Fix: Use mockStoreInstance
+      // --- Resolution Failure Reporting ---------------------------------------
 
-        const result = await docService.findBestVersion(library);
-        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+      describe("resolution failure reporting", () => {
+        it("should list tags among the available labels", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "stable"]);
+          mockStore.checkDocumentExists.mockResolvedValue(false);
+          mockStore.queryLibraryVersions.mockResolvedValue(
+            new Map([[library, [{ version: "1.0.0" }, { version: "stable" }]]]) as never,
+          );
 
-        const resultSpecific = await docService.findBestVersion(library, "1.0.0");
-        expect(resultSpecific).toEqual({ bestMatch: null, hasUnversioned: true });
-      });
+          // Nothing at or below 0.0.1, and "stable" cannot be ranked.
+          const error = (await docService
+            .findBestVersion(library, "0.0.1")
+            .catch((e) => e)) as VersionNotFoundInStoreError;
+          expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
+          expect(error.availableVersions).toEqual(["1.0.0", "stable"]);
+        });
 
-      it("should return fallback match and hasUnversioned=true when target is higher but unversioned exists", async () => {
-        // Renamed test for clarity
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0"]); // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(true); // Unversioned exists // Fix: Use mockStoreInstance
+        it("should raise LibraryNotFoundInStoreError when the library is unknown", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue([]);
+          mockStore.checkDocumentExists.mockResolvedValue(false);
 
-        const result = await docService.findBestVersion(library, "3.0.0"); // Target higher than available
-        // Expect fallback to latest available (1.1.0) because a version was requested
-        expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: true }); // Corrected expectation
-      });
+          await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
+            LibraryNotFoundInStoreError,
+          );
+          await expect(docService.findBestVersion(library)).rejects.toThrow(
+            LibraryNotFoundInStoreError,
+          );
 
-      it("should return fallback match and hasUnversioned=false when target is higher and only semver exists", async () => {
-        // New test for specific corner case
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0"]); // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(false); // No unversioned // Fix: Use mockStoreInstance
+          const error = (await docService
+            .findBestVersion(library)
+            .catch((e) => e)) as LibraryNotFoundInStoreError;
+          expect(error.library).toBe(library);
+          expect(error.similarLibraries).toEqual([]);
+        });
 
-        const result = await docService.findBestVersion(library, "3.0.0"); // Target higher than available
-        // Expect fallback to latest available (1.1.0)
-        expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: false });
-      });
+        it("should report unversioned availability for an unparseable request", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
 
-      it("should throw LibraryNotFoundInStoreError when no versions (semver or unversioned) exist", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue([]); // No semver // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(false); // No unversioned // Fix: Use mockStoreInstance
+          const result = await docService.findBestVersion(library, "not a version!");
+          expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+        });
 
-        await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
-          LibraryNotFoundInStoreError,
-        );
-        await expect(docService.findBestVersion(library)).rejects.toThrow(
-          LibraryNotFoundInStoreError,
-        );
+        it("should throw for an unparseable request when only versions exist", async () => {
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
+          mockStore.checkDocumentExists.mockResolvedValue(false);
 
-        // Check error details
-        const error = (await docService
-          .findBestVersion(library)
-          .catch((e) => e)) as LibraryNotFoundInStoreError;
-        expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
-        expect(error.library).toBe(library);
-        expect(error.similarLibraries).toEqual([]); // No similar libraries in this mock setup
-      });
-
-      it("should not throw for invalid target version format if unversioned exists", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]); // Has semver // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(true); // Has unversioned // Fix: Use mockStoreInstance
-
-        // Invalid format, but unversioned exists, so should return null match
-        const result = await docService.findBestVersion(library, "invalid-format");
-        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
-      });
-
-      it("should throw VersionNotFoundInStoreError for invalid target version format if only semver exists", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]); // Has semver // Fix: Use mockStoreInstance
-        mockStore.checkDocumentExists.mockResolvedValue(false); // No unversioned // Fix: Use mockStoreInstance
-
-        // Invalid format, no unversioned fallback -> throw
-        await expect(
-          docService.findBestVersion(library, "invalid-format"),
-        ).rejects.toThrow(VersionNotFoundInStoreError);
+          await expect(
+            docService.findBestVersion(library, "not a version!"),
+          ).rejects.toThrow(VersionNotFoundInStoreError);
+        });
       });
     });
 
@@ -653,6 +947,7 @@ describe("DocumentManagementService", () => {
         ).toEqual([
           {
             library: "lib1",
+            // Order comes from the store, which sorts in queryLibraryVersions.
             versions: [
               {
                 ref: { library: "lib1", version: "1.0.0" },

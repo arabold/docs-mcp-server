@@ -36,6 +36,7 @@ import {
 } from "react";
 import { ScrapeMode } from "../../../scraper/types";
 import type { AppRouter } from "../../../services/appRouter";
+import { normalizeLibraryName, normalizeVersionLabel } from "../../../store/types";
 import {
   useEnqueueScrapeJob,
   useGetScraperOptions,
@@ -85,9 +86,14 @@ function findVersion(
   version: string | undefined,
 ) {
   if (!libraries || !library) return undefined;
-  const lib = libraries.find((l) => l.library.toLowerCase() === library.toLowerCase());
-  const target = (version ?? "").toLowerCase();
-  return lib?.versions.find((v) => (v.ref.version ?? "").toLowerCase() === target);
+  // Match with the same contract the server stores under, or a padded entry
+  // looks like a new version instead of the existing one.
+  const targetLibrary = normalizeLibraryName(library);
+  const targetVersion = normalizeVersionLabel(version);
+  const lib = libraries.find((l) => normalizeLibraryName(l.library) === targetLibrary);
+  return lib?.versions.find(
+    (v) => normalizeVersionLabel(v.ref.version) === targetVersion,
+  );
 }
 
 function parsePatterns(raw: string): string[] | undefined {
