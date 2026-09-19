@@ -10,15 +10,55 @@ import { normalizeEnvValue } from "../../utils/env";
  */
 
 /**
+ * The complete set of provider prefixes recognized in a model specification.
+ * Anything else before the first colon is part of the model name itself.
+ *
+ * This list is normative rather than descriptive: it decides which prefixes claim
+ * the provider slot, so adding an entry changes how existing specifications parse.
+ * A model literally named `<new-provider>:<tag>` served by an OpenAI-compatible
+ * endpoint would start resolving to the new provider, breaking that configuration
+ * on upgrade. Call provider additions out in the release notes.
+ *
+ * `EmbeddingProvider` is derived from this array so the two cannot drift apart.
+ */
+export const SUPPORTED_PROVIDERS = [
+  "openai",
+  "vertex",
+  "gemini",
+  "aws",
+  "microsoft",
+] as const;
+
+/**
  * Supported embedding model providers.
  */
-export type EmbeddingProvider =
-  | "openai"
-  | "vertex"
-  | "gemini"
-  | "aws"
-  | "microsoft"
-  | "sagemaker";
+export type EmbeddingProvider = (typeof SUPPORTED_PROVIDERS)[number];
+
+/**
+ * Split a model specification into its provider prefix and model name.
+ *
+ * Only a prefix that names a supported provider is treated as a provider, matched
+ * case-insensitively and resolved to its canonical lowercase form. Every other
+ * specification is an OpenAI-compatible model name, which keeps names that carry a
+ * tag or quantization suffix intact (e.g. "nomic-embed-text:latest" or
+ * "second-state/jina-embeddings-v3-GGUF:Q4_K_M").
+ *
+ * @param spec The full model specification.
+ * @returns The resolved provider and model name.
+ */
+export function splitModelSpec(spec: string): {
+  provider: EmbeddingProvider;
+  model: string;
+} {
+  const colonIndex = spec.indexOf(":");
+  const prefix = spec.substring(0, colonIndex).toLowerCase();
+  const provider =
+    colonIndex === -1 ? undefined : SUPPORTED_PROVIDERS.find((name) => name === prefix);
+
+  return provider
+    ? { provider, model: spec.substring(colonIndex + 1) }
+    : { provider: "openai", model: spec };
+}
 
 /**
  * Embedding model configuration parsed from environment variables.
@@ -97,7 +137,7 @@ export class EmbeddingConfig {
     "Cohere/Cohere-embed-v4.0": 1536,
     "embed-v4.0": 1536,
 
-    // SageMaker models (hosted on AWS SageMaker)
+    // Open-weight multilingual models, servable from any OpenAI-compatible endpoint
     "intfloat/multilingual-e5-large": 1024,
     "multilingual-e5-large": 1024,
     "text-embedding-multilingual-e5-large": 1024,
@@ -299,24 +339,40 @@ export class EmbeddingConfig {
     }
   }
 
-  private findKnownDimension(model: string): number | null {
-    const normalized = model.toLowerCase();
-    if (this.runtimeDetectedDimensionModels.has(normalized)) {
-      return null;
-    }
-
-    const exact = this.modelLookup?.get(normalized);
-    if (exact !== undefined) {
-      return exact;
-    }
-
+  /**
+   * Build the lookup keys to try for a model name, most specific first:
+   * the name itself, then with the namespace dropped, the tag dropped, and both.
+   *
+   * Dropping a trailing tag lets a quantized or tagged variant reuse the base
+   * model's dimensions (e.g. "nomic-ai/nomic-embed-text-v2-moe:latest"), which
+   * quantization does not change. Exact matches are tried first, so names whose
+   * own identifier contains a colon (e.g. "amazon.titan-embed-text-v2:0") still
+   * resolve to their own entry.
+   */
+  private dimensionLookupKeys(normalized: string): string[] {
     const slashIndex = normalized.lastIndexOf("/");
-    if (slashIndex !== -1) {
-      const suffix = normalized.substring(slashIndex + 1);
-      if (this.runtimeDetectedDimensionModels.has(suffix)) {
+    const withoutNamespace =
+      slashIndex > -1 ? normalized.substring(slashIndex + 1) : undefined;
+    const bases = withoutNamespace ? [normalized, withoutNamespace] : [normalized];
+
+    const withoutTag = (key: string) => {
+      const colonIndex = key.lastIndexOf(":");
+      return colonIndex > 0 ? [key.substring(0, colonIndex)] : [];
+    };
+
+    return [...bases, ...bases.flatMap(withoutTag)];
+  }
+
+  private findKnownDimension(model: string): number | null {
+    for (const key of this.dimensionLookupKeys(model.toLowerCase())) {
+      if (this.runtimeDetectedDimensionModels.has(key)) {
         return null;
       }
-      return this.modelLookup?.get(suffix) ?? null;
+
+      const dimensions = this.modelLookup?.get(key);
+      if (dimensions !== undefined) {
+        return dimensions;
+      }
     }
 
     return null;
@@ -332,7 +388,6 @@ export class EmbeddingConfig {
    * - gemini: Google Generative AI
    * - aws: AWS Bedrock models
    * - microsoft: Azure OpenAI
-   * - sagemaker: AWS SageMaker hosted models
    *
    * @param modelSpec Model specification (e.g., "openai:text-embedding-3-small"), defaults to "text-embedding-3-small"
    * @returns Parsed embedding model configuration
@@ -342,19 +397,7 @@ export class EmbeddingConfig {
 
     // Parse provider and model from string (e.g., "gemini:embedding-001" or just "text-embedding-3-small")
     // Handle models that contain colons in their names (e.g., "aws:amazon.titan-embed-text-v2:0")
-    const colonIndex = spec.indexOf(":");
-    let provider: EmbeddingProvider;
-    let model: string;
-
-    if (colonIndex === -1) {
-      // No colon found, default to OpenAI
-      provider = "openai";
-      model = spec;
-    } else {
-      // Split only on the first colon
-      provider = spec.substring(0, colonIndex) as EmbeddingProvider;
-      model = spec.substring(colonIndex + 1);
-    }
+    const { provider, model } = splitModelSpec(spec);
 
     // Look up known dimensions (case-insensitive)
     const dimensions = this.findKnownDimension(model);

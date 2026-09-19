@@ -10,19 +10,12 @@ import {
 } from "@langchain/openai";
 import type { AppConfig } from "../../utils/config";
 import { MissingCredentialsError } from "../errors";
+import {
+  type EmbeddingProvider,
+  SUPPORTED_PROVIDERS,
+  splitModelSpec,
+} from "./EmbeddingConfig";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
-
-/**
- * Supported embedding model providers. Each provider requires specific environment
- * variables to be set for API access.
- */
-export type EmbeddingProvider =
-  | "openai"
-  | "vertex"
-  | "gemini"
-  | "aws"
-  | "microsoft"
-  | "sagemaker";
 
 /**
  * Error thrown when an invalid or unsupported embedding provider is specified.
@@ -31,7 +24,7 @@ export class UnsupportedProviderError extends Error {
   constructor(provider: string) {
     super(
       `❌ Unsupported embedding provider: ${provider}\n` +
-        "   Supported providers: openai, vertex, gemini, aws, microsoft, sagemaker\n" +
+        `   Supported providers: ${SUPPORTED_PROVIDERS.join(", ")}\n` +
         "   See README.md for configuration options or run with --help for more details.",
     );
     this.name = "UnsupportedProviderError";
@@ -84,17 +77,15 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
         process.env.AZURE_OPENAI_API_VERSION
       );
 
-    case "sagemaker": {
-      const region = process.env.AWS_REGION;
-      return (
-        !!region &&
-        (!!process.env.AWS_PROFILE ||
-          (!!process.env.AWS_ACCESS_KEY_ID && !!process.env.AWS_SECRET_ACCESS_KEY))
-      );
-    }
-
-    default:
+    // Same exhaustiveness guard as createEmbeddingModel below: a provider added
+    // without a credential branch would otherwise read as "no credentials" and
+    // silently degrade to full-text-only search. The assertion fails the build;
+    // the return is the runtime fallback, and it must stay false so that an
+    // unrecognized provider is never reported as having credentials.
+    default: {
+      const _unhandled: never = provider;
       return false;
+    }
   }
 }
 
@@ -114,7 +105,9 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
  * @param providerAndModel - The provider and model name in the format "provider:model_name"
  *                          or just "model_name" for OpenAI models.
  * @returns A configured instance of the appropriate Embeddings implementation.
- * @throws {UnsupportedProviderError} If an unsupported provider is specified.
+ * @throws {UnsupportedProviderError} Runtime backstop for a supported provider
+ *          that has no construction branch. An unrecognized prefix is not an
+ *          error — it is treated as an OpenAI-compatible model name.
  * @throws {ModelConfigurationError} If there's an issue with the model configuration.
  */
 export function createEmbeddingModel(
@@ -133,11 +126,8 @@ export function createEmbeddingModel(
       "Embedding vector dimension is required; set DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION or embeddings.vectorDimension in config.",
     );
   }
-  // Parse provider and model name
-  const [providerOrModel, ...modelNameParts] = providerAndModel.split(":");
-  const modelName = modelNameParts.join(":");
-  const provider = modelName ? (providerOrModel as EmbeddingProvider) : "openai";
-  const model = modelName || providerOrModel;
+  // Parse provider and model name using the shared specification rules
+  const { provider, model } = splitModelSpec(providerAndModel);
 
   // Default configuration for each provider
   const baseConfig = { stripNewLines: true };
@@ -271,7 +261,12 @@ export function createEmbeddingModel(
       });
     }
 
-    default:
-      throw new UnsupportedProviderError(provider);
+    // Every supported provider has a branch above, so this is unreachable through
+    // splitModelSpec. Assigning to `never` makes adding a provider without a branch
+    // fail typecheck rather than a user's startup; the throw is the runtime backstop.
+    default: {
+      const unhandled: never = provider;
+      throw new UnsupportedProviderError(unhandled);
+    }
   }
 }

@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { BedrockEmbeddings } from "@langchain/aws";
+import { Embeddings } from "@langchain/core/embeddings";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { VertexAIEmbeddings } from "@langchain/google-vertexai";
 import { OpenAIEmbeddings } from "@langchain/openai";
@@ -8,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
-import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
+import type { EmbeddingProvider } from "./EmbeddingConfig";
+import { createEmbeddingModel } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Suppress logger output during tests
@@ -86,6 +88,17 @@ describe("createEmbeddingModel", () => {
     });
   });
 
+  test.each([
+    "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+    "nomic-embed-text:latest",
+    "bge-m3:567m",
+    "jina-embeddings-v3-GGUF:Q4_K_M",
+  ])("should create OpenAI-compatible embeddings for %s", (spec) => {
+    const model = createEmbeddingModel(spec, runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({ modelName: spec });
+  });
+
   test("should create Google Vertex AI embeddings", () => {
     const model = createEmbeddingModel("vertex:text-embedding-004", runtimeConfig);
     expect(model).toBeInstanceOf(VertexAIEmbeddings);
@@ -144,10 +157,42 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should throw UnsupportedProviderError for unknown provider", () => {
-    expect(() => createEmbeddingModel("unknown:model", runtimeConfig)).toThrow(
-      UnsupportedProviderError,
-    );
+  // Typed as a complete record so that adding a provider without adding it here
+  // fails typecheck. This is the testable form of "every supported provider has a
+  // model-creation branch" — the invariant `sagemaker` violated for a year.
+  const PROVIDER_SPECS: Record<EmbeddingProvider, string> = {
+    openai: "openai:text-embedding-3-small",
+    vertex: "vertex:text-embedding-004",
+    gemini: "gemini:embedding-001",
+    aws: "aws:amazon.titan-embed-text-v1",
+    microsoft: "microsoft:test-deployment",
+  };
+
+  test.each(Object.entries(PROVIDER_SPECS))(
+    "should construct a client for the %s provider",
+    (_provider, spec) => {
+      expect(createEmbeddingModel(spec, runtimeConfig)).toBeInstanceOf(Embeddings);
+    },
+  );
+
+  test("should treat the withdrawn sagemaker prefix as an OpenAI-compatible model name", () => {
+    const model = createEmbeddingModel("sagemaker:my-endpoint", runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({ modelName: "sagemaker:my-endpoint" });
+  });
+
+  test("should match a provider prefix case-insensitively", () => {
+    const model = createEmbeddingModel("OpenAI:text-embedding-3-small", runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({ modelName: "text-embedding-3-small" });
+  });
+
+  test("should treat an unrecognized prefix as an OpenAI-compatible model name", () => {
+    // Only the known provider prefixes claim the segment before the first colon;
+    // everything else is a model name served by an OpenAI-compatible endpoint.
+    const model = createEmbeddingModel("unknown:model", runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({ modelName: "unknown:model" });
   });
 
   test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {

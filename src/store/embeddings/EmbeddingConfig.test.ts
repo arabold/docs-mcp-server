@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EmbeddingConfig } from "./EmbeddingConfig";
+import { EmbeddingConfig, SUPPORTED_PROVIDERS } from "./EmbeddingConfig";
 
 describe("EmbeddingConfig", () => {
   // Reset singleton instance before and after each test to ensure isolation
@@ -132,6 +132,61 @@ describe("EmbeddingConfig", () => {
       expect(config.getKnownDimensions("nomic-ai/nomic-embed-text-v2-moe")).toBe(768);
       expect(config.getKnownDimensions("nomic-ai/nomic-embed-code")).toBe(3584);
     });
+
+    it("should resolve dimensions for tagged and quantized variants", () => {
+      const config = new EmbeddingConfig();
+
+      // A tag or quantization suffix does not change the vector width, so the
+      // base model's dimensions apply.
+      expect(config.getKnownDimensions("nomic-ai/nomic-embed-text-v2-moe:latest")).toBe(
+        768,
+      );
+      expect(config.getKnownDimensions("text-embedding-3-small:Q8_0")).toBe(1536);
+    });
+
+    it("should prefer an exact match over stripping a colon suffix", () => {
+      const config = new EmbeddingConfig();
+
+      // The colon belongs to this model's own identifier, not to a tag.
+      expect(config.getKnownDimensions("amazon.titan-embed-text-v2:0")).toBe(1024);
+    });
+  });
+
+  describe("model specification parsing", () => {
+    it.each([
+      "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+      "huoxu/bge-large-en-v1.5-Q8_0-GGUF",
+      "nomic-embed-text:latest",
+      "bge-m3:567m",
+      "mxbai-embed-large:335m-v1-fp16",
+      "jina-embeddings-v3-GGUF:Q4_K_M",
+    ])("should treat %s as an OpenAI-compatible model name", (spec) => {
+      expect(EmbeddingConfig.parseEmbeddingConfig(spec)).toMatchObject({
+        provider: "openai",
+        model: spec,
+      });
+    });
+
+    it.each([
+      ["openai:text-embedding-3-small", "openai", "text-embedding-3-small"],
+      ["vertex:text-embedding-004", "vertex", "text-embedding-004"],
+      ["gemini:embedding-001", "gemini", "embedding-001"],
+      ["aws:amazon.titan-embed-text-v2:0", "aws", "amazon.titan-embed-text-v2:0"],
+      ["microsoft:my-deployment", "microsoft", "my-deployment"],
+      [
+        "openai:second-state/model-GGUF:Q4_K_M",
+        "openai",
+        "second-state/model-GGUF:Q4_K_M",
+      ],
+      // Prefixes match case-insensitively and resolve to their canonical form.
+      ["OpenAI:text-embedding-3-small", "openai", "text-embedding-3-small"],
+      ["AWS:amazon.titan-embed-text-v2:0", "aws", "amazon.titan-embed-text-v2:0"],
+    ])("should keep the explicit provider prefix of %s", (spec, provider, model) => {
+      expect(EmbeddingConfig.parseEmbeddingConfig(spec)).toMatchObject({
+        provider,
+        model,
+      });
+    });
   });
 
   describe("setKnownDimensions", () => {
@@ -242,32 +297,24 @@ describe("EmbeddingConfig", () => {
   });
 
   describe("provider validation", () => {
-    const validProviders = [
-      "openai",
-      "vertex",
-      "gemini",
-      "aws",
-      "microsoft",
-      "sagemaker",
-    ];
-
     it("should accept all valid providers", () => {
       const config = new EmbeddingConfig();
 
-      for (const provider of validProviders) {
+      for (const provider of SUPPORTED_PROVIDERS) {
         const result = config.parse(`${provider}:test-model`);
         expect(result.provider).toBe(provider);
         expect(result.model).toBe("test-model");
       }
     });
 
-    it("should handle unknown providers as valid", () => {
+    it("should treat an unknown provider prefix as part of the model name", () => {
       const config = new EmbeddingConfig();
       const result = config.parse("unknown:test-model");
 
-      // TypeScript typing will prevent this in real usage, but the parser should handle it gracefully
-      expect(result.provider).toBe("unknown" as any);
-      expect(result.model).toBe("test-model");
+      // Only the prefixes above claim the provider slot; anything else is a model
+      // name served by an OpenAI-compatible endpoint.
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("unknown:test-model");
     });
   });
 
@@ -286,8 +333,8 @@ describe("EmbeddingConfig", () => {
       const config = new EmbeddingConfig();
       const result = config.parse(":");
 
-      expect(result.provider).toBe("");
-      expect(result.model).toBe("");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe(":");
       expect(result.dimensions).toBeNull();
       expect(result.modelSpec).toBe(":");
     });
@@ -296,8 +343,8 @@ describe("EmbeddingConfig", () => {
       const config = new EmbeddingConfig();
       const result = config.parse(":model-name");
 
-      expect(result.provider).toBe("");
-      expect(result.model).toBe("model-name");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe(":model-name");
       expect(result.dimensions).toBeNull();
       expect(result.modelSpec).toBe(":model-name");
     });
@@ -306,10 +353,20 @@ describe("EmbeddingConfig", () => {
       const config = new EmbeddingConfig();
       const result = config.parse("provider:");
 
-      expect(result.provider).toBe("provider");
-      expect(result.model).toBe("");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("provider:");
       expect(result.dimensions).toBeNull();
       expect(result.modelSpec).toBe("provider:");
+    });
+
+    it("should handle a supported provider prefix ending with colon", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse("openai:");
+
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("");
+      expect(result.dimensions).toBeNull();
+      expect(result.modelSpec).toBe("openai:");
     });
   });
 

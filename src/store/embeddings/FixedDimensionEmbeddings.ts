@@ -11,20 +11,14 @@ import { DimensionError } from "../errors";
  * - If a vector's dimension is less than the target, it is padded with zeros.
  */
 export class FixedDimensionEmbeddings extends Embeddings {
-  private provider: string;
-  private model: string;
-
   constructor(
     private readonly embeddings: Embeddings,
     private readonly targetDimension: number,
-    providerAndModel: string,
+    /** The model specification, kept verbatim for error messages. */
+    private readonly providerAndModel: string,
     public readonly allowTruncate: boolean = false,
   ) {
     super({});
-    // Parse provider and model from string (e.g., "gemini:embedding-001" or just "text-embedding-3-small")
-    const [providerOrModel, modelName] = providerAndModel.split(":");
-    this.provider = modelName ? providerOrModel : "openai"; // Default to openai if no provider specified
-    this.model = modelName || providerOrModel;
   }
 
   /**
@@ -40,11 +34,7 @@ export class FixedDimensionEmbeddings extends Embeddings {
         return vector.slice(0, this.targetDimension);
       }
       // Otherwise, throw an error
-      throw new DimensionError(
-        `${this.provider}:${this.model}`,
-        dimension,
-        this.targetDimension,
-      );
+      throw new DimensionError(this.providerAndModel, dimension, this.targetDimension);
     }
 
     if (dimension < this.targetDimension) {

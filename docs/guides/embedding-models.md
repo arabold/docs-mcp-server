@@ -14,7 +14,16 @@ If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults t
 - `gemini:embedding-001` (Google Gemini)
 - `aws:amazon.titan-embed-text-v1` (AWS Bedrock)
 - `microsoft:text-embedding-ada-002` (Azure OpenAI)
+- `nomic-embed-text:latest` (OpenAI-compatible, tagged model name)
+- `second-state/jina-embeddings-v3-GGUF:Q4_K_M` (OpenAI-compatible, namespaced and quantized)
 - Or any OpenAI-compatible model name
+
+A prefix is read as a provider only when it is one of the provider names above
+(`openai`, `vertex`, `gemini`, `aws`, `microsoft`), matched
+case-insensitively. Any other model name is passed through to your
+OpenAI-compatible endpoint unchanged, so names carrying a namespace, tag, or
+quantization suffix — the form Ollama, LM Studio, and llama.cpp use — work as
+written and do not need an `openai:` prefix.
 
 ## Provider Configuration
 
@@ -54,7 +63,7 @@ Run local models compatible with the OpenAI API format.
 ```bash
 OPENAI_API_KEY="ollama" \
 OPENAI_API_BASE="http://localhost:11434/v1" \
-DOCS_MCP_EMBEDDING_MODEL="openai:nomic-embed-text" \
+DOCS_MCP_EMBEDDING_MODEL="nomic-embed-text:latest" \
 npx @arabold/docs-mcp-server@latest
 ```
 
