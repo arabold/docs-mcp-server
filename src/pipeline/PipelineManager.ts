@@ -78,6 +78,7 @@ export class PipelineManager implements IPipeline {
       versionId: job.versionId,
       versionStatus: job.versionStatus,
       progressPages: job.progressPages,
+      progressPagesIndexed: job.progressPagesIndexed,
       progressMaxPages: job.progressMaxPages,
       errorMessage: job.errorMessage,
       updatedAt: job.updatedAt,
@@ -285,6 +286,7 @@ export class PipelineManager implements IPipeline {
       // Database fields (single source of truth)
       // Will be populated by updateJobStatus
       progressPages: 0,
+      progressPagesIndexed: 0,
       progressMaxPages: 0,
       errorMessage: null,
       updatedAt: new Date(),
@@ -380,7 +382,6 @@ export class PipelineManager implements IPipeline {
         pageId: page.id,
         etag: page.etag,
       }));
-
       // Get stored scraper options to retrieve the source URL and other options
       const storedOptions = await this.store.getScraperOptions(versionId);
 
@@ -792,6 +793,7 @@ export class PipelineManager implements IPipeline {
     job.progress = progress;
     job.progressPages = progress.pagesScraped;
     job.progressMaxPages = progress.totalPages;
+    job.progressPagesIndexed = progress.pagesIndexed;
     job.updatedAt = new Date();
 
     // Update database progress if we have a version ID
@@ -801,6 +803,7 @@ export class PipelineManager implements IPipeline {
           job.versionId,
           progress.pagesScraped,
           progress.totalPages,
+          progress.pagesIndexed,
         );
       } catch (error) {
         logger.error(`❌ Failed to update database progress for job ${job.id}: ${error}`);
@@ -815,7 +818,7 @@ export class PipelineManager implements IPipeline {
 
     // Logging
     logger.debug(
-      `Job ${job.id} progress: ${progress.pagesScraped}/${progress.totalPages} pages`,
+      `Job ${job.id} progress: ${progress.pagesScraped}/${progress.totalPages} processed, ${progress.pagesIndexed} indexed`,
     );
   }
 }

@@ -6,13 +6,25 @@
 import type { Job } from "./types";
 
 /**
- * Resolves a job's page-progress counts, preferring live progress over the
- * persisted snapshot and defaulting to 0. Shared by the job cards.
+ * Resolves a job's progress counters, preferring live progress over the
+ * persisted snapshot.
+ *
+ * `processed` over `expected` drives the bar and reaches 100% on completion;
+ * `indexed` is what a user means by "pages added" and is null for jobs that
+ * predate the counter. `discovered` is only interesting when it exceeds
+ * `expected`, which happens when the page limit clamps the crawl.
  */
-export function jobPageCounts(job: Job): { pages: number; maxPages: number } {
+export function jobPageCounts(job: Job): {
+  processed: number;
+  expected: number;
+  indexed: number | null;
+  discovered: number | null;
+} {
   return {
-    pages: job.progress?.pagesScraped ?? job.progressPages ?? 0,
-    maxPages: job.progress?.totalPages ?? job.progressMaxPages ?? 0,
+    processed: job.progress?.pagesScraped ?? job.progressPages ?? 0,
+    expected: job.progress?.totalPages ?? job.progressMaxPages ?? 0,
+    indexed: job.progress?.pagesIndexed ?? job.progressPagesIndexed ?? null,
+    discovered: job.progress?.totalDiscovered ?? null,
   };
 }
 

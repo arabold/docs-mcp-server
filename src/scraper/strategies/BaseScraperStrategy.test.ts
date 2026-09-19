@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
 import { AppConfigSchema, DEFAULT_CONFIG, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
-import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
+import {
+  PageOutcome,
+  type QueueItem,
+  type ScraperOptions,
+  type ScraperProgressEvent,
+} from "../types";
 import { BaseScraperStrategy } from "./BaseScraperStrategy";
 
 // Mock logger
@@ -69,9 +74,11 @@ describe("BaseScraperStrategy", () => {
       pagesScraped: 1,
       totalPages: 1,
       totalDiscovered: 1,
+      pagesIndexed: 1,
       currentUrl: "https://example.com/",
       depth: 0,
       maxDepth: 1,
+      outcome: PageOutcome.Stored,
       pageId: undefined,
       result: {
         url: "https://example.com/",
@@ -532,11 +539,17 @@ describe("BaseScraperStrategy", () => {
     // for the rate-based threshold, but does not abort the crawl on its own.
     await expect(strategy.scrape(options, progressCallback)).resolves.not.toThrow();
 
-    // progressCallback should have been called for root + valid page (not the 404 page)
-    const calls = progressCallback.mock.calls.map((c) => c[0].currentUrl);
-    expect(calls).toContain("https://example.com/");
-    expect(calls).toContain("https://example.com/valid");
-    expect(calls).not.toContain("https://example.com/missing");
+    // Every dequeued item reports an outcome, so the 404 appears too — as Absent,
+    // carrying no content.
+    const calls = progressCallback.mock.calls.map((c) => c[0]);
+    const stored = calls.filter((c) => c.outcome === PageOutcome.Stored);
+    expect(stored.map((c) => c.currentUrl)).toEqual([
+      "https://example.com/",
+      "https://example.com/valid",
+    ]);
+    expect(
+      calls.find((c) => c.currentUrl === "https://example.com/missing"),
+    ).toMatchObject({ outcome: PageOutcome.Absent, result: null });
   });
 
   it("should deduplicate URLs and avoid processing the same URL twice", async () => {
@@ -1514,5 +1527,436 @@ describe("BaseScraperStrategy", () => {
       expect(page2Progress).toBeDefined();
       expect(page2Progress![0].pageId).toBe(102);
     });
+  });
+});
+
+describe("BaseScraperStrategy skipped (unprocessable) items", () => {
+  const baseOptions = (): ScraperOptions => ({
+    url: "https://example.com",
+    library: "test",
+    version: "1.0",
+    maxPages: 2000,
+    maxDepth: 2,
+    ignoreErrors: true,
+  });
+
+  it("does not count skips toward the child-page failure rate", async () => {
+    // 900 skips against 100 successes. If skips counted as failures the observed
+    // rate would be 0.9 and the crawl would abort at the 0.5 threshold.
+    const strategy = new TestScraperStrategy(
+      createTestConfig({ abortOnFailureRate: 0.5 }),
+    );
+    const links = Array.from({ length: 1000 }, (_, i) => `https://example.com/p${i}`);
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) {
+        return { url: item.url, links, status: FetchStatus.SUCCESS };
+      }
+      const index = Number(item.url.split("/p")[1]);
+      if (index < 900) {
+        return { url: item.url, links: [], status: FetchStatus.SKIPPED };
+      }
+      return {
+        url: item.url,
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: { textContent: "ok", chunks: [], links: [], errors: [] },
+      };
+    });
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still aborts when genuine failures exceed the threshold alongside skips", async () => {
+    const strategy = new TestScraperStrategy(
+      createTestConfig({ abortOnFailureRate: 0.5 }),
+    );
+    const links = Array.from({ length: 40 }, (_, i) => `https://example.com/p${i}`);
+
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) {
+        return { url: item.url, links, status: FetchStatus.SUCCESS };
+      }
+      const index = Number(item.url.split("/p")[1]);
+      if (index < 20) {
+        return { url: item.url, links: [], status: FetchStatus.SKIPPED };
+      }
+      throw new Error("boom");
+    });
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).rejects.toThrow(/Scrape aborted/);
+  });
+
+  it("produces no content and no progress result for a skipped child", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      item.depth === 0
+        ? {
+            url: item.url,
+            links: ["https://example.com/asset"],
+            status: FetchStatus.SUCCESS,
+            content: { textContent: "root", chunks: [], links: [], errors: [] },
+          }
+        : { url: item.url, links: [], status: FetchStatus.SKIPPED },
+    );
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(baseOptions(), progressCallback);
+
+    const events = progressCallback.mock.calls.map((c) => c[0]);
+    expect(events.filter((e) => e.result).length).toBe(1);
+    expect(
+      events.find((e) => e.currentUrl === "https://example.com/asset"),
+    ).toMatchObject({ outcome: PageOutcome.Skipped, result: null });
+  });
+
+  it("does not fail the job when an llms.txt seed is unprocessable", async () => {
+    // llms.txt seeds are queued at depth 0 but are one of several discovery
+    // seeds, so one unreadable entry must not abort the whole scrape.
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      item.fromLlmsTxt
+        ? { url: item.url, links: [], status: FetchStatus.SKIPPED }
+        : {
+            url: item.url,
+            links: [],
+            status: FetchStatus.SUCCESS,
+            content: { textContent: "root", chunks: [], links: [], errors: [] },
+            queueItems: [
+              { url: "https://example.com/seed", depth: 0, fromLlmsTxt: true },
+            ],
+          },
+    );
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not fail a refresh when a stored depth-0 page becomes unprocessable", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "https://example.com",
+      links: [],
+      status: FetchStatus.SKIPPED,
+    });
+
+    await expect(
+      strategy.scrape(
+        {
+          ...baseOptions(),
+          initialQueue: [{ url: "https://example.com", depth: 0, pageId: 42 }],
+          isRefresh: true,
+        },
+        vi.fn<ProgressCallback<ScraperProgressEvent>>(),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails the job when the start URL itself is unprocessable", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "https://example.com",
+      links: [],
+      status: FetchStatus.SKIPPED,
+    });
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).rejects.toThrow(/Cannot process content type/);
+  });
+});
+
+describe("BaseScraperStrategy progress counter semantics", () => {
+  // The original defect was a relationship between two counters, not a wrong
+  // value in either, so every assertion here checks all four together.
+  const opts = (o: Partial<ScraperOptions> = {}): ScraperOptions => ({
+    url: "https://example.com",
+    library: "test",
+    version: "1.0",
+    maxPages: 1000,
+    maxDepth: 3,
+    ignoreErrors: true,
+    ...o,
+  });
+
+  const page = (url: string, links: string[] = []) => ({
+    url,
+    links,
+    status: FetchStatus.SUCCESS,
+    content: { textContent: "content", chunks: [], links: [], errors: [] },
+  });
+
+  const lastEvent = (cb: { mock: { calls: [ScraperProgressEvent][] } }) =>
+    cb.mock.calls.at(-1)?.[0];
+
+  it("reaches its denominator when the queue drains", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      item.depth === 0
+        ? page(item.url, ["https://example.com/a", "https://example.com/b"])
+        : page(item.url),
+    );
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts(), cb);
+
+    expect(lastEvent(cb)).toMatchObject({
+      pagesScraped: 3,
+      totalPages: 3,
+      totalDiscovered: 3,
+      pagesIndexed: 3,
+    });
+  });
+
+  it("counts a URL discovered from two pages exactly once", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0)
+        return page(item.url, ["https://example.com/a", "https://example.com/b"]);
+      // Both children link the same third page.
+      if (item.url.endsWith("/a") || item.url.endsWith("/b"))
+        return page(item.url, ["https://example.com/shared"]);
+      return page(item.url);
+    });
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts(), cb);
+
+    expect(lastEvent(cb)).toMatchObject({
+      pagesScraped: 4,
+      totalPages: 4,
+      totalDiscovered: 4,
+      pagesIndexed: 4,
+    });
+  });
+
+  it("excludes over-depth links from the denominator", async () => {
+    // The original inflation: links beyond maxDepth were counted at enqueue and
+    // then discarded at dequeue, so the denominator could never be reached.
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      page(item.url, [`${item.url}/deeper`]),
+    );
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts({ maxDepth: 2 }), cb);
+
+    // Root plus two levels; the depth-3 link is never queued.
+    expect(lastEvent(cb)).toMatchObject({
+      pagesScraped: 3,
+      totalPages: 3,
+      totalDiscovered: 3,
+      pagesIndexed: 3,
+    });
+  });
+
+  it("queues nothing beyond the root at maxDepth 0", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      page(item.url, ["https://example.com/a", "https://example.com/b"]),
+    );
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts({ maxDepth: 0 }), cb);
+
+    expect(lastEvent(cb)).toMatchObject({
+      pagesScraped: 1,
+      totalPages: 1,
+      totalDiscovered: 1,
+      pagesIndexed: 1,
+    });
+  });
+
+  it("delivers maxPages indexed pages even when items produce nothing", async () => {
+    // maxPages is a request for pages, not a budget for attempts: asking for 5
+    // should yield 5, and the denominator stretches to keep the fraction whole.
+    const strategy = new TestScraperStrategy(loadConfig());
+    const links = Array.from({ length: 40 }, (_, i) => `https://example.com/p${i}`);
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0) return page(item.url, links);
+      const index = Number(item.url.split("/p")[1]);
+      // Every other child yields nothing.
+      return index % 2 === 0
+        ? { url: item.url, links: [], status: FetchStatus.SKIPPED }
+        : page(item.url);
+    });
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts({ maxPages: 5, maxConcurrency: 1 }), cb);
+
+    const final = lastEvent(cb);
+    expect(final?.pagesIndexed).toBe(5);
+    expect(final?.pagesScraped).toBeGreaterThan(5);
+    expect(final?.pagesScraped).toBe(final?.totalPages);
+    expect(final?.totalDiscovered).toBeGreaterThan(final?.totalPages ?? 0);
+  });
+
+  it("clamps an initial queue larger than maxPages", async () => {
+    // Previously both counters were initialised to queue.length with no clamp,
+    // so a large refresh reported e.g. 1000/1500 forever.
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) => page(item.url));
+    const initialQueue = Array.from({ length: 30 }, (_, i) => ({
+      url: `https://example.com/stored${i}`,
+      depth: 0,
+      pageId: i + 1,
+    }));
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts({ maxPages: 10, initialQueue, isRefresh: true }), cb);
+
+    const final = lastEvent(cb);
+    expect(final?.pagesIndexed).toBe(10);
+    expect(final?.pagesScraped).toBe(10);
+    expect(final?.totalPages).toBe(10);
+  });
+
+  it("advances only the processed count for each non-content outcome", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0)
+        return page(item.url, [
+          "https://example.com/unchanged",
+          "https://example.com/gone",
+          "https://example.com/asset",
+        ]);
+      if (item.url.endsWith("/unchanged"))
+        return { url: item.url, links: [], status: FetchStatus.NOT_MODIFIED };
+      if (item.url.endsWith("/gone"))
+        return { url: item.url, links: [], status: FetchStatus.NOT_FOUND };
+      return { url: item.url, links: [], status: FetchStatus.SKIPPED };
+    });
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts(), cb);
+
+    const outcomes = cb.mock.calls.map(([e]) => e.outcome).sort();
+    expect(outcomes).toEqual(
+      [
+        PageOutcome.Absent,
+        PageOutcome.Skipped,
+        PageOutcome.Stored,
+        PageOutcome.Unchanged,
+      ].sort(),
+    );
+    expect(lastEvent(cb)).toMatchObject({
+      pagesScraped: 4,
+      totalPages: 4,
+      pagesIndexed: 1,
+    });
+  });
+
+  it("does not adjust the counters when a crawl is cancelled", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    const controller = new AbortController();
+    let children = 0;
+    strategy.processItem.mockImplementation(async (item: QueueItem) => {
+      if (item.depth === 0)
+        return page(
+          item.url,
+          Array.from({ length: 10 }, (_, i) => `https://example.com/p${i}`),
+        );
+      // Let one child report first: the root's own event fires before its links
+      // have been counted, so it legitimately reads 1/1.
+      children += 1;
+      if (children > 1) controller.abort();
+      return page(item.url);
+    });
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await expect(
+      strategy.scrape(opts({ maxConcurrency: 1 }), cb, controller.signal),
+    ).rejects.toThrow();
+
+    const final = lastEvent(cb);
+    expect(final?.pagesScraped).toBeLessThan(final?.totalPages ?? 0);
+  });
+});
+
+describe("BaseScraperStrategy empty-page reporting", () => {
+  const opts = (): ScraperOptions => ({
+    url: "https://example.com/page",
+    library: "test",
+    version: "1.0",
+    maxPages: 10,
+    maxDepth: 0,
+  });
+
+  it("carries the validators for a clean empty result", async () => {
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "https://example.com/page",
+      title: "Empty",
+      sourceContentType: "text/html",
+      contentType: "text/markdown",
+      etag: '"v2"',
+      lastModified: "2026-01-01T00:00:00.000Z",
+      links: [],
+      pipelineFailed: false,
+      status: FetchStatus.SUCCESS,
+    });
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts(), cb);
+
+    expect(cb.mock.calls.at(-1)?.[0]).toMatchObject({
+      outcome: PageOutcome.Empty,
+      pagesIndexed: 0,
+      emptyPage: {
+        etag: '"v2"',
+        lastModified: "2026-01-01T00:00:00.000Z",
+        pipelineFailed: false,
+      },
+    });
+  });
+
+  it("withholds the validators when the pipeline failed", async () => {
+    // Storing the etag against a failure we do not understand would make every
+    // later refresh answer 304 and never retry, turning a transient extraction
+    // fault into permanent data loss.
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "https://example.com/page",
+      sourceContentType: "text/html",
+      contentType: "text/html",
+      etag: '"v2"',
+      lastModified: "2026-01-01T00:00:00.000Z",
+      links: [],
+      pipelineFailed: true,
+      status: FetchStatus.SUCCESS,
+    });
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts(), cb);
+
+    expect(cb.mock.calls.at(-1)?.[0]?.emptyPage).toMatchObject({
+      etag: null,
+      lastModified: null,
+      pipelineFailed: true,
+    });
+  });
+
+  it("does not record a container as an empty page", async () => {
+    // A directory listing yields links and no content. It is processed, but it
+    // is not a page and must not be written to the index.
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "file:///docs",
+      links: [],
+      isContainer: true,
+      status: FetchStatus.SUCCESS,
+    });
+    const cb = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(opts(), cb);
+
+    const event = cb.mock.calls.at(-1)?.[0];
+    expect(event?.outcome).toBe(PageOutcome.Empty);
+    expect(event?.emptyPage).toBeUndefined();
   });
 });

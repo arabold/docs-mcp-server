@@ -26,13 +26,13 @@ export interface JobCardProps {
 
 /** Renders the mockup's per-status meta line (URL for running, or the collapse note for cancelling). */
 function StatsLine({ job }: { job: Job }) {
-  const { pages, maxPages } = jobPageCounts(job);
+  const { processed, expected, indexed, discovered } = jobPageCounts(job);
 
   if (job.status === PipelineJobStatus.CANCELLING) {
     return (
       <div className="jobc__stats">
         <span>
-          <b>{pages.toLocaleString()}</b> / {maxPages.toLocaleString()} pages
+          <b>{(indexed ?? 0).toLocaleString()}</b> pages indexed
         </span>
         <span>stops once the in-flight page finishes</span>
       </div>
@@ -43,11 +43,13 @@ function StatsLine({ job }: { job: Job }) {
     return (
       <div className="jobc__stats">
         <span>
-          <b>{pages.toLocaleString()}</b> / {maxPages.toLocaleString()} pages
+          <b>{(indexed ?? 0).toLocaleString()}</b> indexed · {processed.toLocaleString()}{" "}
+          processed
         </span>
-        {job.progress ? (
+        {discovered !== null && discovered > expected ? (
           <span>
-            <b>{job.progress.totalDiscovered.toLocaleString()}</b> discovered
+            <b>{discovered.toLocaleString()}</b> discovered, capped at{" "}
+            {expected.toLocaleString()}
           </span>
         ) : null}
         {job.progress ? (
@@ -84,8 +86,8 @@ export function JobCard({
   const isCancelling = job.status === PipelineJobStatus.CANCELLING;
   const isQueued = job.status === PipelineJobStatus.QUEUED;
 
-  const { pages, maxPages } = jobPageCounts(job);
-  const pct = progressPercent(pages, maxPages);
+  const { processed, expected } = jobPageCounts(job);
+  const pct = progressPercent(processed, expected);
 
   const modifierClass = isRunning
     ? "jobc--running"

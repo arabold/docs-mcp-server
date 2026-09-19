@@ -57,7 +57,7 @@ export class TelemetryService {
           jobId: job.id,
           library: job.library,
           hasVersion: !!job.version,
-          maxPagesConfigured: job.progressMaxPages || 0,
+          maxPagesConfigured: job.scraperOptions?.maxPages ?? null,
           queueWaitTimeMs: queueWaitTime,
         });
         break;
@@ -68,7 +68,7 @@ export class TelemetryService {
           library: job.library,
           durationMs: duration,
           pagesProcessed: job.progressPages || 0,
-          maxPagesConfigured: job.progressMaxPages || 0,
+          maxPagesConfigured: job.scraperOptions?.maxPages ?? null,
           hasVersion: !!job.version,
           throughputPagesPerSecond:
             duration && job.progressPages
@@ -83,7 +83,7 @@ export class TelemetryService {
           library: job.library,
           durationMs: duration,
           pagesProcessed: job.progressPages || 0,
-          maxPagesConfigured: job.progressMaxPages || 0,
+          maxPagesConfigured: job.scraperOptions?.maxPages ?? null,
           hasVersion: !!job.version,
           hasError: !!job.error,
           errorMessage: job.error?.message,

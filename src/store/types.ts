@@ -317,13 +317,25 @@ export interface DbLibraryVersion {
   versionId: number;
   status: VersionStatus;
   errorMessage: string | null;
+  /** Items dequeued and given an outcome. */
   progressPages: number;
+  /** Items expected to be processed. NOT the configured `maxPages` value. */
   progressMaxPages: number;
+  /** Items that produced stored content. Null for rows predating this counter. */
+  progressPagesIndexed: number | null;
   sourceUrl: string | null;
   documentCount: number;
   uniqueUrlCount: number;
   indexedAt: string | null;
 }
+
+/**
+ * A version row as returned to callers, without the library name that groups it.
+ *
+ * Derived from {@link DbLibraryVersion} rather than restated, so the query's
+ * column list and the shape callers receive cannot drift apart.
+ */
+export type LibraryVersionSummary = Omit<DbLibraryVersion, "library">;
 
 /**
  * A single stored chunk as returned by the admin dashboard's chunk explorer.

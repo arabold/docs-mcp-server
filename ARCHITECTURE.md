@@ -272,6 +272,19 @@ HTTP and browser-backed web fetches default to `Accept: text/markdown, text/html
 
 During Playwright-driven page rendering, `HtmlPlaywrightMiddleware` aborts requests to a small, hand-curated list of third-party hosts that pages commonly load but that never carry documentation content: analytics SDKs, session-replay agents, chat widgets, captcha runtimes, and social-embed runtime JS. The list lives in [src/scraper/middleware/subresourceBlocklist.ts](src/scraper/middleware/subresourceBlocklist.ts) and matches on hostname suffix (with a label boundary) plus an optional path prefix. Two categories are deliberately excluded: **advertising networks**, to avoid triggering anti-adblock detection on monetized sites, and **generic CDNs** (unpkg, jsDelivr, cdnjs), because pages legitimately fetch content-bearing libraries from them. The top-level navigation and any iframe document navigations are always exempt — the check short-circuits on Playwright's `resourceType === "document"`. The feature is governed by a single config flag, `scraper.skipKnownTrackers`, which defaults to `true`.
 
+#### Unprocessable-content filtering
+
+The crawler declines to download resources no content pipeline can read. What "can read" means is derived from the pipelines themselves — [src/scraper/pipelines/capability.ts](src/scraper/pipelines/capability.ts) builds a predicate by asking each pipeline's own `canProcess()` — so support for a format is declared in exactly one place. Adding a pipeline widens the crawler automatically; no second list needs updating.
+
+Two gates consult that predicate:
+
+- **Queue-time**, in `WebScraperStrategy`'s discovered-link filter. A MIME type is detected from the link's *pathname* (not its href, so a host like `example.zip` cannot resolve an archive type off its TLD) and the link is dropped before any request when the type names binary media — `image/*`, `video/*`, `audio/*`, `font/*` — that no pipeline claims. The binary-media condition is what makes an extension trustworthy enough to act on without asking the server: `application/*` is deliberately excluded, because the `mime` package files plain-text scripts there (`.csh`, `.tcl`, `.bat`, `.scm`, `.ps` all resolve to `application/*` types that pipelines read fine).
+- **Fetch-time**, in `HttpFetcher`. Responses are streamed, so the `Content-Type` is checked after redirect resolution and the access-policy check but before the body is read. A rejected response has its stream destroyed and is reported as `FetchStatus.SKIPPED`. This is the authoritative gate — it catches extensionless URLs and extensions that disagree with what the server actually serves.
+
+A skipped resource is neither content nor a failure: it stores no page and is excluded from the child-page failure rate, so an asset-heavy site cannot trip `scraper.abortOnFailureRate`. Skips are logged at `debug` only.
+
+There is no configuration flag. The fetch-time gate applies the same predicate the pipeline-selection loop already applies, just earlier, so disabling it would produce a byte-identical index more slowly. On the reference crawl used for issue #490 the two gates cut HTTP requests from 2158 to 1013 and removed roughly 265 MB of discarded image downloads, while indexing exactly the same 806 documents.
+
 ### Storage Architecture
 
 SQLite database with normalized schema:
@@ -399,3 +412,25 @@ and is not wired into PR-required checks.
 
 - **Operator guide:** [docs/guides/benchmarking.md](docs/guides/benchmarking.md) — prerequisites, how to run, how to interpret results.
 - **Developer internals:** [tests/search-eval/README.md](tests/search-eval/README.md) — file layout and extension points.
+
+#### Scrape progress counters
+
+A scrape reports four counters. `totalDiscovered` counts URLs admitted to the
+queue; `totalPages` is how many items the job expects to process; `pagesScraped`
+counts items dequeued and given an outcome; `pagesIndexed` counts those that
+produced stored content. The first two move at enqueue, the last two at outcome.
+
+`pagesScraped` converges on `totalPages` because every queued item reaches
+exactly one outcome — depth, scope, patterns and content type are all filtered
+before admission, so nothing is queued and then silently discarded. `maxPages`
+bounds `pagesIndexed` rather than attempts, so asking for 100 pages yields 100
+pages; the denominator stretches by the number of items that produced nothing,
+which keeps the fraction able to complete.
+
+Every event names its outcome — stored, unchanged, absent, empty, skipped or
+failed. This matters most for the two that both arrive without content: a `304`
+is unchanged and the stored page is kept, while an empty `200` means the page
+exists and holds nothing, and its stored content is replaced. When a pipeline
+*errors* while producing nothing we have learned nothing about the page, so the
+previous content is left alone and the response validator withheld, which keeps
+the next refresh unconditional instead of caching a failure forever.

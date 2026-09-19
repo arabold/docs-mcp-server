@@ -670,3 +670,66 @@ describe("GitHubScraperStrategy", () => {
     });
   });
 });
+
+describe("GitHubScraperStrategy progress counters", () => {
+  // This strategy had no maxDepth, maxPages, initialQueue or counter coverage at
+  // all, despite having the most depth-heterogeneous initial queue of any
+  // strategy: a flat list of blobs at depth 1 alongside nested wiki pages.
+  let strategy: GitHubScraperStrategy;
+  const appConfig = loadConfig();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockHttpFetcher.mockImplementation(function () {
+      return { fetch: vi.fn() };
+    });
+    strategy = new GitHubScraperStrategy(appConfig);
+  });
+
+  it("satisfies the progress invariant over a refresh queue", async () => {
+    const processItem = vi
+      .spyOn(
+        strategy as unknown as {
+          processItem: (item: { url: string; pageId?: number }) => Promise<unknown>;
+        },
+        "processItem",
+      )
+      .mockImplementation(async (item: { url: string; pageId?: number }) => ({
+        url: item.url,
+        links: [],
+        status: FetchStatus.SUCCESS,
+        content: { textContent: "content", chunks: [], links: [], errors: [] },
+      }));
+
+    const initialQueue = [
+      { url: "https://github.com/owner/repo/blob/main/a.md", depth: 1, pageId: 1 },
+      { url: "https://github.com/owner/repo/blob/main/b.md", depth: 1, pageId: 2 },
+      { url: "https://github.com/owner/repo/wiki/Deep", depth: 3, pageId: 3 },
+    ];
+    const options: ScraperOptions = {
+      url: "https://github.com/owner/repo",
+      library: "test",
+      version: "1.0",
+      maxPages: 100,
+      maxDepth: 3,
+      initialQueue,
+      isRefresh: true,
+      ignoreErrors: true,
+    };
+    const cb = vi.fn();
+
+    await strategy.scrape(options, cb);
+
+    // Four items: the three stored pages plus the root, which is unshifted
+    // because it is absent from the initial queue. The depth-3 wiki page is
+    // processed rather than dropped, and the fraction completes.
+    const final = cb.mock.calls.at(-1)?.[0];
+    expect(final).toMatchObject({
+      pagesScraped: 4,
+      totalPages: 4,
+      totalDiscovered: 4,
+      pagesIndexed: 4,
+    });
+    expect(processItem).toHaveBeenCalledTimes(4);
+  });
+});

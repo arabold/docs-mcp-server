@@ -26,6 +26,7 @@ import type {
   CompactResult,
   DbChunkMetadata,
   DbChunkRank,
+  LibraryVersionSummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
   StoredScraperOptions,
@@ -157,7 +158,7 @@ export class DocumentStore {
     queryVersionsByLibraryId: Database.Statement<[number]>;
     // Status tracking statements
     updateVersionStatus: Database.Statement<[string, string | null, number]>;
-    updateVersionProgress: Database.Statement<[number, number, number]>;
+    updateVersionProgress: Database.Statement<[number, number, number | null, number]>;
     getVersionsByStatus: Database.Statement<string[]>;
     // Scraper options statements
     updateVersionScraperOptions: Database.Statement<[string, string, number]>;
@@ -370,6 +371,7 @@ export class DocumentStore {
           v.error_message as errorMessage,
           v.progress_pages as progressPages,
           v.progress_max_pages as progressMaxPages,
+          v.progress_pages_indexed as progressPagesIndexed,
           v.source_url as sourceUrl,
           -- "Last indexed" = when the version was last (re)indexed. Use the
           -- version's updated_at (bumped on every status/progress change during
@@ -449,8 +451,8 @@ export class DocumentStore {
       updateVersionStatus: this.db.prepare<[string, string | null, number]>(
         "UPDATE versions SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       ),
-      updateVersionProgress: this.db.prepare<[number, number, number]>(
-        "UPDATE versions SET progress_pages = ?, progress_max_pages = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+      updateVersionProgress: this.db.prepare<[number, number, number | null, number]>(
+        "UPDATE versions SET progress_pages = ?, progress_max_pages = ?, progress_pages_indexed = COALESCE(?, progress_pages_indexed), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       ),
       getVersionsByStatus: this.db.prepare<[string]>(
         "SELECT v.*, l.name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.status IN (SELECT value FROM json_each(?))",
@@ -1362,9 +1364,11 @@ export class DocumentStore {
     versionId: number,
     pages: number,
     maxPages: number,
+    /** Omit or pass null to leave the stored value untouched. */
+    pagesIndexed: number | null = null,
   ): Promise<void> {
     try {
-      this.statements.updateVersionProgress.run(pages, maxPages, versionId);
+      this.statements.updateVersionProgress.run(pages, maxPages, pagesIndexed, versionId);
     } catch (error) {
       throw new StoreError(`Failed to update version progress: ${error}`);
     }
@@ -1541,40 +1545,10 @@ export class DocumentStore {
   /**
    * Retrieves a mapping of all libraries to their available versions with details.
    */
-  async queryLibraryVersions(): Promise<
-    Map<
-      string,
-      Array<{
-        version: string;
-        versionId: number;
-        status: VersionStatus; // Persisted enum value
-        errorMessage: string | null;
-        progressPages: number;
-        progressMaxPages: number;
-        sourceUrl: string | null;
-        documentCount: number;
-        uniqueUrlCount: number;
-        indexedAt: string | null;
-      }>
-    >
-  > {
+  async queryLibraryVersions(): Promise<Map<string, Array<LibraryVersionSummary>>> {
     try {
       const rows = this.statements.queryLibraryVersions.all() as DbLibraryVersion[];
-      const libraryMap = new Map<
-        string,
-        Array<{
-          version: string;
-          versionId: number;
-          status: VersionStatus;
-          errorMessage: string | null;
-          progressPages: number;
-          progressMaxPages: number;
-          sourceUrl: string | null;
-          documentCount: number;
-          uniqueUrlCount: number;
-          indexedAt: string | null;
-        }>
-      >();
+      const libraryMap = new Map<string, Array<LibraryVersionSummary>>();
 
       for (const row of rows) {
         // Process all rows, including those where version is "" (unversioned)
@@ -1594,6 +1568,7 @@ export class DocumentStore {
           errorMessage: row.errorMessage,
           progressPages: row.progressPages,
           progressMaxPages: row.progressMaxPages,
+          progressPagesIndexed: row.progressPagesIndexed ?? null,
           sourceUrl: row.sourceUrl,
           documentCount: row.documentCount,
           uniqueUrlCount: row.uniqueUrlCount,
@@ -1760,6 +1735,62 @@ export class DocumentStore {
 
       // Not a size error, re-throw
       throw error;
+    }
+  }
+
+  /**
+   * Records a page that exists but holds no content.
+   *
+   * A successful fetch that yields no extractable text is a statement about the
+   * page, not an absence of information, so it replaces whatever was stored
+   * rather than leaving stale content behind. Callers withhold `etag` and
+   * `lastModified` when extraction failed, which keeps the next refresh
+   * unconditional instead of caching a failure against the server's validator.
+   *
+   * @param library Library name.
+   * @param version Version string.
+   * @param depth Crawl depth the page was found at.
+   * @param page Page identity and optional validators.
+   */
+  async addEmptyPage(
+    library: string,
+    version: string,
+    depth: number,
+    page: {
+      url: string;
+      title: string;
+      sourceContentType: string | null;
+      contentType: string | null;
+      etag: string | null;
+      lastModified: string | null;
+    },
+  ): Promise<void> {
+    try {
+      const versionId = await this.resolveVersionId(library, version);
+      this.db.transaction(() => {
+        this.statements.insertPage.run(
+          versionId,
+          page.url,
+          page.title || "",
+          page.etag,
+          page.lastModified,
+          page.sourceContentType,
+          page.contentType,
+          depth,
+        );
+
+        // Clear any chunks the page had before it became empty. Without this the
+        // old content keeps matching searches while the row carries the new
+        // validator, so the next refresh answers 304 and it never self-corrects.
+        const stored = this.statements.getPageId.get(versionId, page.url) as
+          | { id: number }
+          | undefined;
+        if (stored) {
+          this.statements.deleteDocumentsByPageId.run(stored.id);
+        }
+      })();
+    } catch (error) {
+      throw new StoreError(`Failed to record empty page: ${error}`);
     }
   }
 

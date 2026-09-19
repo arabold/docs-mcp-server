@@ -136,7 +136,9 @@ export class HttpFetcher implements ContentFetcher {
           }
 
           const config: AxiosRequestConfig = {
-            responseType: "arraybuffer",
+            // Streamed so the Content-Type can be inspected before any body bytes
+            // are consumed, letting unprocessable responses be abandoned early.
+            responseType: "stream",
             headers: {
               ...headers,
               // Override Accept-Encoding to exclude zstd which Axios doesn't handle automatically
@@ -160,102 +162,118 @@ export class HttpFetcher implements ContentFetcher {
 
           const response = await axios.get(currentUrl, config);
 
-          // 304 Not Modified is a conditional response, not a redirect. Handle
-          // it before the 30x redirect branch so the missing Location header
-          // does not trip the redirect check.
-          if (response.status === 304) {
-            logger.debug(`HTTP 304 Not Modified for ${currentUrl}`);
+          // Under `responseType: "stream"` a body that is never read pins its
+          // socket: Node will not return a partially-consumed response to the
+          // keep-alive pool. Only the success path consumes the stream, so every
+          // other exit — 304, redirect, access-policy rejection, the content-type
+          // gate — tears it down here rather than at each call site.
+          let bodyConsumed = false;
+          try {
+            // 304 Not Modified is a conditional response, not a redirect. Handle
+            // it before the 30x redirect branch so the missing Location header
+            // does not trip the redirect check.
+            if (response.status === 304) {
+              logger.debug(`HTTP 304 Not Modified for ${currentUrl}`);
+              return {
+                content: Buffer.from(""),
+                mimeType: "text/plain",
+                source: currentUrl,
+                status: FetchStatus.NOT_MODIFIED,
+              } satisfies RawContent;
+            }
+
+            if (response.status >= 300 && response.status < 400) {
+              const location = response.headers.location;
+              if (!location) {
+                throw new ScraperError(
+                  `Redirect response for ${currentUrl} did not include a location header`,
+                  false,
+                );
+              }
+
+              if (!followRedirects) {
+                throw new RedirectError(currentUrl, location, response.status);
+              }
+
+              if (redirectCount >= MAX_REDIRECTS) {
+                throw new ScraperError(
+                  `Too many redirects while fetching ${source}`,
+                  false,
+                );
+              }
+
+              const redirectUrl = new URL(location, currentUrl).href;
+              await this.accessPolicy.assertNetworkUrlAllowed(redirectUrl);
+
+              currentUrl = redirectUrl;
+              redirectCount += 1;
+              continue;
+            }
+
+            const contentTypeHeader = response.headers["content-type"];
+            const { mimeType, charset } = MimeTypeUtils.parseContentType(
+              typeof contentTypeHeader === "string" ? contentTypeHeader : undefined,
+            );
+            const rawContentEncoding = response.headers["content-encoding"];
+            const contentEncoding =
+              typeof rawContentEncoding === "string" ? rawContentEncoding : undefined;
+
+            // Determine the final effective URL after redirects (if any)
+            const finalUrl =
+              // Node follow-redirects style
+              response.request?.res?.responseUrl ||
+              // Some adapters may expose directly
+              response.request?.responseUrl ||
+              // Fallback to axios recorded config URL
+              response.config?.url ||
+              currentUrl;
+
+            await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
+
+            // Content-type gate. Runs after redirect resolution and the access-policy
+            // check for the final URL, and before the body is read, so a response no
+            // pipeline can process costs headers rather than megabytes.
+            if (options?.acceptsMimeType && !options.acceptsMimeType(mimeType)) {
+              logger.debug(`Skipping ${finalUrl}: ${mimeType} is not processable`);
+              return {
+                content: Buffer.from(""),
+                mimeType,
+                charset,
+                source: finalUrl,
+                status: FetchStatus.SKIPPED,
+              } satisfies RawContent;
+            }
+
+            // Extract ETag header for caching
+            const etag = response.headers.etag || response.headers.ETag;
+            if (etag) {
+              logger.debug(`Received ETag for ${finalUrl}: ${etag}`);
+            }
+
+            // Extract Last-Modified header for caching
+            const lastModified = response.headers["last-modified"];
+            const lastModifiedISO = lastModified
+              ? new Date(lastModified).toISOString()
+              : undefined;
+
+            const content = await readStreamToBuffer(response.data, options?.signal);
+            bodyConsumed = true;
+
             return {
-              content: Buffer.from(""),
-              mimeType: "text/plain",
-              source: currentUrl,
-              status: FetchStatus.NOT_MODIFIED,
+              content,
+              mimeType,
+              charset,
+              encoding: contentEncoding,
+              source: finalUrl,
+              etag,
+              lastModified: lastModifiedISO,
+              status: FetchStatus.SUCCESS,
             } satisfies RawContent;
-          }
-
-          if (response.status >= 300 && response.status < 400) {
-            const location = response.headers.location;
-            if (!location) {
-              throw new ScraperError(
-                `Redirect response for ${currentUrl} did not include a location header`,
-                false,
-              );
+          } finally {
+            if (!bodyConsumed) {
+              destroyStream(response.data);
             }
-
-            if (!followRedirects) {
-              throw new RedirectError(currentUrl, location, response.status);
-            }
-
-            if (redirectCount >= MAX_REDIRECTS) {
-              throw new ScraperError(
-                `Too many redirects while fetching ${source}`,
-                false,
-              );
-            }
-
-            const redirectUrl = new URL(location, currentUrl).href;
-            await this.accessPolicy.assertNetworkUrlAllowed(redirectUrl);
-
-            currentUrl = redirectUrl;
-            redirectCount += 1;
-            continue;
           }
-
-          const contentTypeHeader = response.headers["content-type"];
-          const { mimeType, charset } = MimeTypeUtils.parseContentType(
-            typeof contentTypeHeader === "string" ? contentTypeHeader : undefined,
-          );
-          const rawContentEncoding = response.headers["content-encoding"];
-          const contentEncoding =
-            typeof rawContentEncoding === "string" ? rawContentEncoding : undefined;
-
-          // Convert ArrayBuffer to Buffer properly
-          let content: Buffer;
-          if (response.data instanceof ArrayBuffer) {
-            content = Buffer.from(response.data);
-          } else if (Buffer.isBuffer(response.data)) {
-            content = response.data;
-          } else if (typeof response.data === "string") {
-            content = Buffer.from(response.data, "utf-8");
-          } else {
-            // Fallback for other data types
-            content = Buffer.from(response.data);
-          }
-
-          // Determine the final effective URL after redirects (if any)
-          const finalUrl =
-            // Node follow-redirects style
-            response.request?.res?.responseUrl ||
-            // Some adapters may expose directly
-            response.request?.responseUrl ||
-            // Fallback to axios recorded config URL
-            response.config?.url ||
-            currentUrl;
-
-          await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
-
-          // Extract ETag header for caching
-          const etag = response.headers.etag || response.headers.ETag;
-          if (etag) {
-            logger.debug(`Received ETag for ${finalUrl}: ${etag}`);
-          }
-
-          // Extract Last-Modified header for caching
-          const lastModified = response.headers["last-modified"];
-          const lastModifiedISO = lastModified
-            ? new Date(lastModified).toISOString()
-            : undefined;
-
-          return {
-            content,
-            mimeType,
-            charset,
-            encoding: contentEncoding,
-            source: finalUrl,
-            etag,
-            lastModified: lastModifiedISO,
-            status: FetchStatus.SUCCESS,
-          } satisfies RawContent;
         }
       } catch (error: unknown) {
         if (error instanceof RedirectError || error instanceof ChallengeError) {
@@ -302,16 +320,14 @@ export class HttpFetcher implements ContentFetcher {
           const server = axiosError.response?.headers?.server;
           let responseBody = "";
 
-          // Safely convert response data to string
+          // Read the error body so the content-based challenge markers below can
+          // still be matched. Under `responseType: "stream"` this is a Readable,
+          // so it has to be drained rather than cast.
           if (axiosError.response?.data) {
             try {
-              if (typeof axiosError.response.data === "string") {
-                responseBody = axiosError.response.data;
-              } else if (Buffer.isBuffer(axiosError.response.data)) {
-                responseBody = axiosError.response.data.toString("utf-8");
-              } else if (axiosError.response.data instanceof ArrayBuffer) {
-                responseBody = Buffer.from(axiosError.response.data).toString("utf-8");
-              }
+              responseBody = (
+                await readStreamToBuffer(axiosError.response.data)
+              ).toString("utf-8");
             } catch {
               // Ignore conversion errors
             }
@@ -329,6 +345,12 @@ export class HttpFetcher implements ContentFetcher {
             throw new ChallengeError(source, status, "cloudflare");
           }
         }
+
+        // Axios rejects 4xx/5xx before the success path's try/finally is entered,
+        // so the error body is a Readable nothing has consumed. Left open it pins
+        // the socket, which matters most on the retry path: a new connection is
+        // opened while the failed one is still held.
+        destroyStream(axiosError.response?.data);
 
         if (this.isTlsCertificateError(code)) {
           throw new TlsCertificateError(source, code, errorCause);
@@ -364,4 +386,54 @@ export class HttpFetcher implements ContentFetcher {
       true,
     );
   }
+}
+
+/**
+ * Abandons a streamed response body without reading it.
+ *
+ * Used when the content-type gate rejects a response: the socket is torn down so
+ * the remaining bytes are never transferred.
+ *
+ * @param stream The response body, which may be any shape axios returned.
+ */
+function destroyStream(stream: unknown): void {
+  const candidate = stream as { destroy?: () => void } | null | undefined;
+  if (candidate && typeof candidate.destroy === "function") {
+    candidate.destroy();
+  }
+}
+
+/**
+ * Collects a streamed response body into a single Buffer.
+ *
+ * Axios yields a Node Readable under `responseType: "stream"`, already decompressed
+ * when `decompress` is enabled. A body that is absent or not async-iterable — which
+ * some error responses carry — reads as empty rather than throwing.
+ *
+ * @param stream The response body to read.
+ * @param signal Optional abort signal; aborting destroys the stream.
+ * @returns The complete body as a Buffer.
+ */
+async function readStreamToBuffer(
+  stream: unknown,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  if (
+    !stream ||
+    typeof (stream as AsyncIterable<unknown>)[Symbol.asyncIterator] !== "function"
+  ) {
+    return Buffer.from("");
+  }
+
+  const chunks: Buffer[] = [];
+  const onAbort = () => destroyStream(stream);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    for await (const chunk of stream as AsyncIterable<Buffer | string>) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
+  return Buffer.concat(chunks);
 }

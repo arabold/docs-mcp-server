@@ -1,8 +1,9 @@
 import type { ScraperService } from "../scraper";
-import type {
-  ScrapeResult,
-  ScraperProgressEvent as ScraperProgress,
-  ScraperProgressEvent,
+import {
+  PageOutcome,
+  type ScrapeResult,
+  type ScraperProgressEvent as ScraperProgress,
+  type ScraperProgressEvent,
 } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { logger } from "../utils/logger";
@@ -77,58 +78,31 @@ export class PipelineWorker {
           // Report progress via manager's callback (single source of truth)
           await callbacks.onJobProgress?.(job, progress);
 
-          // Handle deletion events (404 during refresh or broken links)
-          if (progress.deleted && progress.pageId) {
-            try {
-              await this.store.deletePage(progress.pageId);
-              logger.debug(
-                `[${jobId}] Deleted page ${progress.pageId}: ${progress.currentUrl}`,
-              );
-            } catch (docError) {
-              logger.error(
-                `❌ [${jobId}] Failed to delete page ${progress.pageId}: ${docError}`,
-              );
-
-              // Report the error and fail the job to ensure data integrity
-              const error =
-                docError instanceof Error ? docError : new Error(String(docError));
-              await callbacks.onJobError?.(job, error);
-              // Re-throw to fail the job - deletion failures indicate serious database issues
-              // and leaving orphaned documents would compromise index accuracy
-              throw error;
-            }
-          }
-          // Handle successful content processing
-          else if (progress.result) {
-            try {
-              // For refresh operations, delete old documents before adding new ones
-              if (progress.pageId) {
-                await this.store.deletePage(progress.pageId);
-                logger.debug(
-                  `[${jobId}] Refreshing page ${progress.pageId}: ${progress.currentUrl}`,
-                );
-              }
-
-              // Add the processed content to the store
-              await this.store.addScrapeResult(
-                library,
-                version,
-                progress.depth,
-                progress.result,
-              );
-              logger.debug(`[${jobId}] Stored processed content: ${progress.currentUrl}`);
-            } catch (docError) {
-              logger.error(
-                `❌ [${jobId}] Failed to process content ${progress.currentUrl}: ${docError}`,
-              );
-              // Report document-specific errors via manager's callback
-              await callbacks.onJobError?.(
-                job,
-                docError instanceof Error ? docError : new Error(String(docError)),
-                progress.result,
-              );
-              // Decide if a single document error should fail the whole job
-              // For now, we log and continue. To fail, re-throw here.
+          // Branch on the reported outcome rather than inferring one from a null
+          // result: `Unchanged` and `Empty` both arrive without content but mean
+          // opposite things — one says keep what is stored, the other says the
+          // page is now empty. The switch is exhaustive, so adding an outcome
+          // becomes a compile error here rather than a silent no-op.
+          switch (progress.outcome) {
+            case PageOutcome.Empty:
+              await this.recordEmptyPage(job, callbacks, library, version, progress);
+              break;
+            case PageOutcome.Absent:
+              await this.removeDeletedPage(job, callbacks, progress);
+              break;
+            case PageOutcome.Stored:
+              await this.storeResult(job, callbacks, library, version, progress);
+              break;
+            // Nothing to persist: unchanged content stays, a skipped resource was
+            // never downloaded, and a failure has already been reported. Listed
+            // explicitly so this reads as a decision rather than an omission.
+            case PageOutcome.Unchanged:
+            case PageOutcome.Skipped:
+            case PageOutcome.Failed:
+              break;
+            default: {
+              const unhandled: never = progress.outcome;
+              logger.error(`❌ [${job.id}] Unhandled page outcome: ${unhandled}`);
             }
           }
         },
@@ -157,4 +131,120 @@ export class PipelineWorker {
   // stop()
   // setCallbacks()
   // handleScrapingProgress()
+
+  /**
+   * Records a page that exists but holds no content, replacing what was stored.
+   *
+   * When the pipeline failed rather than genuinely finding nothing, the stored
+   * content is left alone: we learned nothing about the page, and overwriting it
+   * would discard good content on a transient fault.
+   */
+  private async recordEmptyPage(
+    job: InternalPipelineJob,
+    callbacks: WorkerCallbacks,
+    library: string,
+    version: string,
+    progress: ScraperProgressEvent,
+  ): Promise<void> {
+    const { emptyPage } = progress;
+    if (!emptyPage) return; // A container, not a page — nothing to record.
+
+    if (emptyPage.pipelineFailed) {
+      logger.debug(
+        `[${job.id}] Extraction failed with no content, leaving stored page untouched: ${progress.currentUrl}`,
+      );
+      return;
+    }
+
+    try {
+      // A redirect can move a refreshed page to a different URL, in which case
+      // `pageId` names the old one and `addEmptyPage`'s own by-URL cleanup would
+      // not reach it. Remove it explicitly so the old chunks cannot survive
+      // alongside the new empty record.
+      if (progress.pageId) {
+        await this.store.deletePage(progress.pageId);
+      }
+      await this.store.addEmptyPage(library, version, progress.depth, {
+        url: emptyPage.url,
+        title: emptyPage.title,
+        sourceContentType: emptyPage.sourceContentType,
+        contentType: emptyPage.contentType,
+        etag: emptyPage.etag,
+        lastModified: emptyPage.lastModified,
+      });
+      logger.debug(`[${job.id}] Stored empty page: ${progress.currentUrl}`);
+    } catch (docError) {
+      logger.error(
+        `❌ [${job.id}] Failed to record empty page ${progress.currentUrl}: ${docError}`,
+      );
+      // Reported like the other persistence paths, so a job cannot complete
+      // looking successful while its store write failed.
+      await callbacks.onJobError?.(
+        job,
+        docError instanceof Error ? docError : new Error(String(docError)),
+      );
+    }
+  }
+
+  /**
+   * Removes a page the source no longer serves.
+   *
+   * Only refresh items carry a `pageId`; a broken link found mid-crawl has
+   * nothing stored to remove.
+   */
+  private async removeDeletedPage(
+    job: InternalPipelineJob,
+    callbacks: WorkerCallbacks,
+    progress: ScraperProgressEvent,
+  ): Promise<void> {
+    if (!progress.deleted || !progress.pageId) return;
+
+    try {
+      await this.store.deletePage(progress.pageId);
+      logger.debug(`[${job.id}] Deleted page ${progress.pageId}: ${progress.currentUrl}`);
+    } catch (docError) {
+      logger.error(
+        `❌ [${job.id}] Failed to delete page ${progress.pageId}: ${docError}`,
+      );
+      const error = docError instanceof Error ? docError : new Error(String(docError));
+      await callbacks.onJobError?.(job, error);
+      // Deletion failures indicate serious database issues, and leaving orphaned
+      // documents would compromise index accuracy.
+      throw error;
+    }
+  }
+
+  /**
+   * Stores processed content, replacing the page's previous content on refresh.
+   */
+  private async storeResult(
+    job: InternalPipelineJob,
+    callbacks: WorkerCallbacks,
+    library: string,
+    version: string,
+    progress: ScraperProgressEvent,
+  ): Promise<void> {
+    if (!progress.result) return;
+
+    try {
+      if (progress.pageId) {
+        await this.store.deletePage(progress.pageId);
+        logger.debug(
+          `[${job.id}] Refreshing page ${progress.pageId}: ${progress.currentUrl}`,
+        );
+      }
+      await this.store.addScrapeResult(library, version, progress.depth, progress.result);
+      logger.debug(`[${job.id}] Stored processed content: ${progress.currentUrl}`);
+    } catch (docError) {
+      logger.error(
+        `❌ [${job.id}] Failed to process content ${progress.currentUrl}: ${docError}`,
+      );
+      // A single document error is logged and the job continues.
+      await callbacks.onJobError?.(
+        job,
+        docError instanceof Error ? docError : new Error(String(docError)),
+        progress.result,
+      );
+    }
+  }
 }

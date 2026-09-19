@@ -158,29 +158,84 @@ export interface ScrapeResult {
 }
 
 /**
- * Progress information during scraping
+ * What happened to a single queued item once it was processed.
+ *
+ * Named explicitly rather than inferred from `result` being null, because a null
+ * result cannot distinguish a page that is unchanged from one that is now empty:
+ * a 304 says "keep what you have", an empty 200 says "here it is, and it is
+ * empty". Those call for opposite handling.
+ */
+export enum PageOutcome {
+  /** Content was produced and should be stored. The only outcome that indexes. */
+  Stored = "stored",
+  /** The resource was unchanged since the last fetch (304). Keep what is stored. */
+  Unchanged = "unchanged",
+  /** The resource is gone (404). During a refresh the stored page is deleted. */
+  Absent = "absent",
+  /** Fetched successfully but yielded no content. The page exists and is empty. */
+  Empty = "empty",
+  /** No pipeline can read this content type, so the body was never downloaded. */
+  Skipped = "skipped",
+  /** Processing failed and the error was ignored under `ignoreErrors`. */
+  Failed = "failed",
+}
+
+/**
+ * Progress information during scraping.
+ *
+ * Counter semantics are defined by the `scrape-progress-reporting` capability.
+ * In short: `pagesScraped` counts work done, `pagesIndexed` counts what came of
+ * it, and `totalPages` is what `pagesScraped` converges on.
  */
 export interface ScraperProgressEvent {
-  /** Number of pages successfully scraped so far */
+  /**
+   * Queued items that have been dequeued and reached an outcome, whatever that
+   * outcome was. The numerator of the progress fraction. Every queued item
+   * eventually advances this exactly once, so it converges on `totalPages`.
+   */
   pagesScraped: number;
   /**
-   * Maximum number of pages to scrape (from maxPages option).
-   * May be undefined if no limit is set.
+   * Items the job expects to process: URLs admitted to the queue, clamped at the
+   * point the crawl will stop, which is `maxPages` plus the number of processed
+   * items that produced no content.
+   *
+   * This is NOT the configured `maxPages` value.
    */
   totalPages: number;
   /**
-   * Total number of URLs discovered during crawling.
-   * This may be higher than totalPages if maxPages limit is reached.
+   * Total number of URLs admitted to the crawl queue, unbounded by `maxPages`.
+   * Exceeds `totalPages` only when the page limit clamps the crawl.
    */
   totalDiscovered: number;
+  /**
+   * Processed items that produced stored content — the number a user means by
+   * "pages added". Bounded by `maxPages`. Not part of the progress fraction.
+   */
+  pagesIndexed: number;
   /** Current URL being processed */
   currentUrl: string;
   /** Current depth in the crawl tree */
   depth: number;
   /** Maximum depth allowed (from maxDepth option) */
   maxDepth: number;
-  /** The result of scraping the current page, if available. This may be null if the page has been deleted or if an error occurred. */
+  /** What happened to this item. Consumers branch on this, not on `result`. */
+  outcome: PageOutcome;
+  /** The processed content. Non-null only when `outcome` is `Stored`. */
   result: ScrapeResult | null;
+  /**
+   * Page identity for an `Empty` outcome, so the store can record that the page
+   * exists and holds nothing. `etag` and `lastModified` are null when the
+   * pipeline failed, which keeps the next refresh unconditional.
+   */
+  emptyPage?: {
+    url: string;
+    title: string;
+    sourceContentType: string | null;
+    contentType: string | null;
+    etag: string | null;
+    lastModified: string | null;
+    pipelineFailed: boolean;
+  };
   /** Database page ID (for refresh operations or tracking) */
   pageId?: number;
   /** Indicates this page was deleted (404 during refresh or broken link) */

@@ -153,8 +153,9 @@ export class DocumentManagementService {
     versionId: number,
     pages: number,
     maxPages: number,
+    pagesIndexed: number | null = null,
   ): Promise<void> {
-    return this.store.updateVersionProgress(versionId, pages, maxPages);
+    return this.store.updateVersionProgress(versionId, pages, maxPages, pagesIndexed);
   }
 
   /**
@@ -575,6 +576,35 @@ export class DocumentManagementService {
         `❌ Failed to checkpoint store after delete: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  /**
+   * Records a page that exists but holds no content, replacing anything stored
+   * for it previously.
+   *
+   * @param library Library name.
+   * @param version Version string (null/undefined for unversioned).
+   * @param depth Crawl depth the page was found at.
+   * @param page Page identity and optional validators.
+   */
+  async addEmptyPage(
+    library: string,
+    version: string | null | undefined,
+    depth: number,
+    page: {
+      url: string;
+      title: string;
+      sourceContentType: string | null;
+      contentType: string | null;
+      etag: string | null;
+      lastModified: string | null;
+    },
+  ): Promise<void> {
+    if (!page.url) {
+      throw new StoreError("Empty page metadata must include a valid URL");
+    }
+    await this.store.addEmptyPage(library, normalizeVersionLabel(version), depth, page);
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**

@@ -9,12 +9,13 @@ import { logger } from "../../utils/logger";
 import { normalizeUrl, type UrlNormalizerOptions } from "../../utils/url";
 import { FetchStatus } from "../fetcher/types";
 import type { PipelineResult } from "../pipelines/types";
-import type {
-  QueueItem,
-  ScrapeResult,
-  ScraperOptions,
-  ScraperProgressEvent,
-  ScraperStrategy,
+import {
+  PageOutcome,
+  type QueueItem,
+  type ScrapeResult,
+  type ScraperOptions,
+  type ScraperProgressEvent,
+  type ScraperStrategy,
 } from "../types";
 import { isLlmsTxtUrl } from "../utils/llmsTxtParser";
 import { shouldIncludeUrl } from "../utils/patternMatcher";
@@ -51,6 +52,22 @@ export interface ProcessItemResult {
   queueItems?: QueueItem[];
   /** Internal-only allowlist roots to carry to discovered queue items. */
   internalAllowedFileRoots?: string[];
+  /**
+   * True when this item is a container rather than a page — a directory listing
+   * or archive that yields links but is not itself indexable.
+   *
+   * Declared rather than inferred: a container must never be written to the
+   * index as an empty page, and deducing that from a missing content type made
+   * the rule depend on a field set for unrelated reasons.
+   */
+  isContainer?: boolean;
+  /**
+   * True when the pipeline raised errors while producing no content.
+   *
+   * Distinguishes "this page is empty" from "we failed to read this page", which
+   * decides whether the response validator may be stored.
+   */
+  pipelineFailed?: boolean;
   /** Any non-critical errors encountered during processing. This may be an empty array if no errors were encountered or if the content was not processed. */
   status: FetchStatus;
 }
@@ -77,12 +94,49 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
    * - Efficient deduplication across concurrent processing
    */
   protected visited = new Set<string>();
+  /** Items dequeued and given an outcome. Converges on {@link effectiveTotal}. */
   protected pageCount = 0;
-  protected totalDiscovered = 0; // Track total URLs discovered (unlimited)
-  protected effectiveTotal = 0; // Track effective total (limited by maxPages)
+  /** Processed items that produced stored content. Bounded by `maxPages`. */
+  protected pagesIndexed = 0;
+  protected totalDiscovered = 0; // URLs admitted to the queue (unlimited)
+  /** URLs admitted to the queue, clamped at where the crawl will stop. */
+  protected effectiveTotal = 0;
   protected canonicalBaseUrl?: URL; // Final URL after initial redirect (depth 0)
   protected completedChildPageAttempts = 0;
   protected failedChildPages = 0;
+
+  /**
+   * The point at which the crawl stops, expressed in processed items.
+   *
+   * `maxPages` bounds indexed pages, so reaching it takes `maxPages` successes
+   * plus however many items produced nothing along the way. Clamping the
+   * denominator flat at `maxPages` would put it below the numerator; this keeps
+   * the two able to meet.
+   *
+   * @param options Scraper options supplying the effective page limit.
+   * @returns The processed-item budget.
+   */
+  private processingBudget(options: ScraperOptions): number {
+    const maxPages = options.maxPages ?? this.config.scraper.maxPages;
+    // Items that produced nothing push the stopping point further out. Derived
+    // rather than stored: every processed item is either indexed or it is not.
+    return maxPages + (this.pageCount - this.pagesIndexed);
+  }
+
+  /**
+   * Raises the denominator to match a budget that just grew.
+   *
+   * Called when an item produces no content, which pushes the stopping point one
+   * item further out. Never lowers it: the queue may already hold more.
+   *
+   * @param options Scraper options supplying the effective page limit.
+   */
+  protected retuneEffectiveTotal(options: ScraperOptions): void {
+    const capped = Math.min(this.totalDiscovered, this.processingBudget(options));
+    if (capped > this.effectiveTotal) {
+      this.effectiveTotal = capped;
+    }
+  }
 
   abstract canHandle(url: string): boolean;
 
@@ -236,48 +290,58 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
       batch.map(async (item) => {
         // Check signal before processing each item in the batch
         throwIfBatchAborted();
-        // Resolve default for maxDepth check
+        // Resolved for the progress log and the enqueue-time depth filter below.
+        // Items are no longer dropped here: every queued item reaches an outcome,
+        // which is what lets the processed count converge on the queued total.
         const maxDepth = options.maxDepth ?? this.config.scraper.maxDepth;
-        if (item.depth > maxDepth) {
-          return [];
-        }
+
+        // Every dequeued item reaches exactly one outcome and advances the
+        // processed count once, which is what makes it converge on the queued
+        // total. Only `Stored` additionally advances the indexed count.
+        //
+        // Declared outside the try so the failure path reports through it too:
+        // the counter protocol has one implementation, not two.
+        const report = async (
+          outcome: PageOutcome,
+          extra: Partial<
+            Pick<ScraperProgressEvent, "currentUrl" | "result" | "emptyPage" | "deleted">
+          > = {},
+        ): Promise<void> => {
+          const pagesScraped = ++this.pageCount;
+          if (outcome === PageOutcome.Stored) {
+            this.pagesIndexed++;
+          } else {
+            this.retuneEffectiveTotal(options);
+          }
+
+          logger.info(
+            `🌐 Scraping page ${pagesScraped}/${this.effectiveTotal} (depth ${item.depth}/${maxDepth}): ${item.url}`,
+          );
+
+          await progressCallback({
+            pagesScraped,
+            totalPages: this.effectiveTotal,
+            totalDiscovered: this.totalDiscovered,
+            pagesIndexed: this.pagesIndexed,
+            currentUrl: item.url,
+            depth: item.depth,
+            maxDepth,
+            outcome,
+            result: null,
+            pageId: item.pageId,
+            ...extra,
+          });
+        };
 
         try {
           // Pass signal to processItem
           const result = await this.processItem(item, options, signal);
           throwIfBatchAborted();
 
-          // Only count items that represent tracked pages or have actual content
-          // - Refresh operations (have pageId): Always count (they're tracked in DB)
-          // - New files with content: Count (they're being indexed)
-          // - Directory discovery (no pageId, no content): Don't count
-          const shouldCount = item.pageId !== undefined || result.content !== undefined;
-
-          let currentPageCount = this.pageCount;
-          if (shouldCount) {
-            currentPageCount = ++this.pageCount;
-
-            // Log progress for all counted items
-            logger.info(
-              `🌐 Scraping page ${currentPageCount}/${this.effectiveTotal} (depth ${item.depth}/${maxDepth}): ${item.url}`,
-            );
-          }
-
           if (result.status === FetchStatus.NOT_MODIFIED) {
             // File/page hasn't changed, skip processing but count as processed
             logger.debug(`Page unchanged (304): ${item.url}`);
-            if (shouldCount) {
-              await progressCallback({
-                pagesScraped: currentPageCount,
-                totalPages: this.effectiveTotal,
-                totalDiscovered: this.totalDiscovered,
-                currentUrl: item.url,
-                depth: item.depth,
-                maxDepth: maxDepth,
-                result: null,
-                pageId: item.pageId,
-              });
-            }
+            await report(PageOutcome.Unchanged);
             this.recordChildPageCompletion(item, result);
             ensureFailureRateWithinThreshold();
             throwIfBatchAborted();
@@ -317,29 +381,36 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
             // File/page was deleted, count as processed
             logger.debug(`Page deleted (404): ${item.url}`);
-            if (shouldCount) {
-              const progress: ScraperProgressEvent = {
-                pagesScraped: currentPageCount,
-                totalPages: this.effectiveTotal,
-                totalDiscovered: this.totalDiscovered,
-                currentUrl: item.url,
-                depth: item.depth,
-                maxDepth: maxDepth,
-                result: null,
-                pageId: item.pageId,
-              };
-
-              if (isRefreshDeletion) {
-                progress.deleted = true;
-              }
-
-              await progressCallback(progress);
-            }
+            await report(PageOutcome.Absent, isRefreshDeletion ? { deleted: true } : {});
             return fallbackQueueItems;
           }
 
+          if (result.status === FetchStatus.SKIPPED) {
+            // The resource was fetched but nothing can read its content type, so
+            // the body was abandoned at the headers. This is neither a success nor
+            // a failure: no page is stored, and the child-page failure rate is left
+            // untouched so an asset-heavy site cannot trip abortOnFailureRate.
+            // Only the user's actual requested root is fatal, matching the 404
+            // branch above. An llms.txt seed is one of several discovery seeds,
+            // and a refresh replays stored pages at their stored depth — neither
+            // should abort a scrape whose real root resolved fine.
+            if (item.depth === 0 && !item.fromLlmsTxt && item.pageId === undefined) {
+              throw new ScraperError(
+                `Cannot process content type of ${item.url}: no pipeline can read it`,
+                false,
+              );
+            }
+            logger.debug(`Skipped (unprocessable content): ${item.url}`);
+            await report(PageOutcome.Skipped);
+            return result.queueItems ?? [];
+          }
+
           if (result.status !== FetchStatus.SUCCESS) {
+            // Unreachable while FetchStatus has only the four handled members, but
+            // reporting here keeps "every dequeued item reaches exactly one
+            // outcome" true by construction rather than by enumeration.
             logger.error(`❌ Unknown fetch status: ${result.status}`);
+            await report(PageOutcome.Failed);
             return [];
           }
 
@@ -347,14 +418,15 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           // Use the final URL from the result (which may differ due to redirects)
           const finalUrl = result.url || item.url;
 
-          if (result.content) {
-            await progressCallback({
-              pagesScraped: currentPageCount,
-              totalPages: this.effectiveTotal,
-              totalDiscovered: this.totalDiscovered,
+          // A result carrying no text is not a stored page. `WebScraperStrategy`
+          // already gates on this, but the local-file and GitHub processors pass
+          // their pipeline result through unconditionally, so an empty file would
+          // otherwise report Stored, inflate the indexed count and consume the
+          // page budget for a document the store then drops for having no chunks.
+          const producedContent = !!result.content?.textContent?.trim();
+          if (result.content && producedContent) {
+            await report(PageOutcome.Stored, {
               currentUrl: finalUrl,
-              depth: item.depth,
-              maxDepth: maxDepth,
               result: {
                 url: finalUrl,
                 title: result.content.title?.trim() || result.title?.trim() || "",
@@ -367,7 +439,35 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 etag: result.etag || null,
                 lastModified: result.lastModified || null,
               } satisfies ScrapeResult,
-              pageId: item.pageId,
+            });
+            throwIfBatchAborted();
+          } else {
+            // Fetched successfully but produced nothing to store: a directory
+            // listing, or a page whose pipeline extracted no text. Either way the
+            // item was processed, so it is reported rather than advancing the
+            // counter silently.
+            // A container that yields links — a directory listing, an archive — is
+            // processed and produces nothing, but it is not a page and must not be
+            // recorded as one.
+            const wasPage = result.isContainer !== true;
+            await report(PageOutcome.Empty, {
+              currentUrl: finalUrl,
+              emptyPage: !wasPage
+                ? undefined
+                : {
+                    url: finalUrl,
+                    title: result.title?.trim() || "",
+                    sourceContentType: result.sourceContentType ?? null,
+                    contentType: result.contentType ?? null,
+                    // Withheld when the pipeline errored: storing the validator against
+                    // a failure we do not understand would make the next refresh answer
+                    // 304 and never retry, turning a transient fault permanent.
+                    etag: result.pipelineFailed ? null : (result.etag ?? null),
+                    lastModified: result.pipelineFailed
+                      ? null
+                      : (result.lastModified ?? null),
+                    pipelineFailed: result.pipelineFailed === true,
+                  },
             });
             throwIfBatchAborted();
           }
@@ -382,7 +482,19 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           ensureFailureRateWithinThreshold();
           throwIfBatchAborted();
 
-          const linkQueueItems = nextItems
+          // Depth is invariant across these links, so reject the whole set at
+          // once rather than parsing each URL and discarding it.
+          //
+          // Rejecting here rather than at dequeue is what keeps the progress
+          // denominator honest, and the rejection deliberately does NOT add the
+          // URL to `visited`. The queue is breadth-first in a normal crawl, so a
+          // URL is first offered at its minimum reachable depth and this cannot
+          // lose anything — but refresh mode builds its initial queue in database
+          // order, which is not sorted by depth, so the same URL can legitimately
+          // be offered again at a shallower depth later. Consuming a dedup slot
+          // here would discard it.
+          const childDepth = item.depth + 1;
+          const linkQueueItems = (childDepth > maxDepth ? [] : nextItems)
             .map((value) => {
               try {
                 const targetUrl = new URL(value, linkBaseUrl);
@@ -396,7 +508,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 }
                 return {
                   url: targetUrl.href,
-                  depth: item.depth + 1,
+                  depth: childDepth,
                   ...(internalAllowedFileRoots ? { internalAllowedFileRoots } : {}),
                 } satisfies QueueItem;
               } catch (_error) {
@@ -431,6 +543,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
           if (options.ignoreErrors) {
             logger.error(`❌ Failed to process ${item.url}: ${error}`);
+            await report(PageOutcome.Failed);
             return [];
           }
           throw error;
@@ -452,8 +565,9 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         // Always increment the unlimited counter
         this.totalDiscovered++;
 
-        // Only increment effective total if we haven't exceeded maxPages
-        if (this.effectiveTotal < maxPages) {
+        // Clamp at the processed-item budget, not flat at maxPages, so the
+        // denominator stays reachable when items produce no content.
+        if (this.effectiveTotal < this.processingBudget(options)) {
           this.effectiveTotal++;
         }
       }
@@ -469,6 +583,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   ): Promise<void> {
     this.visited.clear();
     this.pageCount = 0;
+    this.pagesIndexed = 0;
     this.completedChildPageAttempts = 0;
     this.failedChildPages = 0;
 
@@ -513,17 +628,23 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
       queue.unshift({ url: options.url, depth: 0 } satisfies QueueItem);
     }
 
-    // Initialize counters based on actual queue length after population
-    this.totalDiscovered = queue.length;
-    this.effectiveTotal = queue.length;
-
     // Resolve optional values to defaults using temporary config lookup
     // (We'll replace this with proper config merging later)
     const maxPages = options.maxPages ?? this.config.scraper.maxPages;
     const maxConcurrency = options.maxConcurrency ?? this.config.scraper.maxConcurrency;
 
-    // Unified processing loop for both normal and refresh modes
-    while (queue.length > 0 && this.pageCount < maxPages) {
+    // Initialize counters from the populated queue. The denominator is clamped
+    // here as well as on increment: a refresh whose initial queue exceeds the
+    // page limit would otherwise start with a total the numerator can never
+    // reach, which is the defect this capability exists to remove.
+    this.totalDiscovered = queue.length;
+    this.effectiveTotal = Math.min(queue.length, this.processingBudget(options));
+
+    // Unified processing loop for both normal and refresh modes.
+    // `maxPages` bounds pages that produce content, not items processed: asking
+    // for 100 pages should yield 100 pages, not stop at 100 attempts of which
+    // some produced nothing.
+    while (queue.length > 0 && this.pagesIndexed < maxPages) {
       // Check for cancellation at the start of each loop iteration
       if (signal?.aborted) {
         logger.debug(`${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal.`);
@@ -532,11 +653,14 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         );
       }
 
-      const remainingPages = maxPages - this.pageCount;
+      const remainingPages = maxPages - this.pagesIndexed;
       if (remainingPages <= 0) {
         break;
       }
 
+      // Bounding the batch by the remaining budget is what stops a concurrent
+      // batch overshooting the limit: at most `remainingPages` items run, so at
+      // most `remainingPages` of them can index.
       const batchSize = Math.min(maxConcurrency, remainingPages, queue.length);
       const batch = queue.splice(0, batchSize);
 

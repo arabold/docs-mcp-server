@@ -24,7 +24,11 @@ export class MimeTypeUtils {
       return { mimeType: "application/octet-stream" };
     }
     const parts = contentTypeHeader.split(";").map((part) => part.trim());
-    const mimeType = parts[0].toLowerCase();
+    // Normalized for the same reason path detection is: the `mime` package's
+    // misfilings also arrive from servers, and a header saying
+    // `application/x-tcl` describes a text script just as a `.tcl` path does.
+    const raw = parts[0].toLowerCase();
+    const mimeType = MimeTypeUtils.normalizeMimeType(raw) ?? raw;
     let charset: string | undefined;
 
     for (let i = 1; i < parts.length; i++) {
@@ -213,6 +217,29 @@ export class MimeTypeUtils {
   }
 
   /**
+   * Checks if a MIME type names a binary media family: image, video, audio, or font.
+   *
+   * These are the families whose file extensions are trustworthy enough to act on
+   * before a request is made. Deliberately excludes `application/*`, because the
+   * `mime` package files plain-text scripts there — `.csh`, `.tcl`, `.bat` and
+   * `.scm` all resolve to `application/*` despite being source code that pipelines
+   * read happily.
+   *
+   * @param mimeType The MIME type to classify.
+   * @returns True when the type names binary media.
+   */
+  public static isBinaryMediaType(mimeType: string): boolean {
+    if (!mimeType) return false;
+    const normalized = mimeType.toLowerCase();
+    return (
+      normalized.startsWith("image/") ||
+      normalized.startsWith("video/") ||
+      normalized.startsWith("audio/") ||
+      normalized.startsWith("font/")
+    );
+  }
+
+  /**
    * Checks if content appears to be binary based on the presence of null bytes.
    * This is a reliable heuristic since text files should not contain null bytes.
    * @param content The content to check (string or Buffer)
@@ -308,6 +335,9 @@ export class MimeTypeUtils {
       clj: "text/x-clojure",
       cljs: "text/x-clojure",
       cljc: "text/x-clojure",
+      scm: "text/x-scheme", // mime package: application/vnd.lotus-screencam
+      ss: "text/x-scheme",
+      tcl: "text/x-tcl", // mime package: application/x-tcl
       jl: "text/x-julia",
 
       // .NET
@@ -328,7 +358,12 @@ export class MimeTypeUtils {
       bash: "text/x-shellscript",
       zsh: "text/x-shellscript",
       fish: "text/x-shellscript",
+      csh: "text/x-shellscript", // mime package: application/x-csh
+      tcsh: "text/x-shellscript",
+      ksh: "text/x-shellscript",
       ps1: "text/x-powershell",
+      bat: "text/x-batch", // mime package: application/x-msdownload
+      cmd: "text/x-batch",
 
       // Documentation formats
       markdown: "text/markdown",
@@ -435,6 +470,10 @@ export class MimeTypeUtils {
       "application/x-tex": "text/x-tex", // .tex files
       "application/x-latex": "text/x-latex", // .latex files
       "application/toml": "text/x-toml", // .toml files
+      "application/x-csh": "text/x-shellscript", // .csh/.tcsh files
+      "application/x-tcl": "text/x-tcl", // .tcl files
+      "application/vnd.lotus-screencam": "text/x-scheme", // .scm files (Lotus ScreenCam conflict)
+      "application/x-msdownload": "text/x-batch", // .bat/.cmd files
     };
 
     return mimeTypeNormalization[mimeType] || mimeType;
@@ -503,6 +542,9 @@ export class MimeTypeUtils {
       "text/x-erlang": "erlang",
       "text/x-elixir": "elixir",
       "text/x-clojure": "clojure",
+      "text/x-scheme": "scheme",
+      "text/x-tcl": "tcl",
+      "text/x-batch": "batch",
       "text/x-julia": "julia",
 
       // Web3/Smart contracts

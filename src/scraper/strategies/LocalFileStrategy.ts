@@ -123,7 +123,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
         logger.debug(
           `Found ${links.length} files in ${filePath} (from ${visibleContents.length} entries)`,
         );
-        return { url: item.url, links, status: FetchStatus.SUCCESS };
+        return { url: item.url, links, isContainer: true, status: FetchStatus.SUCCESS };
       }
 
       // Check if the file itself is an archive (Root Archive)
@@ -160,7 +160,12 @@ export class LocalFileStrategy extends BaseScraperStrategy {
               }
             }
             logger.debug(`Found ${links.length} entries in archive ${filePath}`);
-            return { url: item.url, links, status: FetchStatus.SUCCESS };
+            return {
+              url: item.url,
+              links,
+              isContainer: true,
+              status: FetchStatus.SUCCESS,
+            };
           } catch (err) {
             logger.error(`❌ Failed to list archive ${filePath}: ${err}`);
             // Treat as binary file or fail?
@@ -329,7 +334,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       logger.warn(
         `⚠️  Unsupported content type "${rawContent.mimeType}" for file ${displayPath}. Skipping processing.`,
       );
-      return { url: rawContent.source, links: [], status: FetchStatus.SUCCESS };
+      return { url: rawContent.source, links: [], status: FetchStatus.SKIPPED };
     }
 
     for (const err of processed.errors ?? []) {

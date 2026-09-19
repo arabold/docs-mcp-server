@@ -3,13 +3,14 @@ import type { ProgressCallback } from "../../types";
 import { type AppConfig, loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { FetchStatus } from "../fetcher/types";
-import type {
-  QueueItem,
-  ScrapeResult,
-  ScraperOptions,
-  ScraperProgressEvent,
-} from "../types";
-import { ScrapeMode } from "../types"; // Import ScrapeMode
+import {
+  PageOutcome,
+  type QueueItem,
+  ScrapeMode,
+  type ScrapeResult,
+  type ScraperOptions,
+  type ScraperProgressEvent,
+} from "../types"; // Import ScrapeMode
 import type { ProcessItemResult } from "./BaseScraperStrategy";
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
@@ -182,10 +183,13 @@ describe("WebScraperStrategy", () => {
     await strategy.scrape(options, progressCallback);
 
     // Verify HttpFetcher mock was called
-    expect(mockFetchFn).toHaveBeenCalledWith(testUrl, {
-      signal: undefined, // scrape doesn't pass signal in this basic call
-      followRedirects: options.followRedirects, // Check default from options
-    });
+    expect(mockFetchFn).toHaveBeenCalledWith(
+      testUrl,
+      expect.objectContaining({
+        signal: undefined, // scrape doesn't pass signal in this basic call
+        followRedirects: options.followRedirects, // Check default from options
+      }),
+    );
 
     // Verify that the pipeline processed and called the callback with a document
     expect(progressCallback).toHaveBeenCalled();
@@ -205,10 +209,13 @@ describe("WebScraperStrategy", () => {
     await strategy.scrape(options, progressCallback);
 
     // Verify followRedirects option was passed to the fetcher mock
-    expect(mockFetchFn).toHaveBeenCalledWith("https://example.com", {
-      signal: undefined,
-      followRedirects: false, // Explicitly false from options
-    });
+    expect(mockFetchFn).toHaveBeenCalledWith(
+      "https://example.com",
+      expect.objectContaining({
+        signal: undefined,
+        followRedirects: false, // Explicitly false from options
+      }),
+    );
     // Also check that processing still happened
     expect(progressCallback).toHaveBeenCalled();
     const documentProcessingCall = progressCallback.mock.calls.find(
@@ -1338,11 +1345,55 @@ describe("WebScraperStrategy", () => {
         status: FetchStatus.SUCCESS,
       });
 
-      await strategy.scrape(options, progressCallback);
+      // The start URL itself being unreadable fails the job, matching the
+      // existing rule for a 404 root: completing "successfully" with zero
+      // documents tells the user nothing about what went wrong.
+      await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
+        /Cannot process content type/,
+      );
 
-      // Verify no document was produced for unsupported content
       const docCall = progressCallback.mock.calls.find((call) => call[0].result);
       expect(docCall).toBeUndefined();
+    });
+
+    it("skips unsupported content found during a crawl without failing", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      options.url = "https://example.com/";
+      options.maxDepth = 1;
+
+      mockFetchFn.mockImplementation(async (url: string) =>
+        url === "https://example.com/"
+          ? {
+              content:
+                '<html><body><a href="/asset">asset</a><a href="/page">page</a></body></html>',
+              mimeType: "text/html",
+              source: url,
+              status: FetchStatus.SUCCESS,
+            }
+          : url.endsWith("/asset")
+            ? {
+                content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+                mimeType: "image/png",
+                source: url,
+                status: FetchStatus.SUCCESS,
+              }
+            : {
+                content: "<html><body><h1>Page</h1></body></html>",
+                mimeType: "text/html",
+                source: url,
+                status: FetchStatus.SUCCESS,
+              },
+      );
+
+      await strategy.scrape(options, progressCallback);
+
+      const asset = progressCallback.mock.calls.find(
+        (call) => call[0].currentUrl === "https://example.com/asset",
+      )?.[0];
+      // Reported as skipped rather than empty: nothing read the body, so a
+      // refresh must not treat it as a page that lost its content.
+      expect(asset?.outcome).toBe(PageOutcome.Skipped);
+      expect(asset?.emptyPage).toBeUndefined();
     });
 
     it("should process text/plain content through TextPipeline", async () => {
@@ -2537,5 +2588,161 @@ describe("WebScraperStrategy", () => {
       expect(deepPageCall![0].depth).toBe(2);
       expect(deepPageCall![0].pageId).toBe(555);
     });
+  });
+});
+
+describe("WebScraperStrategy queue-time unprocessable-content gate", () => {
+  let strategy: WebScraperStrategy;
+  let options: ScraperOptions;
+
+  /** Serves a root page linking every supplied href, and plain HTML for anything else. */
+  const serveRootLinking = (hrefs: string[]) => {
+    mockFetchFn.mockImplementation(async (url: string) => {
+      if (url === "https://example.com/") {
+        const anchors = hrefs.map((href) => `<a href="${href}">link</a>`).join("");
+        return {
+          content: `<html><head><title>Root</title></head><body>${anchors}</body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      }
+      return {
+        content: `<html><head><title>${url}</title></head><body>body of ${url}</body></html>`,
+        mimeType: "text/html",
+        source: url,
+        status: FetchStatus.SUCCESS,
+      };
+    });
+  };
+
+  const fetchedUrls = () => mockFetchFn.mock.calls.map((call) => call[0]);
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    strategy = new WebScraperStrategy(loadConfig());
+    options = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0",
+      maxPages: 50,
+      maxDepth: 2,
+      scope: "subpages",
+      followRedirects: true,
+      scrapeMode: ScrapeMode.Fetch,
+    };
+  });
+
+  it.each([
+    "/assets/diagram.png",
+    "/assets/photo.jpg",
+    "/assets/flame.svg",
+    "/assets/demo.mp4",
+  ])("rejects %s without issuing a request", async (href) => {
+    serveRootLinking([href]);
+
+    await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+    // The llms.txt probe also fetches, so assert on the link itself rather than
+    // on the full call list.
+    expect(fetchedUrls()).not.toContain(`https://example.com${href}`);
+  });
+
+  it.each([
+    "/guide.pdf",
+    "/guide.md",
+    "/guide.html",
+    "/example.py",
+    "/notes.txt",
+    "/data.json",
+  ])("admits %s", async (href) => {
+    serveRootLinking([href]);
+
+    await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+    expect(fetchedUrls()).toContain(`https://example.com${href}`);
+  });
+
+  it("admits an extensionless link so the fetch-time gate can decide", async () => {
+    serveRootLinking(["/docs/getting-started"]);
+
+    await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+    expect(fetchedUrls()).toContain("https://example.com/docs/getting-started");
+  });
+
+  it("admits an unrecognised extension (issue #490 regression)", async () => {
+    // guess.qbas and guess.ps are named in issue #490. Detection has no opinion on
+    // them, so both gates must let them through; the server serves them as text/plain.
+    serveRootLinking(["/Guess/guess.qbas", "/Guess/guess.ps"]);
+
+    await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+    expect(fetchedUrls()).toContain("https://example.com/Guess/guess.qbas");
+    expect(fetchedUrls()).toContain("https://example.com/Guess/guess.ps");
+  });
+
+  it("does not reject on an extension appearing only in the query string", async () => {
+    serveRootLinking(["/download?file=diagram.png"]);
+
+    await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+    expect(fetchedUrls()).toContain("https://example.com/download?file=diagram.png");
+  });
+
+  it("keeps rejected links out of totalDiscovered", async () => {
+    serveRootLinking(["/a.png", "/b.jpg", "/c.svg", "/real-page"]);
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(options, progressCallback);
+
+    const last = progressCallback.mock.calls.at(-1)?.[0];
+    // Root plus the one processable link. The three images never enter the queue.
+    expect(last?.totalDiscovered).toBe(2);
+    expect(last?.pagesScraped).toBe(2);
+  });
+});
+
+describe("WebScraperStrategy empty extraction", () => {
+  let strategy: WebScraperStrategy;
+  let options: ScraperOptions;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    strategy = new WebScraperStrategy(loadConfig());
+    options = {
+      url: "https://example.com/page",
+      library: "test",
+      version: "1.0",
+      maxPages: 10,
+      maxDepth: 0,
+      scrapeMode: ScrapeMode.Fetch,
+    };
+  });
+
+  it("reports a clean empty extraction as an empty page carrying its etag", async () => {
+    // A 200 whose pipeline runs cleanly and extracts nothing is a statement that
+    // the page is empty, so the validator accurately describes that state.
+    mockFetchFn.mockResolvedValue({
+      content: "<html><body></body></html>",
+      mimeType: "text/html",
+      source: "https://example.com/page",
+      etag: '"v2"',
+      lastModified: "2026-01-01T00:00:00.000Z",
+      status: FetchStatus.SUCCESS,
+    });
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+
+    await strategy.scrape(options, progressCallback);
+
+    const event = progressCallback.mock.calls.at(-1)?.[0];
+    expect(event?.outcome).toBe(PageOutcome.Empty);
+    expect(event?.emptyPage).toMatchObject({
+      url: "https://example.com/page",
+      etag: '"v2"',
+      lastModified: "2026-01-01T00:00:00.000Z",
+      pipelineFailed: false,
+    });
+    expect(event?.pagesIndexed).toBe(0);
   });
 });

@@ -44,10 +44,15 @@ export interface PipelineJob {
   versionId?: number;
   /** Database version status (authoritative). */
   versionStatus?: VersionStatus;
-  /** Current number of pages processed. */
+  /** Items dequeued and given an outcome. */
   progressPages?: number;
-  /** Maximum number of pages to process. */
+  /**
+   * Items this job expects to process — queued URLs clamped at the stopping
+   * point. NOT the configured `maxPages` value, despite the name.
+   */
   progressMaxPages?: number;
+  /** Items that produced stored content. Null for jobs predating this counter. */
+  progressPagesIndexed?: number | null;
   /** Database error message (more detailed than Error object). */
   errorMessage?: string | null;
   /** Last update timestamp from database. */

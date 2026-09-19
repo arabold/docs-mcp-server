@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { ScraperService } from "../scraper";
 import type { ScrapeResult, ScraperProgressEvent } from "../scraper/types";
+import { PageOutcome } from "../scraper/types";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import { PipelineWorker } from "./PipelineWorker";
 import type { InternalPipelineJob, PipelineManagerCallbacks } from "./types";
@@ -106,6 +107,8 @@ describe("PipelineWorker", () => {
           maxDepth: 1,
           result: mockProcessed1,
           totalDiscovered: 0,
+          pagesIndexed: 0,
+          outcome: PageOutcome.Stored,
         };
         await progressCallback(progress1);
 
@@ -117,6 +120,8 @@ describe("PipelineWorker", () => {
           maxDepth: 1,
           result: mockProcessed2,
           totalDiscovered: 0,
+          pagesIndexed: 0,
+          outcome: PageOutcome.Stored,
         };
         await progressCallback(progress2);
       },
@@ -210,6 +215,8 @@ describe("PipelineWorker", () => {
           maxDepth: 1,
           result: mockProcessed,
           totalDiscovered: 0,
+          pagesIndexed: 0,
+          outcome: PageOutcome.Stored,
         };
         await progressCallback(progress);
       },
@@ -259,6 +266,8 @@ describe("PipelineWorker", () => {
           maxDepth: 1,
           result: mockProcessed,
           totalDiscovered: 0,
+          pagesIndexed: 0,
+          outcome: PageOutcome.Stored,
         };
         // Simulate cancellation happening *before* progress is processed by worker
         abortController.abort();
@@ -329,6 +338,8 @@ describe("PipelineWorker", () => {
           result: null,
           pageId: 123, // Page ID to delete
           totalDiscovered: 0,
+          pagesIndexed: 0,
+          outcome: PageOutcome.Absent,
         };
         await progressCallback(progress);
       },
@@ -369,6 +380,8 @@ describe("PipelineWorker", () => {
             result: null, // No result for 304
             pageId: 123, // Page ID from refresh queue
             totalDiscovered: 0,
+            pagesIndexed: 0,
+            outcome: PageOutcome.Unchanged,
           };
           await progressCallback(progress);
         },
@@ -415,6 +428,8 @@ describe("PipelineWorker", () => {
             result: mockResult,
             pageId: 123, // Existing page ID
             totalDiscovered: 0,
+            pagesIndexed: 0,
+            outcome: PageOutcome.Stored,
           };
           await progressCallback(progress);
         },
@@ -469,6 +484,8 @@ describe("PipelineWorker", () => {
             result: mockResult,
             pageId: undefined, // No pageId = new page
             totalDiscovered: 0,
+            pagesIndexed: 0,
+            outcome: PageOutcome.Stored,
           };
           await progressCallback(progress);
         },
@@ -506,6 +523,8 @@ describe("PipelineWorker", () => {
             deleted: true, // 404 - page was deleted
             pageId: 123,
             totalDiscovered: 0,
+            pagesIndexed: 0,
+            outcome: PageOutcome.Absent,
           };
           await progressCallback(progress);
         },
