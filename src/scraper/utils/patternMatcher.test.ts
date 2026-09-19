@@ -3,6 +3,7 @@ import { DEFAULT_EXCLUSION_PATTERNS } from "./defaultPatterns";
 import {
   extractPathAndQuery,
   isRegexPattern,
+  matchesAnyHostPattern,
   matchesAnyPattern,
   patternToRegExp,
   shouldIncludeUrl,
@@ -606,5 +607,41 @@ describe("patternMatcher", () => {
         shouldIncludeUrl("file:///path/to/CHANGELOG.md", undefined, ["**/CHANGELOG.md"]),
       ).toBe(false);
     });
+  });
+});
+
+describe("compiled pattern caching", () => {
+  // Patterns are recompiled per URL without a cache, which dominates link
+  // filtering: every discovered URL is tested against ~70 default exclusions,
+  // twice. Caching must not change any verdict.
+  it("returns the same compiled RegExp for a repeated pattern", () => {
+    const first = patternToRegExp("**/*.test.*");
+    const second = patternToRegExp("**/*.test.*");
+    expect(second).toBe(first);
+  });
+
+  it("keeps distinct patterns distinct", () => {
+    expect(patternToRegExp("**/*.md")).not.toBe(patternToRegExp("**/*.mdx"));
+  });
+
+  it("gives the same verdict on repeated evaluation", () => {
+    const patterns = ["**/archive/**", "/\\.(ini|cfg)$/", "**/*.min.js"];
+    const urls = [
+      "https://example.com/docs/archive/old.html",
+      "https://example.com/docs/guide.html",
+      "https://example.com/app.min.js",
+      "https://example.com/settings.ini",
+    ];
+    const first = urls.map((u) => matchesAnyPattern(u, patterns));
+    const second = urls.map((u) => matchesAnyPattern(u, patterns));
+    expect(second).toEqual(first);
+    expect(first).toEqual([true, false, true, true]);
+  });
+
+  it("does not let a host-pattern match leak into URL matching", () => {
+    // matchesAnyHostPattern lowercases its pattern before compiling; the cache
+    // is keyed on the compiled string, so the two callers must not collide.
+    expect(matchesAnyHostPattern("EXAMPLE.com", ["example.com"])).toBe(true);
+    expect(matchesAnyPattern("/example.com", ["example.com"])).toBe(true);
   });
 });

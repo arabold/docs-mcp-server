@@ -693,3 +693,40 @@ describe("MimeTypeUtils.detectMimeTypeFromPath dot handling", () => {
     expect(MimeTypeUtils.detectMimeTypeFromPath(pathname)).toBe(expected);
   });
 });
+
+describe("MimeTypeUtils script extensions the mime package misfiles", () => {
+  // The mime package files these plain-text scripts under application/*, which
+  // left them unindexed by the GitHub and local-file strategies and drove the
+  // binary-media narrowing of the crawl gate (issue #490).
+  it.each([
+    [".csh", "/script.csh", "text/x-shellscript", "bash"],
+    [".tcsh", "/script.tcsh", "text/x-shellscript", "bash"],
+    [".ksh", "/script.ksh", "text/x-shellscript", "bash"],
+    [".tcl", "/script.tcl", "text/x-tcl", "tcl"],
+    [".scm", "/lib.scm", "text/x-scheme", "scheme"],
+    [".bat", "/build.bat", "text/x-batch", "batch"],
+    [".cmd", "/build.cmd", "text/x-batch", "batch"],
+  ])("detects %s as a text script", (_label, pathname, mimeType, language) => {
+    expect(MimeTypeUtils.detectMimeTypeFromPath(pathname)).toBe(mimeType);
+    expect(MimeTypeUtils.extractLanguageFromMimeType(mimeType)).toBe(language);
+    expect(MimeTypeUtils.isSourceCode(mimeType)).toBe(true);
+  });
+
+  it.each([
+    ["application/x-csh", "text/x-shellscript"],
+    ["application/x-tcl", "text/x-tcl"],
+    ["application/vnd.lotus-screencam", "text/x-scheme"],
+    ["application/x-msdownload", "text/x-batch"],
+  ])("normalizes %s arriving already-wrong", (wrong, right) => {
+    expect(MimeTypeUtils.normalizeMimeType(wrong)).toBe(right);
+  });
+
+  it("leaves PostScript alone as a genuine document format", () => {
+    // .ps is not a misfiled text script, so it keeps application/postscript.
+    // The crawl gate still admits it, because that type is not binary media.
+    expect(MimeTypeUtils.detectMimeTypeFromPath("/Guess/guess.ps")).toBe(
+      "application/postscript",
+    );
+    expect(MimeTypeUtils.isBinaryMediaType("application/postscript")).toBe(false);
+  });
+});

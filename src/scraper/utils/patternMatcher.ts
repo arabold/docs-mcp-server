@@ -1,4 +1,4 @@
-import { minimatch } from "minimatch";
+import { Minimatch, minimatch } from "minimatch";
 import { getEffectiveExclusionPatterns } from "./defaultPatterns";
 
 /**
@@ -16,6 +16,35 @@ import { getEffectiveExclusionPatterns } from "./defaultPatterns";
  */
 
 /**
+ * Compiled-pattern caches.
+ *
+ * Every discovered URL is matched against the full exclusion set — around 70
+ * default patterns, tested against both the full URL and the pathname — so
+ * recompiling each pattern per URL dominates the cost of link filtering.
+ * Compilation depends only on the pattern string (options are fixed), and the
+ * key space is the set of distinct patterns in use rather than anything
+ * URL-derived, so these stay naturally bounded.
+ */
+const regExpCache = new Map<string, RegExp>();
+const globCache = new Map<string, Minimatch>();
+
+/**
+ * Returns a compiled matcher for a glob pattern, reusing a previous one when the
+ * same pattern has been seen before.
+ *
+ * @param pattern The glob pattern to compile.
+ * @returns A reusable Minimatch instance.
+ */
+function getGlobMatcher(pattern: string): Minimatch {
+  let matcher = globCache.get(pattern);
+  if (!matcher) {
+    matcher = new Minimatch(pattern, { dot: true });
+    globCache.set(pattern, matcher);
+  }
+  return matcher;
+}
+
+/**
  * Detects if a pattern is a regex (starts and ends with '/')
  */
 export function isRegexPattern(pattern: string): boolean {
@@ -27,12 +56,19 @@ export function isRegexPattern(pattern: string): boolean {
  * For globs, uses minimatch's internal conversion.
  */
 export function patternToRegExp(pattern: string): RegExp {
+  const cached = regExpCache.get(pattern);
+  if (cached) return cached;
+
+  let re: RegExp | false;
   if (isRegexPattern(pattern)) {
-    return new RegExp(pattern.slice(1, -1));
+    re = new RegExp(pattern.slice(1, -1));
+  } else {
+    // For globs, minimatch.makeRe returns a RegExp
+    re = minimatch.makeRe(pattern, { dot: true });
   }
-  // For globs, minimatch.makeRe returns a RegExp
-  const re = minimatch.makeRe(pattern, { dot: true });
   if (!re) throw new Error(`Invalid glob pattern: ${pattern}`);
+
+  regExpCache.set(pattern, re);
   return re;
 }
 
@@ -62,7 +98,7 @@ export function matchesAnyPattern(path: string, patterns?: string[]): boolean {
     // - Otherwise, strip leading slash only from path
     const pathForMatch = normalizedPath.replace(/^\//, "");
     const patternForMatch = pattern.startsWith("/") ? pattern.slice(1) : pattern;
-    return minimatch(pathForMatch, patternForMatch, { dot: true });
+    return getGlobMatcher(patternForMatch).match(pathForMatch);
   });
 }
 
@@ -79,7 +115,7 @@ export function matchesAnyHostPattern(value: string, patterns?: string[]): boole
     if (isRegexPattern(pattern)) {
       return patternToRegExp(pattern).test(value);
     }
-    return minimatch(normalized, pattern.toLowerCase(), { dot: true });
+    return getGlobMatcher(pattern.toLowerCase()).match(normalized);
   });
 }
 

@@ -331,6 +331,9 @@ export class MimeTypeUtils {
       clj: "text/x-clojure",
       cljs: "text/x-clojure",
       cljc: "text/x-clojure",
+      scm: "text/x-scheme", // mime package: application/vnd.lotus-screencam
+      ss: "text/x-scheme",
+      tcl: "text/x-tcl", // mime package: application/x-tcl
       jl: "text/x-julia",
 
       // .NET
@@ -351,7 +354,12 @@ export class MimeTypeUtils {
       bash: "text/x-shellscript",
       zsh: "text/x-shellscript",
       fish: "text/x-shellscript",
+      csh: "text/x-shellscript", // mime package: application/x-csh
+      tcsh: "text/x-shellscript",
+      ksh: "text/x-shellscript",
       ps1: "text/x-powershell",
+      bat: "text/x-batch", // mime package: application/x-msdownload
+      cmd: "text/x-batch",
 
       // Documentation formats
       markdown: "text/markdown",
@@ -458,6 +466,10 @@ export class MimeTypeUtils {
       "application/x-tex": "text/x-tex", // .tex files
       "application/x-latex": "text/x-latex", // .latex files
       "application/toml": "text/x-toml", // .toml files
+      "application/x-csh": "text/x-shellscript", // .csh/.tcsh files
+      "application/x-tcl": "text/x-tcl", // .tcl files
+      "application/vnd.lotus-screencam": "text/x-scheme", // .scm files (Lotus ScreenCam conflict)
+      "application/x-msdownload": "text/x-batch", // .bat/.cmd files
     };
 
     return mimeTypeNormalization[mimeType] || mimeType;
@@ -526,6 +538,9 @@ export class MimeTypeUtils {
       "text/x-erlang": "erlang",
       "text/x-elixir": "elixir",
       "text/x-clojure": "clojure",
+      "text/x-scheme": "scheme",
+      "text/x-tcl": "tcl",
+      "text/x-batch": "batch",
       "text/x-julia": "julia",
 
       // Web3/Smart contracts
