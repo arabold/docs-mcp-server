@@ -79,10 +79,12 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
 
     // Same exhaustiveness guard as createEmbeddingModel below: a provider added
     // without a credential branch would otherwise read as "no credentials" and
-    // silently degrade to full-text-only search.
+    // silently degrade to full-text-only search. The assertion fails the build;
+    // the return is the runtime fallback, and it must stay false so that an
+    // unrecognized provider is never reported as having credentials.
     default: {
-      const unhandled: never = provider;
-      return Boolean(unhandled);
+      const _unhandled: never = provider;
+      return false;
     }
   }
 }
@@ -103,7 +105,9 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
  * @param providerAndModel - The provider and model name in the format "provider:model_name"
  *                          or just "model_name" for OpenAI models.
  * @returns A configured instance of the appropriate Embeddings implementation.
- * @throws {UnsupportedProviderError} If an unsupported provider is specified.
+ * @throws {UnsupportedProviderError} Runtime backstop for a supported provider
+ *          that has no construction branch. An unrecognized prefix is not an
+ *          error — it is treated as an OpenAI-compatible model name.
  * @throws {ModelConfigurationError} If there's an issue with the model configuration.
  */
 export function createEmbeddingModel(

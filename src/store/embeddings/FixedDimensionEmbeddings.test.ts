@@ -70,6 +70,34 @@ describe("FixedDimensionEmbeddings", () => {
     await expect(() => wrapper.embedQuery("test")).rejects.toThrow(DimensionError);
   });
 
+  test("should name the full model specification in DimensionError", async () => {
+    // The spec is carried verbatim rather than split and rejoined, so segments
+    // after a second colon survive into the diagnostic.
+    const base = new MockBaseEmbeddings(3072);
+    const wrapper = new FixedDimensionEmbeddings(
+      base,
+      targetDimension,
+      "gemini:model:tag",
+    );
+
+    await expect(() => wrapper.embedQuery("test")).rejects.toThrow(
+      /Model "gemini:model:tag"/,
+    );
+  });
+
+  test("should not prefix an unprefixed model specification in DimensionError", async () => {
+    const base = new MockBaseEmbeddings(3072);
+    const wrapper = new FixedDimensionEmbeddings(
+      base,
+      targetDimension,
+      "nomic-embed-text:latest",
+    );
+
+    await expect(() => wrapper.embedQuery("test")).rejects.toThrow(
+      /Model "nomic-embed-text:latest"/,
+    );
+  });
+
   test("should truncate Gemini-sized vectors (3072d) to target dimension when allowTruncate is true", async () => {
     const geminiDimension = 3072;
     const base = new MockBaseEmbeddings(geminiDimension);
