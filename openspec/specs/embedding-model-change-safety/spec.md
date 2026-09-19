@@ -6,16 +6,30 @@ dimension changes between runs. The system persists the active embedding configu
 metadata, detects mismatches against the currently configured model/dimension on startup, and
 maintains a vector table whose schema matches the configured dimension so that stale or
 incompatible embeddings are never mixed with new ones.
+
 ## Requirements
+
 ### Requirement: Embedding Metadata Persistence
-The system SHALL persist the active embedding configuration in a `metadata` table in the SQLite database using two key-value pairs:
+The system SHALL persist embedding model metadata to the SQLite `metadata` table after successful embedding initialization. The metadata SHALL include the configured model specification and the resolved effective vector dimension used by the database. The system SHALL update this metadata atomically with successful initialization, not during partial or failed initialization.
 
-- `embedding_model`: The full model specification string (e.g., `openai:text-embedding-3-small`)
-- `embedding_dimension`: The configured vector dimension as a string (e.g., `"1536"`)
+The persisted dimension SHALL be the same dimension used for `documents_vec` table creation and vector normalization. For known fixed-output models this is the known dimension unless explicitly overridden. For unknown or variable-dimension models this is the runtime-detected provider output dimension on first successful initialization unless explicitly overridden. On later startups with the same model and no explicit dimension change, the persisted dimension SHALL be reused as the locked database dimension without probing the provider.
 
-The `metadata` table SHALL be created by a database migration with the schema `CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)`.
+#### Scenario: Persist fixed known model metadata
+- **WHEN** embeddings initialize successfully with `openai:text-embedding-3-small`
+- **AND** no explicit dimension override is configured
+- **THEN** the system SHALL persist `embedding_model = "openai:text-embedding-3-small"`
+- **AND** the system SHALL persist `embedding_dimension = "1536"`
 
-The metadata SHALL be written after successful embedding initialization during `DocumentStore.initialize()`. If embeddings are disabled (FTS-only mode), no embedding metadata SHALL be stored.
+#### Scenario: Persist runtime-detected model metadata
+- **WHEN** embeddings initialize successfully with `openai:custom-embedding-model`
+- **AND** the provider returns a 1024-dimensional startup probe
+- **THEN** the system SHALL persist `embedding_model = "openai:custom-embedding-model"`
+- **AND** the system SHALL persist `embedding_dimension = "1024"`
+
+#### Scenario: Do not persist metadata on initialization failure
+- **WHEN** embedding initialization fails before completion
+- **THEN** the system SHALL NOT overwrite existing embedding metadata
+- **AND** the system SHALL NOT write new embedding metadata
 
 #### Scenario: Metadata stored after successful embedding init
 - **WHEN** the embedding model `openai:text-embedding-3-small` with dimension 1536 initializes successfully
@@ -42,12 +56,30 @@ On first startup, or when upgrading from a database that does not yet contain em
 - **THEN** the system SHALL treat this as a first-run scenario and silently initialize the metadata
 
 ### Requirement: Model Change Detection
-During `DocumentStore.initialize()`, after applying migrations but before creating the vector table, the system SHALL compare the configured embedding model and dimension against the values stored in the `metadata` table. A change is detected when either:
+The system SHALL compare the stored embedding model metadata against the current configured model specification and any explicit vector dimension override during startup. The comparison SHALL happen after database migrations but before vector table creation, vector table mutation, prepared statement initialization, provider startup probing, or vector search use.
 
-- The `embedding_model` value differs from `config.app.embeddingModel`, OR
-- The `embedding_dimension` value differs from `config.embeddings.vectorDimension`
+If the stored model specification differs from the current configured model, or if an explicitly configured vector dimension differs from the stored dimension, the system SHALL throw `EmbeddingModelChangedError`. The error SHALL include the stored model, current model, stored dimension, and current resolved dimension. If the stored model specification matches and no explicit dimension override changed, the system SHALL use the stored dimension as the current resolved dimension and SHALL NOT probe the provider during startup.
 
-When a change is detected, the system SHALL throw an `EmbeddingModelChangedError` containing the previous and current model identifiers and dimensions. This error is structured to enable the CLI layer to decide how to handle it (prompt or fail).
+#### Scenario: Model name change is detected
+- **WHEN** stored metadata contains `embedding_model = "openai:text-embedding-3-small"`
+- **AND** current configuration uses `gemini:embedding-001`
+- **THEN** the system SHALL throw `EmbeddingModelChangedError`
+- **AND** the error SHALL include both model names
+
+#### Scenario: Resolved dimension change is detected
+- **WHEN** stored metadata contains `embedding_model = "openai:custom-embedding-model"`
+- **AND** stored metadata contains `embedding_dimension = "1024"`
+- **AND** current configuration uses `openai:custom-embedding-model`
+- **AND** `embeddings.vectorDimension` is explicitly configured as 768
+- **THEN** the system SHALL throw `EmbeddingModelChangedError`
+- **AND** the error SHALL include stored dimension 1024 and current dimension 768
+
+#### Scenario: Same resolved model and dimension proceeds
+- **WHEN** stored metadata contains `embedding_model = "openai:NovaSearch/stella_en_400M_v5"`
+- **AND** stored metadata contains `embedding_dimension = "6144"`
+- **AND** current configuration uses `openai:NovaSearch/stella_en_400M_v5`
+- **THEN** startup SHALL proceed without model-change confirmation
+- **AND** the system SHALL NOT probe the provider during startup
 
 #### Scenario: Model changed, same dimension
 - **WHEN** the stored `embedding_model` is `openai:text-embedding-3-small`
@@ -154,13 +186,30 @@ After invalidation, the system SHALL continue startup. Documents remain fully se
 - **AND** vector similarity search SHALL return no results (empty vec table)
 
 ### Requirement: Runtime-Configurable Vector Table
-The `documents_vec` virtual table SHALL be created at runtime by `DocumentStore.ensureVectorTable()` using the configured `embeddings.vectorDimension` rather than being defined in a SQL migration. A migration SHALL drop any existing hard-coded `documents_vec` table to allow runtime recreation.
+The system SHALL create the SQLite vector table with the current resolved effective vector dimension. The table DDL SHALL use `float[N]` where `N` is the resolved effective dimension. The system SHALL create the table only after the effective dimension has been resolved and model-change safety checks have passed.
 
-The method SHALL:
-- Validate that the dimension is a positive integer (throw `StoreError` otherwise)
-- Check if `documents_vec` already exists with the correct dimension (no-op if matching)
-- If the table does not exist, create it with the configured dimension
-- NOT backfill vectors from the `documents` table (vectors are populated only during scraping)
+If the resolved effective dimension changes relative to stored embedding metadata, the system SHALL refuse to reuse the existing vector table until the user confirms reindexing or reset behavior through the existing model-change flow.
+
+#### Scenario: Create vector table with known fixed dimension
+- **WHEN** the configured model is `openai:text-embedding-3-small`
+- **AND** no explicit dimension override is configured
+- **THEN** the system SHALL create `documents_vec` with `embedding float[1536]`
+
+#### Scenario: Create vector table with runtime-detected dimension
+- **WHEN** the configured model is `openai:custom-embedding-model`
+- **AND** the provider returns a 1024-dimensional startup probe
+- **THEN** the system SHALL create `documents_vec` with `embedding float[1024]`
+
+#### Scenario: Create vector table with locked stored dimension
+- **WHEN** the configured model is `openai:custom-embedding-model`
+- **AND** stored metadata contains `embedding_model = "openai:custom-embedding-model"`
+- **AND** stored metadata contains `embedding_dimension = "1024"`
+- **THEN** the system SHALL create `documents_vec` with `embedding float[1024]`
+- **AND** the system SHALL NOT make a provider probe request during startup
+
+#### Scenario: Create vector table with explicit override dimension
+- **WHEN** `embeddings.vectorDimension` is explicitly configured as 768
+- **THEN** the system SHALL create `documents_vec` with `embedding float[768]`
 
 #### Scenario: First startup creates vector table
 - **WHEN** `documents_vec` does not exist
@@ -176,4 +225,3 @@ The method SHALL:
 #### Scenario: Invalid dimension rejected
 - **WHEN** `vectorDimension` is 0 or negative
 - **THEN** the system SHALL throw a `StoreError`
-
