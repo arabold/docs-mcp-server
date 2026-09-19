@@ -197,7 +197,9 @@ selection whenever they are the closest available match.
 
 When a caller requests no specific version and the library has no semantic versions, the system SHALL
 resolve to the library's single opaque tag when exactly one exists. When more than one tag exists there is
-no defensible newest, so the system SHALL raise a version-not-found error that lists the available labels.
+no defensible newest, so no tag resolves; the request then falls through to the unversioned bucket, and
+raises a version-not-found error listing the available labels only when no unversioned documentation
+exists either. Returning documentation the library actually holds is preferred over failing.
 
 #### Scenario: A single tag resolves without an explicit request
 - **GIVEN** a library whose only stored label is `latest`
@@ -205,10 +207,18 @@ no defensible newest, so the system SHALL raise a version-not-found error that l
 - **THEN** the resolver SHALL return `latest`
 
 #### Scenario: Multiple tags cannot be ranked
-- **GIVEN** a library with the stored labels `stable` and `next` and no semantic versions
+- **GIVEN** a library with the stored labels `stable` and `next`, no semantic versions and no unversioned
+  documentation
 - **WHEN** a caller requests no version
 - **THEN** the system SHALL raise a version-not-found error
 - **AND** the error SHALL list `stable` and `next` as available labels
+
+#### Scenario: Ambiguous tags fall through to unversioned documentation
+- **GIVEN** a library with the stored labels `stable` and `next`, no semantic versions, and unversioned
+  documentation
+- **WHEN** a caller requests no version
+- **THEN** the resolver SHALL report no match and that unversioned documentation exists
+- **AND** SHALL NOT raise an error, because usable documentation is available
 
 #### Scenario: A single tag does not outrank a semantic version
 - **GIVEN** a library with the stored labels `1.0.0` and `stable`

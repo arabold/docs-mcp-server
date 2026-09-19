@@ -714,6 +714,17 @@ describe("DocumentManagementService", () => {
           expect(error.availableVersions).toEqual(["stable", "next"]);
         });
 
+        it("should fall through to unversioned when tags are ambiguous", async () => {
+          // Ambiguous tags mean no tag resolves, but erroring while the library
+          // holds usable unversioned documentation would be worse than handing
+          // it back. find_version still reports that no version matched.
+          mockStore.queryUniqueVersions.mockResolvedValue(["stable", "next"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+        });
+
         it("should not let a single tag outrank a semantic version", async () => {
           mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "stable"]);
 
