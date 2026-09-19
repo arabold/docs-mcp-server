@@ -14,12 +14,6 @@ import { type EmbeddingProvider, splitModelSpec } from "./EmbeddingConfig";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 /**
- * Supported embedding model providers. Each provider requires specific environment
- * variables to be set for API access.
- */
-export type { EmbeddingProvider };
-
-/**
  * Error thrown when an invalid or unsupported embedding provider is specified.
  */
 export class UnsupportedProviderError extends Error {
@@ -263,6 +257,9 @@ export function createEmbeddingModel(
       });
     }
 
+    // Reachable today via `sagemaker:*`, which passes credential validation above but
+    // has no creation branch here. Also guards a provider added to EmbeddingProvider
+    // without a matching case. Do not remove as dead code.
     default:
       throw new UnsupportedProviderError(provider);
   }

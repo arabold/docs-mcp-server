@@ -132,6 +132,24 @@ describe("EmbeddingConfig", () => {
       expect(config.getKnownDimensions("nomic-ai/nomic-embed-text-v2-moe")).toBe(768);
       expect(config.getKnownDimensions("nomic-ai/nomic-embed-code")).toBe(3584);
     });
+
+    it("should resolve dimensions for tagged and quantized variants", () => {
+      const config = new EmbeddingConfig();
+
+      // A tag or quantization suffix does not change the vector width, so the
+      // base model's dimensions apply.
+      expect(config.getKnownDimensions("nomic-ai/nomic-embed-text-v2-moe:latest")).toBe(
+        768,
+      );
+      expect(config.getKnownDimensions("text-embedding-3-small:Q8_0")).toBe(1536);
+    });
+
+    it("should prefer an exact match over stripping a colon suffix", () => {
+      const config = new EmbeddingConfig();
+
+      // The colon belongs to this model's own identifier, not to a tag.
+      expect(config.getKnownDimensions("amazon.titan-embed-text-v2:0")).toBe(1024);
+    });
   });
 
   describe("model specification parsing", () => {
@@ -295,6 +313,17 @@ describe("EmbeddingConfig", () => {
       }
     });
 
+    it.each(["OpenAI:text-embedding-3-small", "AWS:amazon.titan-embed-text-v2:0"])(
+      "should match the provider prefix of %s case-insensitively",
+      (spec) => {
+        const config = new EmbeddingConfig();
+        const result = config.parse(spec);
+
+        expect(result.provider).toBe(spec.split(":")[0].toLowerCase());
+        expect(result.model).toBe(spec.substring(spec.indexOf(":") + 1));
+      },
+    );
+
     it("should treat an unknown provider prefix as part of the model name", () => {
       const config = new EmbeddingConfig();
       const result = config.parse("unknown:test-model");
@@ -345,6 +374,16 @@ describe("EmbeddingConfig", () => {
       expect(result.model).toBe("provider:");
       expect(result.dimensions).toBeNull();
       expect(result.modelSpec).toBe("provider:");
+    });
+
+    it("should handle a supported provider prefix ending with colon", () => {
+      const config = new EmbeddingConfig();
+      const result = config.parse("openai:");
+
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("");
+      expect(result.dimensions).toBeNull();
+      expect(result.modelSpec).toBe("openai:");
     });
   });
 

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
-import { createEmbeddingModel } from "./EmbeddingFactory";
+import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Suppress logger output during tests
@@ -153,6 +153,28 @@ describe("createEmbeddingModel", () => {
     expect(model).toMatchObject({
       model: "amazon.titan-embed-text-v1",
     });
+  });
+
+  test("should throw UnsupportedProviderError for a provider without a creation branch", () => {
+    // `sagemaker` is a supported prefix with a credential check but no creation
+    // branch, so it is the remaining path to the switch's default case.
+    vi.stubGlobal("process", {
+      env: {
+        AWS_REGION: "us-east-1",
+        AWS_ACCESS_KEY_ID: "test-key",
+        AWS_SECRET_ACCESS_KEY: "test-secret",
+      },
+    });
+
+    expect(() => createEmbeddingModel("sagemaker:my-endpoint", runtimeConfig)).toThrow(
+      UnsupportedProviderError,
+    );
+  });
+
+  test("should match a provider prefix case-insensitively", () => {
+    const model = createEmbeddingModel("OpenAI:text-embedding-3-small", runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({ modelName: "text-embedding-3-small" });
   });
 
   test("should treat an unrecognized prefix as an OpenAI-compatible model name", () => {

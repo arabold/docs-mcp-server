@@ -10,45 +10,42 @@ import { normalizeEnvValue } from "../../utils/env";
  */
 
 /**
- * Supported embedding model providers.
- */
-export type EmbeddingProvider =
-  | "openai"
-  | "vertex"
-  | "gemini"
-  | "aws"
-  | "microsoft"
-  | "sagemaker";
-
-/**
  * The complete set of provider prefixes recognized in a model specification.
  * Anything else before the first colon is part of the model name itself.
+ *
+ * This list is normative rather than descriptive: it decides which prefixes claim
+ * the provider slot, so adding an entry changes how existing specifications parse.
+ * A model literally named `<new-provider>:<tag>` served by an OpenAI-compatible
+ * endpoint would start resolving to the new provider, breaking that configuration
+ * on upgrade. Call provider additions out in the release notes.
+ *
+ * `EmbeddingProvider` is derived from this array so the two cannot drift apart.
  */
-const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set<EmbeddingProvider>([
+const SUPPORTED_PROVIDERS = [
   "openai",
   "vertex",
   "gemini",
   "aws",
   "microsoft",
   "sagemaker",
-]);
+] as const;
 
 /**
- * Determines whether a model specification prefix names a supported provider.
- *
- * @param value The segment preceding the first colon of a model specification.
- * @returns True when the segment is a known provider prefix.
+ * Supported embedding model providers.
  */
-export function isSupportedProvider(value: string): value is EmbeddingProvider {
-  return SUPPORTED_PROVIDERS.has(value);
-}
+export type EmbeddingProvider = (typeof SUPPORTED_PROVIDERS)[number];
+
+const PROVIDER_LOOKUP: ReadonlyMap<string, EmbeddingProvider> = new Map(
+  SUPPORTED_PROVIDERS.map((provider) => [provider, provider]),
+);
 
 /**
  * Split a model specification into its provider prefix and model name.
  *
- * Only a prefix that names a supported provider is treated as a provider. Every
- * other specification is an OpenAI-compatible model name, which keeps names that
- * carry a tag or quantization suffix intact (e.g. "nomic-embed-text:latest" or
+ * Only a prefix that names a supported provider is treated as a provider, matched
+ * case-insensitively and resolved to its canonical lowercase form. Every other
+ * specification is an OpenAI-compatible model name, which keeps names that carry a
+ * tag or quantization suffix intact (e.g. "nomic-embed-text:latest" or
  * "second-state/jina-embeddings-v3-GGUF:Q4_K_M").
  *
  * @param spec The full model specification.
@@ -63,9 +60,9 @@ export function splitModelSpec(spec: string): {
     return { provider: "openai", model: spec };
   }
 
-  const prefix = spec.substring(0, colonIndex);
-  if (isSupportedProvider(prefix)) {
-    return { provider: prefix, model: spec.substring(colonIndex + 1) };
+  const provider = PROVIDER_LOOKUP.get(spec.substring(0, colonIndex).toLowerCase());
+  if (provider) {
+    return { provider, model: spec.substring(colonIndex + 1) };
   }
 
   return { provider: "openai", model: spec };
@@ -350,24 +347,44 @@ export class EmbeddingConfig {
     }
   }
 
-  private findKnownDimension(model: string): number | null {
-    const normalized = model.toLowerCase();
-    if (this.runtimeDetectedDimensionModels.has(normalized)) {
-      return null;
-    }
-
-    const exact = this.modelLookup?.get(normalized);
-    if (exact !== undefined) {
-      return exact;
-    }
+  /**
+   * Build the lookup keys to try for a model name, most specific first:
+   * the name itself, then with the namespace dropped, the tag dropped, and both.
+   *
+   * Dropping a trailing tag lets a quantized or tagged variant reuse the base
+   * model's dimensions (e.g. "nomic-ai/nomic-embed-text-v2-moe:latest"), which
+   * quantization does not change. Exact matches are tried first, so names whose
+   * own identifier contains a colon (e.g. "amazon.titan-embed-text-v2:0") still
+   * resolve to their own entry.
+   */
+  private dimensionLookupKeys(normalized: string): string[] {
+    const keys = [normalized];
 
     const slashIndex = normalized.lastIndexOf("/");
-    if (slashIndex !== -1) {
-      const suffix = normalized.substring(slashIndex + 1);
-      if (this.runtimeDetectedDimensionModels.has(suffix)) {
+    if (slashIndex !== -1 && slashIndex < normalized.length - 1) {
+      keys.push(normalized.substring(slashIndex + 1));
+    }
+
+    for (const key of [...keys]) {
+      const colonIndex = key.lastIndexOf(":");
+      if (colonIndex > 0) {
+        keys.push(key.substring(0, colonIndex));
+      }
+    }
+
+    return keys;
+  }
+
+  private findKnownDimension(model: string): number | null {
+    for (const key of this.dimensionLookupKeys(model.toLowerCase())) {
+      if (this.runtimeDetectedDimensionModels.has(key)) {
         return null;
       }
-      return this.modelLookup?.get(suffix) ?? null;
+
+      const dimensions = this.modelLookup?.get(key);
+      if (dimensions !== undefined) {
+        return dimensions;
+      }
     }
 
     return null;
