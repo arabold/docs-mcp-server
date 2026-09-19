@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
-import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
+import { createEmbeddingModel } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Suppress logger output during tests
@@ -86,15 +86,15 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should create OpenAI-compatible embeddings for namespaced quantized models", () => {
-    const model = createEmbeddingModel(
-      "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
-      runtimeConfig,
-    );
+  test.each([
+    "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+    "nomic-embed-text:latest",
+    "bge-m3:567m",
+    "jina-embeddings-v3-GGUF:Q4_K_M",
+  ])("should create OpenAI-compatible embeddings for %s", (spec) => {
+    const model = createEmbeddingModel(spec, runtimeConfig);
     expect(model).toBeInstanceOf(OpenAIEmbeddings);
-    expect(model).toMatchObject({
-      modelName: "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
-    });
+    expect(model).toMatchObject({ modelName: spec });
   });
 
   test("should create Google Vertex AI embeddings", () => {
@@ -155,10 +155,12 @@ describe("createEmbeddingModel", () => {
     });
   });
 
-  test("should throw UnsupportedProviderError for unknown provider", () => {
-    expect(() => createEmbeddingModel("unknown:model", runtimeConfig)).toThrow(
-      UnsupportedProviderError,
-    );
+  test("should treat an unrecognized prefix as an OpenAI-compatible model name", () => {
+    // Only the known provider prefixes claim the segment before the first colon;
+    // everything else is a model name served by an OpenAI-compatible endpoint.
+    const model = createEmbeddingModel("unknown:model", runtimeConfig);
+    expect(model).toBeInstanceOf(OpenAIEmbeddings);
+    expect(model).toMatchObject({ modelName: "unknown:model" });
   });
 
   test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {

@@ -134,12 +134,37 @@ describe("EmbeddingConfig", () => {
     });
   });
 
-  it("should treat namespaced models with quantization suffixes as OpenAI-compatible", () => {
-    expect(
-      EmbeddingConfig.parseEmbeddingConfig("second-state/jina-embeddings-v3-GGUF:Q4_K_M"),
-    ).toMatchObject({
-      provider: "openai",
-      model: "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+  describe("model specification parsing", () => {
+    it.each([
+      "second-state/jina-embeddings-v3-GGUF:Q4_K_M",
+      "huoxu/bge-large-en-v1.5-Q8_0-GGUF",
+      "nomic-embed-text:latest",
+      "bge-m3:567m",
+      "mxbai-embed-large:335m-v1-fp16",
+      "jina-embeddings-v3-GGUF:Q4_K_M",
+    ])("should treat %s as an OpenAI-compatible model name", (spec) => {
+      expect(EmbeddingConfig.parseEmbeddingConfig(spec)).toMatchObject({
+        provider: "openai",
+        model: spec,
+      });
+    });
+
+    it.each([
+      ["openai:text-embedding-3-small", "openai", "text-embedding-3-small"],
+      ["vertex:text-embedding-004", "vertex", "text-embedding-004"],
+      ["gemini:embedding-001", "gemini", "embedding-001"],
+      ["aws:amazon.titan-embed-text-v2:0", "aws", "amazon.titan-embed-text-v2:0"],
+      ["microsoft:my-deployment", "microsoft", "my-deployment"],
+      [
+        "openai:second-state/model-GGUF:Q4_K_M",
+        "openai",
+        "second-state/model-GGUF:Q4_K_M",
+      ],
+    ])("should keep the explicit provider prefix of %s", (spec, provider, model) => {
+      expect(EmbeddingConfig.parseEmbeddingConfig(spec)).toMatchObject({
+        provider,
+        model,
+      });
     });
   });
 
@@ -270,13 +295,14 @@ describe("EmbeddingConfig", () => {
       }
     });
 
-    it("should handle unknown providers as valid", () => {
+    it("should treat an unknown provider prefix as part of the model name", () => {
       const config = new EmbeddingConfig();
       const result = config.parse("unknown:test-model");
 
-      // TypeScript typing will prevent this in real usage, but the parser should handle it gracefully
-      expect(result.provider).toBe("unknown" as any);
-      expect(result.model).toBe("test-model");
+      // Only the prefixes above claim the provider slot; anything else is a model
+      // name served by an OpenAI-compatible endpoint.
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("unknown:test-model");
     });
   });
 
@@ -295,8 +321,8 @@ describe("EmbeddingConfig", () => {
       const config = new EmbeddingConfig();
       const result = config.parse(":");
 
-      expect(result.provider).toBe("");
-      expect(result.model).toBe("");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe(":");
       expect(result.dimensions).toBeNull();
       expect(result.modelSpec).toBe(":");
     });
@@ -305,8 +331,8 @@ describe("EmbeddingConfig", () => {
       const config = new EmbeddingConfig();
       const result = config.parse(":model-name");
 
-      expect(result.provider).toBe("");
-      expect(result.model).toBe("model-name");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe(":model-name");
       expect(result.dimensions).toBeNull();
       expect(result.modelSpec).toBe(":model-name");
     });
@@ -315,8 +341,8 @@ describe("EmbeddingConfig", () => {
       const config = new EmbeddingConfig();
       const result = config.parse("provider:");
 
-      expect(result.provider).toBe("provider");
-      expect(result.model).toBe("");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("provider:");
       expect(result.dimensions).toBeNull();
       expect(result.modelSpec).toBe("provider:");
     });

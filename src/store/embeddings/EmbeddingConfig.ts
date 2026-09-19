@@ -20,8 +20,55 @@ export type EmbeddingProvider =
   | "microsoft"
   | "sagemaker";
 
-function isModelNamespace(value: string): boolean {
-  return value.includes("/");
+/**
+ * The complete set of provider prefixes recognized in a model specification.
+ * Anything else before the first colon is part of the model name itself.
+ */
+const SUPPORTED_PROVIDERS: ReadonlySet<string> = new Set<EmbeddingProvider>([
+  "openai",
+  "vertex",
+  "gemini",
+  "aws",
+  "microsoft",
+  "sagemaker",
+]);
+
+/**
+ * Determines whether a model specification prefix names a supported provider.
+ *
+ * @param value The segment preceding the first colon of a model specification.
+ * @returns True when the segment is a known provider prefix.
+ */
+export function isSupportedProvider(value: string): value is EmbeddingProvider {
+  return SUPPORTED_PROVIDERS.has(value);
+}
+
+/**
+ * Split a model specification into its provider prefix and model name.
+ *
+ * Only a prefix that names a supported provider is treated as a provider. Every
+ * other specification is an OpenAI-compatible model name, which keeps names that
+ * carry a tag or quantization suffix intact (e.g. "nomic-embed-text:latest" or
+ * "second-state/jina-embeddings-v3-GGUF:Q4_K_M").
+ *
+ * @param spec The full model specification.
+ * @returns The resolved provider and model name.
+ */
+export function splitModelSpec(spec: string): {
+  provider: EmbeddingProvider;
+  model: string;
+} {
+  const colonIndex = spec.indexOf(":");
+  if (colonIndex === -1) {
+    return { provider: "openai", model: spec };
+  }
+
+  const prefix = spec.substring(0, colonIndex);
+  if (isSupportedProvider(prefix)) {
+    return { provider: prefix, model: spec.substring(colonIndex + 1) };
+  }
+
+  return { provider: "openai", model: spec };
 }
 
 /**
@@ -346,19 +393,7 @@ export class EmbeddingConfig {
 
     // Parse provider and model from string (e.g., "gemini:embedding-001" or just "text-embedding-3-small")
     // Handle models that contain colons in their names (e.g., "aws:amazon.titan-embed-text-v2:0")
-    const colonIndex = spec.indexOf(":");
-    let provider: EmbeddingProvider;
-    let model: string;
-
-    if (colonIndex === -1 || isModelNamespace(spec.substring(0, colonIndex))) {
-      // No colon found, default to OpenAI
-      provider = "openai";
-      model = spec;
-    } else {
-      // Split only on the first colon
-      provider = spec.substring(0, colonIndex) as EmbeddingProvider;
-      model = spec.substring(colonIndex + 1);
-    }
+    const { provider, model } = splitModelSpec(spec);
 
     // Look up known dimensions (case-insensitive)
     const dimensions = this.findKnownDimension(model);

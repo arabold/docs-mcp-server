@@ -10,19 +10,14 @@ import {
 } from "@langchain/openai";
 import type { AppConfig } from "../../utils/config";
 import { MissingCredentialsError } from "../errors";
+import { type EmbeddingProvider, splitModelSpec } from "./EmbeddingConfig";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 /**
  * Supported embedding model providers. Each provider requires specific environment
  * variables to be set for API access.
  */
-export type EmbeddingProvider =
-  | "openai"
-  | "vertex"
-  | "gemini"
-  | "aws"
-  | "microsoft"
-  | "sagemaker";
+export type { EmbeddingProvider };
 
 /**
  * Error thrown when an invalid or unsupported embedding provider is specified.
@@ -133,13 +128,8 @@ export function createEmbeddingModel(
       "Embedding vector dimension is required; set DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION or embeddings.vectorDimension in config.",
     );
   }
-  // Parse provider and model name
-  const [providerOrModel, ...modelNameParts] = providerAndModel.split(":");
-  const modelName = modelNameParts.join(":");
-  const isNamespacedModel = providerOrModel.includes("/");
-  const provider =
-    modelName && !isNamespacedModel ? (providerOrModel as EmbeddingProvider) : "openai";
-  const model = modelName && !isNamespacedModel ? modelName : providerAndModel;
+  // Parse provider and model name using the shared specification rules
+  const { provider, model } = splitModelSpec(providerAndModel);
 
   // Default configuration for each provider
   const baseConfig = { stripNewLines: true };

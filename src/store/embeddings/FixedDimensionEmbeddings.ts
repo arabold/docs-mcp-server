@@ -1,5 +1,6 @@
 import { Embeddings } from "@langchain/core/embeddings";
 import { DimensionError } from "../errors";
+import { splitModelSpec } from "./EmbeddingConfig";
 
 /**
  * Wrapper around an Embeddings implementation that ensures vectors have a fixed dimension.
@@ -22,9 +23,9 @@ export class FixedDimensionEmbeddings extends Embeddings {
   ) {
     super({});
     // Parse provider and model from string (e.g., "gemini:embedding-001" or just "text-embedding-3-small")
-    const [providerOrModel, modelName] = providerAndModel.split(":");
-    this.provider = modelName ? providerOrModel : "openai"; // Default to openai if no provider specified
-    this.model = modelName || providerOrModel;
+    const { provider, model } = splitModelSpec(providerAndModel);
+    this.provider = provider;
+    this.model = model;
   }
 
   /**
