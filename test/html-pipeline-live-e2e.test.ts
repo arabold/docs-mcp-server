@@ -45,8 +45,14 @@ describe("HTML Pipeline Website Tests", () => {
       expect(typeof result).toBe("string");
       expect(result.length).toBeGreaterThan(100);
       
-      // This MUST be present - it's the original requirement
-      expect(result.toLowerCase()).toContain("requests are subject to rate limits");
+      // Proves the JS-rendered body was extracted, not just the page shell.
+      // Matches both known wordings of the sentence: Salesforce changed
+      // "requests are subject to rate limits" to "... to the same rate limits
+      // as other Salesforce APIs". A bare "rate limit" would also match shell,
+      // nav or error text, which would not prove anything.
+      expect(result.toLowerCase()).toMatch(
+        /requests are subject to (the same )?rate limits/,
+      );
       
       // Additional content validations
       expect(result.toLowerCase()).toContain("chatter");
