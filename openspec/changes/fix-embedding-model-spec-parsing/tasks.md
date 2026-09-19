@@ -34,5 +34,5 @@
 
 ## 7. Release
 
-- [ ] 7.1 Note the behavioral break in the PR description: an unrecognized prefix no longer raises `UnsupportedProviderError` at startup and instead reaches the configured endpoint as a model name.
-- [ ] 7.2 Open the PR crediting @mikemikimike for the cherry-picked initial commit, closing #484 and referencing the closed PR #485.
+- [x] 7.1 Noted in PR #498 under **Behavioral changes**, item 1.
+- [x] 7.2 Opened as PR #498, crediting @mikemikimike for the cherry-picked initial commit, closing #484 and superseding #485.

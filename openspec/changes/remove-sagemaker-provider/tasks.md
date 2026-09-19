@@ -37,5 +37,5 @@
 
 ## 7. Release
 
-- [ ] 7.1 Note the behavioral break in the PR description: `sagemaker:<endpoint>` no longer raises `UnsupportedProviderError` and instead resolves as an OpenAI-compatible model name. Record that no working configuration is affected, because the provider never constructed a client.
-- [ ] 7.2 State in the release notes that SageMaker was never implemented and is being withdrawn rather than removed from a working state, so the entry is not read as a regression.
+- [x] 7.1 Noted in PR #498 under **Behavioral changes**, item 2.
+- [x] 7.2 Stated in PR #498 under **SageMaker withdrawn**: never implemented, withdrawn rather than removed from a working state, with the reason it cannot be finished as a small change.
