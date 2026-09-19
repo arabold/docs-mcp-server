@@ -2,7 +2,9 @@
 
 ## Purpose
 Defines how embeddings are produced for document chunks, including metadata enrichment, batch processing, error recovery, dimension normalization, and fallback behavior when embeddings are disabled.
+
 ## Requirements
+
 ### Requirement: Chunk Metadata Header
 The system SHALL prepend a metadata header to each chunk's content before generating its embedding. The header SHALL include the page title, URL, and hierarchical section path in the following format:
 
@@ -80,30 +82,56 @@ Size errors SHALL be detected by matching error messages against keywords includ
 - **THEN** the system SHALL continue splitting recursively until the batch succeeds or contains a single text
 
 ### Requirement: Vector Dimension Normalization
-The system SHALL normalize all embedding vectors to a fixed database dimension (`embeddings.vectorDimension`, default 1536) before storage:
+The system SHALL normalize every embedding vector to the resolved effective database dimension before insertion into the vector table. The resolved effective dimension SHALL be determined before vector table creation from, in priority order:
+1. An explicit `embeddings.vectorDimension` value supplied by user configuration, environment variables, or CLI arguments.
+2. A stored `embedding_dimension` when stored `embedding_model` matches the current configured model.
+3. A known fixed-output model dimension.
+4. Runtime detection from a test embedding for unknown or variable-dimension models that do not have matching stored metadata.
 
-- **Oversized vector with MRL truncation enabled** (e.g., Gemini models via `FixedDimensionEmbeddings`): The system SHALL truncate the vector to the target dimension by keeping only the first N elements. This is valid for Matryoshka Representation Learning (MRL) models.
-- **Oversized vector without truncation**: The system SHALL raise a `DimensionError`.
-- **Undersized vector**: The system SHALL pad the vector with zeros to reach the target dimension.
+If an embedding vector is shorter than the resolved effective dimension, the system SHALL pad it with zeros. If an embedding vector is longer than the resolved effective dimension, the system SHALL only truncate when the embedding provider explicitly allows Matryoshka/resizable truncation. Otherwise, the system SHALL reject the vector with a dimension error.
 
-The target dimension (`embeddings.vectorDimension`) is configurable at runtime and determines the size of the `documents_vec` virtual table. When the dimension changes between startups, the model change detection system SHALL handle invalidation before any new vectors are stored.
+**Default dimension:** 1536 when no embedding model is configured or when an explicit default-only configuration is needed for FTS-only operation.
 
-**Code reference:** `src/store/embeddings/FixedDimensionEmbeddings.ts:13-67`, `src/store/DocumentStore.ts:455-465`
+#### Scenario: Padding smaller vectors
+- **WHEN** the resolved effective dimension is 1536
+- **AND** an embedding API returns a 1024-dimensional vector
+- **THEN** the system SHALL pad the vector with 512 zeros
+- **AND** insert a 1536-dimensional vector into `documents_vec`
+
+#### Scenario: Rejecting oversized non-MRL vectors
+- **WHEN** the resolved effective dimension is 768
+- **AND** an embedding API returns a 1536-dimensional vector
+- **AND** the embedding wrapper does not allow Matryoshka/resizable truncation
+- **THEN** the system SHALL reject the vector with `DimensionError`
+- **AND** the system SHALL NOT silently truncate the vector
+
+#### Scenario: Runtime-detected unknown model dimension
+- **WHEN** the configured model is unknown
+- **AND** no explicit `embeddings.vectorDimension` is configured
+- **AND** the provider returns a 1024-dimensional vector for the startup probe
+- **THEN** the system SHALL create `documents_vec` for 1024-dimensional vectors
+- **AND** generated embeddings SHALL be normalized to 1024 dimensions
+
+#### Scenario: Explicit override remains authoritative
+- **WHEN** the configured model is unknown
+- **AND** `embeddings.vectorDimension` is explicitly configured as 768
+- **THEN** the system SHALL create `documents_vec` for 768-dimensional vectors
+- **AND** generated embeddings SHALL be validated and normalized against 768 dimensions
 
 #### Scenario: Gemini model with MRL truncation
 - **WHEN** a Gemini embedding model returns 768-dimensional vectors
-- **AND** the database vector dimension is 1536
+- **AND** the resolved effective dimension is 1536
 - **THEN** the system SHALL zero-pad the vector to 1536 dimensions
 
 #### Scenario: Model returns oversized vector without MRL support
 - **WHEN** an embedding model returns 2048-dimensional vectors
 - **AND** MRL truncation is not enabled for the model
-- **AND** the database vector dimension is 1536
+- **AND** the resolved effective dimension is 1536
 - **THEN** the system SHALL raise a `DimensionError`
 
 #### Scenario: Model returns exact target dimensions
 - **WHEN** an embedding model returns 1536-dimensional vectors
-- **AND** the database vector dimension is 1536
+- **AND** the resolved effective dimension is 1536
 - **THEN** the system SHALL store the vector as-is without modification
 
 #### Scenario: Custom vector dimension configuration
@@ -113,14 +141,45 @@ The target dimension (`embeddings.vectorDimension`) is configurable at runtime a
 - **AND** the `documents_vec` table SHALL use `embedding FLOAT[768]`
 
 ### Requirement: Dimension Detection
-The system SHALL determine the output dimensions of the configured embedding model using the following strategy:
+The system SHALL determine the effective embedding dimension during initialization when embeddings are enabled. The system SHALL skip runtime probing for known fixed-output models regardless of whether an explicit dimension override is configured. The system SHALL also skip runtime probing for unknown and variable-dimension models when stored metadata contains the same `embedding_model` as the current configuration and a stored `embedding_dimension`, regardless of whether an explicit dimension override is configured.
 
-1. **Known model lookup**: If the model name matches the known dimensions lookup table (case-insensitive), use the known dimensions directly.
-2. **Test embedding**: If the model is not in the lookup table, generate a test embedding of the string `"test"` and measure the output vector length. This test has a configurable timeout (`embeddings.initTimeoutMs`, default 30 seconds).
+Runtime probing SHALL use the configured embedding provider to generate an embedding for the string `"test"` and measure the returned vector length whenever the configured model is unknown or variable-dimension and no matching stored dimension exists, regardless of whether an explicit dimension override is configured; the resulting native dimension is used for validation even when an explicit override determines the stored database dimension. The system SHALL use the detected or stored length consistently for vector table sizing, normalization, metadata persistence, and model-change checks during that session.
 
-The detected dimensions SHALL be cached for the duration of the session and used for all subsequent vector operations.
+#### Scenario: Known fixed-output model avoids probing
+- **WHEN** the configured model is `openai:text-embedding-3-small`
+- **AND** `embeddings.vectorDimension` is not explicitly configured
+- **THEN** the effective dimension SHALL be 1536
+- **AND** the system SHALL NOT make a startup probe request
 
-**Code reference:** `src/store/DocumentStore.ts:508-537`
+#### Scenario: Variable-dimension model is probed
+- **WHEN** the configured model is `openai:NovaSearch/stella_en_400M_v5`
+- **AND** `embeddings.vectorDimension` is not explicitly configured
+- **AND** no stored metadata exists for that model
+- **AND** the provider returns a 4096-dimensional vector for `"test"`
+- **THEN** the effective dimension SHALL be 4096
+- **AND** the vector table SHALL be created for 4096-dimensional vectors
+
+#### Scenario: Variable-dimension model reuses locked dimension
+- **WHEN** the configured model is `openai:NovaSearch/stella_en_400M_v5`
+- **AND** `embeddings.vectorDimension` is not explicitly configured
+- **AND** stored metadata contains `embedding_model = "openai:NovaSearch/stella_en_400M_v5"`
+- **AND** stored metadata contains `embedding_dimension = "4096"`
+- **THEN** the effective dimension SHALL be 4096
+- **AND** the system SHALL NOT make a startup probe request
+
+#### Scenario: Unknown model reuses locked dimension
+- **WHEN** the configured model is `openai:custom-embedding-v1`
+- **AND** `embeddings.vectorDimension` is not explicitly configured
+- **AND** stored metadata contains `embedding_model = "openai:custom-embedding-v1"`
+- **AND** stored metadata contains `embedding_dimension = "1024"`
+- **THEN** the effective dimension SHALL be 1024
+- **AND** the system SHALL NOT make a startup probe request
+
+#### Scenario: Explicit override skips auto dimension selection
+- **WHEN** the configured model is `openai:NovaSearch/stella_en_400M_v5`
+- **AND** `embeddings.vectorDimension` is explicitly configured as 1024
+- **THEN** the effective dimension SHALL be 1024
+- **AND** generated embeddings SHALL be validated against 1024 dimensions
 
 #### Scenario: Known model skips test embedding
 - **WHEN** the model is `text-embedding-3-small` (in the known dimensions table)
@@ -164,4 +223,3 @@ When the embedding model changes and vectors are invalidated, existing documents
 - **THEN** all existing documents SHALL have `NULL` embeddings
 - **AND** FTS search SHALL continue working for all documents
 - **AND** vector search SHALL return no results until libraries are re-scraped
-

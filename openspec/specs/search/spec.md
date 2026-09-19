@@ -1,7 +1,9 @@
 # search Specification
 
 ## Purpose
-TBD - created by archiving change improve-search-chunking. Update Purpose after archive.
+Controls how search hits from the same document are grouped into result chunks and ranked, so
+that nearby matches are presented as a single coherent result while distant matches are split
+into separate, distinctly ranked results.
 ## Requirements
 ### Requirement: Configurable Chunk Distance
 The system MUST allow configuring the maximum distance between chunks to consider them part of the same result group.

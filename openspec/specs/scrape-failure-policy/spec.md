@@ -1,7 +1,9 @@
 # scrape-failure-policy Specification
 
 ## Purpose
-TBD - created by archiving change fail-fast-scrape-thresholds. Update Purpose after archive.
+Keeps scrape jobs from retrying indefinitely or hanging on unrecoverable failures by bounding
+HTTP fetch retries and defining clear pass/fail thresholds, so a job fails fast instead of
+consuming resources on requests that cannot succeed.
 ## Requirements
 ### Requirement: Bounded HTTP Fetch Retries
 The scraper SHALL default HTTP fetch retries to 3 retries per page request, in addition to the initial attempt.

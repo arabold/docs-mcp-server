@@ -1,7 +1,9 @@
 # hash-routed-spa-support Specification
 
 ## Purpose
-TBD - created by archiving change support-hash-routed-spas. Update Purpose after archive.
+Ensures Single Page Applications (SPAs) that rely on hash-based client-side routing (e.g.
+`#/page`) are correctly discovered and indexed as distinct pages, rather than being collapsed
+into a single URL by the scraper's default hash-fragment stripping.
 ## Requirements
 ### Requirement: Explicit Hash Route Preservation
 The system SHALL provide a configuration option and CLI flag (`--preserve-hashes` / `preserveHashes`) and SHALL expose the same capability through the MCP `scrape_docs` tool to disable the stripping of hash fragments from URLs during web crawling. This allows Single Page Applications (SPAs) that utilize hash-based client-side routing to be correctly identified, queued, and indexed as distinct pages.
