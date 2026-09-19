@@ -211,25 +211,53 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
   private shouldCountTowardFailureThreshold(
     item: QueueItem,
+    options: ScraperOptions,
     result?: ProcessItemResult,
   ): boolean {
-    return item.depth > 0 && !this.isRefreshDeletion(item, result);
+    // An llms.txt index is a discovery hint, not a list of pages the user asked
+    // for. Its dead entries must not push the scrape past the failure threshold
+    // — that would abort the scrape by the back door, which is exactly what
+    // treating those 404s as non-fatal is meant to prevent.
+    if (item.fromLlmsTxt) {
+      return false;
+    }
+    return !this.isRequestedRoot(item, options) && !this.isRefreshDeletion(item, result);
+  }
+
+  /**
+   * True only for the URL the user actually requested.
+   *
+   * Identified by URL rather than `depth === 0`: llms.txt seeds are queued at
+   * depth 0 so their own links get a fresh depth budget, and a refresh rebuilds
+   * its queue from stored pages that carry neither the seed marker nor a
+   * meaningful root depth.
+   */
+  protected isRequestedRoot(item: QueueItem, options: ScraperOptions): boolean {
+    const normalizerOptions = this.getUrlNormalizerOptions(options);
+    return (
+      normalizeUrl(item.url, normalizerOptions) ===
+      normalizeUrl(options.url, normalizerOptions)
+    );
   }
 
   private isRefreshDeletion(item: QueueItem, result?: ProcessItemResult): boolean {
     return item.pageId !== undefined && result?.status === FetchStatus.NOT_FOUND;
   }
 
-  private recordChildPageCompletion(item: QueueItem, result?: ProcessItemResult): void {
-    if (!this.shouldCountTowardFailureThreshold(item, result)) {
+  private recordChildPageCompletion(
+    item: QueueItem,
+    options: ScraperOptions,
+    result?: ProcessItemResult,
+  ): void {
+    if (!this.shouldCountTowardFailureThreshold(item, options, result)) {
       return;
     }
 
     this.completedChildPageAttempts++;
   }
 
-  private recordChildPageFailure(item: QueueItem): void {
-    if (item.depth === 0) {
+  private recordChildPageFailure(item: QueueItem, options: ScraperOptions): void {
+    if (!this.shouldCountTowardFailureThreshold(item, options)) {
       return;
     }
 
@@ -342,7 +370,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             // File/page hasn't changed, skip processing but count as processed
             logger.debug(`Page unchanged (304): ${item.url}`);
             await report(PageOutcome.Unchanged);
-            this.recordChildPageCompletion(item, result);
+            this.recordChildPageCompletion(item, options, result);
             ensureFailureRateWithinThreshold();
             throwIfBatchAborted();
             return result.queueItems ?? [];
@@ -364,8 +392,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             // resolved fine (see llmstxt-discovery spec: llms.txt link failures
             // are not supposed to fail the overall scrape).
             if (
-              item.depth === 0 &&
-              !item.fromLlmsTxt &&
+              this.isRequestedRoot(item, options) &&
               !isRefreshDeletion &&
               !hasNewFallbackQueueItem
             ) {
@@ -373,7 +400,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             }
 
             if (!isRefreshDeletion) {
-              this.recordChildPageFailure(item);
+              this.recordChildPageFailure(item, options);
               ensureFailureRateWithinThreshold();
             }
 
@@ -478,7 +505,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           const internalAllowedFileRoots =
             result.internalAllowedFileRoots ?? item.internalAllowedFileRoots;
 
-          this.recordChildPageCompletion(item, result);
+          this.recordChildPageCompletion(item, options, result);
           ensureFailureRateWithinThreshold();
           throwIfBatchAborted();
 
@@ -530,7 +557,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
           // Never ignore errors for the root URL (depth 0) - if it fails, the job should fail
           // There's no point in "successfully" completing with 0 documents
-          if (item.depth === 0) {
+          if (this.isRequestedRoot(item, options)) {
             throw error;
           }
 
@@ -538,7 +565,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             throw batchAbortError;
           }
 
-          this.recordChildPageFailure(item);
+          this.recordChildPageFailure(item, options);
           ensureFailureRateWithinThreshold();
 
           if (options.ignoreErrors) {

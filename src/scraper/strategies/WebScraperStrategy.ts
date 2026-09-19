@@ -22,7 +22,7 @@ import type { ContentPipeline, PipelineResult } from "../pipelines/types";
 import type { QueueItem, ScraperOptions, ScraperProgressEvent } from "../types";
 import { convertToString } from "../utils/buffer";
 import { isLlmsTxtUrl, type LlmsTxtResult, parseLlmsTxt } from "../utils/llmsTxtParser";
-import { isPathDescendant } from "../utils/scope";
+import { isFileLikePath, isPathDescendant } from "../utils/scope";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 import { LocalFileStrategy } from "./LocalFileStrategy";
 
@@ -224,20 +224,35 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   }
 
   private getLlmsTxtCandidates(baseUrl: string, inputUrl: string): string[] {
-    const input = new URL(inputUrl);
-    const parentPath = input.pathname.endsWith("/")
-      ? input.pathname
-      : input.pathname.slice(0, input.pathname.lastIndexOf("/") + 1);
-    input.pathname = `${parentPath}llms.txt`.replace(/\/+/g, "/");
-    input.search = "";
-    input.hash = "";
+    const llmsTxtAt = (base: string, pathname: string): string => {
+      const url = new URL(base);
+      url.pathname = pathname.replace(/\/+/g, "/");
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    };
 
-    const root = new URL(baseUrl);
-    root.pathname = "/llms.txt";
-    root.search = "";
-    root.hash = "";
+    const { pathname } = new URL(inputUrl);
+    // Direct subpath candidate (e.g. /paymob-docs -> /paymob-docs/llms.txt).
+    // Only for directory-like paths: appending to a file name (/docs/page.html)
+    // would probe /docs/page.html/llms.txt, which is a guaranteed 404.
+    // Appending to a file name (/docs/page.html, /docs/index) would probe a
+    // guaranteed 404, so only directory-like paths get the subpath candidate.
+    const isDirectoryLike = !isFileLikePath(pathname);
+    // Parent path candidate (e.g. /docs/v1/page.html -> /docs/v1/llms.txt)
+    const parentPath = pathname.endsWith("/")
+      ? pathname
+      : pathname.slice(0, pathname.lastIndexOf("/") + 1);
 
-    return [...new Set([input.toString(), root.toString()])];
+    return [
+      ...new Set([
+        ...(isDirectoryLike
+          ? [llmsTxtAt(inputUrl, `${pathname.replace(/\/+$/, "")}/llms.txt`)]
+          : []),
+        llmsTxtAt(inputUrl, `${parentPath}llms.txt`),
+        llmsTxtAt(baseUrl, "/llms.txt"),
+      ]),
+    ];
   }
 
   /**
@@ -384,8 +399,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.debug(`Processing ${url} with stored ETag: ${item.etag}`);
       }
 
-      // Check for Archive Root URL (only if depth 0)
-      if (item.depth === 0) {
+      // Check for Archive Root URL (only the user's actual requested root)
+      if (this.isRequestedRoot(item, options)) {
         if (isArchivePath(new URL(url).pathname)) {
           return this.processRootArchive(item, options, signal);
         }
@@ -396,7 +411,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       const effectiveSource = options.preserveHashes
         ? this.restorePreservedHash(url, rawContent.source)
         : rawContent.source;
-      if (item.depth === 0) {
+      if (this.isRequestedRoot(item, options)) {
         this.updateCanonicalBaseUrl(effectiveSource, options);
       }
       const llmsTxtQueueItems = this.consumePendingLlmsTxtQueueItems(item, options);

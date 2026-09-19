@@ -1,11 +1,16 @@
+import fs from "node:fs";
 import { type Browser, chromium, type Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
-import { RedirectError, ScraperError } from "../../utils/errors";
+import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
-import { withMarkdownPreferredAccept } from "./headers";
+import {
+  DEFAULT_BROWSER_USER_AGENT,
+  getHeader,
+  withMarkdownPreferredAccept,
+} from "./headers";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -60,6 +65,10 @@ export class BrowserFetcher implements ContentFetcher {
       const browser = await this.ensureBrowserReady();
       const fingerprintHeaders = this.fingerprintGenerator.generateHeaders();
       browserContext = await browser.newContext({
+        userAgent:
+          getHeader(options?.headers, "user-agent") ||
+          fingerprintHeaders["user-agent"] ||
+          DEFAULT_BROWSER_USER_AGENT,
         ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
           "https://browser-context.local",
         ),
@@ -96,6 +105,16 @@ export class BrowserFetcher implements ContentFetcher {
       // Cloudflare telemetry, websockets), so "networkidle" never settles and
       // page.goto times out even though the document is already available.
       logger.debug(`Navigating to ${source} with browser...`);
+      // page.goto() returns the *first* main-document response. A challenge
+      // page typically navigates again once it clears, so the status that
+      // matters is the last one the main frame received.
+      let lastMainFrameResponse: Awaited<ReturnType<typeof page.goto>> = null;
+      page.on("response", (candidate) => {
+        const request = candidate.request();
+        if (request.isNavigationRequest() && request.frame() === page?.mainFrame()) {
+          lastMainFrameResponse = candidate;
+        }
+      });
       let response: Awaited<ReturnType<typeof page.goto>>;
       try {
         response = await page.goto(source, { waitUntil: "load", timeout });
@@ -143,6 +162,31 @@ export class BrowserFetcher implements ContentFetcher {
       // Get the final URL after any redirects
       const finalUrl = page.url();
       await this.accessPolicy.assertNetworkUrlAllowed(finalUrl);
+
+      // If the browser did not get past the block, the error page it rendered
+      // is not documentation — returning it SUCCESS would index the block page.
+      // Mirrors the status check fetchViaRequest already performs.
+      // A challenge navigates again once it clears, so everything downstream —
+      // content type, body, etag — must come from the document that actually
+      // ended up loaded, not from the one page.goto() first returned.
+      response = lastMainFrameResponse ?? response;
+      const finalStatus = response.status();
+      if (finalStatus === 404) {
+        logger.debug(`Browser navigation to ${source} returned 404`);
+        return {
+          content: Buffer.from(""),
+          mimeType: "text/plain",
+          source: finalUrl,
+          status: FetchStatus.NOT_FOUND,
+        } satisfies RawContent;
+      }
+      if (finalStatus >= 400) {
+        throw new HttpStatusError(
+          `Browser navigation to ${source} returned status ${finalStatus}`,
+          true,
+          finalStatus,
+        );
+      }
 
       // Determine content type
       const contentType = response.headers()["content-type"] || "text/html";
@@ -239,10 +283,23 @@ export class BrowserFetcher implements ContentFetcher {
       headers,
     );
 
+    // Same semantics as the navigation path: a 404 is a definitive answer that
+    // refresh uses to delete a stale page and that llms.txt seeds treat as
+    // non-fatal, so it must not surface as a generic failure.
+    if (response.status() === 404) {
+      logger.debug(`Browser request for ${source} returned 404`);
+      return {
+        content: Buffer.from(""),
+        mimeType: "text/plain",
+        source: finalUrl,
+        status: FetchStatus.NOT_FOUND,
+      } satisfies RawContent;
+    }
     if (!response.ok()) {
-      throw new ScraperError(
+      throw new HttpStatusError(
         `Browser request for ${source} returned status ${response.status()}`,
         true,
+        response.status(),
       );
     }
 
@@ -314,11 +371,54 @@ export class BrowserFetcher implements ContentFetcher {
     }
   }
 
+  /**
+   * Resolves the Chromium binary to launch.
+   *
+   * Playwright's own managed build is pinned to the installed Playwright
+   * version and is always preferred. A distro Chromium is only a fallback for
+   * environments that skipped the browser download, since an arbitrary system
+   * build can drift from the protocol Playwright expects.
+   *
+   * @returns An explicit executable path, or undefined to let Playwright choose.
+   */
+  private static resolveChromiumExecutablePath(): string | undefined {
+    const configuredPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+    if (configuredPath) {
+      return configuredPath;
+    }
+
+    try {
+      if (fs.existsSync(chromium.executablePath())) {
+        return undefined;
+      }
+    } catch {
+      // executablePath() throws when no managed build is registered at all.
+    }
+
+    const systemPath = [
+      "/usr/lib/chromium/chromium",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+    ].find((candidate) => fs.existsSync(candidate));
+
+    if (systemPath) {
+      logger.debug(
+        `Playwright's managed Chromium is unavailable; using system Chromium at ${systemPath}`,
+      );
+    }
+    return systemPath;
+  }
+
   public static async launchBrowser(): Promise<Browser> {
     return chromium.launch({
       headless: true,
-      executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
-      args: ["--no-sandbox"],
+      executablePath: BrowserFetcher.resolveChromiumExecutablePath(),
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled",
+      ],
     });
   }
 

@@ -60,6 +60,18 @@ class TlsCertificateError extends ScraperError {
   }
 }
 
+/** An HTTP fetch that failed with a response, carrying that response's status. */
+class HttpStatusError extends ScraperError {
+  constructor(
+    message: string,
+    isRetryable: boolean,
+    public readonly statusCode: number,
+    cause?: Error,
+  ) {
+    super(message, isRetryable, cause);
+  }
+}
+
 class AccessPolicyError extends ScraperError {
   constructor(message: string) {
     super(message, false);
@@ -69,6 +81,7 @@ class AccessPolicyError extends ScraperError {
 export {
   AccessPolicyError,
   ChallengeError,
+  HttpStatusError,
   InvalidUrlError,
   RedirectError,
   ScraperError,

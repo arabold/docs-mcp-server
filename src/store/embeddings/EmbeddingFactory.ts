@@ -137,25 +137,29 @@ export function createEmbeddingModel(
       if (!process.env.OPENAI_API_KEY) {
         throw new MissingCredentialsError("openai", ["OPENAI_API_KEY"]);
       }
-      const config: Partial<OpenAIEmbeddingsParams> & { configuration?: ClientOptions } =
-        {
-          ...baseConfig,
-          modelName: model,
-          batchSize: 512, // OpenAI supports large batches
-          timeout: requestTimeoutMs,
-          // Request plain float arrays instead of letting the OpenAI SDK pick its
-          // default. Without this the SDK sends `encoding_format: "base64"` and then
-          // unconditionally base64-decodes the response. OpenAI-compatible providers
-          // that ignore the parameter (Mistral, LM Studio, Ollama, ...) return JSON
-          // floats, which the decoder mangles into a silently corrupted vector of a
-          // quarter the length and every element zero.
-          encodingFormat: "float",
-        };
-      // Add custom base URL if specified
+      const apiKey = process.env.OPENAI_API_KEY;
       const baseURL = process.env.OPENAI_API_BASE;
-      config.configuration = baseURL
-        ? { baseURL, timeout: requestTimeoutMs }
-        : { timeout: requestTimeoutMs };
+      const config: Partial<OpenAIEmbeddingsParams> & {
+        apiKey?: string;
+        configuration?: ClientOptions;
+      } = {
+        ...baseConfig,
+        apiKey,
+        modelName: model,
+        batchSize: 512, // OpenAI supports large batches
+        timeout: requestTimeoutMs,
+        // Request plain float arrays instead of letting the OpenAI SDK pick its
+        // default. Without this the SDK sends `encoding_format: "base64"` and then
+        // unconditionally base64-decodes the response. OpenAI-compatible providers
+        // that ignore the parameter (Mistral, LM Studio, Ollama, ...) return JSON
+        // floats, which the decoder mangles into a silently corrupted vector of a
+        // quarter the length and every element zero.
+        encodingFormat: "float",
+        configuration: {
+          ...(baseURL ? { baseURL } : {}),
+          timeout: requestTimeoutMs,
+        },
+      };
       return new OpenAIEmbeddings(config);
     }
 

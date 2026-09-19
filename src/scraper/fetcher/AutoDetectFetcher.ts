@@ -5,12 +5,15 @@
  */
 
 import type { AppConfig } from "../../utils/config";
-import { ChallengeError, TlsCertificateError } from "../../utils/errors";
+import { ChallengeError, HttpStatusError, TlsCertificateError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { BrowserFetcher } from "./BrowserFetcher";
 import { FileFetcher } from "./FileFetcher";
 import { HttpFetcher } from "./HttpFetcher";
 import type { ContentFetcher, FetchOptions, RawContent } from "./types";
+
+/** Statuses anti-bot layers return that a real browser can often get past. */
+const ANTI_BOT_STATUS_CODES = new Set([403, 429]);
 
 /**
  * AutoDetectFetcher automatically selects the appropriate fetcher based on URL type
@@ -28,6 +31,28 @@ export class AutoDetectFetcher implements ContentFetcher {
     this.httpFetcher = new HttpFetcher(scraperConfig);
     this.browserFetcher = new BrowserFetcher(scraperConfig);
     this.fileFetcher = new FileFetcher(scraperConfig);
+  }
+
+  /**
+   * Classifies a fetch failure as one a real browser could plausibly get past.
+   *
+   * @param error The error the HTTP fetcher threw.
+   * @returns A reason to log, or null when the browser would not help.
+   */
+  private static browserFallbackReason(error: unknown): string | null {
+    if (error instanceof ChallengeError) {
+      return "Challenge detected";
+    }
+    if (error instanceof TlsCertificateError) {
+      return "TLS certificate validation failed";
+    }
+    // A 403/429 that wasn't recognized as a challenge is still usually an
+    // anti-bot block. Keyed off the response status, never the message text,
+    // which embeds the url and would match any url containing "403".
+    if (error instanceof HttpStatusError && ANTI_BOT_STATUS_CODES.has(error.statusCode)) {
+      return `Anti-bot block (HTTP ${error.statusCode})`;
+    }
+    return null;
   }
 
   /**
@@ -53,22 +78,16 @@ export class AutoDetectFetcher implements ContentFetcher {
       return this.fileFetcher.fetch(source, options);
     }
 
-    // For HTTP(S) URLs, try HttpFetcher first, fallback to BrowserFetcher on challenge
+    // For HTTP(S) URLs, try HttpFetcher first, fallback to BrowserFetcher on
+    // a challenge or an anti-bot block
     if (this.httpFetcher.canFetch(source)) {
       try {
         logger.debug(`Using HttpFetcher for: ${source}`);
         return await this.httpFetcher.fetch(source, options);
-      } catch (error) {
-        if (error instanceof ChallengeError) {
-          logger.info(
-            `🔄 Challenge detected for ${source}, falling back to browser fetcher...`,
-          );
-          return this.browserFetcher.fetch(source, options);
-        }
-        if (error instanceof TlsCertificateError) {
-          logger.info(
-            `🔄 TLS certificate validation failed for ${source}, falling back to browser fetcher...`,
-          );
+      } catch (error: unknown) {
+        const reason = AutoDetectFetcher.browserFallbackReason(error);
+        if (reason) {
+          logger.info(`🔄 ${reason} for ${source}, falling back to browser fetcher...`);
           return this.browserFetcher.fetch(source, options);
         }
         throw error;

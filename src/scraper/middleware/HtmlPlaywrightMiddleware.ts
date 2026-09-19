@@ -11,7 +11,11 @@ import { type AppConfig, defaults } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { BrowserFetcher } from "../fetcher";
-import { withMarkdownPreferredAccept } from "../fetcher/headers";
+import {
+  DEFAULT_BROWSER_USER_AGENT,
+  getHeader,
+  withMarkdownPreferredAccept,
+} from "../fetcher/headers";
 import { ScrapeMode } from "../types";
 import { SimpleMemoryCache } from "../utils/SimpleMemoryCache";
 import { isBlockedSubresource } from "./subresourceBlocklist";
@@ -1110,20 +1114,14 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       const browser = await this.ensureBrowser();
 
       // Always create a browser context (with or without credentials)
-      if (credentials) {
-        browserContext = await browser.newContext({
-          httpCredentials: credentials,
-          ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
-            "https://browser-context.local",
-          ),
-        });
-      } else {
-        browserContext = await browser.newContext({
-          ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
-            "https://browser-context.local",
-          ),
-        });
-      }
+      browserContext = await browser.newContext({
+        userAgent: getHeader(customHeaders, "user-agent") || DEFAULT_BROWSER_USER_AGENT,
+        viewport: { width: 1920, height: 1080 },
+        ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
+          "https://browser-context.local",
+        ),
+        ...(credentials ? { httpCredentials: credentials } : {}),
+      });
       page = await browserContext.newPage();
 
       logger.debug(`Playwright: Processing ${context.source}`);

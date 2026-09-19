@@ -1463,6 +1463,89 @@ describe("WebScraperStrategy", () => {
       );
     });
 
+    it("should probe the subpath of a dotted version directory", async () => {
+      // An any-dot heuristic reads "v1.0" as a file name and skips the very
+      // subpath candidate this probe exists to try.
+      options.url = "https://example.com/docs/v1.0";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => {
+        if (url === "https://example.com/docs/v1.0/llms.txt") {
+          return {
+            content: "# Docs\n\n- [Intro](intro)",
+            mimeType: "text/markdown",
+            source: url,
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        return {
+          content: `<html><body><h1>${url}</h1></body></html>`,
+          mimeType: "text/html",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        };
+      });
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      expect(mockFetchFn).toHaveBeenCalledWith(
+        "https://example.com/docs/v1.0/llms.txt",
+        expect.anything(),
+      );
+    });
+
+    it.each([
+      [
+        "an index path",
+        "https://example.com/docs/index",
+        "https://example.com/docs/index/llms.txt",
+      ],
+      [
+        "an .mdx page",
+        "https://example.com/docs/page.mdx",
+        "https://example.com/docs/page.mdx/llms.txt",
+      ],
+    ])(
+      "should not probe a subpath candidate below %s",
+      async (_label, url, unexpected) => {
+        // "index" is a file name by the repository's own scope rule, and .mdx is a
+        // supported document format — neither is a directory to descend into.
+        options.url = url;
+        options.maxDepth = 0;
+        mockFetchFn.mockImplementation(async (u: string) => ({
+          content: `<html><body><h1>${u}</h1></body></html>`,
+          mimeType: "text/html",
+          source: u,
+          status: FetchStatus.SUCCESS,
+        }));
+
+        await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+        expect(mockFetchFn).not.toHaveBeenCalledWith(unexpected, expect.anything());
+        expect(mockFetchFn).toHaveBeenCalledWith(
+          "https://example.com/docs/llms.txt",
+          expect.anything(),
+        );
+      },
+    );
+
+    it("should not probe a subpath candidate below a real page file", async () => {
+      options.url = "https://example.com/docs/page.html";
+      options.maxDepth = 0;
+      mockFetchFn.mockImplementation(async (url: string) => ({
+        content: `<html><body><h1>${url}</h1></body></html>`,
+        mimeType: "text/html",
+        source: url,
+        status: FetchStatus.SUCCESS,
+      }));
+
+      await strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>());
+
+      expect(mockFetchFn).not.toHaveBeenCalledWith(
+        "https://example.com/docs/page.html/llms.txt",
+        expect.anything(),
+      );
+    });
+
     it("should resolve redirected llms.txt relative links against the final llms.txt URL", async () => {
       options.url = "https://example.com/docs/start";
       options.scope = "hostname";

@@ -5,6 +5,33 @@ import { extractPrimaryDomain } from "../../utils/url";
 const INDEX_FILE_PATTERN = /^index(\.[a-z0-9]+)?$/i;
 
 /**
+ * Extensions that mark a URL's last segment as a page rather than a directory.
+ * Kept in step with the document formats {@link MimeTypeUtils} recognizes.
+ */
+const PAGE_FILE_EXTENSION_PATTERN =
+  /\.(?:html?|xhtml|php|aspx?|jsp|mdx?|markdown|txt|rst|adoc|json|ya?ml|xml|pdf)$/i;
+
+/**
+ * Returns true when a URL path names a page rather than a directory.
+ *
+ * An extension alone is too loose — a version directory like `/docs/v1.0` ends
+ * in `.0` — so only known page extensions count, plus the bare `index` form
+ * that {@link computeBaseDirectory} already treats as a file.
+ *
+ * @param pathname The URL pathname to classify.
+ * @returns Whether the last segment names a file.
+ */
+export function isFileLikePath(pathname: string): boolean {
+  const lastSegment = pathname.split("/").filter(Boolean).at(-1);
+  if (!lastSegment) {
+    return false;
+  }
+  return (
+    PAGE_FILE_EXTENSION_PATTERN.test(lastSegment) || INDEX_FILE_PATTERN.test(lastSegment)
+  );
+}
+
+/**
  * Compute the effective base directory for scope=subpages.
  * Rules:
  * - Empty path or "/" → "/"
