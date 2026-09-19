@@ -158,4 +158,12 @@ describe("dataRouter - chunk explorer procedures", () => {
       });
     });
   });
+
+  describe("compact", () => {
+    it("skips compaction for an in-memory store", async () => {
+      const result = await caller.compact({ force: true });
+      expect(result.skipped).toBe(true);
+      expect(result.vacuumed).toBe(false);
+    });
+  });
 });

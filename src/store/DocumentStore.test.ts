@@ -2597,3 +2597,111 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
     });
   });
 });
+
+describe("DocumentStore - compaction", () => {
+  let store: DocumentStore | undefined;
+  let tempDir: string;
+  type TestDb = {
+    pragma(sql: string, options?: { simple?: boolean }): unknown;
+    exec(sql: string): unknown;
+  };
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-compact-"));
+  });
+
+  afterEach(async () => {
+    if (store) {
+      await store.shutdown();
+      store = undefined;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("skips compaction for in-memory databases", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(":memory:", cfg);
+    await store.initialize();
+
+    const result = await store.compact({ force: true });
+    expect(result.skipped).toBe(true);
+    expect(result.vacuumed).toBe(false);
+    expect(result.reclaimedBytes).toBe(0);
+  });
+
+  it("reclaims disk space after deleting documents", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(join(tempDir, "documents.db"), cfg);
+    await store.initialize();
+
+    const payload = "x".repeat(50_000);
+    for (let i = 0; i < 20; i++) {
+      await store.addDocuments(
+        "compactlib",
+        "1.0.0",
+        1,
+        createScrapeResult(`Page ${i}`, `https://example.com/page-${i}`, payload),
+      );
+    }
+
+    await store.deletePages("compactlib", "1.0.0");
+
+    const result = await store.compact({ force: false });
+    expect(result.skipped).toBe(false);
+    expect(result.vacuumed).toBe(true);
+    expect(result.afterBytes).toBeLessThan(result.beforeBytes);
+    expect(result.reclaimedBytes).toBeGreaterThan(0);
+
+    const second = await store.compact({ force: false });
+    expect(second.vacuumed).toBe(false);
+  });
+
+  it("does not vacuum when vacuum is false", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(join(tempDir, "documents.db"), cfg);
+    await store.initialize();
+
+    const payload = "x".repeat(50_000);
+    for (let i = 0; i < 20; i++) {
+      await store.addDocuments(
+        "compactlib",
+        "1.0.0",
+        1,
+        createScrapeResult(`Page ${i}`, `https://example.com/page-${i}`, payload),
+      );
+    }
+
+    await store.deletePages("compactlib", "1.0.0");
+
+    const result = await store.compact({ force: false, vacuum: false });
+    expect(result.skipped).toBe(false);
+    expect(result.vacuumed).toBe(false);
+  });
+
+  it("uses file temp storage during vacuum and restores the previous setting", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(join(tempDir, "documents.db"), cfg);
+    await store.initialize();
+
+    const db = (store as unknown as { db: TestDb }).db;
+    db.pragma("temp_store = MEMORY");
+
+    const originalExec = db.exec.bind(db);
+    let tempStoreDuringVacuum: number | undefined;
+    db.exec = (sql: string): unknown => {
+      if (sql === "VACUUM") {
+        tempStoreDuringVacuum = Number(db.pragma("temp_store", { simple: true }));
+      }
+      return originalExec(sql);
+    };
+
+    await store.compact({ force: true });
+
+    expect(tempStoreDuringVacuum).toBe(1);
+    expect(Number(db.pragma("temp_store", { simple: true }))).toBe(2);
+  });
+});

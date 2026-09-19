@@ -39,6 +39,18 @@ const mockStore = {
   queryLibraryVersions: vi.fn().mockResolvedValue(new Map<string, any[]>()),
   addDocuments: vi.fn(),
   deletePages: vi.fn(),
+  compact: vi.fn().mockResolvedValue({
+    skipped: false,
+    vacuumed: true,
+    beforeBytes: 100,
+    afterBytes: 50,
+    reclaimedBytes: 50,
+  }),
+  removeVersion: vi.fn().mockResolvedValue({
+    documentsDeleted: 1,
+    versionDeleted: true,
+    libraryDeleted: false,
+  }),
   // Status tracking methods
   updateVersionStatus: vi.fn(),
   updateVersionProgress: vi.fn(),
@@ -350,6 +362,7 @@ describe("DocumentManagementService", () => {
 
       await docService.removeAllDocuments(library, version);
       expect(mockStore.deletePages).toHaveBeenCalledWith(library, version); // Fix: Use mockStoreInstance
+      expect(mockStore.compact).toHaveBeenCalledWith({ force: false, vacuum: false });
     });
 
     it("should handle removing documents with null/undefined/empty version", async () => {
@@ -360,6 +373,29 @@ describe("DocumentManagementService", () => {
       expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
       await docService.removeAllDocuments(library, "");
       expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
+    });
+
+    it("should still remove documents when compaction fails", async () => {
+      mockStore.compact.mockRejectedValueOnce(new Error("checkpoint busy"));
+
+      await expect(
+        docService.removeAllDocuments("test-lib", "1.0.0"),
+      ).resolves.toBeUndefined();
+      expect(mockStore.deletePages).toHaveBeenCalledWith("test-lib", "1.0.0");
+    });
+
+    it("should compact the store", async () => {
+      const compactResult = {
+        skipped: false,
+        vacuumed: true,
+        beforeBytes: 200,
+        afterBytes: 80,
+        reclaimedBytes: 120,
+      };
+      mockStore.compact.mockResolvedValueOnce(compactResult);
+
+      await expect(docService.compact({ force: true })).resolves.toEqual(compactResult);
+      expect(mockStore.compact).toHaveBeenCalledWith({ force: true });
     });
 
     describe("listVersions", () => {

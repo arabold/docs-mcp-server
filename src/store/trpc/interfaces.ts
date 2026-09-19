@@ -6,6 +6,7 @@ import type { ScraperOptions } from "../../scraper/types";
 import type { EmbeddingModelConfig } from "../embeddings/EmbeddingConfig";
 import type {
   ActivityHistory,
+  CompactResult,
   DbVersionWithLibrary,
   EmbeddingConfigInfo,
   FindVersionResult,
@@ -39,6 +40,13 @@ export interface IDocumentManagement {
   ): Promise<StoreSearchResult[]>;
   removeAllDocuments(library: string, version?: string | null): Promise<void>;
   removeVersion(library: string, version?: string | null): Promise<void>;
+  /**
+   * Reclaims unused SQLite pages and truncates the WAL file.
+   * VACUUM takes an exclusive lock and may block searches until it finishes.
+   * @param options.force Always VACUUM even if no free pages are detected.
+   * @param options.vacuum When `false`, only run a non-blocking WAL checkpoint.
+   */
+  compact(options?: { force?: boolean; vacuum?: boolean }): Promise<CompactResult>;
 
   // Minimal set used indirectly by pipeline/UI where needed
   getVersionsByStatus(statuses: VersionStatus[]): Promise<DbVersionWithLibrary[]>;
