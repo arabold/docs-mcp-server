@@ -1353,6 +1353,41 @@ describe("DocumentStore - Common Functionality", () => {
     });
   });
 
+  describe("Version Label Normalization", () => {
+    it("collapses surrounding whitespace into a single version id", async () => {
+      const padded = await store.resolveVersionId("wslib", " 1.0.0 ");
+      const bare = await store.resolveVersionId("wslib", "1.0.0");
+      expect(padded).toBe(bare);
+    });
+
+    it("treats a whitespace-only label as unversioned", async () => {
+      const blank = await store.resolveVersionId("wslib2", "   ");
+      const empty = await store.resolveVersionId("wslib2", "");
+      expect(blank).toBe(empty);
+    });
+
+    it("keeps a partial version distinct from its full form", async () => {
+      // "1.20" is stored verbatim, never coerced to "1.20.0" — they are
+      // separate buckets that each remain addressable.
+      const partial = await store.resolveVersionId("partiallib", "1.20");
+      const full = await store.resolveVersionId("partiallib", "1.20.0");
+      expect(partial).not.toBe(full);
+    });
+
+    it("accepts a non-version label without rejecting it", async () => {
+      const tag = await store.resolveVersionId("taglib", "stable");
+      expect(typeof tag).toBe("number");
+      const versions = await store.queryUniqueVersions("taglib");
+      expect(versions).toContain("stable");
+    });
+
+    it("collapses surrounding whitespace on the library name too", async () => {
+      const padded = await store.resolveVersionId(" spacedlib ", "1.0.0");
+      const bare = await store.resolveVersionId("spacedlib", "1.0.0");
+      expect(padded).toBe(bare);
+    });
+  });
+
   describe("Version Isolation", () => {
     it("should search within specific versions only", async () => {
       await store.addDocuments(

@@ -175,6 +175,21 @@ describe("PipelineManager", () => {
     expect(job?.sourceUrl).toBe("http://a.com");
   });
 
+  it("should normalize version labels so entry points share one bucket", async () => {
+    // " LATEST " and "latest" are the same version; enqueueing the second must
+    // abort the first as a duplicate rather than queue a parallel job.
+    const options = { url: "http://a.com", library: "libN", version: "latest" };
+    const jobId1 = await manager.enqueueScrapeJob("libN", " LATEST ", options);
+    const jobId2 = await manager.enqueueScrapeJob("libN", "latest", options);
+
+    expect(jobId1).not.toBe(jobId2);
+    const job1 = await manager.getJob(jobId1);
+    const job2 = await manager.getJob(jobId2);
+    expect(job1?.version).toBe("latest");
+    expect(job2?.version).toBe("latest");
+    expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
+  });
+
   it("should start a queued job and transition to RUNNING", async () => {
     // Simulate a long-running job
     const pendingPromise = new Promise(() => {});

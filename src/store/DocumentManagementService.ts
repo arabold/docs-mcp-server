@@ -12,6 +12,9 @@ import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { formatBytes } from "../utils/string";
 import {
+  compareVersionsDescending,
+  isSemanticVersion,
+  type SemanticVersionCandidate,
   sortVersionsDescending,
   toVersionCandidate,
   toVersionCandidates,
@@ -42,7 +45,7 @@ import type {
   VersionStatus,
   VersionSummary,
 } from "./types";
-import { normalizeVersionRef } from "./types";
+import { normalizeVersionLabel, normalizeVersionRef } from "./types";
 
 /**
  * Provides semantic search capabilities across different versions of library documentation.
@@ -94,14 +97,6 @@ export class DocumentManagementService {
           dimensions: config.dimensions,
         }
       : null;
-  }
-
-  /**
-   * Normalizes a version string, converting null or undefined to an empty string
-   * and converting to lowercase.
-   */
-  private normalizeVersion(version?: string | null): string {
-    return (version ?? "").toLowerCase();
   }
 
   /**
@@ -185,10 +180,7 @@ export class DocumentManagementService {
    * Delegates to existing ensureLibraryAndVersion for storage.
    */
   async ensureVersion(ref: VersionRef): Promise<number> {
-    const normalized = {
-      library: ref.library.trim().toLowerCase(),
-      version: (ref.version ?? "").trim().toLowerCase(),
-    };
+    const normalized = normalizeVersionRef(ref);
     return this.ensureLibraryAndVersion(normalized.library, normalized.version);
   }
 
@@ -220,6 +212,10 @@ export class DocumentManagementService {
           } satisfies VersionSummary;
         }),
       );
+      // queryLibraryVersions orders lexicographically in SQL, which puts
+      // "1.10.0" before "1.9.0". Sort here with the comparator the resolver
+      // uses so every listing surface agrees on which version is newest.
+      vs.sort((a, b) => compareVersionsDescending(a.ref.version, b.ref.version));
       summaries.push({ library, versions: vs });
     }
     return summaries;
@@ -275,12 +271,12 @@ export class DocumentManagementService {
    */
   async listVersions(library: string): Promise<string[]> {
     const versions = await this.store.queryUniqueVersions(library);
-    // Accept anything recognizable as a version (e.g. "1.20", "5"), not just
-    // strict X.Y.Z strings — otherwise real-world partial versions are
-    // silently dropped and become invisible to findBestVersion(). Non-version
-    // labels like "stable"/"latest" are not versions and stay excluded.
-    const validVersions = versions.filter((v) => toVersionCandidate(v) !== null);
-    return sortVersionsDescending(validVersions);
+    // Every non-empty label is kept, whether it is a semantic version or an
+    // opaque tag — dropping tags here is what made documentation indexed as
+    // "latest" or "stable" unreachable. The empty label is excluded because it
+    // represents unversioned content, which is tracked separately.
+    const labels = versions.filter((v) => toVersionCandidate(v) !== null);
+    return sortVersionsDescending(labels);
   }
 
   /**
@@ -288,32 +284,129 @@ export class DocumentManagementService {
    * If version is omitted, checks for documents without a specific version.
    */
   async exists(library: string, version?: string | null): Promise<boolean> {
-    const normalizedVersion = this.normalizeVersion(version);
+    const normalizedVersion = normalizeVersionLabel(version);
     return this.store.checkDocumentExists(library, normalizedVersion);
   }
 
   /**
-   * Resolves a matched semver back to the version label stored in the database.
+   * Lists every label stored for a library, for inclusion in error messages.
    *
-   * Several stored labels can normalize to the same semver — `"1.20"` and
-   * `"1.20.0"`, or `"2.0.0"` and `"v2.0.0"`, are distinct rows that both
-   * normalize to `1.20.0` / `2.0.0`. The caller's own request wins first, so
-   * asking for either form returns that form; otherwise a strict semver label
-   * is preferred over a coerced one.
+   * Unlike {@link listVersions} this is not filtered or ordered for matching —
+   * it is what a caller may ask for, including opaque tags the resolver could
+   * not rank.
    *
-   * @param candidates Candidates built from the library's stored versions.
-   * @param normalized The normalized semver chosen by range matching.
-   * @param targetVersion The version the caller requested, if any.
-   * @returns The stored version label, or `undefined` if nothing normalized to it.
+   * @param library Library name.
+   * @returns Every stored label, including the empty unversioned label.
    */
-  private selectStoredVersion(
+  private async listAvailableLabels(library: string): Promise<string[]> {
+    const allLibraryDetails = await this.store.queryLibraryVersions();
+    const libraryDetails = allLibraryDetails.get(library) ?? [];
+    return libraryDetails.map((v) => v.version);
+  }
+
+  /**
+   * Resolves a requested version against a library's stored labels.
+   *
+   * The ladder is ordered so that the most specific answer wins:
+   *
+   * 1. A literal match on a stored label, so any indexed bucket is always
+   *    reachable by the name it was indexed under — including an opaque tag.
+   * 2. Semantic version matching over the version-tier labels, ranking
+   *    prereleases as ordinary versions.
+   * 3. A library's single opaque tag, when it has no semantic versions at all.
+   *
+   * @param candidates Classified labels stored for the library.
+   * @param targetVersion The version the caller requested, if any.
+   * @returns The stored label to use, or `null` when nothing resolves.
+   * @throws {VersionNotFoundInStoreError} When only tags exist and several are
+   *   available, so no single one can be called newest.
+   */
+  private resolveVersionLabel(
     candidates: VersionCandidate[],
-    normalized: string,
     targetVersion?: string,
-  ): string | undefined {
-    const matches = candidates.filter((c) => c.normalized === normalized);
-    const exact = matches.find((c) => c.stored === targetVersion);
-    return (exact ?? matches.find((c) => c.strict) ?? matches[0])?.stored;
+  ): string | null {
+    const requested = normalizeVersionLabel(targetVersion);
+
+    // Rung 1: literal match.
+    if (requested !== "") {
+      const literal = candidates.find((c) => c.stored === requested);
+      if (literal) {
+        return literal.stored;
+      }
+    }
+
+    // Rung 2: semantic version matching.
+    const versions = candidates.filter(isSemanticVersion);
+    if (versions.length > 0) {
+      const matched = this.matchSemanticVersion(versions, requested);
+      if (matched) {
+        return matched;
+      }
+    }
+
+    // Rung 3: a lone opaque tag, only when the caller expressed no preference
+    // and there is no semantic version to rank ahead of it.
+    if (requested === "" && versions.length === 0) {
+      const tags = candidates.filter((c) => c.kind === "tag");
+      if (tags.length === 1) {
+        return tags[0].stored;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Matches a request against semantic-version labels.
+   *
+   * A request naming a specific version matches that version or the highest one
+   * below it, because older documentation is more useful than none. Prereleases
+   * are ranked as ordinary versions: `includePrerelease` keeps semver from
+   * skipping a prerelease that is the closest available match, which matters for
+   * documentation in a way it does not for installing packages.
+   *
+   * @param versions Semantic-version candidates for the library.
+   * @param requested Normalized request; empty means no preference.
+   * @returns The stored label of the best match, or `null` when none matches.
+   */
+  private matchSemanticVersion(
+    versions: SemanticVersionCandidate[],
+    requested: string,
+  ): string | null {
+    const normalizedCandidates = versions.map((c) => c.normalized);
+    const options: semver.RangeOptions = { includePrerelease: true };
+
+    let range: string;
+    if (requested === "" || requested === "latest") {
+      range = "*";
+    } else {
+      const versionRegex = /^(\d+)(?:\.(?:x(?:\.x)?|\d+(?:\.(?:x|\d+))?))?$|^$/;
+      if (!semver.valid(requested) && !versionRegex.test(requested)) {
+        logger.warn(`⚠️  Invalid target version format: ${requested}`);
+        return null;
+      }
+      if (!semver.validRange(requested)) {
+        // Not a range (like '1.2' or '1'): treat it like a tilde range
+        range = `~${requested}`;
+      } else if (semver.valid(requested)) {
+        // An exact version: allow matching it OR any older version
+        range = `${requested} || <=${requested}`;
+      } else {
+        // Already a valid range (like '1.x'): use it directly
+        range = requested;
+      }
+    }
+
+    const best = semver.maxSatisfying(normalizedCandidates, range, options);
+    if (!best) {
+      return null;
+    }
+
+    // Map the winning normalized version back to a stored label. Several labels
+    // can normalize to the same version ("1.20" and "1.20.0"); rung 1 already
+    // handled a caller asking for one by name, so prefer the strict spelling.
+    const matches = versions.filter((c) => c.normalized === best);
+    return (matches.find((c) => c.strict) ?? matches[0]).stored;
   }
 
   /**
@@ -336,77 +429,40 @@ export class DocumentManagementService {
     const libraryAndVersion = `${library}${targetVersion ? `@${targetVersion}` : ""}`;
     logger.info(`🔍 Finding best version for ${libraryAndVersion}`);
 
-    // Check if unversioned documents exist *before* filtering for valid semver
+    // Unversioned content is tracked separately from labelled buckets, so check
+    // for it before any label handling.
     const hasUnversioned = await this.store.checkDocumentExists(library, "");
-    const versionStrings = await this.listVersions(library);
+    const labels = await this.listVersions(library);
 
-    if (versionStrings.length === 0) {
+    if (labels.length === 0) {
       if (hasUnversioned) {
         logger.info(`ℹ️ Unversioned documents exist for ${library}`);
         return { bestMatch: null, hasUnversioned: true };
       }
-      // Throw error only if NO versions (semver or unversioned) exist
-      logger.warn(`⚠️  No valid versions found for ${library}`);
+      logger.warn(`⚠️  No versions found for ${library}`);
       // The next line should usually throw
       await this.validateLibraryExists(library);
       // Fallback, should not reach here
       throw new LibraryNotFoundInStoreError(library, []);
     }
 
-    let bestMatch: string | null = null;
-
-    // semver.maxSatisfying() requires every candidate to itself be a fully
-    // valid X.Y.Z semver string — a stored version like "1.20" fails that
-    // even though listVersions() now accepts it. Match on the normalized
-    // forms, then resolve the winner back to the label that is actually in
-    // the store so downstream lookups (e.g. checkDocumentExists) use it.
-    const candidates = toVersionCandidates(versionStrings);
-    const normalizedCandidates = candidates.map((c) => c.normalized);
-    const resolveStored = (normalized: string | null): string | null =>
-      normalized === null
-        ? null
-        : (this.selectStoredVersion(candidates, normalized, targetVersion) ?? null);
-
-    if (!targetVersion || targetVersion === "latest") {
-      bestMatch = resolveStored(semver.maxSatisfying(normalizedCandidates, "*"));
-    } else {
-      const versionRegex = /^(\d+)(?:\.(?:x(?:\.x)?|\d+(?:\.(?:x|\d+))?))?$|^$/;
-      if (!semver.valid(targetVersion) && !versionRegex.test(targetVersion)) {
-        logger.warn(`⚠️  Invalid target version format: ${targetVersion}`);
-        // Don't throw yet, maybe unversioned exists
-      } else {
-        // Restore the previous logic with fallback
-        let range = targetVersion;
-        if (!semver.validRange(targetVersion)) {
-          // If it's not a valid range (like '1.2' or '1'), treat it like a tilde range
-          range = `~${targetVersion}`;
-        } else if (semver.valid(targetVersion)) {
-          // If it's an exact version, allow matching it OR any older version
-          range = `${range} || <=${targetVersion}`;
-        }
-        // If it was already a valid range (like '1.x'), use it directly
-        bestMatch = resolveStored(semver.maxSatisfying(normalizedCandidates, range));
-      }
-    }
+    const candidates = toVersionCandidates(labels);
+    const bestMatch = this.resolveVersionLabel(candidates, targetVersion);
 
     if (bestMatch) {
       logger.info(`✅ Found best match version ${bestMatch} for ${libraryAndVersion}`);
     } else {
-      logger.warn(`⚠️  No matching semver version found for ${libraryAndVersion}`);
+      logger.warn(`⚠️  No matching version found for ${libraryAndVersion}`);
     }
 
-    // If no semver match found, but unversioned exists, return that info.
-    // If a semver match was found, return it along with unversioned status.
-    // If no semver match AND no unversioned, throw error.
+    // A resolved label always wins over the unversioned bucket, so indexed
+    // documentation is never silently skipped. Only when nothing resolves does
+    // unversioned content come into play, and failing that we report the error.
     if (!bestMatch && !hasUnversioned) {
-      // Fetch detailed versions to pass to the error constructor
-      const allLibraryDetails = await this.store.queryLibraryVersions();
-      const libraryDetails = allLibraryDetails.get(library) ?? [];
-      const availableVersions = libraryDetails.map((v) => v.version);
       throw new VersionNotFoundInStoreError(
         library,
         targetVersion ?? "",
-        availableVersions,
+        await this.listAvailableLabels(library),
       );
     }
 
@@ -418,7 +474,7 @@ export class DocumentManagementService {
    * If version is omitted, removes documents without a specific version.
    */
   async removeAllDocuments(library: string, version?: string | null): Promise<void> {
-    const normalizedVersion = this.normalizeVersion(version);
+    const normalizedVersion = normalizeVersionLabel(version);
     logger.info(
       `🗑️ Removing all documents from ${library}@${normalizedVersion || "latest"} store`,
     );
@@ -462,7 +518,7 @@ export class DocumentManagementService {
    * @param version Version string (null/undefined for unversioned)
    */
   async removeVersion(library: string, version?: string | null): Promise<void> {
-    const normalizedVersion = this.normalizeVersion(version);
+    const normalizedVersion = normalizeVersionLabel(version);
     logger.debug(`Removing version: ${library}@${normalizedVersion || "latest"}`);
 
     const result = await this.store.removeVersion(library, normalizedVersion, true);
@@ -554,7 +610,7 @@ export class DocumentManagementService {
     result: ScrapeResult,
   ): Promise<void> {
     const processingStart = performance.now();
-    const normalizedVersion = this.normalizeVersion(version);
+    const normalizedVersion = normalizeVersionLabel(version);
     const { url, title, chunks, contentType } = result;
     if (!url) {
       throw new StoreError("Processed content metadata must include a valid URL");
@@ -609,7 +665,7 @@ export class DocumentManagementService {
     query: string,
     limit = 5,
   ): Promise<StoreSearchResult[]> {
-    const normalizedVersion = this.normalizeVersion(version);
+    const normalizedVersion = normalizeVersionLabel(version);
     return this.documentRetriever.search(library, normalizedVersion, query, limit);
   }
 
@@ -622,7 +678,7 @@ export class DocumentManagementService {
   async ensureLibraryAndVersion(library: string, version: string): Promise<number> {
     // Use the same resolution logic as addDocuments but return the version ID
     const normalizedLibrary = library.toLowerCase();
-    const normalizedVersion = this.normalizeVersion(version);
+    const normalizedVersion = normalizeVersionLabel(version);
 
     // This will create the library and version if they don't exist
     const versionId = await this.store.resolveVersionId(

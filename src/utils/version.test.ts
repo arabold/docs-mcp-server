@@ -1,14 +1,131 @@
 /**
- * Unit tests for version comparison utilities.
+ * Unit tests for version label classification and comparison utilities.
  */
 
 import { describe, expect, it } from "vitest";
 import {
   compareVersionsDescending,
+  isSemanticVersion,
   sortVersionsDescending,
   toVersionCandidate,
   toVersionCandidates,
 } from "./version";
+
+describe("toVersionCandidate", () => {
+  it("should classify full semantic versions as versions, preserving metadata", () => {
+    expect(toVersionCandidate("1.2.3")).toEqual({
+      kind: "version",
+      stored: "1.2.3",
+      normalized: "1.2.3",
+      strict: true,
+    });
+    expect(toVersionCandidate("2.0.0-beta")).toEqual({
+      kind: "version",
+      stored: "2.0.0-beta",
+      normalized: "2.0.0-beta",
+      strict: true,
+    });
+    expect(toVersionCandidate("1.0.0+build")).toMatchObject({
+      kind: "version",
+      stored: "1.0.0+build",
+    });
+    expect(toVersionCandidate("v2.0.0-beta.1")).toEqual({
+      kind: "version",
+      stored: "v2.0.0-beta.1",
+      normalized: "2.0.0-beta.1",
+      strict: true,
+    });
+  });
+
+  it("should classify partial versions as versions", () => {
+    expect(toVersionCandidate("1.20")).toEqual({
+      kind: "version",
+      stored: "1.20",
+      normalized: "1.20.0",
+      strict: false,
+    });
+    expect(toVersionCandidate("5")).toEqual({
+      kind: "version",
+      stored: "5",
+      normalized: "5.0.0",
+      strict: false,
+    });
+    expect(toVersionCandidate("v2")).toMatchObject({
+      kind: "version",
+      normalized: "2.0.0",
+    });
+    expect(toVersionCandidate("v1.20")).toMatchObject({
+      kind: "version",
+      normalized: "1.20.0",
+    });
+  });
+
+  it("should classify labels that merely contain a number as tags", () => {
+    // semver.coerce() on its own pulls the first number out of arbitrary text
+    // ("stable-2024" -> 2024.0.0), which would let a branch or channel name
+    // sort and match as if it were a release.
+    for (const label of [
+      "stable-2024",
+      "release-2024",
+      "docs-v3",
+      "node18",
+      "alpha-1",
+      "2024-01-15",
+    ]) {
+      expect(toVersionCandidate(label)).toEqual({ kind: "tag", stored: label });
+    }
+  });
+
+  it("should classify channel names as tags", () => {
+    for (const label of ["stable", "latest", "main", "next"]) {
+      expect(toVersionCandidate(label)).toEqual({ kind: "tag", stored: label });
+    }
+  });
+
+  it("should classify range syntax stored as a label as a tag", () => {
+    // Range syntax describes a query, not a released version.
+    expect(toVersionCandidate("1.x")).toEqual({ kind: "tag", stored: "1.x" });
+    expect(toVersionCandidate("1.2.x")).toEqual({ kind: "tag", stored: "1.2.x" });
+  });
+
+  it("should classify over-long numeric labels as tags", () => {
+    expect(toVersionCandidate("1.2.3.4")).toEqual({ kind: "tag", stored: "1.2.3.4" });
+  });
+
+  it("should return null for an empty label, which means unversioned", () => {
+    // Unversioned is its own bucket, not a tag.
+    expect(toVersionCandidate("")).toBeNull();
+  });
+});
+
+describe("toVersionCandidates", () => {
+  it("should keep tags alongside versions and preserve input order", () => {
+    const candidates = toVersionCandidates(["1.20", "stable", "2.0.0"]);
+    expect(candidates.map((c) => c.stored)).toEqual(["1.20", "stable", "2.0.0"]);
+    expect(candidates.map((c) => c.kind)).toEqual(["version", "tag", "version"]);
+  });
+
+  it("should drop empty labels", () => {
+    expect(toVersionCandidates(["1.0.0", "", "stable"]).map((c) => c.stored)).toEqual([
+      "1.0.0",
+      "stable",
+    ]);
+  });
+
+  it("should keep both forms when a partial and its full version coexist", () => {
+    const candidates = toVersionCandidates(["1.20", "1.20.0"]);
+    expect(candidates).toHaveLength(2);
+    expect(candidates.every((c) => c.kind === "version")).toBe(true);
+    expect(candidates.filter(isSemanticVersion).map((c) => c.normalized)).toEqual([
+      "1.20.0",
+      "1.20.0",
+    ]);
+    expect(candidates.filter(isSemanticVersion).map((c) => c.strict)).toEqual([
+      false,
+      true,
+    ]);
+  });
+});
 
 describe("compareVersionsDescending", () => {
   it("should place unversioned (empty string) first", () => {
@@ -51,10 +168,15 @@ describe("compareVersionsDescending", () => {
     expect(compareVersionsDescending("v2.0.0", "v1.0.0")).toBeLessThan(0);
   });
 
-  it("should fallback to string comparison for invalid semver", () => {
-    // "xyz" and "abc" - descending alphabetical order
-    expect(compareVersionsDescending("xyz", "abc")).toBeLessThan(0);
-    expect(compareVersionsDescending("abc", "xyz")).toBeGreaterThan(0);
+  it("should place semantic versions ahead of opaque tags", () => {
+    expect(compareVersionsDescending("1.0.0", "stable")).toBeLessThan(0);
+    expect(compareVersionsDescending("stable", "1.0.0")).toBeGreaterThan(0);
+  });
+
+  it("should sort opaque tags alphabetically", () => {
+    expect(compareVersionsDescending("next", "stable")).toBeLessThan(0);
+    expect(compareVersionsDescending("stable", "next")).toBeGreaterThan(0);
+    expect(compareVersionsDescending("abc", "xyz")).toBeLessThan(0);
   });
 });
 
@@ -84,88 +206,45 @@ describe("sortVersionsDescending", () => {
     // Expected: unversioned first, then 19.0.0-rc.1, 18.2.0, 18.0.0, 17.0.2
     expect(sorted).toEqual(["", "19.0.0-rc.1", "18.2.0", "18.0.0", "17.0.2"]);
   });
-});
 
-describe("toVersionCandidate", () => {
-  it("should keep strict semver verbatim", () => {
-    expect(toVersionCandidate("1.2.3")).toEqual({
-      stored: "1.2.3",
-      normalized: "1.2.3",
-      strict: true,
-    });
+  it("should sort semantic versions newest first, not lexicographically", () => {
+    expect(sortVersionsDescending(["1.9.0", "1.10.0", "2.0.0"])).toEqual([
+      "2.0.0",
+      "1.10.0",
+      "1.9.0",
+    ]);
   });
 
-  it("should coerce partial versions to full semver", () => {
-    expect(toVersionCandidate("1.20")).toEqual({
-      stored: "1.20",
-      normalized: "1.20.0",
-      strict: false,
-    });
-    expect(toVersionCandidate("5")).toEqual({
-      stored: "5",
-      normalized: "5.0.0",
-      strict: false,
-    });
+  it("should sort partial versions by value, not by text", () => {
+    expect(sortVersionsDescending(["1.20", "5", "2.0.0"])).toEqual([
+      "5",
+      "2.0.0",
+      "1.20",
+    ]);
   });
 
-  it("should preserve prerelease and build metadata instead of collapsing it", () => {
-    expect(toVersionCandidate("2.0.0-beta")).toEqual({
-      stored: "2.0.0-beta",
-      normalized: "2.0.0-beta",
-      strict: true,
-    });
-    // The "v" prefix is still strict semver, and the tag must survive.
-    expect(toVersionCandidate("v2.0.0-beta.1")).toEqual({
-      stored: "v2.0.0-beta.1",
-      normalized: "2.0.0-beta.1",
-      strict: true,
-    });
+  it("should sort a prerelease below its release", () => {
+    expect(sortVersionsDescending(["2.0.0", "2.0.0-beta", "1.0.0"])).toEqual([
+      "2.0.0",
+      "2.0.0-beta",
+      "1.0.0",
+    ]);
   });
 
-  it("should accept a 'v' prefix on partial versions", () => {
-    expect(toVersionCandidate("v1.20")).toEqual({
-      stored: "v1.20",
-      normalized: "1.20.0",
-      strict: false,
-    });
+  it("should order labels that normalize to the same version deterministically", () => {
+    // "1.20" and "1.20.0" are the same semver, so ordering would otherwise fall
+    // to store insertion order. The strict spelling wins, matching the label
+    // semantic matching resolves to.
+    expect(sortVersionsDescending(["1.20", "1.20.0"])).toEqual(["1.20.0", "1.20"]);
+    expect(sortVersionsDescending(["1.20.0", "1.20"])).toEqual(["1.20.0", "1.20"]);
   });
 
-  it("should reject strings that are not versions", () => {
-    expect(toVersionCandidate("")).toBeNull();
-    expect(toVersionCandidate("stable")).toBeNull();
-    expect(toVersionCandidate("latest")).toBeNull();
-  });
-
-  it("should reject labels that merely contain a number", () => {
-    // semver.coerce() on its own pulls the first number out of arbitrary text
-    // ("stable-2024" -> 2024.0.0), which would let a branch or channel name
-    // sort and match as if it were a release. Only bare major[.minor] shapes
-    // may fall back to coercion.
-    expect(toVersionCandidate("stable-2024")).toBeNull();
-    expect(toVersionCandidate("release-2024")).toBeNull();
-    expect(toVersionCandidate("docs-v3")).toBeNull();
-    expect(toVersionCandidate("node18")).toBeNull();
-    expect(toVersionCandidate("alpha-1")).toBeNull();
-    expect(toVersionCandidate("2024-01-15")).toBeNull();
-  });
-
-  it("should reject range syntax, which is a query and not a stored version", () => {
-    expect(toVersionCandidate("1.x")).toBeNull();
-    expect(toVersionCandidate("1.2.x")).toBeNull();
-  });
-});
-
-describe("toVersionCandidates", () => {
-  it("should drop non-versions and keep input order", () => {
-    expect(toVersionCandidates(["1.20", "stable", "2.0.0"]).map((c) => c.stored)).toEqual(
-      ["1.20", "2.0.0"],
-    );
-  });
-
-  it("should keep both forms when a partial and its full version coexist", () => {
-    const candidates = toVersionCandidates(["1.20", "1.20.0"]);
-    expect(candidates).toHaveLength(2);
-    expect(candidates.every((c) => c.normalized === "1.20.0")).toBe(true);
-    expect(candidates.map((c) => c.strict)).toEqual([false, true]);
+  it("should place unversioned first and tags last", () => {
+    expect(sortVersionsDescending(["stable", "1.0.0", "", "next"])).toEqual([
+      "",
+      "1.0.0",
+      "next",
+      "stable",
+    ]);
   });
 });

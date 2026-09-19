@@ -1,7 +1,6 @@
-import * as semver from "semver";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
+import { normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
-import { ValidationError } from "./errors";
 
 export interface RefreshVersionToolOptions {
   library: string;
@@ -33,34 +32,10 @@ export class RefreshVersionTool {
   async execute(options: RefreshVersionToolOptions): Promise<RefreshExecuteResult> {
     const { library, version, preserveHashes, waitForCompletion = true } = options;
 
-    let internalVersion: string;
-    const partialVersionRegex = /^\d+(\.\d+)?$/; // Matches '1' or '1.2'
-
-    if (version === null || version === undefined) {
-      internalVersion = "";
-    } else {
-      const validFullVersion = semver.valid(version);
-      if (validFullVersion) {
-        internalVersion = validFullVersion;
-      } else if (partialVersionRegex.test(version)) {
-        const coercedVersion = semver.coerce(version);
-        if (coercedVersion) {
-          internalVersion = coercedVersion.version;
-        } else {
-          throw new ValidationError(
-            `Invalid version format for refreshing: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
-            "RefreshVersionTool",
-          );
-        }
-      } else {
-        throw new ValidationError(
-          `Invalid version format for refreshing: '${version}'. Use 'X.Y.Z', 'X.Y.Z-prerelease', 'X.Y', 'X', or omit.`,
-          "RefreshVersionTool",
-        );
-      }
-    }
-
-    internalVersion = internalVersion.toLowerCase();
+    // A version label is stored verbatim: normalize it (trim, lowercase, empty
+    // means unversioned) and store what the caller typed. Labels that are not
+    // semantic versions, such as "stable", are legitimate and resolve literally.
+    const internalVersion = normalizeVersionLabel(version);
 
     // Use the injected pipeline instance
     const pipeline = this.pipeline;

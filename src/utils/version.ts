@@ -1,20 +1,117 @@
 /**
- * Version comparison utilities for consistent sorting across the application.
- * Provides semver-aware comparison with support for unversioned (latest) entries.
+ * Version label classification and comparison utilities.
+ *
+ * A stored version label is whatever an operator indexed documentation under.
+ * It is classified into one of two tiers: a *semantic version*, which takes part
+ * in ordering and range matching, or an *opaque tag*, which is only ever matched
+ * literally. Nothing is discarded — classification is a routing decision, not a
+ * judgement about whether a label is valid.
  */
 
 import semver from "semver";
 
 /**
- * Compares two version strings for sorting in descending order (latest first).
+ * Partial versions accepted as stored labels: `major` or `major.minor`, with an
+ * optional `v` prefix (e.g. `"5"`, `"1.20"`, `"v1.20"`).
+ *
+ * Coercion is gated on this shape because `semver.coerce()` pulls the first
+ * number out of arbitrary text — it turns `"stable-2024"` into `2024.0.0` and
+ * `"node18"` into `18.0.0`, which would make non-version labels sort and match
+ * as if they were releases.
+ */
+const PARTIAL_VERSION_PATTERN = /^v?\d+(?:\.\d+)?$/;
+
+/** A stored label that is a semantic version, usable for ordering and ranges. */
+export interface SemanticVersionCandidate {
+  kind: "version";
+  /** The version string exactly as stored in the database. */
+  stored: string;
+  /** Strict `X.Y.Z[-prerelease]` semver used for range matching and sorting. */
+  normalized: string;
+  /** True when `stored` was already valid semver and needed no coercion. */
+  strict: boolean;
+}
+
+/** A stored label that is not a version and can only be matched literally. */
+export interface TagCandidate {
+  kind: "tag";
+  /** The label exactly as stored in the database. */
+  stored: string;
+}
+
+/**
+ * A stored version label paired with how it may be matched.
+ *
+ * Labels in the store are whatever a project publishes — `"1.20"`, `"5"`,
+ * `"v2.0.0"`, `"2.0.0-beta"`, but also `"stable"` or `"main"`. Semver range
+ * matching only accepts full `X.Y.Z` strings, so a candidate keeps the stored
+ * label beside the form used for matching, and records which tier it is in.
+ */
+export type VersionCandidate = SemanticVersionCandidate | TagCandidate;
+
+/**
+ * Classifies a stored version label.
+ *
+ * Strict semver is matched first and preserved verbatim, so prerelease and build
+ * metadata survive and a label like `"2.0.0-beta"` never collapses into
+ * `"2.0.0"` and outranks the real release. Only the partial shapes in
+ * {@link PARTIAL_VERSION_PATTERN} fall back to coercion. Everything else is an
+ * opaque tag.
+ *
+ * @param stored Version label as stored in the database.
+ * @returns The candidate, or `null` for an empty label, which represents
+ *   unversioned documentation rather than a tag.
+ */
+export function toVersionCandidate(stored: string): VersionCandidate | null {
+  if (stored === "") {
+    return null;
+  }
+
+  const strict = semver.valid(stored);
+  if (strict) {
+    return { kind: "version", stored, normalized: strict, strict: true };
+  }
+
+  if (PARTIAL_VERSION_PATTERN.test(stored)) {
+    const coerced = semver.coerce(stored);
+    if (coerced) {
+      return { kind: "version", stored, normalized: coerced.version, strict: false };
+    }
+  }
+
+  return { kind: "tag", stored };
+}
+
+/**
+ * Classifies stored version labels, dropping empty ones.
+ *
+ * @param versions Version labels as stored in the database.
+ * @returns One candidate per non-empty label, in input order.
+ */
+export function toVersionCandidates(versions: string[]): VersionCandidate[] {
+  return versions
+    .map(toVersionCandidate)
+    .filter((candidate): candidate is VersionCandidate => candidate !== null);
+}
+
+/** Narrows a candidate to the semantic version tier. */
+export function isSemanticVersion(
+  candidate: VersionCandidate,
+): candidate is SemanticVersionCandidate {
+  return candidate.kind === "version";
+}
+
+/**
+ * Compares two version labels for sorting in the canonical display order.
  *
  * Rules:
- * - Unversioned entries (empty string, null, undefined) are considered "latest" and sort first.
- * - Valid semver versions are compared using semver rules.
- * - Invalid semver versions are compared as strings (case-insensitive).
+ * - Unversioned entries (empty string, null, undefined) sort first.
+ * - Semantic versions follow, newest first, compared by semver rules. Labels
+ *   that normalize to the same version are ordered strict spelling first.
+ * - Opaque tags sort last, in alphabetical order.
  *
- * @param a First version string (may be empty, null, or undefined for unversioned)
- * @param b Second version string (may be empty, null, or undefined for unversioned)
+ * @param a First version label (may be empty, null, or undefined for unversioned)
+ * @param b Second version label (may be empty, null, or undefined for unversioned)
  * @returns Negative if a should come before b, positive if b should come before a, 0 if equal
  */
 export function compareVersionsDescending(
@@ -29,97 +126,42 @@ export function compareVersionsDescending(
   if (aIsUnversioned) return -1;
   if (bIsUnversioned) return 1;
 
-  // Both have versions - normalize via the same rules used for range matching,
-  // so sort order and version resolution never disagree.
-  const aSemver = toVersionCandidate(a)?.normalized;
-  const bSemver = toVersionCandidate(b)?.normalized;
+  // Classify via the same rules used for range matching, so sort order and
+  // version resolution never disagree.
+  const aCandidate = toVersionCandidate(a);
+  const bCandidate = toVersionCandidate(b);
+  const aIsVersion = aCandidate?.kind === "version";
+  const bIsVersion = bCandidate?.kind === "version";
 
-  if (aSemver && bSemver) {
-    // Both are valid semver - compare descending (higher version first)
-    return semver.rcompare(aSemver, bSemver);
+  if (aIsVersion && bIsVersion) {
+    // Both are semantic versions - compare descending (higher version first)
+    const byVersion = semver.rcompare(aCandidate.normalized, bCandidate.normalized);
+    if (byVersion !== 0) return byVersion;
+
+    // Distinct labels can normalize to the same version ("1.20" and "1.20.0").
+    // Order is still required to be deterministic, so prefer the strict
+    // spelling — the same one semantic matching resolves to — and fall back to
+    // the label itself rather than leaving it to store insertion order.
+    if (aCandidate.strict !== bCandidate.strict) return aCandidate.strict ? -1 : 1;
+    return aCandidate.stored.localeCompare(bCandidate.stored);
   }
 
-  // Fallback to string comparison (case-insensitive, descending)
-  const aLower = (a as string).toLowerCase();
-  const bLower = (b as string).toLowerCase();
-  return bLower.localeCompare(aLower);
+  // Semantic versions outrank opaque tags, which have no defensible position
+  // among them.
+  if (aIsVersion) return -1;
+  if (bIsVersion) return 1;
+
+  // Both are tags - alphabetical, so the order is at least deterministic.
+  return a.toLowerCase().localeCompare(b.toLowerCase());
 }
 
 /**
- * Sorts an array of version strings in descending order (latest first).
- * Unversioned entries (empty string) are placed at the beginning.
+ * Sorts version labels into the canonical display order: unversioned first,
+ * then semantic versions newest-first, then opaque tags alphabetically.
  *
- * @param versions Array of version strings
- * @returns New array sorted in descending order
+ * @param versions Array of version labels
+ * @returns New array sorted in canonical order
  */
 export function sortVersionsDescending(versions: string[]): string[] {
   return [...versions].sort(compareVersionsDescending);
-}
-
-/**
- * A stored version string paired with the strict semver used to match it.
- *
- * Version labels in the store are whatever a project publishes — `"1.20"`,
- * `"5"`, `"v2.0.0"` or `"2.0.0-beta"` — but semver range matching only accepts
- * full `X.Y.Z` strings. A candidate keeps both forms side by side so matches
- * can be resolved back to the label that is actually in the store.
- */
-export type VersionCandidate = {
-  /** The version string exactly as stored in the database. */
-  stored: string;
-  /** Strict `X.Y.Z[-prerelease]` semver used for range matching and sorting. */
-  normalized: string;
-  /** True when `stored` was already valid semver and needed no coercion. */
-  strict: boolean;
-};
-
-/**
- * Partial versions accepted as stored labels: `major` or `major.minor`, with an
- * optional `v` prefix (e.g. `"5"`, `"1.20"`, `"v1.20"`).
- *
- * Coercion is gated on this shape because `semver.coerce()` pulls the first
- * number out of arbitrary text — it turns `"stable-2024"` into `2024.0.0` and
- * `"node18"` into `18.0.0`, which would make non-version labels sort and match
- * as if they were releases.
- */
-const PARTIAL_VERSION_PATTERN = /^v?\d+(?:\.\d+)?$/;
-
-/**
- * Normalizes a stored version string into a {@link VersionCandidate}.
- *
- * Strict semver is matched first and preserved verbatim, so prerelease and
- * build metadata survive and a label like `"2.0.0-beta"` never collapses into
- * `"2.0.0"` and outranks the real release. Only the partial shapes in
- * {@link PARTIAL_VERSION_PATTERN} fall back to coercion.
- *
- * @param stored Version string as stored in the database.
- * @returns The candidate, or `null` when the string is not a version at all
- *   (e.g. `""`, `"stable"`, `"latest"`, `"stable-2024"`).
- */
-export function toVersionCandidate(stored: string): VersionCandidate | null {
-  const strict = semver.valid(stored);
-  if (strict) {
-    return { stored, normalized: strict, strict: true };
-  }
-  if (!PARTIAL_VERSION_PATTERN.test(stored)) {
-    return null;
-  }
-  const coerced = semver.coerce(stored);
-  if (coerced) {
-    return { stored, normalized: coerced.version, strict: false };
-  }
-  return null;
-}
-
-/**
- * Maps stored version strings to {@link VersionCandidate}s, dropping the
- * entries that are not versions at all.
- *
- * @param versions Version strings as stored in the database.
- * @returns One candidate per recognizable version, in input order.
- */
-export function toVersionCandidates(versions: string[]): VersionCandidate[] {
-  return versions
-    .map(toVersionCandidate)
-    .filter((candidate): candidate is VersionCandidate => candidate !== null);
 }

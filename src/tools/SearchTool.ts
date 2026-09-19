@@ -96,15 +96,15 @@ export class SearchTool {
       let versionToSearch: string | null | undefined = resolvedVersion;
 
       if (!exactMatch) {
-        // If not exact match, find the best version (which might be null)
-        const versionResult = await this.docService.findBestVersion(library, version);
-        // Use the bestMatch from the result, which could be null
+        // Resolve against what was logged as being searched, so the request the
+        // resolver sees and the one reported above cannot drift apart.
+        const versionResult = await this.docService.findBestVersion(
+          library,
+          resolvedVersion,
+        );
+        // bestMatch is null only when nothing resolved and unversioned content
+        // exists; searchStore normalizes null to "" and searches that bucket.
         versionToSearch = versionResult.bestMatch;
-
-        // If findBestVersion returned null (no matching semver) AND unversioned docs exist,
-        // should we search unversioned? The current logic passes null to searchStore,
-        // which gets normalized to "" (unversioned). This seems reasonable.
-        // If findBestVersion threw VersionNotFoundInStoreError, it's caught below.
       }
       // If exactMatch is true, versionToSearch remains the originally provided version.
 

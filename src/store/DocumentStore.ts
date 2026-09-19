@@ -42,6 +42,7 @@ import {
   type DbVersion,
   type DbVersionWithLibrary,
   denormalizeVersionName,
+  normalizeVersionLabel,
   normalizeVersionName,
   type VersionScraperOptions,
   type VersionStatus,
@@ -1284,8 +1285,11 @@ export class DocumentStore {
    * Creates library and version records if they don't exist.
    */
   async resolveVersionId(library: string, version: string): Promise<number> {
-    const normalizedLibrary = library.toLowerCase();
-    const normalizedVersion = denormalizeVersionName(version.toLowerCase());
+    const normalizedLibrary = library.trim().toLowerCase();
+    // Last point every write passes through: apply the single version label
+    // contract here so an entry point that forgets to normalize cannot create a
+    // duplicate bucket (e.g. " 1.0.0 " alongside "1.0.0").
+    const normalizedVersion = denormalizeVersionName(normalizeVersionLabel(version));
 
     // Insert or get library_id
     this.statements.insertLibrary.run(normalizedLibrary);

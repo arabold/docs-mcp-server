@@ -144,11 +144,27 @@ export interface VersionRef {
   version: string; // empty string for unversioned
 }
 
+/**
+ * Normalizes a version label for storage and lookup.
+ *
+ * This is the single write contract for version labels: trim surrounding
+ * whitespace, lowercase, and treat an empty result as unversioned. The label is
+ * otherwise stored verbatim — it is never validated, coerced or rejected, since
+ * a version label is not guaranteed to be a semantic version (`stable` and
+ * `1.20` are as legitimate as `1.20.0`).
+ *
+ * @param version Version label as supplied by a caller, if any.
+ * @returns The normalized label, or an empty string for unversioned content.
+ */
+export function normalizeVersionLabel(version?: string | null): string {
+  return (version ?? "").trim().toLowerCase();
+}
+
 /** Normalize a VersionRef (lowercase, trim; empty string for unversioned). */
 export function normalizeVersionRef(ref: VersionRef): VersionRef {
   return {
     library: ref.library.trim().toLowerCase(),
-    version: (ref.version ?? "").trim().toLowerCase(),
+    version: normalizeVersionLabel(ref.version),
   };
 }
 
