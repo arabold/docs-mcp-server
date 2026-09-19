@@ -51,10 +51,12 @@ because a version label is not guaranteed to be a semantic version.
 ### Requirement: Version Label Classification
 
 The system SHALL classify each stored label as either a semantic version or an opaque tag. A semantic
-version is a full `X.Y.Z` semver string, or a `major` or `major.minor` prefix, each optionally preceded by
-`v` and optionally carrying prerelease or build metadata. Every other label is an opaque tag. Semantic
-versions participate in ordering and range matching; opaque tags SHALL be matched only literally and
-SHALL NEVER be coerced into a version, ordered against versions, or selected by a range.
+version is either a full `X.Y.Z` semver string — optionally `v`-prefixed, and optionally carrying
+prerelease or build metadata — or a bare `major` / `major.minor` prefix, optionally `v`-prefixed. Every
+other label is an opaque tag, including a partial version that carries a prerelease or build suffix such
+as `1.20-beta`, because completing it would require guessing the patch level it is a prerelease of.
+Semantic versions participate in ordering and range matching; opaque tags SHALL be matched only literally
+and SHALL NEVER be coerced into a version, ordered against versions, or selected by a range.
 
 #### Scenario: Full semantic versions are versions
 - **WHEN** the labels `1.2.3`, `2.0.0-beta`, `1.0.0+build`, `v2.0.0-beta.1` are classified
@@ -83,6 +85,11 @@ SHALL NEVER be coerced into a version, ordered against versions, or selected by 
 #### Scenario: Over-long numeric labels are tags
 - **WHEN** the label `1.2.3.4` is classified
 - **THEN** it SHALL be classified as an opaque tag
+
+#### Scenario: Partial versions carrying a suffix are tags
+- **WHEN** the labels `1.20-beta`, `v2+docs` are classified
+- **THEN** each SHALL be classified as an opaque tag
+- **AND** each SHALL remain reachable by its own name through literal matching
 
 ### Requirement: Literal Label Resolution
 
@@ -280,8 +287,12 @@ is unknown, the system SHALL raise a library-not-found error carrying similarly 
 
 The system SHALL present a library's versions in a single deterministic order wherever they are listed:
 unversioned documentation first, then semantic versions from newest to oldest, then opaque tags in
-alphabetical order. Every surface that lists versions SHALL use this order, so the default selection a
-caller sees matches the one the resolver would choose.
+alphabetical order. Every surface that lists versions SHALL use this order, so the newest semantic version
+is always the first version shown.
+
+Display order is not the resolver's default. A library holding unversioned documentation lists it first,
+while a request naming no version resolves to the newest semantic version — the two answer different
+questions, and a listing surface that selects its first entry by default selects unversioned deliberately.
 
 #### Scenario: Semantic versions sort newest first
 - **GIVEN** a library with the stored versions `1.9.0`, `1.10.0` and `2.0.0`
@@ -307,3 +318,9 @@ caller sees matches the one the resolver would choose.
 - **GIVEN** a library with the stored versions `1.9.0` and `1.10.0`
 - **WHEN** its versions are listed in the web UI and resolved with no requested version
 - **THEN** both SHALL identify `1.10.0` as the newest
+
+#### Scenario: Unversioned leads the listing without becoming the resolver's default
+- **GIVEN** a library with unversioned documentation and the stored version `1.0.0`
+- **WHEN** its versions are listed and a request naming no version is resolved
+- **THEN** the listing SHALL place unversioned first
+- **AND** the resolver SHALL return `1.0.0`, not the unversioned bucket

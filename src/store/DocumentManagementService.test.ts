@@ -766,6 +766,17 @@ describe("DocumentManagementService", () => {
           expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: true });
         });
 
+        it("should not make unversioned the resolver's default just because it lists first", async () => {
+          // The canonical listing order puts unversioned first, which the web UI
+          // uses as its default selection. Resolution answers a different
+          // question and picks the newest semantic version.
+          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
+          mockStore.checkDocumentExists.mockResolvedValue(true);
+
+          const result = await docService.findBestVersion(library);
+          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+        });
+
         it("should not silently skip a tag in favour of unversioned", async () => {
           mockStore.queryUniqueVersions.mockResolvedValue(["latest"]);
           mockStore.checkDocumentExists.mockResolvedValue(true);

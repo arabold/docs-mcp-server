@@ -92,6 +92,16 @@ describe("toVersionCandidate", () => {
     expect(toVersionCandidate("1.2.3.4")).toEqual({ kind: "tag", stored: "1.2.3.4" });
   });
 
+  it("should classify partial versions carrying a suffix as tags", () => {
+    // Completing "1.20-beta" would mean guessing which patch level it is a
+    // prerelease of, so it stays an opaque tag and is reachable literally.
+    expect(toVersionCandidate("1.20-beta")).toEqual({
+      kind: "tag",
+      stored: "1.20-beta",
+    });
+    expect(toVersionCandidate("v2+docs")).toEqual({ kind: "tag", stored: "v2+docs" });
+  });
+
   it("should return null for an empty label, which means unversioned", () => {
     // Unversioned is its own bucket, not a tag.
     expect(toVersionCandidate("")).toBeNull();

@@ -1415,6 +1415,8 @@ describe("DocumentStore - Common Functionality", () => {
         "1.9.0",
         "stable",
       ]);
+      // Unversioned leads the listing; it is not the newest *version*.
+      expect(versions.filter((v) => v.version !== "")[0].version).toBe("2.0.0-beta");
     });
   });
 
