@@ -154,7 +154,7 @@ export class GitHubRepoProcessor {
       logger.warn(
         `⚠️  Unsupported content type "${rawContent.mimeType}" for file ${filePath}. Skipping processing.`,
       );
-      return { url: item.url, links: [], status: FetchStatus.SUCCESS };
+      return { url: item.url, links: [], status: FetchStatus.SKIPPED };
     }
 
     for (const err of processed.errors ?? []) {

@@ -85,7 +85,7 @@ export class PipelineWorker {
           // becomes a compile error here rather than a silent no-op.
           switch (progress.outcome) {
             case PageOutcome.Empty:
-              await this.recordEmptyPage(job, library, version, progress);
+              await this.recordEmptyPage(job, callbacks, library, version, progress);
               break;
             case PageOutcome.Absent:
               await this.removeDeletedPage(job, callbacks, progress);
@@ -141,6 +141,7 @@ export class PipelineWorker {
    */
   private async recordEmptyPage(
     job: InternalPipelineJob,
+    callbacks: WorkerCallbacks,
     library: string,
     version: string,
     progress: ScraperProgressEvent,
@@ -156,6 +157,13 @@ export class PipelineWorker {
     }
 
     try {
+      // A redirect can move a refreshed page to a different URL, in which case
+      // `pageId` names the old one and `addEmptyPage`'s own by-URL cleanup would
+      // not reach it. Remove it explicitly so the old chunks cannot survive
+      // alongside the new empty record.
+      if (progress.pageId) {
+        await this.store.deletePage(progress.pageId);
+      }
       await this.store.addEmptyPage(library, version, progress.depth, {
         url: emptyPage.url,
         title: emptyPage.title,
@@ -168,6 +176,12 @@ export class PipelineWorker {
     } catch (docError) {
       logger.error(
         `❌ [${job.id}] Failed to record empty page ${progress.currentUrl}: ${docError}`,
+      );
+      // Reported like the other persistence paths, so a job cannot complete
+      // looking successful while its store write failed.
+      await callbacks.onJobError?.(
+        job,
+        docError instanceof Error ? docError : new Error(String(docError)),
       );
     }
   }

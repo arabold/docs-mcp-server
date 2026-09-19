@@ -334,7 +334,7 @@ export class LocalFileStrategy extends BaseScraperStrategy {
       logger.warn(
         `⚠️  Unsupported content type "${rawContent.mimeType}" for file ${displayPath}. Skipping processing.`,
       );
-      return { url: rawContent.source, links: [], status: FetchStatus.SUCCESS };
+      return { url: rawContent.source, links: [], status: FetchStatus.SKIPPED };
     }
 
     for (const err of processed.errors ?? []) {

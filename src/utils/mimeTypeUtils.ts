@@ -24,7 +24,11 @@ export class MimeTypeUtils {
       return { mimeType: "application/octet-stream" };
     }
     const parts = contentTypeHeader.split(";").map((part) => part.trim());
-    const mimeType = parts[0].toLowerCase();
+    // Normalized for the same reason path detection is: the `mime` package's
+    // misfilings also arrive from servers, and a header saying
+    // `application/x-tcl` describes a text script just as a `.tcl` path does.
+    const raw = parts[0].toLowerCase();
+    const mimeType = MimeTypeUtils.normalizeMimeType(raw) ?? raw;
     let charset: string | undefined;
 
     for (let i = 1; i < parts.length; i++) {

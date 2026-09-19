@@ -346,6 +346,12 @@ export class HttpFetcher implements ContentFetcher {
           }
         }
 
+        // Axios rejects 4xx/5xx before the success path's try/finally is entered,
+        // so the error body is a Readable nothing has consumed. Left open it pins
+        // the socket, which matters most on the retry path: a new connection is
+        // opened while the failed one is still held.
+        destroyStream(axiosError.response?.data);
+
         if (this.isTlsCertificateError(code)) {
           throw new TlsCertificateError(source, code, errorCause);
         }

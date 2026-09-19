@@ -125,7 +125,7 @@ export class GitHubWikiProcessor {
         logger.warn(
           `⚠️  Unsupported content type "${rawContent.mimeType}" for wiki page ${currentUrl}. Skipping processing.`,
         );
-        return { url: currentUrl, links: [], status: FetchStatus.SUCCESS };
+        return { url: currentUrl, links: [], status: FetchStatus.SKIPPED };
       }
 
       for (const err of processed.errors ?? []) {

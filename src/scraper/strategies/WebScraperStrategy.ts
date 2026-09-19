@@ -299,6 +299,15 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") {
           continue;
         }
+        // Seeds go through the same admission checks as discovered links: an
+        // image or archive listed in llms.txt should be rejected at queue time
+        // rather than fetched and then discarded.
+        if (isArchivePath(targetUrl.pathname)) {
+          continue;
+        }
+        if (!this.canProcessDiscoveredLink(targetUrl)) {
+          continue;
+        }
         if (!this.shouldProcessUrl(targetUrl.href, options)) {
           continue;
         }
@@ -442,7 +451,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           url: effectiveSource,
           links: [],
           queueItems: llmsTxtQueueItems,
-          status: FetchStatus.SUCCESS,
+          // Skipped, not empty: nothing read the body, so we cannot claim the
+          // page has no content — and a refresh must not erase what is stored.
+          status: FetchStatus.SKIPPED,
         };
       }
 

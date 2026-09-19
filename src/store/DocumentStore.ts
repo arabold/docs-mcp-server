@@ -452,7 +452,7 @@ export class DocumentStore {
         "UPDATE versions SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       ),
       updateVersionProgress: this.db.prepare<[number, number, number | null, number]>(
-        "UPDATE versions SET progress_pages = ?, progress_max_pages = ?, progress_pages_indexed = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE versions SET progress_pages = ?, progress_max_pages = ?, progress_pages_indexed = COALESCE(?, progress_pages_indexed), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       ),
       getVersionsByStatus: this.db.prepare<[string]>(
         "SELECT v.*, l.name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.status IN (SELECT value FROM json_each(?))",
@@ -1364,6 +1364,7 @@ export class DocumentStore {
     versionId: number,
     pages: number,
     maxPages: number,
+    /** Omit or pass null to leave the stored value untouched. */
     pagesIndexed: number | null = null,
   ): Promise<void> {
     try {

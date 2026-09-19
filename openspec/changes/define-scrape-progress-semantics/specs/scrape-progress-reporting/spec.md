@@ -142,16 +142,30 @@ The TSDoc for each counter on `ScraperProgressEvent` SHALL state the meaning def
 - **THEN** the reported value is the resolved `maxPages` configuration value
 - **AND** it is not derived from any progress counter
 
-### Requirement: All four counters are persisted
+### Requirement: The reported counters are persisted
 
-All four counters SHALL be persisted on the job record so that their values survive a process restart and remain available after a job completes. No counter SHALL be live-only, and no counter's post-completion value SHALL be reconstructed from a different source with its own definition.
+`pagesScraped`, `totalPages` and `pagesIndexed` SHALL be persisted on the job
+record so that their values survive a process restart and remain available after
+a job completes. None of the three SHALL be live-only, and none SHALL have its
+post-completion value reconstructed from a different source with its own
+definition.
 
-Rows written before the content-producing counter existed SHALL carry a null value for it, not zero, and consumers SHALL render null as unknown.
+`totalDiscovered` is deliberately not persisted. It describes work the crawl
+declined to queue rather than work it did, and it is only distinguishable from
+`totalPages` while a limit is clamping an in-flight crawl. A restarted job
+re-derives it from its own run.
+
+Rows written before the content-producing counter existed SHALL carry a null value for it, not zero, and consumers SHALL render null as unknown. A caller that omits the value SHALL leave any stored value untouched rather than clearing it.
 
 #### Scenario: Counters survive a restart
 - **GIVEN** a completed scrape job
 - **WHEN** the process restarts and the job record is read back
-- **THEN** all four counters report the values they held at completion
+- **THEN** `pagesScraped`, `totalPages` and `pagesIndexed` report the values they held at completion
+
+#### Scenario: Omitting the indexed count preserves it
+- **GIVEN** a stored job record carrying a content-producing count
+- **WHEN** a progress update is written without that value
+- **THEN** the stored value is unchanged
 
 #### Scenario: Historical rows report unknown, not zero
 - **GIVEN** a job record written by a release prior to this change

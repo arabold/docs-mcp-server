@@ -418,7 +418,13 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           // Use the final URL from the result (which may differ due to redirects)
           const finalUrl = result.url || item.url;
 
-          if (result.content) {
+          // A result carrying no text is not a stored page. `WebScraperStrategy`
+          // already gates on this, but the local-file and GitHub processors pass
+          // their pipeline result through unconditionally, so an empty file would
+          // otherwise report Stored, inflate the indexed count and consume the
+          // page budget for a document the store then drops for having no chunks.
+          const producedContent = !!result.content?.textContent?.trim();
+          if (result.content && producedContent) {
             await report(PageOutcome.Stored, {
               currentUrl: finalUrl,
               result: {

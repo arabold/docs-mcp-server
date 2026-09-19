@@ -377,18 +377,22 @@ describe("LocalFileStrategy", () => {
 
     await strategy.scrape(options, progressCallback);
 
-    expect(storedCalls(progressCallback)).toHaveLength(1);
+    // An empty file produces no chunks, so the store would drop it. Reporting it
+    // as indexed would have inflated the count for a document never written; it
+    // is recorded as an empty page instead.
+    expect(storedCalls(progressCallback)).toHaveLength(0);
     expect(progressCallback).toHaveBeenCalledWith(
       expect.objectContaining({
         // The directory itself is item 1; the file is item 2.
         pagesScraped: 2,
+        pagesIndexed: 0,
         currentUrl: "file:///testdir/empty.md",
-        result: expect.objectContaining({
-          textContent: "",
-          contentType: "text/markdown",
-          title: "Untitled",
+        outcome: PageOutcome.Empty,
+        emptyPage: expect.objectContaining({
           url: "file:///testdir/empty.md",
-        } satisfies Partial<ScrapeResult>),
+          contentType: "text/markdown",
+          pipelineFailed: false,
+        }),
       } satisfies Partial<ScraperProgressEvent>),
     );
   });

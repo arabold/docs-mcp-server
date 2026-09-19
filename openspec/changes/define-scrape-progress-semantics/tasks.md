@@ -15,7 +15,9 @@ The ordering audit ran before drafting. Results: a normal crawl is provably brea
 
 - [x] 1.1 Ordering guarantee documented next to the depth filter, including that it does not hold in refresh mode.
 - [x] 1.2 Documented rather than asserted — the comment records that the property rests on the root being alone in the first batch.
-- [x] 1.3 `PipelineManager` floors the refresh `maxDepth` by the deepest stored page in the same pass that builds `initialQueue`.
+- [x] 1.3 **Reversed on review — no floor is applied.** It was implemented, then removed, for two reasons. Its premise was wrong: `initialQueue` items bypass the enqueue-time depth filter entirely, which applies only to discovered links, so a stored page deeper than the current limit is processed either way. And it ratcheted: every QUEUED job persists its scraper options, refreshes included, so the floored value was written back, read by the next refresh and floored again, climbing on every cycle and never returning to what the user configured.
+
+  What remains is a narrower gap: when stored options are missing or unparseable, `maxDepth` falls back to the config default, so *descendants* of deeper stored pages are not rediscovered. The root cause is `DocumentStore.getScraperOptions` discarding a usable options blob when `source_url` is null and swallowing a JSON parse failure into an empty object — which loses `scope`, `includePatterns`, `headers` and the rest, not just `maxDepth`. Fixing that is the deeper change and is deliberately left out of this one.
 
 ## 2. Depth Filtering At Enqueue
 
@@ -87,7 +89,7 @@ The existing suite asserts counters only in simple, consistent cases. These are 
 - [x] 9.4 Mixed 200/304/404 outcomes each advance the processed count; only 200s index.
 - [x] 9.5 Content, skips and ignored failures together satisfy the invariant.
 - [x] 9.6 An initial queue larger than maxPages reports N/N.
-- [x] 9.7 Refresh floors maxDepth by the deepest stored page.
+- [x] 9.7 Dropped with the floor (see 1.3). Refresh coverage is the GitHub strategy test in 9.10, which exercises a depth-heterogeneous initial queue.
 - [x] 9.12 maxPages delivers its full count of indexed pages despite non-content items.
 - [x] 9.8 maxDepth 0 queues nothing beyond the root.
 - [x] 9.9 llms.txt depth-0 seeds survive; guarded by the seed test in the skipped-items suite.

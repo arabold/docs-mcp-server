@@ -1345,11 +1345,55 @@ describe("WebScraperStrategy", () => {
         status: FetchStatus.SUCCESS,
       });
 
-      await strategy.scrape(options, progressCallback);
+      // The start URL itself being unreadable fails the job, matching the
+      // existing rule for a 404 root: completing "successfully" with zero
+      // documents tells the user nothing about what went wrong.
+      await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
+        /Cannot process content type/,
+      );
 
-      // Verify no document was produced for unsupported content
       const docCall = progressCallback.mock.calls.find((call) => call[0].result);
       expect(docCall).toBeUndefined();
+    });
+
+    it("skips unsupported content found during a crawl without failing", async () => {
+      const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+      options.url = "https://example.com/";
+      options.maxDepth = 1;
+
+      mockFetchFn.mockImplementation(async (url: string) =>
+        url === "https://example.com/"
+          ? {
+              content:
+                '<html><body><a href="/asset">asset</a><a href="/page">page</a></body></html>',
+              mimeType: "text/html",
+              source: url,
+              status: FetchStatus.SUCCESS,
+            }
+          : url.endsWith("/asset")
+            ? {
+                content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+                mimeType: "image/png",
+                source: url,
+                status: FetchStatus.SUCCESS,
+              }
+            : {
+                content: "<html><body><h1>Page</h1></body></html>",
+                mimeType: "text/html",
+                source: url,
+                status: FetchStatus.SUCCESS,
+              },
+      );
+
+      await strategy.scrape(options, progressCallback);
+
+      const asset = progressCallback.mock.calls.find(
+        (call) => call[0].currentUrl === "https://example.com/asset",
+      )?.[0];
+      // Reported as skipped rather than empty: nothing read the body, so a
+      // refresh must not treat it as a page that lost its content.
+      expect(asset?.outcome).toBe(PageOutcome.Skipped);
+      expect(asset?.emptyPage).toBeUndefined();
     });
 
     it("should process text/plain content through TextPipeline", async () => {
