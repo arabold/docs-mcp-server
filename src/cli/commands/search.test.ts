@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import { createSearchCommand } from "./search";
 
@@ -14,6 +15,10 @@ vi.mock("../../tools", () => ({
   SearchTool: vi.fn().mockImplementation(function () {
     return { execute: vi.fn(async () => ({ results: [] })) };
   }),
+}));
+vi.mock("../../telemetry", () => ({
+  TelemetryEvent: { CLI_COMMAND: "cli_command" },
+  telemetry: { track: vi.fn() },
 }));
 vi.mock("../utils", () => ({
   getGlobalOptions: vi.fn(() => ({ storePath: undefined })),
@@ -78,5 +83,16 @@ describe("search command", () => {
     await parser.parse("search react hooks --output yaml");
 
     expect(stdoutWriteMock).toHaveBeenCalledWith("[]\n");
+  });
+
+  it("does not send the Search Query to telemetry", async () => {
+    const parser = yargs().scriptName("test");
+    createSearchCommand(parser);
+
+    await parser.parse("search react 'private Search Query'");
+
+    expect(JSON.stringify(vi.mocked(telemetry.track).mock.calls)).not.toContain(
+      "private Search Query",
+    );
   });
 });

@@ -1,0 +1,20 @@
+services:
+  worker:
+    env_file: !override
+      - "${TEST_WORKER_ENV}"
+    environment:
+      LOG_LEVEL: debug
+      NODE_OPTIONS: --import=/test/mock-voyage.mjs
+    volumes: !override
+      - "${TEST_DATA_DIR}:/data"
+      - grounded-docs-config:/config
+      - "${TEST_MOCK_PATH}:/test/mock-voyage.mjs:ro"
+  web:
+    ports: !override
+      - "127.0.0.1::6280"
+  mcp-read:
+    ports: !override
+      - "127.0.0.1::6280"
+  mcp-admin:
+    ports: !override
+      - "127.0.0.1::6280"

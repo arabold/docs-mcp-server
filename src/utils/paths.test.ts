@@ -154,6 +154,15 @@ describe("paths utilities", () => {
       expect(vol.existsSync(newPath)).toBe(true);
     });
 
+    it("can resolve a store path without creating it", () => {
+      const readOnlyPath = "/read-only/storage/location";
+
+      const result = resolveStorePath(readOnlyPath, { create: false });
+
+      expect(result).toBe(readOnlyPath);
+      expect(vol.existsSync(readOnlyPath)).toBe(false);
+    });
+
     it("should handle complex legacy store detection scenario", () => {
       // Setup a more complex project structure with legacy store
       const legacyStorePath = path.join(projectRoot, ".store");

@@ -11,6 +11,17 @@
   - 📖 **Read `README.md`** first for project structure, setup, and configuration details.
   - 🏗️ **Read `ARCHITECTURE.md`** before making changes to understand system design and service interactions.
 
+## Remote Server Access
+
+- When work on the remote deployment server is required, read connection
+  parameters from `.secrets.local.env` in the repository root.
+- Use `.example.secrets.local.env` as the variable reference. Never place real
+  connection values in that example file.
+- Never print, log, copy into chat, stage, commit, or otherwise expose values
+  loaded from `.secrets.local.env`.
+- Do not guess or hard-code remote connection parameters. If a required value is
+  absent, report only the missing variable name and ask the user to fill it in.
+
 ## Development Workflow
 
 ### Key Commands

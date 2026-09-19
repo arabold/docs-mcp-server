@@ -1,8 +1,11 @@
-import { VersionNotFoundInStoreError } from "../store";
+import {
+  LibraryNotFoundInStoreError,
+  VersionNotFoundInStoreError,
+} from "../store/errors";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import type { StoreSearchResult } from "../store/types";
 import { logger } from "../utils/logger";
-import { ValidationError } from "./errors";
+import { ToolError, ValidationError } from "./errors";
 
 export interface SearchToolOptions {
   library: string;
@@ -33,9 +36,17 @@ export interface SearchToolResult {
  * Returns available versions when requested version is not found.
  */
 export class SearchTool {
-  private docService: IDocumentManagement;
+  private docService: Pick<
+    IDocumentManagement,
+    "validateLibraryExists" | "listLibraries" | "findBestVersion" | "searchStore"
+  >;
 
-  constructor(docService: IDocumentManagement) {
+  constructor(
+    docService: Pick<
+      IDocumentManagement,
+      "validateLibraryExists" | "listLibraries" | "findBestVersion" | "searchStore"
+    >,
+  ) {
     this.docService = docService;
   }
 
@@ -64,31 +75,31 @@ export class SearchTool {
       );
     }
 
-    // When exactMatch is true, version must be specified and not 'latest'
-    if (exactMatch && (!version || version === "latest")) {
-      // Get available *detailed* versions for error message
-      await this.docService.validateLibraryExists(library);
-      // Fetch detailed versions using listLibraries and find the specific library
-      const allLibraries = await this.docService.listLibraries();
-      const libraryInfo = allLibraries.find((lib) => lib.library === library);
-      const availableVersions = libraryInfo
-        ? libraryInfo.versions.map((v) => v.ref.version)
-        : [];
-      throw new VersionNotFoundInStoreError(
-        library,
-        version ?? "latest",
-        availableVersions,
-      );
-    }
-
     // Default to 'latest' only when exactMatch is false
     const resolvedVersion = version || "latest";
 
     logger.info(
-      `🔍 Searching ${library}@${resolvedVersion} for: ${query}${exactMatch ? " (exact match)" : ""}`,
+      `🔍 Searching ${library}@${resolvedVersion}${exactMatch ? " (exact match)" : ""}`,
     );
 
+    let failureStage = "library validation";
     try {
+      // When exactMatch is true, version must be specified and not 'latest'
+      if (exactMatch && (!version || version === "latest")) {
+        await this.docService.validateLibraryExists(library);
+        failureStage = "version resolution";
+        const allLibraries = await this.docService.listLibraries();
+        const libraryInfo = allLibraries.find((lib) => lib.library === library);
+        const availableVersions = libraryInfo
+          ? libraryInfo.versions.map((v) => v.ref.version)
+          : [];
+        throw new VersionNotFoundInStoreError(
+          library,
+          version ?? "latest",
+          availableVersions,
+        );
+      }
+
       // 1. Validate library exists first
       await this.docService.validateLibraryExists(library);
 
@@ -96,6 +107,7 @@ export class SearchTool {
       let versionToSearch: string | null | undefined = resolvedVersion;
 
       if (!exactMatch) {
+        failureStage = "version resolution";
         // If not exact match, find the best version (which might be null)
         const versionResult = await this.docService.findBestVersion(library, version);
         // Use the bestMatch from the result, which could be null
@@ -110,6 +122,7 @@ export class SearchTool {
 
       // Note: versionToSearch can be string | null | undefined here.
       // searchStore handles null/undefined by normalizing to "".
+      failureStage = "document retrieval";
       const results = await this.docService.searchStore(
         library,
         versionToSearch,
@@ -120,10 +133,14 @@ export class SearchTool {
 
       return { results };
     } catch (error) {
-      logger.error(
-        `❌ Search failed: ${error instanceof Error ? error.message : "Unknown error"}`,
-      );
-      throw error;
+      logger.error(`❌ Search failed during ${failureStage}`);
+      if (
+        error instanceof LibraryNotFoundInStoreError ||
+        error instanceof VersionNotFoundInStoreError
+      ) {
+        throw error;
+      }
+      throw new ToolError(`Search failed during ${failureStage}`, this.constructor.name);
     }
   }
 }

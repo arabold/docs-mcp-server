@@ -30,6 +30,12 @@ vi.mock("./paths", () => ({
   getProjectRoot: vi.fn().mockReturnValue(undefined), // Default to undefined to rely on explicit searchDirs
 }));
 
+const managedConfigPath = path.join(process.cwd(), ".vitest-config-mock", "config.yaml");
+const managedConfigFixture = fs.readFileSync(
+  path.join(process.cwd(), "test", "fixtures", "managed-default-config.yaml"),
+  "utf8",
+);
+
 describe("Configuration Loading", () => {
   let tmpDir: string;
   let originalEnv: NodeJS.ProcessEnv;
@@ -72,6 +78,12 @@ describe("Configuration Loading", () => {
       expect(
         fs.existsSync(path.join(process.cwd(), ".vitest-config-mock", "config.yaml")),
       ).toBe(true);
+    });
+
+    it("keeps the tracked managed config aligned with generated defaults", () => {
+      loadConfig({}, {});
+
+      expect(fs.readFileSync(managedConfigPath, "utf8")).toBe(managedConfigFixture);
     });
 
     it("should load explicit config from --config and NOT write back", () => {
@@ -182,6 +194,51 @@ describe("Configuration Loading", () => {
   });
 
   describe("Unit Logic & Edge Cases", () => {
+    it("loads the default-off provider-neutral reranker configuration", () => {
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "reranker-defaults.yaml") },
+      );
+
+      expect(config.search.reranker).toEqual({
+        enabled: false,
+        provider: "voyage",
+        model: "rerank-2.5-lite",
+        candidateLimit: 30,
+        requestTimeoutMs: 5000,
+      });
+    });
+
+    it("uses the local public search range for the reranker candidate limit", () => {
+      process.env.DOCS_MCP_SEARCH_RERANKER_CANDIDATE_LIMIT = "100";
+      expect(
+        loadConfig({}, { configPath: path.join(tmpDir, "reranker-candidate-limit.yaml") })
+          .search.reranker.candidateLimit,
+      ).toBe(100);
+
+      process.env.DOCS_MCP_SEARCH_RERANKER_CANDIDATE_LIMIT = "101";
+      expect(() =>
+        loadConfig(
+          {},
+          { configPath: path.join(tmpDir, "reranker-candidate-limit.yaml") },
+        ),
+      ).toThrow();
+    });
+
+    it("keeps VOYAGE_API_KEY outside resolved and printed configuration", () => {
+      process.env.VOYAGE_API_KEY = "test-secret-that-must-not-be-resolved";
+
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "reranker-secret.yaml") },
+      );
+      const printedConfig = JSON.stringify(config);
+
+      expect(config).not.toHaveProperty("VOYAGE_API_KEY");
+      expect(config.search.reranker).not.toHaveProperty("apiKey");
+      expect(printedConfig).not.toContain("test-secret-that-must-not-be-resolved");
+    });
+
     it("should handle nested defaults correctly (Assembly)", () => {
       const configPath = path.join(tmpDir, "defaults.yaml");
       fs.writeFileSync(configPath, "");

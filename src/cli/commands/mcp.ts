@@ -7,7 +7,11 @@ import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { DocumentManagementClient, DocumentManagementService } from "../../store";
+import {
+  createLocalDocumentManagementService,
+  DocumentManagementClient,
+  type DocumentManagementService,
+} from "../../store";
 import { EmbeddingModelChangedError } from "../../store/errors";
 import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
@@ -153,7 +157,7 @@ export function createMcpCommand(cli: Argv) {
           await client.initialize();
           docService = client;
         } else {
-          const service = new DocumentManagementService(eventBus, appConfig);
+          const service = createLocalDocumentManagementService(eventBus, appConfig);
           try {
             await service.initialize();
           } catch (error) {

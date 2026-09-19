@@ -1,15 +1,33 @@
 import type { AppConfig } from "../utils/config";
+import { logger } from "../utils/logger";
 import { createContentAssemblyStrategy } from "./assembly/ContentAssemblyStrategyFactory";
+import {
+  getRerankerFallbackCategory,
+  type RerankerFallbackCategory,
+} from "./CircuitBreakingReranker";
 import type { DocumentStore } from "./DocumentStore";
+import type { Reranker } from "./Reranker";
 import type { DbChunkRank, DbPageChunk, StoreSearchResult } from "./types";
+
+type RankedCandidate = DbPageChunk & DbChunkRank & { baselineIndex?: number };
+
+interface RerankerOperation {
+  candidateCount: number;
+  elapsedTimeMs: number;
+  fallbackCategory: RerankerFallbackCategory | "none";
+  outcome: "fallback" | "success";
+  usageTokens: number | null;
+}
 
 export class DocumentRetrieverService {
   private documentStore: DocumentStore;
   private config: AppConfig;
+  private reranker?: Reranker;
 
-  constructor(documentStore: DocumentStore, config: AppConfig) {
+  constructor(documentStore: DocumentStore, config: AppConfig, reranker?: Reranker) {
     this.documentStore = documentStore;
     this.config = config;
+    this.reranker = reranker;
   }
 
   /**
@@ -29,22 +47,79 @@ export class DocumentRetrieverService {
     // Normalize version: null/undefined becomes empty string, then lowercase
     const normalizedVersion = (version ?? "").toLowerCase();
 
+    const userLimit = limit ?? 10;
+    const activeReranker = this.config.search.reranker.enabled && this.reranker;
+    const retrievalLimit = activeReranker
+      ? Math.max(userLimit, this.config.search.reranker.candidateLimit)
+      : userLimit;
     const initialResults = await this.documentStore.findByContent(
       library,
       normalizedVersion,
       query,
-      limit ?? 10,
+      retrievalLimit,
     );
 
     if (initialResults.length === 0) {
       return [];
     }
 
+    let rankedCandidates: RankedCandidate[] = initialResults;
+    let rerankerOperation: RerankerOperation | undefined;
+    if (activeReranker) {
+      const rerankerStartedAt = Date.now();
+      try {
+        const rerankResult = await activeReranker.rerank(
+          query,
+          initialResults.map((candidate, index) => ({
+            index,
+            content: candidate.content,
+            sourceUrl: candidate.url,
+          })),
+        );
+        rankedCandidates = rerankResult.scores
+          .map(({ index, score }) => ({
+            ...initialResults[index],
+            score,
+            baselineIndex: index,
+          }))
+          .sort(
+            (first, second) =>
+              second.score - first.score || first.baselineIndex - second.baselineIndex,
+          )
+          .slice(0, userLimit);
+        rerankerOperation = {
+          candidateCount: initialResults.length,
+          elapsedTimeMs: Date.now() - rerankerStartedAt,
+          fallbackCategory: "none",
+          outcome: "success",
+          usageTokens: rerankResult.usageTokens ?? null,
+        };
+      } catch (error) {
+        const baselineResults =
+          retrievalLimit === userLimit
+            ? initialResults
+            : await this.documentStore.findByContent(
+                library,
+                normalizedVersion,
+                query,
+                userLimit,
+              );
+        rankedCandidates = baselineResults.slice(0, userLimit);
+        rerankerOperation = {
+          candidateCount: initialResults.length,
+          elapsedTimeMs: Date.now() - rerankerStartedAt,
+          fallbackCategory: getRerankerFallbackCategory(error),
+          outcome: "fallback",
+          usageTokens: null,
+        };
+      }
+    }
+
     // Group initial results by URL
-    const resultsByUrl = this.groupResultsByUrl(initialResults);
+    const resultsByUrl = this.groupResultsByUrl(rankedCandidates);
 
     // Process each URL group with appropriate strategy
-    const results: StoreSearchResult[] = [];
+    const results: { result: StoreSearchResult; baselineIndex: number }[] = [];
     for (const [url, urlResults] of resultsByUrl.entries()) {
       // Cluster chunks based on distance
       const clusters = this.clusterChunksByDistance(urlResults);
@@ -57,25 +132,65 @@ export class DocumentRetrieverService {
           url,
           cluster,
         );
-        results.push(result);
+        const explicitBaselineIndex = cluster.reduce<number | undefined>(
+          (bestIndex, candidate) =>
+            candidate.baselineIndex !== undefined &&
+            (bestIndex === undefined || candidate.baselineIndex < bestIndex)
+              ? candidate.baselineIndex
+              : bestIndex,
+          undefined,
+        );
+        results.push({
+          result,
+          baselineIndex: explicitBaselineIndex ?? results.length,
+        });
       }
     }
 
     // Sort all results by score descending
     // This ensures that if a highly relevant chunk was split from a less relevant one,
     // the highly relevant one appears first in the final list.
-    results.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+    const assembledResults = results
+      .sort(
+        (first, second) =>
+          (second.result.score ?? 0) - (first.result.score ?? 0) ||
+          first.baselineIndex - second.baselineIndex,
+      )
+      .map(({ result }) => result);
 
-    return results;
+    if (rerankerOperation) {
+      this.logRerankerOperation(rerankerOperation, assembledResults.length);
+    }
+
+    return assembledResults;
+  }
+
+  private logRerankerOperation(
+    operation: RerankerOperation,
+    returnedCount: number,
+  ): void {
+    const safeMetadata = JSON.stringify({
+      provider: this.config.search.reranker.provider,
+      model: this.config.search.reranker.model,
+      candidateCount: operation.candidateCount,
+      elapsedTimeMs: operation.elapsedTimeMs,
+      outcome: operation.outcome,
+      returnedCount,
+      usageTokens: operation.usageTokens,
+      fallbackCategory: operation.fallbackCategory,
+    });
+    if (operation.outcome === "success") {
+      logger.debug(`Reranker operation ${safeMetadata}`);
+      return;
+    }
+    logger.warn(`⚠️  Reranker fallback ${safeMetadata}`);
   }
 
   /**
    * Groups search results by URL.
    */
-  private groupResultsByUrl(
-    results: (DbPageChunk & DbChunkRank)[],
-  ): Map<string, (DbPageChunk & DbChunkRank)[]> {
-    const resultsByUrl = new Map<string, (DbPageChunk & DbChunkRank)[]>();
+  private groupResultsByUrl(results: RankedCandidate[]): Map<string, RankedCandidate[]> {
+    const resultsByUrl = new Map<string, RankedCandidate[]>();
 
     for (const result of results) {
       const url = result.url;
@@ -98,7 +213,7 @@ export class DocumentRetrieverService {
     library: string,
     version: string,
     url: string,
-    initialChunks: (DbPageChunk & DbChunkRank)[],
+    initialChunks: RankedCandidate[],
   ): Promise<StoreSearchResult> {
     // Extract processed and source MIME types from page-level fields.
     // Convert null to undefined for consistency.
@@ -141,9 +256,7 @@ export class DocumentRetrieverService {
    * @param chunks The list of chunks to cluster (must be from the same URL).
    * @returns An array of chunk clusters, where each cluster is an array of chunks.
    */
-  private clusterChunksByDistance(
-    chunks: (DbPageChunk & DbChunkRank)[],
-  ): (DbPageChunk & DbChunkRank)[][] {
+  private clusterChunksByDistance(chunks: RankedCandidate[]): RankedCandidate[][] {
     if (chunks.length === 0) return [];
     if (chunks.length === 1) return [chunks];
 
@@ -154,8 +267,8 @@ export class DocumentRetrieverService {
       return a.id.localeCompare(b.id);
     });
 
-    const clusters: (DbPageChunk & DbChunkRank)[][] = [];
-    let currentCluster: (DbPageChunk & DbChunkRank)[] = [sortedChunks[0]];
+    const clusters: RankedCandidate[][] = [];
+    let currentCluster: RankedCandidate[] = [sortedChunks[0]];
     // Ensure maxChunkDistance is non-negative
     const maxChunkDistance = Math.max(0, this.config.assembly.maxChunkDistance);
 

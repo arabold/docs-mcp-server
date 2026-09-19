@@ -1,0 +1,13 @@
+interface:
+  display_name: "SAP SuccessFactors OData документация"
+  short_description: "Поиск по справочнику SAP SuccessFactors OData"
+  default_prompt: "Используй $lib-sap-sf-odata, чтобы проверить вопрос по SAP SuccessFactors OData V2 в индексированной документации."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "lib-docs"
+      description: "Удалённая read-only библиотека документации"
+
+policy:
+  allow_implicit_invocation: true

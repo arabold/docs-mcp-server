@@ -1,0 +1,88 @@
+services:
+  worker:
+    image: ${DOCS_MCP_IMAGE:?Set DOCS_MCP_IMAGE to an immutable registry manifest digest}
+    command: ["worker", "--host", "0.0.0.0", "--port", "8080", "--quiet"]
+    restart: unless-stopped
+    env_file:
+      - .env.worker
+    environment:
+      DOCS_MCP_STORE_PATH: /data
+      DOCS_MCP_SEARCH_RERANKER_ENABLED: "true"
+      DOCS_MCP_SEARCH_RERANKER_CANDIDATE_LIMIT: "30"
+      DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_MODE: allowedRoots
+      DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS: /documents
+      DOCS_MCP_TELEMETRY: "false"
+    volumes:
+      - grounded-docs-data:/data
+      - grounded-docs-config:/config
+      - ./imports/ONEC_ERP:/documents/ONEC_ERP:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(8080,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  web:
+    image: ${DOCS_MCP_IMAGE:?Set DOCS_MCP_IMAGE to an immutable registry manifest digest}
+    command: ["web", "--host", "0.0.0.0", "--port", "6280", "--server-url", "http://worker:8080/api", "--no-logo", "--quiet"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16280:6280"
+    environment:
+      DOCS_MCP_TELEMETRY: "false"
+    volumes:
+      - grounded-docs-config:/config
+    depends_on:
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(6280,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  mcp-read:
+    image: ${DOCS_MCP_IMAGE:?Set DOCS_MCP_IMAGE to an immutable registry manifest digest}
+    command: ["mcp", "--protocol", "http", "--host", "0.0.0.0", "--port", "6280", "--server-url", "http://worker:8080/api", "--read-only", "--no-logo", "--quiet"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16281:6280"
+    environment:
+      DOCS_MCP_TELEMETRY: "false"
+    volumes:
+      - grounded-docs-config:/config
+    depends_on:
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(6280,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  mcp-admin:
+    image: ${DOCS_MCP_IMAGE:?Set DOCS_MCP_IMAGE to an immutable registry manifest digest}
+    command: ["mcp", "--protocol", "http", "--host", "0.0.0.0", "--port", "6280", "--server-url", "http://worker:8080/api", "--no-logo", "--quiet"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:16282:6280"
+    environment:
+      DOCS_MCP_TELEMETRY: "false"
+    volumes:
+      - grounded-docs-config:/config
+    depends_on:
+      worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('net').connect(6280,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+volumes:
+  grounded-docs-data:
+  grounded-docs-config:

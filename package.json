@@ -23,6 +23,9 @@
   "scripts": {
     "prepare": "husky || true",
     "build": "vite build --config vite.config.web.ts && vite build",
+    "build:mcpb:server": "vite build --config vite.config.mcpb.ts",
+    "build:mcpb": "vite-node scripts/build-mcpb.ts",
+    "smoke:mcpb": "vite-node scripts/smoke-mcpb.ts",
     "start": "node --enable-source-maps dist/index.js",
     "cli": "node --enable-source-maps dist/index.js",
     "server": "node --enable-source-maps dist/index.ts",
@@ -40,6 +43,7 @@
     "evaluate:search": "vite-node tests/search-eval/run.ts --measure",
     "evaluate:search:baseline": "vite-node tests/search-eval/run.ts --baseline",
     "evaluate:search:preflight": "vite-node tests/search-eval/cli/preflight.ts",
+    "evaluate:reranking": "vite-node tests/reranking-eval/run.ts",
     "test:live": "vitest run --exclude= test/html-pipeline-live-e2e.test.ts",
     "lint": "biome check .",
     "lint:fix": "biome check . --fix",

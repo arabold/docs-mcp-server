@@ -1,9 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../utils/config";
 import { loadConfig } from "../utils/config";
+import { logger } from "../utils/logger";
+import {
+  CircuitBreakingReranker,
+  RerankerUnavailableError,
+} from "./CircuitBreakingReranker";
 import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
-import type { DbChunkRank, DbPageChunk } from "./types";
+import type { DbChunkRank, DbPageChunk, StoreSearchResult } from "./types";
+import { VoyageReranker } from "./VoyageReranker";
 
 vi.mock("./DocumentStore");
 
@@ -20,10 +26,21 @@ describe("DocumentRetrieverService", () => {
     service = new DocumentRetrieverService(store, config);
   });
 
-  it("should return an empty array when no documents are found", async () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("skips an enabled reranker when Baseline Ranking is empty", async () => {
+    const rerank = vi.fn();
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
     vi.spyOn(store, "findByContent").mockResolvedValue([]);
+
     const results = await service.search("lib", "1.0.0", "query");
+
     expect(results).toEqual([]);
+    expect(rerank).not.toHaveBeenCalled();
   });
 
   it("should consolidate multiple hits from the same URL into a single ordered result", async () => {
@@ -219,7 +236,7 @@ describe("DocumentRetrieverService", () => {
     ]);
   });
 
-  it("should use the provided limit", async () => {
+  it("preserves Baseline Ranking behavior when reranking is disabled", async () => {
     const library = "lib";
     const version = "1.0.0";
     const query = "test";
@@ -231,6 +248,8 @@ describe("DocumentRetrieverService", () => {
       score: 0.5,
       metadata: {},
     } as DbPageChunk & DbChunkRank;
+    const rerank = vi.fn();
+    service = new DocumentRetrieverService(store, config, { rerank });
 
     vi.spyOn(store, "findByContent").mockResolvedValue([initialResult]);
     vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
@@ -242,12 +261,891 @@ describe("DocumentRetrieverService", () => {
     const results = await service.search(library, version, query, limit);
 
     expect(store.findByContent).toHaveBeenCalledWith(library, version, query, limit);
+    expect(rerank).not.toHaveBeenCalled();
     expect(results).toEqual([
       {
         content: "Main chunk",
         url: "url",
         score: 0.5,
       },
+    ]);
+  });
+
+  it("passes raw search candidates to an enabled reranker before context assembly", async () => {
+    const candidate = {
+      id: "doc1",
+      content: "Raw candidate content",
+      url: "https://example.com/doc",
+      score: 0.5,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [{ index: 0, score: 0.9 }],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue([candidate]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([candidate]);
+
+    await service.search("lib", "1.0.0", "exact search query", 3);
+
+    expect(rerank).toHaveBeenCalledWith("exact search query", [
+      {
+        index: 0,
+        content: "Raw candidate content",
+        sourceUrl: "https://example.com/doc",
+      },
+    ]);
+  });
+
+  it("returns the exact Baseline Ranking prefix when the reranker fails", async () => {
+    const candidates = [
+      {
+        id: "first",
+        content: "Baseline first",
+        url: "https://example.com/first",
+        score: 0.91,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "second",
+        content: "Baseline second",
+        url: "https://example.com/second",
+        score: 0.73,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "third",
+        content: "Outside prefix",
+        url: "https://example.com/third",
+        score: 0.42,
+        sort_order: 1,
+        metadata: {},
+      },
+    ] as (DbPageChunk & DbChunkRank)[];
+    const rerank = vi.fn().mockRejectedValue(new Error("raw provider cause"));
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue(candidates);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) =>
+      candidates.filter((candidate) => ids.includes(candidate.id)),
+    );
+
+    const results = await service.search("lib", "1.0.0", "private query", 2);
+
+    expect(results).toEqual([
+      {
+        content: "Baseline first",
+        url: "https://example.com/first",
+        score: 0.91,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+      {
+        content: "Baseline second",
+        url: "https://example.com/second",
+        score: 0.73,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+    ]);
+  });
+
+  it.each([400, 401, 403, 429, 500, 502, 503, 504])(
+    "uses the exact Baseline Ranking prefix for Voyage HTTP %i",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response("private provider response body", {
+            status,
+          }),
+        ),
+      );
+
+      await expectVoyageFailOpen();
+    },
+  );
+
+  it("uses the exact Baseline Ranking prefix for a Voyage network failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockRejectedValue(
+          new Error("raw cause from https://private-provider.example/internal"),
+        ),
+    );
+
+    await expectVoyageFailOpen();
+  });
+
+  it("uses the exact Baseline Ranking prefix for invalid Voyage JSON", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response("{private invalid json", { status: 200 })),
+    );
+
+    await expectVoyageFailOpen();
+  });
+
+  it.each([
+    ["missing data", {}],
+    ["missing result", { data: [{ index: 0, relevance_score: 0.8 }] }],
+    [
+      "duplicate index",
+      {
+        data: [
+          { index: 0, relevance_score: 0.8 },
+          { index: 0, relevance_score: 0.7 },
+          { index: 2, relevance_score: 0.6 },
+        ],
+      },
+    ],
+    [
+      "extra result",
+      {
+        data: [
+          { index: 0, relevance_score: 0.8 },
+          { index: 1, relevance_score: 0.7 },
+          { index: 2, relevance_score: 0.6 },
+          { index: 2, relevance_score: 0.5 },
+        ],
+      },
+    ],
+    [
+      "missing index",
+      {
+        data: [
+          { relevance_score: 0.8 },
+          { index: 1, relevance_score: 0.7 },
+          { index: 2, relevance_score: 0.6 },
+        ],
+      },
+    ],
+    [
+      "non-integer index",
+      {
+        data: [
+          { index: 0.5, relevance_score: 0.8 },
+          { index: 1, relevance_score: 0.7 },
+          { index: 2, relevance_score: 0.6 },
+        ],
+      },
+    ],
+    [
+      "out-of-range index",
+      {
+        data: [
+          { index: 0, relevance_score: 0.8 },
+          { index: 1, relevance_score: 0.7 },
+          { index: 3, relevance_score: 0.6 },
+        ],
+      },
+    ],
+    [
+      "missing score",
+      {
+        data: [
+          { index: 0, relevance_score: 0.8 },
+          { index: 1 },
+          { index: 2, relevance_score: 0.6 },
+        ],
+      },
+    ],
+    [
+      "non-finite score",
+      {
+        data: [
+          { index: 0, relevance_score: 0.8 },
+          { index: 1, relevance_score: Number.POSITIVE_INFINITY },
+          { index: 2, relevance_score: 0.6 },
+        ],
+      },
+    ],
+  ])(
+    "uses the exact Baseline Ranking prefix for Voyage shape: %s",
+    async (_name, body) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      );
+
+      await expectVoyageFailOpen();
+    },
+  );
+
+  it("uses the exact Baseline Ranking prefix after the Voyage deadline", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+        const signal = init.signal as AbortSignal;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new DOMException("private timeout cause", "AbortError"));
+          });
+        });
+      }),
+    );
+
+    const pendingResults = expectVoyageFailOpen();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await pendingResults;
+  });
+
+  it.each([
+    "timeout",
+    "request_failed",
+    "provider_error",
+    "invalid_response",
+    "circuit_open",
+    "probe_in_progress",
+  ] as const)("logs only the sanitized fallback category: %s", async (category) => {
+    const candidate = {
+      id: "candidate",
+      content: "private Search Candidate",
+      url: "https://example.com/candidate",
+      score: 0.91,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, {
+      rerank: vi.fn().mockRejectedValue(new RerankerUnavailableError(category)),
+    });
+    vi.spyOn(store, "findByContent").mockResolvedValue([candidate]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([candidate]);
+
+    await service.search("lib", "1.0.0", "private Search Query", 1);
+
+    expectFallbackLogCategory(category);
+  });
+
+  it("logs successful usage through the same operational metadata whitelist", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [
+              { index: 1, relevance_score: 0.95 },
+              { index: 0, relevance_score: 0.25 },
+            ],
+            usage: { total_tokens: 42 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    const candidates = [
+      {
+        id: "first",
+        content: "First candidate",
+        url: "https://example.com/first",
+        score: 0.9,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "second",
+        content: "Second candidate",
+        url: "https://example.com/second",
+        score: 0.8,
+        sort_order: 1,
+        metadata: {},
+      },
+    ] as (DbPageChunk & DbChunkRank)[];
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(
+      store,
+      config,
+      new CircuitBreakingReranker(
+        new VoyageReranker({
+          apiKey: "test-voyage-secret",
+          model: config.search.reranker.model,
+          requestTimeoutMs: 5_000,
+        }),
+      ),
+    );
+    vi.spyOn(store, "findByContent").mockResolvedValue(candidates);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) =>
+      candidates.filter((candidate) => ids.includes(candidate.id)),
+    );
+
+    await service.search("lib", "1.0.0", "private Search Query", 2);
+
+    const message = vi
+      .mocked(logger.debug)
+      .mock.calls.map(([loggedMessage]) => loggedMessage)
+      .find((loggedMessage) => loggedMessage.startsWith("Reranker operation "));
+    expect(message).toBeDefined();
+    if (!message) {
+      throw new Error("Missing Reranker operation log");
+    }
+    const metadata = JSON.parse(message.slice(message.indexOf("{")));
+    expect(metadata).toMatchObject({
+      provider: "voyage",
+      model: "rerank-2.5-lite",
+      candidateCount: 2,
+      outcome: "success",
+      returnedCount: 2,
+      usageTokens: 42,
+      fallbackCategory: "none",
+    });
+  });
+
+  it("logs only whitelisted operational metadata for Fail-open Search", async () => {
+    const sensitiveValues = [
+      "test-voyage-secret",
+      "private Search Query",
+      "private Search Candidate",
+      "private provider response body",
+      "raw provider cause",
+      "https://private-provider.example/internal",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error(sensitiveValues.join(" | "))),
+    );
+
+    await runVoyageFailure(sensitiveValues[1], sensitiveValues[2]);
+
+    expect(logger.warn).toHaveBeenCalledOnce();
+    const message = vi.mocked(logger.warn).mock.calls[0][0];
+    for (const sensitiveValue of sensitiveValues) {
+      expect(message).not.toContain(sensitiveValue);
+    }
+    const metadata = JSON.parse(message.slice(message.indexOf("{")));
+    expect(Object.keys(metadata)).toEqual([
+      "provider",
+      "model",
+      "candidateCount",
+      "elapsedTimeMs",
+      "outcome",
+      "returnedCount",
+      "usageTokens",
+      "fallbackCategory",
+    ]);
+    expect(metadata).toMatchObject({
+      provider: "voyage",
+      model: "rerank-2.5-lite",
+      candidateCount: 3,
+      outcome: "fallback",
+      returnedCount: 2,
+      usageTokens: null,
+      fallbackCategory: "request_failed",
+    });
+    expect(metadata.elapsedTimeMs).toEqual(expect.any(Number));
+  });
+
+  it("restores the exact user-limit Baseline Ranking after reranker failure", async () => {
+    const widenedCandidate = {
+      id: "widened",
+      content: "Widened candidate",
+      url: "https://example.com/widened",
+      score: 0.2,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const baselineCandidate = {
+      id: "baseline",
+      content: "Baseline candidate",
+      url: "https://example.com/baseline",
+      score: 0.9,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, {
+      rerank: vi.fn().mockRejectedValue(new Error("provider unavailable")),
+    });
+    vi.spyOn(store, "findByContent").mockImplementation(
+      async (_library, _version, _query, searchLimit) =>
+        searchLimit === 30 ? [widenedCandidate] : [baselineCandidate],
+    );
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([baselineCandidate]);
+
+    const results = await service.search("lib", "1.0.0", "private query", 1);
+
+    expect(store.findByContent).toHaveBeenNthCalledWith(
+      2,
+      "lib",
+      "1.0.0",
+      "private query",
+      1,
+    );
+    expect(results).toEqual([
+      {
+        content: "Baseline candidate",
+        url: "https://example.com/baseline",
+        score: 0.9,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+    ]);
+  });
+
+  async function expectVoyageFailOpen(
+    query = "private Search Query",
+    firstContent = "private Search Candidate",
+  ): Promise<void> {
+    const results = await runVoyageFailure(query, firstContent);
+
+    expect(results).toEqual([
+      {
+        content: firstContent,
+        url: "https://example.com/baseline-first",
+        score: 0.91,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+      {
+        content: "Baseline second",
+        url: "https://example.com/baseline-second",
+        score: 0.73,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+    ]);
+  }
+
+  async function runVoyageFailure(
+    query: string,
+    firstContent: string,
+  ): Promise<StoreSearchResult[]> {
+    const candidates = [
+      {
+        id: "baseline-first",
+        content: firstContent,
+        url: "https://example.com/baseline-first",
+        score: 0.91,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "baseline-second",
+        content: "Baseline second",
+        url: "https://example.com/baseline-second",
+        score: 0.73,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "outside-prefix",
+        content: "Outside prefix",
+        url: "https://example.com/outside-prefix",
+        score: 0.42,
+        sort_order: 1,
+        metadata: {},
+      },
+    ] as (DbPageChunk & DbChunkRank)[];
+    config.search.reranker.enabled = true;
+    config.search.reranker.requestTimeoutMs = 5_000;
+    service = new DocumentRetrieverService(
+      store,
+      config,
+      new CircuitBreakingReranker(
+        new VoyageReranker({
+          apiKey: "test-voyage-secret",
+          model: config.search.reranker.model,
+          requestTimeoutMs: config.search.reranker.requestTimeoutMs,
+        }),
+      ),
+    );
+    vi.spyOn(store, "findByContent").mockResolvedValue(candidates);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) =>
+      candidates.filter((candidate) => ids.includes(candidate.id)),
+    );
+
+    return service.search("lib", "1.0.0", query, 2);
+  }
+
+  function expectFallbackLogCategory(expectedCategory: string): void {
+    expect(logger.warn).toHaveBeenCalledOnce();
+    const message = vi.mocked(logger.warn).mock.calls[0][0];
+    const metadata = JSON.parse(message.slice(message.indexOf("{")));
+    expect(metadata.fallbackCategory).toBe(expectedCategory);
+  }
+
+  it("uses the configured candidate limit when it exceeds the user limit", async () => {
+    const candidate = {
+      id: "doc1",
+      content: "Candidate",
+      url: "https://example.com/doc",
+      score: 0.5,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [{ index: 0, score: 0.9 }],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue([candidate]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([candidate]);
+
+    await service.search("lib", "1.0.0", "query", 3);
+
+    expect(store.findByContent).toHaveBeenCalledWith("lib", "1.0.0", "query", 30);
+  });
+
+  it("does not perform fallback retrieval on a successful rerank", async () => {
+    const candidate = {
+      id: "doc1",
+      content: "Candidate",
+      url: "https://example.com/doc",
+      score: 0.5,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [{ index: 0, score: 0.9 }],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+    vi.spyOn(store, "findByContent")
+      .mockResolvedValueOnce([candidate])
+      .mockRejectedValueOnce(new Error("fallback retrieval must remain lazy"));
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([candidate]);
+
+    await expect(service.search("lib", "1.0.0", "query", 1)).resolves.toEqual([
+      expect.objectContaining({ score: 0.9 }),
+    ]);
+    expect(rerank).toHaveBeenCalledOnce();
+    expect(store.findByContent).toHaveBeenCalledOnce();
+  });
+
+  it("propagates reranker scores into final ordering after context assembly", async () => {
+    const firstCandidate = {
+      id: "first",
+      content: "Baseline first",
+      url: "https://example.com/first",
+      score: 0.9,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const secondCandidate = {
+      id: "second",
+      content: "Reranked first",
+      url: "https://example.com/second",
+      score: 0.8,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [
+        { index: 0, score: 0.1 },
+        { index: 1, score: 0.95 },
+      ],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue([firstCandidate, secondCandidate]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) =>
+      ids.includes("first") ? [firstCandidate] : [secondCandidate],
+    );
+
+    const results = await service.search("lib", "1.0.0", "query", 2);
+
+    expect(results).toEqual([
+      {
+        content: "Reranked first",
+        url: "https://example.com/second",
+        score: 0.95,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+      {
+        content: "Baseline first",
+        url: "https://example.com/first",
+        score: 0.1,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+    ]);
+  });
+
+  it("keeps the maximum reranker score when same-page candidates are assembled", async () => {
+    const candidates = [
+      {
+        id: "first",
+        content: "First nearby candidate",
+        url: "https://example.com/same-page",
+        score: 0.9,
+        sort_order: 10,
+        metadata: {},
+      },
+      {
+        id: "second",
+        content: "Second nearby candidate",
+        url: "https://example.com/same-page",
+        score: 0.8,
+        sort_order: 12,
+        metadata: {},
+      },
+    ] as (DbPageChunk & DbChunkRank)[];
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [
+        { index: 0, score: 0.2 },
+        { index: 1, score: 0.95 },
+      ],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue(candidates);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue(candidates);
+
+    const results = await service.search("lib", "1.0.0", "query", 2);
+
+    expect(results).toEqual([
+      {
+        content: "First nearby candidate\n\nSecond nearby candidate",
+        url: "https://example.com/same-page",
+        score: 0.95,
+        mimeType: undefined,
+        sourceMimeType: undefined,
+      },
+    ]);
+  });
+
+  it("does not reduce a user limit above the reranker candidate limit", async () => {
+    const candidate = {
+      id: "doc1",
+      content: "Candidate",
+      url: "https://example.com/doc",
+      score: 0.5,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [{ index: 0, score: 0.7 }],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue([candidate]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockResolvedValue([candidate]);
+
+    await service.search("lib", "1.0.0", "query", 50);
+
+    expect(store.findByContent).toHaveBeenCalledWith("lib", "1.0.0", "query", 50);
+  });
+
+  it("applies the user limit to reranked candidates before context assembly", async () => {
+    const candidates = [
+      {
+        id: "excluded",
+        content: "Excluded candidate",
+        url: "https://example.com/excluded",
+        score: 0.9,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "first",
+        content: "First selected candidate",
+        url: "https://example.com/first",
+        score: 0.8,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "second",
+        content: "Second selected candidate",
+        url: "https://example.com/second",
+        score: 0.7,
+        sort_order: 1,
+        metadata: {},
+      },
+    ] as (DbPageChunk & DbChunkRank)[];
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [
+        { index: 0, score: 0.1 },
+        { index: 1, score: 0.9 },
+        { index: 2, score: 0.8 },
+      ],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue(candidates);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    const findChunksByIds = vi
+      .spyOn(store, "findChunksByIds")
+      .mockImplementation(async (_lib, _ver, ids) =>
+        candidates.filter((candidate) => ids.includes(candidate.id)),
+      );
+
+    const results = await service.search("lib", "1.0.0", "query", 2);
+
+    expect(results.map((result) => result.url)).toEqual([
+      "https://example.com/first",
+      "https://example.com/second",
+    ]);
+    expect(findChunksByIds).not.toHaveBeenCalledWith(
+      "lib",
+      "1.0.0",
+      expect.arrayContaining(["excluded"]),
+    );
+  });
+
+  it("preserves Baseline Ranking when reranker scores are equal", async () => {
+    const firstCandidate = {
+      id: "first",
+      content: "Baseline first",
+      url: "https://example.com/first",
+      score: 0.9,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const secondCandidate = {
+      id: "second",
+      content: "Baseline second",
+      url: "https://example.com/second",
+      score: 0.8,
+      sort_order: 1,
+      metadata: {},
+    } as DbPageChunk & DbChunkRank;
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [
+        { index: 1, score: 0.5 },
+        { index: 0, score: 0.5 },
+      ],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue([firstCandidate, secondCandidate]);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) =>
+      ids.includes("first") ? [firstCandidate] : [secondCandidate],
+    );
+
+    const results = await service.search("lib", "1.0.0", "query", 2);
+
+    expect(results.map((result) => result.url)).toEqual([
+      "https://example.com/first",
+      "https://example.com/second",
+    ]);
+  });
+
+  it("preserves Baseline Ranking for equal-score interleaved same-page clusters", async () => {
+    const candidates = [
+      {
+        id: "same-page-later",
+        content: "Baseline first",
+        url: "https://example.com/same-page",
+        score: 0.9,
+        sort_order: 100,
+        metadata: {},
+      },
+      {
+        id: "other-page",
+        content: "Baseline second",
+        url: "https://example.com/other-page",
+        score: 0.8,
+        sort_order: 1,
+        metadata: {},
+      },
+      {
+        id: "same-page-earlier",
+        content: "Baseline third",
+        url: "https://example.com/same-page",
+        score: 0.7,
+        sort_order: 1,
+        metadata: {},
+      },
+    ] as (DbPageChunk & DbChunkRank)[];
+    const rerank = vi.fn().mockResolvedValue({
+      scores: [
+        { index: 2, score: 0.5 },
+        { index: 1, score: 0.5 },
+        { index: 0, score: 0.5 },
+      ],
+    });
+    config.search.reranker.enabled = true;
+    service = new DocumentRetrieverService(store, config, { rerank });
+
+    vi.spyOn(store, "findByContent").mockResolvedValue(candidates);
+    vi.spyOn(store, "findParentChunk").mockResolvedValue(null);
+    vi.spyOn(store, "findPrecedingSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChildChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findSubsequentSiblingChunks").mockResolvedValue([]);
+    vi.spyOn(store, "findChunksByIds").mockImplementation(async (_lib, _ver, ids) =>
+      candidates.filter((candidate) => ids.includes(candidate.id)),
+    );
+
+    const results = await service.search("lib", "1.0.0", "query", 3);
+
+    expect(results.map((result) => result.content)).toEqual([
+      "Baseline first",
+      "Baseline second",
+      "Baseline third",
     ]);
   });
 

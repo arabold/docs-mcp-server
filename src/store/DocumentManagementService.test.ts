@@ -81,7 +81,9 @@ import { EventBusService } from "../events";
 import { loadConfig } from "../utils/config";
 import { getProjectRoot } from "../utils/paths";
 // Import the mocked constructor AFTER vi.mock
+import { CircuitBreakingReranker } from "./CircuitBreakingReranker";
 import { DocumentManagementService } from "./DocumentManagementService";
+import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { createDocumentManagement, createLocalDocumentManagement } from "./index";
 
 // Mock DocumentRetrieverService (keep existing structure)
@@ -140,6 +142,8 @@ describe("DocumentManagementService", () => {
 
     // Set OPENAI_API_KEY for tests to enable default embedding behavior
     process.env.OPENAI_API_KEY = "test-api-key";
+    appConfig.search.reranker.enabled = false;
+    delete process.env.VOYAGE_API_KEY;
 
     // Initialize the main service instance used by most tests
     // This will now use memfs for its internal fs calls
@@ -300,6 +304,32 @@ describe("DocumentManagementService", () => {
       expect(MockDocumentManagementClient).not.toHaveBeenCalled();
     });
 
+    it("rejects enabled local search when VOYAGE_API_KEY is missing", async () => {
+      appConfig.search.reranker.enabled = true;
+      const eventBus = new EventBusService();
+
+      await expect(
+        createDocumentManagement({
+          eventBus,
+          appConfig,
+        }),
+      ).rejects.toThrow("VOYAGE_API_KEY");
+    });
+
+    it("creates and injects Voyage only for an enabled local search executor", async () => {
+      appConfig.search.reranker.enabled = true;
+      process.env.VOYAGE_API_KEY = "test-voyage-key";
+      const eventBus = new EventBusService();
+
+      await createDocumentManagement({ eventBus, appConfig });
+
+      expect(DocumentRetrieverService).toHaveBeenCalledWith(
+        mockStore,
+        appConfig,
+        expect.any(CircuitBreakingReranker),
+      );
+    });
+
     it("createDocumentManagement({serverUrl}) returns initialized remote client", async () => {
       const url = "http://localhost:8080";
 
@@ -314,6 +344,19 @@ describe("DocumentManagementService", () => {
       expect(mockClientInitialize).toHaveBeenCalledTimes(1);
       // Not a local service instance
       expect(dm).not.toBeInstanceOf(DocumentManagementService);
+    });
+
+    it("does not require VOYAGE_API_KEY for a remote proxy", async () => {
+      appConfig.search.reranker.enabled = true;
+      const eventBus = new EventBusService();
+
+      await expect(
+        createDocumentManagement({
+          serverUrl: "http://localhost:8080",
+          eventBus,
+          appConfig,
+        }),
+      ).resolves.toBeDefined();
     });
 
     it("createLocalDocumentManagement() returns initialized local service", async () => {

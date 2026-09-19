@@ -1,0 +1,67 @@
+name: MCPB Extensions
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/mcpb.yml"
+      - "scripts/build-mcpb.ts"
+      - "scripts/smoke-mcpb.ts"
+      - "src/build/**"
+      - "src/mcp/**"
+      - "src/mcpb.ts"
+      - "src/store/**"
+      - "vite.config.mcpb.ts"
+      - "package.json"
+      - "package-lock.json"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows-x64
+            runner: windows-latest
+          - target: macos-x64
+            runner: macos-15-intel
+          - target: macos-arm64
+            runner: macos-15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build:mcpb:server
+
+      - name: Build read-only MCPB
+        run: npm run build:mcpb -- --target ${{ matrix.target }}
+
+      - name: Smoke-test packaged MCP server
+        run: npm run smoke:mcpb -- artifacts
+
+      - name: Upload MCPB artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: lib-docs-${{ matrix.target }}
+          path: artifacts/*.mcpb
+          if-no-files-found: error

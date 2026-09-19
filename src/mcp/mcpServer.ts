@@ -283,7 +283,6 @@ export function createMcpServerInstance(
         context: "mcp_server",
         library,
         version,
-        query: query.substring(0, 100), // Truncate query for privacy
         limit,
       });
 
@@ -310,8 +309,8 @@ ${r.content}\n`,
           );
         }
         return createResponse(formattedResults.join(""));
-      } catch (error) {
-        return createError(error);
+      } catch {
+        return createError("Search failed");
       }
     },
   );

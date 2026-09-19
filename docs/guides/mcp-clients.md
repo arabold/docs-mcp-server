@@ -17,6 +17,21 @@ Most clients support two connection modes:
 ## 🤖 Desktop Apps
 
 ### Claude Desktop
+
+#### Read-only desktop extension
+
+Platform-specific `.mcpb` artifacts install from **Settings → Extensions → Advanced settings → Install Extension**:
+
+- `lib-docs-<version>-windows-x64.mcpb`
+- `lib-docs-<version>-macos-x64.mcpb`
+- `lib-docs-<version>-macos-arm64.mcpb`
+
+The extension appears in Claude Desktop as `lib-docs`. It reads the existing system Grounded Docs index and exposes only `search_docs`, `list_libraries`, and `find_version`. It does not expose indexing, refresh, removal, job, or URL-fetching tools. Populate the local index through the CLI or Web UI before using the extension.
+
+Maintainers build the native artifacts from **Actions → MCPB Extensions → Run workflow**. Each artifact is built on its matching Windows or macOS runner because the server includes native Node.js dependencies.
+
+#### Manual configuration
+
 Edit your configuration file:
 *   **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 *   **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`

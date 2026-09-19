@@ -20,6 +20,9 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import Database from "better-sqlite3";
 import { ZipArchive } from "archiver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -34,6 +37,43 @@ const DOCKER_AVAILABLE = (() => {
 const PREBUILT_TAG = process.env.DOCKER_IMAGE_TAG;
 const IMAGE_TAG = PREBUILT_TAG ?? "docs-mcp-server:e2e-test";
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
+const PRODUCTION_COMPOSE_PATH = path.join(
+  PROJECT_ROOT,
+  "deploy",
+  "remote-grounded",
+  "docker-compose.yml",
+);
+const PRODUCTION_WORKER_ENV_EXAMPLE_PATH = path.join(
+  PROJECT_ROOT,
+  "deploy",
+  "remote-grounded",
+  "worker.env.example",
+);
+const PRODUCTION_DEPLOYMENT_README_PATH = path.join(
+  PROJECT_ROOT,
+  "deploy",
+  "remote-grounded",
+  "README.md",
+);
+// Created by accepted base image 5ae5b7de against test/fixtures/json.json.
+const EXISTING_RERANKER_DB_FIXTURE = path.join(
+  PROJECT_ROOT,
+  "test",
+  "fixtures",
+  "reranker-existing-documents.db.gz.base64",
+);
+const RERANKER_MOCK_FIXTURE = path.join(
+  PROJECT_ROOT,
+  "test",
+  "fixtures",
+  "mock-voyage-reranker.mjs",
+);
+const RERANKER_COMPOSE_OVERRIDE = path.join(
+  PROJECT_ROOT,
+  "test",
+  "fixtures",
+  "reranker-compose.override.yml",
+);
 const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
 
 interface DockerResult {
@@ -42,14 +82,42 @@ interface DockerResult {
   stderr: string;
 }
 
+interface DatabaseSnapshot {
+  userVersion: number;
+  schema: string[];
+  counts: { documents: number; libraries: number; pages: number; versions: number };
+}
+
+interface DistributedStackEvidence {
+  before: DatabaseSnapshot;
+  after: DatabaseSnapshot;
+  composeStatus: string;
+  webHealth: string;
+  readOnlySearch: string;
+  administrativeSearch: string;
+  workerLogs: string;
+}
+
+interface ComposeTestContext {
+  args: string[];
+  environment: NodeJS.ProcessEnv;
+}
+
 // Runs `docker` asynchronously rather than via spawnSync. These commands can
 // run for minutes (image build, Playwright scrapes); a synchronous call
 // blocks Node's event loop for that whole time, which starves Vitest's
 // worker <-> main-thread RPC heartbeat and trips its 60s "onTaskUpdate"
 // timeout as a false-positive unhandled error.
-function docker(args: string[], opts: { timeout?: number } = {}): Promise<DockerResult> {
+function docker(
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {},
+): Promise<DockerResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, { timeout: opts.timeout });
+    const child = spawn("docker", args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      timeout: opts.timeout,
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -107,6 +175,246 @@ function listIndexedUrls(dbPath: string): string[] {
   }
 }
 
+function snapshotDatabase(dbPath: string): DatabaseSnapshot {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const userVersion = db.pragma("user_version", { simple: true }) as number;
+    const schema = db
+      .prepare(
+        "SELECT type || ':' || name || ':' || COALESCE(sql, '') AS entry FROM sqlite_master ORDER BY type, name",
+      )
+      .all()
+      .map((row) => (row as { entry: string }).entry);
+    const count = (table: string) =>
+      (db.prepare(`SELECT COUNT(*) AS value FROM ${table}`).get() as { value: number })
+        .value;
+    return {
+      userVersion,
+      schema,
+      counts: {
+        documents: count("documents"),
+        libraries: count("libraries"),
+        pages: count("pages"),
+        versions: count("versions"),
+      },
+    };
+  } finally {
+    db.close();
+  }
+}
+
+async function waitForHttp(
+  url: string,
+  attempts = 60,
+  requireOk = true,
+): Promise<Response> {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const response = await fetch(url, { signal: AbortSignal.timeout(1000) }).catch(
+      () => null,
+    );
+    if (response && (!requireOk || response.ok)) return response;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`HTTP endpoint did not become ready: ${url}`);
+}
+
+async function mappedContainerUrl(containerId: string, port: number): Promise<string> {
+  const result = await docker(["port", containerId, String(port)]);
+  const match = result.stdout.match(/:(\d+)/);
+  if (!match) {
+    throw new Error(`Could not resolve mapped port: ${result.stdout || result.stderr}`);
+  }
+  return `http://127.0.0.1:${match[1]}`;
+}
+
+async function callSearchTool(baseUrl: string): Promise<string> {
+  const transport = new SSEClientTransport(new URL("/sse", baseUrl), {
+    fetch: async (input, init) => {
+      const response = await fetch(input, init);
+      if (response.body) {
+        response.body.cancel = async () => undefined;
+      }
+      return response;
+    },
+  });
+  const client = new Client({ name: "docker-e2e", version: "1.0.0" });
+  try {
+    const timeout = new Promise<never>((_resolve, reject) =>
+      setTimeout(() => reject(new Error(`MCP search timed out: ${baseUrl}`)), 30_000),
+    );
+    await Promise.race([client.connect(transport), timeout]);
+    const result = await Promise.race([
+      client.callTool({
+        name: "search_docs",
+        arguments: {
+          library: "docker-reranker",
+          query: "WonderWidgets",
+          limit: 2,
+        },
+      }),
+      timeout,
+    ]);
+    return JSON.stringify(result);
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
+async function productionComposeServiceUrl(
+  context: ComposeTestContext,
+  service: string,
+): Promise<string> {
+  const result = await dockerCompose(context, ["port", service, "6280"]);
+  const match = result.stdout.match(/:(\d+)/);
+  if (result.status !== 0 || !match) {
+    throw new Error(`Could not resolve ${service} port: ${result.stderr}`);
+  }
+  return `http://127.0.0.1:${match[1]}`;
+}
+
+function dockerCompose(
+  context: ComposeTestContext,
+  args: string[],
+  options: { timeout?: number } = {},
+): Promise<DockerResult> {
+  return docker([...context.args, ...args], {
+    env: context.environment,
+    timeout: options.timeout,
+  });
+}
+
+async function exerciseProductionComposeStack(): Promise<DistributedStackEvidence> {
+  const suffix = `${process.pid}-${Date.now()}`;
+  const projectName = `docs-mcp-reranker-${suffix}`;
+  const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-compose-stack-"));
+  const dataDir = path.join(testDir, "data");
+  const workerEnvPath = path.join(testDir, "worker.env");
+  fs.mkdirSync(dataDir);
+  fs.chmodSync(dataDir, 0o777);
+  const fixture = fs
+    .readFileSync(EXISTING_RERANKER_DB_FIXTURE, "utf8")
+    .replace(/\s/g, "");
+  fs.writeFileSync(
+    path.join(dataDir, "documents.db"),
+    gunzipSync(Buffer.from(fixture, "base64")),
+  );
+  fs.writeFileSync(workerEnvPath, "VOYAGE_API_KEY=test-only-worker-key\n");
+
+  const dbPath = path.join(dataDir, "documents.db");
+  const before = snapshotDatabase(dbPath);
+  const composeContext: ComposeTestContext = {
+    args: [
+      "compose",
+      "--project-name",
+      projectName,
+      "-f",
+      PRODUCTION_COMPOSE_PATH,
+      "-f",
+      RERANKER_COMPOSE_OVERRIDE,
+    ],
+    environment: {
+      ...process.env,
+      DOCS_MCP_IMAGE: IMAGE_TAG,
+      TEST_DATA_DIR: dataDir,
+      TEST_MOCK_PATH: RERANKER_MOCK_FIXTURE,
+      TEST_WORKER_ENV: workerEnvPath,
+    },
+  };
+
+  let runningEvidence: Omit<DistributedStackEvidence, "after"> | undefined;
+  try {
+    try {
+      const up = await dockerCompose(
+        composeContext,
+        ["up", "-d", "--wait", "--wait-timeout", "120"],
+        { timeout: 180_000 },
+      );
+      if (up.status !== 0) {
+        throw new Error(`Production Compose startup failed: ${up.stderr}`);
+      }
+      const status = await dockerCompose(composeContext, [
+        "ps",
+        "--format",
+        "json",
+      ]);
+      const webUrl = await productionComposeServiceUrl(composeContext, "web");
+      const readOnlyUrl = await productionComposeServiceUrl(
+        composeContext,
+        "mcp-read",
+      );
+      const administrativeUrl = await productionComposeServiceUrl(
+        composeContext,
+        "mcp-admin",
+      );
+      const webHealth = await (
+        await waitForHttp(`${webUrl}/api/getSystemHealth`)
+      ).text();
+      const readOnlySearch = await callSearchTool(readOnlyUrl);
+      const administrativeSearch = await callSearchTool(administrativeUrl);
+      const logs = await dockerCompose(composeContext, [
+        "logs",
+        "--no-color",
+        "worker",
+      ]);
+      runningEvidence = {
+        before,
+        composeStatus: status.stdout,
+        webHealth,
+        readOnlySearch,
+        administrativeSearch,
+        workerLogs: logs.stdout + logs.stderr,
+      };
+    } finally {
+      const down = await dockerCompose(
+        composeContext,
+        ["down", "--volumes", "--remove-orphans"],
+        { timeout: 120_000 },
+      );
+      if (down.status !== 0) {
+        throw new Error(`Production Compose cleanup failed: ${down.stderr}`);
+      }
+    }
+
+    if (!runningEvidence) {
+      throw new Error("Production Compose evidence was not captured");
+    }
+    return { ...runningEvidence, after: snapshotDatabase(dbPath) };
+  } finally {
+    fs.rmSync(testDir, { recursive: true, force: true });
+  }
+}
+
+describe("Production deployment documentation", () => {
+  const instructions = fs.readFileSync(PRODUCTION_DEPLOYMENT_README_PATH, "utf8");
+
+  it("creates the worker secret file without clobbering it and with mode 0600", () => {
+    expect(instructions).toContain(
+      "install -m 600 worker.env.example .env.worker",
+    );
+    expect(instructions).toContain("chmod 600 .env.worker");
+    expect(instructions).not.toContain("cp -n worker.env.example .env.worker");
+  });
+
+  it("validates Compose without rendering its credential-bearing environment", () => {
+    expect(instructions).toContain(
+      "docker compose -f deploy/remote-grounded/docker-compose.yml config --quiet",
+    );
+    expect(instructions).not.toContain(
+      "docker compose -f deploy/remote-grounded/docker-compose.yml config\n",
+    );
+  });
+
+  it("documents publishing and deploying only an immutable registry digest", () => {
+    expect(instructions).toContain(
+      "registry.example/docs-mcp-server:issue-9-<git-sha>",
+    );
+    expect(instructions).toContain(
+      "Set `DOCS_MCP_IMAGE` only to the recorded `name@sha256:...` digest",
+    );
+    expect(instructions).not.toContain("immutable tag or digest");
+  });
+});
+
 describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
   beforeAll(async () => {
     if (PREBUILT_TAG) return;
@@ -128,6 +436,128 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     spawnSync("docker", ["image", "rm", "-f", IMAGE_TAG], { stdio: "ignore" });
   });
 
+  it("keeps the production reranker credential on the search worker", () => {
+    const deployDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-compose-"));
+    const composePath = path.join(deployDir, "docker-compose.yml");
+    fs.copyFileSync(PRODUCTION_COMPOSE_PATH, composePath);
+    const workerEnvironment = fs
+      .readFileSync(PRODUCTION_WORKER_ENV_EXAMPLE_PATH, "utf8")
+      .replace("<existing-openai-api-key>", "test-only-embedding-key")
+      .replace("<voyage-api-key>", "test-only-key");
+    fs.writeFileSync(path.join(deployDir, ".env.worker"), workerEnvironment);
+    fs.mkdirSync(path.join(deployDir, "imports", "ONEC_ERP"), { recursive: true });
+
+    try {
+      const result = spawnSync(
+        "docker",
+        ["compose", "-f", composePath, "config", "--format", "json"],
+        {
+          cwd: deployDir,
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            DOCS_MCP_IMAGE: "docs-mcp-server@sha256:test-only-immutable-digest",
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const config = JSON.parse(result.stdout) as {
+        services: Record<
+          string,
+          { environment?: Record<string, string>; image?: string }
+        >;
+      };
+      const worker = config.services.worker;
+      expect(worker.image).toBe(
+        "docs-mcp-server@sha256:test-only-immutable-digest",
+      );
+      expect(worker.environment?.DOCS_MCP_SEARCH_RERANKER_ENABLED).toBe("true");
+      expect(worker.environment?.DOCS_MCP_SEARCH_RERANKER_CANDIDATE_LIMIT).toBe(
+        "30",
+      );
+      expect(worker.environment?.DOCS_MCP_EMBEDDING_MODEL).toBe(
+        "openai:baai/bge-m3",
+      );
+      expect(worker.environment?.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION).toBe(
+        "1024",
+      );
+      expect(worker.environment?.OPENAI_API_KEY).toBe("test-only-embedding-key");
+      expect(worker.environment?.VOYAGE_API_KEY).toBe("test-only-key");
+
+      for (const serviceName of ["web", "mcp-read", "mcp-admin"]) {
+        const service = config.services[serviceName];
+        expect(service.image).toBe(worker.image);
+        expect(service.environment).not.toHaveProperty("VOYAGE_API_KEY");
+        expect(service.environment).not.toHaveProperty(
+          "DOCS_MCP_SEARCH_RERANKER_ENABLED",
+        );
+        expect(service.environment).not.toHaveProperty(
+          "DOCS_MCP_SEARCH_RERANKER_CANDIDATE_LIMIT",
+        );
+        expect(service.environment).not.toHaveProperty("OPENAI_API_KEY");
+      }
+    } finally {
+      fs.rmSync(deployDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails an enabled local search process at startup without VOYAGE_API_KEY", async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-missing-key-"));
+    fs.chmodSync(dataDir, 0o777);
+    try {
+      const result = await docker([
+        "run",
+        "--rm",
+        "-v",
+        `${dataDir}:/data`,
+        "-e",
+        "DOCS_MCP_TELEMETRY=false",
+        "-e",
+        "DOCS_MCP_SEARCH_RERANKER_ENABLED=true",
+        IMAGE_TAG,
+        "worker",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8080",
+      ]);
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.status).not.toBe(0);
+      expect(output).toContain("VOYAGE_API_KEY");
+      expect(output).toContain("Missing required environment variable");
+      expect(output).not.toMatch(/api\.voyageai\.com|Bearer\s|sk-[A-Za-z0-9]/);
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  describe("production worker reranking Compose stack", () => {
+    let evidence: DistributedStackEvidence;
+
+    beforeAll(async () => {
+      evidence = await exerciseProductionComposeStack();
+    }, 300_000);
+
+    it("starts every service healthy with remote web and MCP initialization", () => {
+      expect(evidence.composeStatus).toContain('"Health":"healthy"');
+      expect(evidence.webHealth).toContain('"mode":"remote"');
+    });
+
+    it("routes read-only and administrative MCP search through worker reranking", () => {
+      expect(evidence.readOnlySearch).toContain("WonderWidgets");
+      expect(evidence.administrativeSearch).toContain("WonderWidgets");
+      expect(evidence.workerLogs.match(/TEST_RERANK_CALLED/g)).toHaveLength(2);
+    });
+
+    it("keeps the worker credential out of runtime logs", () => {
+      expect(evidence.workerLogs).not.toContain("test-only-worker-key");
+    });
+
+    it("opens existing SQLite data without schema changes or reindexing", () => {
+      expect(evidence.before.counts.documents).toBeGreaterThan(0);
+      expect(evidence.after).toEqual(evidence.before);
+    });
+  });
   it("runs the entrypoint as a non-root user", async () => {
     const r = await docker(["run", "--rm", "--entrypoint", "id", IMAGE_TAG, "-u"]);
     expect(r.status, `id -u failed: ${r.stderr}`).toBe(0);

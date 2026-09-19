@@ -110,6 +110,13 @@ Job recovery behavior depends on deployment mode:
 
 ## Container Deployment
 
+The production-equivalent worker-reranking stack and its operator procedure are
+documented in
+[`deploy/remote-grounded/README.md`](../../deploy/remote-grounded/README.md).
+That stack pins one immutable custom image across all processes, enables the
+Reranker only on the search-owning worker, and keeps the web and MCP proxies
+credential-free. The shared configuration default remains disabled.
+
 ### Single Container
 
 ```dockerfile

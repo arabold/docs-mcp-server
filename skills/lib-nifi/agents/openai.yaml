@@ -1,0 +1,13 @@
+interface:
+  display_name: "Apache NiFi документация"
+  short_description: "Поиск по документации Apache NiFi 2"
+  default_prompt: "Используй $lib-nifi, чтобы проверить вопрос по Apache NiFi 2 в индексированной документации."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "lib-docs"
+      description: "Удалённая read-only библиотека документации"
+
+policy:
+  allow_implicit_invocation: true

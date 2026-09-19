@@ -103,6 +103,8 @@ npx @arabold/docs-mcp-server@latest
 
 See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo) and other setup options.
 
+Claude Desktop users can also install a platform-specific, read-only `.mcpb` extension. It exposes indexed-document search tools only and uses the existing local Grounded Docs index. See **[Claude Desktop extension](docs/guides/mcp-clients.md#read-only-desktop-extension)** for supported artifacts and installation details.
+
 `scrape_docs` also accepts `preserveHashes: true` for documentation sites that use hash-based client-side routing.
 Use it only for hash-routed SPAs; normal sites typically use hash fragments for in-page anchors.
 

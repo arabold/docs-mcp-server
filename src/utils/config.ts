@@ -160,6 +160,13 @@ export const DEFAULT_CONFIG = {
     weightVec: 1,
     weightFts: 1,
     vectorMultiplier: 10,
+    reranker: {
+      enabled: false,
+      provider: "voyage",
+      model: "rerank-2.5-lite",
+      candidateLimit: 30,
+      requestTimeoutMs: 5000,
+    },
   },
   sandbox: {
     defaultTimeoutMs: 5000,
@@ -373,6 +380,24 @@ export const AppConfigSchema = z.object({
         .number()
         .int()
         .default(DEFAULT_CONFIG.search.vectorMultiplier),
+      reranker: z
+        .object({
+          enabled: envBoolean.default(DEFAULT_CONFIG.search.reranker.enabled),
+          provider: z.enum(["voyage"]).default(DEFAULT_CONFIG.search.reranker.provider),
+          model: z.string().default(DEFAULT_CONFIG.search.reranker.model),
+          candidateLimit: z.coerce
+            .number()
+            .int()
+            .positive()
+            .max(100)
+            .default(DEFAULT_CONFIG.search.reranker.candidateLimit),
+          requestTimeoutMs: z.coerce
+            .number()
+            .int()
+            .positive()
+            .default(DEFAULT_CONFIG.search.reranker.requestTimeoutMs),
+        })
+        .default(DEFAULT_CONFIG.search.reranker),
     })
     .default(DEFAULT_CONFIG.search),
   sandbox: z

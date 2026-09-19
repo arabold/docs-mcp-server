@@ -1,0 +1,13 @@
+interface:
+  display_name: "Создание библиотечных навыков"
+  short_description: "Создаёт и проверяет навыки lib-*"
+  default_prompt: "Используй $lib-skill-creation, чтобы создать или унифицировать навык поиска по библиотеке документации."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "lib-docs"
+      description: "Read-only библиотека для проверки имён, версий и результатов поиска"
+
+policy:
+  allow_implicit_invocation: true

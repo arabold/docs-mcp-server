@@ -17,9 +17,9 @@ export interface FindVersionToolResult {
  * Supports exact version matches and X-Range patterns (e.g., '5.x', '5.2.x').
  */
 export class FindVersionTool {
-  private docService: IDocumentManagement;
+  private docService: Pick<IDocumentManagement, "findBestVersion">;
 
-  constructor(docService: IDocumentManagement) {
+  constructor(docService: Pick<IDocumentManagement, "findBestVersion">) {
     this.docService = docService;
   }
 

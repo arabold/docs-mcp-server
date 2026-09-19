@@ -1,0 +1,46 @@
+Listen 6280
+Listen 6281
+Listen 6282
+
+<VirtualHost *:6280>
+    ServerName grounded-docs-web.local
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:16280/ retry=0 timeout=600
+    ProxyPassReverse / http://127.0.0.1:16280/
+
+    <Location />
+        AuthType Basic
+        AuthName "Grounded Docs Administration"
+        AuthUserFile /etc/apache2/grounded-docs.htpasswd
+        Require valid-user
+    </Location>
+
+    ErrorLog ${APACHE_LOG_DIR}/grounded-docs-web-error.log
+    CustomLog ${APACHE_LOG_DIR}/grounded-docs-web-access.log combined
+</VirtualHost>
+
+<VirtualHost *:6281>
+    ServerName grounded-docs-mcp-read.local
+    RewriteEngine On
+    RewriteCond %{HTTP:Authorization} !^Bearer\ __READ_TOKEN__$
+    RewriteRule ^ - [R=401,L]
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:16281/ retry=0 timeout=600
+    ProxyPassReverse / http://127.0.0.1:16281/
+
+    ErrorLog ${APACHE_LOG_DIR}/grounded-docs-mcp-read-error.log
+    CustomLog ${APACHE_LOG_DIR}/grounded-docs-mcp-read-access.log combined
+</VirtualHost>
+
+<VirtualHost *:6282>
+    ServerName grounded-docs-mcp-admin.local
+    RewriteEngine On
+    RewriteCond %{HTTP:Authorization} !^Bearer\ __ADMIN_TOKEN__$
+    RewriteRule ^ - [R=401,L]
+    ProxyPreserveHost On
+    ProxyPass / http://127.0.0.1:16282/ retry=0 timeout=600
+    ProxyPassReverse / http://127.0.0.1:16282/
+
+    ErrorLog ${APACHE_LOG_DIR}/grounded-docs-mcp-admin-error.log
+    CustomLog ${APACHE_LOG_DIR}/grounded-docs-mcp-admin-access.log combined
+</VirtualHost>

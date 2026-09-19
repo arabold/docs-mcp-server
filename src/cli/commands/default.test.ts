@@ -23,7 +23,7 @@ vi.mock("../../mcp/tools", () => ({
 }));
 
 vi.mock("../../store", () => ({
-  DocumentManagementService: vi.fn().mockImplementation(function () {
+  createLocalDocumentManagementService: vi.fn(() => {
     return {
       initialize: vi.fn().mockResolvedValue(undefined),
       shutdown: vi.fn(),

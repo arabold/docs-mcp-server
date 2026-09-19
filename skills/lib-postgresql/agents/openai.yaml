@@ -1,0 +1,13 @@
+interface:
+  display_name: "PostgreSQL 18 документация"
+  short_description: "Поиск по официальной документации PostgreSQL 18"
+  default_prompt: "Используй $lib-postgresql, чтобы проверить вопрос по PostgreSQL 18 в индексированной официальной документации."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "lib-docs"
+      description: "Удалённая read-only библиотека документации"
+
+policy:
+  allow_implicit_invocation: true

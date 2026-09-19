@@ -23,12 +23,15 @@ import type { AppConfig } from "../utils/config";
 /**
  * Interface for the shared tool instances.
  */
-export interface McpServerTools {
+export interface ReadOnlyMcpTools {
   listLibraries: ListLibrariesTool;
   findVersion: FindVersionTool;
+  search: SearchTool;
+}
+
+export interface McpServerTools extends ReadOnlyMcpTools {
   scrape: ScrapeTool;
   refresh: RefreshVersionTool;
-  search: SearchTool;
   listJobs: ListJobsTool;
   getJobInfo: GetJobInfoTool;
   cancelJob: CancelJobTool;

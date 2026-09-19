@@ -7,7 +7,7 @@ import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
 import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { DocumentManagementService } from "../../store";
+import { createLocalDocumentManagementService } from "../../store";
 import { EmbeddingModelChangedError } from "../../store/errors";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
@@ -148,7 +148,7 @@ export function createDefaultAction(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService = new DocumentManagementService(eventBus, appConfig);
+      const docService = createLocalDocumentManagementService(eventBus, appConfig);
       try {
         await docService.initialize();
       } catch (error) {

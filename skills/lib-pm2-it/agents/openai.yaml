@@ -1,0 +1,11 @@
+interface:
+  display_name: "PM² для IT-проектов документация"
+  short_description: "Поиск по официальной методологии PM² для IT-программ"
+  default_prompt: "Используй $lib-pm2-it, чтобы проверить управление IT-проектом или программой по официальной методологии PM²."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "lib-docs"
+      description: "Удалённая read-only библиотека документации"
+policy:
+  allow_implicit_invocation: true

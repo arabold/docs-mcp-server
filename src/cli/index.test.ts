@@ -126,18 +126,22 @@ vi.mock("../utils/paths", () => ({
 
 vi.mock("../store", async () => {
   const actual = await vi.importActual<any>("../store");
+  const DocumentManagementService = vi.fn().mockImplementation(function () {
+    return {
+      initialize: vi.fn().mockResolvedValue(undefined),
+      shutdown: vi.fn(),
+    };
+  });
   return {
     ...actual,
     createDocumentManagement: vi.fn(async (opts: any) => {
       capturedCreateArgs.push(opts);
       return { shutdown: vi.fn() } as any;
     }),
-    DocumentManagementService: vi.fn().mockImplementation(function () {
-      return {
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn(),
-      };
-    }),
+    DocumentManagementService,
+    createLocalDocumentManagementService: vi.fn(
+      (eventBus, appConfig) => new DocumentManagementService(eventBus, appConfig),
+    ),
   };
 });
 vi.mock("../store/errors", () => ({

@@ -20,6 +20,7 @@ import {
   StoreError,
   VersionNotFoundInStoreError,
 } from "./errors";
+import type { Reranker } from "./Reranker";
 import type {
   ActivityHistory,
   CompactResult,
@@ -50,7 +51,7 @@ export class DocumentManagementService {
   private readonly pipelines: ContentPipeline[];
   private readonly eventBus: EventBusService;
 
-  constructor(eventBus: EventBusService, appConfig: AppConfig) {
+  constructor(eventBus: EventBusService, appConfig: AppConfig, reranker?: Reranker) {
     this.appConfig = appConfig;
     this.eventBus = eventBus;
     const storePath = this.appConfig.app.storePath;
@@ -66,7 +67,11 @@ export class DocumentManagementService {
     // Directory creation is handled by the centralized path resolution
 
     this.store = new DocumentStore(dbPath, this.appConfig);
-    this.documentRetriever = new DocumentRetrieverService(this.store, this.appConfig);
+    this.documentRetriever = new DocumentRetrieverService(
+      this.store,
+      this.appConfig,
+      reranker,
+    );
 
     // Initialize content pipelines for different content types including universal TextPipeline fallback
     this.pipelines = PipelineFactory.createStandardPipelines(this.appConfig);

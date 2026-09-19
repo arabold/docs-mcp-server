@@ -285,6 +285,12 @@ The `versions` table serves as the job state hub, storing progress, errors, and 
 
 DocumentManagementService handles CRUD operations and version resolution. DocumentRetrieverService provides hybrid search combining vector similarity and full-text search using Reciprocal Rank Fusion (RRF) with configurable weights. The search system implements dual-mode FTS query generation for improved recall (combining exact phrase and keyword matching) and uses an overfetch factor to retrieve more candidates before final ranking.
 
+Deep candidate retrievals (limits of 30 or more) preserve their RRF head and
+reserve the tail for any missing candidates from the top half of the vector
+ranking. This semantic recall floor prevents dense-only documentation from
+being crowded out by chunks that receive both FTS and vector rank contributions.
+Smaller user-facing searches retain the unmodified RRF ranking.
+
 ## Interface Implementations
 
 ### Web Interface

@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +8,7 @@ import type { Chunk } from "../splitter/types";
 import { loadConfig, markVectorDimensionSource } from "../utils/config";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
-import { DimensionError, EmbeddingModelChangedError } from "./errors";
+import { ConnectionError, DimensionError, EmbeddingModelChangedError } from "./errors";
 import { VersionStatus } from "./types";
 
 const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
@@ -75,7 +76,39 @@ vi.mock("./embeddings/EmbeddingFactory", async () => {
   };
 });
 
+describe("DocumentStore read-only connection", () => {
+  it("reads an existing index without changing the database file", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "docs-mcp-read-only-"));
+    const dbPath = join(directory, "documents.db");
+    const config = loadConfig({ storePath: directory, embeddingModel: "" });
+
+    try {
+      const writable = new DocumentStore(dbPath, config);
+      await writable.initialize();
+      await writable.resolveVersionId("example", "1.0.0");
+      await writable.shutdown();
+      const before = sha256(dbPath);
+
+      const readOnly = new DocumentStore(dbPath, config, { readOnly: true });
+      await readOnly.initialize();
+      expect(await readOnly.queryUniqueVersions("example")).toEqual(["1.0.0"]);
+      await expect(readOnly.resolveVersionId("other", "1.0.0")).rejects.toThrow(
+        /readonly|read-only/i,
+      );
+      await readOnly.shutdown();
+
+      expect(sha256(dbPath)).toBe(before);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 const appConfig = loadConfig();
+
+function sha256(filePath: string): string {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+}
 
 /**
  * Helper function to create minimal ScrapeResult for testing.
@@ -139,6 +172,22 @@ describe("DocumentStore - With Embeddings", () => {
     if (store) {
       await store.shutdown();
     }
+  });
+
+  it("does not expose the Search Query or raw database cause in search errors", async () => {
+    const closedStore = new DocumentStore(":memory:", appConfig);
+    await closedStore.initialize();
+    await closedStore.shutdown();
+    const query = "private Search Query";
+
+    const error = await closedStore
+      .findByContent("searchtest", "1.0.0", query, 10)
+      .catch((caughtError: unknown) => caughtError);
+
+    expect(error).toBeInstanceOf(ConnectionError);
+    expect((error as Error).message).toBe("Failed to find documents by content");
+    expect((error as Error).message).not.toContain(query);
+    expect((error as Error).message).not.toContain("database connection is not open");
   });
 
   describe("Document Storage and Retrieval", () => {
@@ -571,6 +620,59 @@ describe("DocumentStore - With Embeddings", () => {
       // All results should have valid scores
       for (const result of results) {
         expect(result.score).toBeGreaterThan(0);
+      }
+    });
+
+    it("keeps top vector-only matches in deep Search Candidate retrieval", async () => {
+      vi.stubEnv("OPENAI_API_KEY", "test-key-for-vector-recall-floor");
+      try {
+        await store.shutdown();
+        store = new DocumentStore(":memory:", appConfig);
+        await store.initialize();
+        const query = "ab";
+        for (let index = 0; index < 11; index += 1) {
+          await store.addDocuments(
+            "recallfloor",
+            "1.0.0",
+            1,
+            createScrapeResult(
+              `Semantic distractor ${index}`,
+              `https://example.com/semantic-distractor-${index}`,
+              "ba",
+            ),
+          );
+        }
+        await store.addDocuments(
+          "recallfloor",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Semantic target",
+            "https://example.com/semantic-target",
+            "ba",
+          ),
+        );
+        for (let index = 0; index < 70; index += 1) {
+          await store.addDocuments(
+            "recallfloor",
+            "1.0.0",
+            1,
+            createScrapeResult(
+              `Hybrid ${index}`,
+              `https://example.com/hybrid-${index}`,
+              `${query} lexical candidate ${index}`,
+            ),
+          );
+        }
+
+        const results = await store.findByContent("recallfloor", "1.0.0", query, 30);
+
+        expect(results.map((result) => result.url)).toContain(
+          "https://example.com/semantic-target",
+        );
+        expect(results[0].url).not.toBe("https://example.com/semantic-target");
+      } finally {
+        vi.unstubAllEnvs();
       }
     });
 

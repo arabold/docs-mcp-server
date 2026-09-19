@@ -58,7 +58,10 @@ export function getProjectRoot(): string {
  * @param storePath Optional custom storage path
  * @returns Resolved absolute path for data storage
  */
-export function resolveStorePath(storePath?: string): string {
+export function resolveStorePath(
+  storePath?: string,
+  options: { create?: boolean } = {},
+): string {
   let dbDir: string;
 
   // 1. Check storePath parameter
@@ -79,6 +82,8 @@ export function resolveStorePath(storePath?: string): string {
       dbDir = standardPaths.data;
     }
   }
+
+  if (options.create === false) return dbDir;
 
   // Ensure the chosen directory exists
   try {

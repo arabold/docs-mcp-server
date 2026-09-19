@@ -26,9 +26,9 @@ export interface ListLibrariesResult {
  * Tool for listing all available libraries and their indexed versions in the store.
  */
 export class ListLibrariesTool {
-  private docService: IDocumentManagement;
+  private docService: Pick<IDocumentManagement, "listLibraries">;
 
-  constructor(docService: IDocumentManagement) {
+  constructor(docService: Pick<IDocumentManagement, "listLibraries">) {
     this.docService = docService;
   }
 

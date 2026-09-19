@@ -40,19 +40,17 @@ export class DocumentManagementClient implements IDocumentManagement {
         }),
       ],
     });
-    logger.debug(`DocumentManagementClient (tRPC) created for: ${this.baseUrl}`);
+    logger.debug("DocumentManagementClient (tRPC) created");
   }
 
   async initialize(): Promise<void> {
     // Connectivity check using ping procedure
     try {
       await this.client.ping.query();
-    } catch (error) {
-      logger.debug(
-        `Failed to connect to DocumentManagement server at ${this.baseUrl}: ${error}`,
-      );
+    } catch {
+      logger.debug("Failed to connect to configured DocumentManagement server");
       throw new Error(
-        `Failed to connect to server at ${this.baseUrl}.\n\nPlease verify the server URL includes the correct port (default 8080) and ends with '/api' (e.g., 'http://localhost:8080/api').`,
+        "Failed to connect to the configured server. Verify that the server URL includes the correct port and ends with '/api'.",
       );
     }
   }
