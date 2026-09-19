@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
-import { ScraperError } from "../../utils/errors";
+import { ChallengeError, HttpStatusError, ScraperError } from "../../utils/errors";
 import { FetchStatus, HttpFetcher } from "../fetcher";
 import type { ScraperOptions } from "../types";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
@@ -616,9 +616,10 @@ describe("GitHubScraperStrategy", () => {
       httpFetcherInstance.fetch.mockImplementation((url: string) => {
         if (url.includes("api.github.com/repos/")) {
           return Promise.reject(
-            new ScraperError(
+            new HttpStatusError(
               "Failed to fetch https://api.github.com/repos/owner/repo after 1 attempts: Request failed with status code 401",
               true,
+              401,
             ),
           );
         }
@@ -640,14 +641,72 @@ describe("GitHubScraperStrategy", () => {
       );
     });
 
+    it("should translate a Cloudflare-challenged 403 into the access-denied message", async () => {
+      // HttpFetcher raises ChallengeError, not HttpStatusError, for a 403 with
+      // challenge markers — it still carries the status and still deserves the
+      // friendly message.
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/")) {
+          return Promise.reject(
+            new ChallengeError(
+              "https://api.github.com/repos/owner/repo",
+              403,
+              "cloudflare",
+            ),
+          );
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/repo", depth: 0 };
+
+      await expect(strategy.processItem(item, options)).rejects.toThrow(
+        /GitHub access denied/,
+      );
+    });
+
+    it("should not report access denied when only the repo name contains 403", async () => {
+      // The error message embeds the api url, so a message-substring check
+      // would misreport this connection failure as a permissions problem.
+      httpFetcherInstance.fetch.mockImplementation((url: string) => {
+        if (url.includes("api.github.com/repos/")) {
+          return Promise.reject(
+            new ScraperError(
+              "Failed to fetch https://api.github.com/repos/owner/error-403 after 3 attempts: connect ECONNREFUSED",
+              true,
+            ),
+          );
+        }
+        return Promise.resolve({
+          content: "",
+          mimeType: "text/plain",
+          source: url,
+          status: FetchStatus.SUCCESS,
+        });
+      });
+
+      const item = { url: "https://github.com/owner/error-403", depth: 0 };
+
+      await expect(strategy.processItem(item, options)).rejects.toThrow(/ECONNREFUSED/);
+      await expect(strategy.processItem(item, options)).rejects.not.toThrow(
+        /access denied/,
+      );
+    });
+
     it("should throw user-friendly error when access is denied (403)", async () => {
       // Mock repo info API throwing 403 error (forbidden/rate-limited)
       httpFetcherInstance.fetch.mockImplementation((url: string) => {
         if (url.includes("api.github.com/repos/")) {
           return Promise.reject(
-            new ScraperError(
+            new HttpStatusError(
               "Failed to fetch https://api.github.com/repos/owner/repo after 1 attempts: Request failed with status code 403",
               true,
+              403,
             ),
           );
         }
