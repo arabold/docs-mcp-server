@@ -21,16 +21,18 @@ import { normalizeEnvValue } from "../../utils/env";
  *
  * `EmbeddingProvider` is derived from this array so the two cannot drift apart.
  */
-const SUPPORTED_PROVIDERS = ["openai", "vertex", "gemini", "aws", "microsoft"] as const;
+export const SUPPORTED_PROVIDERS = [
+  "openai",
+  "vertex",
+  "gemini",
+  "aws",
+  "microsoft",
+] as const;
 
 /**
  * Supported embedding model providers.
  */
 export type EmbeddingProvider = (typeof SUPPORTED_PROVIDERS)[number];
-
-const PROVIDER_LOOKUP: ReadonlyMap<string, EmbeddingProvider> = new Map(
-  SUPPORTED_PROVIDERS.map((provider) => [provider, provider]),
-);
 
 /**
  * Split a model specification into its provider prefix and model name.
@@ -49,16 +51,13 @@ export function splitModelSpec(spec: string): {
   model: string;
 } {
   const colonIndex = spec.indexOf(":");
-  if (colonIndex === -1) {
-    return { provider: "openai", model: spec };
-  }
+  const prefix = spec.substring(0, colonIndex).toLowerCase();
+  const provider =
+    colonIndex === -1 ? undefined : SUPPORTED_PROVIDERS.find((name) => name === prefix);
 
-  const provider = PROVIDER_LOOKUP.get(spec.substring(0, colonIndex).toLowerCase());
-  if (provider) {
-    return { provider, model: spec.substring(colonIndex + 1) };
-  }
-
-  return { provider: "openai", model: spec };
+  return provider
+    ? { provider, model: spec.substring(colonIndex + 1) }
+    : { provider: "openai", model: spec };
 }
 
 /**
@@ -351,21 +350,17 @@ export class EmbeddingConfig {
    * resolve to their own entry.
    */
   private dimensionLookupKeys(normalized: string): string[] {
-    const keys = [normalized];
-
     const slashIndex = normalized.lastIndexOf("/");
-    if (slashIndex !== -1 && slashIndex < normalized.length - 1) {
-      keys.push(normalized.substring(slashIndex + 1));
-    }
+    const withoutNamespace =
+      slashIndex > -1 ? normalized.substring(slashIndex + 1) : undefined;
+    const bases = withoutNamespace ? [normalized, withoutNamespace] : [normalized];
 
-    for (const key of [...keys]) {
+    const withoutTag = (key: string) => {
       const colonIndex = key.lastIndexOf(":");
-      if (colonIndex > 0) {
-        keys.push(key.substring(0, colonIndex));
-      }
-    }
+      return colonIndex > 0 ? [key.substring(0, colonIndex)] : [];
+    };
 
-    return keys;
+    return [...bases, ...bases.flatMap(withoutTag)];
   }
 
   private findKnownDimension(model: string): number | null {

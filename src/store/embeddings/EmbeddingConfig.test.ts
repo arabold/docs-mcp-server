@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EmbeddingConfig } from "./EmbeddingConfig";
+import { EmbeddingConfig, SUPPORTED_PROVIDERS } from "./EmbeddingConfig";
 
 describe("EmbeddingConfig", () => {
   // Reset singleton instance before and after each test to ensure isolation
@@ -178,6 +178,9 @@ describe("EmbeddingConfig", () => {
         "openai",
         "second-state/model-GGUF:Q4_K_M",
       ],
+      // Prefixes match case-insensitively and resolve to their canonical form.
+      ["OpenAI:text-embedding-3-small", "openai", "text-embedding-3-small"],
+      ["AWS:amazon.titan-embed-text-v2:0", "aws", "amazon.titan-embed-text-v2:0"],
     ])("should keep the explicit provider prefix of %s", (spec, provider, model) => {
       expect(EmbeddingConfig.parseEmbeddingConfig(spec)).toMatchObject({
         provider,
@@ -294,28 +297,15 @@ describe("EmbeddingConfig", () => {
   });
 
   describe("provider validation", () => {
-    const validProviders = ["openai", "vertex", "gemini", "aws", "microsoft"];
-
     it("should accept all valid providers", () => {
       const config = new EmbeddingConfig();
 
-      for (const provider of validProviders) {
+      for (const provider of SUPPORTED_PROVIDERS) {
         const result = config.parse(`${provider}:test-model`);
         expect(result.provider).toBe(provider);
         expect(result.model).toBe("test-model");
       }
     });
-
-    it.each(["OpenAI:text-embedding-3-small", "AWS:amazon.titan-embed-text-v2:0"])(
-      "should match the provider prefix of %s case-insensitively",
-      (spec) => {
-        const config = new EmbeddingConfig();
-        const result = config.parse(spec);
-
-        expect(result.provider).toBe(spec.split(":")[0].toLowerCase());
-        expect(result.model).toBe(spec.substring(spec.indexOf(":") + 1));
-      },
-    );
 
     it("should treat an unknown provider prefix as part of the model name", () => {
       const config = new EmbeddingConfig();

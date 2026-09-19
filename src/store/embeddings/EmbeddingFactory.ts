@@ -10,7 +10,11 @@ import {
 } from "@langchain/openai";
 import type { AppConfig } from "../../utils/config";
 import { MissingCredentialsError } from "../errors";
-import { type EmbeddingProvider, splitModelSpec } from "./EmbeddingConfig";
+import {
+  type EmbeddingProvider,
+  SUPPORTED_PROVIDERS,
+  splitModelSpec,
+} from "./EmbeddingConfig";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 /**
@@ -20,7 +24,7 @@ export class UnsupportedProviderError extends Error {
   constructor(provider: string) {
     super(
       `❌ Unsupported embedding provider: ${provider}\n` +
-        "   Supported providers: openai, vertex, gemini, aws, microsoft\n" +
+        `   Supported providers: ${SUPPORTED_PROVIDERS.join(", ")}\n` +
         "   See README.md for configuration options or run with --help for more details.",
     );
     this.name = "UnsupportedProviderError";
@@ -73,8 +77,13 @@ export function areCredentialsAvailable(provider: EmbeddingProvider): boolean {
         process.env.AZURE_OPENAI_API_VERSION
       );
 
-    default:
-      return false;
+    // Same exhaustiveness guard as createEmbeddingModel below: a provider added
+    // without a credential branch would otherwise read as "no credentials" and
+    // silently degrade to full-text-only search.
+    default: {
+      const unhandled: never = provider;
+      return Boolean(unhandled);
+    }
   }
 }
 

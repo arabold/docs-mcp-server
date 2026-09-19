@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { BedrockEmbeddings } from "@langchain/aws";
+import { Embeddings } from "@langchain/core/embeddings";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { VertexAIEmbeddings } from "@langchain/google-vertexai";
 import { OpenAIEmbeddings } from "@langchain/openai";
@@ -9,7 +10,7 @@ import { loadConfig } from "../../utils/config";
 import { sanitizeEnvironment } from "../../utils/env";
 import { MissingCredentialsError } from "../errors";
 import type { EmbeddingProvider } from "./EmbeddingConfig";
-import { createEmbeddingModel, UnsupportedProviderError } from "./EmbeddingFactory";
+import { createEmbeddingModel } from "./EmbeddingFactory";
 import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 
 // Suppress logger output during tests
@@ -170,9 +171,7 @@ describe("createEmbeddingModel", () => {
   test.each(Object.entries(PROVIDER_SPECS))(
     "should construct a client for the %s provider",
     (_provider, spec) => {
-      expect(() => createEmbeddingModel(spec, runtimeConfig)).not.toThrow(
-        UnsupportedProviderError,
-      );
+      expect(createEmbeddingModel(spec, runtimeConfig)).toBeInstanceOf(Embeddings);
     },
   );
 
