@@ -1,7 +1,7 @@
 // @ts-expect-error
 import { gfm } from "@joplin/turndown-plugin-gfm";
 import type * as cheerio from "cheerio";
-import type { Element } from "domhandler";
+import type { AnyNode, Element } from "domhandler";
 import TurndownService from "turndown";
 import { logger } from "../../utils/logger";
 import { fullTrim } from "../../utils/string";
@@ -151,6 +151,51 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
       visit(child);
     }
     return text;
+  }
+
+  /**
+   * Converts as much of a subtree as Turndown will accept, descending past the
+   * parts it rejects.
+   *
+   * Turndown converts a document in one call, so a single node it cannot
+   * handle costs the whole page. Retrying node by node confines the damage:
+   * every subtree that converts keeps its Markdown — headings included, which
+   * is what the semantic splitter chunks on — and only the subtree that keeps
+   * throwing falls back to its text. Formatting inside that subtree flattens;
+   * the point is to keep the words.
+   */
+  private convertNodeWithFallback($: cheerio.CheerioAPI, node: AnyNode): string {
+    if (node.type === "text") {
+      return fullTrim(node.data);
+    }
+    if (node.type !== "tag") {
+      return "";
+    }
+
+    try {
+      return this.turndownService.turndown($.html(node)).trim();
+    } catch {
+      const parts = $(node)
+        .contents()
+        .toArray()
+        .map((child) => this.convertNodeWithFallback($, child))
+        .filter((part) => part.length > 0);
+
+      return parts.length > 0 ? parts.join("\n\n") : fullTrim($(node).text());
+    }
+  }
+
+  /**
+   * Salvages Markdown from a document whose whole-document conversion threw.
+   */
+  private salvageMarkdown($: cheerio.CheerioAPI): string {
+    const roots = $("body").length > 0 ? $("body").contents() : $.root().contents();
+    return roots
+      .toArray()
+      .map((node) => this.convertNodeWithFallback($, node))
+      .filter((part) => part.length > 0)
+      .join("\n\n")
+      .trim();
   }
 
   private normalizeLinkContent(content: string): string {
@@ -312,11 +357,19 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
         ),
       );
       // A failed conversion leaves `context.content` holding the HTML we were
-      // handed, and the rest of the pipeline would happily split and embed that
-      // markup as if it were prose. Drop it instead: paired with the recorded
-      // error this reads downstream as "we learned nothing about this page",
-      // which leaves any previously stored content untouched.
-      context.content = "";
+      // handed, and the rest of the pipeline would split and embed that markup
+      // as if it were prose. Convert what we can instead, node by node.
+      const salvaged = this.salvageMarkdown($);
+      if (salvaged) {
+        logger.warn(
+          `⚠️  Recovered ${salvaged.length} characters of Markdown for ${context.source} after a failed conversion`,
+        );
+        context.contentType = "text/markdown";
+      }
+      // Empty means we salvaged nothing. Paired with the recorded error that
+      // reads downstream as "we learned nothing about this page", which leaves
+      // any previously stored content untouched.
+      context.content = salvaged;
     } finally {
       this.preservedTableHtml.clear();
     }
