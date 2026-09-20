@@ -312,6 +312,92 @@ describe("HtmlSanitizerMiddleware", () => {
     expect(context.dom("pre code").text()).toContain("srv.carbonads.net");
   });
 
+  it("should drop promo chrome that sits outside the main content region", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    // Mirrors VitePress: the promo banner lives in a plain <div class="aside">
+    // that no selector in the deny list matches, and renders before <main>.
+    const html = `
+      <html><body>
+        <div class="aside">
+          <a class="viteconf" href="https://example.com/conf">
+            <img src="/conf.svg" alt="Conf Logo"><span>Conference 2025 View the replays</span>
+          </a>
+        </div>
+        <main>
+          <h1>Server-Side Rendering</h1>
+          <p>SSR specifically refers to front-end frameworks that support running the same application in Node.js, pre-rendering it to HTML, and finally hydrating it on the client.</p>
+        </main>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const $ = context.dom;
+    expect($).toBeDefined();
+    expect($?.("body").text()).not.toContain("Conference 2025");
+    expect($?.("a.viteconf").length).toBe(0);
+    expect($?.("h1").text()).toBe("Server-Side Rendering");
+    expect($?.("body").text()).toContain("SSR specifically refers");
+  });
+
+  it("should fall back to role=main when the page has no main element", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    const html = `
+      <html><body>
+        <div class="fork-ribbon"><a href="https://example.com/repo">Fork me on GitHub</a></div>
+        <div role="main">
+          <h1>Quickstart</h1>
+          <p>Eager to get started? This page gives a good introduction to the library and how to install it before diving into the rest of the documentation.</p>
+        </div>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const $ = context.dom;
+    expect($?.("body").text()).not.toContain("Fork me on GitHub");
+    expect($?.("body").text()).toContain("Eager to get started");
+  });
+
+  it("should keep the full body when the main region holds little of the text", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    // Some pages mark a small shell as <main> while the prose lives beside it.
+    const html = `
+      <html><body>
+        <main><p>Loading…</p></main>
+        <div class="content">
+          <h1>Configuration</h1>
+          <p>Every option below can be set from the command line, from the environment, or from a configuration file, and the precedence between those three sources is fixed.</p>
+        </div>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const $ = context.dom;
+    expect($?.("body").text()).toContain("Every option below");
+    expect($?.("body").text()).toContain("Loading");
+  });
+
+  it("should leave content untouched when the page declares no main region", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    const html = `
+      <html><body>
+        <div class="doc"><h1>Title</h1><p>Body text that has no declared main region around it.</p></div>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const $ = context.dom;
+    expect($?.("div.doc").length).toBe(1);
+    expect($?.("body").text()).toContain("no declared main region");
+  });
+
   it("should skip processing if content type is not HTML", async () => {
     const middleware = new HtmlSanitizerMiddleware();
     const context = createMockContext("<script>alert(1)</script>");
