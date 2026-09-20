@@ -1,7 +1,7 @@
 // @ts-expect-error
 import { gfm } from "@joplin/turndown-plugin-gfm";
 import type * as cheerio from "cheerio";
-import type { Element } from "domhandler";
+import type { AnyNode, Element } from "domhandler";
 import TurndownService from "turndown";
 import { logger } from "../../utils/logger";
 import { fullTrim } from "../../utils/string";
@@ -12,6 +12,8 @@ const maxGfmTableCells = 1_000;
 const maxGfmTableHtmlLength = 100_000;
 const gfmTableChunkRows = 100;
 const preservedTablePlaceholderAttribute = "data-docs-mcp-preserved-table-id";
+const ELEMENT_NODE = 1;
+const TEXT_NODE = 3;
 
 /**
  * Middleware to convert the final processed HTML content (from Cheerio object in context.dom)
@@ -64,26 +66,7 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
           }
         }
 
-        // Clone so we don't mutate the live DOM (Turndown re-visits nodes).
-        const clone = element.cloneNode(true) as HTMLElement;
-
-        // Replace <br> with literal newlines.
-        for (const br of Array.from(clone.querySelectorAll("br"))) {
-          br.replaceWith("\n");
-        }
-
-        // Modern syntax highlighters (Shiki, Prism, highlight.js, etc.) split
-        // each line into a `<span class="line">` or `<div class="line">` with
-        // no surrounding whitespace, relying on CSS `display: block` for the
-        // visual line break. `textContent` collapses those into a single line,
-        // so we splice in newlines between line containers ourselves before
-        // reading the text.
-        const lineNodes = clone.querySelectorAll("span.line, div.line, [data-line]");
-        for (let i = 0; i < lineNodes.length - 1; i++) {
-          lineNodes[i].appendChild(clone.ownerDocument.createTextNode("\n"));
-        }
-
-        const text = clone.textContent || "";
+        const text = this.extractPreText(element);
 
         return `\n\`\`\`${language}\n${text.replace(/^\n+|\n+$/g, "")}\n\`\`\`\n`;
       },
@@ -119,6 +102,100 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
         return tableHtml ? `\n\n${tableHtml}\n\n` : "";
       },
     });
+  }
+
+  /**
+   * Reads the text of a `<pre>` block, inserting the line breaks its markup
+   * only implies visually.
+   *
+   * The walk is deliberately read-only. Cloning or mutating the node would be
+   * the obvious way to splice newlines in, but `cloneNode` recreates each
+   * element through `document.createElement`, which rejects any name the DOM
+   * considers invalid. Real pages carry such names — a generator that emits
+   * `<lt;200 cores/socket>` for text it failed to escape leaves elements no
+   * DOM will recreate — and a throw here fails the whole page conversion.
+   */
+  private extractPreText(element: HTMLElement): string {
+    // Modern syntax highlighters (Shiki, Prism, highlight.js, etc.) split each
+    // line into a `<span class="line">` or `<div class="line">` with no
+    // surrounding whitespace, relying on CSS `display: block` for the visual
+    // line break. `textContent` collapses those into a single line, so we emit
+    // a newline after every line container except the last.
+    const lineNodes = Array.from(
+      element.querySelectorAll("span.line, div.line, [data-line]"),
+    );
+    const lineNodeSet = new Set<Node>(lineNodes);
+    const lastLineNode = lineNodes[lineNodes.length - 1];
+
+    let text = "";
+    const visit = (node: Node): void => {
+      if (node.nodeType === TEXT_NODE) {
+        text += node.nodeValue ?? "";
+        return;
+      }
+      if (node.nodeType !== ELEMENT_NODE) {
+        return;
+      }
+      if (node.nodeName === "BR") {
+        text += "\n";
+        return;
+      }
+      for (const child of Array.from(node.childNodes)) {
+        visit(child);
+      }
+      if (lineNodeSet.has(node) && node !== lastLineNode) {
+        text += "\n";
+      }
+    };
+    for (const child of Array.from(element.childNodes)) {
+      visit(child);
+    }
+    return text;
+  }
+
+  /**
+   * Converts as much of a subtree as Turndown will accept, descending past the
+   * parts it rejects.
+   *
+   * Turndown converts a document in one call, so a single node it cannot
+   * handle costs the whole page. Retrying node by node confines the damage:
+   * every subtree that converts keeps its Markdown — headings included, which
+   * is what the semantic splitter chunks on — and only the subtree that keeps
+   * throwing falls back to its text. Formatting inside that subtree flattens;
+   * the point is to keep the words.
+   */
+  private convertNodeWithFallback($: cheerio.CheerioAPI, node: AnyNode): string {
+    if (node.type === "text") {
+      return fullTrim(node.data);
+    }
+    if (node.type !== "tag") {
+      return "";
+    }
+
+    try {
+      return this.turndownService.turndown($.html(node)).trim();
+    } catch {
+      const parts = $(node)
+        .contents()
+        .toArray()
+        .map((child) => this.convertNodeWithFallback($, child))
+        .filter((part) => part.length > 0);
+
+      return parts.length > 0 ? parts.join("\n\n") : fullTrim($(node).text());
+    }
+  }
+
+  /**
+   * Salvages Markdown from a document whose whole-document conversion threw.
+   */
+  private salvageMarkdown($: cheerio.CheerioAPI): string {
+    const roots = $("body").length > 0 ? $("body").contents() : $.root().contents();
+    return roots
+      .toArray()
+      .map((node) => this.convertNodeWithFallback($, node))
+      .filter((part) => part.length > 0)
+      .join("\n\n")
+      .trim();
   }
 
   private normalizeLinkContent(content: string): string {
@@ -279,7 +356,20 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
           `Failed to convert HTML to Markdown: ${error instanceof Error ? error.message : String(error)}`,
         ),
       );
-      // Decide if pipeline should stop? For now, continue.
+      // A failed conversion leaves `context.content` holding the HTML we were
+      // handed, and the rest of the pipeline would split and embed that markup
+      // as if it were prose. Convert what we can instead, node by node.
+      const salvaged = this.salvageMarkdown($);
+      if (salvaged) {
+        logger.warn(
+          `⚠️  Recovered ${salvaged.length} characters of Markdown for ${context.source} after a failed conversion`,
+        );
+        context.contentType = "text/markdown";
+      }
+      // Empty means we salvaged nothing. Paired with the recorded error that
+      // reads downstream as "we learned nothing about this page", which leaves
+      // any previously stored content untouched.
+      context.content = salvaged;
     } finally {
       this.preservedTableHtml.clear();
     }

@@ -289,7 +289,7 @@ describe("HtmlToMarkdownMiddleware", () => {
     expect(context.errors).toHaveLength(0);
   });
 
-  it("should handle errors during Turndown conversion", async () => {
+  it("should fall back to text when nothing in the document converts", async () => {
     const middleware = new HtmlToMarkdownMiddleware();
     const html = "<html><body><p>Content</p></body></html>";
     const context = createMockContext(html);
@@ -303,15 +303,57 @@ describe("HtmlToMarkdownMiddleware", () => {
         throw new Error(errorMsg);
       });
 
-    await middleware.process(context, next);
+    try {
+      await middleware.process(context, next);
+    } finally {
+      turndownSpy.mockRestore();
+    }
 
     expect(next).toHaveBeenCalledOnce(); // Should still call next
-    expect(context.content).toBe(html); // Content should remain original HTML
+    // Keeping the markup would index HTML as if it were prose, but the words
+    // are still worth having.
+    expect(context.content).toBe("Content");
     expect(context.errors).toHaveLength(1);
     expect(context.errors[0].message).toContain(errorMsg);
+  });
 
-    turndownSpy.mockRestore();
-    // No close needed
+  it("should keep the convertible parts when one subtree fails to convert", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    const html = `
+      <html><body>
+        <h1>Title</h1>
+        <p>Good paragraph.</p>
+        <div class="broken">Broken text</div>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    const realTurndown = TurndownService.prototype.turndown;
+    const turndownSpy = vi
+      .spyOn(TurndownService.prototype, "turndown")
+      .mockImplementation(function (
+        this: TurndownService,
+        input: Parameters<typeof realTurndown>[0],
+      ) {
+        if (typeof input === "string" && input.includes("broken")) {
+          throw new Error("Turndown failed");
+        }
+        return realTurndown.call(this, input);
+      });
+
+    try {
+      await middleware.process(context, next);
+    } finally {
+      turndownSpy.mockRestore();
+    }
+
+    expect(context.errors).toHaveLength(1);
+    expect(context.contentType).toBe("text/markdown");
+    // Headings survive, which is what the semantic splitter chunks on.
+    expect(context.content).toContain("# Title");
+    expect(context.content).toContain("Good paragraph.");
+    // The failing subtree contributes its text rather than nothing.
+    expect(context.content).toContain("Broken text");
   });
 
   it("should apply custom anchor rule to remove empty or invalid links", async () => {
@@ -451,6 +493,26 @@ Mixed: [Another Valid](http://another.com) and bad one.`;
     expect(next).toHaveBeenCalledOnce();
     expect(context.content).toContain("line one\nline two\nline three");
     expect(context.errors).toHaveLength(0);
+  });
+
+  it("should convert code blocks containing element names the DOM cannot recreate", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    // Generators that fail to escape `<` in their output leave tags like
+    // `<lt;200 cores/socket>` behind. Browsers park those in the tree as
+    // unknown elements, but their names are invalid for `createElement`.
+    const html = `
+      <html><body>
+        <pre>One <lt;200 cores/socket>gt;200 cores</pre>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(context.errors).toHaveLength(0);
+    expect(context.contentType).toBe("text/markdown");
+    expect(context.content).toContain("200 cores");
   });
 
   it("should still respect existing newlines / <br> in code blocks", async () => {
