@@ -10,7 +10,7 @@ import type { ProgressCallback } from "../../types";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
-import type { UrlNormalizerOptions } from "../../utils/url";
+import { stripMarkdownExtension, type UrlNormalizerOptions } from "../../utils/url";
 import { AutoDetectFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import {
@@ -151,6 +151,35 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   private isMarkdownUrl(url: string): boolean {
     const mimeType = MimeTypeUtils.detectMimeTypeFromPath(url);
     return mimeType ? MimeTypeUtils.isMarkdown(mimeType) : false;
+  }
+
+  /**
+   * Resolves the page identity for a fetched resource.
+   *
+   * A published Markdown file is a representation of a page rather than a page of
+   * its own, so `guide.md` is recorded as `guide`. Both signals are required and
+   * they answer different questions: the extension states what the author meant
+   * the URL to be, the response states what the server actually returned. The
+   * extension alone would fold a soft 404 or an HTML page onto an identity it
+   * does not serve; the response alone would rewrite the identity of a document
+   * that is legitimately its own resource.
+   *
+   * Being a property of the response, the rule needs no knowledge of how the URL
+   * was discovered or of what else the crawl has seen — which is what lets an
+   * `llms.txt` entry and a crawled link converge without ordering guarantees.
+   *
+   * @param url The URL the content was fetched from, after redirects.
+   * @param rawContent The response, consulted for its resolved MIME type.
+   * @returns The canonical page URL.
+   */
+  private resolvePageIdentity(url: string, rawContent: RawContent): string {
+    if (!this.isMarkdownUrl(url)) return url;
+    if (!this.isAcceptableMarkdownVariant(rawContent)) return url;
+    const canonical = stripMarkdownExtension(url);
+    if (canonical !== url) {
+      logger.debug(`Markdown variant ${url} recorded as ${canonical}`);
+    }
+    return canonical;
   }
 
   /**
@@ -408,9 +437,12 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       // Use AutoDetectFetcher which handles fallbacks automatically
       const rawContent = await this.fetchItemContent(item, options, signal);
-      const effectiveSource = options.preserveHashes
+      const fetchedSource = options.preserveHashes
         ? this.restorePreservedHash(url, rawContent.source)
         : rawContent.source;
+      // A Markdown variant is recorded under the page it represents, so a `.md`
+      // URL and its canonical form resolve to one identity however each was found.
+      const effectiveSource = this.resolvePageIdentity(fetchedSource, rawContent);
       if (this.isRequestedRoot(item, options)) {
         this.updateCanonicalBaseUrl(effectiveSource, options);
       }

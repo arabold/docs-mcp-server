@@ -113,3 +113,45 @@ export function extractPrimaryDomain(hostname: string): string {
 }
 
 export type { UrlNormalizerOptions };
+
+/**
+ * Strips a Markdown file extension from a URL, yielding the canonical page URL.
+ *
+ * A published Markdown file is a representation of a page, not a separate page,
+ * so `https://example.com/guide.md` and `https://example.com/guide` name the same
+ * document and must share one identity — otherwise a site whose `llms.txt` lists
+ * `.md` URLs is indexed twice, once per spelling.
+ *
+ * Callers are responsible for establishing that the response really is Markdown;
+ * this function only performs the rewrite. Deciding on the extension alone would
+ * fold a page onto an identity that does not serve it whenever a server ignores
+ * the extension and answers with HTML or a soft error.
+ *
+ * Query and fragment are preserved, and a URL whose path has no Markdown
+ * extension is returned unchanged.
+ *
+ * @param url The absolute URL the content was fetched from.
+ * @returns The URL with a trailing Markdown extension removed, or `url` unchanged.
+ */
+export function stripMarkdownExtension(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+
+  const { pathname } = parsed;
+  const lastSlash = pathname.lastIndexOf("/");
+  const segment = pathname.slice(lastSlash + 1);
+  const dot = segment.lastIndexOf(".");
+  // No extension, or a dotfile whose leading dot is not an extension separator.
+  if (dot <= 0) return url;
+
+  const stripped = segment.slice(0, dot);
+  // Refuse to produce an empty final segment: `/.md` has no canonical page.
+  if (stripped.length === 0) return url;
+
+  parsed.pathname = `${pathname.slice(0, lastSlash + 1)}${stripped}`;
+  return parsed.toString();
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractPrimaryDomain, normalizeUrl } from "./url";
+import { extractPrimaryDomain, normalizeUrl, stripMarkdownExtension } from "./url";
 
 describe("URL normalization", () => {
   describe("default behavior", () => {
@@ -218,5 +218,54 @@ describe("extractPrimaryDomain", () => {
       expect(extractPrimaryDomain("DOCS.PYTHON.ORG")).toBe("python.org");
       expect(extractPrimaryDomain("API.GitHub.COM")).toBe("github.com");
     });
+  });
+});
+
+describe("stripMarkdownExtension", () => {
+  it("strips a markdown extension to yield the canonical page URL", () => {
+    expect(stripMarkdownExtension("https://react.dev/learn.md")).toBe(
+      "https://react.dev/learn",
+    );
+    expect(stripMarkdownExtension("https://vite.dev/guide/ssr.md")).toBe(
+      "https://vite.dev/guide/ssr",
+    );
+  });
+
+  it("strips any extension, leaving the caller to decide it is markdown", () => {
+    // The function performs the rewrite; establishing that the response really
+    // is Markdown is the caller's job, so it does not re-test the extension.
+    expect(stripMarkdownExtension("https://example.com/a/guide.markdown")).toBe(
+      "https://example.com/a/guide",
+    );
+  });
+
+  it("preserves query and fragment", () => {
+    expect(stripMarkdownExtension("https://example.com/guide.md?v=2#intro")).toBe(
+      "https://example.com/guide?v=2#intro",
+    );
+  });
+
+  it("leaves a URL without an extension unchanged", () => {
+    expect(stripMarkdownExtension("https://example.com/guide")).toBe(
+      "https://example.com/guide",
+    );
+    expect(stripMarkdownExtension("https://example.com/")).toBe("https://example.com/");
+  });
+
+  it("refuses to produce an empty final segment", () => {
+    // `/.md` has no canonical page to fold onto.
+    expect(stripMarkdownExtension("https://example.com/.md")).toBe(
+      "https://example.com/.md",
+    );
+  });
+
+  it("does not treat a dot in a directory segment as an extension", () => {
+    expect(stripMarkdownExtension("https://example.com/v1.0/guide")).toBe(
+      "https://example.com/v1.0/guide",
+    );
+  });
+
+  it("returns an unparseable URL unchanged", () => {
+    expect(stripMarkdownExtension("not a url")).toBe("not a url");
   });
 });

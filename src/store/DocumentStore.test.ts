@@ -2807,3 +2807,107 @@ describe("DocumentStore - compaction", () => {
     expect(Number(db.pragma("temp_store", { simple: true }))).toBe(2);
   });
 });
+
+/**
+ * A page can be reached both as a published Markdown file and as an HTML page —
+ * one document under two URLs that resolve to a single identity. Markdown is the
+ * representation the site's authors published; converting HTML ourselves is the
+ * fallback for sites that offer nothing better. Writes are otherwise
+ * last-one-wins, so without an explicit rule the winner would be decided by
+ * crawl order.
+ */
+describe("DocumentStore - Markdown representation precedence", () => {
+  let store: DocumentStore;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  const resultWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    url: "https://example.com/guide",
+    title: "Guide",
+    sourceContentType,
+    contentType: "text/markdown",
+    textContent: content,
+    links: [],
+    errors: [],
+    chunks: [{ types: ["text"], content, section: { level: 0, path: [] } }],
+  });
+
+  const storedContent = async (): Promise<string[]> => {
+    const results = await store.findChunksByUrl(
+      "lib",
+      "1.0",
+      "https://example.com/guide",
+    );
+    return results.map((r) => r.content);
+  };
+
+  beforeEach(async () => {
+    originalEnv = { ...process.env };
+    delete process.env.OPENAI_API_KEY;
+    store = new DocumentStore(":memory:", appConfig);
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    process.env = originalEnv;
+    if (store) await store.shutdown();
+  });
+
+  it("keeps the markdown representation when html arrives afterwards", async () => {
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      resultWith("text/markdown", "from markdown"),
+    );
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html"));
+
+    expect(await storedContent()).toEqual(["from markdown"]);
+  });
+
+  it("replaces an html representation when markdown arrives afterwards", async () => {
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html"));
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      resultWith("text/markdown", "from markdown"),
+    );
+
+    expect(await storedContent()).toEqual(["from markdown"]);
+  });
+
+  it("does not depend on which representation was stored first", async () => {
+    // The pair above, stated as the property they exist to hold.
+    const markdownFirst = new DocumentStore(":memory:", appConfig);
+    await markdownFirst.initialize();
+    await markdownFirst.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md"));
+    await markdownFirst.addDocuments("lib", "1.0", 0, resultWith("text/html", "html"));
+    const a = await markdownFirst.findChunksByUrl(
+      "lib",
+      "1.0",
+      "https://example.com/guide",
+    );
+    await markdownFirst.shutdown();
+
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "html"));
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md"));
+    const b = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
+
+    expect(a.map((r) => r.content)).toEqual(b.map((r) => r.content));
+  });
+
+  it("still replaces markdown with newer markdown", async () => {
+    // The rule is about representation, not about freezing the page.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "first"));
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "second"));
+
+    expect(await storedContent()).toEqual(["second"]);
+  });
+
+  it("still replaces html with newer html", async () => {
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "first"));
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "second"));
+
+    expect(await storedContent()).toEqual(["second"]);
+  });
+});

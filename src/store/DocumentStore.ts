@@ -5,6 +5,7 @@ import * as sqliteVec from "sqlite-vec";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import { type AppConfig, isVectorDimensionExplicit } from "../utils/config";
 import { logger } from "../utils/logger";
+import { MimeTypeUtils } from "../utils/mimeTypeUtils";
 import { compareVersionsDescending } from "../utils/version";
 import { applyMigrations } from "./applyMigrations";
 import { EmbeddingConfig, type EmbeddingModelConfig } from "./embeddings/EmbeddingConfig";
@@ -294,7 +295,7 @@ export class DocumentStore {
         "INSERT INTO pages (version_id, url, title, etag, last_modified, source_content_type, content_type, depth) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, source_content_type = excluded.source_content_type, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth",
       ),
       getPageId: this.db.prepare<[number, string]>(
-        "SELECT id FROM pages WHERE version_id = ? AND url = ?",
+        "SELECT id, source_content_type FROM pages WHERE version_id = ? AND url = ?",
       ),
       insertLibrary: this.db.prepare<[string]>(
         "INSERT INTO libraries (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
@@ -1897,8 +1898,25 @@ export class DocumentStore {
       // Delete existing documents for this page to prevent conflicts
       // First check if the page exists and get its ID
       const existingPage = this.statements.getPageId.get(versionId, url) as
-        | { id: number }
+        | { id: number; source_content_type: string | null }
         | undefined;
+
+      // A page can be reached as both a published Markdown file and an HTML page
+      // — the same document under two URLs that resolve to one identity. Markdown
+      // is what the site's authors published for machine consumption, so it wins;
+      // converting HTML ourselves is the fallback for sites offering nothing
+      // better. Writes are otherwise last-one-wins, which would hand the decision
+      // to crawl order.
+      if (
+        existingPage &&
+        MimeTypeUtils.isMarkdown(existingPage.source_content_type ?? "") &&
+        !MimeTypeUtils.isMarkdown(result.sourceContentType ?? "")
+      ) {
+        logger.debug(
+          `Keeping stored Markdown representation of ${url}; ignoring ${result.sourceContentType} version`,
+        );
+        return;
+      }
 
       if (existingPage) {
         const result = this.statements.deleteDocumentsByPageId.run(existingPage.id);
