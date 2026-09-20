@@ -572,6 +572,10 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       return {
         url: effectiveSource,
+        // Where the bytes came from, kept so a later refresh requests this
+        // representation rather than whatever the identity serves, and so the
+        // validator below is returned to the resource that issued it.
+        contentUrl: fetchedSource,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
         sourceContentType: rawContent.mimeType,

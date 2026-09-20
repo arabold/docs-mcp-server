@@ -375,9 +375,17 @@ export class PipelineManager implements IPipeline {
         `🔄 Preparing refresh job for ${library}@${normalizedVersion || "latest"} with ${pages.length} page(s)`,
       );
 
-      // Build initialQueue from pages with original depth values
+      // Build initialQueue from pages with original depth values.
+      //
+      // Requests go to where the content actually came from, which differs from
+      // the page's URL when a representation lives elsewhere — a published
+      // Markdown file recorded under the page it represents. Asking for the URL
+      // instead would retrieve a different representation, and would send the
+      // stored validator to a resource that never issued it. `content_url` is
+      // NULL for pages retrieved from their own address, including every row
+      // written before representations were resolved to a shared identity.
       const initialQueue = pages.map((page) => ({
-        url: page.url,
+        url: page.content_url ?? page.url,
         depth: page.depth ?? 0, // Use original depth, fallback to 0 for old data
         pageId: page.id,
         etag: page.etag,

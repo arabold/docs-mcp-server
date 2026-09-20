@@ -487,10 +487,14 @@ export class DocumentManagementService {
    * Retrieves all pages for a specific version ID with their metadata.
    * Used for refresh operations to get existing pages with their ETags and depths.
    */
-  async getPagesByVersionId(
-    versionId: number,
-  ): Promise<
-    Array<{ id: number; url: string; etag: string | null; depth: number | null }>
+  async getPagesByVersionId(versionId: number): Promise<
+    Array<{
+      id: number;
+      url: string;
+      etag: string | null;
+      depth: number | null;
+      content_url: string | null;
+    }>
   > {
     return this.store.getPagesByVersionId(versionId);
   }

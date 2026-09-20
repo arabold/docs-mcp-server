@@ -34,6 +34,8 @@ export interface BaseScraperStrategyOptions {
 export interface ProcessItemResult {
   /** The URL of the content */
   url: string;
+  /** Where the content was retrieved from, when that differs from `url`. */
+  contentUrl?: string;
   /** The title of the page or document, extracted during processing */
   title?: string | null;
   /** Original MIME type of the fetched resource, if known */
@@ -459,6 +461,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               currentUrl: finalUrl,
               result: {
                 url: finalUrl,
+                contentUrl: result.contentUrl,
                 title: result.content.title?.trim() || result.title?.trim() || "",
                 sourceContentType: result.sourceContentType || result.contentType || "",
                 contentType: result.contentType || "",

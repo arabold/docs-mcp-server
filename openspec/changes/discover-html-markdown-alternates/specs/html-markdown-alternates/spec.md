@@ -156,6 +156,40 @@ A response that is not an acceptable Markdown variant SHALL leave the URL's iden
 - **GIVEN** a URL with no Markdown extension that returns Markdown
 - **THEN** its identity is unchanged
 
+### Requirement: A page retains the location its content came from
+
+Resolving a page's identity SHALL NOT discard the location the content was actually retrieved from. A page therefore carries both: the identity it is recorded under, and the location that served it. They coincide for most pages and differ whenever a representation was fetched from somewhere other than the page's canonical address.
+
+Keeping only the identity breaks three things at once, because the identity is an assertion about where a page lives while the retrieval location is a fact about where its bytes came from:
+
+- **Refetching.** A later refresh SHALL request the representation that produced the stored content. Requesting the identity instead retrieves a different representation, so the stored content is never refreshed and the preferred representation is silently replaced by whatever the identity serves.
+- **Validators.** A stored validator describes the resource that issued it, so it SHALL be sent only to that resource. Pairing a validator with a different resource makes conditional requests meaningless at best, and at worst earns a not-modified response that skips a real update.
+- **Offering a working link.** The identity is derived rather than observed — nothing guarantees the canonical address serves anything. The retrieval location is known to serve the content, so it remains available as the link to offer when the identity does not resolve.
+
+Whether a consumer presents the identity or the retrieval location is that consumer's decision; this requirement is that both remain available to make it.
+
+#### Scenario: Refresh requests the representation that produced the content
+- **GIVEN** a page whose content came from a Markdown representation at a different location than its identity
+- **WHEN** the page is refreshed
+- **THEN** the request goes to the location the content came from
+- **AND** not to the page's identity
+
+#### Scenario: A validator is returned to its own resource
+- **GIVEN** a stored page whose validator was issued by its Markdown representation
+- **WHEN** a conditional request is made for that page
+- **THEN** the validator is sent to the resource that issued it
+
+#### Scenario: A page keeps refreshing after its identity is resolved
+- **GIVEN** a page recorded under an identity that differs from where its content was retrieved
+- **WHEN** it is refreshed and the representation has changed
+- **THEN** the stored content reflects the change
+- **AND** the page does not become frozen at the content it was first indexed with
+
+#### Scenario: Both locations are available to consumers
+- **WHEN** a stored page is read back
+- **THEN** its identity and the location its content came from are both available
+- **AND** a consumer can offer a link to a location known to serve the content
+
 ### Requirement: Ordering with llms.txt Markdown preference
 
 For queue items discovered from llms.txt, the scraper SHALL preserve the existing implicit `.md` variant preference before using HTML Markdown alternate discovery. If the implicit `.md` variant fails and the original URL response is HTML, the scraper SHALL then apply HTML Markdown alternate discovery before normal HTML processing. For queue items not discovered from llms.txt, the scraper SHALL fetch the original URL with the existing Markdown-preferred `Accept` behavior and apply HTML Markdown alternate discovery only when the response is HTML.

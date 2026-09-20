@@ -137,6 +137,14 @@ export interface ScraperOptions {
 export interface ScrapeResult {
   /** The URL of the page that was scraped */
   url: string;
+  /**
+   * Where the content was actually retrieved from, when that differs from `url`.
+   *
+   * `url` is the page's identity; this is the location that served its bytes. They
+   * diverge when a representation lives elsewhere — a published Markdown file
+   * recorded under the page it represents. Undefined means the two coincide.
+   */
+  contentUrl?: string;
   /** Page title */
   title: string;
   /** Original MIME type of the fetched resource before pipeline processing */

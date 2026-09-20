@@ -129,6 +129,7 @@ export class DocumentStore {
         string | null,
         string | null,
         number | null,
+        string | null,
       ]
     >;
     getPageId: Database.Statement<[number, string]>;
@@ -290,9 +291,10 @@ export class DocumentStore {
           string | null,
           string | null,
           number | null,
+          string | null,
         ]
       >(
-        "INSERT INTO pages (version_id, url, title, etag, last_modified, source_content_type, content_type, depth) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, source_content_type = excluded.source_content_type, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth",
+        "INSERT INTO pages (version_id, url, title, etag, last_modified, source_content_type, content_type, depth, content_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, source_content_type = excluded.source_content_type, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth, content_url = excluded.content_url",
       ),
       getPageId: this.db.prepare<[number, string]>(
         "SELECT id, source_content_type FROM pages WHERE version_id = ? AND url = ?",
@@ -1778,6 +1780,8 @@ export class DocumentStore {
           page.sourceContentType,
           page.contentType,
           depth,
+          // An empty page carries no separate retrieval location.
+          null,
         );
 
         // Clear any chunks the page had before it became empty. Without this the
@@ -1947,6 +1951,8 @@ export class DocumentStore {
           sourceContentType,
           contentType,
           depth,
+          // NULL means "retrieved from its own URL"; only a divergence is recorded.
+          result.contentUrl && result.contentUrl !== url ? result.contentUrl : null,
         );
 
         // Query for the page ID since we can't use RETURNING

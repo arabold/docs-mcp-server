@@ -13,6 +13,14 @@ export interface DbPage {
   source_content_type: string | null;
   content_type: string | null;
   depth: number | null;
+  /**
+   * Where this page's content was retrieved from, when that differs from `url`.
+   *
+   * NULL means the two coincide, which is true of every page whose content came
+   * from its own address — and of every row written before representations were
+   * resolved to a shared identity. Readers coalesce to `url`.
+   */
+  content_url: string | null;
   created_at: string;
   updated_at: string;
 }

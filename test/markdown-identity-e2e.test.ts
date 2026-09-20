@@ -170,4 +170,120 @@ describe("Markdown variant identity E2E", () => {
     expect(urls).toContain(`${TEST_BASE_URL}/stale.md`);
     expect(urls).not.toContain(`${TEST_BASE_URL}/stale`);
   }, 30000);
+
+  it("refreshes the representation the content came from, not the identity", async () => {
+    // The identity is an assertion about where the page lives; the retrieval
+    // location is a fact about where its bytes came from. Refreshing the former
+    // fetches a different representation and leaves the stored one stale.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>hi</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nOriginal markdown body.", {
+        "Content-Type": "text/markdown",
+        ETag: '"md-v1"',
+      });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+    expect(await storedUrls()).toContain(`${TEST_BASE_URL}/guide`);
+
+    // Only the markdown representation is mocked for the refresh. A refresh that
+    // asked for the identity would find nothing and fail the assertions below.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>hi</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .matchHeader("if-none-match", '"md-v1"')
+      .reply(200, "# Guide\n\nUpdated markdown body.", {
+        "Content-Type": "text/markdown",
+        ETag: '"md-v2"',
+      });
+
+    const refreshId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
+    await pipelineManager.waitForJobCompletion(refreshId);
+
+    // The page updated rather than freezing at what it was first indexed with.
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "body", 10);
+    const guide = results.filter((r) => r.url === `${TEST_BASE_URL}/guide`);
+    expect(guide.some((r) => r.content?.includes("Updated markdown body"))).toBe(true);
+    expect(guide.some((r) => r.content?.includes("Original markdown body"))).toBe(false);
+  }, 30000);
+
+  it("sends a stored validator back to the resource that issued it", async () => {
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>hi</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nBody.", {
+        "Content-Type": "text/markdown",
+        ETag: '"md-v1"',
+      });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    // The interceptor only matches when the markdown resource's own validator
+    // arrives on a request for that resource.
+    const conditional = nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>hi</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .matchHeader("if-none-match", '"md-v1"')
+      .reply(304, undefined, { ETag: '"md-v1"' });
+
+    const refreshId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
+    await pipelineManager.waitForJobCompletion(refreshId);
+
+    expect(conditional.isDone()).toBe(true);
+  }, 30000);
+
+  it("refreshes a page with no separate retrieval location unchanged", async () => {
+    // The common case must keep working: no llms.txt, no markdown variant.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>Original text.</p></body></html>", {
+        "Content-Type": "text/html",
+        ETag: '"html-v1"',
+      });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    const refreshed = nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .matchHeader("if-none-match", '"html-v1"')
+      .reply(200, "<html><body><h1>Home</h1><p>Updated text.</p></body></html>", {
+        "Content-Type": "text/html",
+        ETag: '"html-v2"',
+      });
+
+    const refreshId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
+    await pipelineManager.waitForJobCompletion(refreshId);
+
+    expect(refreshed.isDone()).toBe(true);
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "text", 10);
+    expect(results.some((r) => r.content?.includes("Updated text"))).toBe(true);
+  }, 30000);
 });
