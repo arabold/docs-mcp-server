@@ -9,15 +9,44 @@ schema: spec-driven
 #     We use conventional commits
 #     Domain: e-commerce platform
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+# Per-artifact rules (additive to the schema's built-in guidance).
+rules:
+  specs:
+    - "Apply the re-implementation test to every requirement: if we threw away the code and re-implemented this capability from scratch, would the spec need to change? If yes, the requirement is over-specified — it is pinned to the current implementation rather than to the behavior. Rewrite it in terms of what a caller observes."
+    - "No measurements in specs. Timeouts, retry counts, batch sizes, page limits, concurrency levels, token budgets, cache TTLs, percentages and thresholds drift with tuning and hardware, so a spec that names them churns on every adjustment. Specify that a bound exists and what happens when it is crossed; put the value in design.md or in the code's configuration defaults."
+    - "No implementation details in specs. Class, function, file, table and column names, library and framework choices, internal call order, module boundaries and data structures belong in design.md. A spec names the capability's inputs, outputs, error conditions and external constraints."
+    - "Prefer the smallest requirement set that pins the contract. Two requirements that always change together are one requirement; a scenario that only re-states the requirement in other words is noise. Specs are read far more often than they are written — every extra line is a line that can go stale."
+
+  design:
+    - "Include a Program Design section, placed after Decisions, that settles the shape of the code: which types exist, what the signatures are, where the files live, and what calls what. Decisions answer which approach and why; Program Design answers what an implementer would otherwise have to invent. This is also where implementation constraints live, so specs can stay implementation-free."
+    - "Hold the altitude: above implementation (signatures without bodies, call order without logic, file paths without contents) and below architecture (no component inventories, deployment topology or technology-choice rationale — those belong in ARCHITECTURE.md or Decisions). The test: if an implementer could get it materially wrong and the mistake would survive review, write it down; if it is obvious from the surrounding code, leave it out. Describe only what changes — a design that restates the existing program is noise."
+    - "Pick the notations that carry information for this change. Most changes need two, not four."
+    - |-
+      Give a file-tree diff of the affected paths only, marking `+` added, `~` modified, `-` removed, with a reason on every modified file. It anchors the plan to where things actually live and surfaces a bad home for new code before it is written.
+      ```
+      src/scraper/
+        fetcher/
+      ~   HttpFetcher.ts          # retries through the shared budget
+      +   RetryBudget.ts          # backoff accounting across fetchers
+        pipelines/
+      ~   HtmlPipeline.ts         # surfaces fetch failures instead of swallowing them
+      test/
+      + retry-budget-e2e.test.ts
+      ```
+    - "Write down the new or changed signatures that are too internal for ARCHITECTURE.md and easy to get wrong — types and signatures only, no bodies — and state the error contract alongside each: what it throws or returns on failure. Omit accessors, plumbing, and anything whose signature follows unambiguously from an existing pattern in the codebase."
+    - |-
+      Draw a call-stack tree for any orchestration or control-flow change, in diff syntax when the interesting part is what moves. Show the boundary crossings that matter — process, transaction, retry scope — and name any invariant the ordering has to hold beside the step that holds it. A tree that stays inside one function is not worth drawing.
+      ```
+      PipelineManager.process()
+          HtmlPipeline.run()
+      -     HttpFetcher.fetch()           # retried inline, no shared budget
+      +     RetryBudget.acquire()         # throws BudgetExhaustedError
+      +     HttpFetcher.fetch()
+      +   ScraperService.recordSkip()     # skips stay out of abortOnFailureRate
+      ```
+    - "Use Mermaid sparingly — diagrams become unreadable fast and cost more to maintain than they return. Reach for one only when the relationship is genuinely two-dimensional: a state machine with non-obvious transitions, or a sequence across three or more services with interleaved responses. A linear flow is a call-stack tree, not a diagram. Diagrams from openspec exploration carry over only if they meet that bar; otherwise redraw them as a tree."
+    - "Small illustrative samples are welcome — a type or interface signature, a config snippet, a representative payload, the shape of a new error. Not the implementation: no full function bodies or copy-pasteable code, no exhaustive tree of the repository or of an unaffected area. If the design contains the code, write the code instead. Do not invent names for things that already exist; read the current code and use its names."
+    - "Program Design also carries the constraints the implementation must respect but the spec must not name: chosen libraries, migration and backfill order, concurrency and transaction boundaries, performance budgets with their measured numbers, and the reasons behind them."
 
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.
