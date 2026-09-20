@@ -114,17 +114,17 @@ src/scraper/
 
 | Requirement | Satisfied by | Evidence |
 |---|---|---|
-| Extractor backend selection | `scraper.htmlExtractor` enum in `src/utils/config.ts`; backend choice in `HtmlPipeline.ts` | `HtmlPipeline.test.ts` — "processes HTML via Defuddle when htmlExtractor is set to defuddle" |
+| Extractor backend selection | `scraper.htmlExtractor` enum in `src/utils/config.ts`; backend choice in `HtmlPipeline.ts` | `HtmlPipeline.test.ts` — "processes HTML via Defuddle when htmlExtractor is set to defuddle"; `config.test.ts` — file-borne value resets to the default, environment override is rejected, supported values accepted |
 | Site chrome removal | `defaultSelectorsToRemove` in `HtmlSanitizerMiddleware.ts` | `HtmlSanitizerMiddleware.test.ts` — default elements, Carbon Ads, EthicalAds/AdSense, DocSearch, skip-links/breadcrumbs |
-| Scoping to the declared content region | `scopeToMainContent` in `HtmlSanitizerMiddleware.ts` | `HtmlSanitizerMiddleware.test.ts` — promo chrome outside main, `role=main` fallback, small-region guard, no-region case |
+| Scoping to the declared content region | `scopeToMainContent` in `HtmlSanitizerMiddleware.ts` | `HtmlSanitizerMiddleware.test.ts` — promo chrome outside main, `role=main` fallback, richest of several candidates, small-region guard, no-region case, pretty-printed indentation |
 | Caller-supplied exclusions | `excludeSelectors` merge in `HtmlSanitizerMiddleware.ts`; `applyExcludePreDefuddle` in `HtmlDefuddleMiddleware.ts` | `HtmlSanitizerMiddleware.test.ts` — custom selectors, combined selectors |
 | Content preservation guarantees | Host-scoped ad selectors (`a[href*="srv.carbonads.net"]`, not the apex) | `HtmlSanitizerMiddleware.test.ts` — prose links to the Carbon Ads apex survive; prose/code naming ad hostnames survive |
-| Never empties or drops a page | Pre-sanitization body snapshot and restore in `HtmlSanitizerMiddleware.ts`; retention fallback in `HtmlDefuddleMiddleware.ts` | Restore path is uncovered — see Risks |
-| Does not narrow discovery | Middleware order in `HtmlPipeline.ts`: metadata and link extraction precede the extractor | Order is asserted only implicitly — see Risks |
+| Never empties or drops a page | Pre-sanitization body snapshot and restore in `HtmlSanitizerMiddleware.ts`; retention fallback in `HtmlDefuddleMiddleware.ts` | `HtmlSanitizerMiddleware.test.ts` — "should preserve text rather than emptying a page when exclusions remove everything"; verified to fail with the restore disabled |
+| Does not narrow discovery | Middleware order in `HtmlPipeline.ts`: metadata and link extraction precede the extractor | `HtmlPipeline.test.ts` — "discovers links inside removed chrome and keeps that chrome out of the content"; verified to fail with the extractor moved ahead of link extraction |
 
 ## Risks / Trade-offs
 
-- **The spec claims guarantees that no test pins.** Two requirements rest on behavior nothing exercises directly: the empty-document restore path, and the ordering that keeps link discovery ahead of extraction. Both would survive a refactor silently. → tasks.md adds a regression test for each; they are the only code this change produces.
+- **Every requirement now has a named test, and the load-bearing ones are mutation-checked.** The restore path, the ordering that keeps link discovery ahead of extraction, the richest-candidate choice, and the normalized ratio were each verified to fail when the behavior they pin is disabled. Rows in the table above name them.
 
 - **Twenty pages is a small sample.** The region share (>98%) and the retention floor (≥21.6%) are both read off one static fetch of 20 sites. A site family absent from that sample could sit lower. → The 0.5 floor is set far from the observed minimum rather than just under it, and the failure mode when it fires is the status quo, not content loss. The sample is recorded above so a future pass can extend rather than re-derive it.
 
@@ -134,6 +134,6 @@ src/scraper/
 
 - **Two requirements rest on evidence thinner than the table implies.** Verified during apply: no test covers the ARIA-landmark-role category of chrome removal (the role selectors ship, but only `role="main"` appears in a test, and for a different requirement). And the "advertising is removed after render, not blocked" scenario is cross-capability — it is a property of the seam with `subresource-blocklist`, asserted by neither side. → Recorded rather than fixed: adding an ARIA-role test is a reasonable follow-up, and the render-not-block property is better pinned where the two capabilities meet than inside either one.
 
-- **Configuration policy, not an extractor concern.** An unrecognised `scraper.htmlExtractor` value does not fail startup; the loader warns, quarantines the offending file when writable, and resets to defaults. Only `server.publicOrigin` throws. The spec's scenario was corrected to match during apply. A typo'd extractor therefore runs the default silently apart from that warning — worth revisiting as config-wide behavior, but out of scope for this capability.
+- **Invalid-value handling differs by configuration source, project-wide.** A file-borne `scraper.htmlExtractor` value that fails validation is not fatal — the loader warns, quarantines the file when writable, and rebuilds from defaults. An environment override is different: the fallback path reapplies env and CLI over defaults and then hard-parses, so an invalid env value throws. Measured both ways during apply and covered in `config.test.ts`; the spec carries a scenario per source. This asymmetry is a property of the loader and applies to every key, not just this one, and the `configuration` capability specifies neither case. Worth a requirement there; out of scope for this capability, which only guarantees that an unrecognised value never results in an unrecognised extractor running.
 
 - **Doc-only changes are easy to leave half-applied.** The capability describes shipped behavior, so nothing fails if the spec is wrong. → Verification is the requirement-to-evidence map above rather than a test run.

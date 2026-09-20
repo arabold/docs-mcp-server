@@ -344,6 +344,31 @@ describe("HtmlSanitizerMiddleware", () => {
     expect($?.("body").text()).toContain("SSR specifically refers");
   });
 
+  it("should scope to the text-richest region when a page declares several", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    // Multiple <main> elements are invalid but common in generated markup —
+    // a stub from a layout template beside the real one. The first in
+    // document order is the wrong choice here.
+    const html = `
+      <html><body>
+        <main class="stub"><p>Menu</p></main>
+        <main class="real">
+          <h1>Deployment</h1>
+          <p>Build the site, upload the output directory to your host, and point the domain at it. The generated files are fully static and need no runtime.</p>
+        </main>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const $ = context.dom;
+    expect($?.("main.real").length).toBe(1);
+    expect($?.("main.stub").length).toBe(0);
+    expect($?.("body").text()).not.toContain("Menu");
+    expect($?.("body").text()).toContain("Build the site");
+  });
+
   it("should fall back to role=main when the page has no main element", async () => {
     const middleware = new HtmlSanitizerMiddleware();
     const html = `

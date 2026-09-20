@@ -17,9 +17,9 @@ row, confirm the named test actually asserts the requirement's scenarios rather
 than something adjacent; where it does not, note the gap instead of widening
 this change.
 
-- [x] 2.1 Confirm the backend-selection requirement: `scraper.htmlExtractor` accepts only `cheerio` and `defuddle` and defaults to `cheerio`, and an out-of-enum value fails configuration load. Verify by checking the enum in `src/utils/config.ts` and the existing config tests cover rejection.
+- [x] 2.1 Confirm the backend-selection requirement: `scraper.htmlExtractor` accepts only `cheerio` and `defuddle` and defaults to `cheerio`. Out-of-enum handling is source-dependent — a file-borne value resets to the default with a warning, an environment override fails loading — so cover both in `src/utils/config.test.ts` and verify the spec's two scenarios match.
 - [x] 2.2 Confirm the chrome-removal requirement: every category named in the spec has at least one covering test, and an entry matching nothing leaves the other categories applied. Verify against the existing selector tests in `HtmlSanitizerMiddleware.test.ts`.
-- [x] 2.3 Confirm the region-scoping requirement: all four scenarios (banner outside the region, `role="main"` fallback, small-region guard, no declared region) map to the tests added in PR #506. Verify by name-matching each scenario to a test.
+- [x] 2.3 Confirm the region-scoping requirement: every scenario (banner outside the region, `role="main"` fallback, richest of several candidates, small-region guard, no declared region) maps to a test. Verify by name-matching each scenario to a test, and add one where none exists.
 - [x] 2.4 Confirm the preservation guarantees: prose and code naming an ad hostname survive, and a prose link to an ad network's apex domain survives. Verify against the two existing tests that cover this.
 - [x] 2.5 Record any row where the evidence does not actually cover the scenario as a follow-up in design.md — Risks rather than fixing it here.
 

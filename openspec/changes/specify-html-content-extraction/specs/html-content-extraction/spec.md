@@ -10,6 +10,8 @@ Defines what the HTML extractor stage discards from a fetched page and what it g
 
 Extraction SHALL be governed by exactly one user-facing configuration key, `scraper.htmlExtractor`, accepting the values `cheerio` and `defuddle` and defaulting to `cheerio`. No other configuration key SHALL select or blend backends.
 
+A value outside the accepted set SHALL NOT result in an unrecognised extractor running. How it is refused depends on the source the value came from, which is a property of configuration loading rather than of this capability: a file-borne value is reset to the default with a warning, while an environment override fails loading outright.
+
 The default backend carries this capability's contract: every requirement below describes it. The `defuddle` value selects an alternate heuristic extractor kept for head-to-head evaluation against that contract, and is NOT held to the requirements below — its purpose is to be measured against them, so pinning its behavior would defeat the comparison. Selecting it SHALL change only which parts of a page survive extraction; every downstream stage, and the caller-supplied exclusions described below, SHALL behave identically under either value.
 
 #### Scenario: Default backend is used when unconfigured
@@ -23,11 +25,17 @@ The default backend carries this capability's contract: every requirement below 
 - **THEN** the alternate extractor decides what survives
 - **AND** title extraction, link discovery, Markdown conversion, and chunking behave as they do under the default
 
-#### Scenario: Unrecognised value falls back to the default backend
-- **GIVEN** `scraper.htmlExtractor` is set to a value other than `cheerio` or `defuddle`
+#### Scenario: Unrecognised value in the configuration file falls back to the default
+- **GIVEN** the configuration file sets `scraper.htmlExtractor` to a value other than `cheerio` or `defuddle`
 - **WHEN** configuration is loaded
 - **THEN** the effective value is the default backend
 - **AND** a warning records that the configuration was reset
+
+#### Scenario: Unrecognised value in the environment fails loading
+- **GIVEN** the environment override for `scraper.htmlExtractor` is set to a value other than `cheerio` or `defuddle`
+- **WHEN** configuration is loaded
+- **THEN** loading fails with a validation error
+- **AND** no extraction runs
 
 ### Requirement: Site chrome removal
 
