@@ -540,6 +540,51 @@ title:   Spaced Out
     expect(result[0].content).toBe("---\n# A YAML comment\ntitle:   Spaced Out\n---");
   });
 
+  it("should not treat a leading thematic break as frontmatter", async () => {
+    // A document opening with `---` has its whole body parsed as YAML by gray-matter,
+    // which can yield a bare string. Only a mapping is real frontmatter; otherwise the
+    // entire page would collapse into a single frontmatter chunk and lose its structure.
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+
+# Hello
+
+Body text.`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
+    expect(result.some((c) => c.types.includes("heading"))).toBe(true);
+    expect(result.map((c) => c.content).join("\n")).toContain("Body text.");
+  });
+
+  it("should not treat scalar frontmatter as frontmatter", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+just a bare string
+---
+# Main Content`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
+    expect(result.map((c) => c.content).join("\n")).toContain("Main Content");
+  });
+
+  it("should not treat a frontmatter list as frontmatter", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+- one
+- two
+---
+# Main Content`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
+    expect(result.map((c) => c.content).join("\n")).toContain("Main Content");
+  });
+
   it("should ignore malformed frontmatter and treat it as text", async () => {
     const splitter = new SemanticMarkdownSplitter(100, 5000);
     // Malformed because no closing delimiter or invalid yaml structure that gray-matter rejects?

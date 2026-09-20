@@ -117,7 +117,7 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     try {
       // Check for frontmatter
       const file = matter(markdown);
-      if (Object.keys(file.data).length > 0) {
+      if (SemanticMarkdownSplitter.hasFrontmatterData(file.data)) {
         frontmatterChunk = {
           types: ["frontmatter"],
           content: SemanticMarkdownSplitter.extractRawFrontmatter(markdown, file),
@@ -147,6 +147,27 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     }
 
     return chunks;
+  }
+
+  /**
+   * Reports whether a gray-matter parse produced real frontmatter.
+   *
+   * gray-matter hands back whatever YAML parsed to, which is not necessarily a mapping.
+   * A document opening with a thematic break (`---`) has its entire body parsed as YAML
+   * and can yield a bare string or array, and `Object.keys` on those returns character or
+   * element indices — so a naive emptiness check treats the whole document as frontmatter
+   * and discards its heading structure. Only a plain object with at least one key counts.
+   *
+   * @param data The `data` property of a gray-matter result.
+   * @returns True when the parse yielded a non-empty mapping.
+   */
+  private static hasFrontmatterData(data: unknown): data is Record<string, unknown> {
+    return (
+      typeof data === "object" &&
+      data !== null &&
+      !Array.isArray(data) &&
+      Object.keys(data).length > 0
+    );
   }
 
   /**
