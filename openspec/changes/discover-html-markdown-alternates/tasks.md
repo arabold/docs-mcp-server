@@ -26,6 +26,16 @@
 - [ ] 4.3 Add tests proving accepted alternates do not create duplicate indexed documents and that links from accepted Markdown content continue normal crawl filtering.
 - [ ] 4.4 Add tests for ordering with llms.txt `.md` preference success and fallback to HTML alternate discovery.
 
+## 4a. Canonical identity for Markdown variant URLs
+
+- [ ] 4a.1 Derive a page's recorded URL by stripping the path extension when the extension names a Markdown type **and** the response satisfies the existing acceptable-Markdown-variant predicate. Reuse that predicate rather than restating which content types count — react.dev serves `.md` as `text/plain` while vite.dev serves `text/markdown`, so requiring a literal Markdown content type would miss the more common case.
+- [ ] 4a.2 Apply the identity rule wherever a fetched page is recorded, not only on the llms.txt path. The rule is a property of the response, so it must not depend on how the URL was discovered.
+- [ ] 4a.3 Leave the URL untouched when the response is not an acceptable Markdown variant, so a soft 404 or an HTML page served at a `.md` URL cannot fold a page onto an identity that does not serve it.
+- [ ] 4a.4 Make the identity feed deduplication: the canonical form is what the visited set is keyed on, so a `.md` URL and its canonical form collapse to one page regardless of which is seen first.
+- [ ] 4a.5 Ensure the Markdown representation wins a collision rather than whichever arrived first. Current dedup is first-wins by visited-set membership, which would keep the HTML copy on a crawl that reaches it first.
+- [ ] 4a.6 Tests: an llms.txt listing `.md` URLs records canonical identities; a site reachable both ways indexes each page once; `text/plain` at a `.md` URL still strips; an HTML response at a `.md` URL does not; a Markdown response at an extensionless URL is unchanged; and HTML-then-Markdown ends with Markdown stored.
+- [ ] 4a.7 Regression check against real indexes: vite.dev currently yields 112 pages for 68 distinct documents, and react.dev yields pages recorded only under `.md` URLs. Both should resolve to canonical identities with no duplicates.
+
 ## 5. Documentation and Validation
 
 - [ ] 5.1 Update README or architecture documentation if the early alternate discovery path materially changes the documented Markdown-optimized web scraping behavior.

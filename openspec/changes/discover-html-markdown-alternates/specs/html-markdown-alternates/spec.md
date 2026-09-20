@@ -94,6 +94,68 @@ When a Markdown alternate is accepted, the scraper SHALL treat the alternate as 
 - **THEN** the system SHALL extract those links through the Markdown pipeline
 - **AND** the system SHALL apply the normal crawl filtering rules before queueing them
 
+### Requirement: Markdown is the preferred representation of a page
+
+When both a Markdown and an HTML representation of the same page are available, the system SHALL index the Markdown one. Markdown is what the page's authors published for machine consumption; converting HTML to Markdown ourselves is a fallback for the majority of sites that offer nothing better, not an equal alternative.
+
+This preference SHALL NOT depend on which representation was encountered first. A crawl that reaches the HTML page before the Markdown one SHALL still end with the Markdown content indexed.
+
+#### Scenario: Markdown replaces an already-indexed HTML representation
+- **GIVEN** a page whose HTML representation has been processed
+- **WHEN** a Markdown representation of the same page is accepted
+- **THEN** the stored content for that page is the Markdown representation
+
+#### Scenario: Encounter order does not decide the winner
+- **GIVEN** two crawls of the same site that reach a page's HTML and Markdown representations in opposite orders
+- **WHEN** each crawl completes
+- **THEN** both have indexed the Markdown representation
+
+#### Scenario: HTML is used when no Markdown representation exists
+- **WHEN** a page offers no Markdown representation
+- **THEN** the system SHALL process its HTML through the existing pipeline
+
+### Requirement: A Markdown variant URL carries the canonical page identity
+
+A URL SHALL be recorded under its extension-stripped form when **both** of the following hold:
+
+1. the URL's path extension names a Markdown type, and
+2. the response is an acceptable Markdown variant.
+
+Both signals are required, and they answer different questions. The extension states what the author intended the URL to mean; the response states what the server actually returned. Either alone is unsafe: an extension with no matching response strips the identity of a page that merely happens to end in `.md`, and a Markdown response with no matching extension would rewrite the identity of a document that is legitimately its own resource.
+
+The rule is a property of the response, not of how the URL was discovered. It therefore holds regardless of whether the URL arrived from an llms.txt index, a discovered link, or an alternate declaration, and needs no knowledge of what else the crawl has seen or will see.
+
+A response that is not an acceptable Markdown variant SHALL leave the URL's identity unchanged, so a server that ignores the extension — answering with an HTML page or a soft error — cannot cause a page to be recorded under a URL that does not serve it.
+
+#### Scenario: An llms.txt index listing Markdown URLs
+- **GIVEN** an llms.txt whose entries name `.md` URLs
+- **WHEN** those entries are fetched and return Markdown
+- **THEN** each page is recorded under its extension-stripped URL
+- **AND** no page is recorded under a `.md` URL
+
+#### Scenario: Both representations reached in one crawl
+- **GIVEN** a site whose Markdown variants are listed in llms.txt
+- **AND** whose HTML pages are also reachable by crawling
+- **WHEN** both are encountered
+- **THEN** they resolve to a single page identity
+- **AND** the page is indexed once
+
+#### Scenario: A generic text content type still counts
+- **GIVEN** a `.md` URL served with a generic text content type rather than a Markdown one
+- **WHEN** the response is accepted as a Markdown variant
+- **THEN** the extension is stripped
+- **AND** the identity does not depend on the server naming the Markdown type exactly
+
+#### Scenario: A server that ignores the extension
+- **GIVEN** a `.md` URL whose response is an HTML page
+- **WHEN** the response is evaluated
+- **THEN** it is not an acceptable Markdown variant
+- **AND** the URL keeps its own identity rather than being folded onto a page it does not serve
+
+#### Scenario: A Markdown response at a URL without the extension
+- **GIVEN** a URL with no Markdown extension that returns Markdown
+- **THEN** its identity is unchanged
+
 ### Requirement: Ordering with llms.txt Markdown preference
 
 For queue items discovered from llms.txt, the scraper SHALL preserve the existing implicit `.md` variant preference before using HTML Markdown alternate discovery. If the implicit `.md` variant fails and the original URL response is HTML, the scraper SHALL then apply HTML Markdown alternate discovery before normal HTML processing. For queue items not discovered from llms.txt, the scraper SHALL fetch the original URL with the existing Markdown-preferred `Accept` behavior and apply HTML Markdown alternate discovery only when the response is HTML.
