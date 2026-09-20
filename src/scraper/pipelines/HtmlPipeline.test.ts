@@ -292,6 +292,54 @@ describe("HtmlPipeline", () => {
     expect(result.errors).toHaveLength(0);
   });
 
+  it("discovers links inside removed chrome and keeps that chrome out of the content", async () => {
+    // Link discovery must read the complete document, before extraction
+    // discards anything. These sibling links exist only inside a <nav>
+    // landmark, which the extractor removes, and outside <main>, which
+    // region scoping discards — so reordering the extractor ahead of link
+    // extraction would silently shrink every crawl frontier.
+    const pipeline = new HtmlPipeline(appConfig);
+    const html = `
+      <html>
+        <head><title>Routing</title></head>
+        <body>
+          <nav>
+            <a href="https://example.com/guide/install">Installation</a>
+            <a href="https://example.com/guide/config">Configuration</a>
+          </nav>
+          <main>
+            <h1>Routing</h1>
+            <p>Routes are declared in the configuration file and resolved in the order they appear.</p>
+          </main>
+        </body>
+      </html>
+    `;
+
+    const raw: RawContent = {
+      content: html,
+      mimeType: "text/html",
+      charset: "utf-8",
+      source: "http://test.example.com",
+      status: FetchStatus.SUCCESS,
+    };
+
+    const result = await pipeline.process(raw, {
+      url: "http://example.com",
+      library: "example",
+      version: "",
+      scrapeMode: ScrapeMode.Fetch,
+    });
+
+    // The crawler is still offered both sibling URLs...
+    expect(result.links).toContain("https://example.com/guide/install");
+    expect(result.links).toContain("https://example.com/guide/config");
+
+    // ...while the navigation itself stays out of the indexed content.
+    expect(result.textContent).not.toContain("Installation");
+    expect(result.textContent).not.toContain("Configuration");
+    expect(result.textContent).toContain("Routes are declared");
+  });
+
   it("should convert contentType from text/html to text/markdown", async () => {
     const pipeline = new HtmlPipeline(appConfig);
     const html = `

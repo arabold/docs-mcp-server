@@ -398,6 +398,31 @@ describe("HtmlSanitizerMiddleware", () => {
     expect($?.("body").text()).toContain("no declared main region");
   });
 
+  it("should preserve text rather than emptying a page when exclusions remove everything", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    // The caller's selector matches the only element carrying visible text.
+    // Emptying the page here would index a blank document; the extractor is
+    // expected to fall back to the pre-sanitization body instead.
+    const html = `
+      <html><body>
+        <div class="everything">
+          <h1>Installation</h1>
+          <p>Install the package with your package manager of choice, then add the plugin to your configuration file.</p>
+        </div>
+      </body></html>`;
+    const context = createMockContext(html, "http://example.com", {
+      excludeSelectors: [".everything"],
+    });
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    const $ = context.dom;
+    expect($?.("body").text().trim()).not.toBe("");
+    expect($?.("body").text()).toContain("Install the package");
+  });
+
   it("should skip processing if content type is not HTML", async () => {
     const middleware = new HtmlSanitizerMiddleware();
     const context = createMockContext("<script>alert(1)</script>");

@@ -290,10 +290,10 @@ run are visible in the workflow summary and uploaded as an artifact.
 
 ## Comparing HTML extractors (Cheerio vs. Defuddle)
 
-The HTML pipeline supports two interchangeable content extractors:
+The HTML pipeline supports two content extractors:
 
-- `cheerio` (default): the built-in `HtmlSanitizerMiddleware` with a hand-curated selector blocklist.
-- `defuddle`: [Defuddle](https://github.com/kepano/defuddle), which scores DOM nodes and extracts the main article content.
+- `cheerio` (default): the built-in `HtmlSanitizerMiddleware` with a hand-curated selector blocklist. This is the extractor the `html-content-extraction` spec describes, and the behaviour the benchmark measures against.
+- `defuddle`: [Defuddle](https://github.com/kepano/defuddle), which scores DOM nodes and extracts the main article content. Kept as an evaluation arm for the comparison below; it is not held to the extraction guarantees the default carries.
 
 Select the extractor with the `DOCS_MCP_SCRAPER_HTML_EXTRACTOR` env var (or
 `scraper.htmlExtractor` in `config.yaml`). Both produce a Cheerio DOM that flows
