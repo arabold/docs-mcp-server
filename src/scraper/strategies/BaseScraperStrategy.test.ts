@@ -1749,12 +1749,28 @@ describe("BaseScraperStrategy skipped (unprocessable) items", () => {
     strategy.processItem.mockResolvedValue({
       url: "https://example.com",
       links: [],
+      sourceContentType: "application/zip",
       status: FetchStatus.SKIPPED,
     });
 
     await expect(
       strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
-    ).rejects.toThrow(/Cannot process content type/);
+    ).rejects.toThrow(/Cannot process application\/zip/);
+  });
+
+  it("names the failure generically when the skip carried no content type", async () => {
+    // Strategies that report a skip without a type still have to fail the root
+    // legibly, rather than interpolating "undefined" into the message.
+    const strategy = new TestScraperStrategy(loadConfig());
+    strategy.processItem.mockResolvedValue({
+      url: "https://example.com",
+      links: [],
+      status: FetchStatus.SKIPPED,
+    });
+
+    await expect(
+      strategy.scrape(baseOptions(), vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).rejects.toThrow(/Cannot process unknown content type/);
   });
 });
 

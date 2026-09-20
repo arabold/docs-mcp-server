@@ -99,12 +99,11 @@ Steps 2 and 3 overlap: archive extensions also resolve to MIME types no pipeline
 - **THEN** the depth filter is not applied to them, because it governs discovered links only
 - **AND** no previously indexed page is left unrefreshed as a result of depth filtering
 
-#### Scenario: Refresh depth limit is floored by the stored pages
-- **GIVEN** a refresh whose stored scraper options are missing or unparseable, so `maxDepth` would fall back to the configured default
-- **AND** stored pages recorded at depths greater than that default
-- **WHEN** the refresh resolves its effective `maxDepth`
-- **THEN** the effective `maxDepth` is at least the greatest depth among the stored pages
-- **AND** no stored page is deeper than the limit of the refresh that processes it
+#### Scenario: A stored page deeper than the limit is still refreshed
+- **GIVEN** a refresh whose effective `maxDepth` is lower than the depth recorded for some stored page
+- **WHEN** that page is replayed from the initial queue
+- **THEN** it is processed rather than dropped, because the depth filter governs discovered links only
+- **AND** its own discovered links are still filtered against the effective `maxDepth`
 
 ### Requirement: Protocol equality is required for all scopes
 

@@ -169,17 +169,19 @@ The fetcher SHALL NOT depend on the pipeline layer. The capability predicate SHA
 
 ### Requirement: Skipped resources are neither content nor failures
 
-A resource rejected by either gate SHALL be logged at `debug` level with the resource URL and the MIME type that caused the rejection. Skipped resources SHALL NOT produce `info`, `warn`, or `error` log output, and SHALL NOT produce any `console.*` output. A skipped resource SHALL NOT produce a stored page, and SHALL NOT be recorded as a page failure.
+A resource rejected by either gate SHALL have its URL and the MIME type that caused the rejection recorded at `debug` level. Such a rejection SHALL NOT produce `info`, `warn`, or `error` log output, and SHALL NOT produce any `console.*` output. A skipped resource SHALL NOT produce a stored page, and SHALL NOT be recorded as a page failure.
+
+Skipping is routine on a documentation site, which links to images and downloads as a matter of course. Surfacing it above `debug` would train operators to ignore the level that reports real problems.
 
 #### Scenario: Debug log records the reason
 - **GIVEN** the logger level is `debug`
-- **WHEN** a resource is skipped by either gate
-- **THEN** exactly one `debug` entry is emitted naming the URL and the rejecting MIME type
+- **WHEN** a resource is rejected by either gate
+- **THEN** the URL and the rejecting MIME type appear in `debug` output
 
 #### Scenario: Higher log levels stay silent
 - **GIVEN** the logger level is `info` or higher
-- **WHEN** a resource is skipped
-- **THEN** no log entry is emitted for that skip
+- **WHEN** a resource is rejected by either gate
+- **THEN** no log entry is emitted for that rejection
 
 #### Scenario: Skipped resource produces no page
 - **WHEN** a resource is skipped

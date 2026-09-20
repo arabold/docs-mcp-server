@@ -421,8 +421,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             // and a refresh replays stored pages at their stored depth — neither
             // should abort a scrape whose real root resolved fine.
             if (item.depth === 0 && !item.fromLlmsTxt && item.pageId === undefined) {
+              // Name the type: the user picked this URL, and "some content type"
+              // does not tell them whether they mistyped it or asked for a format
+              // this server cannot read.
+              const contentType = result.sourceContentType ?? "unknown content type";
               throw new ScraperError(
-                `Cannot process content type of ${item.url}: no pipeline can read it`,
+                `Cannot process ${contentType} at ${item.url}: no pipeline can read it`,
                 false,
               );
             }

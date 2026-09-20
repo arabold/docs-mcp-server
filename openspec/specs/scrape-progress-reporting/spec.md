@@ -181,7 +181,8 @@ Rows written before the content-producing counter existed SHALL carry a null val
 #### Scenario: Re-indexing populates the historical row
 - **GIVEN** a library version whose stored job record predates this change
 - **WHEN** the version is scraped or refreshed again
-- **THEN** the record is written with all four counters populated
+- **THEN** the record is written with its persisted counters populated
+- **AND** the content-producing counter no longer reads as unknown
 
 ### Requirement: The page limit bounds indexed pages
 
@@ -251,7 +252,7 @@ Each event SHALL name its outcome explicitly. Consumers SHALL NOT infer the outc
 
 When a resource is fetched successfully, its pipeline runs without error, and the result contains no extractable content, the system SHALL record the page as existing with no content. Any previously stored content for that page SHALL be replaced, and the response's `etag` and `last_modified` SHALL be stored, because the response is an accurate statement that the page is empty.
 
-When the pipeline reports errors and produces no content, the system SHALL leave any previously stored content for that page unchanged and SHALL NOT store the response's `etag`. Withholding the validator ensures the next refresh re-fetches the resource unconditionally rather than receiving `304 Not Modified` and never retrying, which would make a transient extraction failure permanent.
+When the pipeline reports errors and produces no content, the system SHALL leave any previously stored content for that page unchanged and SHALL NOT store the response's `etag`. The page therefore keeps the validator from its last successful extraction, and the next refresh is conditional on that one rather than on the failed response's. Because the resource has moved on from the validator being sent, the server answers with content instead of `304 Not Modified`, and the extraction is retried. Storing the failed response's validator would instead earn a `304` and never retry, making a transient extraction failure permanent.
 
 #### Scenario: Page that became genuinely empty
 - **GIVEN** a stored page with previously indexed content
@@ -271,7 +272,8 @@ When the pipeline reports errors and produces no content, the system SHALL leave
 #### Scenario: A withheld etag causes a retry on the next refresh
 - **GIVEN** a page whose `etag` was withheld after an extraction failure
 - **WHEN** the next refresh runs
-- **THEN** the resource is fetched without a conditional request
+- **THEN** the request carries the validator from the last successful extraction, not the failed response's
+- **AND** the server answers with content rather than `304 Not Modified`
 - **AND** a successful extraction restores its content
 
 #### Scenario: An empty page persists across refreshes cheaply

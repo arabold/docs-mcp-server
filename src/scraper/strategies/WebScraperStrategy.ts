@@ -428,6 +428,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           url: effectiveSource,
           links: [],
           queueItems: llmsTxtQueueItems,
+          // Carried so a fatal skip at the requested root can name the type that
+          // caused it. Null for 304 and 404, whose MIME type describes nothing.
+          sourceContentType: rawContent.mimeType ?? null,
           status: rawContent.status,
         };
       }
@@ -466,6 +469,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           url: effectiveSource,
           links: [],
           queueItems: llmsTxtQueueItems,
+          sourceContentType: rawContent.mimeType ?? null,
           // Skipped, not empty: nothing read the body, so we cannot claim the
           // page has no content — and a refresh must not erase what is stored.
           status: FetchStatus.SKIPPED,

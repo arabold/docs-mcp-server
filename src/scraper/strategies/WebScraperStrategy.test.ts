@@ -1347,9 +1347,11 @@ describe("WebScraperStrategy", () => {
 
       // The start URL itself being unreadable fails the job, matching the
       // existing rule for a 404 root: completing "successfully" with zero
-      // documents tells the user nothing about what went wrong.
+      // documents tells the user nothing about what went wrong. The message
+      // names the served type, so the user can tell a mistyped URL from a
+      // format this server cannot read.
       await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
-        /Cannot process content type/,
+        /Cannot process image\/png/,
       );
 
       const docCall = progressCallback.mock.calls.find((call) => call[0].result);

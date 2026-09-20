@@ -237,7 +237,9 @@ describe("Unprocessable content gates E2E", () => {
 
     expect(job?.status).toBe(PipelineJobStatus.FAILED);
     const message = job?.error?.message ?? job?.errorMessage ?? "";
-    expect(message).toMatch(/content type/i);
+    // The type itself, not just the words "content type" — a user who mistyped a
+    // URL needs to see what was actually served.
+    expect(message).toContain("application/octet-stream");
     expect(message).toContain(`${TEST_BASE_URL}/`);
   }, 30000);
 
