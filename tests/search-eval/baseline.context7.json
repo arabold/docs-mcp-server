@@ -1,8 +1,8 @@
 {
-  "recordedAt": "2026-05-18T23:46:53.743Z",
+  "recordedAt": "2026-09-20T17:26:34.864Z",
   "config": {
     "provider": "context7",
-    "embeddingModel": "text-embedding-3-small",
+    "embeddingModel": "openai:text-embedding-3-small",
     "topK": 5,
     "judge": "openai:gpt-5.4-mini",
     "datasetFile": "tests/search-eval/dataset.yaml",
@@ -14,12 +14,12 @@
       "subsequentSiblingsLimit": 2,
       "maxChunkDistance": 3
     },
-    "timestamp": "2026-05-18T23:46:53.679Z"
+    "timestamp": "2026-09-20T17:26:34.844Z"
   },
   "summary": {
     "config": {
       "provider": "context7",
-      "embeddingModel": "text-embedding-3-small",
+      "embeddingModel": "openai:text-embedding-3-small",
       "topK": 5,
       "judge": "openai:gpt-5.4-mini",
       "datasetFile": "tests/search-eval/dataset.yaml",
@@ -31,51 +31,51 @@
         "subsequentSiblingsLimit": 2,
         "maxChunkDistance": 3
       },
-      "timestamp": "2026-05-18T23:46:53.679Z"
+      "timestamp": "2026-09-20T17:26:34.844Z"
     },
     "ir": {
-      "mrr": 0.7330508474576272,
-      "recall_at_3": 0.7090395480225989,
-      "recall_at_5": 0.7259887005649718,
-      "recall_at_10": 0.7259887005649718,
-      "ndcg_at_5": 0.7044137796617245,
-      "ndcg_at_10": 0.7044137796617245,
-      "hit_at_1": 0.6440677966101694,
+      "mrr": 0.6949152542372883,
+      "recall_at_3": 0.6949152542372882,
+      "recall_at_5": 0.7288135593220338,
+      "recall_at_10": 0.7288135593220338,
+      "ndcg_at_5": 0.6734207127110649,
+      "ndcg_at_10": 0.6734207127110649,
+      "hit_at_1": 0.559322033898305,
       "hit_at_3": 0.8305084745762712,
-      "hit_at_5": 0.847457627118644
+      "hit_at_5": 0.864406779661017
     },
     "perIntent": [
       {
         "intent": "api-lookup",
         "n": 18,
-        "mrr": 0.8240740740740741,
-        "recall_at_5": 0.8333333333333334,
-        "ndcg_at_5": 0.8092756025461355,
-        "hit_at_3": 0.9444444444444444
+        "mrr": 0.7083333333333334,
+        "recall_at_5": 0.7777777777777778,
+        "ndcg_at_5": 0.7048308520249207,
+        "hit_at_3": 0.8333333333333334
       },
       {
         "intent": "conceptual",
         "n": 15,
-        "mrr": 0.7666666666666667,
-        "recall_at_5": 0.7333333333333333,
-        "ndcg_at_5": 0.7150234453108847,
-        "hit_at_3": 0.8666666666666667
+        "mrr": 0.788888888888889,
+        "recall_at_5": 0.7777777777777778,
+        "ndcg_at_5": 0.7217641219478288,
+        "hit_at_3": 0.9333333333333333
       },
       {
         "intent": "comparison",
         "n": 12,
-        "mrr": 0.5625,
-        "recall_at_5": 0.47222222222222215,
-        "ndcg_at_5": 0.5153802839273666,
-        "hit_at_3": 0.5833333333333334
+        "mrr": 0.6944444444444445,
+        "recall_at_5": 0.5138888888888888,
+        "ndcg_at_5": 0.613176423664149,
+        "hit_at_3": 0.75
       },
       {
         "intent": "troubleshooting",
         "n": 14,
-        "mrr": 0.7261904761904762,
+        "mrr": 0.5773809523809524,
         "recall_at_5": 0.7976190476190476,
-        "ndcg_at_5": 0.7202526476728315,
-        "hit_at_3": 0.8571428571428571
+        "ndcg_at_5": 0.6328777000226457,
+        "hit_at_3": 0.7857142857142857
       }
     ],
     "structuralPassRate": {
@@ -86,27 +86,246 @@
     "llmJudged": [
       {
         "metric": "chunk_coherence",
-        "mean": 4.796610169491525,
+        "mean": 4.830508474576271,
         "n": 59
       },
       {
         "metric": "content_faithfulness",
-        "mean": 4.237288135593221,
+        "mean": 4.067796610169491,
         "n": 59
       },
       {
         "metric": "answerability",
-        "mean": 4.491525423728813,
+        "mean": 4.52542372881356,
         "n": 59
       }
     ],
     "crossJudge": [],
     "regression": {
-      "hasBaseline": false,
+      "hasBaseline": true,
       "incompatibilities": [],
-      "regressions": [],
-      "improvements": [],
-      "stable": []
+      "regressions": [
+        {
+          "metric": "mrr",
+          "baseline": 0.7330508474576272,
+          "current": 0.6949152542372883,
+          "relativeDelta": -0.05202312138728309,
+          "status": "regressed",
+          "scope": "headline"
+        },
+        {
+          "metric": "hit_at_1",
+          "baseline": 0.6440677966101694,
+          "current": 0.559322033898305,
+          "relativeDelta": -0.13157894736842105,
+          "status": "regressed",
+          "scope": "headline"
+        },
+        {
+          "metric": "mrr",
+          "baseline": 0.8240740740740741,
+          "current": 0.7083333333333334,
+          "relativeDelta": -0.14044943820224715,
+          "status": "regressed",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.8092756025461355,
+          "current": 0.7048308520249207,
+          "relativeDelta": -0.1290595567104849,
+          "status": "regressed",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.9444444444444444,
+          "current": 0.8333333333333334,
+          "relativeDelta": -0.11764705882352935,
+          "status": "regressed",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "mrr",
+          "baseline": 0.7261904761904762,
+          "current": 0.5773809523809524,
+          "relativeDelta": -0.20491803278688514,
+          "status": "regressed",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.7202526476728315,
+          "current": 0.6328777000226457,
+          "relativeDelta": -0.1213115257993125,
+          "status": "regressed",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        }
+      ],
+      "improvements": [
+        {
+          "metric": "mrr",
+          "baseline": 0.5625,
+          "current": 0.6944444444444445,
+          "relativeDelta": 0.23456790123456805,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.5153802839273666,
+          "current": 0.613176423664149,
+          "relativeDelta": 0.18975529873115024,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.5833333333333334,
+          "current": 0.75,
+          "relativeDelta": 0.28571428571428564,
+          "status": "improved",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        }
+      ],
+      "stable": [
+        {
+          "metric": "recall_at_3",
+          "baseline": 0.7090395480225989,
+          "current": 0.6949152542372882,
+          "relativeDelta": -0.01992031872509965,
+          "status": "stable",
+          "scope": "headline"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.7259887005649718,
+          "current": 0.7288135593220338,
+          "relativeDelta": 0.0038910505836574753,
+          "status": "stable",
+          "scope": "headline"
+        },
+        {
+          "metric": "recall_at_10",
+          "baseline": 0.7259887005649718,
+          "current": 0.7288135593220338,
+          "relativeDelta": 0.0038910505836574753,
+          "status": "stable",
+          "scope": "headline"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.7044137796617245,
+          "current": 0.6734207127110649,
+          "relativeDelta": -0.0439983825494487,
+          "status": "stable",
+          "scope": "headline"
+        },
+        {
+          "metric": "ndcg_at_10",
+          "baseline": 0.7044137796617245,
+          "current": 0.6734207127110649,
+          "relativeDelta": -0.0439983825494487,
+          "status": "stable",
+          "scope": "headline"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.8305084745762712,
+          "current": 0.8305084745762712,
+          "relativeDelta": 0,
+          "status": "stable",
+          "scope": "headline"
+        },
+        {
+          "metric": "hit_at_5",
+          "baseline": 0.847457627118644,
+          "current": 0.864406779661017,
+          "relativeDelta": 0.02000000000000008,
+          "status": "stable",
+          "scope": "headline"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.8333333333333334,
+          "current": 0.7777777777777778,
+          "relativeDelta": -0.0666666666666667,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "api-lookup"
+        },
+        {
+          "metric": "mrr",
+          "baseline": 0.7666666666666667,
+          "current": 0.788888888888889,
+          "relativeDelta": 0.02898550724637685,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.7333333333333333,
+          "current": 0.7777777777777778,
+          "relativeDelta": 0.0606060606060607,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "ndcg_at_5",
+          "baseline": 0.7150234453108847,
+          "current": 0.7217641219478288,
+          "relativeDelta": 0.009427210647635945,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.8666666666666667,
+          "current": 0.9333333333333333,
+          "relativeDelta": 0.0769230769230769,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "conceptual"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.47222222222222215,
+          "current": 0.5138888888888888,
+          "relativeDelta": 0.0882352941176471,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "comparison"
+        },
+        {
+          "metric": "recall_at_5",
+          "baseline": 0.7976190476190476,
+          "current": 0.7976190476190476,
+          "relativeDelta": 0,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        },
+        {
+          "metric": "hit_at_3",
+          "baseline": 0.8571428571428571,
+          "current": 0.7857142857142857,
+          "relativeDelta": -0.0833333333333333,
+          "status": "stable",
+          "scope": "per-intent",
+          "scopeKey": "troubleshooting"
+        }
+      ]
     }
   }
 }
