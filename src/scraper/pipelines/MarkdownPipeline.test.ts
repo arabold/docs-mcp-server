@@ -539,5 +539,30 @@ Final paragraph.`;
       const minLevel = Math.min(...result.chunks!.map((chunk) => chunk.section.level));
       expect(minLevel).toBeGreaterThanOrEqual(1); // Should not degrade to 0
     });
+
+    it("indexes the real frontmatter text, not the literal string 'undefined'", async () => {
+      // Regression for #503: the metadata middleware parses the content before the
+      // splitter does, and gray-matter's cache returns a copy without its raw `matter`
+      // property on that second parse.
+      const pipeline = new MarkdownPipeline(appConfig);
+      const raw: RawContent = {
+        content: `---\nurl: /guide/ssr.md\n---\n# Server-Side Rendering (SSR)\n\nSome body text.`,
+        mimeType: "text/markdown",
+        charset: "utf-8",
+        source: "https://vite.dev/guide/ssr.md",
+        status: FetchStatus.SUCCESS,
+      };
+
+      const result = await pipeline.process(raw, {
+        url: "https://vite.dev/guide/ssr.md",
+        library: "vite",
+        version: "",
+        scrapeMode: ScrapeMode.Fetch,
+      });
+
+      const allContent = result.chunks?.map((chunk) => chunk.content).join("\n") ?? "";
+      expect(allContent).toContain("url: /guide/ssr.md");
+      expect(allContent).not.toContain("undefined");
+    });
   });
 });
