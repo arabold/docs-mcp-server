@@ -12,6 +12,7 @@
  */
 
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
+import { splitModelSpec } from "../../src/store/embeddings/EmbeddingConfig";
 import { normalizeProviderName } from "./providers";
 import {
   DEFAULT_TOLERANCES,
@@ -64,6 +65,19 @@ const CONFIG_KEYS_REQUIRING_MATCH = [
   "topK",
 ] as const;
 
+/**
+ * Renders an embedding model spec in canonical `provider:model` form.
+ *
+ * Undefined passes through so a baseline recorded before the field existed is
+ * treated as "not stated" rather than as a mismatch, matching how the other
+ * config keys handle a missing value.
+ */
+function normalizeModelSpec(spec: string | undefined): string | undefined {
+  if (spec === undefined) return undefined;
+  const { provider, model } = splitModelSpec(spec);
+  return `${provider}:${model}`;
+}
+
 function relativeDelta(baseline: number, current: number): number {
   if (baseline === 0) {
     if (current === 0) return 0;
@@ -112,6 +126,17 @@ export function compare(
     if (key === "provider") {
       b = normalizeProviderName(b as string | undefined);
       c = normalizeProviderName(c as string | undefined);
+    }
+    // Special case: an embedding model spec names the same model whether or not
+    // it carries its provider prefix, and the prefix became canonical once the
+    // resolver started reporting it. Comparing raw strings therefore reads
+    // "text-embedding-3-small" and "openai:text-embedding-3-small" as a model
+    // change and disables the regression gate for the life of the baseline.
+    // Resolve both through the app's own parser so this notion of "same model"
+    // cannot drift from the one the server uses.
+    if (key === "embeddingModel") {
+      b = normalizeModelSpec(b as string | undefined);
+      c = normalizeModelSpec(c as string | undefined);
     }
     if (b !== undefined && c !== undefined && b !== c) {
       incompatibilities.push(`${key}: baseline=${JSON.stringify(b)} current=${JSON.stringify(c)}`);
