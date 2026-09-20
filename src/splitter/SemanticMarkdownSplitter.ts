@@ -118,13 +118,9 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
       // Check for frontmatter
       const file = matter(markdown);
       if (Object.keys(file.data).length > 0) {
-        // Reconstruct the frontmatter block
-        // file.matter contains the raw content between the delimiters
-        const rawFrontmatter = `---\n${file.matter}\n---`;
-
         frontmatterChunk = {
           types: ["frontmatter"],
-          content: rawFrontmatter,
+          content: SemanticMarkdownSplitter.extractRawFrontmatter(markdown, file),
           section: {
             level: 0,
             path: [],
@@ -151,6 +147,35 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     }
 
     return chunks;
+  }
+
+  /**
+   * Recovers the raw frontmatter block, including its delimiters, from the original markdown.
+   *
+   * gray-matter exposes the raw block as `file.matter`, but that property is non-enumerable
+   * and the library caches parsed results: a repeated parse of the same string returns a
+   * shallow `Object.assign({}, cached)` copy, which drops it. Our pipeline parses the same
+   * content more than once (see MarkdownMetadataExtractorMiddleware), so `file.matter` is
+   * `undefined` here in practice. `file.content` is the input with the frontmatter block
+   * stripped from the front, so the block is recovered by slicing that suffix off instead,
+   * which also preserves the author's original formatting and YAML comments.
+   *
+   * @param markdown The original markdown passed to gray-matter.
+   * @param file The parsed gray-matter result for that markdown.
+   * @returns The frontmatter block with delimiters, e.g. `---\ntitle: Quick Start\n---`.
+   */
+  private static extractRawFrontmatter(
+    markdown: string,
+    file: matter.GrayMatterFile<string>,
+  ): string {
+    if (markdown.endsWith(file.content)) {
+      const block = markdown.slice(0, markdown.length - file.content.length).trimEnd();
+      if (block.length > 0) {
+        return block;
+      }
+    }
+    // Defensive fallback: re-serialize the parsed data if the content is not a suffix.
+    return matter.stringify("", file.data).trimEnd();
   }
 
   /**

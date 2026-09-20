@@ -1,3 +1,4 @@
+import matter from "gray-matter";
 import { describe, expect, it } from "vitest";
 import { SemanticMarkdownSplitter } from "./SemanticMarkdownSplitter";
 
@@ -500,6 +501,43 @@ tags: [one, two]
 
     expect(result[1].types).toEqual(["heading"]);
     expect(result[1].content).toBe("# Main Content");
+  });
+
+  it("should extract the raw frontmatter even when the content was parsed before", async () => {
+    // Regression for #503: gray-matter caches parsed results and returns a shallow copy
+    // for repeated parses, which drops the non-enumerable `matter` property. The pipeline
+    // parses the same content in MarkdownMetadataExtractorMiddleware before it reaches the
+    // splitter, so the cache is always warm here.
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+url: /guide/ssr.md
+title: Server-Side Rendering
+---
+# Server-Side Rendering (SSR)`;
+
+    matter(markdown); // warm gray-matter's cache, as the middleware does
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result[0].types).toEqual(["frontmatter"]);
+    expect(result[0].content).toBe(
+      "---\nurl: /guide/ssr.md\ntitle: Server-Side Rendering\n---",
+    );
+    expect(result[0].content).not.toContain("undefined");
+  });
+
+  it("should preserve the original frontmatter formatting and comments", async () => {
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+# A YAML comment
+title:   Spaced Out
+---
+# Main Content`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result[0].types).toEqual(["frontmatter"]);
+    expect(result[0].content).toBe("---\n# A YAML comment\ntitle:   Spaced Out\n---");
   });
 
   it("should ignore malformed frontmatter and treat it as text", async () => {
