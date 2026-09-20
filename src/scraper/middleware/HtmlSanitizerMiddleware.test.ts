@@ -269,8 +269,10 @@ describe("HtmlSanitizerMiddleware", () => {
         <ol itemscope itemtype="https://schema.org/BreadcrumbList">
           <li>Crumb</li>
         </ol>
-        <span class="sr-only">Search</span>
-        <main><h1>Page Title</h1></main>
+        <main>
+          <h1>Page Title</h1>
+          <span class="sr-only">Search</span>
+        </main>
       </body></html>`;
     const context = createMockContext(html);
     const next = vi.fn().mockResolvedValue(undefined);
@@ -282,6 +284,7 @@ describe("HtmlSanitizerMiddleware", () => {
     expect(context.dom("a.skip-link").length).toBe(0);
     expect(context.dom('[aria-label="breadcrumb"]').length).toBe(0);
     expect(context.dom('[itemtype*="BreadcrumbList"]').length).toBe(0);
+    // The sr-only rule is scoped to <a>, so an icon-button's label survives.
     expect(context.dom("span.sr-only").length).toBe(1);
     expect(context.dom("h1").text()).toBe("Page Title");
   });
@@ -396,6 +399,32 @@ describe("HtmlSanitizerMiddleware", () => {
     const $ = context.dom;
     expect($?.("div.doc").length).toBe(1);
     expect($?.("body").text()).toContain("no declared main region");
+  });
+
+  it("should scope a pretty-printed page whose indentation outnumbers its text", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    // Generated markup is often deeply indented, and removing a chrome element
+    // leaves its surrounding whitespace node behind — outside <main>. Counting
+    // that raw whitespace as content deflates the region's share and can push
+    // a dominant <main> under the floor, so the banner survives.
+    const gap = "\n          ".repeat(20);
+    const html = `
+      <html><body>
+        <div class="aside">${gap}
+          <a class="sponsor" href="https://example.com/sponsor">Sponsor</a>${gap}
+        </div>${gap}
+        <main>
+          <h1>Configuration reference</h1>
+        </main>${gap}
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const $ = context.dom;
+    expect($?.("body").text()).not.toContain("Sponsor");
+    expect($?.("h1").text()).toBe("Configuration reference");
   });
 
   it("should preserve text rather than emptying a page when exclusions remove everything", async () => {

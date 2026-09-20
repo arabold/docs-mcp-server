@@ -14,6 +14,20 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 const MAIN_CONTENT_MIN_TEXT_RATIO = 0.5;
 
 /**
+ * Length of an element's text as a reader would see it, with runs of
+ * whitespace collapsed to a single space.
+ *
+ * Cheerio's `.text()` returns raw text nodes, so on pretty-printed markup the
+ * indentation between tags counts as content. That matters for the
+ * main-content ratio: removing a chrome element leaves its surrounding
+ * whitespace node behind, outside the content region, which deflates the
+ * region's measured share and can push a dominant `<main>` below the floor.
+ */
+function visibleTextLength(text: string): number {
+  return text.replace(/\s+/g, " ").trim().length;
+}
+
+/**
  * Options for HtmlSanitizerMiddleware.
  */
 export interface HtmlSanitizerOptions {
@@ -211,7 +225,7 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
     candidates.each((_, element) => {
       const tagName = $(element).prop("tagName")?.toLowerCase();
       if (tagName === "html" || tagName === "body") return;
-      const length = $(element).text().trim().length;
+      const length = visibleTextLength($(element).text());
       if (length > bestLength) {
         bestLength = length;
         best = element;
@@ -219,7 +233,7 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
     });
     if (!best || bestLength === 0) return;
 
-    const bodyLength = $("body").text().trim().length;
+    const bodyLength = visibleTextLength($("body").text());
     if (bodyLength === 0) return;
 
     const ratio = bestLength / bodyLength;

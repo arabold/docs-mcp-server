@@ -57,6 +57,8 @@ Measured across 20 documentation sites (vite, mdn, react, typescript, rust, vue,
 
 The distance between the observed minimum (98.2%) and the floor (0.5) is the safety margin. The floor is not tuned to sit just under the observed data; it is set where a page would have to be structurally unusual to fall below it, because the cost of scoping wrongly (silent content loss) far exceeds the cost of not scoping (chrome in a chunk, the status quo).
 
+Both sides of the ratio are measured on *normalized* text, with runs of whitespace collapsed. Cheerio's `.text()` returns raw text nodes, so on pretty-printed markup the indentation between tags counts as content — and removing a chrome element leaves its surrounding whitespace node behind, outside the region. Counting that raw deflates the region's share and can push a dominant `<main>` under the floor, silently skipping the pass. Verified: on the 20-site corpus the two measures produce byte-identical output (those pages are server-rendered and dense enough that the raw ratio already cleared the floor), so this matters only for generated, heavily-indented markup.
+
 *Alternative considered:* no floor. Rejected — the whole risk of this mechanism is a page that mislabels its region, and without a floor that page loses its content silently.
 
 ### 4. Scoping runs after selector removal, not before
