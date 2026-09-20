@@ -291,7 +291,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add signal
   ): Promise<QueueItem[]> {
-    const maxPages = options.maxPages ?? this.config.scraper.maxPages;
     let batchAbortError: FailureThresholdExceededError | null = null;
 
     const ensureFailureRateWithinThreshold = (): void => {
