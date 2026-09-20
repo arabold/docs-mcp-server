@@ -105,7 +105,7 @@ Transform content through ordered middleware chains within pipelines:
 - **DOM Parsing**: Converts the raw HTML string into a manipulable DOM object using Cheerio
 - **Metadata Extraction**: Extracts the document title from `<title>` or `<h1>` tags in the full DOM
 - **Link Discovery**: Gathers all links from the complete page for the crawler to potentially follow
-- **Content Sanitization**: Removes large, irrelevant sections like navigation, footers, ads, and boilerplate
+- **Content Sanitization**: Removes large, irrelevant sections like navigation, footers, ads, and boilerplate, then narrows to the page's declared main-content region (`<main>` or `role="main"`) when that region holds most of the remaining text — this catches site-specific promo banners and sponsor blocks that no selector list can enumerate
 - **URL Normalization**: Cleans the _remaining_ content by converting relative image/link URLs to absolute ones and removing non-functional links (anchors, `javascript:`, etc.) while preserving their text content
 - **Markdown Conversion**: Converts the final, cleaned, and normalized HTML into Markdown format
 

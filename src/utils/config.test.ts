@@ -569,6 +569,42 @@ describe("Auto-generated Environment Variable Overrides", () => {
     });
   });
 
+  it("resets an unrecognised htmlExtractor in the config file to the default", () => {
+    // A file-borne value that fails schema validation is not fatal: the loader
+    // warns and rebuilds from defaults, so a typo cannot select an
+    // unrecognised extractor.
+    const configPath = path.join(tmpDir, "bad-extractor.yaml");
+    fs.writeFileSync(configPath, "scraper:\n  htmlExtractor: nonsense\n");
+
+    const config = loadConfig({}, { configPath });
+
+    expect(config.scraper.htmlExtractor).toBe("cheerio");
+  });
+
+  it("rejects an unrecognised htmlExtractor supplied through the environment", () => {
+    // Environment overrides are reapplied when the loader falls back, so an
+    // invalid one fails loading outright rather than resetting to the default.
+    process.env.DOCS_MCP_SCRAPER_HTML_EXTRACTOR = "nonsense";
+
+    expect(() =>
+      loadConfig({}, { configPath: path.join(tmpDir, "env-extractor.yaml") }),
+    ).toThrow();
+  });
+
+  it("accepts the supported htmlExtractor values", () => {
+    process.env.DOCS_MCP_SCRAPER_HTML_EXTRACTOR = "defuddle";
+    expect(
+      loadConfig({}, { configPath: path.join(tmpDir, "defuddle.yaml") }).scraper
+        .htmlExtractor,
+    ).toBe("defuddle");
+
+    process.env.DOCS_MCP_SCRAPER_HTML_EXTRACTOR = "cheerio";
+    expect(
+      loadConfig({}, { configPath: path.join(tmpDir, "cheerio.yaml") }).scraper
+        .htmlExtractor,
+    ).toBe("cheerio");
+  });
+
   it("rejects vectorDimension of 0 or negative values", () => {
     // vectorDimension = 0 should fail Zod .min(1) validation
     process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "0";
