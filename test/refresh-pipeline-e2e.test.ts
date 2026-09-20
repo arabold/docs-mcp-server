@@ -62,6 +62,12 @@ describe("Refresh Pipeline E2E Tests", () => {
 
     // Clear any previous nock mocks
     nock.cleanAll();
+
+    // Answer the llms.txt probe the way a site without one does. The scraper
+    // probes for llms.txt before crawling; left unmocked those requests escape
+    // to the real network, where the unresolvable test host costs three retries
+    // with backoff — about 7 seconds per scrape job, spent waiting on DNS.
+    nock(TEST_BASE_URL).persist().get(/llms\.txt$/).reply(404);
   });
 
   afterEach(async () => {
@@ -798,6 +804,10 @@ describe("Refresh Pipeline E2E Tests", () => {
     });
 
     it("scrapes allowlisted hosts and rejects non-allowlisted hosts end-to-end", async () => {
+      // Same llms.txt probe shortcut as the outer beforeEach, for this group's
+      // own host. The blocked host deliberately gets no such mock: its only
+      // interceptor is the one below, which must stay unconsumed.
+      nock(ALLOWED_BASE).persist().get(/llms\.txt$/).reply(404);
       nock(ALLOWED_BASE)
         .get("/")
         .reply(200, "<html><body><h1>Allowed</h1></body></html>", {
