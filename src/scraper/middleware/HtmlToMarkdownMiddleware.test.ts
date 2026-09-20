@@ -289,7 +289,7 @@ describe("HtmlToMarkdownMiddleware", () => {
     expect(context.errors).toHaveLength(0);
   });
 
-  it("should handle errors during Turndown conversion", async () => {
+  it("should discard the unconverted HTML when Turndown conversion fails", async () => {
     const middleware = new HtmlToMarkdownMiddleware();
     const html = "<html><body><p>Content</p></body></html>";
     const context = createMockContext(html);
@@ -303,15 +303,17 @@ describe("HtmlToMarkdownMiddleware", () => {
         throw new Error(errorMsg);
       });
 
-    await middleware.process(context, next);
+    try {
+      await middleware.process(context, next);
+    } finally {
+      turndownSpy.mockRestore();
+    }
 
     expect(next).toHaveBeenCalledOnce(); // Should still call next
-    expect(context.content).toBe(html); // Content should remain original HTML
+    // Keeping the markup would index HTML as if it were prose.
+    expect(context.content).toBe("");
     expect(context.errors).toHaveLength(1);
     expect(context.errors[0].message).toContain(errorMsg);
-
-    turndownSpy.mockRestore();
-    // No close needed
   });
 
   it("should apply custom anchor rule to remove empty or invalid links", async () => {
@@ -451,6 +453,26 @@ Mixed: [Another Valid](http://another.com) and bad one.`;
     expect(next).toHaveBeenCalledOnce();
     expect(context.content).toContain("line one\nline two\nline three");
     expect(context.errors).toHaveLength(0);
+  });
+
+  it("should convert code blocks containing element names the DOM cannot recreate", async () => {
+    const middleware = new HtmlToMarkdownMiddleware();
+    // Generators that fail to escape `<` in their output leave tags like
+    // `<lt;200 cores/socket>` behind. Browsers park those in the tree as
+    // unknown elements, but their names are invalid for `createElement`.
+    const html = `
+      <html><body>
+        <pre>One <lt;200 cores/socket>gt;200 cores</pre>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(context.errors).toHaveLength(0);
+    expect(context.contentType).toBe("text/markdown");
+    expect(context.content).toContain("200 cores");
   });
 
   it("should still respect existing newlines / <br> in code blocks", async () => {
