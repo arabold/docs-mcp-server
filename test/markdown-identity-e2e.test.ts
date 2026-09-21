@@ -286,4 +286,71 @@ describe("Markdown variant identity E2E", () => {
     const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "text", 10);
     expect(results.some((r) => r.content?.includes("Updated text"))).toBe(true);
   }, 30000);
+
+  it("collapses spellings that differ only by a trailing slash or fragment", async () => {
+    // The residual duplicate classes after `.md` identity alone: an llms.txt
+    // entry reaching `/config.md` while a crawl reaches `/config/` and an
+    // in-page anchor reaches `/config/#opts`. All three name one page.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Config](${TEST_BASE_URL}/config.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(
+        200,
+        `<html><body><h1>Home</h1>` +
+          `<a href="${TEST_BASE_URL}/config/">Config</a>` +
+          `<a href="${TEST_BASE_URL}/config/#opts">Options</a>` +
+          `</body></html>`,
+        { "Content-Type": "text/html" },
+      )
+      .get("/config.md")
+      .reply(200, "# Config\n\nConfiguration reference.", {
+        "Content-Type": "text/markdown",
+      })
+      .get("/config/")
+      .reply(200, "<html><body><h1>Config</h1><p>HTML copy.</p></body></html>", {
+        "Content-Type": "text/html",
+      });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    const urls = await storedUrls();
+    const config = urls.filter((u) => u.includes("config"));
+    expect(config).toEqual([`${TEST_BASE_URL}/config`]);
+  }, 30000);
+
+  it("leaves hash-routed URLs alone", async () => {
+    // With preserveHashes the fragment names the route, so `/docs/#/a` and
+    // `/docs/#/b` are different pages and neither slash nor fragment may be
+    // trimmed.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(
+        200,
+        `<html><body><h1>App</h1>` +
+          `<a href="${TEST_BASE_URL}/#/alpha">Alpha</a>` +
+          `<a href="${TEST_BASE_URL}/#/beta">Beta</a>` +
+          `</body></html>`,
+        { "Content-Type": "text/html" },
+      )
+      .get("/")
+      .times(2)
+      .reply(
+        200,
+        "<html><body><h1>Route</h1><p>Route content here.</p></body></html>",
+        { "Content-Type": "text/html" },
+      );
+
+    expect((await runScrape({ preserveHashes: true }))?.status).toBe(
+      PipelineJobStatus.COMPLETED,
+    );
+
+    const urls = await storedUrls();
+    expect(urls).toContain(`${TEST_BASE_URL}/#/alpha`);
+    expect(urls).toContain(`${TEST_BASE_URL}/#/beta`);
+  }, 30000);
 });

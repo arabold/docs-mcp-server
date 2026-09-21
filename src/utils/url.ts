@@ -2,7 +2,6 @@ import psl from "psl";
 import { InvalidUrlError } from "./errors";
 
 interface UrlNormalizerOptions {
-  ignoreCase?: boolean;
   removeHash?: boolean;
   removeTrailingSlash?: boolean;
   removeQuery?: boolean;
@@ -10,7 +9,6 @@ interface UrlNormalizerOptions {
 }
 
 const defaultNormalizerOptions: UrlNormalizerOptions = {
-  ignoreCase: true,
   removeHash: true,
   removeTrailingSlash: true,
   removeQuery: false,
@@ -59,14 +57,12 @@ export function normalizeUrl(
       normalized.hash = preservedHash;
     }
 
-    let result = normalized.href;
-
-    // Apply case normalization if configured
-    if (finalOptions.ignoreCase) {
-      result = result.toLowerCase();
-    }
-
-    return result;
+    // Case is deliberately left alone. A URL path, query and fragment are
+    // case-sensitive, so folding them can merge two different documents into
+    // one — and since this value is the crawl's dedup key, the second one is
+    // then never fetched. Servers that do serve paths case-insensitively will
+    // index a page twice instead, which is the failure that leaves evidence.
+    return normalized.href;
   } catch {
     return url; // Return original URL if parsing fails
   }

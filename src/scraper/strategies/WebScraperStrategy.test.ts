@@ -1086,7 +1086,8 @@ describe("WebScraperStrategy", () => {
     const reportedUrls = callsWithDocs.map((call) => call[0].result?.url);
     expect(reportedUrls).toEqual(
       expect.arrayContaining([
-        "https://example.com",
+        // A bare origin is stored with its canonical "/" path.
+        "https://example.com/",
         "https://example.com/page1",
         "https://example.com/page2",
       ]),
@@ -1325,8 +1326,9 @@ describe("WebScraperStrategy", () => {
         "https://example.com/docs/guide",
         expect.anything(),
       );
+      // Stored without the trailing slash, so `/docs/` and `/docs` are one page.
       const startDoc = progressCallback.mock.calls.find(
-        (call) => call[0].result?.url === testUrl,
+        (call) => call[0].result?.url === "https://example.com/docs",
       );
       expect(startDoc?.[0].result?.textContent).toBe(
         "[Guide](https://example.com/docs/guide)",
@@ -1791,8 +1793,10 @@ describe("WebScraperStrategy", () => {
         expect.anything(),
       );
       // Fetched as the .md variant, recorded under the page it represents.
+      // Fetched as `index.html.md`; the extension strips to `index.html`, which
+      // canonicalises to the directory the page actually lives at.
       const guideDoc = progressCallback.mock.calls.find(
-        (call) => call[0].result?.url === "https://example.com/docs/guide/index.html",
+        (call) => call[0].result?.url === "https://example.com/docs/guide",
       );
       expect(guideDoc?.[0].result?.contentType).toBe("text/markdown");
       expect(

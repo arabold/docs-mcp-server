@@ -19,8 +19,8 @@ describe("URL normalization", () => {
       expect(normalizeUrl("https://example.com/page/")).toBe("https://example.com/page");
     });
 
-    it("should convert to lowercase", () => {
-      expect(normalizeUrl("https://example.com/PAGE")).toBe("https://example.com/page");
+    it("does not convert to lowercase", () => {
+      expect(normalizeUrl("https://example.com/PAGE")).toBe("https://example.com/PAGE");
     });
   });
 
@@ -39,10 +39,19 @@ describe("URL normalization", () => {
       ).toBe("https://example.com/page/");
     });
 
-    it("should preserve case when ignoreCase is false", () => {
-      expect(
-        normalizeUrl("https://example.com/PATH/TO/PAGE", { ignoreCase: false }),
-      ).toBe("https://example.com/PATH/TO/PAGE");
+    it("preserves case, which is not configurable", () => {
+      expect(normalizeUrl("https://example.com/PATH/TO/PAGE")).toBe(
+        "https://example.com/PATH/TO/PAGE",
+      );
+    });
+
+    it("keeps paths differing only in case distinct", () => {
+      // The reason case folding was removed: this value is the crawl's dedup
+      // key, so folding these together means the second page is never fetched
+      // and nothing reports that it was dropped.
+      expect(normalizeUrl("https://example.com/Guide")).not.toBe(
+        normalizeUrl("https://example.com/guide"),
+      );
     });
 
     it("should remove query parameters when removeQuery is true", () => {
@@ -58,13 +67,16 @@ describe("URL normalization", () => {
     it("should normalize file URLs", () => {
       // Note: On some platforms/Node versions, file:// host is empty, on others it might be parsed differently.
       // But standard file:// URL has empty host.
+      // Index file and trailing slash are normalized; case is not. On a
+      // case-sensitive filesystem `/Users/.../Docs` and `/users/.../docs` are
+      // different directories, and folding them would merge two of them.
       const url = "file:///Users/username/Docs/Index.html";
-      expect(normalizeUrl(url)).toBe("file:///users/username/docs");
+      expect(normalizeUrl(url)).toBe("file:///Users/username/Docs");
     });
 
     it("should handle file URLs with spaces", () => {
       const url = "file:///Users/User%20Name/My%20Docs/";
-      expect(normalizeUrl(url)).toBe("file:///users/user%20name/my%20docs");
+      expect(normalizeUrl(url)).toBe("file:///Users/User%20Name/My%20Docs");
     });
 
     it("should handle file URLs with query strings (rare but valid)", () => {

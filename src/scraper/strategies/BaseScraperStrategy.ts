@@ -150,6 +150,27 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     this.options = options;
   }
 
+  /**
+   * Normalises a URL for storage as a page identity.
+   *
+   * Shares the dedup normaliser's handling of trailing slashes, fragments and
+   * index files, so a page and its dedup key cannot disagree about which URLs
+   * name the same document.
+   *
+   * @param url The URL the content resolved to.
+   * @param scrapeOptions Options carrying the hash-preservation choice.
+   * @returns The URL to record the page under.
+   */
+  protected canonicalizeStoredUrl(url: string, scrapeOptions: ScraperOptions): string {
+    // Hash-routed sites are exempt. There the fragment names the route, so
+    // `/docs/#/guide` and `/docs#/guide` are not the same page and trimming
+    // either the slash or the fragment would invent a URL the site does not
+    // serve. Those crawls keep the URL exactly as it resolved.
+    if (scrapeOptions.preserveHashes) return url;
+
+    return normalizeUrl(url, this.getUrlNormalizerOptions(scrapeOptions));
+  }
+
   protected getUrlNormalizerOptions(scrapeOptions: ScraperOptions): UrlNormalizerOptions {
     return {
       ...this.options.urlNormalizerOptions,
@@ -448,7 +469,21 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
           // Handle successful processing - report result with content
           // Use the final URL from the result (which may differ due to redirects)
-          const finalUrl = result.url || item.url;
+          //
+          // Normalised so that spellings differing only by a trailing slash or a
+          // fragment resolve to one page. Two routes to the same document —
+          // `/config/` from a crawl and `/config.md` from an llms.txt index —
+          // otherwise land as separate rows and split a page in two.
+          //
+          // Case is deliberately preserved: the dedup key lowercases, but a URL
+          // path is case-sensitive, and storing `useeffect` for `useEffect` would
+          // hand out links that do not resolve.
+          const finalUrl = this.canonicalizeStoredUrl(result.url || item.url, options);
+
+          // Register the resolved identity so the other route to this page is
+          // recognised as already seen. The identity is only known after the
+          // response, which is why it cannot be settled when the URL is queued.
+          this.visited.add(normalizeUrl(finalUrl, this.getUrlNormalizerOptions(options)));
 
           // A result carrying no text is not a stored page. `WebScraperStrategy`
           // already gates on this, but the local-file and GitHub processors pass
