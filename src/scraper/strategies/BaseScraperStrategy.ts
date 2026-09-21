@@ -151,32 +151,40 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   }
 
   /**
-   * Normalises a URL for storage as a page identity.
+   * Resolves the URL a page is recorded under.
    *
-   * Shares the dedup normaliser's handling of trailing slashes, fragments and
-   * index files, so a page and its dedup key cannot disagree about which URLs
-   * name the same document.
+   * The base implementation records the URL exactly as it resolved. Trimming a
+   * trailing slash or an index file is an HTTP convention — it rests on a server
+   * returning the same bytes either way — and that is false for the URL spaces
+   * other strategies work in: `file:///docs/index.html` and a GitHub blob path
+   * both name a file, and the trimmed form addresses nothing. Strategies whose
+   * URLs follow web conventions override this.
    *
    * @param url The URL the content resolved to.
-   * @param scrapeOptions Options carrying the hash-preservation choice.
+   * @param _scrapeOptions Options, used by overrides.
    * @returns The URL to record the page under.
    */
-  protected canonicalizeStoredUrl(url: string, scrapeOptions: ScraperOptions): string {
-    // Hash-routed sites are exempt. There the fragment names the route, so
-    // `/docs/#/guide` and `/docs#/guide` are not the same page and trimming
-    // either the slash or the fragment would invent a URL the site does not
-    // serve. Those crawls keep the URL exactly as it resolved.
-    if (scrapeOptions.preserveHashes) return url;
-
-    return normalizeUrl(url, this.getUrlNormalizerOptions(scrapeOptions));
+  protected canonicalizeStoredUrl(url: string, _scrapeOptions: ScraperOptions): string {
+    return url;
   }
 
   protected getUrlNormalizerOptions(scrapeOptions: ScraperOptions): UrlNormalizerOptions {
+    // Hash-routed sites opt out of the whole rewrite, not just of hash removal.
+    // There the fragment names the route, so `/docs/#/guide` and `/docs#/guide`
+    // are different pages and trimming the slash ahead of the fragment invents a
+    // URL the site does not serve. Expressed here rather than at the call sites
+    // so a page's identity and its dedup key cannot disagree.
+    if (scrapeOptions.preserveHashes) {
+      return {
+        ...this.options.urlNormalizerOptions,
+        removeHash: false,
+        removeTrailingSlash: false,
+        removeIndex: false,
+      };
+    }
     return {
       ...this.options.urlNormalizerOptions,
-      removeHash: scrapeOptions.preserveHashes
-        ? false
-        : (this.options.urlNormalizerOptions?.removeHash ?? true),
+      removeHash: this.options.urlNormalizerOptions?.removeHash ?? true,
     };
   }
 
@@ -470,14 +478,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           // Handle successful processing - report result with content
           // Use the final URL from the result (which may differ due to redirects)
           //
-          // Normalised so that spellings differing only by a trailing slash or a
-          // fragment resolve to one page. Two routes to the same document —
+          // Canonicalised so that spellings differing only by a trailing slash or
+          // a fragment resolve to one page. Two routes to the same document —
           // `/config/` from a crawl and `/config.md` from an llms.txt index —
           // otherwise land as separate rows and split a page in two.
-          //
-          // Case is deliberately preserved: the dedup key lowercases, but a URL
-          // path is case-sensitive, and storing `useeffect` for `useEffect` would
-          // hand out links that do not resolve.
           const finalUrl = this.canonicalizeStoredUrl(result.url || item.url, options);
 
           // Register the resolved identity so the other route to this page is

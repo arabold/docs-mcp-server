@@ -10,7 +10,11 @@ import type { ProgressCallback } from "../../types";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
-import { stripMarkdownExtension, type UrlNormalizerOptions } from "../../utils/url";
+import {
+  normalizeUrl,
+  stripMarkdownExtension,
+  type UrlNormalizerOptions,
+} from "../../utils/url";
 import { AutoDetectFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import {
@@ -143,13 +147,57 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     return variant.toString();
   }
 
+  /**
+   * Records a web page under its canonical URL.
+   *
+   * Web URLs are the case the shared normaliser was written for: a server
+   * returns the same bytes for `/config` and `/config/`, and for a directory and
+   * its index file, so those spellings name one page.
+   */
+  protected override canonicalizeStoredUrl(
+    url: string,
+    scrapeOptions: ScraperOptions,
+  ): string {
+    return normalizeUrl(url, this.getUrlNormalizerOptions(scrapeOptions));
+  }
+
+  /**
+   * Restates an accepted Markdown variant's content type as Markdown.
+   *
+   * Sites disagree on how to serve a `.md` file: vite.dev sends `text/markdown`,
+   * react.dev sends `text/plain`. Both are accepted as Markdown, so both must be
+   * recorded as Markdown — the stored `sourceContentType` is what later decides
+   * that a published Markdown representation outranks an HTML one, and a page
+   * filed under `text/plain` would lose that comparison and be overwritten.
+   *
+   * The variant-preference path below already does this; doing it here covers
+   * the case where the URL was a `.md` to begin with.
+   */
+  private asMarkdownRepresentation(url: string, rawContent: RawContent): RawContent {
+    if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
+      return rawContent;
+    }
+    return MimeTypeUtils.isMarkdown(rawContent.mimeType)
+      ? rawContent
+      : { ...rawContent, mimeType: "text/markdown" };
+  }
+
   private isAcceptableMarkdownVariant(rawContent: RawContent): boolean {
     const mimeType = rawContent.mimeType.toLowerCase();
     return MimeTypeUtils.isMarkdown(mimeType) || mimeType === "text/plain";
   }
 
   private isMarkdownUrl(url: string): boolean {
-    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(url);
+    // Pathname only, for the reason `canProcessDiscoveredLink` documents: given a
+    // whole URL the detector reads the host's suffix as an extension, and `.md`
+    // is Moldova's ccTLD, so `https://example.md/` would report as Markdown.
+    let pathname: string;
+    try {
+      pathname = new URL(url).pathname;
+    } catch {
+      return false;
+    }
+    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(pathname);
     return mimeType ? MimeTypeUtils.isMarkdown(mimeType) : false;
   }
 
@@ -173,8 +221,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
    * @returns The canonical page URL.
    */
   private resolvePageIdentity(url: string, rawContent: RawContent): string {
-    if (!this.isMarkdownUrl(url)) return url;
-    if (!this.isAcceptableMarkdownVariant(rawContent)) return url;
+    if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
+      return url;
+    }
     const canonical = stripMarkdownExtension(url);
     if (canonical !== url) {
       logger.debug(`Markdown variant ${url} recorded as ${canonical}`);
@@ -222,7 +271,8 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     const fetchOptions = this.createFetchOptions(item, options, signal);
 
     if (!item.fromLlmsTxt || this.isMarkdownUrl(item.url)) {
-      return this.fetcher.fetch(item.url, fetchOptions);
+      const fetched = await this.fetcher.fetch(item.url, fetchOptions);
+      return this.asMarkdownRepresentation(item.url, fetched);
     }
 
     const markdownVariantUrl = this.buildMarkdownVariantUrl(item.url);
@@ -572,10 +622,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       return {
         url: effectiveSource,
-        // Where the bytes came from, kept so a later refresh requests this
-        // representation rather than whatever the identity serves, and so the
-        // validator below is returned to the resource that issued it.
-        contentUrl: fetchedSource,
+        // Recorded only when the bytes came from somewhere other than the
+        // page's identity, so a later refresh requests that representation and
+        // the validator below goes back to the resource that issued it. Equal
+        // values would claim a divergence that does not exist.
+        contentUrl: effectiveSource === fetchedSource ? undefined : fetchedSource,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
         sourceContentType: rawContent.mimeType,

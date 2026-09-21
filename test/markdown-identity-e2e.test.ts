@@ -353,4 +353,35 @@ describe("Markdown variant identity E2E", () => {
     expect(urls).toContain(`${TEST_BASE_URL}/#/alpha`);
     expect(urls).toContain(`${TEST_BASE_URL}/#/beta`);
   }, 30000);
+
+  it("protects a markdown representation served as plain text", async () => {
+    // react.dev serves its .md alternates as text/plain while vite.dev sends
+    // text/markdown. Both are accepted as Markdown, so both must outrank an HTML
+    // copy of the same page — a page filed under text/plain would lose that
+    // comparison and be overwritten by whichever route arrived last.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(
+        200,
+        `<html><body><h1>Home</h1><a href="${TEST_BASE_URL}/guide">Guide</a></body></html>`,
+        { "Content-Type": "text/html" },
+      )
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nMarkdown body.", { "Content-Type": "text/plain" })
+      .get("/guide")
+      .reply(200, "<html><body><h1>Guide</h1><p>HTML body.</p></body></html>", {
+        "Content-Type": "text/html",
+      });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "body", 10);
+    const guide = results.filter((r) => r.url === `${TEST_BASE_URL}/guide`);
+    expect(guide.some((r) => r.content?.includes("Markdown body"))).toBe(true);
+    expect(guide.some((r) => r.content?.includes("HTML body"))).toBe(false);
+  }, 30000);
 });

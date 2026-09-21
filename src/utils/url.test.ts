@@ -243,11 +243,27 @@ describe("stripMarkdownExtension", () => {
     );
   });
 
-  it("strips any extension, leaving the caller to decide it is markdown", () => {
-    // The function performs the rewrite; establishing that the response really
-    // is Markdown is the caller's job, so it does not re-test the extension.
+  it("recognises the markdown extensions the shared detector knows", () => {
     expect(stripMarkdownExtension("https://example.com/a/guide.markdown")).toBe(
       "https://example.com/a/guide",
+    );
+  });
+
+  it("leaves a non-markdown extension alone", () => {
+    // The name is load-bearing: stripping any extension would rewrite
+    // `report.pdf` to `report`, an identity nothing serves.
+    expect(stripMarkdownExtension("https://example.com/report.pdf")).toBe(
+      "https://example.com/report.pdf",
+    );
+    expect(stripMarkdownExtension("https://example.com/page.tar.gz")).toBe(
+      "https://example.com/page.tar.gz",
+    );
+  });
+
+  it("does not read a markdown TLD as a markdown file", () => {
+    // `.md` is Moldova's ccTLD; detection must see the path, not the host.
+    expect(stripMarkdownExtension("https://example.md/guide")).toBe(
+      "https://example.md/guide",
     );
   });
 

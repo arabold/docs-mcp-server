@@ -82,6 +82,12 @@ interface EmbeddingBatchContext {
  * embeddings along with their metadata. Supports versioned storage of documents for different
  * libraries, enabling version-specific document retrieval and searches.
  */
+/** The row `getPageId` returns. Declared once so its two readers agree. */
+interface PageIdRow {
+  id: number;
+  source_content_type: string | null;
+}
+
 export class DocumentStore {
   private readonly config: AppConfig;
   private readonly dbPath: string;
@@ -296,6 +302,7 @@ export class DocumentStore {
       >(
         "INSERT INTO pages (version_id, url, title, etag, last_modified, source_content_type, content_type, depth, content_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(version_id, url) DO UPDATE SET title = excluded.title, source_content_type = excluded.source_content_type, content_type = excluded.content_type, etag = excluded.etag, last_modified = excluded.last_modified, depth = excluded.depth, content_url = excluded.content_url",
       ),
+      // Returns the row shape described by `PageIdRow`.
       getPageId: this.db.prepare<[number, string]>(
         "SELECT id, source_content_type FROM pages WHERE version_id = ? AND url = ?",
       ),
@@ -1816,6 +1823,33 @@ export class DocumentStore {
         return;
       }
 
+      // Resolve library and version IDs (creates them if they don't exist)
+      const versionId = await this.resolveVersionId(library, version);
+      const existingPage = this.statements.getPageId.get(versionId, url) as
+        | PageIdRow
+        | undefined;
+
+      // A page can be reached as both a published Markdown file and an HTML page
+      // — the same document under two URLs that resolve to one identity. Markdown
+      // is what the site's authors published for machine consumption, so it wins;
+      // converting HTML ourselves is the fallback for sites offering nothing
+      // better. Writes are otherwise last-one-wins, which would hand the decision
+      // to crawl order.
+      //
+      // Decided before embedding, not after: this write is going to be dropped,
+      // and embedding it first would spend a billed API round-trip on chunks
+      // nothing will read.
+      if (
+        existingPage &&
+        MimeTypeUtils.isMarkdown(existingPage.source_content_type ?? "") &&
+        !MimeTypeUtils.isMarkdown(result.sourceContentType ?? "")
+      ) {
+        logger.debug(
+          `Keeping stored Markdown representation of ${url}; ignoring ${result.sourceContentType} version`,
+        );
+        return;
+      }
+
       // Generate embeddings in batch only if vector search is enabled
       let paddedEmbeddings: number[][] = [];
 
@@ -1896,32 +1930,6 @@ export class DocumentStore {
         paddedEmbeddings = rawEmbeddings.map((vector) => this.padVector(vector));
       }
 
-      // Resolve library and version IDs (creates them if they don't exist)
-      const versionId = await this.resolveVersionId(library, version);
-
-      // Delete existing documents for this page to prevent conflicts
-      // First check if the page exists and get its ID
-      const existingPage = this.statements.getPageId.get(versionId, url) as
-        | { id: number; source_content_type: string | null }
-        | undefined;
-
-      // A page can be reached as both a published Markdown file and an HTML page
-      // — the same document under two URLs that resolve to one identity. Markdown
-      // is what the site's authors published for machine consumption, so it wins;
-      // converting HTML ourselves is the fallback for sites offering nothing
-      // better. Writes are otherwise last-one-wins, which would hand the decision
-      // to crawl order.
-      if (
-        existingPage &&
-        MimeTypeUtils.isMarkdown(existingPage.source_content_type ?? "") &&
-        !MimeTypeUtils.isMarkdown(result.sourceContentType ?? "")
-      ) {
-        logger.debug(
-          `Keeping stored Markdown representation of ${url}; ignoring ${result.sourceContentType} version`,
-        );
-        return;
-      }
-
       if (existingPage) {
         const result = this.statements.deleteDocumentsByPageId.run(existingPage.id);
         if (result.changes > 0) {
@@ -1951,18 +1959,19 @@ export class DocumentStore {
           sourceContentType,
           contentType,
           depth,
-          // NULL means "retrieved from its own URL"; only a divergence is recorded.
-          result.contentUrl && result.contentUrl !== url ? result.contentUrl : null,
+          // NULL means "retrieved from its own URL"; the strategy reports this
+          // only when the two genuinely differ.
+          result.contentUrl ?? null,
         );
 
         // Query for the page ID since we can't use RETURNING
-        const existingPage = this.statements.getPageId.get(versionId, url) as
-          | { id: number }
+        const insertedPage = this.statements.getPageId.get(versionId, url) as
+          | PageIdRow
           | undefined;
-        if (!existingPage) {
+        if (!insertedPage) {
           throw new StoreError(`Failed to get page ID for URL: ${url}`);
         }
-        const pageId = existingPage.id;
+        const pageId = insertedPage.id;
 
         // Then insert document chunks linked to their pages
         let docIndex = 0;

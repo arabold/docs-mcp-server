@@ -1,5 +1,6 @@
 import psl from "psl";
 import { InvalidUrlError } from "./errors";
+import { MimeTypeUtils } from "./mimeTypeUtils";
 
 interface UrlNormalizerOptions {
   removeHash?: boolean;
@@ -20,11 +21,12 @@ export function normalizeUrl(
   options: UrlNormalizerOptions = defaultNormalizerOptions,
 ): string {
   try {
-    const parsedUrl = new URL(url);
     const finalOptions = { ...defaultNormalizerOptions, ...options };
-
-    // Clone the URL to modify it safely
     const normalized = new URL(url);
+
+    // Captured before the reset below, so the URL is parsed once rather than twice.
+    const originalHash = normalized.hash;
+    const originalSearch = normalized.search;
 
     // Reset search and hash for the normalized base
     normalized.search = "";
@@ -44,8 +46,8 @@ export function normalizeUrl(
     }
 
     // Keep original parts we want to preserve
-    const preservedHash = !finalOptions.removeHash ? parsedUrl.hash : "";
-    const preservedSearch = !finalOptions.removeQuery ? parsedUrl.search : "";
+    const preservedHash = !finalOptions.removeHash ? originalHash : "";
+    const preservedSearch = !finalOptions.removeQuery ? originalSearch : "";
 
     // Construct final URL string
     // Use href to get the full string, but we need to re-assemble if we want query/hash specific control
@@ -111,23 +113,19 @@ export function extractPrimaryDomain(hostname: string): string {
 export type { UrlNormalizerOptions };
 
 /**
- * Strips a Markdown file extension from a URL, yielding the canonical page URL.
+ * Rewrites a published Markdown file's URL to the page it represents.
  *
- * A published Markdown file is a representation of a page, not a separate page,
- * so `https://example.com/guide.md` and `https://example.com/guide` name the same
- * document and must share one identity — otherwise a site whose `llms.txt` lists
- * `.md` URLs is indexed twice, once per spelling.
+ * `https://example.com/guide.md` and `https://example.com/guide` name the same
+ * document, so they must share one identity — otherwise a site whose `llms.txt`
+ * lists `.md` URLs is indexed twice, once per spelling.
  *
- * Callers are responsible for establishing that the response really is Markdown;
- * this function only performs the rewrite. Deciding on the extension alone would
- * fold a page onto an identity that does not serve it whenever a server ignores
- * the extension and answers with HTML or a soft error.
- *
- * Query and fragment are preserved, and a URL whose path has no Markdown
- * extension is returned unchanged.
+ * The extension is only half the test. Callers SHALL also establish that the
+ * response really was Markdown, because a server that ignores the extension and
+ * answers with HTML or a soft error would otherwise fold a page onto an identity
+ * that does not serve it.
  *
  * @param url The absolute URL the content was fetched from.
- * @returns The URL with a trailing Markdown extension removed, or `url` unchanged.
+ * @returns The page URL, or `url` unchanged when the path names no Markdown file.
  */
 export function stripMarkdownExtension(url: string): string {
   let parsed: URL;
@@ -137,17 +135,18 @@ export function stripMarkdownExtension(url: string): string {
     return url;
   }
 
-  const { pathname } = parsed;
-  const lastSlash = pathname.lastIndexOf("/");
-  const segment = pathname.slice(lastSlash + 1);
-  const dot = segment.lastIndexOf(".");
-  // No extension, or a dotfile whose leading dot is not an extension separator.
-  if (dot <= 0) return url;
+  // Gated on the shared detector rather than on "has a dot", so the name stays
+  // true and the set of Markdown extensions has one home. The pathname is passed
+  // deliberately: given a whole URL the detector would read a host like
+  // `example.md` as a Markdown file.
+  const detected = MimeTypeUtils.detectMimeTypeFromPath(parsed.pathname);
+  if (!detected || !MimeTypeUtils.isMarkdown(detected)) return url;
 
-  const stripped = segment.slice(0, dot);
-  // Refuse to produce an empty final segment: `/.md` has no canonical page.
-  if (stripped.length === 0) return url;
+  // A leading dot is not an extension separator, so `/.md` is left alone — it
+  // names no page to fold onto.
+  const stripped = parsed.pathname.replace(/([^/])\.[^/.]*$/, "$1");
+  if (stripped === parsed.pathname) return url;
 
-  parsed.pathname = `${pathname.slice(0, lastSlash + 1)}${stripped}`;
+  parsed.pathname = stripped;
   return parsed.toString();
 }
