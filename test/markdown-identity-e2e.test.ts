@@ -470,6 +470,64 @@ describe("Markdown variant identity E2E", () => {
     expect(guide.some((r) => r.content?.includes("Markdown guide body"))).toBe(true);
   }, 30000);
 
+  it("records the retrieval location for a page that turns out to be empty", async () => {
+    // An empty page still has a retrieval location. Dropping it stored NULL, so
+    // the next refresh asked the identity instead of the markdown file it was
+    // read from — and sent that file's validator to a resource that never
+    // issued it.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>Home body.</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .reply(200, "   \n\n   \n", {
+        "Content-Type": "text/markdown",
+        ETag: '"md-empty-v1"',
+      });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    const versionId = await docService.ensureVersion({
+      library: TEST_LIBRARY,
+      version: TEST_VERSION,
+    });
+    const guide = (await docService.getPagesByVersionId(versionId)).find(
+      (p) => p.url === `${TEST_BASE_URL}/guide`,
+    );
+    expect(guide).toBeDefined();
+    expect(guide?.content_url).toBe(`${TEST_BASE_URL}/guide.md`);
+
+    // The consequence that matters: the refresh goes back to the markdown file
+    // with the validator that file issued, and finds content there.
+    nock.cleanAll();
+    const conditional = nock(TEST_BASE_URL)
+      .persist()
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>Home body.</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .matchHeader("if-none-match", '"md-empty-v1"')
+      .reply(200, "# Guide\n\nThe page has content again.", {
+        "Content-Type": "text/markdown",
+        ETag: '"md-v2"',
+      });
+
+    const refreshId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
+    await pipelineManager.waitForJobCompletion(refreshId);
+
+    expect(conditional.isDone()).toBe(true);
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "content", 10);
+    expect(results.some((r) => r.content?.includes("content again"))).toBe(true);
+  }, 30000);
+
   it("does not delete a live page because its markdown alternate is gone", async () => {
     // A refresh asks the location the content came from, which for a published
     // Markdown file is not the page's own URL. A 404 there says the file was

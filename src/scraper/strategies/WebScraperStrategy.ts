@@ -574,6 +574,13 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         );
         return {
           url: effectiveSource,
+          // Recorded here as well as on the non-empty return: an empty page
+          // still has a retrieval location, and the base strategy's fallback
+          // cannot recover it once the identity has moved — it compares the
+          // identity with itself and finds no divergence. Without this the row
+          // stores NULL and the next refresh asks the identity while sending
+          // the validator the Markdown file issued.
+          contentUrl: effectiveSource === fetchedSource ? undefined : fetchedSource,
           title: processed.title ?? null,
           sourceContentType: rawContent.mimeType,
           contentType: processed.contentType || rawContent.mimeType,
