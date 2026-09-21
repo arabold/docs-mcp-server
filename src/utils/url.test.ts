@@ -54,6 +54,29 @@ describe("URL normalization", () => {
       );
     });
 
+    it("still folds a trailing slash on a URL with no fragment", () => {
+      // `removeHash: false` is how a hash-routed crawl keeps its route
+      // fragments. Exempting the whole crawl from path normalization instead
+      // left `/docs` and `/docs/` as two pages on exactly those sites.
+      expect(normalizeUrl("https://example.com/docs/", { removeHash: false })).toBe(
+        "https://example.com/docs",
+      );
+      expect(
+        normalizeUrl("https://example.com/docs/index.html", { removeHash: false }),
+      ).toBe("https://example.com/docs");
+    });
+
+    it("leaves the path alone in front of a preserved fragment", () => {
+      // There the fragment names the route, so the path is part of its
+      // spelling and trimming the slash invents a URL the site does not serve.
+      expect(
+        normalizeUrl("https://example.com/docs/#/guide", { removeHash: false }),
+      ).toBe("https://example.com/docs/#/guide");
+      expect(normalizeUrl("https://example.com/docs#/guide", { removeHash: false })).toBe(
+        "https://example.com/docs#/guide",
+      );
+    });
+
     it("should remove query parameters when removeQuery is true", () => {
       expect(
         normalizeUrl("https://example.com/api?version=1.0", {

@@ -162,16 +162,18 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   }
 
   /**
-   * Restates an accepted Markdown variant's content type as Markdown.
+   * Chooses the content type a Markdown variant should be parsed as.
    *
    * Sites disagree on how to serve a `.md` file: vite.dev sends `text/markdown`,
-   * react.dev sends `text/plain`. Both are accepted as Markdown, so both must be
-   * recorded as Markdown — the stored `sourceContentType` is what later decides
-   * that a published Markdown representation outranks an HTML one, and a page
-   * filed under `text/plain` would lose that comparison and be overwritten.
+   * react.dev sends `text/plain`. Both are Markdown documents, so both are
+   * parsed as Markdown — the extension is the author's statement about the
+   * format, and the plain-text pipeline would throw away every heading.
    *
-   * The variant-preference path below already does this; doing it here covers
-   * the case where the URL was a `.md` to begin with.
+   * This governs parsing only. The served type is reported unchanged, because
+   * that is what the store's precedence rule reads: a `text/plain` body is
+   * equally consistent with a real document and with a soft error page served
+   * at a `.md` address that has none, and recording it as Markdown would let
+   * the latter outrank the page it was folded onto and never be replaced.
    */
   private asMarkdownRepresentation(url: string, rawContent: RawContent): RawContent {
     if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
@@ -271,11 +273,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     const fetchOptions = this.createFetchOptions(item, options, signal);
 
     if (!item.fromLlmsTxt || this.isMarkdownUrl(item.url)) {
-      const fetched = await this.fetcher.fetch(item.url, fetchOptions);
-      // Judged on where the bytes came from, not where we asked. A redirect from
-      // an extensionless URL to a `.md` resource is still a published Markdown
-      // representation, and the queued URL would hide that.
-      return this.asMarkdownRepresentation(fetched.source ?? item.url, fetched);
+      return await this.fetcher.fetch(item.url, fetchOptions);
     }
 
     const markdownVariantUrl = this.buildMarkdownVariantUrl(item.url);
@@ -288,9 +286,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.debug(
           `llms.txt Markdown URL preference succeeded: ${item.url} -> ${markdownVariantUrl}`,
         );
-        return MimeTypeUtils.isMarkdown(markdownContent.mimeType)
-          ? markdownContent
-          : { ...markdownContent, mimeType: "text/markdown" };
+        return markdownContent;
       }
 
       logger.debug(
@@ -527,17 +523,21 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       }
 
       // --- Start Pipeline Processing ---
+      // What to parse it as, which for a `.md` URL served as plain text is not
+      // what the server said it was. `rawContent` keeps the served type, which
+      // is what gets reported and stored.
+      const forParsing = this.asMarkdownRepresentation(fetchedSource, rawContent);
       let processed: PipelineResult | undefined;
       for (const pipeline of this.pipelines) {
         const contentBuffer = Buffer.isBuffer(rawContent.content)
           ? rawContent.content
           : Buffer.from(rawContent.content);
-        if (pipeline.canProcess(rawContent.mimeType || "text/plain", contentBuffer)) {
+        if (pipeline.canProcess(forParsing.mimeType || "text/plain", contentBuffer)) {
           logger.debug(
-            `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
+            `Selected ${pipeline.constructor.name} for content type "${forParsing.mimeType}" (${url})`,
           );
           processed = await pipeline.process(
-            { ...rawContent, source: effectiveSource },
+            { ...forParsing, source: effectiveSource },
             options,
             this.fetcher,
           );

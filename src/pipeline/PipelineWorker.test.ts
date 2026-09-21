@@ -151,12 +151,14 @@ describe("PipelineWorker", () => {
       mockJob.version,
       1,
       mockProcessed1,
+      undefined,
     );
     expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
       mockJob.library,
       mockJob.version,
       1,
       mockProcessed2,
+      undefined,
     );
 
     // Verify onJobProgress was called
@@ -404,7 +406,7 @@ describe("PipelineWorker", () => {
       );
     });
 
-    it("should DELETE existing documents and INSERT new ones for a 200 OK status on an existing page", async () => {
+    it("should hand the refreshed page's id to the store for a 200 OK status on an existing page", async () => {
       const mockResult: ScrapeResult = {
         textContent: "updated content",
         url: "url1",
@@ -437,24 +439,20 @@ describe("PipelineWorker", () => {
 
       await worker.executeJob(mockJob, mockCallbacks);
 
-      // Verify DELETE was called first
-      expect(mockStore.deletePage).toHaveBeenCalledOnce();
-      expect(mockStore.deletePage).toHaveBeenCalledWith(123);
+      // The old row is retired inside the store's write transaction, not here.
+      // Deleting it first hid it from the precedence check, so a refresh that
+      // re-fetched both representations of one page kept whichever finished
+      // last instead of the better one.
+      expect(mockStore.deletePage).not.toHaveBeenCalled();
 
-      // Verify INSERT (addScrapeResult) was called after deletion
       expect(mockStore.addScrapeResult).toHaveBeenCalledOnce();
       expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
         mockJob.library,
         mockJob.version,
         1,
         mockResult,
+        123,
       );
-
-      // Verify call order: delete before add
-      const deleteCallOrder = (mockStore.deletePage as Mock).mock.invocationCallOrder[0];
-      const addCallOrder = (mockStore.addScrapeResult as Mock).mock
-        .invocationCallOrder[0];
-      expect(deleteCallOrder).toBeLessThan(addCallOrder);
 
       // Verify progress was reported
       expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
@@ -496,13 +494,14 @@ describe("PipelineWorker", () => {
       // Verify NO deletion was performed (new page)
       expect(mockStore.deletePage).not.toHaveBeenCalled();
 
-      // Verify INSERT (addScrapeResult) was called
+      // Verify INSERT (addScrapeResult) was called, with no page to retire
       expect(mockStore.addScrapeResult).toHaveBeenCalledOnce();
       expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
         mockJob.library,
         mockJob.version,
         1,
         mockResult,
+        undefined,
       );
 
       // Verify progress was reported

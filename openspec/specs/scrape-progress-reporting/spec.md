@@ -188,7 +188,16 @@ Rows written before the content-producing counter existed SHALL carry a null val
 
 The effective `maxPages` SHALL bound `pagesIndexed`, not `pagesScraped`. A crawl SHALL continue while its queue is non-empty and fewer than `maxPages` pages have produced stored content. Items that are processed without producing content — unchanged pages, deleted pages, resources skipped as unprocessable, directory listings, and ignored failures — SHALL NOT consume the budget.
 
-`pagesIndexed` SHALL NOT exceed `maxPages`.
+`pagesIndexed` SHALL count distinct pages, not store writes. Two routes can reach one document — a published Markdown file and the HTML page it represents resolve to a single identity — and both are written, because deciding which representation to keep belongs to the store. Only the first of them SHALL advance `pagesIndexed` or consume the budget; counting the second spends a unit of the limit on a page that was never added.
+
+`pagesIndexed` SHALL NOT exceed `maxPages`, and SHALL equal the number of pages the crawl stored.
+
+#### Scenario: A second representation of a stored page is not a new page
+- **GIVEN** a crawl configured with `maxPages: 3`
+- **AND** a site where one document is reachable both as a Markdown file and as an HTML page, alongside two other pages
+- **WHEN** the crawl completes
+- **THEN** three distinct pages are stored
+- **AND** `pagesIndexed` is 3
 
 #### Scenario: Limit delivers the requested number of pages
 - **GIVEN** a crawl configured with `maxPages: 100`

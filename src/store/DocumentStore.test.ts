@@ -2831,6 +2831,18 @@ describe("DocumentStore - Markdown representation precedence", () => {
     chunks: [{ types: ["text"], content, section: { level: 0, path: [] } }],
   });
 
+  /**
+   * The second representation of a page reached during one crawl.
+   *
+   * Precedence decides between two routes to the same document, so it applies
+   * only to a write the crawl has flagged as competing with one it already
+   * made. A plain write is the new state of the page and always lands.
+   */
+  const competingWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    ...resultWith(sourceContentType, content),
+    isAdditionalRepresentation: true,
+  });
+
   const storedContent = async (): Promise<string[]> => {
     const results = await store.findChunksByUrl(
       "lib",
@@ -2859,7 +2871,7 @@ describe("DocumentStore - Markdown representation precedence", () => {
       0,
       resultWith("text/markdown", "from markdown"),
     );
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html"));
+    await store.addDocuments("lib", "1.0", 0, competingWith("text/html", "from html"));
 
     expect(await storedContent()).toEqual(["from markdown"]);
   });
@@ -2870,7 +2882,7 @@ describe("DocumentStore - Markdown representation precedence", () => {
       "lib",
       "1.0",
       0,
-      resultWith("text/markdown", "from markdown"),
+      competingWith("text/markdown", "from markdown"),
     );
 
     expect(await storedContent()).toEqual(["from markdown"]);
@@ -2881,7 +2893,7 @@ describe("DocumentStore - Markdown representation precedence", () => {
     const markdownFirst = new DocumentStore(":memory:", appConfig);
     await markdownFirst.initialize();
     await markdownFirst.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md"));
-    await markdownFirst.addDocuments("lib", "1.0", 0, resultWith("text/html", "html"));
+    await markdownFirst.addDocuments("lib", "1.0", 0, competingWith("text/html", "html"));
     const a = await markdownFirst.findChunksByUrl(
       "lib",
       "1.0",
@@ -2890,10 +2902,89 @@ describe("DocumentStore - Markdown representation precedence", () => {
     await markdownFirst.shutdown();
 
     await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "html"));
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md"));
+    await store.addDocuments("lib", "1.0", 0, competingWith("text/markdown", "md"));
     const b = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
 
     expect(a.map((r) => r.content)).toEqual(b.map((r) => r.content));
+  });
+
+  it("ranks a plain-text body below html, whichever arrives first", async () => {
+    // `text/plain` reaches this rule only because a `.md` URL was served as
+    // plain text, which is equally consistent with a real document and with a
+    // soft error page served at an address that has none. It may stand in for a
+    // page nothing else reached, but never displace one really retrieved.
+    const plainFirst = new DocumentStore(":memory:", appConfig);
+    await plainFirst.initialize();
+    await plainFirst.addDocuments("lib", "1.0", 0, resultWith("text/plain", "Not Found"));
+    await plainFirst.addDocuments("lib", "1.0", 0, competingWith("text/html", "real"));
+    const a = await plainFirst.findChunksByUrl("lib", "1.0", "https://example.com/guide");
+    await plainFirst.shutdown();
+
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "real"));
+    await store.addDocuments("lib", "1.0", 0, competingWith("text/plain", "Not Found"));
+
+    expect(a.map((r) => r.content)).toEqual(["real"]);
+    expect(await storedContent()).toEqual(["real"]);
+  });
+
+  it("lets a later crawl replace markdown with html", async () => {
+    // Precedence settles a race between two routes in one crawl. A write that
+    // is not competing is the page's new state, so a site that stopped
+    // publishing its markdown does not freeze on the last copy we hold.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "old md"));
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "new html"));
+
+    expect(await storedContent()).toEqual(["new html"]);
+  });
+
+  it("retires the row a losing write came from", async () => {
+    // A refresh reaches one page by two spellings. The write that loses on
+    // precedence is the only thing that knows its old spelling folded into this
+    // identity, so it still has to retire that row — otherwise the old one stays
+    // searchable with stale content and loses again on every later refresh.
+    const legacy: ScrapeResult = {
+      ...resultWith("text/html", "stale html body"),
+      url: "https://example.com/guide/index.html",
+    };
+    await store.addDocuments("lib", "1.0", 0, legacy);
+    const pageByUrl = async (url: string) => {
+      const versionId = await store.resolveVersionId("lib", "1.0");
+      return (await store.getPagesByVersionId(versionId)).find((p) => p.url === url);
+    };
+    const legacyPage = await pageByUrl("https://example.com/guide/index.html");
+    expect(legacyPage).toBeDefined();
+
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "fresh md"));
+    // The HTML spelling now resolves onto the same identity and loses.
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      competingWith("text/html", "stale html body"),
+      legacyPage?.id,
+    );
+
+    expect(await storedContent()).toEqual(["fresh md"]);
+    expect(await pageByUrl("https://example.com/guide/index.html")).toBeUndefined();
+  });
+
+  it("does not retire the previous row when there is nothing to store", async () => {
+    // A result with no chunks means the pipeline learned nothing. Retiring the
+    // page it came from would delete indexed content and put nothing back.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "kept"));
+    const versionId = await store.resolveVersionId("lib", "1.0");
+    const page = (await store.getPagesByVersionId(versionId)).find(
+      (p) => p.url === "https://example.com/guide",
+    );
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      { ...resultWith("text/html", ""), chunks: [] },
+      page?.id,
+    );
+
+    expect(await storedContent()).toEqual(["kept"]);
   });
 
   it("still replaces markdown with newer markdown", async () => {
@@ -2924,6 +3015,18 @@ describe("DocumentStore - concurrent writes to one identity", () => {
     links: [],
     errors: [],
     chunks: [{ types: ["text"], content, section: { level: 0, path: [] } }],
+  });
+
+  /**
+   * The second representation of a page reached during one crawl.
+   *
+   * Precedence decides between two routes to the same document, so it applies
+   * only to a write the crawl has flagged as competing with one it already
+   * made. A plain write is the new state of the page and always lands.
+   */
+  const competingWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    ...resultWith(sourceContentType, content),
+    isAdditionalRepresentation: true,
   });
 
   beforeEach(async () => {
@@ -2978,7 +3081,7 @@ describe("DocumentStore - concurrent writes to one identity", () => {
 
     await Promise.all([
       store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "from markdown")),
-      store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html")),
+      store.addDocuments("lib", "1.0", 0, competingWith("text/html", "from html")),
     ]);
 
     const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
@@ -2989,9 +3092,16 @@ describe("DocumentStore - concurrent writes to one identity", () => {
   it("keeps markdown whichever write is scheduled first", async () => {
     blockEmbeddingsUntilBothArrive(2);
 
+    // The crawl flags whichever representation it reached second, so here it is
+    // the Markdown one — and Markdown still wins, which is the property.
     await Promise.all([
       store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html")),
-      store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "from markdown")),
+      store.addDocuments(
+        "lib",
+        "1.0",
+        0,
+        competingWith("text/markdown", "from markdown"),
+      ),
     ]);
 
     const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");

@@ -202,7 +202,6 @@ describe("Scrape progress counters E2E", () => {
     const final = lastEvent();
     // Root + hit1 + hit2 produce content and exhaust the budget of 3.
     expect(final.pagesIndexed).toBe(3);
-    expect(final.pagesIndexed).toBeLessThanOrEqual(3);
     // The 404s were processed but did not consume the budget, so more items
     // were scraped than indexed.
     expect(final.pagesScraped).toBeGreaterThan(final.pagesIndexed);
@@ -315,6 +314,46 @@ describe("Scrape progress counters E2E", () => {
 
     const final = lastEvent();
     expect(final.pagesScraped).toBeLessThan(final.totalPages);
-    expect(final.pagesScraped / final.totalPages).toBeLessThan(1);
+
+    // Asserted on the persisted record, not only on the event stream: the
+    // counters a client reads back are the job's, and squaring them up on
+    // cancellation would leave every in-flight event untouched and unnoticed.
+    expect(job?.progressPages).toBe(final.pagesScraped);
+    expect(job?.progressMaxPages).toBe(final.totalPages);
+    expect(job?.progressPages ?? 0).toBeLessThan(job?.progressMaxPages ?? 0);
+    expect(job?.progressPagesIndexed).toBe(final.pagesIndexed);
+  }, 30000);
+
+  it("counts one page once when both its representations are crawled", async () => {
+    // A document reachable as `/guide.md` and `/guide` resolves to one identity,
+    // and both routes are stored — the store decides which representation to
+    // keep. Counting the second as a new page spent a unit of the page budget on
+    // a page that was never added, so a crawl asked for N stopped short of N and
+    // reported N anyway. `/extra` is the page that went missing.
+    nock(TEST_BASE_URL)
+      .get("/")
+      .reply(200, hubPage(["/guide.md", "/guide", "/extra"]), {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nMarkdown body.", { "Content-Type": "text/markdown" })
+      .get("/guide")
+      .reply(200, leafPage("Guide"), { "Content-Type": "text/html" })
+      .get("/extra")
+      .reply(200, leafPage("Extra"), { "Content-Type": "text/html" });
+
+    const job = await runScrape({ maxPages: 3 });
+    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+
+    const versionId = await docService.ensureVersion({
+      library: TEST_LIBRARY,
+      version: TEST_VERSION,
+    });
+    const urls = (await docService.getPagesByVersionId(versionId)).map((p) => p.url);
+
+    expect(job.progressPagesIndexed).toBe(urls.length);
+    expect(urls).toHaveLength(3);
+    expect(urls).toContain(`${TEST_BASE_URL}/extra`);
+    expect(urls).not.toContain(`${TEST_BASE_URL}/guide.md`);
   }, 30000);
 });

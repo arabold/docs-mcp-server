@@ -96,19 +96,38 @@ When a Markdown alternate is accepted, the scraper SHALL treat the alternate as 
 
 ### Requirement: Markdown is the preferred representation of a page
 
-When both a Markdown and an HTML representation of the same page are available, the system SHALL index the Markdown one. Markdown is what the page's authors published for machine consumption; converting HTML to Markdown ourselves is a fallback for the majority of sites that offer nothing better, not an equal alternative.
+When one crawl reaches both a Markdown and an HTML representation of the same page, the system SHALL index the Markdown one. Markdown is what the page's authors published for machine consumption; converting HTML to Markdown ourselves is a fallback for the majority of sites that offer nothing better, not an equal alternative.
 
 This preference SHALL NOT depend on which representation was encountered first. A crawl that reaches the HTML page before the Markdown one SHALL still end with the Markdown content indexed.
 
+The preference SHALL apply only between representations reached during the same crawl. It settles which of two routes to one document wins a race; it is not a claim that the stored copy is permanent. A later crawl's answer for a page SHALL replace what is stored, so a site that stops publishing a Markdown representation is re-indexed from what it now serves rather than freezing on the last Markdown copy retrieved.
+
+A representation whose content type the server did not confirm — a Markdown variant URL answered as plain text — SHALL rank below one that was confirmed. Such a response is equally consistent with a real document and with a soft error page served at an address that has none, so it may stand in for a page no other route reached, but SHALL NOT displace a page that was really retrieved.
+
 #### Scenario: Markdown replaces an already-indexed HTML representation
 - **GIVEN** a page whose HTML representation has been processed
-- **WHEN** a Markdown representation of the same page is accepted
+- **WHEN** a Markdown representation of the same page is accepted in the same crawl
 - **THEN** the stored content for that page is the Markdown representation
 
 #### Scenario: Encounter order does not decide the winner
 - **GIVEN** two crawls of the same site that reach a page's HTML and Markdown representations in opposite orders
 - **WHEN** each crawl completes
 - **THEN** both have indexed the Markdown representation
+
+#### Scenario: A later crawl supersedes the stored representation
+- **GIVEN** a stored page whose content came from a Markdown representation
+- **WHEN** a later crawl reaches only the page's HTML representation
+- **THEN** the stored content for that page is the HTML representation
+
+#### Scenario: An unconfirmed plain-text body does not displace a retrieved page
+- **GIVEN** a crawl that retrieved a page's HTML representation
+- **WHEN** the same crawl reaches a Markdown variant URL for that page and the server answers with plain text
+- **THEN** the stored content for that page remains the HTML representation
+
+#### Scenario: An empty representation competes on the same terms
+- **GIVEN** a crawl that stored a page's Markdown representation
+- **WHEN** the same crawl reaches another representation of that page that yields no extractable content
+- **THEN** the stored content for that page remains the Markdown representation
 
 #### Scenario: HTML is used when no Markdown representation exists
 - **WHEN** a page offers no Markdown representation

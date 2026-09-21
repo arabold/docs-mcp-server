@@ -76,6 +76,49 @@ interface EmbeddingBatchContext {
   totalChunks: number;
 }
 
+/**
+ * How strongly a representation resists being replaced by a competing one.
+ *
+ * A page reachable as both a published Markdown file and an HTML page produces
+ * two writes under one identity, and which arrives last is an accident of crawl
+ * order. Ranking them makes the outcome the same either way.
+ *
+ * Markdown the site publishes is what its authors wrote for machine
+ * consumption, so it outranks HTML we converted ourselves. Plain text ranks
+ * below both: it is only ever seen here because a `.md` URL was served as
+ * `text/plain`, which is equally consistent with a real document and with a
+ * soft error page served at an address that has none — so it may stand in for a
+ * page nothing else reached, but never displace one that was really retrieved.
+ */
+function representationRank(sourceContentType: string | null | undefined): number {
+  const mimeType = (sourceContentType ?? "").toLowerCase();
+  if (MimeTypeUtils.isMarkdown(mimeType)) return 2;
+  // Plain text and a type we could not identify at all say the same thing:
+  // nothing confirms what this is. Both may stand in for a page no other route
+  // reached, and neither may displace one that was really retrieved.
+  if (mimeType === "" || mimeType.startsWith("text/plain")) return 0;
+  return 1;
+}
+
+/**
+ * Whether a competing representation should be turned away.
+ *
+ * Only applies between representations seen in the same crawl. A first write
+ * for an identity always lands, so a later crawl's answer supersedes an earlier
+ * crawl's rather than being blocked by it.
+ */
+function losesToStoredRepresentation(
+  stored: PageIdRow | undefined,
+  incomingSourceContentType: string | null | undefined,
+  isAdditionalRepresentation: boolean | undefined,
+): boolean {
+  if (!stored || !isAdditionalRepresentation) return false;
+  return (
+    representationRank(stored.source_content_type) >
+    representationRank(incomingSourceContentType)
+  );
+}
+
 /** The row `getPageId` returns. Declared once so its two readers agree. */
 interface PageIdRow {
   id: number;
@@ -275,7 +318,7 @@ export class DocumentStore {
   private prepareStatements(): void {
     const statements = {
       getById: this.db.prepare<[bigint]>(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type 
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url 
          FROM documents d
          JOIN pages p ON d.page_id = p.id
          WHERE d.id = ?`,
@@ -401,7 +444,7 @@ export class DocumentStore {
       getChildChunks: this.db.prepare<
         [string, string, string, number, string, bigint, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -417,7 +460,7 @@ export class DocumentStore {
       getPrecedingSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -432,7 +475,7 @@ export class DocumentStore {
       getSubsequentSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -445,7 +488,7 @@ export class DocumentStore {
         LIMIT ?
       `),
       getParentChunk: this.db.prepare<[string, string, string, string, bigint]>(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -1749,6 +1792,34 @@ export class DocumentStore {
   }
 
   /**
+   * Removes the row a refreshed page was read from, when it is not the row now
+   * being written.
+   *
+   * A refresh carries the id of the page it is re-fetching, and that page can
+   * move: a redirect renames it, and resolving a `.md` URL to the page it
+   * represents folds it onto another row. Either way the old row is stale. When
+   * the id names the row being written it is the same page, not a stale one, and
+   * deleting it would throw away the very content the write is competing with.
+   *
+   * Runs inside the caller's transaction so the decision and the write cannot be
+   * separated by another representation landing in between.
+   *
+   * @param previousPageId Page the refresh item was read from, if any.
+   * @param current The row presently stored under the URL being written.
+   */
+  private retirePreviousPage(
+    previousPageId: number | undefined,
+    current: PageIdRow | undefined,
+  ): void {
+    if (previousPageId === undefined || previousPageId === current?.id) return;
+    this.statements.deleteDocumentsByPageId.run(previousPageId);
+    const deleted = this.statements.deletePage.run(previousPageId);
+    if (deleted.changes > 0) {
+      logger.debug(`Retired page ${previousPageId}, superseded by another URL`);
+    }
+  }
+
+  /**
    * Records a page that exists but holds no content.
    *
    * A successful fetch that yields no extractable text is a statement about the
@@ -1774,11 +1845,36 @@ export class DocumentStore {
       contentType: string | null;
       etag: string | null;
       lastModified: string | null;
+      isAdditionalRepresentation?: boolean;
     },
+    previousPageId?: number,
   ): Promise<void> {
     try {
       const versionId = await this.resolveVersionId(library, version);
       this.db.transaction(() => {
+        const current = this.statements.getPageId.get(versionId, page.url) as
+          | PageIdRow
+          | undefined;
+
+        // An empty representation is still a representation, and it competes on
+        // the same terms: an HTML twin that extracted nothing must not erase the
+        // Markdown this crawl already stored under the same identity.
+        if (
+          losesToStoredRepresentation(
+            current,
+            page.sourceContentType,
+            page.isAdditionalRepresentation,
+          )
+        ) {
+          logger.debug(
+            `Keeping stored ${current?.source_content_type} representation of ${page.url}; ignoring empty ${page.sourceContentType} version`,
+          );
+          this.retirePreviousPage(previousPageId, current);
+          return;
+        }
+
+        this.retirePreviousPage(previousPageId, current);
+
         this.statements.insertPage.run(
           versionId,
           page.url,
@@ -1794,9 +1890,12 @@ export class DocumentStore {
         // Clear any chunks the page had before it became empty. Without this the
         // old content keeps matching searches while the row carries the new
         // validator, so the next refresh answers 304 and it never self-corrects.
-        const stored = this.statements.getPageId.get(versionId, page.url) as
-          | { id: number }
-          | undefined;
+        //
+        // `current` is reused when it exists: `insertPage` upserts, so the row
+        // keeps its id. Only a page that did not exist before needs looking up.
+        const stored =
+          current ??
+          (this.statements.getPageId.get(versionId, page.url) as PageIdRow | undefined);
         if (stored) {
           this.statements.deleteDocumentsByPageId.run(stored.id);
         }
@@ -1816,6 +1915,7 @@ export class DocumentStore {
     version: string,
     depth: number,
     result: ScrapeResult,
+    previousPageId?: number,
   ): Promise<void> {
     try {
       const { title, url, chunks } = result;
@@ -1829,25 +1929,27 @@ export class DocumentStore {
         | PageIdRow
         | undefined;
 
-      // A page can be reached as both a published Markdown file and an HTML page
-      // — the same document under two URLs that resolve to one identity. Markdown
-      // is what the site's authors published for machine consumption, so it wins;
-      // converting HTML ourselves is the fallback for sites offering nothing
-      // better. Writes are otherwise last-one-wins, which would hand the decision
-      // to crawl order.
-      //
       // Checked here as an optimisation only — a write that is going to be
       // dropped should not first pay for a billed embedding round-trip. The
       // authoritative check is repeated inside the write transaction below,
       // because this snapshot is taken before the embedding await and a
       // concurrent write for the same identity can land in between.
+      //
+      // Taken only when this write has no previous row to retire. Retiring has
+      // to happen inside that transaction, so returning early with one pending
+      // would strand it: the losing write is the only thing that knows the old
+      // spelling folded into this identity, and the row would stay searchable
+      // and lose again on every later refresh.
       if (
-        existingPage &&
-        MimeTypeUtils.isMarkdown(existingPage.source_content_type ?? "") &&
-        !MimeTypeUtils.isMarkdown(result.sourceContentType ?? "")
+        previousPageId === undefined &&
+        losesToStoredRepresentation(
+          existingPage,
+          result.sourceContentType,
+          result.isAdditionalRepresentation,
+        )
       ) {
         logger.debug(
-          `Keeping stored Markdown representation of ${url}; ignoring ${result.sourceContentType} version`,
+          `Keeping stored ${existingPage?.source_content_type} representation of ${url}; ignoring ${result.sourceContentType} version`,
         );
         return;
       }
@@ -1944,15 +2046,23 @@ export class DocumentStore {
           | undefined;
 
         if (
-          current &&
-          MimeTypeUtils.isMarkdown(current.source_content_type ?? "") &&
-          !MimeTypeUtils.isMarkdown(result.sourceContentType ?? "")
+          losesToStoredRepresentation(
+            current,
+            result.sourceContentType,
+            result.isAdditionalRepresentation,
+          )
         ) {
           logger.debug(
-            `Keeping stored Markdown representation of ${url}; ignoring ${result.sourceContentType} version`,
+            `Keeping stored ${current?.source_content_type} representation of ${url}; ignoring ${result.sourceContentType} version`,
           );
+          // The row this write came from is still retired below: this crawl has
+          // decided that URL folds into `url`, so leaving it would keep a second
+          // copy of the page under its old spelling.
+          this.retirePreviousPage(previousPageId, current);
           return false;
         }
+
+        this.retirePreviousPage(previousPageId, current);
 
         if (current) {
           const deleted = this.statements.deleteDocumentsByPageId.run(current.id);
@@ -2562,7 +2672,7 @@ export class DocumentStore {
       // Use parameterized query for variable number of IDs
       const placeholders = ids.map(() => "?").join(",");
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id
@@ -2594,7 +2704,7 @@ export class DocumentStore {
     try {
       const normalizedVersion = normalizeVersionLabel(version);
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id

@@ -32,8 +32,16 @@ export function normalizeUrl(
     normalized.search = "";
     normalized.hash = "";
 
+    // A preserved fragment names a route, so the path in front of it is part of
+    // that route's spelling: on a hash-routed site `/docs/#/guide` and
+    // `/docs#/guide` are different pages, and trimming the slash invents a URL
+    // the site does not serve. Only URLs that actually carry a fragment are
+    // exempt — an ordinary `/docs/` on the same site still folds onto `/docs`,
+    // which is why this is decided per URL rather than per crawl.
+    const pathIsPartOfRoute = !finalOptions.removeHash && originalHash !== "";
+
     // Remove index files first, before handling trailing slashes
-    if (finalOptions.removeIndex) {
+    if (finalOptions.removeIndex && !pathIsPartOfRoute) {
       normalized.pathname = normalized.pathname.replace(
         /\/index\.(html|htm|asp|php|jsp)$/i,
         "/",
@@ -41,7 +49,11 @@ export function normalizeUrl(
     }
 
     // Handle trailing slash
-    if (finalOptions.removeTrailingSlash && normalized.pathname.length > 1) {
+    if (
+      finalOptions.removeTrailingSlash &&
+      !pathIsPartOfRoute &&
+      normalized.pathname.length > 1
+    ) {
       normalized.pathname = normalized.pathname.replace(/\/+$/, "");
     }
 

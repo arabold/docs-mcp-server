@@ -62,6 +62,7 @@ export interface DbPageChunk extends DbChunk {
   title?: string | null;
   source_content_type?: string | null;
   content_type?: string | null;
+  content_url?: string | null;
 }
 
 /**
@@ -84,6 +85,16 @@ export type DbQueryResult<T> = T | undefined;
  */
 export interface StoreSearchResult {
   url: string;
+  /**
+   * Where the content was actually retrieved from, when that differs from
+   * `url`.
+   *
+   * `url` is the page's identity, which can be derived rather than observed: a
+   * page published as `/guide.md` is recorded as `/guide`, and a site need not
+   * serve anything at the latter. Callers showing a link to the source should
+   * prefer this when it is set, so the link goes somewhere that answers.
+   */
+  contentUrl?: string | null;
   content: string;
   score: number | null;
   mimeType?: string | null;

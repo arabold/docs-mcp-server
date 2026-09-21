@@ -176,7 +176,15 @@ export default function Search() {
                   key={`${result.url}::${result.content.slice(0, 48)}`}
                 >
                   <div className="doc-head">
-                    <a href={result.url} target="_blank" rel="noreferrer">
+                    {/* The identity names the page; the link goes to whatever
+                        actually served it. They differ when the identity was
+                        derived — a page published as `/guide.md` is recorded as
+                        `/guide`, which the site need not serve. */}
+                    <a
+                      href={result.contentUrl || result.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       {result.url}
                     </a>
                     <span className="doc-score">

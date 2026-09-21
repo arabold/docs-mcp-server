@@ -354,11 +354,69 @@ describe("Markdown variant identity E2E", () => {
     expect(urls).toContain(`${TEST_BASE_URL}/#/beta`);
   }, 30000);
 
-  it("protects a markdown representation served as plain text", async () => {
+  it("still collapses a trailing slash on a hash-routed crawl", async () => {
+    // Preserving fragments must not switch off path normalization for every
+    // other URL in the crawl: that left `/docs` and `/docs/` as two pages on
+    // exactly the sites the option exists for.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(
+        200,
+        `<html><body><a href="${TEST_BASE_URL}/docs">A</a><a href="${TEST_BASE_URL}/docs/">B</a></body></html>`,
+        { "Content-Type": "text/html" },
+      )
+      .get("/docs")
+      .reply(200, "<html><body><h1>Docs</h1><p>Docs body.</p></body></html>", {
+        "Content-Type": "text/html",
+      });
+
+    expect((await runScrape({ preserveHashes: true }))?.status).toBe(
+      PipelineJobStatus.COMPLETED,
+    );
+
+    const urls = await storedUrls();
+    expect(urls.filter((u) => u.startsWith(`${TEST_BASE_URL}/docs`))).toEqual([
+      `${TEST_BASE_URL}/docs`,
+    ]);
+  }, 30000);
+
+  it("parses a markdown alternate served as plain text as markdown", async () => {
     // react.dev serves its .md alternates as text/plain while vite.dev sends
-    // text/markdown. Both are accepted as Markdown, so both must outrank an HTML
-    // copy of the same page — a page filed under text/plain would lose that
-    // comparison and be overwritten by whichever route arrived last.
+    // text/markdown. The extension is the author's statement about the format,
+    // so the body is parsed as Markdown either way — the plain-text pipeline
+    // would throw away every heading — and it folds onto the page it represents.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>hi</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nMarkdown body.", { "Content-Type": "text/plain" });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    const urls = await storedUrls();
+    expect(urls).toContain(`${TEST_BASE_URL}/guide`);
+    expect(urls).not.toContain(`${TEST_BASE_URL}/guide.md`);
+
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "body", 10);
+    const guide = results.filter((r) => r.url === `${TEST_BASE_URL}/guide`);
+    expect(guide.some((r) => r.content?.includes("Markdown body"))).toBe(true);
+  }, 30000);
+
+  it("does not let a plain-text body displace a page that was really retrieved", async () => {
+    // A server answering 200 text/plain "Not Found" for every .md URL is
+    // indistinguishable from react.dev's real alternates, so the identity still
+    // folds — but the page it folds onto must survive. Ranking plain text below
+    // HTML is what makes the outcome the same whichever route arrives last;
+    // granting it Markdown's precedence instead left the real page overwritten
+    // by a stub and locked out of every later refresh.
     nock(TEST_BASE_URL)
       .get("/llms.txt")
       .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
@@ -371,17 +429,196 @@ describe("Markdown variant identity E2E", () => {
         { "Content-Type": "text/html" },
       )
       .get("/guide.md")
-      .reply(200, "# Guide\n\nMarkdown body.", { "Content-Type": "text/plain" })
+      .reply(200, "Not Found", { "Content-Type": "text/plain" })
       .get("/guide")
-      .reply(200, "<html><body><h1>Guide</h1><p>HTML body.</p></body></html>", {
+      .reply(200, "<html><body><h1>Guide</h1><p>Real guide content.</p></body></html>", {
         "Content-Type": "text/html",
       });
 
     expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
 
-    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "body", 10);
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "guide", 10);
     const guide = results.filter((r) => r.url === `${TEST_BASE_URL}/guide`);
-    expect(guide.some((r) => r.content?.includes("Markdown body"))).toBe(true);
-    expect(guide.some((r) => r.content?.includes("HTML body"))).toBe(false);
+    expect(guide.some((r) => r.content?.includes("Real guide content"))).toBe(true);
+    expect(guide.some((r) => r.content?.includes("Not Found"))).toBe(false);
+  }, 30000);
+
+  it("keeps the stored markdown when an html twin extracts nothing", async () => {
+    // An empty representation competes on the same terms as a full one. Without
+    // that, the HTML twin's empty record replaced the Markdown already stored
+    // under the identity and the page was left with no chunks at all.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(
+        200,
+        `<html><body><h1>Home</h1><a href="${TEST_BASE_URL}/guide">Guide</a></body></html>`,
+        { "Content-Type": "text/html" },
+      )
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nMarkdown guide body.", { "Content-Type": "text/markdown" })
+      .get("/guide")
+      .reply(200, "<html><body></body></html>", { "Content-Type": "text/html" });
+
+    expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "guide", 10);
+    const guide = results.filter((r) => r.url === `${TEST_BASE_URL}/guide`);
+    expect(guide.some((r) => r.content?.includes("Markdown guide body"))).toBe(true);
+  }, 30000);
+
+  it("does not delete a live page because its markdown alternate is gone", async () => {
+    // A refresh asks the location the content came from, which for a published
+    // Markdown file is not the page's own URL. A 404 there says the file was
+    // withdrawn, not that the page was: sites drop their `.md` alternates and
+    // keep serving the pages. Deleting on that answer removed live pages from
+    // the index without ever requesting them, and — because refresh 404s are
+    // deliberately excluded from the failure threshold — reported success.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>Home body.</p></body></html>", {
+        "Content-Type": "text/html",
+        ETag: '"home-v1"',
+      })
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nGuide body about widgets.", {
+        "Content-Type": "text/markdown",
+        ETag: '"md-v1"',
+      });
+
+    expect((await runScrape({ maxDepth: 2 }))?.status).toBe(PipelineJobStatus.COMPLETED);
+    expect(await storedUrls()).toContain(`${TEST_BASE_URL}/guide`);
+
+    // The site withdraws its alternates; the HTML page is still served.
+    nock.cleanAll();
+    nock(TEST_BASE_URL)
+      .persist()
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(304, undefined, { ETag: '"home-v1"' })
+      .get("/guide.md")
+      .reply(404)
+      .get("/guide")
+      .reply(
+        200,
+        "<html><body><h1>Guide</h1><p>Guide body about widgets.</p></body></html>",
+        { "Content-Type": "text/html" },
+      );
+
+    const refreshId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
+    await pipelineManager.waitForJobCompletion(refreshId);
+
+    expect(await storedUrls()).toContain(`${TEST_BASE_URL}/guide`);
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "widgets", 10);
+    expect(results.some((r) => r.content?.includes("widgets"))).toBe(true);
+  }, 30000);
+
+  it("deletes the page when neither the alternate nor the page itself is served", async () => {
+    // The fallback asks the identity; if that is gone too, the page really is.
+    nock(TEST_BASE_URL)
+      .get("/llms.txt")
+      .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
+        "Content-Type": "text/plain",
+      })
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>Home body.</p></body></html>", {
+        "Content-Type": "text/html",
+        ETag: '"home-v1"',
+      })
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nGuide body about widgets.", {
+        "Content-Type": "text/markdown",
+      });
+
+    expect((await runScrape({ maxDepth: 2 }))?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    nock.cleanAll();
+    nock(TEST_BASE_URL)
+      .persist()
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(304, undefined, { ETag: '"home-v1"' })
+      .get("/guide.md")
+      .reply(404)
+      .get("/guide")
+      .reply(404);
+
+    const refreshId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
+    await pipelineManager.waitForJobCompletion(refreshId);
+
+    expect(await storedUrls()).not.toContain(`${TEST_BASE_URL}/guide`);
+  }, 30000);
+
+  it("keeps the markdown when refreshing an index that predates one identity", async () => {
+    // An index built before `.md` URLs folded onto their canonical page holds
+    // both representations as separate rows. The first refresh re-fetches both,
+    // and they now resolve to one identity. Retiring the old row before the two
+    // could be compared let the HTML overwrite the Markdown — silently, on
+    // upgrade, for exactly the indexes this change exists to repair.
+    nock(TEST_BASE_URL)
+      .persist()
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>Home body.</p></body></html>", {
+        "Content-Type": "text/html",
+      });
+    expect((await runScrape({ maxDepth: 0 }))?.status).toBe(PipelineJobStatus.COMPLETED);
+
+    // The pre-upgrade shape, in the order an llms.txt-driven crawl produced it:
+    // the .md entries first, the crawled HTML pages after.
+    for (const [url, mime, body] of [
+      [`${TEST_BASE_URL}/guide.md`, "text/markdown", "Legacy markdown guide body."],
+      [`${TEST_BASE_URL}/guide`, "text/html", "Legacy HTML guide body."],
+    ] as const) {
+      await docService.addScrapeResult(TEST_LIBRARY, TEST_VERSION, 1, {
+        url,
+        title: "Guide",
+        sourceContentType: mime,
+        contentType: mime,
+        textContent: body,
+        links: [],
+        errors: [],
+        chunks: [{ types: ["text"], content: body, section: { level: 0, path: [] } }],
+      });
+    }
+
+    nock.cleanAll();
+    nock(TEST_BASE_URL)
+      .persist()
+      .get("/llms.txt")
+      .reply(404)
+      .get("/")
+      .reply(200, "<html><body><h1>Home</h1><p>Home body.</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide")
+      .reply(200, "<html><body><h1>Guide</h1><p>Fresh HTML guide body.</p></body></html>", {
+        "Content-Type": "text/html",
+      })
+      .get("/guide.md")
+      .reply(200, "# Guide\n\nFresh markdown guide body.", {
+        "Content-Type": "text/markdown",
+      });
+
+    const refreshId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
+    await pipelineManager.waitForJobCompletion(refreshId);
+
+    // One identity, and the published Markdown is what it holds.
+    expect(await storedUrls()).not.toContain(`${TEST_BASE_URL}/guide.md`);
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "guide", 10);
+    expect(results.some((r) => r.content?.includes("Fresh markdown guide body"))).toBe(
+      true,
+    );
+    expect(results.some((r) => r.content?.includes("Fresh HTML guide body"))).toBe(false);
   }, 30000);
 });

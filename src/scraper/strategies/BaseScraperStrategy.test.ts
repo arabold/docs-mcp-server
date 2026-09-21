@@ -82,6 +82,7 @@ describe("BaseScraperStrategy", () => {
       pageId: undefined,
       result: {
         url: "https://example.com/",
+        contentUrl: undefined,
         title: "",
         sourceContentType: "",
         contentType: "",
@@ -91,6 +92,9 @@ describe("BaseScraperStrategy", () => {
         links: [],
         errors: [],
         chunks: [],
+        // First representation of this identity in the crawl, so it counts as a
+        // new page and the store takes it unconditionally.
+        isAdditionalRepresentation: false,
       },
     } satisfies ScraperProgressEvent);
   });

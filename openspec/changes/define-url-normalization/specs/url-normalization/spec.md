@@ -84,6 +84,13 @@ Some servers do serve paths case-insensitively, and on those a case-sensitive ke
 
 When a crawl treats fragments as routes rather than positions — a hash-routed site, where the fragment selects which page is shown — normalization SHALL leave fragments intact, and SHALL leave the surrounding URL intact with them. Trimming a trailing slash ahead of a route fragment produces a URL the site does not serve.
 
+The exemption SHALL be decided per URL. It follows from a URL carrying a route fragment, not from the crawl's policy alone: a URL with no fragment is an ordinary URL whichever policy is in force, and exempting it too would leave a site's `/docs` and `/docs/` recorded as two pages.
+
+#### Scenario: A URL without a fragment is normalized either way
+- **GIVEN** a crawl that treats fragments as routes
+- **WHEN** a URL carrying no fragment is normalized
+- **THEN** the transformations above are applied to it
+
 #### Scenario: Hash-routed URLs keep their fragments
 - **GIVEN** a crawl that treats fragments as routes
 - **WHEN** two URLs differ only by their fragments
@@ -108,3 +115,9 @@ They answer different questions. The identity asserts where a page lives; the re
 #### Scenario: Both remain available
 - **WHEN** a stored page is read back
 - **THEN** its identity and its retrieval location are both available
+
+#### Scenario: A search result links somewhere that answers
+- **GIVEN** a stored page whose identity was derived and whose retrieval location differs
+- **WHEN** the page is returned as a search result
+- **THEN** the retrieval location is available to the caller alongside the identity
+- **AND** a link offered to a reader addresses the retrieval location
