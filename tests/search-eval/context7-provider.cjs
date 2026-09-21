@@ -86,7 +86,9 @@ function normalizeUrl(library, raw) {
  * defensively doesn't hurt.)
  */
 // Exported for tests if anyone ever wants them; not used inside this script.
-module.exports = { normalizeUrl, LIBRARY_MAP };
+// `fetchContext7` is exported so its response handling can be tested: the
+// silent-zero regression this provider guards against lived entirely there.
+module.exports = { normalizeUrl, LIBRARY_MAP, fetchContext7 };
 
 function fetchContext7(libraryId, query) {
   const url = `https://context7.com/api/v2/context?libraryId=${encodeURIComponent(

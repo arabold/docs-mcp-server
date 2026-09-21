@@ -8,12 +8,14 @@
  */
 
 import { createRequire } from "node:module";
-import { describe, expect, it } from "vitest";
+import nock from "nock";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { normalizeUrl, LIBRARY_MAP } = require("./context7-provider.cjs") as {
+const { normalizeUrl, LIBRARY_MAP, fetchContext7 } = require("./context7-provider.cjs") as {
   normalizeUrl: (library: string, raw: string) => string;
   LIBRARY_MAP: Record<string, string>;
+  fetchContext7: (libraryId: string, query: string) => Promise<unknown>;
 };
 
 describe("normalizeUrl — python version segment", () => {
@@ -97,5 +99,82 @@ describe("LIBRARY_MAP", () => {
     // That id answers 202 `library_not_finalized` for every query, which the
     // provider used to swallow as an empty result set.
     expect(LIBRARY_MAP.python).not.toBe("/websites/python_3");
+  });
+});
+
+/**
+ * The regression this provider exists to prevent: a response that is not a
+ * usable result set must fail the run, not resolve to an empty one. A stale
+ * library id scored zero on every query while reporting no errors, which read
+ * as a 28% quality collapse on Context7's side.
+ */
+describe("fetchContext7 — responses that must not look like an empty result", () => {
+  beforeEach(() => {
+    nock.cleanAll();
+  });
+
+  afterEach(() => {
+    nock.cleanAll();
+  });
+
+  it("rejects a 202 for a library that is not finalized", async () => {
+    // What a retired library id actually returns. It parses as valid JSON and
+    // carries no snippets, so accepting it yields zero results and exit code 0.
+    nock("https://context7.com")
+      .get("/api/v2/context")
+      .query(true)
+      .reply(202, {
+        error: "library_not_finalized",
+        message: "Library /websites/python_3 is still being processed.",
+      });
+
+    await expect(fetchContext7("/websites/python_3", "pathlib")).rejects.toThrow(
+      /HTTP 202/,
+    );
+  });
+
+  it("rejects a 429 quota response", async () => {
+    nock("https://context7.com")
+      .get("/api/v2/context")
+      .query(true)
+      .reply(429, { error: "Quota Exceeded", message: "Monthly quota exceeded." });
+
+    await expect(fetchContext7("/websites/react_dev", "hooks")).rejects.toThrow(
+      /HTTP 429/,
+    );
+  });
+
+  it("rejects a 200 whose body carries an error", async () => {
+    // The same trap by another route: a success status with a failure payload.
+    nock("https://context7.com")
+      .get("/api/v2/context")
+      .query(true)
+      .reply(200, { error: "internal", message: "something went wrong" });
+
+    await expect(fetchContext7("/websites/react_dev", "hooks")).rejects.toThrow(
+      /returned error "internal"/,
+    );
+  });
+
+  it("rejects a body that is not JSON", async () => {
+    nock("https://context7.com")
+      .get("/api/v2/context")
+      .query(true)
+      .reply(200, "<html>gateway timeout</html>");
+
+    await expect(fetchContext7("/websites/react_dev", "hooks")).rejects.toThrow(
+      /bad JSON/,
+    );
+  });
+
+  it("resolves a well-formed 200", async () => {
+    nock("https://context7.com")
+      .get("/api/v2/context")
+      .query(true)
+      .reply(200, { codeSnippets: [], infoSnippets: [] });
+
+    await expect(
+      fetchContext7("/websites/react_dev", "hooks"),
+    ).resolves.toMatchObject({ codeSnippets: [], infoSnippets: [] });
   });
 });
