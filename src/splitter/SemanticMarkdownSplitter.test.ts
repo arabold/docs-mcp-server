@@ -851,3 +851,48 @@ Text paragraph.
     });
   });
 });
+
+describe("heading anchor annotations", () => {
+  /** Returns every section path and heading line the splitter produced. */
+  const split = async (markdown: string) => {
+    const chunks = await new SemanticMarkdownSplitter(100, 5000).splitText(markdown);
+    return {
+      paths: chunks.flatMap((c) => c.section.path),
+      content: chunks.map((c) => c.content).join("\n"),
+    };
+  };
+
+  it("drops an MDX anchor comment from the heading and its path", async () => {
+    // react.dev pins heading ids this way; the annotation is an instruction to
+    // the renderer, so indexing it puts noise in both the embedding and the
+    // section path a reader sees.
+    const { paths, content } = await split(
+      "## Adding styles {/*adding-styles*/}\n\nUse className.",
+    );
+
+    expect(paths).toContain("Adding styles");
+    expect(content).toContain("## Adding styles");
+    expect(content).not.toContain("{/*");
+  });
+
+  it("drops a hash-style anchor", async () => {
+    const { paths, content } = await split("## Adding styles {#adding-styles}\n\nBody.");
+
+    expect(paths).toContain("Adding styles");
+    expect(content).not.toContain("{#adding-styles}");
+  });
+
+  it("keeps braces that are part of the heading", async () => {
+    // Only a trailing annotation is an anchor. A heading about JSX or object
+    // literals has to survive intact.
+    const { paths } = await split("## Use {count} in JSX\n\nBody.");
+
+    expect(paths).toContain("Use {count} in JSX");
+  });
+
+  it("leaves a heading without an annotation alone", async () => {
+    const { paths } = await split("## Plain heading\n\nBody.");
+
+    expect(paths).toContain("Plain heading");
+  });
+});

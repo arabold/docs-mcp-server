@@ -36,6 +36,33 @@ interface DocumentSection {
  * 1. Split document into sections based on headings (H1-H3 only)
  * 2. Split section content into smaller chunks based on preferredChunkSize
  */
+/**
+ * Removes an explicit anchor annotation from the end of a heading.
+ *
+ * Markdown dialects let authors pin a heading's id rather than let it be
+ * derived. MDX writes it as a comment and several Markdown extensions use
+ * `{#adding-styles}`. Neither is prose — both are instructions to the renderer
+ * — yet they survive into the text we index, landing in the embedded content
+ * and in the section path shown to readers.
+ *
+ * The MDX form reaches here already chewed: this runs after markdown has been
+ * converted to HTML, and the conversion consumes the comment's asterisks as
+ * emphasis markers, so `{/*adding-styles*\/}` arrives as `{/adding-styles/}`.
+ * Both spellings are matched, since which one appears depends on the converter.
+ *
+ * Anchored to the end of the string, so a heading that legitimately contains
+ * braces earlier on — `Use {count} in JSX` — keeps them.
+ *
+ * @param heading The heading text as rendered.
+ * @returns The heading without a trailing anchor annotation.
+ */
+function stripHeadingAnchors(heading: string): string {
+  return heading
+    .replace(/\s*\{\/\*?[\s\S]*?\*?\/\}\s*$/, "")
+    .replace(/\s*\{#[^}\s]*\}\s*$/, "")
+    .trimEnd();
+}
+
 export class SemanticMarkdownSplitter implements DocumentSplitter {
   private turndownService: TurndownService;
   public textSplitter: TextContentSplitter;
@@ -220,7 +247,7 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
       if (headingMatch) {
         // Create new section for H1-H6 heading
         const level = Number.parseInt(headingMatch[1], 10);
-        const title = fullTrim(element.textContent || "");
+        const title = stripHeadingAnchors(fullTrim(element.textContent || ""));
 
         // Pop sections from stack until we find the parent level
         while (stack.length > 1 && stack[stack.length - 1].level >= level) {
