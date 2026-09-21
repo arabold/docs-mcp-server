@@ -194,6 +194,23 @@ describe("PipelineManager", () => {
     expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
   });
 
+  it("should normalize library names so entry points share one bucket", async () => {
+    // The store buckets by folded library name, so "LibN" and "libn" index into
+    // one version. Comparing them exactly here let both jobs run in parallel
+    // against that bucket, where the second one's clean-before-scrape deleted
+    // pages the first had already written — and both reported success.
+    const options = { url: "http://a.com", library: "LibN", version: "1.0" };
+    const jobId1 = await manager.enqueueScrapeJob("LibN", "1.0", options);
+    const jobId2 = await manager.enqueueScrapeJob(" libn ", "1.0", {
+      ...options,
+      library: " libn ",
+    });
+
+    expect(jobId1).not.toBe(jobId2);
+    const job1 = await manager.getJob(jobId1);
+    expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
+  });
+
   it("should start a queued job and transition to RUNNING", async () => {
     // Simulate a long-running job
     const pendingPromise = new Promise(() => {});

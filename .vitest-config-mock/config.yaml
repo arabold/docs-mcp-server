@@ -32,6 +32,7 @@ scraper:
   fetcher:
     maxRetries: 3
     baseDelayMs: 1000
+    timeoutMs: 30000
     maxCacheItems: 200
     maxCacheItemSizeBytes: 512000
   document:

@@ -139,21 +139,16 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     // This splitter focuses on markdown, HTML, and plain text content
 
     let contentToProcess = markdown;
-    let frontmatterChunk: Chunk | null = null;
+    let frontmatterBlock: string | null = null;
 
     try {
       // Check for frontmatter
       const file = matter(markdown);
-      if (SemanticMarkdownSplitter.hasFrontmatterData(file.data)) {
-        frontmatterChunk = {
-          types: ["frontmatter"],
-          content: SemanticMarkdownSplitter.extractRawFrontmatter(markdown, file),
-          section: {
-            level: 0,
-            path: [],
-          },
-        };
-
+      if (
+        SemanticMarkdownSplitter.hasClosedFrontmatterBlock(markdown) &&
+        SemanticMarkdownSplitter.hasFrontmatterData(file.data)
+      ) {
+        frontmatterBlock = SemanticMarkdownSplitter.extractRawFrontmatter(markdown, file);
         contentToProcess = file.content;
       }
     } catch (err) {
@@ -169,11 +164,59 @@ export class SemanticMarkdownSplitter implements DocumentSplitter {
     const sections = await this.splitIntoSections(dom);
     const chunks = await this.splitSectionContent(sections);
 
-    if (frontmatterChunk) {
-      chunks.unshift(frontmatterChunk);
+    if (frontmatterBlock) {
+      // Size-bounded like every other chunk. It is prepended after splitting,
+      // so nothing else would bound it, and a page carrying a long `summary:`
+      // or a generated field list produced a single chunk many times the limit.
+      //
+      // A block that cannot be divided — one unbroken token longer than the
+      // limit, such as an embedded key or data URI — keeps its oversized chunk
+      // rather than failing the page. That is the behaviour this replaces, so
+      // the worst case is unchanged and the common case is now bounded.
+      let parts: string[];
+      try {
+        parts = await this.textSplitter.split(frontmatterBlock);
+      } catch (err) {
+        logger.warn(
+          `Keeping an oversized frontmatter chunk; it could not be split: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        parts = [frontmatterBlock];
+      }
+      chunks.unshift(
+        ...parts.map(
+          (content): Chunk => ({
+            types: ["frontmatter"],
+            content,
+            section: { level: 0, path: [] },
+          }),
+        ),
+      );
     }
 
     return chunks;
+  }
+
+  /**
+   * Reports whether the document actually opens with a closed frontmatter block.
+   *
+   * gray-matter has no delimiter to stop at when a document opens with a
+   * thematic break and never closes it, so it parses the entire body as YAML.
+   * When that body happens to be a valid mapping — a page whose first line is
+   * `---` followed by `Replacement: use the createClient helper`, or any
+   * `Key: value` prose — the parse looks exactly like real frontmatter, and the
+   * whole document is filed as one frontmatter chunk with no headings and no
+   * sections. Turndown renders `<hr>` as `---`, so HTML pages reach this too.
+   *
+   * Checked against the source rather than the parse, because only the source
+   * says whether a closing delimiter was ever there.
+   *
+   * @param markdown The original markdown passed to gray-matter.
+   * @returns True when a `---` delimited block opens the document and closes.
+   */
+  private static hasClosedFrontmatterBlock(markdown: string): boolean {
+    return /^\uFEFF?---[^\S\n]*\r?\n[\s\S]*?\r?\n---[^\S\n]*(\r?\n|$)/.test(markdown);
   }
 
   /**

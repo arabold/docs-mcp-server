@@ -190,7 +190,6 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     expect(await articleIsSearchable()).toBe(true);
     const page = await storedArticle();
     expect(page?.etag).toBe('"article-v1"');
-    expect(page?.etag).not.toBe('"article-v2-broken"');
   }, 60000);
 
   it("retries on the next refresh after a withheld etag, restoring content", async () => {

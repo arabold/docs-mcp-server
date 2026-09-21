@@ -354,7 +354,9 @@ describe("HttpFetcher", () => {
           // Verify that our custom Accept-Encoding header is set (excluding zstd)
           "Accept-Encoding": "gzip, deflate, br",
         }),
-        timeout: undefined,
+        // Defaulted from config: axios has none of its own, so leaving it
+        // undefined let a stalled server hold the worker indefinitely.
+        timeout: DEFAULT_CONFIG.scraper.fetcher.timeoutMs,
         maxRedirects: 0,
         signal: undefined,
         decompress: true,
@@ -381,7 +383,9 @@ describe("HttpFetcher", () => {
       expect.objectContaining({
         responseType: "stream",
         headers: expect.objectContaining(headers),
-        timeout: undefined,
+        // Defaulted from config: axios has none of its own, so leaving it
+        // undefined let a stalled server hold the worker indefinitely.
+        timeout: DEFAULT_CONFIG.scraper.fetcher.timeoutMs,
         maxRedirects: 0,
         signal: undefined,
         decompress: true,

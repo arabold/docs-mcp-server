@@ -531,4 +531,21 @@ line three</code></pre>
     expect(context.content).toContain("line one\nline two\nline three");
     expect(context.errors).toHaveLength(0);
   });
+
+  it("never leaves markup in the context when the salvage itself fails", async () => {
+    // The salvage runs the same converter over the same document, so whatever
+    // defeated the whole-document pass can defeat it too. An escaping throw
+    // skipped the assignment that replaces the content, leaving the raw HTML
+    // for the splitter to chunk and the embedder to bill for — and, on a
+    // refresh, leaving a zero-chunk result that replaced the stored page.
+    const depth = 2000;
+    const html = `<html><body>${"<div>".repeat(depth)}deep text${"</div>".repeat(depth)}</body></html>`;
+    const context = createMockContext(html);
+    const middleware = new HtmlToMarkdownMiddleware();
+
+    await middleware.process(context, async () => {});
+
+    expect(context.content.trimStart().startsWith("<")).toBe(false);
+    expect(context.errors.length).toBeGreaterThan(0);
+  });
 });

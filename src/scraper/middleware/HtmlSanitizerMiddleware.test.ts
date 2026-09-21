@@ -344,11 +344,13 @@ describe("HtmlSanitizerMiddleware", () => {
     expect($?.("body").text()).toContain("SSR specifically refers");
   });
 
-  it("should scope to the text-richest region when a page declares several", async () => {
+  it("should keep every declared region when a page declares several", async () => {
     const middleware = new HtmlSanitizerMiddleware();
     // Multiple <main> elements are invalid but common in generated markup —
-    // a stub from a layout template beside the real one. The first in
-    // document order is the wrong choice here.
+    // a stub from a layout template beside the real one. Keeping only the
+    // richest costs a few characters of chrome here, but on a page whose
+    // second region is a real section it silently dropped the whole thing,
+    // so both are kept and the chrome is tolerated.
     const html = `
       <html><body>
         <main class="stub"><p>Menu</p></main>
@@ -364,9 +366,47 @@ describe("HtmlSanitizerMiddleware", () => {
 
     const $ = context.dom;
     expect($?.("main.real").length).toBe(1);
-    expect($?.("main.stub").length).toBe(0);
-    expect($?.("body").text()).not.toContain("Menu");
     expect($?.("body").text()).toContain("Build the site");
+    // Everything outside the declared regions is still gone.
+    expect($?.("body").children().toArray()).toHaveLength(2);
+  });
+
+  it("should not drop a second content region of comparable size", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    // Two co-equal regions score exactly at the ratio floor when only the
+    // winner is measured, so the guard could not catch this: one whole region
+    // was discarded with nothing above debug logging to say so.
+    const html = `
+      <html><body>
+        <main id="guide"><p>Guide prose about configuring the widget factory properly.</p></main>
+        <main id="api"><p>API reference prose listing every exported helper function.</p></main>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const text = context.dom?.("body").text() ?? "";
+    expect(text).toContain("widget factory");
+    expect(text).toContain("exported helper");
+  });
+
+  it("should not duplicate a region nested inside another region", async () => {
+    const middleware = new HtmlSanitizerMiddleware();
+    // Nested <main> elements, not <main> around role=main: the candidate set is
+    // `$("main")` whenever any exists, so a nested role=main is never a
+    // candidate and would not exercise the guard at all.
+    const html = `
+      <html><body>
+        <main><main><p>Configure the deployment target before building the site output.</p></main></main>
+      </body></html>`;
+    const context = createMockContext(html);
+    const next = vi.fn().mockResolvedValue(undefined);
+
+    await middleware.process(context, next);
+
+    const text = context.dom?.("body").text() ?? "";
+    expect(text.split("Configure the deployment target")).toHaveLength(2);
   });
 
   it("should fall back to role=main when the page has no main element", async () => {

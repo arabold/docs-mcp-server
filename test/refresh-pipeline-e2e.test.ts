@@ -470,12 +470,19 @@ describe("Refresh Pipeline E2E Tests", () => {
 
   describe("Resiliency", () => {
     it("should handle network timeouts gracefully and continue processing other pages", async () => {
+      // The timeout has to be real: nothing used to set one, axios has no
+      // default, and the stalling response carried no Content-Type — so the
+      // page was dropped by the content-type gate and this test passed
+      // without a timeout ever occurring. Shortened here so the stall is
+      // bounded well inside the test's own budget.
+      appConfig.scraper.fetcher.timeoutMs = 500;
+
       // Setup: Mock initial site where one page times out
       nock(TEST_BASE_URL)
         .get("/")
         .reply(
           200,
-          "<html><body><h1>Home</h1><a href='/page1'>Page 1</a><a href='/timeout-page'>Timeout</a></body></html>",
+          "<html><body><h1>Home</h1><a href='/page1'>Page 1</a><a href='/page2'>Page 2</a><a href='/timeout-page'>Timeout</a></body></html>",
           {
             "Content-Type": "text/html",
             ETag: '"home-v1"',
@@ -486,9 +493,23 @@ describe("Refresh Pipeline E2E Tests", () => {
           "Content-Type": "text/html",
           ETag: '"page1-v1"',
         })
+        .get("/page2")
+        .reply(200, "<html><body><h1>Page 2</h1><p>Also working</p></body></html>", {
+          "Content-Type": "text/html",
+          ETag: '"page2-v1"',
+        });
+
+      // Persisted: the fetcher retries, and every attempt must stall the same
+      // way rather than falling through to an unmatched request.
+      nock(TEST_BASE_URL)
+        .persist()
         .get("/timeout-page")
-        .delay(5000) // Simulate timeout
-        .reply(200, "Should never reach this");
+        .delay(5000) // Longer than the fetcher's timeout, so the read aborts
+        .reply(
+          200,
+          "<html><body><h1>Never</h1><p>Should never reach this</p></body></html>",
+          { "Content-Type": "text/html" },
+        );
 
       // Execute scrape - should complete despite timeout
       const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
@@ -497,6 +518,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        ignoreErrors: true,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(jobId);
@@ -508,11 +530,14 @@ describe("Refresh Pipeline E2E Tests", () => {
       });
       const pages = await docService.getPagesByVersionId(versionId);
 
-      // Should have home and page1, but timeout-page should have failed
-      expect(pages.length).toBeGreaterThanOrEqual(2);
-      const urls = pages.map((p) => p.url);
-      expect(urls).toContain(`${TEST_BASE_URL}/`);
-      expect(urls).toContain(`${TEST_BASE_URL}/page1`);
+      // The stalled page is not indexed, and the pages around it still are —
+      // the crawl carried on rather than parking on the dead URL.
+      const urls = pages.map((p) => p.url).sort();
+      expect(urls).toEqual([
+        `${TEST_BASE_URL}/`,
+        `${TEST_BASE_URL}/page1`,
+        `${TEST_BASE_URL}/page2`,
+      ]);
 
       // Verify working page content is searchable
       const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "working page", 10);
@@ -626,10 +651,21 @@ describe("Refresh Pipeline E2E Tests", () => {
 
       // Should now have the new URL
       expect(urls).toContain(`${TEST_BASE_URL}/page1-new`);
+      // And not the old one. The test named "update canonical URLs" but only
+      // checked the new row existed, so a half-done move — new row written,
+      // old row left behind with stale content, searchable forever — passed.
+      expect(urls).not.toContain(`${TEST_BASE_URL}/page1`);
 
-      // Verify content from new location is searchable
+      // Verify content from new location is searchable, and the old content is gone
       const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "new location", 10);
       expect(search.length).toBeGreaterThan(0);
+      const stale = await docService.searchStore(
+        TEST_LIBRARY,
+        TEST_VERSION,
+        "Original location",
+        10,
+      );
+      expect(stale.some((r) => r.content?.includes("Original location"))).toBe(false);
     }, 30000);
   });
 

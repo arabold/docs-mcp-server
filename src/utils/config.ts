@@ -112,6 +112,11 @@ export const DEFAULT_CONFIG = {
     fetcher: {
       maxRetries: 3,
       baseDelayMs: 1000,
+      // A server that accepts the connection and then stalls would otherwise
+      // hold a worker forever: axios has no default timeout, so nothing else
+      // bounds the wait. Generous enough for a slow docs host rendering a
+      // large page, short enough that one bad URL cannot park a crawl.
+      timeoutMs: 30_000,
       maxCacheItems: 200,
       maxCacheItemSizeBytes: 500 * 1024,
     },
@@ -248,6 +253,10 @@ export const AppConfigSchema = z.object({
             .number()
             .int()
             .default(DEFAULT_CONFIG.scraper.fetcher.baseDelayMs),
+          timeoutMs: z.coerce
+            .number()
+            .int()
+            .default(DEFAULT_CONFIG.scraper.fetcher.timeoutMs),
           maxCacheItems: z.coerce
             .number()
             .int()

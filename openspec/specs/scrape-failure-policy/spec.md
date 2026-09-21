@@ -16,6 +16,15 @@ The scraper SHALL default HTTP fetch retries to 3 retries per page request, in a
 - **WHEN** an HTTP page fetch fails with a non-retryable permanent error
 - **THEN** the fetcher SHALL fail the page without consuming additional retries
 
+### Requirement: Bounded HTTP Fetch Duration
+The scraper SHALL bound how long a single HTTP fetch may wait, so that a server which accepts a connection and then stalls cannot hold a worker indefinitely. A fetch that exceeds the bound SHALL be treated as a retryable failure and SHALL NOT stop the crawl from processing the rest of the queue.
+
+#### Scenario: A stalled response does not park the crawl
+- **GIVEN** a page whose server accepts the request and never completes the response
+- **WHEN** the crawl reaches that page
+- **THEN** the fetch is abandoned once the bound elapses
+- **AND** the remaining pages are still fetched and indexed
+
 ### Requirement: Root Page Failures Abort Immediately
 The scraper SHALL fail the scrape job immediately when the root page cannot be processed successfully during a normal scrape and no alternate crawl seeds are available. During refresh, a tracked root page that returns `NOT_FOUND` SHALL be treated as a deletion instead of a hard failure.
 
