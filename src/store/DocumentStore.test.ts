@@ -2908,23 +2908,16 @@ describe("DocumentStore - Markdown representation precedence", () => {
     expect(a.map((r) => r.content)).toEqual(b.map((r) => r.content));
   });
 
-  it("ranks a plain-text body below html, whichever arrives first", async () => {
-    // `text/plain` reaches this rule only because a `.md` URL was served as
-    // plain text, which is equally consistent with a real document and with a
-    // soft error page served at an address that has none. It may stand in for a
-    // page nothing else reached, but never displace one really retrieved.
-    const plainFirst = new DocumentStore(":memory:", appConfig);
-    await plainFirst.initialize();
-    await plainFirst.addDocuments("lib", "1.0", 0, resultWith("text/plain", "Not Found"));
-    await plainFirst.addDocuments("lib", "1.0", 0, competingWith("text/html", "real"));
-    const a = await plainFirst.findChunksByUrl("lib", "1.0", "https://example.com/guide");
-    await plainFirst.shutdown();
+  it("decides on the recorded type, leaving the markdown judgement upstream", async () => {
+    // The store's rule is only markdown-vs-not. Whether a `.md` URL answered as
+    // `text/plain` counts as Markdown is settled before the write, by
+    // `WebScraperStrategy.asMarkdownRepresentation`, which restates it — so a
+    // `text/plain` arriving here is a genuine plain-text page and loses to
+    // stored Markdown like any other non-Markdown representation.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md body"));
+    await store.addDocuments("lib", "1.0", 0, competingWith("text/plain", "txt body"));
 
-    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "real"));
-    await store.addDocuments("lib", "1.0", 0, competingWith("text/plain", "Not Found"));
-
-    expect(a.map((r) => r.content)).toEqual(["real"]);
-    expect(await storedContent()).toEqual(["real"]);
+    expect(await storedContent()).toEqual(["md body"]);
   });
 
   it("lets a later crawl replace markdown with html", async () => {

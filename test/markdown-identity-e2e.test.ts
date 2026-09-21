@@ -410,13 +410,17 @@ describe("Markdown variant identity E2E", () => {
     expect(guide.some((r) => r.content?.includes("Markdown body"))).toBe(true);
   }, 30000);
 
-  it("does not let a plain-text body displace a page that was really retrieved", async () => {
-    // A server answering 200 text/plain "Not Found" for every .md URL is
-    // indistinguishable from react.dev's real alternates, so the identity still
-    // folds — but the page it folds onto must survive. Ranking plain text below
-    // HTML is what makes the outcome the same whichever route arrives last;
-    // granting it Markdown's precedence instead left the real page overwritten
-    // by a stub and locked out of every later refresh.
+  it("prefers a markdown alternate served as plain text over its html twin", async () => {
+    // react.dev serves its `.md` alternates as `text/plain`; vite.dev sends
+    // `text/markdown`. Both are the published Markdown for the page, so both
+    // outrank an HTML copy of it.
+    //
+    // Plain text was briefly ranked below HTML, to stop a plain-text soft error
+    // page outranking the page it folds onto. That protected nothing: the hosts
+    // that soft-404 a `.md` URL answer `200 text/markdown` with a
+    // `# Page Not Found` body, which this rule does not see, while react.dev
+    // returns a real 404. It only cost the published Markdown of every site
+    // serving `text/plain`.
     nock(TEST_BASE_URL)
       .get("/llms.txt")
       .reply(200, `# Docs\n\n- [Guide](${TEST_BASE_URL}/guide.md)\n`, {
@@ -429,18 +433,21 @@ describe("Markdown variant identity E2E", () => {
         { "Content-Type": "text/html" },
       )
       .get("/guide.md")
-      .reply(200, "Not Found", { "Content-Type": "text/plain" })
+      .reply(200, "# Guide\n\nMarkdown body.", { "Content-Type": "text/plain" })
       .get("/guide")
-      .reply(200, "<html><body><h1>Guide</h1><p>Real guide content.</p></body></html>", {
+      .reply(200, "<html><body><h1>Guide</h1><p>HTML body.</p></body></html>", {
         "Content-Type": "text/html",
       });
 
     expect((await runScrape())?.status).toBe(PipelineJobStatus.COMPLETED);
 
-    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "guide", 10);
+    const urls = await storedUrls();
+    expect(urls.filter((u) => u === `${TEST_BASE_URL}/guide`)).toHaveLength(1);
+
+    const results = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "body", 10);
     const guide = results.filter((r) => r.url === `${TEST_BASE_URL}/guide`);
-    expect(guide.some((r) => r.content?.includes("Real guide content"))).toBe(true);
-    expect(guide.some((r) => r.content?.includes("Not Found"))).toBe(false);
+    expect(guide.some((r) => r.content?.includes("Markdown body"))).toBe(true);
+    expect(guide.some((r) => r.content?.includes("HTML body"))).toBe(false);
   }, 30000);
 
   it("keeps the stored markdown when an html twin extracts nothing", async () => {

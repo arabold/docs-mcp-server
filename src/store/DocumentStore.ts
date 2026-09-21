@@ -77,31 +77,14 @@ interface EmbeddingBatchContext {
 }
 
 /**
- * How strongly a representation resists being replaced by a competing one.
+ * Whether a competing representation should be turned away.
  *
  * A page reachable as both a published Markdown file and an HTML page produces
  * two writes under one identity, and which arrives last is an accident of crawl
- * order. Ranking them makes the outcome the same either way.
- *
- * Markdown the site publishes is what its authors wrote for machine
- * consumption, so it outranks HTML we converted ourselves. Plain text ranks
- * below both: it is only ever seen here because a `.md` URL was served as
- * `text/plain`, which is equally consistent with a real document and with a
- * soft error page served at an address that has none — so it may stand in for a
- * page nothing else reached, but never displace one that was really retrieved.
- */
-function representationRank(sourceContentType: string | null | undefined): number {
-  const mimeType = (sourceContentType ?? "").toLowerCase();
-  if (MimeTypeUtils.isMarkdown(mimeType)) return 2;
-  // Plain text and a type we could not identify at all say the same thing:
-  // nothing confirms what this is. Both may stand in for a page no other route
-  // reached, and neither may displace one that was really retrieved.
-  if (mimeType === "" || mimeType.startsWith("text/plain")) return 0;
-  return 1;
-}
-
-/**
- * Whether a competing representation should be turned away.
+ * order. Markdown the site publishes is what its authors wrote for machine
+ * consumption, so it wins; converting HTML ourselves is the fallback for sites
+ * offering nothing better. A `.md` URL answered as `text/plain` counts as
+ * Markdown — see `WebScraperStrategy.asMarkdownRepresentation`.
  *
  * Only applies between representations seen in the same crawl. A first write
  * for an identity always lands, so a later crawl's answer supersedes an earlier
@@ -114,8 +97,8 @@ function losesToStoredRepresentation(
 ): boolean {
   if (!stored || !isAdditionalRepresentation) return false;
   return (
-    representationRank(stored.source_content_type) >
-    representationRank(incomingSourceContentType)
+    MimeTypeUtils.isMarkdown(stored.source_content_type ?? "") &&
+    !MimeTypeUtils.isMarkdown(incomingSourceContentType ?? "")
   );
 }
 

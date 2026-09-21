@@ -162,18 +162,22 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   }
 
   /**
-   * Chooses the content type a Markdown variant should be parsed as.
+   * Restates an accepted Markdown variant's content type as Markdown.
    *
    * Sites disagree on how to serve a `.md` file: vite.dev sends `text/markdown`,
    * react.dev sends `text/plain`. Both are Markdown documents, so both are
-   * parsed as Markdown — the extension is the author's statement about the
-   * format, and the plain-text pipeline would throw away every heading.
+   * parsed and recorded as Markdown — the extension is the author's statement
+   * about the format, and the plain-text pipeline would throw away every
+   * heading. Markdown is close enough to a superset of plain text that a file
+   * using none of its syntax still comes through intact.
    *
-   * This governs parsing only. The served type is reported unchanged, because
-   * that is what the store's precedence rule reads: a `text/plain` body is
-   * equally consistent with a real document and with a soft error page served
-   * at a `.md` address that has none, and recording it as Markdown would let
-   * the latter outrank the page it was folded onto and never be replaced.
+   * `text/plain` is not treated as a weaker signal than HTML. It was, briefly,
+   * to stop a plain-text soft error page outranking the page it folds onto —
+   * but the hosts that soft-404 a `.md` URL answer `200 text/markdown` with a
+   * `# Page Not Found` body (ai-sdk.dev, nextjs.org), so that rule caught none
+   * of them, while react.dev — the `text/plain` host — returns a real 404.
+   * It cost the published Markdown of every such site and bought nothing.
+   * Soft-error detection needs to read the body, and belongs elsewhere.
    */
   private asMarkdownRepresentation(url: string, rawContent: RawContent): RawContent {
     if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
@@ -485,10 +489,16 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       }
 
       // Use AutoDetectFetcher which handles fallbacks automatically
-      const rawContent = await this.fetchItemContent(item, options, signal);
+      const fetched = await this.fetchItemContent(item, options, signal);
       const fetchedSource = options.preserveHashes
-        ? this.restorePreservedHash(url, rawContent.source)
-        : rawContent.source;
+        ? this.restorePreservedHash(url, fetched.source)
+        : fetched.source;
+      // Judged on where the bytes came from, not on where we asked: a redirect
+      // from an extensionless URL to a `.md` resource is still a published
+      // Markdown representation, and the queued URL would hide that. Applied
+      // here rather than per fetch path so every route reaching this point —
+      // including the llms.txt variant fallback — is covered by one rule.
+      const rawContent = this.asMarkdownRepresentation(fetchedSource, fetched);
       // A Markdown variant is recorded under the page it represents, so a `.md`
       // URL and its canonical form resolve to one identity however each was found.
       const effectiveSource = this.resolvePageIdentity(fetchedSource, rawContent);
@@ -523,21 +533,17 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       }
 
       // --- Start Pipeline Processing ---
-      // What to parse it as, which for a `.md` URL served as plain text is not
-      // what the server said it was. `rawContent` keeps the served type, which
-      // is what gets reported and stored.
-      const forParsing = this.asMarkdownRepresentation(fetchedSource, rawContent);
       let processed: PipelineResult | undefined;
       for (const pipeline of this.pipelines) {
         const contentBuffer = Buffer.isBuffer(rawContent.content)
           ? rawContent.content
           : Buffer.from(rawContent.content);
-        if (pipeline.canProcess(forParsing.mimeType || "text/plain", contentBuffer)) {
+        if (pipeline.canProcess(rawContent.mimeType || "text/plain", contentBuffer)) {
           logger.debug(
-            `Selected ${pipeline.constructor.name} for content type "${forParsing.mimeType}" (${url})`,
+            `Selected ${pipeline.constructor.name} for content type "${rawContent.mimeType}" (${url})`,
           );
           processed = await pipeline.process(
-            { ...forParsing, source: effectiveSource },
+            { ...rawContent, source: effectiveSource },
             options,
             this.fetcher,
           );

@@ -102,7 +102,7 @@ This preference SHALL NOT depend on which representation was encountered first. 
 
 The preference SHALL apply only between representations reached during the same crawl. It settles which of two routes to one document wins a race; it is not a claim that the stored copy is permanent. A later crawl's answer for a page SHALL replace what is stored, so a site that stops publishing a Markdown representation is re-indexed from what it now serves rather than freezing on the last Markdown copy retrieved.
 
-A representation whose content type the server did not confirm — a Markdown variant URL answered as plain text — SHALL rank below one that was confirmed. Such a response is equally consistent with a real document and with a soft error page served at an address that has none, so it may stand in for a page no other route reached, but SHALL NOT displace a page that was really retrieved.
+A Markdown variant URL answered as plain text SHALL count as Markdown for this preference. Sites disagree on how to serve a `.md` file and `text/plain` is one of the answers in use, so the served type alone does not distinguish a published Markdown document from anything else. Markdown syntax is close enough to a superset of plain text that a document using none of it still survives the Markdown pipeline intact.
 
 #### Scenario: Markdown replaces an already-indexed HTML representation
 - **GIVEN** a page whose HTML representation has been processed
@@ -119,10 +119,10 @@ A representation whose content type the server did not confirm — a Markdown va
 - **WHEN** a later crawl reaches only the page's HTML representation
 - **THEN** the stored content for that page is the HTML representation
 
-#### Scenario: An unconfirmed plain-text body does not displace a retrieved page
+#### Scenario: A plain-text Markdown alternate is preferred over HTML
 - **GIVEN** a crawl that retrieved a page's HTML representation
 - **WHEN** the same crawl reaches a Markdown variant URL for that page and the server answers with plain text
-- **THEN** the stored content for that page remains the HTML representation
+- **THEN** the stored content for that page is the Markdown representation
 
 #### Scenario: An empty representation competes on the same terms
 - **GIVEN** a crawl that stored a page's Markdown representation
