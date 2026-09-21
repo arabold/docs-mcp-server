@@ -166,6 +166,7 @@ export class PipelineWorker {
       }
       await this.store.addEmptyPage(library, version, progress.depth, {
         url: emptyPage.url,
+        contentUrl: emptyPage.contentUrl,
         title: emptyPage.title,
         sourceContentType: emptyPage.sourceContentType,
         contentType: emptyPage.contentType,

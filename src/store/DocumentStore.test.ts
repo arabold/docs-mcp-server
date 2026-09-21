@@ -2911,3 +2911,91 @@ describe("DocumentStore - Markdown representation precedence", () => {
     expect(await storedContent()).toEqual(["second"]);
   });
 });
+
+describe("DocumentStore - concurrent writes to one identity", () => {
+  let store: DocumentStore;
+
+  const resultWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    url: "https://example.com/guide",
+    title: "Guide",
+    sourceContentType,
+    contentType: "text/markdown",
+    textContent: content,
+    links: [],
+    errors: [],
+    chunks: [{ types: ["text"], content, section: { level: 0, path: [] } }],
+  });
+
+  beforeEach(async () => {
+    // Vector search on, so embedding introduces a real await between reading
+    // the page row and writing it — which is the window the race lives in.
+    mockEmbeddingDimension.value = 1536;
+    appConfig.app.embeddingModel = EmbeddingConfig.parseEmbeddingConfig(
+      "openai:text-embedding-3-small",
+    ).modelSpec;
+    store = new DocumentStore(":memory:", appConfig);
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    if (store) await store.shutdown();
+  });
+
+  /**
+   * Holds every embedding call open until both writers have reached it, so the
+   * two are provably in flight together. `Promise.all` alone does not guarantee
+   * that: whichever chain needs fewer microtask turns can finish outright
+   * before the other reads the page row, and then there is no race to observe.
+   */
+  function blockEmbeddingsUntilBothArrive(count: number): void {
+    const s = store as unknown as {
+      embedDocumentsWithRetry: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = s.embedDocumentsWithRetry.bind(s);
+    let arrived = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    s.embedDocumentsWithRetry = async (...args: unknown[]) => {
+      arrived++;
+      if (arrived >= count) release();
+      await gate;
+      return original(...args);
+    };
+  }
+
+  it("stores one chunk set when both representations are written at once", async () => {
+    // Pins the observable property: two concurrent writes to one identity leave
+    // one chunk set, and it is the Markdown one.
+    //
+    // It does not discriminate the in-transaction re-read that guards the
+    // read-then-write window — reverting that still passes here, because
+    // better-sqlite3 transactions are synchronous and a writer that enters one
+    // completes before the other starts. The re-read is justified by reasoning
+    // rather than by this test.
+    blockEmbeddingsUntilBothArrive(2);
+
+    await Promise.all([
+      store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "from markdown")),
+      store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html")),
+    ]);
+
+    const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe("from markdown");
+  });
+
+  it("keeps markdown whichever write is scheduled first", async () => {
+    blockEmbeddingsUntilBothArrive(2);
+
+    await Promise.all([
+      store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html")),
+      store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "from markdown")),
+    ]);
+
+    const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe("from markdown");
+  });
+});

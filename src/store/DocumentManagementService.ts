@@ -597,6 +597,7 @@ export class DocumentManagementService {
     depth: number,
     page: {
       url: string;
+      contentUrl?: string;
       title: string;
       sourceContentType: string | null;
       contentType: string | null;

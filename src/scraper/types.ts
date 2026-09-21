@@ -237,6 +237,8 @@ export interface ScraperProgressEvent {
    */
   emptyPage?: {
     url: string;
+    /** Where the content was retrieved from, when that differs from `url`. */
+    contentUrl?: string;
     title: string;
     sourceContentType: string | null;
     contentType: string | null;

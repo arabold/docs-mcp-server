@@ -272,7 +272,10 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
     if (!item.fromLlmsTxt || this.isMarkdownUrl(item.url)) {
       const fetched = await this.fetcher.fetch(item.url, fetchOptions);
-      return this.asMarkdownRepresentation(item.url, fetched);
+      // Judged on where the bytes came from, not where we asked. A redirect from
+      // an extensionless URL to a `.md` resource is still a published Markdown
+      // representation, and the queued URL would hide that.
+      return this.asMarkdownRepresentation(fetched.source ?? item.url, fetched);
     }
 
     const markdownVariantUrl = this.buildMarkdownVariantUrl(item.url);

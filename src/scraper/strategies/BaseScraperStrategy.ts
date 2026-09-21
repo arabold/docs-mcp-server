@@ -500,7 +500,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               currentUrl: finalUrl,
               result: {
                 url: finalUrl,
-                contentUrl: result.contentUrl,
+                // Canonicalisation can move the identity too (`/docs/` to
+                // `/docs`), and then the bytes came from somewhere the identity
+                // no longer names. Record whichever URL actually served them.
+                contentUrl:
+                  result.contentUrl ??
+                  (result.url && result.url !== finalUrl ? result.url : undefined),
                 title: result.content.title?.trim() || result.title?.trim() || "",
                 sourceContentType: result.sourceContentType || result.contentType || "",
                 contentType: result.contentType || "",
@@ -528,6 +533,13 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 ? undefined
                 : {
                     url: finalUrl,
+                    // An empty page still has a retrieval location: `/guide` can
+                    // be empty and have been read from `/guide.md`. Dropping it
+                    // would send the next refresh to the identity carrying a
+                    // validator the identity never issued.
+                    contentUrl:
+                      result.contentUrl ??
+                      (result.url && result.url !== finalUrl ? result.url : undefined),
                     title: result.title?.trim() || "",
                     sourceContentType: result.sourceContentType ?? null,
                     contentType: result.contentType ?? null,

@@ -16,27 +16,6 @@ import { TextContentSplitter } from "./splitters/TextContentSplitter";
 import type { Chunk, DocumentSplitter, SectionContentType } from "./types";
 
 /**
- * Represents a section of content within a document,
- * typically defined by a heading
- */
-interface DocumentSection {
-  level: number;
-  path: string[]; // Full path including parent headings
-  content: {
-    type: SectionContentType;
-    text: string;
-  }[];
-}
-
-/**
- * Splits markdown documents into semantic chunks while preserving
- * structure and distinguishing between different content types.
- *
- * The splitting process happens in two steps:
- * 1. Split document into sections based on headings (H1-H3 only)
- * 2. Split section content into smaller chunks based on preferredChunkSize
- */
-/**
  * Removes an explicit anchor annotation from the end of a heading.
  *
  * Markdown dialects let authors pin a heading's id rather than let it be
@@ -63,6 +42,27 @@ function stripHeadingAnchors(heading: string): string {
     .trimEnd();
 }
 
+/**
+ * Represents a section of content within a document,
+ * typically defined by a heading
+ */
+interface DocumentSection {
+  level: number;
+  path: string[]; // Full path including parent headings
+  content: {
+    type: SectionContentType;
+    text: string;
+  }[];
+}
+
+/**
+ * Splits markdown documents into semantic chunks while preserving
+ * structure and distinguishing between different content types.
+ *
+ * The splitting process happens in two steps:
+ * 1. Split document into sections based on headings (H1-H3 only)
+ * 2. Split section content into smaller chunks based on preferredChunkSize
+ */
 export class SemanticMarkdownSplitter implements DocumentSplitter {
   private turndownService: TurndownService;
   public textSplitter: TextContentSplitter;

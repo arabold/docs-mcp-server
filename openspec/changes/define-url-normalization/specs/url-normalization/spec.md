@@ -51,9 +51,11 @@ Normalization SHALL apply the following, each because two spellings differing on
 - **WHEN** two URLs differ only by a query string
 - **THEN** they do not normalize to the same value
 
-### Requirement: Case is preserved
+### Requirement: Case is preserved where it is significant
 
-Normalization SHALL NOT change the case of any part of a URL, and case folding SHALL NOT be offered as an option. A URL path, query and fragment are case-sensitive: two paths differing only in case may address two different documents, and treating them as one drops a page from the index without reporting anything.
+Normalization SHALL NOT change the case of a URL's path, query or fragment, and case folding SHALL NOT be offered as an option. Those components are case-sensitive: two paths differing only in case may address two different documents, and treating them as one drops a page from the index without reporting anything.
+
+Scheme and host are case-insensitive, and parsing a URL already renders them in lower case. Normalization inherits that and SHALL NOT be read as requiring the input's original spelling of either — preserving a meaningless distinction would split one host into two.
 
 Some servers do serve paths case-insensitively, and on those a case-sensitive key indexes one document twice. That is the safer failure: a duplicate is visible and can be recognised, while a page that was never fetched leaves nothing behind to notice.
 
@@ -63,11 +65,16 @@ Some servers do serve paths case-insensitively, and on those a case-sensitive ke
 - **THEN** the results differ
 - **AND** both pages are crawled
 
-#### Scenario: A stored identity keeps its original case
+#### Scenario: A stored identity keeps its original path case
 - **GIVEN** a page whose URL contains upper-case characters in its path
 - **WHEN** the page is recorded
 - **THEN** its identity carries the same characters
 - **AND** the link offered for it resolves
+
+#### Scenario: Host case is not significant
+- **GIVEN** two URLs differing only by the case of their scheme or host
+- **WHEN** each is normalized
+- **THEN** the results are equal
 
 #### Scenario: Case folding cannot be re-enabled
 - **WHEN** the normalizer's options are inspected

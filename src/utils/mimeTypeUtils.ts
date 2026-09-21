@@ -9,10 +9,6 @@ export interface ParsedContentType {
 }
 
 /**
- * Enhanced MIME type detection and utility functions.
- * Combines standard MIME type operations with enhanced source code detection.
- */
-/**
  * Extension-to-MIME overrides for types the `mime` package gets wrong or does
  * not know. See openspec/changes/refactor-mime-type-detection/design.md.
  *
@@ -202,6 +198,10 @@ const MIME_TYPE_NORMALIZATION: Record<string, string> = {
   "application/x-msdownload": "text/x-batch", // .bat/.cmd files
 };
 
+/**
+ * Enhanced MIME type detection and utility functions.
+ * Combines standard MIME type operations with enhanced source code detection.
+ */
 // biome-ignore lint/complexity/noStaticOnlyClass: helpers are static
 export class MimeTypeUtils {
   /**

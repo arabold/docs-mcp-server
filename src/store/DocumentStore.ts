@@ -76,18 +76,18 @@ interface EmbeddingBatchContext {
   totalChunks: number;
 }
 
-/**
- * Manages document storage and retrieval using SQLite with vector and full-text search capabilities.
- * Provides direct access to SQLite with prepared statements to store and query document
- * embeddings along with their metadata. Supports versioned storage of documents for different
- * libraries, enabling version-specific document retrieval and searches.
- */
 /** The row `getPageId` returns. Declared once so its two readers agree. */
 interface PageIdRow {
   id: number;
   source_content_type: string | null;
 }
 
+/**
+ * Manages document storage and retrieval using SQLite with vector and full-text search capabilities.
+ * Provides direct access to SQLite with prepared statements to store and query document
+ * embeddings along with their metadata. Supports versioned storage of documents for different
+ * libraries, enabling version-specific document retrieval and searches.
+ */
 export class DocumentStore {
   private readonly config: AppConfig;
   private readonly dbPath: string;
@@ -1768,6 +1768,7 @@ export class DocumentStore {
     depth: number,
     page: {
       url: string;
+      contentUrl?: string;
       title: string;
       sourceContentType: string | null;
       contentType: string | null;
@@ -1787,8 +1788,7 @@ export class DocumentStore {
           page.sourceContentType,
           page.contentType,
           depth,
-          // An empty page carries no separate retrieval location.
-          null,
+          page.contentUrl ?? null,
         );
 
         // Clear any chunks the page had before it became empty. Without this the
@@ -1836,9 +1836,11 @@ export class DocumentStore {
       // better. Writes are otherwise last-one-wins, which would hand the decision
       // to crawl order.
       //
-      // Decided before embedding, not after: this write is going to be dropped,
-      // and embedding it first would spend a billed API round-trip on chunks
-      // nothing will read.
+      // Checked here as an optimisation only — a write that is going to be
+      // dropped should not first pay for a billed embedding round-trip. The
+      // authoritative check is repeated inside the write transaction below,
+      // because this snapshot is taken before the embedding await and a
+      // concurrent write for the same identity can land in between.
       if (
         existingPage &&
         MimeTypeUtils.isMarkdown(existingPage.source_content_type ?? "") &&
@@ -1930,15 +1932,35 @@ export class DocumentStore {
         paddedEmbeddings = rawEmbeddings.map((vector) => this.padVector(vector));
       }
 
-      if (existingPage) {
-        const result = this.statements.deleteDocumentsByPageId.run(existingPage.id);
-        if (result.changes > 0) {
-          logger.debug(`Deleted ${result.changes} existing documents for URL: ${url}`);
-        }
-      }
-
       // Insert documents in a transaction
-      const transaction = this.db.transaction(() => {
+      const transaction = this.db.transaction((): boolean => {
+        // Re-read inside the transaction. The snapshot above predates the
+        // embedding await, so when both representations of one identity are
+        // processed concurrently each can observe no row, and both would insert
+        // — leaving two chunk sets under one page. Reading and writing in the
+        // same synchronous transaction closes that window.
+        const current = this.statements.getPageId.get(versionId, url) as
+          | PageIdRow
+          | undefined;
+
+        if (
+          current &&
+          MimeTypeUtils.isMarkdown(current.source_content_type ?? "") &&
+          !MimeTypeUtils.isMarkdown(result.sourceContentType ?? "")
+        ) {
+          logger.debug(
+            `Keeping stored Markdown representation of ${url}; ignoring ${result.sourceContentType} version`,
+          );
+          return false;
+        }
+
+        if (current) {
+          const deleted = this.statements.deleteDocumentsByPageId.run(current.id);
+          if (deleted.changes > 0) {
+            logger.debug(`Deleted ${deleted.changes} existing documents for URL: ${url}`);
+          }
+        }
+
         // Extract content type from metadata if available
         const sourceContentType = result.sourceContentType || result.contentType || null;
         const contentType = result.contentType || result.sourceContentType || null;
@@ -2001,6 +2023,7 @@ export class DocumentStore {
 
           docIndex++;
         }
+        return true;
       });
 
       transaction();
