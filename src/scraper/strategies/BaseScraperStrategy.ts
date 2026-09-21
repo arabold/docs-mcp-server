@@ -34,6 +34,8 @@ export interface BaseScraperStrategyOptions {
 export interface ProcessItemResult {
   /** The URL of the content */
   url: string;
+  /** Where the content was retrieved from, when that differs from `url`. */
+  contentUrl?: string;
   /** The title of the page or document, extracted during processing */
   title?: string | null;
   /** Original MIME type of the fetched resource, if known */
@@ -94,6 +96,19 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
    * - Efficient deduplication across concurrent processing
    */
   protected visited = new Set<string>();
+  /**
+   * Page identities this crawl has already stored, as the strategy reports
+   * them — `canonicalizeStoredUrl`'s output, which is a normalized URL for web
+   * crawls and the URL unchanged for `file://` and GitHub sources.
+   *
+   * `visited` cannot serve here: it holds URLs as they were queued, and a page's
+   * identity is only known once the response arrives — `/guide.md` resolves to
+   * `/guide`, which by then may already be sitting in the queue under its own
+   * spelling. Both are dequeued and both are stored, so without this set one
+   * page would be counted twice against the page limit and the crawl would stop
+   * short of the pages the user asked for.
+   */
+  protected storedIdentities = new Set<string>();
   /** Items dequeued and given an outcome. Converges on {@link effectiveTotal}. */
   protected pageCount = 0;
   /** Processed items that produced stored content. Bounded by `maxPages`. */
@@ -148,7 +163,30 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     this.options = options;
   }
 
+  /**
+   * Resolves the URL a page is recorded under.
+   *
+   * The base implementation records the URL exactly as it resolved. Trimming a
+   * trailing slash or an index file is an HTTP convention — it rests on a server
+   * returning the same bytes either way — and that is false for the URL spaces
+   * other strategies work in: `file:///docs/index.html` and a GitHub blob path
+   * both name a file, and the trimmed form addresses nothing. Strategies whose
+   * URLs follow web conventions override this.
+   *
+   * @param url The URL the content resolved to.
+   * @param _scrapeOptions Options, used by overrides.
+   * @returns The URL to record the page under.
+   */
+  protected canonicalizeStoredUrl(url: string, _scrapeOptions: ScraperOptions): string {
+    return url;
+  }
+
   protected getUrlNormalizerOptions(scrapeOptions: ScraperOptions): UrlNormalizerOptions {
+    // On a hash-routed site the fragment names the route, so it is kept. The
+    // path in front of a fragment is then part of that route's spelling and is
+    // left alone too, but `normalizeUrl` decides that per URL: disabling the
+    // path rewrites for the whole crawl would leave `/docs` and `/docs/` as two
+    // pages on the very sites this option is for.
     return {
       ...this.options.urlNormalizerOptions,
       removeHash: scrapeOptions.preserveHashes
@@ -291,7 +329,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     progressCallback: ProgressCallback<ScraperProgressEvent>,
     signal?: AbortSignal, // Add signal
   ): Promise<QueueItem[]> {
-    const maxPages = options.maxPages ?? this.config.scraper.maxPages;
     let batchAbortError: FailureThresholdExceededError | null = null;
 
     const ensureFailureRateWithinThreshold = (): void => {
@@ -336,7 +373,18 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           > = {},
         ): Promise<void> => {
           const pagesScraped = ++this.pageCount;
-          if (outcome === PageOutcome.Stored) {
+
+          // Two routes can reach one document — an llms.txt `.md` entry and the
+          // crawled HTML page — and both are sent to the store, which decides
+          // which representation to keep. Only the first of them is a new page:
+          // counting the second would let one document consume two units of the
+          // page budget and leave the crawl short of what the user asked for.
+          const identity = extra.result?.url ?? extra.emptyPage?.url;
+          const alreadyStored =
+            identity !== undefined && this.storedIdentities.has(identity);
+          const isNewPage = outcome === PageOutcome.Stored && !alreadyStored;
+          if (isNewPage) {
+            if (identity !== undefined) this.storedIdentities.add(identity);
             this.pagesIndexed++;
           } else {
             this.retuneEffectiveTotal(options);
@@ -358,6 +406,21 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             result: null,
             pageId: item.pageId,
             ...extra,
+            // Told to the store rather than derived there: only the crawl knows
+            // whether it has already stored this identity during this run, and
+            // that is what separates "a competing representation" from "the new
+            // state of the page", which are resolved in opposite directions.
+            ...(extra.result
+              ? { result: { ...extra.result, isAdditionalRepresentation: alreadyStored } }
+              : {}),
+            ...(extra.emptyPage
+              ? {
+                  emptyPage: {
+                    ...extra.emptyPage,
+                    isAdditionalRepresentation: alreadyStored,
+                  },
+                }
+              : {}),
           });
         };
 
@@ -377,8 +440,34 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
           }
 
           if (result.status === FetchStatus.NOT_FOUND) {
-            const isRefreshDeletion = this.isRefreshDeletion(item, result);
-            const fallbackQueueItems = result.queueItems ?? [];
+            // A 404 at a representation is not a statement about the page. A
+            // refresh asks the location the content came from, which for a
+            // published Markdown file is not the page's own URL; a site that
+            // withdraws those files still serves the pages they described.
+            // Ask the identity before concluding anything, and send no stored
+            // validator with it — that one was issued by the resource that is
+            // now gone. If the identity 404s too, this item carries no further
+            // fallback and the page is deleted then.
+            const identityFallback: QueueItem[] =
+              item.identityUrl !== undefined && item.identityUrl !== item.url
+                ? // Spread so the item keeps whatever else governs how it is
+                  // fetched and scoped; only the address and the validator
+                  // change. `etag` is dropped because it was issued by the
+                  // resource that just answered 404, and `identityUrl` because
+                  // this IS the identity — a second 404 here is the page.
+                  [{ ...item, url: item.identityUrl, etag: null, identityUrl: undefined }]
+                : [];
+            // Deliberately not named `isRefreshDeletion`: the method of that
+            // name answers "is this a refresh 404?" and is still consulted by
+            // `shouldCountTowardFailureThreshold`, which must keep ignoring
+            // these. This narrower question is whether the page is actually
+            // removed, which a pending fallback defers.
+            const deletesStoredPage =
+              this.isRefreshDeletion(item, result) && identityFallback.length === 0;
+            const fallbackQueueItems = [
+              ...(result.queueItems ?? []),
+              ...identityFallback,
+            ];
             const hasNewFallbackQueueItem = fallbackQueueItems.some(
               (queueItem) =>
                 !this.visited.has(
@@ -393,13 +482,13 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             // are not supposed to fail the overall scrape).
             if (
               this.isRequestedRoot(item, options) &&
-              !isRefreshDeletion &&
+              !deletesStoredPage &&
               !hasNewFallbackQueueItem
             ) {
               throw new ScraperError(`Root page not found: ${item.url}`, false);
             }
 
-            if (!isRefreshDeletion) {
+            if (!deletesStoredPage) {
               this.recordChildPageFailure(item, options);
               ensureFailureRateWithinThreshold();
             }
@@ -408,7 +497,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
             // File/page was deleted, count as processed
             logger.debug(`Page deleted (404): ${item.url}`);
-            await report(PageOutcome.Absent, isRefreshDeletion ? { deleted: true } : {});
+            await report(PageOutcome.Absent, deletesStoredPage ? { deleted: true } : {});
             return fallbackQueueItems;
           }
 
@@ -422,8 +511,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
             // and a refresh replays stored pages at their stored depth — neither
             // should abort a scrape whose real root resolved fine.
             if (item.depth === 0 && !item.fromLlmsTxt && item.pageId === undefined) {
+              // Name the type: the user picked this URL, and "some content type"
+              // does not tell them whether they mistyped it or asked for a format
+              // this server cannot read.
+              const contentType = result.sourceContentType ?? "unknown content type";
               throw new ScraperError(
-                `Cannot process content type of ${item.url}: no pipeline can read it`,
+                `Cannot process ${contentType} at ${item.url}: no pipeline can read it`,
                 false,
               );
             }
@@ -443,7 +536,17 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
 
           // Handle successful processing - report result with content
           // Use the final URL from the result (which may differ due to redirects)
-          const finalUrl = result.url || item.url;
+          //
+          // Canonicalised so that spellings differing only by a trailing slash or
+          // a fragment resolve to one page. Two routes to the same document —
+          // `/config/` from a crawl and `/config.md` from an llms.txt index —
+          // otherwise land as separate rows and split a page in two.
+          const finalUrl = this.canonicalizeStoredUrl(result.url || item.url, options);
+
+          // Register the resolved identity so the other route to this page is
+          // recognised as already seen. The identity is only known after the
+          // response, which is why it cannot be settled when the URL is queued.
+          this.visited.add(normalizeUrl(finalUrl, this.getUrlNormalizerOptions(options)));
 
           // A result carrying no text is not a stored page. `WebScraperStrategy`
           // already gates on this, but the local-file and GitHub processors pass
@@ -456,6 +559,12 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
               currentUrl: finalUrl,
               result: {
                 url: finalUrl,
+                // Canonicalisation can move the identity too (`/docs/` to
+                // `/docs`), and then the bytes came from somewhere the identity
+                // no longer names. Record whichever URL actually served them.
+                contentUrl:
+                  result.contentUrl ??
+                  (result.url && result.url !== finalUrl ? result.url : undefined),
                 title: result.content.title?.trim() || result.title?.trim() || "",
                 sourceContentType: result.sourceContentType || result.contentType || "",
                 contentType: result.contentType || "",
@@ -483,6 +592,13 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
                 ? undefined
                 : {
                     url: finalUrl,
+                    // An empty page still has a retrieval location: `/guide` can
+                    // be empty and have been read from `/guide.md`. Dropping it
+                    // would send the next refresh to the identity carrying a
+                    // validator the identity never issued.
+                    contentUrl:
+                      result.contentUrl ??
+                      (result.url && result.url !== finalUrl ? result.url : undefined),
                     title: result.title?.trim() || "",
                     sourceContentType: result.sourceContentType ?? null,
                     contentType: result.contentType ?? null,
@@ -609,6 +725,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     signal?: AbortSignal, // Add signal
   ): Promise<void> {
     this.visited.clear();
+    this.storedIdentities.clear();
     this.pageCount = 0;
     this.pagesIndexed = 0;
     this.completedChildPageAttempts = 0;

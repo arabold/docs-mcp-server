@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractPrimaryDomain, normalizeUrl } from "./url";
+import { extractPrimaryDomain, normalizeUrl, stripMarkdownExtension } from "./url";
 
 describe("URL normalization", () => {
   describe("default behavior", () => {
@@ -19,8 +19,8 @@ describe("URL normalization", () => {
       expect(normalizeUrl("https://example.com/page/")).toBe("https://example.com/page");
     });
 
-    it("should convert to lowercase", () => {
-      expect(normalizeUrl("https://example.com/PAGE")).toBe("https://example.com/page");
+    it("does not convert to lowercase", () => {
+      expect(normalizeUrl("https://example.com/PAGE")).toBe("https://example.com/PAGE");
     });
   });
 
@@ -39,10 +39,42 @@ describe("URL normalization", () => {
       ).toBe("https://example.com/page/");
     });
 
-    it("should preserve case when ignoreCase is false", () => {
+    it("preserves case, which is not configurable", () => {
+      expect(normalizeUrl("https://example.com/PATH/TO/PAGE")).toBe(
+        "https://example.com/PATH/TO/PAGE",
+      );
+    });
+
+    it("keeps paths differing only in case distinct", () => {
+      // The reason case folding was removed: this value is the crawl's dedup
+      // key, so folding these together means the second page is never fetched
+      // and nothing reports that it was dropped.
+      expect(normalizeUrl("https://example.com/Guide")).not.toBe(
+        normalizeUrl("https://example.com/guide"),
+      );
+    });
+
+    it("still folds a trailing slash on a URL with no fragment", () => {
+      // `removeHash: false` is how a hash-routed crawl keeps its route
+      // fragments. Exempting the whole crawl from path normalization instead
+      // left `/docs` and `/docs/` as two pages on exactly those sites.
+      expect(normalizeUrl("https://example.com/docs/", { removeHash: false })).toBe(
+        "https://example.com/docs",
+      );
       expect(
-        normalizeUrl("https://example.com/PATH/TO/PAGE", { ignoreCase: false }),
-      ).toBe("https://example.com/PATH/TO/PAGE");
+        normalizeUrl("https://example.com/docs/index.html", { removeHash: false }),
+      ).toBe("https://example.com/docs");
+    });
+
+    it("leaves the path alone in front of a preserved fragment", () => {
+      // There the fragment names the route, so the path is part of its
+      // spelling and trimming the slash invents a URL the site does not serve.
+      expect(
+        normalizeUrl("https://example.com/docs/#/guide", { removeHash: false }),
+      ).toBe("https://example.com/docs/#/guide");
+      expect(normalizeUrl("https://example.com/docs#/guide", { removeHash: false })).toBe(
+        "https://example.com/docs#/guide",
+      );
     });
 
     it("should remove query parameters when removeQuery is true", () => {
@@ -58,13 +90,16 @@ describe("URL normalization", () => {
     it("should normalize file URLs", () => {
       // Note: On some platforms/Node versions, file:// host is empty, on others it might be parsed differently.
       // But standard file:// URL has empty host.
+      // Index file and trailing slash are normalized; case is not. On a
+      // case-sensitive filesystem `/Users/.../Docs` and `/users/.../docs` are
+      // different directories, and folding them would merge two of them.
       const url = "file:///Users/username/Docs/Index.html";
-      expect(normalizeUrl(url)).toBe("file:///users/username/docs");
+      expect(normalizeUrl(url)).toBe("file:///Users/username/Docs");
     });
 
     it("should handle file URLs with spaces", () => {
       const url = "file:///Users/User%20Name/My%20Docs/";
-      expect(normalizeUrl(url)).toBe("file:///users/user%20name/my%20docs");
+      expect(normalizeUrl(url)).toBe("file:///Users/User%20Name/My%20Docs");
     });
 
     it("should handle file URLs with query strings (rare but valid)", () => {
@@ -218,5 +253,70 @@ describe("extractPrimaryDomain", () => {
       expect(extractPrimaryDomain("DOCS.PYTHON.ORG")).toBe("python.org");
       expect(extractPrimaryDomain("API.GitHub.COM")).toBe("github.com");
     });
+  });
+});
+
+describe("stripMarkdownExtension", () => {
+  it("strips a markdown extension to yield the canonical page URL", () => {
+    expect(stripMarkdownExtension("https://react.dev/learn.md")).toBe(
+      "https://react.dev/learn",
+    );
+    expect(stripMarkdownExtension("https://vite.dev/guide/ssr.md")).toBe(
+      "https://vite.dev/guide/ssr",
+    );
+  });
+
+  it("recognises the markdown extensions the shared detector knows", () => {
+    expect(stripMarkdownExtension("https://example.com/a/guide.markdown")).toBe(
+      "https://example.com/a/guide",
+    );
+  });
+
+  it("leaves a non-markdown extension alone", () => {
+    // The name is load-bearing: stripping any extension would rewrite
+    // `report.pdf` to `report`, an identity nothing serves.
+    expect(stripMarkdownExtension("https://example.com/report.pdf")).toBe(
+      "https://example.com/report.pdf",
+    );
+    expect(stripMarkdownExtension("https://example.com/page.tar.gz")).toBe(
+      "https://example.com/page.tar.gz",
+    );
+  });
+
+  it("does not read a markdown TLD as a markdown file", () => {
+    // `.md` is Moldova's ccTLD; detection must see the path, not the host.
+    expect(stripMarkdownExtension("https://example.md/guide")).toBe(
+      "https://example.md/guide",
+    );
+  });
+
+  it("preserves query and fragment", () => {
+    expect(stripMarkdownExtension("https://example.com/guide.md?v=2#intro")).toBe(
+      "https://example.com/guide?v=2#intro",
+    );
+  });
+
+  it("leaves a URL without an extension unchanged", () => {
+    expect(stripMarkdownExtension("https://example.com/guide")).toBe(
+      "https://example.com/guide",
+    );
+    expect(stripMarkdownExtension("https://example.com/")).toBe("https://example.com/");
+  });
+
+  it("refuses to produce an empty final segment", () => {
+    // `/.md` has no canonical page to fold onto.
+    expect(stripMarkdownExtension("https://example.com/.md")).toBe(
+      "https://example.com/.md",
+    );
+  });
+
+  it("does not treat a dot in a directory segment as an extension", () => {
+    expect(stripMarkdownExtension("https://example.com/v1.0/guide")).toBe(
+      "https://example.com/v1.0/guide",
+    );
+  });
+
+  it("returns an unparseable URL unchanged", () => {
+    expect(stripMarkdownExtension("not a url")).toBe("not a url");
   });
 });

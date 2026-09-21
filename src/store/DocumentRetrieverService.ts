@@ -112,6 +112,11 @@ export class DocumentRetrieverService {
       initialChunks.length > 0
         ? (initialChunks[0].source_content_type ?? undefined)
         : undefined;
+    // The identity can be one this crawl derived rather than one the site
+    // serves, so a caller linking to the source needs the location that
+    // actually answered. Undefined when the two coincide.
+    const contentUrl =
+      initialChunks.length > 0 ? (initialChunks[0].content_url ?? undefined) : undefined;
 
     // Find the maximum score from the initial results
     const maxScore = Math.max(...initialChunks.map((chunk) => chunk.score));
@@ -131,6 +136,7 @@ export class DocumentRetrieverService {
 
     return {
       url,
+      contentUrl,
       content,
       score: maxScore,
       mimeType,

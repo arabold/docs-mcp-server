@@ -487,10 +487,14 @@ export class DocumentManagementService {
    * Retrieves all pages for a specific version ID with their metadata.
    * Used for refresh operations to get existing pages with their ETags and depths.
    */
-  async getPagesByVersionId(
-    versionId: number,
-  ): Promise<
-    Array<{ id: number; url: string; etag: string | null; depth: number | null }>
+  async getPagesByVersionId(versionId: number): Promise<
+    Array<{
+      id: number;
+      url: string;
+      etag: string | null;
+      depth: number | null;
+      content_url: string | null;
+    }>
   > {
     return this.store.getPagesByVersionId(versionId);
   }
@@ -593,17 +597,26 @@ export class DocumentManagementService {
     depth: number,
     page: {
       url: string;
+      contentUrl?: string;
       title: string;
       sourceContentType: string | null;
       contentType: string | null;
       etag: string | null;
       lastModified: string | null;
+      isAdditionalRepresentation?: boolean;
     },
+    previousPageId?: number,
   ): Promise<void> {
     if (!page.url) {
       throw new StoreError("Empty page metadata must include a valid URL");
     }
-    await this.store.addEmptyPage(library, normalizeVersionLabel(version), depth, page);
+    await this.store.addEmptyPage(
+      library,
+      normalizeVersionLabel(version),
+      depth,
+      page,
+      previousPageId,
+    );
     this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
@@ -615,13 +628,15 @@ export class DocumentManagementService {
    * @param library Library name
    * @param version Version string (null/undefined for unversioned)
    * @param processed Pre-processed content with chunks already created
-   * @param pageId Optional page ID for refresh operations
+   * @param previousPageId Page a refresh read this content from, retired by the
+   *   store when the write lands under a different row.
    */
   async addScrapeResult(
     library: string,
     version: string | null | undefined,
     depth: number,
     result: ScrapeResult,
+    previousPageId?: number,
   ): Promise<void> {
     const processingStart = performance.now();
     const normalizedVersion = normalizeVersionLabel(version);
@@ -641,7 +656,13 @@ export class DocumentManagementService {
       logger.info(`✂️  Storing ${chunks.length} pre-split chunks`);
 
       // Add split documents to store
-      await this.store.addDocuments(library, normalizedVersion, depth, result);
+      await this.store.addDocuments(
+        library,
+        normalizedVersion,
+        depth,
+        result,
+        previousPageId,
+      );
 
       // Emit library change event after adding documents
       this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);

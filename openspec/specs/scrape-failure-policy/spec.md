@@ -16,6 +16,15 @@ The scraper SHALL default HTTP fetch retries to 3 retries per page request, in a
 - **WHEN** an HTTP page fetch fails with a non-retryable permanent error
 - **THEN** the fetcher SHALL fail the page without consuming additional retries
 
+### Requirement: Bounded HTTP Fetch Duration
+The scraper SHALL bound how long a single HTTP fetch may wait, so that a server which accepts a connection and then stalls cannot hold a worker indefinitely. A fetch that exceeds the bound SHALL be treated as a retryable failure and SHALL NOT stop the crawl from processing the rest of the queue.
+
+#### Scenario: A stalled response does not park the crawl
+- **GIVEN** a page whose server accepts the request and never completes the response
+- **WHEN** the crawl reaches that page
+- **THEN** the fetch is abandoned once the bound elapses
+- **AND** the remaining pages are still fetched and indexed
+
 ### Requirement: Root Page Failures Abort Immediately
 The scraper SHALL fail the scrape job immediately when the root page cannot be processed successfully during a normal scrape and no alternate crawl seeds are available. During refresh, a tracked root page that returns `NOT_FOUND` SHALL be treated as a deletion instead of a hard failure.
 
@@ -72,3 +81,28 @@ The scraper SHALL exclude expected page deletions detected during refresh from c
 - **WHEN** a normal crawl encounters a non-root page that returns `NOT_FOUND`
 - **THEN** the scraper SHALL treat that page as a terminal page failure for failure-rate accounting
 - **AND** the page SHALL not be treated as a refresh deletion
+
+### Requirement: Skipped Content Does Not Count As Failure
+A resource rejected by the queue-time or fetch-time unprocessable-content gates SHALL NOT be counted as a completed child-page attempt and SHALL NOT be counted as a failed child page. Skips SHALL therefore have no effect on the failure rate compared against `scraper.abortOnFailureRate`.
+
+Without this exclusion, a site whose pages link predominantly to images would drive the observed failure rate past the threshold and abort a scrape in which every page that was read succeeded.
+
+#### Scenario: Image-heavy site does not trip the failure threshold
+- **GIVEN** `scraper.abortOnFailureRate` is at its default of 0.5
+- **AND** a crawl in which 900 discovered resources are skipped as unprocessable and 100 pages are fetched successfully
+- **WHEN** the failure rate is evaluated
+- **THEN** the observed failure rate is 0
+- **AND** the scrape continues
+
+#### Scenario: Genuine failures still count alongside skips
+- **GIVEN** a crawl in which resources are skipped as unprocessable
+- **AND** child pages also fail with fetch errors
+- **WHEN** the failure rate is evaluated
+- **THEN** only the fetch errors contribute to both the numerator and the denominator
+- **AND** the skips are absent from both
+
+#### Scenario: Root URL skipped as unprocessable
+- **GIVEN** a user supplies a start URL that responds with a content type no pipeline can process
+- **WHEN** the depth-0 resource is skipped by the fetch-time gate
+- **THEN** the scrape fails with a clear error naming the unprocessable content type
+- **AND** the failure is not silent

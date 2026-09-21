@@ -33,6 +33,8 @@ const MAX_REDIRECTS = 5;
  */
 export class HttpFetcher implements ContentFetcher {
   private readonly maxRetriesDefault: number;
+  /** Applied when the caller names no timeout; axios itself has no default. */
+  private readonly timeoutDefaultMs: number;
   private readonly baseDelayDefaultMs: number;
   private readonly retryableStatusCodes = [
     408, // Request Timeout
@@ -71,6 +73,7 @@ export class HttpFetcher implements ContentFetcher {
   constructor(scraperConfig: AppConfig["scraper"]) {
     this.maxRetriesDefault = scraperConfig.fetcher.maxRetries;
     this.baseDelayDefaultMs = scraperConfig.fetcher.baseDelayMs;
+    this.timeoutDefaultMs = scraperConfig.fetcher.timeoutMs;
     this.fingerprintGenerator = new FingerprintGenerator();
     this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
   }
@@ -146,7 +149,10 @@ export class HttpFetcher implements ContentFetcher {
               // This prevents servers from sending zstd-compressed content that would appear as binary garbage
               "Accept-Encoding": "gzip, deflate, br",
             },
-            timeout: options?.timeout,
+            // Defaulted rather than passed through as undefined: axios treats
+            // that as "wait forever", so a server that accepts the connection
+            // and then stalls held the worker until the process died.
+            timeout: options?.timeout ?? this.timeoutDefaultMs,
             signal: options?.signal, // Pass signal to axios
             // Redirects are handled manually so every target can be revalidated before connect.
             maxRedirects: 0,

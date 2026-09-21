@@ -218,25 +218,45 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
     const candidates = $("main").length > 0 ? $("main") : $('[role="main"]');
     if (candidates.length === 0) return;
 
-    // Pick the text-richest candidate. Pages occasionally carry more than one
-    // `<main>` (invalid but common), or nest `role="main"` inside `<main>`.
-    let best: Element | undefined;
-    let bestLength = 0;
+    // Keep every declared region, not the richest one. Pages do carry more than
+    // one `<main>` (invalid but common) — a guide beside an API reference, an
+    // article beside a pre-rendered version picker — and each is content the
+    // author marked as such. Choosing between them discarded whole sections
+    // with nothing above `debug` to say so.
+    const regions: Element[] = [];
     candidates.each((_, element) => {
       const tagName = $(element).prop("tagName")?.toLowerCase();
       if (tagName === "html" || tagName === "body") return;
-      const length = visibleTextLength($(element).text());
-      if (length > bestLength) {
-        bestLength = length;
-        best = element;
+      // A region nested inside one already kept is the same region declared
+      // twice; keeping both would index its text twice. Only same-kind nesting
+      // reaches here — the candidate set is `<main>` or `[role=main]`, never
+      // both — so this is a `<main>` inside a `<main>`.
+      if (
+        $(element)
+          .parents()
+          .toArray()
+          .some((parent) => regions.includes(parent as Element))
+      ) {
+        return;
       }
+      regions.push(element as Element);
     });
-    if (!best || bestLength === 0) return;
+    if (regions.length === 0) return;
+
+    const regionLengths = regions.map((element) => visibleTextLength($(element).text()));
+    const keptLength = regionLengths.reduce((total, length) => total + length, 0);
+    if (keptLength === 0) return;
 
     const bodyLength = visibleTextLength($("body").text());
     if (bodyLength === 0) return;
 
-    const ratio = bestLength / bodyLength;
+    // Measured on the largest single region, not on their sum. The floor asks
+    // "does a declared region actually hold this page's content?", and summing
+    // answers a different question: two regions of 30% each would clear it and
+    // scope the page, discarding the 40% outside that the floor exists to
+    // protect. Whether to scope is decided by the best region; what to keep,
+    // once scoping, is all of them.
+    const ratio = Math.max(...regionLengths) / bodyLength;
     if (ratio < MAIN_CONTENT_MIN_TEXT_RATIO) {
       logger.debug(
         `Main-content region holds only ${(ratio * 100).toFixed(1)}% of the text for ${source}; keeping full body`,
@@ -244,10 +264,12 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
       return;
     }
 
-    const kept = $(best).clone();
-    $("body").empty().append(kept);
+    const kept = regions.map((element) => $(element).clone());
+    $("body")
+      .empty()
+      .append(...kept);
     logger.debug(
-      `Scoped content to main region (${bestLength}/${bodyLength} chars) for ${source}`,
+      `Scoped content to ${regions.length} main region(s) (${keptLength}/${bodyLength} chars) for ${source}`,
     );
   }
 

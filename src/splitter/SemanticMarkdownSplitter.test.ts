@@ -558,6 +558,49 @@ Body text.`;
     expect(result.map((c) => c.content).join("\n")).toContain("Body text.");
   });
 
+  it("should not treat an unclosed leading break as frontmatter when the body is a mapping", async () => {
+    // The half the type check missed. With no closing delimiter gray-matter
+    // consumes the whole document as YAML, and a body of `Key: value` prose
+    // parses as a mapping — so it looks exactly like real frontmatter and the
+    // page collapses into one chunk with no headings. Turndown renders `<hr>`
+    // as `---`, so HTML pages reach this too.
+    const splitter = new SemanticMarkdownSplitter(100, 5000);
+    const markdown = `---
+
+## Deprecation notice
+
+Replacement: use the createClient helper instead.`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
+    expect(result.some((c) => c.types.includes("heading"))).toBe(true);
+    expect(result.map((c) => c.content).join("\n")).toContain("createClient");
+  });
+
+  it("should keep the frontmatter chunk within the size limit", async () => {
+    // It is prepended after splitting, so nothing else bounds it.
+    const splitter = new SemanticMarkdownSplitter(1000, 5000);
+    const markdown = `---\ntitle: T\nsummary: ${"word ".repeat(2000)}\n---\n\n# Head\n\nBody.`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.some((c) => c.types.includes("frontmatter"))).toBe(true);
+    expect(Math.max(...result.map((c) => c.content.length))).toBeLessThanOrEqual(5000);
+  });
+
+  it("should keep an indivisible frontmatter block rather than failing the page", async () => {
+    // One unbroken token longer than the limit cannot be divided. That is the
+    // behaviour bounding replaced, so it degrades to it instead of throwing.
+    const splitter = new SemanticMarkdownSplitter(1000, 5000);
+    const markdown = `---\ntoken: ${"x".repeat(10000)}\n---\n\n# Head\n\nBody.`;
+
+    const result = await splitter.splitText(markdown);
+
+    expect(result.some((c) => c.types.includes("frontmatter"))).toBe(true);
+    expect(result.some((c) => c.types.includes("heading"))).toBe(true);
+  });
+
   it("should not treat scalar frontmatter as frontmatter", async () => {
     const splitter = new SemanticMarkdownSplitter(100, 5000);
     const markdown = `---
@@ -849,5 +892,50 @@ Text paragraph.
       const result = await splitter.splitText(html);
       expectAllBalanced(result);
     });
+  });
+});
+
+describe("heading anchor annotations", () => {
+  /** Returns every section path and heading line the splitter produced. */
+  const split = async (markdown: string) => {
+    const chunks = await new SemanticMarkdownSplitter(100, 5000).splitText(markdown);
+    return {
+      paths: chunks.flatMap((c) => c.section.path),
+      content: chunks.map((c) => c.content).join("\n"),
+    };
+  };
+
+  it("drops an MDX anchor comment from the heading and its path", async () => {
+    // react.dev pins heading ids this way; the annotation is an instruction to
+    // the renderer, so indexing it puts noise in both the embedding and the
+    // section path a reader sees.
+    const { paths, content } = await split(
+      "## Adding styles {/*adding-styles*/}\n\nUse className.",
+    );
+
+    expect(paths).toContain("Adding styles");
+    expect(content).toContain("## Adding styles");
+    expect(content).not.toContain("{/*");
+  });
+
+  it("drops a hash-style anchor", async () => {
+    const { paths, content } = await split("## Adding styles {#adding-styles}\n\nBody.");
+
+    expect(paths).toContain("Adding styles");
+    expect(content).not.toContain("{#adding-styles}");
+  });
+
+  it("keeps braces that are part of the heading", async () => {
+    // Only a trailing annotation is an anchor. A heading about JSX or object
+    // literals has to survive intact.
+    const { paths } = await split("## Use {count} in JSX\n\nBody.");
+
+    expect(paths).toContain("Use {count} in JSX");
+  });
+
+  it("leaves a heading without an annotation alone", async () => {
+    const { paths } = await split("## Plain heading\n\nBody.");
+
+    expect(paths).toContain("Plain heading");
   });
 });

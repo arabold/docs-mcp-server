@@ -94,6 +94,121 @@ When a Markdown alternate is accepted, the scraper SHALL treat the alternate as 
 - **THEN** the system SHALL extract those links through the Markdown pipeline
 - **AND** the system SHALL apply the normal crawl filtering rules before queueing them
 
+### Requirement: Markdown is the preferred representation of a page
+
+When one crawl reaches both a Markdown and an HTML representation of the same page, the system SHALL index the Markdown one. Markdown is what the page's authors published for machine consumption; converting HTML to Markdown ourselves is a fallback for the majority of sites that offer nothing better, not an equal alternative.
+
+This preference SHALL NOT depend on which representation was encountered first. A crawl that reaches the HTML page before the Markdown one SHALL still end with the Markdown content indexed.
+
+The preference SHALL apply only between representations reached during the same crawl. It settles which of two routes to one document wins a race; it is not a claim that the stored copy is permanent. A later crawl's answer for a page SHALL replace what is stored, so a site that stops publishing a Markdown representation is re-indexed from what it now serves rather than freezing on the last Markdown copy retrieved.
+
+A Markdown variant URL answered as plain text SHALL count as Markdown for this preference. Sites disagree on how to serve a `.md` file and `text/plain` is one of the answers in use, so the served type alone does not distinguish a published Markdown document from anything else. Markdown syntax is close enough to a superset of plain text that a document using none of it still survives the Markdown pipeline intact.
+
+#### Scenario: Markdown replaces an already-indexed HTML representation
+- **GIVEN** a page whose HTML representation has been processed
+- **WHEN** a Markdown representation of the same page is accepted in the same crawl
+- **THEN** the stored content for that page is the Markdown representation
+
+#### Scenario: Encounter order does not decide the winner
+- **GIVEN** two crawls of the same site that reach a page's HTML and Markdown representations in opposite orders
+- **WHEN** each crawl completes
+- **THEN** both have indexed the Markdown representation
+
+#### Scenario: A later crawl supersedes the stored representation
+- **GIVEN** a stored page whose content came from a Markdown representation
+- **WHEN** a later crawl reaches only the page's HTML representation
+- **THEN** the stored content for that page is the HTML representation
+
+#### Scenario: A plain-text Markdown alternate is preferred over HTML
+- **GIVEN** a crawl that retrieved a page's HTML representation
+- **WHEN** the same crawl reaches a Markdown variant URL for that page and the server answers with plain text
+- **THEN** the stored content for that page is the Markdown representation
+
+#### Scenario: An empty representation competes on the same terms
+- **GIVEN** a crawl that stored a page's Markdown representation
+- **WHEN** the same crawl reaches another representation of that page that yields no extractable content
+- **THEN** the stored content for that page remains the Markdown representation
+
+#### Scenario: HTML is used when no Markdown representation exists
+- **WHEN** a page offers no Markdown representation
+- **THEN** the system SHALL process its HTML through the existing pipeline
+
+### Requirement: A Markdown variant URL carries the canonical page identity
+
+A URL SHALL be recorded under its extension-stripped form when **both** of the following hold:
+
+1. the URL's path extension names a Markdown type, and
+2. the response is an acceptable Markdown variant.
+
+Both signals are required, and they answer different questions. The extension states what the author intended the URL to mean; the response states what the server actually returned. Either alone is unsafe: an extension with no matching response strips the identity of a page that merely happens to end in `.md`, and a Markdown response with no matching extension would rewrite the identity of a document that is legitimately its own resource.
+
+The rule is a property of the response, not of how the URL was discovered. It therefore holds regardless of whether the URL arrived from an llms.txt index, a discovered link, or an alternate declaration, and needs no knowledge of what else the crawl has seen or will see.
+
+A response that is not an acceptable Markdown variant SHALL leave the URL's identity unchanged, so a server that ignores the extension — answering with an HTML page or a soft error — cannot cause a page to be recorded under a URL that does not serve it.
+
+#### Scenario: An llms.txt index listing Markdown URLs
+- **GIVEN** an llms.txt whose entries name `.md` URLs
+- **WHEN** those entries are fetched and return Markdown
+- **THEN** each page is recorded under its extension-stripped URL
+- **AND** no page is recorded under a `.md` URL
+
+#### Scenario: Both representations reached in one crawl
+- **GIVEN** a site whose Markdown variants are listed in llms.txt
+- **AND** whose HTML pages are also reachable by crawling
+- **WHEN** both are encountered
+- **THEN** they resolve to a single page identity
+- **AND** the page is indexed once
+
+#### Scenario: A generic text content type still counts
+- **GIVEN** a `.md` URL served with a generic text content type rather than a Markdown one
+- **WHEN** the response is accepted as a Markdown variant
+- **THEN** the extension is stripped
+- **AND** the identity does not depend on the server naming the Markdown type exactly
+
+#### Scenario: A server that ignores the extension
+- **GIVEN** a `.md` URL whose response is an HTML page
+- **WHEN** the response is evaluated
+- **THEN** it is not an acceptable Markdown variant
+- **AND** the URL keeps its own identity rather than being folded onto a page it does not serve
+
+#### Scenario: A Markdown response at a URL without the extension
+- **GIVEN** a URL with no Markdown extension that returns Markdown
+- **THEN** its identity is unchanged
+
+### Requirement: A page retains the location its content came from
+
+Resolving a page's identity SHALL NOT discard the location the content was actually retrieved from. A page therefore carries both: the identity it is recorded under, and the location that served it. They coincide for most pages and differ whenever a representation was fetched from somewhere other than the page's canonical address.
+
+Keeping only the identity breaks three things at once, because the identity is an assertion about where a page lives while the retrieval location is a fact about where its bytes came from:
+
+- **Refetching.** A later refresh SHALL request the representation that produced the stored content. Requesting the identity instead retrieves a different representation, so the stored content is never refreshed and the preferred representation is silently replaced by whatever the identity serves.
+- **Validators.** A stored validator describes the resource that issued it, so it SHALL be sent only to that resource. Pairing a validator with a different resource makes conditional requests meaningless at best, and at worst earns a not-modified response that skips a real update.
+- **Offering a working link.** The identity is derived rather than observed — nothing guarantees the canonical address serves anything. The retrieval location is known to serve the content, so it remains available as the link to offer when the identity does not resolve.
+
+Whether a consumer presents the identity or the retrieval location is that consumer's decision; this requirement is that both remain available to make it.
+
+#### Scenario: Refresh requests the representation that produced the content
+- **GIVEN** a page whose content came from a Markdown representation at a different location than its identity
+- **WHEN** the page is refreshed
+- **THEN** the request goes to the location the content came from
+- **AND** not to the page's identity
+
+#### Scenario: A validator is returned to its own resource
+- **GIVEN** a stored page whose validator was issued by its Markdown representation
+- **WHEN** a conditional request is made for that page
+- **THEN** the validator is sent to the resource that issued it
+
+#### Scenario: A page keeps refreshing after its identity is resolved
+- **GIVEN** a page recorded under an identity that differs from where its content was retrieved
+- **WHEN** it is refreshed and the representation has changed
+- **THEN** the stored content reflects the change
+- **AND** the page does not become frozen at the content it was first indexed with
+
+#### Scenario: Both locations are available to consumers
+- **WHEN** a stored page is read back
+- **THEN** its identity and the location its content came from are both available
+- **AND** a consumer can offer a link to a location known to serve the content
+
 ### Requirement: Ordering with llms.txt Markdown preference
 
 For queue items discovered from llms.txt, the scraper SHALL preserve the existing implicit `.md` variant preference before using HTML Markdown alternate discovery. If the implicit `.md` variant fails and the original URL response is HTML, the scraper SHALL then apply HTML Markdown alternate discovery before normal HTML processing. For queue items not discovered from llms.txt, the scraper SHALL fetch the original URL with the existing Markdown-preferred `Accept` behavior and apply HTML Markdown alternate discovery only when the response is HTML.

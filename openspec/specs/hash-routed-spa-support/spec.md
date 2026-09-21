@@ -37,6 +37,13 @@ When `preserveHashes` is enabled, the system SHALL preserve hash fragments in cr
 - **WHEN** the crawler discovers `https://example.com/#/guide` and `https://example.com/#/api` during the same job with `preserveHashes` enabled
 - **THEN** the queue and `visited` deduplication logic SHALL treat them as distinct URLs and SHALL process both pages
 
+The exemption SHALL be decided per URL, not per crawl. A preserved fragment names a route, so the path in front of it is part of that route's spelling and is left unrewritten. A URL in the same crawl that carries no fragment is an ordinary URL and SHALL still be normalized, so enabling the option does not leave `/docs` and `/docs/` stored as two pages.
+
+#### Scenario: A URL without a fragment is still normalized
+- **GIVEN** a crawl with `preserveHashes` enabled
+- **WHEN** it reaches `https://example.com/docs` and `https://example.com/docs/`
+- **THEN** both resolve to one identity and one page is stored
+
 #### Scenario: Refresh preserves existing hash-routed pages
 - **WHEN** a version was originally scraped with `preserveHashes: true` and a refresh job is enqueued without changing that option
 - **THEN** the refresh job SHALL reuse the stored `preserveHashes: true` setting and SHALL rebuild its `initialQueue` without collapsing stored hash-routed page URLs

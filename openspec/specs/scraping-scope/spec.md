@@ -30,9 +30,15 @@ The user-provided URL SHALL be added to the queue and fetched at depth 0 regardl
 Discovered links SHALL be filtered in this order, with each filter able to reject before later filters run:
 1. URL parse — invalid URLs are rejected.
 2. Archive-extension filter — links ending in `.zip`, `.tar`, `.gz`, or `.tgz` (case-insensitive) are rejected during crawl.
-3. Scope check — `isInScope(canonicalBaseUrl, target, scope)` must return true.
-4. Pattern check — `shouldIncludeUrl(target, includePatterns, excludePatterns)` must return true (default exclusion patterns apply when no user excludePatterns are provided).
-5. Optional `shouldFollowLink` callback — if configured, must return true.
+3. Unprocessable-media filter — a MIME type is detected from the link's pathname via `MimeTypeUtils.detectMimeTypeFromPath()`; the link is rejected only when that type names binary media (`image/*`, `video/*`, `audio/*`, `font/*`) that no configured pipeline can process. Any other detected type, and a null detection, proceed to the remaining filters.
+4. Depth check — a link whose resulting depth would exceed the effective `maxDepth` is rejected.
+5. Scope check — `isInScope(canonicalBaseUrl, target, scope)` must return true.
+6. Pattern check — `shouldIncludeUrl(target, includePatterns, excludePatterns)` must return true (default exclusion patterns apply when no user excludePatterns are provided).
+7. Optional `shouldFollowLink` callback — if configured, must return true.
+
+Every filter SHALL be applied before the link is admitted to the queue. No link admitted to the queue may later be discarded on the basis of a condition that these filters could have evaluated, because admission advances the progress denominator.
+
+Steps 2 and 3 overlap: archive extensions also resolve to MIME types no pipeline claims. The archive filter is retained as a distinct step because archive roots have separate depth-0 handling and its intent does not depend on pipeline composition.
 
 #### Scenario: Scope reject short-circuits pattern check
 - **WHEN** scope is `subpages` with base `https://example.com/api/`
@@ -42,6 +48,62 @@ Discovered links SHALL be filtered in this order, with each filter able to rejec
 #### Scenario: Archive link rejected before scope check
 - **WHEN** a discovered link is `https://example.com/api/dump.zip`
 - **THEN** the link is rejected by the archive-extension filter regardless of scope
+
+#### Scenario: Image link rejected before scope check
+- **WHEN** a discovered link is `https://other.com/assets/diagram.png`
+- **THEN** the link is rejected by the unprocessable-media filter regardless of scope
+- **AND** no HTTP request is issued for it
+
+#### Scenario: Script link with a misclassified extension survives the filter
+- **WHEN** a discovered link is `https://example.com/Guess/guess.ps`
+- **AND** detection resolves it to `application/postscript`, which is not binary media
+- **THEN** the unprocessable-media filter does not reject it
+- **AND** the link proceeds to the depth check
+
+#### Scenario: Extensionless link survives the new filter
+- **WHEN** a discovered link is `https://example.com/api/intro`
+- **AND** `detectMimeTypeFromPath()` returns null for it
+- **THEN** the unprocessable-media filter does not reject it
+- **AND** the link proceeds to the depth check
+
+#### Scenario: Over-depth link is rejected at enqueue
+- **GIVEN** `maxDepth` is 3
+- **AND** a link is discovered on a page at depth 3
+- **WHEN** the link is filtered
+- **THEN** it is rejected by the depth check
+- **AND** it is not added to the queue
+- **AND** no progress counter advances for it
+
+#### Scenario: At-depth link is admitted
+- **GIVEN** `maxDepth` is 3
+- **AND** a link is discovered on a page at depth 2
+- **WHEN** the link is filtered
+- **THEN** the depth check admits it at depth 3
+- **AND** it is added to the queue
+
+#### Scenario: Queued items are never dropped for depth
+- **GIVEN** any crawl with any `maxDepth`
+- **WHEN** an item is dequeued for processing
+- **THEN** it is never discarded on the basis of its depth
+- **AND** it reaches an outcome that advances the processed count
+
+#### Scenario: Depth rejection does not consume a dedup slot
+- **GIVEN** a URL is rejected by the depth check
+- **WHEN** the same URL is later discovered from a different page at an acceptable depth
+- **THEN** the earlier rejection does not cause the later discovery to be deduplicated away
+- **AND** the URL is admitted to the queue on its merits
+
+#### Scenario: Refresh mode preserves previously indexed pages
+- **GIVEN** a refresh operation whose initial queue is populated from stored pages carrying their recorded depths
+- **WHEN** those items are admitted to the queue
+- **THEN** the depth filter is not applied to them, because it governs discovered links only
+- **AND** no previously indexed page is left unrefreshed as a result of depth filtering
+
+#### Scenario: A stored page deeper than the limit is still refreshed
+- **GIVEN** a refresh whose effective `maxDepth` is lower than the depth recorded for some stored page
+- **WHEN** that page is replayed from the initial queue
+- **THEN** it is processed rather than dropped, because the depth filter governs discovered links only
+- **AND** its own discovered links are still filtered against the effective `maxDepth`
 
 ### Requirement: Protocol equality is required for all scopes
 

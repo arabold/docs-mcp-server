@@ -158,20 +158,26 @@ export class PipelineWorker {
 
     try {
       // A redirect can move a refreshed page to a different URL, in which case
-      // `pageId` names the old one and `addEmptyPage`'s own by-URL cleanup would
-      // not reach it. Remove it explicitly so the old chunks cannot survive
-      // alongside the new empty record.
-      if (progress.pageId) {
-        await this.store.deletePage(progress.pageId);
-      }
-      await this.store.addEmptyPage(library, version, progress.depth, {
-        url: emptyPage.url,
-        title: emptyPage.title,
-        sourceContentType: emptyPage.sourceContentType,
-        contentType: emptyPage.contentType,
-        etag: emptyPage.etag,
-        lastModified: emptyPage.lastModified,
-      });
+      // `pageId` names the old one and the by-URL cleanup would not reach it.
+      // The store retires it as part of the same transaction that decides
+      // whether this write lands: deleting it up front would erase a stronger
+      // representation before anything could compare the two.
+      await this.store.addEmptyPage(
+        library,
+        version,
+        progress.depth,
+        {
+          url: emptyPage.url,
+          contentUrl: emptyPage.contentUrl,
+          title: emptyPage.title,
+          sourceContentType: emptyPage.sourceContentType,
+          contentType: emptyPage.contentType,
+          etag: emptyPage.etag,
+          lastModified: emptyPage.lastModified,
+          isAdditionalRepresentation: emptyPage.isAdditionalRepresentation,
+        },
+        progress.pageId,
+      );
       logger.debug(`[${job.id}] Stored empty page: ${progress.currentUrl}`);
     } catch (docError) {
       logger.error(
@@ -227,13 +233,17 @@ export class PipelineWorker {
     if (!progress.result) return;
 
     try {
-      if (progress.pageId) {
-        await this.store.deletePage(progress.pageId);
-        logger.debug(
-          `[${job.id}] Refreshing page ${progress.pageId}: ${progress.currentUrl}`,
-        );
-      }
-      await this.store.addScrapeResult(library, version, progress.depth, progress.result);
+      // The old row is retired inside the store's write transaction rather than
+      // here. Deleting it first would hide it from the precedence check, so a
+      // refresh that re-fetches both representations of one page would keep
+      // whichever finished last instead of the better one.
+      await this.store.addScrapeResult(
+        library,
+        version,
+        progress.depth,
+        progress.result,
+        progress.pageId,
+      );
       logger.debug(`[${job.id}] Stored processed content: ${progress.currentUrl}`);
     } catch (docError) {
       logger.error(

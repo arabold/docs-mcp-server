@@ -16,6 +16,16 @@ const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
 
 /**
+ * How far the node-by-node salvage will descend before taking a subtree's text.
+ *
+ * Real documentation pages nest 12-25 levels deep, so this never engages on
+ * one; it bounds the cost on documents built by a generator that emits
+ * thousands of nested wrappers, which are also the documents whose conversion
+ * fails in the first place.
+ */
+const MAX_SALVAGE_DEPTH = 100;
+
+/**
  * Middleware to convert the final processed HTML content (from Cheerio object in context.dom)
  * into Markdown using Turndown, applying custom rules.
  */
@@ -164,12 +174,24 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
    * throwing falls back to its text. Formatting inside that subtree flattens;
    * the point is to keep the words.
    */
-  private convertNodeWithFallback($: cheerio.CheerioAPI, node: AnyNode): string {
+  private convertNodeWithFallback(
+    $: cheerio.CheerioAPI,
+    node: AnyNode,
+    depth = 0,
+  ): string {
     if (node.type === "text") {
       return fullTrim(node.data);
     }
     if (node.type !== "tag") {
       return "";
+    }
+
+    // Each level serializes its whole subtree to hand Turndown a string, so
+    // descending costs O(depth x size) and a pathologically nested document
+    // spends minutes on one page. Past this depth the remaining structure is
+    // not carrying meaning anyway, so take the words and stop.
+    if (depth >= MAX_SALVAGE_DEPTH) {
+      return fullTrim($(node).text());
     }
 
     try {
@@ -178,7 +200,7 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
       const parts = $(node)
         .contents()
         .toArray()
-        .map((child) => this.convertNodeWithFallback($, child))
+        .map((child) => this.convertNodeWithFallback($, child, depth + 1))
         .filter((part) => part.length > 0);
 
       return parts.length > 0 ? parts.join("\n\n") : fullTrim($(node).text());
@@ -359,7 +381,21 @@ export class HtmlToMarkdownMiddleware implements ContentProcessorMiddleware {
       // A failed conversion leaves `context.content` holding the HTML we were
       // handed, and the rest of the pipeline would split and embed that markup
       // as if it were prose. Convert what we can instead, node by node.
-      const salvaged = this.salvageMarkdown($);
+      //
+      // Guarded in turn, because the salvage runs the same converter and walks
+      // the same document: whatever defeated the first pass can defeat it too,
+      // and an escaping throw would skip the assignment below and leave the
+      // markup in place — the one outcome this whole branch exists to prevent.
+      let salvaged = "";
+      try {
+        salvaged = this.salvageMarkdown($);
+      } catch (salvageError) {
+        logger.warn(
+          `⚠️  Could not salvage any Markdown for ${context.source}: ${
+            salvageError instanceof Error ? salvageError.message : String(salvageError)
+          }`,
+        );
+      }
       if (salvaged) {
         logger.warn(
           `⚠️  Recovered ${salvaged.length} characters of Markdown for ${context.source} after a failed conversion`,

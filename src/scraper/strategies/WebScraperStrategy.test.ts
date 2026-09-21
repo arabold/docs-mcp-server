@@ -1086,7 +1086,8 @@ describe("WebScraperStrategy", () => {
     const reportedUrls = callsWithDocs.map((call) => call[0].result?.url);
     expect(reportedUrls).toEqual(
       expect.arrayContaining([
-        "https://example.com",
+        // A bare origin is stored with its canonical "/" path.
+        "https://example.com/",
         "https://example.com/page1",
         "https://example.com/page2",
       ]),
@@ -1325,8 +1326,9 @@ describe("WebScraperStrategy", () => {
         "https://example.com/docs/guide",
         expect.anything(),
       );
+      // Stored without the trailing slash, so `/docs/` and `/docs` are one page.
       const startDoc = progressCallback.mock.calls.find(
-        (call) => call[0].result?.url === testUrl,
+        (call) => call[0].result?.url === "https://example.com/docs",
       );
       expect(startDoc?.[0].result?.textContent).toBe(
         "[Guide](https://example.com/docs/guide)",
@@ -1347,9 +1349,11 @@ describe("WebScraperStrategy", () => {
 
       // The start URL itself being unreadable fails the job, matching the
       // existing rule for a 404 root: completing "successfully" with zero
-      // documents tells the user nothing about what went wrong.
+      // documents tells the user nothing about what went wrong. The message
+      // names the served type, so the user can tell a mistyped URL from a
+      // format this server cannot read.
       await expect(strategy.scrape(options, progressCallback)).rejects.toThrow(
-        /Cannot process content type/,
+        /Cannot process image\/png/,
       );
 
       const docCall = progressCallback.mock.calls.find((call) => call[0].result);
@@ -1788,10 +1792,16 @@ describe("WebScraperStrategy", () => {
         "https://example.com/docs/page.html",
         expect.anything(),
       );
+      // Fetched as the .md variant, recorded under the page it represents.
+      // Fetched as `index.html.md`; the extension strips to `index.html`, which
+      // canonicalises to the directory the page actually lives at.
       const guideDoc = progressCallback.mock.calls.find(
-        (call) => call[0].result?.url === "https://example.com/docs/guide/index.html.md",
+        (call) => call[0].result?.url === "https://example.com/docs/guide",
       );
       expect(guideDoc?.[0].result?.contentType).toBe("text/markdown");
+      expect(
+        progressCallback.mock.calls.some((call) => call[0].result?.url?.endsWith(".md")),
+      ).toBe(false);
     });
 
     it("should reject non-Markdown text variants for llms.txt pages", async () => {
@@ -1926,9 +1936,11 @@ describe("WebScraperStrategy", () => {
         "https://example.com/guide.md",
         expect.anything(),
       );
+      // The .md URL is what was fetched; the page is recorded under its
+      // canonical form, so a Markdown variant and its page share one identity.
       expect(
         progressCallback.mock.calls.some(
-          (call) => call[0].result?.url === "https://example.com/guide.md",
+          (call) => call[0].result?.url === "https://example.com/guide",
         ),
       ).toBe(true);
     });
@@ -2827,5 +2839,99 @@ describe("WebScraperStrategy empty extraction", () => {
       pipelineFailed: false,
     });
     expect(event?.pagesIndexed).toBe(0);
+  });
+});
+
+describe("WebScraperStrategy markdown variant identity", () => {
+  let strategy: WebScraperStrategy;
+
+  const optionsFor = (url: string): ScraperOptions => ({
+    url,
+    library: "test",
+    version: "1.0",
+    maxPages: 10,
+    maxDepth: 0,
+    scrapeMode: ScrapeMode.Fetch,
+  });
+
+  /** Runs one page and returns the URL the progress event recorded for it. */
+  const recordedUrl = async (url: string): Promise<string | undefined> => {
+    const progressCallback = vi.fn<ProgressCallback<ScraperProgressEvent>>();
+    await strategy.scrape(optionsFor(url), progressCallback);
+    return progressCallback.mock.calls.at(-1)?.[0]?.result?.url;
+  };
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    strategy = new WebScraperStrategy(loadConfig());
+  });
+
+  it("records a markdown variant under the page it represents", async () => {
+    mockFetchFn.mockResolvedValue({
+      content: "# Server-Side Rendering\n\nSome guidance about SSR.",
+      mimeType: "text/markdown",
+      source: "https://vite.dev/guide/ssr.md",
+      status: FetchStatus.SUCCESS,
+    });
+
+    expect(await recordedUrl("https://vite.dev/guide/ssr.md")).toBe(
+      "https://vite.dev/guide/ssr",
+    );
+  });
+
+  it("accepts a generic text content type as a markdown variant", async () => {
+    // react.dev serves its .md alternates as text/plain; requiring the server to
+    // name the markdown type exactly would miss the more common case.
+    mockFetchFn.mockResolvedValue({
+      content: "---\ntitle: Quick Start\n---\n\n# Quick Start\n\nWelcome.",
+      mimeType: "text/plain",
+      source: "https://react.dev/learn.md",
+      status: FetchStatus.SUCCESS,
+    });
+
+    expect(await recordedUrl("https://react.dev/learn.md")).toBe(
+      "https://react.dev/learn",
+    );
+  });
+
+  it("keeps the URL when the server ignores the extension and returns HTML", async () => {
+    // A soft 404 answering an HTML page must not fold that response onto a
+    // canonical URL it does not serve.
+    mockFetchFn.mockResolvedValue({
+      content: "<html><body><h1>Not found</h1><p>No such page here.</p></body></html>",
+      mimeType: "text/html",
+      source: "https://tailwindcss.com/docs/flex.md",
+      status: FetchStatus.SUCCESS,
+    });
+
+    expect(await recordedUrl("https://tailwindcss.com/docs/flex.md")).toBe(
+      "https://tailwindcss.com/docs/flex.md",
+    );
+  });
+
+  it("leaves a markdown response at an extensionless URL unchanged", async () => {
+    mockFetchFn.mockResolvedValue({
+      content: "# Guide\n\nBody text.",
+      mimeType: "text/markdown",
+      source: "https://example.com/guide",
+      status: FetchStatus.SUCCESS,
+    });
+
+    expect(await recordedUrl("https://example.com/guide")).toBe(
+      "https://example.com/guide",
+    );
+  });
+
+  it("leaves a non-markdown extension unchanged", async () => {
+    mockFetchFn.mockResolvedValue({
+      content: "plain notes",
+      mimeType: "text/plain",
+      source: "https://example.com/notes.txt",
+      status: FetchStatus.SUCCESS,
+    });
+
+    expect(await recordedUrl("https://example.com/notes.txt")).toBe(
+      "https://example.com/notes.txt",
+    );
   });
 });

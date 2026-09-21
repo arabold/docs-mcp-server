@@ -1,8 +1,8 @@
 import psl from "psl";
 import { InvalidUrlError } from "./errors";
+import { MimeTypeUtils } from "./mimeTypeUtils";
 
 interface UrlNormalizerOptions {
-  ignoreCase?: boolean;
   removeHash?: boolean;
   removeTrailingSlash?: boolean;
   removeQuery?: boolean;
@@ -10,7 +10,6 @@ interface UrlNormalizerOptions {
 }
 
 const defaultNormalizerOptions: UrlNormalizerOptions = {
-  ignoreCase: true,
   removeHash: true,
   removeTrailingSlash: true,
   removeQuery: false,
@@ -22,18 +21,27 @@ export function normalizeUrl(
   options: UrlNormalizerOptions = defaultNormalizerOptions,
 ): string {
   try {
-    const parsedUrl = new URL(url);
     const finalOptions = { ...defaultNormalizerOptions, ...options };
-
-    // Clone the URL to modify it safely
     const normalized = new URL(url);
+
+    // Captured before the reset below, so the URL is parsed once rather than twice.
+    const originalHash = normalized.hash;
+    const originalSearch = normalized.search;
 
     // Reset search and hash for the normalized base
     normalized.search = "";
     normalized.hash = "";
 
+    // A preserved fragment names a route, so the path in front of it is part of
+    // that route's spelling: on a hash-routed site `/docs/#/guide` and
+    // `/docs#/guide` are different pages, and trimming the slash invents a URL
+    // the site does not serve. Only URLs that actually carry a fragment are
+    // exempt — an ordinary `/docs/` on the same site still folds onto `/docs`,
+    // which is why this is decided per URL rather than per crawl.
+    const pathIsPartOfRoute = !finalOptions.removeHash && originalHash !== "";
+
     // Remove index files first, before handling trailing slashes
-    if (finalOptions.removeIndex) {
+    if (finalOptions.removeIndex && !pathIsPartOfRoute) {
       normalized.pathname = normalized.pathname.replace(
         /\/index\.(html|htm|asp|php|jsp)$/i,
         "/",
@@ -41,13 +49,17 @@ export function normalizeUrl(
     }
 
     // Handle trailing slash
-    if (finalOptions.removeTrailingSlash && normalized.pathname.length > 1) {
+    if (
+      finalOptions.removeTrailingSlash &&
+      !pathIsPartOfRoute &&
+      normalized.pathname.length > 1
+    ) {
       normalized.pathname = normalized.pathname.replace(/\/+$/, "");
     }
 
     // Keep original parts we want to preserve
-    const preservedHash = !finalOptions.removeHash ? parsedUrl.hash : "";
-    const preservedSearch = !finalOptions.removeQuery ? parsedUrl.search : "";
+    const preservedHash = !finalOptions.removeHash ? originalHash : "";
+    const preservedSearch = !finalOptions.removeQuery ? originalSearch : "";
 
     // Construct final URL string
     // Use href to get the full string, but we need to re-assemble if we want query/hash specific control
@@ -59,14 +71,12 @@ export function normalizeUrl(
       normalized.hash = preservedHash;
     }
 
-    let result = normalized.href;
-
-    // Apply case normalization if configured
-    if (finalOptions.ignoreCase) {
-      result = result.toLowerCase();
-    }
-
-    return result;
+    // Case is deliberately left alone. A URL path, query and fragment are
+    // case-sensitive, so folding them can merge two different documents into
+    // one — and since this value is the crawl's dedup key, the second one is
+    // then never fetched. Servers that do serve paths case-insensitively will
+    // index a page twice instead, which is the failure that leaves evidence.
+    return normalized.href;
   } catch {
     return url; // Return original URL if parsing fails
   }
@@ -113,3 +123,42 @@ export function extractPrimaryDomain(hostname: string): string {
 }
 
 export type { UrlNormalizerOptions };
+
+/**
+ * Rewrites a published Markdown file's URL to the page it represents.
+ *
+ * `https://example.com/guide.md` and `https://example.com/guide` name the same
+ * document, so they must share one identity — otherwise a site whose `llms.txt`
+ * lists `.md` URLs is indexed twice, once per spelling.
+ *
+ * The extension is only half the test. Callers SHALL also establish that the
+ * response really was Markdown, because a server that ignores the extension and
+ * answers with HTML or a soft error would otherwise fold a page onto an identity
+ * that does not serve it.
+ *
+ * @param url The absolute URL the content was fetched from.
+ * @returns The page URL, or `url` unchanged when the path names no Markdown file.
+ */
+export function stripMarkdownExtension(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+
+  // Gated on the shared detector rather than on "has a dot", so the name stays
+  // true and the set of Markdown extensions has one home. The pathname is passed
+  // deliberately: given a whole URL the detector would read a host like
+  // `example.md` as a Markdown file.
+  const detected = MimeTypeUtils.detectMimeTypeFromPath(parsed.pathname);
+  if (!detected || !MimeTypeUtils.isMarkdown(detected)) return url;
+
+  // A leading dot is not an extension separator, so `/.md` is left alone — it
+  // names no page to fold onto.
+  const stripped = parsed.pathname.replace(/([^/])\.[^/.]*$/, "$1");
+  if (stripped === parsed.pathname) return url;
+
+  parsed.pathname = stripped;
+  return parsed.toString();
+}

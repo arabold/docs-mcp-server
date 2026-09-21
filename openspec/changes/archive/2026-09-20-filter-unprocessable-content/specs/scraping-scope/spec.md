@@ -1,3 +1,5 @@
+> **Archive-order note.** `define-scrape-progress-semantics` modifies this same requirement to add the depth check, and restates the step 3 rule below so its version is complete. This change SHALL be archived first; archiving it after would drop that depth check from the merged requirement.
+
 ## MODIFIED Requirements
 
 ### Requirement: Filter ordering for discovered links

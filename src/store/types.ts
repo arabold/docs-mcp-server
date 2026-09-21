@@ -13,6 +13,14 @@ export interface DbPage {
   source_content_type: string | null;
   content_type: string | null;
   depth: number | null;
+  /**
+   * Where this page's content was retrieved from, when that differs from `url`.
+   *
+   * NULL means the two coincide, which is true of every page whose content came
+   * from its own address — and of every row written before representations were
+   * resolved to a shared identity. Readers coalesce to `url`.
+   */
+  content_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -54,6 +62,7 @@ export interface DbPageChunk extends DbChunk {
   title?: string | null;
   source_content_type?: string | null;
   content_type?: string | null;
+  content_url?: string | null;
 }
 
 /**
@@ -76,6 +85,16 @@ export type DbQueryResult<T> = T | undefined;
  */
 export interface StoreSearchResult {
   url: string;
+  /**
+   * Where the content was actually retrieved from, when that differs from
+   * `url`.
+   *
+   * `url` is the page's identity, which can be derived rather than observed: a
+   * page published as `/guide.md` is recorded as `/guide`, and a site need not
+   * serve anything at the latter. Callers showing a link to the source should
+   * prefer this when it is set, so the link goes somewhere that answers.
+   */
+  contentUrl?: string | null;
   content: string;
   score: number | null;
   mimeType?: string | null;

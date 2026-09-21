@@ -1,4 +1,4 @@
-> **Rebase note.** This delta assumes `filter-unprocessable-content` has landed and established step 3 as the unprocessable-extension filter. If that change is reordered or dropped, renumber the steps below accordingly.
+> **Rebase note.** This delta modifies the same requirement as `filter-unprocessable-content`, which SHALL be archived first. The step 3 rule below is that change's unprocessable-media filter, restated verbatim so the merged requirement is complete; this delta's own contribution is the depth check at step 4 and the admission rule beneath the list. Archiving in the other order would drop the depth check.
 
 ## MODIFIED Requirements
 
@@ -7,7 +7,7 @@
 Discovered links SHALL be filtered in this order, with each filter able to reject before later filters run:
 1. URL parse — invalid URLs are rejected.
 2. Archive-extension filter — links ending in `.zip`, `.tar`, `.gz`, or `.tgz` (case-insensitive) are rejected during crawl.
-3. Unprocessable-extension filter — a MIME type is detected from the link's pathname via `MimeTypeUtils.detectMimeTypeFromPath()`; when detection returns a type that no configured pipeline can process, the link is rejected. When detection returns null the link proceeds.
+3. Unprocessable-media filter — a MIME type is detected from the link's pathname via `MimeTypeUtils.detectMimeTypeFromPath()`; the link is rejected only when that type names binary media (`image/*`, `video/*`, `audio/*`, `font/*`) that no configured pipeline can process. Any other detected type, and a null detection, proceed to the remaining filters.
 4. Depth check — a link whose resulting depth would exceed the effective `maxDepth` is rejected.
 5. Scope check — `isInScope(canonicalBaseUrl, target, scope)` must return true.
 6. Pattern check — `shouldIncludeUrl(target, includePatterns, excludePatterns)` must return true (default exclusion patterns apply when no user excludePatterns are provided).
@@ -28,13 +28,19 @@ Steps 2 and 3 overlap: archive extensions also resolve to MIME types no pipeline
 
 #### Scenario: Image link rejected before scope check
 - **WHEN** a discovered link is `https://other.com/assets/diagram.png`
-- **THEN** the link is rejected by the unprocessable-extension filter regardless of scope
+- **THEN** the link is rejected by the unprocessable-media filter regardless of scope
 - **AND** no HTTP request is issued for it
 
-#### Scenario: Extensionless link survives the unprocessable filter
+#### Scenario: Script link with a misclassified extension survives the filter
+- **WHEN** a discovered link is `https://example.com/Guess/guess.ps`
+- **AND** detection resolves it to `application/postscript`, which is not binary media
+- **THEN** the unprocessable-media filter does not reject it
+- **AND** the link proceeds to the depth check
+
+#### Scenario: Extensionless link survives the new filter
 - **WHEN** a discovered link is `https://example.com/api/intro`
 - **AND** `detectMimeTypeFromPath()` returns null for it
-- **THEN** the unprocessable-extension filter does not reject it
+- **THEN** the unprocessable-media filter does not reject it
 - **AND** the link proceeds to the depth check
 
 #### Scenario: Over-depth link is rejected at enqueue

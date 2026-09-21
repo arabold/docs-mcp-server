@@ -10,7 +10,11 @@ import type { ProgressCallback } from "../../types";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
-import type { UrlNormalizerOptions } from "../../utils/url";
+import {
+  normalizeUrl,
+  stripMarkdownExtension,
+  type UrlNormalizerOptions,
+} from "../../utils/url";
 import { AutoDetectFetcher } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import {
@@ -143,14 +147,94 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     return variant.toString();
   }
 
+  /**
+   * Records a web page under its canonical URL.
+   *
+   * Web URLs are the case the shared normaliser was written for: a server
+   * returns the same bytes for `/config` and `/config/`, and for a directory and
+   * its index file, so those spellings name one page.
+   */
+  protected override canonicalizeStoredUrl(
+    url: string,
+    scrapeOptions: ScraperOptions,
+  ): string {
+    return normalizeUrl(url, this.getUrlNormalizerOptions(scrapeOptions));
+  }
+
+  /**
+   * Restates an accepted Markdown variant's content type as Markdown.
+   *
+   * Sites disagree on how to serve a `.md` file: vite.dev sends `text/markdown`,
+   * react.dev sends `text/plain`. Both are Markdown documents, so both are
+   * parsed and recorded as Markdown — the extension is the author's statement
+   * about the format, and the plain-text pipeline would throw away every
+   * heading. Markdown is close enough to a superset of plain text that a file
+   * using none of its syntax still comes through intact.
+   *
+   * `text/plain` is not treated as a weaker signal than HTML. It was, briefly,
+   * to stop a plain-text soft error page outranking the page it folds onto —
+   * but the hosts that soft-404 a `.md` URL answer `200 text/markdown` with a
+   * `# Page Not Found` body (ai-sdk.dev, nextjs.org), so that rule caught none
+   * of them, while react.dev — the `text/plain` host — returns a real 404.
+   * It cost the published Markdown of every such site and bought nothing.
+   * Soft-error detection needs to read the body, and belongs elsewhere.
+   */
+  private asMarkdownRepresentation(url: string, rawContent: RawContent): RawContent {
+    if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
+      return rawContent;
+    }
+    return MimeTypeUtils.isMarkdown(rawContent.mimeType)
+      ? rawContent
+      : { ...rawContent, mimeType: "text/markdown" };
+  }
+
   private isAcceptableMarkdownVariant(rawContent: RawContent): boolean {
     const mimeType = rawContent.mimeType.toLowerCase();
     return MimeTypeUtils.isMarkdown(mimeType) || mimeType === "text/plain";
   }
 
   private isMarkdownUrl(url: string): boolean {
-    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(url);
+    // Pathname only, for the reason `canProcessDiscoveredLink` documents: given a
+    // whole URL the detector reads the host's suffix as an extension, and `.md`
+    // is Moldova's ccTLD, so `https://example.md/` would report as Markdown.
+    let pathname: string;
+    try {
+      pathname = new URL(url).pathname;
+    } catch {
+      return false;
+    }
+    const mimeType = MimeTypeUtils.detectMimeTypeFromPath(pathname);
     return mimeType ? MimeTypeUtils.isMarkdown(mimeType) : false;
+  }
+
+  /**
+   * Resolves the page identity for a fetched resource.
+   *
+   * A published Markdown file is a representation of a page rather than a page of
+   * its own, so `guide.md` is recorded as `guide`. Both signals are required and
+   * they answer different questions: the extension states what the author meant
+   * the URL to be, the response states what the server actually returned. The
+   * extension alone would fold a soft 404 or an HTML page onto an identity it
+   * does not serve; the response alone would rewrite the identity of a document
+   * that is legitimately its own resource.
+   *
+   * Being a property of the response, the rule needs no knowledge of how the URL
+   * was discovered or of what else the crawl has seen — which is what lets an
+   * `llms.txt` entry and a crawled link converge without ordering guarantees.
+   *
+   * @param url The URL the content was fetched from, after redirects.
+   * @param rawContent The response, consulted for its resolved MIME type.
+   * @returns The canonical page URL.
+   */
+  private resolvePageIdentity(url: string, rawContent: RawContent): string {
+    if (!this.isMarkdownUrl(url) || !this.isAcceptableMarkdownVariant(rawContent)) {
+      return url;
+    }
+    const canonical = stripMarkdownExtension(url);
+    if (canonical !== url) {
+      logger.debug(`Markdown variant ${url} recorded as ${canonical}`);
+    }
+    return canonical;
   }
 
   /**
@@ -193,7 +277,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     const fetchOptions = this.createFetchOptions(item, options, signal);
 
     if (!item.fromLlmsTxt || this.isMarkdownUrl(item.url)) {
-      return this.fetcher.fetch(item.url, fetchOptions);
+      return await this.fetcher.fetch(item.url, fetchOptions);
     }
 
     const markdownVariantUrl = this.buildMarkdownVariantUrl(item.url);
@@ -206,9 +290,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         logger.debug(
           `llms.txt Markdown URL preference succeeded: ${item.url} -> ${markdownVariantUrl}`,
         );
-        return MimeTypeUtils.isMarkdown(markdownContent.mimeType)
-          ? markdownContent
-          : { ...markdownContent, mimeType: "text/markdown" };
+        return markdownContent;
       }
 
       logger.debug(
@@ -407,10 +489,19 @@ export class WebScraperStrategy extends BaseScraperStrategy {
       }
 
       // Use AutoDetectFetcher which handles fallbacks automatically
-      const rawContent = await this.fetchItemContent(item, options, signal);
-      const effectiveSource = options.preserveHashes
-        ? this.restorePreservedHash(url, rawContent.source)
-        : rawContent.source;
+      const fetched = await this.fetchItemContent(item, options, signal);
+      const fetchedSource = options.preserveHashes
+        ? this.restorePreservedHash(url, fetched.source)
+        : fetched.source;
+      // Judged on where the bytes came from, not on where we asked: a redirect
+      // from an extensionless URL to a `.md` resource is still a published
+      // Markdown representation, and the queued URL would hide that. Applied
+      // here rather than per fetch path so every route reaching this point —
+      // including the llms.txt variant fallback — is covered by one rule.
+      const rawContent = this.asMarkdownRepresentation(fetchedSource, fetched);
+      // A Markdown variant is recorded under the page it represents, so a `.md`
+      // URL and its canonical form resolve to one identity however each was found.
+      const effectiveSource = this.resolvePageIdentity(fetchedSource, rawContent);
       if (this.isRequestedRoot(item, options)) {
         this.updateCanonicalBaseUrl(effectiveSource, options);
       }
@@ -428,6 +519,9 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           url: effectiveSource,
           links: [],
           queueItems: llmsTxtQueueItems,
+          // Carried so a fatal skip at the requested root can name the type that
+          // caused it. Null for 304 and 404, whose MIME type describes nothing.
+          sourceContentType: rawContent.mimeType ?? null,
           status: rawContent.status,
         };
       }
@@ -466,6 +560,7 @@ export class WebScraperStrategy extends BaseScraperStrategy {
           url: effectiveSource,
           links: [],
           queueItems: llmsTxtQueueItems,
+          sourceContentType: rawContent.mimeType ?? null,
           // Skipped, not empty: nothing read the body, so we cannot claim the
           // page has no content — and a refresh must not erase what is stored.
           status: FetchStatus.SKIPPED,
@@ -485,6 +580,13 @@ export class WebScraperStrategy extends BaseScraperStrategy {
         );
         return {
           url: effectiveSource,
+          // Recorded here as well as on the non-empty return: an empty page
+          // still has a retrieval location, and the base strategy's fallback
+          // cannot recover it once the identity has moved — it compares the
+          // identity with itself and finds no divergence. Without this the row
+          // stores NULL and the next refresh asks the identity while sending
+          // the validator the Markdown file issued.
+          contentUrl: effectiveSource === fetchedSource ? undefined : fetchedSource,
           title: processed.title ?? null,
           sourceContentType: rawContent.mimeType,
           contentType: processed.contentType || rawContent.mimeType,
@@ -536,6 +638,11 @@ export class WebScraperStrategy extends BaseScraperStrategy {
 
       return {
         url: effectiveSource,
+        // Recorded only when the bytes came from somewhere other than the
+        // page's identity, so a later refresh requests that representation and
+        // the validator below goes back to the resource that issued it. Equal
+        // values would claim a divergence that does not exist.
+        contentUrl: effectiveSource === fetchedSource ? undefined : fetchedSource,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
         sourceContentType: rawContent.mimeType,

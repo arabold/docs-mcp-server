@@ -11,6 +11,18 @@ export type QueueItem = {
   etag?: string | null; // Last known ETag for conditional requests during refresh
   /** True when the queue item was seeded from a discovered llms.txt file. */
   fromLlmsTxt?: boolean;
+  /**
+   * The page's own URL, when `url` is the location a representation of it was
+   * retrieved from rather than the page itself.
+   *
+   * A refresh asks for the representation, because that is what produced the
+   * stored content and what issued the stored validator. But a 404 there is a
+   * statement about the representation, not about the page: a site that
+   * withdraws its published Markdown files still serves the pages they
+   * described. This is the address to fall back to before concluding the page
+   * is gone.
+   */
+  identityUrl?: string;
   /** Internal-only allowlist roots for application-managed temporary files. */
   internalAllowedFileRoots?: string[];
 };
@@ -137,6 +149,14 @@ export interface ScraperOptions {
 export interface ScrapeResult {
   /** The URL of the page that was scraped */
   url: string;
+  /**
+   * Where the content was actually retrieved from, when that differs from `url`.
+   *
+   * `url` is the page's identity; this is the location that served its bytes. They
+   * diverge when a representation lives elsewhere — a published Markdown file
+   * recorded under the page it represents. Undefined means the two coincide.
+   */
+  contentUrl?: string;
   /** Page title */
   title: string;
   /** Original MIME type of the fetched resource before pipeline processing */
@@ -155,6 +175,15 @@ export interface ScrapeResult {
   etag?: string | null;
   /** Last-Modified from HTTP response for caching */
   lastModified?: string | null;
+  /**
+   * True when this crawl already stored another representation of `url`.
+   *
+   * A page reachable as both `/guide.md` and `/guide` produces two results with
+   * one identity, and the store keeps whichever representation is stronger. A
+   * first write is not a competition and always lands, so a later crawl's
+   * answer supersedes an earlier crawl's instead of being blocked by it.
+   */
+  isAdditionalRepresentation?: boolean;
 }
 
 /**
@@ -229,12 +258,16 @@ export interface ScraperProgressEvent {
    */
   emptyPage?: {
     url: string;
+    /** Where the content was retrieved from, when that differs from `url`. */
+    contentUrl?: string;
     title: string;
     sourceContentType: string | null;
     contentType: string | null;
     etag: string | null;
     lastModified: string | null;
     pipelineFailed: boolean;
+    /** See {@link ScrapeResult.isAdditionalRepresentation}. */
+    isAdditionalRepresentation?: boolean;
   };
   /** Database page ID (for refresh operations or tracking) */
   pageId?: number;

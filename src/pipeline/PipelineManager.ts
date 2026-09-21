@@ -14,7 +14,11 @@ import { ScraperRegistry, ScraperService } from "../scraper";
 import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
-import { normalizeVersionLabel, VersionStatus } from "../store/types";
+import {
+  normalizeLibraryName,
+  normalizeVersionLabel,
+  VersionStatus,
+} from "../store/types";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError } from "./errors";
@@ -237,14 +241,19 @@ export class PipelineManager implements IPipeline {
     version: string | undefined | null,
     options: ScraperOptions,
   ): Promise<string> {
-    // Normalized so the job is deduped against the bucket it will be stored under.
+    // Normalized so the job is deduped against the bucket it will be stored
+    // under. Both halves of the key need it: the store buckets by folded
+    // library name too, so comparing those exactly let `Docs` and `docs` run as
+    // two jobs against one bucket, where the second one's clean-before-scrape
+    // deleted pages the first had already written — and both reported success.
     const normalizedVersion = normalizeVersionLabel(version);
+    const normalizedLibrary = normalizeLibraryName(library);
 
     // Abort any existing QUEUED or RUNNING job for the same library+version
     const allJobs = await this.getJobs();
     const duplicateJobs = allJobs.filter(
       (job) =>
-        job.library === library &&
+        normalizeLibraryName(job.library) === normalizedLibrary &&
         normalizeVersionLabel(job.version) === normalizedVersion &&
         [PipelineJobStatus.QUEUED, PipelineJobStatus.RUNNING].includes(job.status),
     );
@@ -375,12 +384,23 @@ export class PipelineManager implements IPipeline {
         `🔄 Preparing refresh job for ${library}@${normalizedVersion || "latest"} with ${pages.length} page(s)`,
       );
 
-      // Build initialQueue from pages with original depth values
+      // Build initialQueue from pages with original depth values.
+      //
+      // Requests go to where the content actually came from, which differs from
+      // the page's URL when a representation lives elsewhere — a published
+      // Markdown file recorded under the page it represents. Asking for the URL
+      // instead would retrieve a different representation, and would send the
+      // stored validator to a resource that never issued it. `content_url` is
+      // NULL for pages retrieved from their own address, including every row
+      // written before representations were resolved to a shared identity.
       const initialQueue = pages.map((page) => ({
-        url: page.url,
+        url: page.content_url ?? page.url,
         depth: page.depth ?? 0, // Use original depth, fallback to 0 for old data
         pageId: page.id,
         etag: page.etag,
+        // Carried so a withdrawn representation does not read as a withdrawn
+        // page: the scraper asks this address before deleting anything.
+        identityUrl: page.content_url ? page.url : undefined,
       }));
       // Get stored scraper options to retrieve the source URL and other options
       const storedOptions = await this.store.getScraperOptions(versionId);

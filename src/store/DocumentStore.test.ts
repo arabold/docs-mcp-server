@@ -2807,3 +2807,298 @@ describe("DocumentStore - compaction", () => {
     expect(Number(db.pragma("temp_store", { simple: true }))).toBe(2);
   });
 });
+
+/**
+ * A page can be reached both as a published Markdown file and as an HTML page —
+ * one document under two URLs that resolve to a single identity. Markdown is the
+ * representation the site's authors published; converting HTML ourselves is the
+ * fallback for sites that offer nothing better. Writes are otherwise
+ * last-one-wins, so without an explicit rule the winner would be decided by
+ * crawl order.
+ */
+describe("DocumentStore - Markdown representation precedence", () => {
+  let store: DocumentStore;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  const resultWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    url: "https://example.com/guide",
+    title: "Guide",
+    sourceContentType,
+    contentType: "text/markdown",
+    textContent: content,
+    links: [],
+    errors: [],
+    chunks: [{ types: ["text"], content, section: { level: 0, path: [] } }],
+  });
+
+  /**
+   * The second representation of a page reached during one crawl.
+   *
+   * Precedence decides between two routes to the same document, so it applies
+   * only to a write the crawl has flagged as competing with one it already
+   * made. A plain write is the new state of the page and always lands.
+   */
+  const competingWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    ...resultWith(sourceContentType, content),
+    isAdditionalRepresentation: true,
+  });
+
+  const storedContent = async (): Promise<string[]> => {
+    const results = await store.findChunksByUrl(
+      "lib",
+      "1.0",
+      "https://example.com/guide",
+    );
+    return results.map((r) => r.content);
+  };
+
+  beforeEach(async () => {
+    originalEnv = { ...process.env };
+    delete process.env.OPENAI_API_KEY;
+    store = new DocumentStore(":memory:", appConfig);
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    process.env = originalEnv;
+    if (store) await store.shutdown();
+  });
+
+  it("keeps the markdown representation when html arrives afterwards", async () => {
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      resultWith("text/markdown", "from markdown"),
+    );
+    await store.addDocuments("lib", "1.0", 0, competingWith("text/html", "from html"));
+
+    expect(await storedContent()).toEqual(["from markdown"]);
+  });
+
+  it("replaces an html representation when markdown arrives afterwards", async () => {
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html"));
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      competingWith("text/markdown", "from markdown"),
+    );
+
+    expect(await storedContent()).toEqual(["from markdown"]);
+  });
+
+  it("does not depend on which representation was stored first", async () => {
+    // The pair above, stated as the property they exist to hold.
+    const markdownFirst = new DocumentStore(":memory:", appConfig);
+    await markdownFirst.initialize();
+    await markdownFirst.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md"));
+    await markdownFirst.addDocuments("lib", "1.0", 0, competingWith("text/html", "html"));
+    const a = await markdownFirst.findChunksByUrl(
+      "lib",
+      "1.0",
+      "https://example.com/guide",
+    );
+    await markdownFirst.shutdown();
+
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "html"));
+    await store.addDocuments("lib", "1.0", 0, competingWith("text/markdown", "md"));
+    const b = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
+
+    expect(a.map((r) => r.content)).toEqual(b.map((r) => r.content));
+  });
+
+  it("decides on the recorded type, leaving the markdown judgement upstream", async () => {
+    // The store's rule is only markdown-vs-not. Whether a `.md` URL answered as
+    // `text/plain` counts as Markdown is settled before the write, by
+    // `WebScraperStrategy.asMarkdownRepresentation`, which restates it — so a
+    // `text/plain` arriving here is a genuine plain-text page and loses to
+    // stored Markdown like any other non-Markdown representation.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "md body"));
+    await store.addDocuments("lib", "1.0", 0, competingWith("text/plain", "txt body"));
+
+    expect(await storedContent()).toEqual(["md body"]);
+  });
+
+  it("lets a later crawl replace markdown with html", async () => {
+    // Precedence settles a race between two routes in one crawl. A write that
+    // is not competing is the page's new state, so a site that stopped
+    // publishing its markdown does not freeze on the last copy we hold.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "old md"));
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "new html"));
+
+    expect(await storedContent()).toEqual(["new html"]);
+  });
+
+  it("retires the row a losing write came from", async () => {
+    // A refresh reaches one page by two spellings. The write that loses on
+    // precedence is the only thing that knows its old spelling folded into this
+    // identity, so it still has to retire that row — otherwise the old one stays
+    // searchable with stale content and loses again on every later refresh.
+    const legacy: ScrapeResult = {
+      ...resultWith("text/html", "stale html body"),
+      url: "https://example.com/guide/index.html",
+    };
+    await store.addDocuments("lib", "1.0", 0, legacy);
+    const pageByUrl = async (url: string) => {
+      const versionId = await store.resolveVersionId("lib", "1.0");
+      return (await store.getPagesByVersionId(versionId)).find((p) => p.url === url);
+    };
+    const legacyPage = await pageByUrl("https://example.com/guide/index.html");
+    expect(legacyPage).toBeDefined();
+
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "fresh md"));
+    // The HTML spelling now resolves onto the same identity and loses.
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      competingWith("text/html", "stale html body"),
+      legacyPage?.id,
+    );
+
+    expect(await storedContent()).toEqual(["fresh md"]);
+    expect(await pageByUrl("https://example.com/guide/index.html")).toBeUndefined();
+  });
+
+  it("does not retire the previous row when there is nothing to store", async () => {
+    // A result with no chunks means the pipeline learned nothing. Retiring the
+    // page it came from would delete indexed content and put nothing back.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "kept"));
+    const versionId = await store.resolveVersionId("lib", "1.0");
+    const page = (await store.getPagesByVersionId(versionId)).find(
+      (p) => p.url === "https://example.com/guide",
+    );
+    await store.addDocuments(
+      "lib",
+      "1.0",
+      0,
+      { ...resultWith("text/html", ""), chunks: [] },
+      page?.id,
+    );
+
+    expect(await storedContent()).toEqual(["kept"]);
+  });
+
+  it("still replaces markdown with newer markdown", async () => {
+    // The rule is about representation, not about freezing the page.
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "first"));
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "second"));
+
+    expect(await storedContent()).toEqual(["second"]);
+  });
+
+  it("still replaces html with newer html", async () => {
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "first"));
+    await store.addDocuments("lib", "1.0", 0, resultWith("text/html", "second"));
+
+    expect(await storedContent()).toEqual(["second"]);
+  });
+});
+
+describe("DocumentStore - concurrent writes to one identity", () => {
+  let store: DocumentStore;
+
+  const resultWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    url: "https://example.com/guide",
+    title: "Guide",
+    sourceContentType,
+    contentType: "text/markdown",
+    textContent: content,
+    links: [],
+    errors: [],
+    chunks: [{ types: ["text"], content, section: { level: 0, path: [] } }],
+  });
+
+  /**
+   * The second representation of a page reached during one crawl.
+   *
+   * Precedence decides between two routes to the same document, so it applies
+   * only to a write the crawl has flagged as competing with one it already
+   * made. A plain write is the new state of the page and always lands.
+   */
+  const competingWith = (sourceContentType: string, content: string): ScrapeResult => ({
+    ...resultWith(sourceContentType, content),
+    isAdditionalRepresentation: true,
+  });
+
+  beforeEach(async () => {
+    // Vector search on, so embedding introduces a real await between reading
+    // the page row and writing it — which is the window the race lives in.
+    mockEmbeddingDimension.value = 1536;
+    appConfig.app.embeddingModel = EmbeddingConfig.parseEmbeddingConfig(
+      "openai:text-embedding-3-small",
+    ).modelSpec;
+    store = new DocumentStore(":memory:", appConfig);
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    if (store) await store.shutdown();
+  });
+
+  /**
+   * Holds every embedding call open until both writers have reached it, so the
+   * two are provably in flight together. `Promise.all` alone does not guarantee
+   * that: whichever chain needs fewer microtask turns can finish outright
+   * before the other reads the page row, and then there is no race to observe.
+   */
+  function blockEmbeddingsUntilBothArrive(count: number): void {
+    const s = store as unknown as {
+      embedDocumentsWithRetry: (...args: unknown[]) => Promise<unknown>;
+    };
+    const original = s.embedDocumentsWithRetry.bind(s);
+    let arrived = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    s.embedDocumentsWithRetry = async (...args: unknown[]) => {
+      arrived++;
+      if (arrived >= count) release();
+      await gate;
+      return original(...args);
+    };
+  }
+
+  it("stores one chunk set when both representations are written at once", async () => {
+    // Pins the observable property: two concurrent writes to one identity leave
+    // one chunk set, and it is the Markdown one.
+    //
+    // It does not discriminate the in-transaction re-read that guards the
+    // read-then-write window — reverting that still passes here, because
+    // better-sqlite3 transactions are synchronous and a writer that enters one
+    // completes before the other starts. The re-read is justified by reasoning
+    // rather than by this test.
+    blockEmbeddingsUntilBothArrive(2);
+
+    await Promise.all([
+      store.addDocuments("lib", "1.0", 0, resultWith("text/markdown", "from markdown")),
+      store.addDocuments("lib", "1.0", 0, competingWith("text/html", "from html")),
+    ]);
+
+    const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe("from markdown");
+  });
+
+  it("keeps markdown whichever write is scheduled first", async () => {
+    blockEmbeddingsUntilBothArrive(2);
+
+    // The crawl flags whichever representation it reached second, so here it is
+    // the Markdown one — and Markdown still wins, which is the property.
+    await Promise.all([
+      store.addDocuments("lib", "1.0", 0, resultWith("text/html", "from html")),
+      store.addDocuments(
+        "lib",
+        "1.0",
+        0,
+        competingWith("text/markdown", "from markdown"),
+      ),
+    ]);
+
+    const chunks = await store.findChunksByUrl("lib", "1.0", "https://example.com/guide");
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].content).toBe("from markdown");
+  });
+});

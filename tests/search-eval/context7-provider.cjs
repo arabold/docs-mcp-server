@@ -26,7 +26,13 @@ const https = require("node:https");
  */
 const LIBRARY_MAP = {
   react: "/websites/react_dev",
-  python: "/websites/python_3",
+  // `/websites/python_3` was retired in favour of per-version libraries and now
+  // answers 202 `library_not_finalized` for every query. Context7 offers
+  // `/websites/python_3_16`, `_3_10` and `_3_9`; the newest is closest to the
+  // `docs.python.org/3/` tree our qrels reference. `/python/cpython` also
+  // exists but attributes chunks to the GitHub source tree (.rst/.py) rather
+  // than the rendered docs, which our URL-matched IR metrics cannot use.
+  python: "/websites/python_3_16",
   fastapi: "/websites/fastapi_tiangolo",
   vite: "/websites/vite_dev",
   tailwindcss: "/tailwindlabs/tailwindcss.com",
@@ -40,6 +46,11 @@ const LIBRARY_MAP = {
  *     URL (https://tailwindcss.com/docs/<page>). Context7's
  *     /tailwindlabs/tailwindcss.com library attributes chunks to the source
  *     .mdx, not the rendered page.
+ *   - python: version segment (`/3.16/`, `/3.10/`) → `/3/`. Context7 indexes
+ *     per-version doc sites while our qrels reference the `docs.python.org/3/`
+ *     alias for current stable. Matching on the version would make every
+ *     python URL miss. Deliberately version-agnostic so a future Context7
+ *     version bump does not silently break the comparison again.
  *   - All libraries: strip trailing `/` and any `?...` query string. FastAPI
  *     in particular returns `/tutorial/path-params` while our qrels use
  *     `/tutorial/path-params/`.
@@ -47,6 +58,13 @@ const LIBRARY_MAP = {
 function normalizeUrl(library, raw) {
   if (!raw || typeof raw !== "string") return raw;
   let url = raw.trim();
+
+  if (library === "python") {
+    url = url.replace(
+      /^https:\/\/docs\.python\.org\/3(?:\.\d+)?\//,
+      "https://docs.python.org/3/",
+    );
+  }
 
   if (library === "tailwindcss") {
     const m = url.match(
@@ -68,7 +86,9 @@ function normalizeUrl(library, raw) {
  * defensively doesn't hurt.)
  */
 // Exported for tests if anyone ever wants them; not used inside this script.
-module.exports = { normalizeUrl, LIBRARY_MAP };
+// `fetchContext7` is exported so its response handling can be tested: the
+// silent-zero regression this provider guards against lived entirely there.
+module.exports = { normalizeUrl, LIBRARY_MAP, fetchContext7 };
 
 function fetchContext7(libraryId, query) {
   const url = `https://context7.com/api/v2/context?libraryId=${encodeURIComponent(
@@ -87,17 +107,37 @@ function fetchContext7(libraryId, query) {
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
         const body = Buffer.concat(chunks).toString("utf8");
-        if (res.statusCode === undefined || res.statusCode >= 400) {
+        // Anything but 200 is a failure, including the 2xx codes that carry a
+        // problem in the body. `/v2/context` answers 202 `library_not_finalized`
+        // for a library that is stale or still processing, and that response
+        // parses cleanly with no snippets in it — so accepting it produced an
+        // empty result set with exit code 0, indistinguishable from a library
+        // that genuinely matched nothing. A dead library ID then scores zero on
+        // every query and reads as a quality collapse rather than a broken
+        // config. Fail loudly instead.
+        if (res.statusCode !== 200) {
           reject(
             new Error(`Context7 HTTP ${res.statusCode}: ${body.slice(0, 300)}`),
           );
           return;
         }
+        let parsed;
         try {
-          resolve(JSON.parse(body));
+          parsed = JSON.parse(body);
         } catch (e) {
           reject(new Error(`bad JSON from Context7: ${e.message}`));
+          return;
         }
+        // A 200 carrying an `error` field is the same trap by another route.
+        if (parsed && typeof parsed === "object" && parsed.error) {
+          reject(
+            new Error(
+              `Context7 returned error "${parsed.error}": ${String(parsed.message ?? "").slice(0, 200)}`,
+            ),
+          );
+          return;
+        }
+        resolve(parsed);
       });
     });
     req.on("error", reject);

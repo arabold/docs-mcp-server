@@ -125,6 +125,11 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 | `html-pipeline-nonhtml-e2e.test.ts` | Non-HTML content (text/plain) bypasses Playwright cleanly | none | yes |
 | `html-pipeline-live-e2e.test.ts` | HTML pipeline against real documentation sites (anti-scrape, JS-heavy) | network; slow & flaky | **no** — `npm run test:live` (uses `vite.config.live.ts`) |
 | `refresh-pipeline-e2e.test.ts` | Refresh handling: 200/304/404, broken links, etag flow | none (mock server) | yes |
+| `scrape-progress-e2e.test.ts` | Progress counter semantics: the `pagesScraped`/`totalPages` invariant, `maxPages` bounding indexed pages, counters persisted to the job record and read back through `GetJobInfoTool` | none (mock server) | yes |
+| `unprocessable-content-e2e.test.ts` | Queue-time and fetch-time unprocessable-content gates: no request for filtered links, skips store nothing, skips stay out of `abortOnFailureRate` | none (mock server) | yes |
+| `empty-page-refresh-e2e.test.ts` | Empty page vs. extraction failure across refreshes: etag stored when genuinely empty, withheld when the pipeline errored, retried on the next refresh | none (mock server) | yes |
+| `markdown-identity-e2e.test.ts` | Markdown variant pages are recorded under the canonical URL, a site reachable as both `.md` and HTML indexes once, and a `.md` URL serving HTML keeps its own identity | none (mock server) | yes |
+| `version-resolution-e2e.test.ts` | Version label normalization and resolution against a real SQLite store: write-path parity across entry points, tag/semver/prerelease resolution, listing order | none | yes |
 | `archive-integration.test.ts` | `LocalFileStrategy` archive (zip) traversal and extraction | fixture archive | yes |
 | `local-file-pdf-e2e.test.ts` | PDF in a `file://` directory is indexed alongside `.txt`/`.md` (regression for issue #394) | Xberg native deps | yes |
 | `vector-persistence-e2e.test.ts` | Embeddings land in `documents_vec` virtual table | MSW-mocked OpenAI | yes |
