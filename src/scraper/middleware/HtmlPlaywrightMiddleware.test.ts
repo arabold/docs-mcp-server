@@ -8,6 +8,7 @@ import {
   type MockedObject,
   vi,
 } from "vitest";
+import { type AppConfig, DEFAULT_CONFIG } from "../../utils/config";
 import { MARKDOWN_PREFERRED_ACCEPT } from "../fetcher/headers";
 import { ScrapeMode, type ScraperOptions } from "../types";
 import {
@@ -26,6 +27,28 @@ vi.mock("playwright", async () =>
 
 import { type Browser, chromium, type Frame, type Page } from "playwright";
 
+/**
+ * A scraper config for these tests: the real defaults with file access opened
+ * up, which the middleware under test needs and the default `allowedRoots`
+ * mode would refuse.
+ *
+ * Derived from `DEFAULT_CONFIG` rather than written out, so a new field in the
+ * config schema cannot leave this file failing to typecheck — which is exactly
+ * what a hand-copied literal did when `fetcher.timeoutMs` was added.
+ */
+function makeScraperConfig(): AppConfig["scraper"] {
+  return {
+    ...DEFAULT_CONFIG.scraper,
+    security: {
+      ...DEFAULT_CONFIG.scraper.security,
+      fileAccess: {
+        ...DEFAULT_CONFIG.scraper.security.fileAccess,
+        mode: "unrestricted",
+        allowedRoots: [],
+      },
+    },
+  };
+}
 // Helper to create a minimal valid ScraperOptions object
 const createMockScraperOptions = (
   url = "http://example.com",
@@ -160,41 +183,7 @@ describe("HtmlPlaywrightMiddleware", () => {
 
   beforeEach(() => {
     // Create a mock scraper configuration
-    const mockScraperConfig = {
-      maxPages: 1000,
-      maxDepth: 3,
-      maxConcurrency: 3,
-      abortOnFailureRate: 0.5,
-      preserveHashes: false,
-      skipKnownTrackers: true,
-      pageTimeoutMs: 5000,
-      browserTimeoutMs: 30000,
-      htmlExtractor: "cheerio" as const,
-      fetcher: {
-        maxRetries: 3,
-        baseDelayMs: 1000,
-        maxCacheItems: 200,
-        maxCacheItemSizeBytes: 500 * 1024,
-      },
-      document: {
-        maxSize: 10 * 1024 * 1024,
-      },
-      security: {
-        network: {
-          mode: "open" as const,
-          allowPrivateNetworks: false,
-          allowedHosts: [],
-          allowedCidrs: [],
-          allowInvalidTls: false,
-        },
-        fileAccess: {
-          mode: "unrestricted" as const,
-          allowedRoots: [],
-          followSymlinks: false,
-          includeHidden: false,
-        },
-      },
-    };
+    const mockScraperConfig = makeScraperConfig();
     playwrightMiddleware = new HtmlPlaywrightMiddleware(mockScraperConfig);
   });
 
@@ -1045,41 +1034,7 @@ describe("Route handling race condition protection", () => {
   let playwrightMiddleware: HtmlPlaywrightMiddleware;
 
   beforeEach(() => {
-    const mockScraperConfig = {
-      maxPages: 1000,
-      maxDepth: 3,
-      maxConcurrency: 3,
-      abortOnFailureRate: 0.5,
-      preserveHashes: false,
-      skipKnownTrackers: true,
-      pageTimeoutMs: 5000,
-      browserTimeoutMs: 30000,
-      htmlExtractor: "cheerio" as const,
-      fetcher: {
-        maxRetries: 3,
-        baseDelayMs: 1000,
-        maxCacheItems: 200,
-        maxCacheItemSizeBytes: 500 * 1024,
-      },
-      document: {
-        maxSize: 10 * 1024 * 1024,
-      },
-      security: {
-        network: {
-          mode: "open" as const,
-          allowPrivateNetworks: false,
-          allowedHosts: [],
-          allowedCidrs: [],
-          allowInvalidTls: false,
-        },
-        fileAccess: {
-          mode: "unrestricted" as const,
-          allowedRoots: [],
-          followSymlinks: false,
-          includeHidden: false,
-        },
-      },
-    };
+    const mockScraperConfig = makeScraperConfig();
     playwrightMiddleware = new HtmlPlaywrightMiddleware(mockScraperConfig);
   });
 
@@ -1485,41 +1440,7 @@ describe("Route handling race condition protection", () => {
   });
 
   describe("Tracker blocklist", () => {
-    const baseConfig = {
-      maxPages: 1000,
-      maxDepth: 3,
-      maxConcurrency: 3,
-      abortOnFailureRate: 0.5,
-      preserveHashes: false,
-      skipKnownTrackers: true,
-      pageTimeoutMs: 5000,
-      browserTimeoutMs: 30000,
-      htmlExtractor: "cheerio" as const,
-      fetcher: {
-        maxRetries: 3,
-        baseDelayMs: 1000,
-        maxCacheItems: 200,
-        maxCacheItemSizeBytes: 500 * 1024,
-      },
-      document: {
-        maxSize: 10 * 1024 * 1024,
-      },
-      security: {
-        network: {
-          mode: "open" as const,
-          allowPrivateNetworks: false,
-          allowedHosts: [],
-          allowedCidrs: [],
-          allowInvalidTls: false,
-        },
-        fileAccess: {
-          mode: "unrestricted" as const,
-          allowedRoots: [],
-          followSymlinks: false,
-          includeHidden: false,
-        },
-      },
-    };
+    const baseConfig = makeScraperConfig();
 
     const makeMockRoute = (url: string, resourceType: string) => ({
       request: () => ({
