@@ -305,20 +305,36 @@ export function createMcpServerInstance(
   // Search docs tool
   server.tool(
     "search_docs",
-    "Search up-to-date documentation for a library or package. Examples:\n\n" +
-      '- {library: "react", query: "hooks lifecycle"} -> matches latest version of React\n' +
-      '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> matches React 18.0.0 or earlier\n' +
-      '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
-      '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
+    "Search library documentation using hybrid full-text (BM25) and vector search.\n\n" +
+      "HOW TO SEARCH EFFECTIVELY:\n" +
+      "1. Exact Symbols Win (Highest Precision): Query exact API names, functions, hooks, types, or interfaces (e.g. 'useEffect', 'tabs.onUpdated', 'createSlice').\n" +
+      "2. Keep It Short: Use 1-3 targeted keywords only. Do NOT stack 5+ words or write full sentences.\n" +
+      "3. No Boolean Operators: Do NOT use 'or', 'and', 'how to' — search keywords directly.\n" +
+      "4. Next Step: Search returns concise content snippets. To read the complete guide, full API contract, or code examples, take the resulting URL and call `read_page`.\n" +
+      "5. Fallback: If unsure about available topics or search returns empty, call `list_pages` to browse the sitemap.",
     {
-      library: z.string().trim().describe("Library name."),
+      library: z
+        .string()
+        .trim()
+        .describe(
+          "Library name (use `list_libraries` first to verify available libraries).",
+        ),
       version: z
         .string()
         .trim()
         .optional()
         .describe("Library version (exact or X-Range, optional)."),
-      query: z.string().trim().describe("Documentation search query."),
-      limit: z.number().optional().default(5).describe("Maximum number of results."),
+      query: z
+        .string()
+        .trim()
+        .describe(
+          "1-3 targeted keywords or exact API symbol (e.g. 'tabs.onUpdated', 'useCallback'). Avoid long sentences.",
+        ),
+      limit: z
+        .number()
+        .optional()
+        .default(5)
+        .describe("Maximum number of results (default 5, max 20)."),
     },
     {
       title: "Search Library Documentation",
@@ -369,9 +385,12 @@ ${r.content}\n`,
   server.tool(
     "read_page",
     "Read the full Markdown documentation of a specific page from a library without re-scraping the web.\n" +
-      "Use this after finding a relevant URL via `search_docs` or `list_pages` to get complete code examples and instructions.",
+      "Call this with a page URL obtained from `search_docs` or `list_pages` to inspect complete implementations, type signatures, and code examples without token waste.",
     {
-      library: z.string().trim().describe("Library name."),
+      library: z
+        .string()
+        .trim()
+        .describe("Library name (verify with `list_libraries` first)."),
       pathOrUrl: z
         .string()
         .trim()
@@ -431,9 +450,12 @@ ${r.content}\n`,
   server.tool(
     "list_pages",
     "List indexed documentation pages and sitemap for a library version with pagination.\n" +
-      "Use this to explore what topics, guides, and API pages exist in an indexed library.",
+      "Call this when exploring a library's architecture, when you do not know exact function names, or when `search_docs` returns no relevant results.",
     {
-      library: z.string().trim().describe("Library name."),
+      library: z
+        .string()
+        .trim()
+        .describe("Library name (verify with `list_libraries` first)."),
       version: z
         .string()
         .trim()
@@ -516,7 +538,7 @@ ${r.content}\n`,
   // List libraries tool
   server.tool(
     "list_libraries",
-    "List all indexed libraries.",
+    "PRIMARY ENTRYPOINT — call FIRST before searching or reading docs to verify which libraries and versions are available locally.",
     {
       // no params
     },
