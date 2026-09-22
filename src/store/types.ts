@@ -499,3 +499,47 @@ export interface CompactResult {
   /** Bytes reclaimed (`beforeBytes - afterBytes`, floored at 0). */
   reclaimedBytes: number;
 }
+
+/**
+ * Result of reading full page documentation.
+ */
+export interface PageContentResult {
+  url: string;
+  title: string | null;
+  content: string;
+  contentType: string | null;
+  charCount: number;
+  chunksCount: number;
+  truncated?: boolean;
+}
+
+/**
+ * Options for listing pages in a library version.
+ */
+export interface ListPagesOptions {
+  prefix?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Item in the list of pages.
+ */
+export interface PageListItem {
+  url: string;
+  title: string | null;
+  depth: number | null;
+}
+
+/**
+ * Result of listing pages for a library version.
+ */
+export interface ListPagesResult {
+  library: string;
+  version: string;
+  total: number;
+  pages: PageListItem[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}

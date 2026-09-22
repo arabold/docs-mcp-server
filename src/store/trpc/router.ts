@@ -24,10 +24,7 @@ const t = initTRPC.context<DataTrpcContext>().create({
 });
 
 // Common schemas
-const nonEmpty = z
-  .string()
-  .min(1)
-  .transform((s) => s.trim());
+const nonEmpty = z.string().trim().min(1);
 const optionalVersion = z
   .string()
   .optional()
@@ -100,6 +97,75 @@ export function createDataRouter(trpc: unknown) {
           );
 
           return results as StoreSearchResult[];
+        },
+      ),
+
+    getPageContent: tt.procedure
+      .input(
+        z.object({
+          library: nonEmpty,
+          version: optionalVersion,
+          pathOrUrl: nonEmpty,
+          options: z
+            .object({
+              maxChars: z.number().positive().optional(),
+            })
+            .optional(),
+        }),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: {
+            library: string;
+            version: string | null | undefined;
+            pathOrUrl: string;
+            options?: { maxChars?: number };
+          };
+        }) => {
+          return await ctx.docService.getPageContent(
+            input.library,
+            input.version ?? null,
+            input.pathOrUrl,
+            input.options,
+          );
+        },
+      ),
+
+    listPages: tt.procedure
+      .input(
+        z.object({
+          library: nonEmpty,
+          version: optionalVersion,
+          options: z
+            .object({
+              prefix: z.string().optional(),
+              limit: z.number().int().positive().max(200).optional(),
+              offset: z.number().int().nonnegative().optional(),
+            })
+            .optional(),
+        }),
+      )
+      .query(
+        async ({
+          ctx,
+          input,
+        }: {
+          ctx: DataTrpcContext;
+          input: {
+            library: string;
+            version: string | null | undefined;
+            options?: { prefix?: string; limit?: number; offset?: number };
+          };
+        }) => {
+          return await ctx.docService.listPages(
+            input.library,
+            input.version ?? null,
+            input.options,
+          );
         },
       ),
 

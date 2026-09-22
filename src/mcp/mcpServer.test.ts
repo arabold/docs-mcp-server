@@ -51,6 +51,37 @@ const mockTools: McpServerTools = {
   remove: {
     execute: vi.fn(async () => ({ message: "Removed" })),
   } as any,
+  listPages: {
+    execute: vi.fn(async () => ({
+      library: "test",
+      version: "",
+      total: 0,
+      pages: [],
+      limit: 50,
+      offset: 0,
+      hasMore: false,
+    })),
+  } as any,
+  readPage: {
+    execute: vi.fn(async () => ({
+      url: "https://example.com",
+      title: "Test",
+      content: "# Test",
+      contentType: "text/markdown",
+      charCount: 6,
+      chunksCount: 1,
+      truncated: false,
+    })),
+  } as any,
+  compactStore: {
+    execute: vi.fn(async () => ({
+      skipped: false,
+      vacuumed: true,
+      beforeBytes: 1000,
+      afterBytes: 500,
+      reclaimedBytes: 500,
+    })),
+  } as any,
 };
 
 describe("MCP Server Read-Only Mode", () => {
@@ -74,6 +105,90 @@ describe("MCP Server Read-Only Mode", () => {
     // Verify the server has the expected name and can be instantiated
     // This ensures our capability changes don't break server creation
     expect(server).toBeDefined();
+  });
+
+  it("should register read_page and list_pages in both normal and read-only mode", () => {
+    const normalServer = createMcpServerInstance(mockTools, mockConfig);
+    const readOnlyServer = createMcpServerInstance(mockTools, mockReadOnlyConfig);
+
+    expect((normalServer as any)._registeredTools.read_page).toBeDefined();
+    expect((normalServer as any)._registeredTools.list_pages).toBeDefined();
+
+    expect((readOnlyServer as any)._registeredTools.read_page).toBeDefined();
+    expect((readOnlyServer as any)._registeredTools.list_pages).toBeDefined();
+  });
+
+  it("should register compact_store in normal mode and omit in read-only mode", () => {
+    const normalServer = createMcpServerInstance(mockTools, mockConfig);
+    const readOnlyServer = createMcpServerInstance(mockTools, mockReadOnlyConfig);
+
+    expect((normalServer as any)._registeredTools.compact_store).toBeDefined();
+    expect((readOnlyServer as any)._registeredTools.compact_store).toBeUndefined();
+  });
+
+  it("should handle read_page tool execution and format source header", async () => {
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const readPageTool = (server as any)._registeredTools.read_page;
+
+    expect(readPageTool).toBeDefined();
+
+    const response = await readPageTool.handler({
+      library: "react",
+      pathOrUrl: "/reference/react",
+      version: "19.0.0",
+    });
+
+    expect(mockTools.readPage.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        library: "react",
+        pathOrUrl: "/reference/react",
+        version: "19.0.0",
+      }),
+    );
+    expect(response.content[0].text).toContain("> Source: https://example.com");
+    expect(response.content[0].text).toContain("# Test");
+  });
+
+  it("should handle list_pages tool execution and format links with depth", async () => {
+    (mockTools.listPages.execute as any).mockResolvedValueOnce({
+      library: "react",
+      version: "19.0.0",
+      total: 1,
+      pages: [{ url: "https://example.com/docs", title: "[Beta] Guide", depth: 1 }],
+      limit: 50,
+      offset: 0,
+      hasMore: false,
+    });
+
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const listPagesTool = (server as any)._registeredTools.list_pages;
+
+    expect(listPagesTool).toBeDefined();
+
+    const response = await listPagesTool.handler({
+      library: "react",
+      version: "19.0.0",
+    });
+
+    expect(mockTools.listPages.execute).toHaveBeenCalled();
+    expect(response.content[0].text).toContain("Indexed pages for react@19.0.0");
+    expect(response.content[0].text).toContain("\\[Beta\\] Guide");
+  });
+
+  it("should handle compact_store tool execution and format memory stats", async () => {
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const compactTool = (server as any)._registeredTools.compact_store;
+
+    expect(compactTool).toBeDefined();
+
+    const response = await compactTool.handler({ force: true, vacuum: true });
+
+    expect(mockTools.compactStore.execute).toHaveBeenCalledWith({
+      force: true,
+      vacuum: true,
+    });
+    expect(response.content[0].text).toContain("Database compacted successfully");
+    expect(response.content[0].text).toContain("VACUUM executed: yes");
   });
 
   it("should register scrape_docs with preserveHashes support and propagate it", async () => {

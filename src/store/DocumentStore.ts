@@ -20,7 +20,9 @@ import {
   ConnectionError,
   DimensionError,
   EmbeddingModelChangedError,
+  PageNotFoundInStoreError,
   StoreError,
+  VersionNotFoundInStoreError,
 } from "./errors";
 import type {
   ActivityHistory,
@@ -28,8 +30,11 @@ import type {
   DbChunkMetadata,
   DbChunkRank,
   LibraryVersionSummary,
+  ListPagesOptions,
+  ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentResult,
   StoredScraperOptions,
   VersionChunkListItem,
   VersionChunkStats,
@@ -204,6 +209,15 @@ export class DocumentStore {
     countVersionsByLibraryId: Database.Statement<[number]>;
     getVersionId: Database.Statement<[string, string]>;
     getPagesByVersionId: Database.Statement<[number]>;
+    getPageChunksByPageId: Database.Statement<[number]>;
+    findPageForContent: Database.Statement<{
+      versionId: number;
+      url: string;
+      path: string;
+    }>;
+    getRootPageByVersionId: Database.Statement<[number]>;
+    getPageSuggestionsByKeyword: Database.Statement<[number, string, string, string]>;
+    getFallbackPageSuggestions: Database.Statement<[number]>;
   };
 
   /**
@@ -516,6 +530,57 @@ export class DocumentStore {
       ),
       getPagesByVersionId: this.db.prepare<[number]>(
         "SELECT * FROM pages WHERE version_id = ?",
+      ),
+      getPageChunksByPageId: this.db.prepare<[number]>(
+        `SELECT id, content, sort_order FROM documents WHERE page_id = ? ORDER BY sort_order ASC, id ASC`,
+      ),
+      findPageForContent: this.db.prepare<{
+        versionId: number;
+        url: string;
+        path: string;
+      }>(
+        `SELECT id, url, title, content_type, source_content_type, content_url
+         FROM pages
+         WHERE version_id = :versionId
+           AND (
+             url = :url
+             OR rtrim(url, '/') = rtrim(:url, '/')
+             OR content_url = :url
+             OR (:path != '' AND rtrim(url, '/') LIKE '%' || :path ESCAPE '\\')
+           )
+         ORDER BY
+           CASE
+             WHEN url = :url THEN 1
+             WHEN rtrim(url, '/') = rtrim(:url, '/') THEN 2
+             WHEN content_url = :url THEN 3
+             ELSE 4
+           END,
+           LENGTH(url) ASC,
+           depth ASC,
+           id ASC
+         LIMIT 1`,
+      ),
+      getRootPageByVersionId: this.db.prepare<[number]>(
+        `SELECT id, url, title, content_type, source_content_type, content_url
+         FROM pages
+         WHERE version_id = ? AND (depth = 0 OR depth IS NULL)
+         ORDER BY id ASC
+         LIMIT 1`,
+      ),
+      getPageSuggestionsByKeyword: this.db.prepare<[number, string, string, string]>(
+        `SELECT url FROM pages
+         WHERE version_id = ?
+           AND (url LIKE '%' || ? || '%' ESCAPE '\\' OR title LIKE '%' || ? || '%' ESCAPE '\\')
+         ORDER BY
+           CASE WHEN url LIKE '%' || ? || '%' ESCAPE '\\' THEN 1 ELSE 2 END,
+           LENGTH(url) ASC
+         LIMIT 3`,
+      ),
+      getFallbackPageSuggestions: this.db.prepare<[number]>(
+        `SELECT url FROM pages
+         WHERE version_id = ?
+         ORDER BY depth ASC NULLS LAST, id ASC
+         LIMIT 3`,
       ),
     };
     this.statements = statements;
@@ -2187,6 +2252,256 @@ export class DocumentStore {
       return result;
     } catch (error) {
       throw new ConnectionError("Failed to get pages by version ID", error);
+    }
+  }
+
+  /**
+   * Retrieves the full markdown content of a page by stitching its chunks in sort_order.
+   */
+  async getPageContent(
+    library: string,
+    version: string,
+    pathOrUrl: string,
+    options?: { maxChars?: number },
+  ): Promise<PageContentResult> {
+    try {
+      const normalizedLibrary = normalizeLibraryName(library);
+      const normalizedVersion = normalizeVersionLabel(version);
+
+      const versionResult = this.statements.getVersionId.get(
+        normalizedLibrary,
+        normalizedVersion,
+      ) as { id: number; library_id: number } | undefined;
+
+      if (!versionResult) {
+        throw new VersionNotFoundInStoreError(library, version, []);
+      }
+
+      const rawInput = pathOrUrl?.trim();
+      if (!rawInput) {
+        throw new PageNotFoundInStoreError(library, version, pathOrUrl);
+      }
+
+      // 1. Normalize Windows backslashes and strip enclosing angle brackets (<...>) and quotes ("..." or '...')
+      let cleanPath = rawInput
+        .replace(/\\/g, "/")
+        .replace(/^[<"']+|[>"']+$/g, "")
+        .trim();
+
+      // 2. Strip relative path prefixes (./ or ../)
+      cleanPath = cleanPath.replace(/^(\.\/|\.\.\/)+/, "").trim();
+
+      // 3. Fallback decode URI components if encoded (%2F, %20, etc.)
+      try {
+        cleanPath = decodeURIComponent(cleanPath).trim();
+      } catch {
+        // Fallback to unescaped string if decodeURIComponent throws URIError
+      }
+
+      if (!cleanPath) {
+        throw new PageNotFoundInStoreError(library, version, pathOrUrl);
+      }
+
+      // Candidate lookups: first try exact pathOrUrl (preserving hash routes & query params like #/guide or ?v=1),
+      // then try fallback with stripped anchor fragment and query params.
+      const candidatePaths = [cleanPath];
+      if (cleanPath.includes("#") || cleanPath.includes("?")) {
+        const stripped = cleanPath.split("#")[0].split("?")[0].trim();
+        if (stripped && stripped !== cleanPath) {
+          candidatePaths.push(stripped);
+        }
+      }
+
+      const versionId = versionResult.id;
+      let pageRow:
+        | {
+            id: number;
+            url: string;
+            title: string | null;
+            content_type: string | null;
+            source_content_type: string | null;
+            content_url: string | null;
+          }
+        | undefined;
+
+      for (const targetPath of candidatePaths) {
+        let normalizedPath = targetPath;
+        if (
+          !normalizedPath.startsWith("http://") &&
+          !normalizedPath.startsWith("https://")
+        ) {
+          if (!normalizedPath.startsWith("/")) {
+            normalizedPath = `/${normalizedPath}`;
+          }
+          normalizedPath = normalizedPath.replace(/\/+$/, "");
+        } else {
+          normalizedPath = normalizedPath.replace(/\/+$/, "");
+        }
+
+        pageRow = this.statements.findPageForContent.get({
+          versionId,
+          url: targetPath,
+          path: normalizedPath ? this.escapeLikePattern(normalizedPath) : "",
+        }) as typeof pageRow;
+
+        if (pageRow) {
+          break;
+        }
+
+        // If user passed root path ("/" or "///") and exact match wasn't found, look for depth 0 root page
+        if (normalizedPath === "") {
+          pageRow = this.statements.getRootPageByVersionId.get(
+            versionId,
+          ) as typeof pageRow;
+          if (pageRow) {
+            break;
+          }
+        }
+      }
+
+      if (!pageRow) {
+        // Extract last non-empty path segment or filename as a keyword for suggestions
+        const pathForKeyword = cleanPath.split("#")[0].split("?")[0];
+        const segments = pathForKeyword.split("/").filter(Boolean);
+        const lastSegment = segments.length > 0 ? segments[segments.length - 1] : "";
+
+        let suggestions: string[] = [];
+        if (lastSegment && lastSegment.length >= 2) {
+          const escapedKeyword = this.escapeLikePattern(lastSegment);
+          const candidateRows = this.statements.getPageSuggestionsByKeyword.all(
+            versionId,
+            escapedKeyword,
+            escapedKeyword,
+            escapedKeyword,
+          ) as Array<{ url: string }>;
+          suggestions = candidateRows.map((r) => r.url);
+        }
+
+        if (suggestions.length === 0) {
+          const fallbackRows = this.statements.getFallbackPageSuggestions.all(
+            versionId,
+          ) as Array<{ url: string }>;
+          suggestions = fallbackRows.map((r) => r.url);
+        }
+
+        throw new PageNotFoundInStoreError(library, version, pathOrUrl, suggestions);
+      }
+
+      const chunks = this.statements.getPageChunksByPageId.all(pageRow.id) as Array<{
+        id: number;
+        content: string;
+        sort_order: number;
+      }>;
+
+      let fullContent = chunks.map((c) => c.content).join("\n\n");
+      let truncated = false;
+
+      if (
+        options?.maxChars &&
+        options.maxChars > 0 &&
+        fullContent.length > options.maxChars
+      ) {
+        let cutIndex = options.maxChars;
+        const lastNewline = fullContent.lastIndexOf("\n", cutIndex);
+        const minCutIndex = Math.max(Math.floor(cutIndex * 0.8), cutIndex - 500);
+        if (lastNewline !== -1 && lastNewline >= minCutIndex) {
+          cutIndex = lastNewline;
+        }
+        fullContent = fullContent.slice(0, cutIndex);
+        const codeBlockMatches = fullContent.match(/```/g);
+        if (codeBlockMatches && codeBlockMatches.length % 2 !== 0) {
+          fullContent += "\n```";
+        }
+        truncated = true;
+      }
+
+      return {
+        url: pageRow.url,
+        title: pageRow.title,
+        content: fullContent,
+        contentType: pageRow.content_type || pageRow.source_content_type || null,
+        charCount: fullContent.length,
+        chunksCount: chunks.length,
+        truncated,
+      };
+    } catch (error) {
+      if (error instanceof StoreError) {
+        throw error;
+      }
+      throw new ConnectionError("Failed to get page content", error);
+    }
+  }
+
+  /**
+   * Lists indexed pages for a library version with optional prefix filtering and pagination.
+   */
+  async listPages(
+    library: string,
+    version: string,
+    options: ListPagesOptions = {},
+  ): Promise<ListPagesResult> {
+    try {
+      const normalizedLibrary = normalizeLibraryName(library);
+      const normalizedVersion = normalizeVersionLabel(version);
+
+      const versionResult = this.statements.getVersionId.get(
+        normalizedLibrary,
+        normalizedVersion,
+      ) as { id: number; library_id: number } | undefined;
+
+      if (!versionResult) {
+        throw new VersionNotFoundInStoreError(library, version, []);
+      }
+
+      const versionId = versionResult.id;
+      const limit = Math.min(Math.max(1, options.limit ?? 50), 200);
+      const offset = Math.max(0, options.offset ?? 0);
+      const prefix = options.prefix?.trim();
+
+      let countSql = "SELECT COUNT(*) as total FROM pages WHERE version_id = ?";
+      let dataSql = "SELECT url, title, depth FROM pages WHERE version_id = ?";
+      const countParams: unknown[] = [versionId];
+      const dataParams: unknown[] = [versionId];
+
+      if (prefix) {
+        countSql += " AND url LIKE '%' || ? || '%' ESCAPE '\\'";
+        countParams.push(this.escapeLikePattern(prefix));
+        dataSql += " AND url LIKE '%' || ? || '%' ESCAPE '\\'";
+        dataParams.push(this.escapeLikePattern(prefix));
+      }
+
+      dataSql += " ORDER BY depth ASC NULLS LAST, url ASC LIMIT ? OFFSET ?";
+      dataParams.push(limit, offset);
+
+      const countStmt = this.db.prepare(countSql);
+      const countRow = countStmt.get(...countParams) as { total: number };
+      const total = countRow?.total ?? 0;
+
+      const dataStmt = this.db.prepare(dataSql);
+      const rows = dataStmt.all(...dataParams) as Array<{
+        url: string;
+        title: string | null;
+        depth: number | null;
+      }>;
+
+      return {
+        library,
+        version,
+        total,
+        pages: rows.map((r) => ({
+          url: r.url,
+          title: r.title,
+          depth: r.depth,
+        })),
+        limit,
+        offset,
+        hasMore: offset + rows.length < total,
+      };
+    } catch (error) {
+      if (error instanceof StoreError) {
+        throw error;
+      }
+      throw new ConnectionError("Failed to list pages", error);
     }
   }
 

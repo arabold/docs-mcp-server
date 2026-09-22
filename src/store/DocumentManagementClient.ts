@@ -16,8 +16,11 @@ import type {
   EmbeddingConfigInfo,
   FindVersionResult,
   LibrarySummary,
+  ListPagesOptions,
+  ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentResult,
   StoredScraperOptions,
   StoreSearchResult,
   VersionChunkStats,
@@ -83,6 +86,32 @@ export class DocumentManagementClient implements IDocumentManagement {
     limit?: number,
   ): Promise<StoreSearchResult[]> {
     return this.client.search.query({ library, version: version ?? null, query, limit });
+  }
+
+  async getPageContent(
+    library: string,
+    version: string | null | undefined,
+    pathOrUrl: string,
+    options?: { maxChars?: number },
+  ): Promise<PageContentResult> {
+    return this.client.getPageContent.query({
+      library,
+      version: version ?? null,
+      pathOrUrl,
+      options,
+    });
+  }
+
+  async listPages(
+    library: string,
+    version: string | null | undefined,
+    options?: ListPagesOptions,
+  ): Promise<ListPagesResult> {
+    return this.client.listPages.query({
+      library,
+      version: version ?? null,
+      options,
+    });
   }
 
   async removeVersion(library: string, version?: string | null): Promise<void> {

@@ -251,6 +251,55 @@ export function createMcpServerInstance(
         }
       },
     );
+
+    // Compact store tool
+    server.tool(
+      "compact_store",
+      "Reclaim unused SQLite disk space and truncate the WAL file after large scrapes or deletions.",
+      {
+        force: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("Always VACUUM even if no free pages are detected."),
+        vacuum: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe(
+            "Run VACUUM (reclaims disk space). When false, only checkpoints WAL.",
+          ),
+      },
+      {
+        title: "Compact Store",
+        readOnlyHint: false,
+        destructiveHint: false,
+      },
+      async ({ force, vacuum }) => {
+        telemetry.track(TelemetryEvent.TOOL_USED, {
+          tool: "compact_store",
+          context: "mcp_server",
+          force,
+          vacuum,
+        });
+
+        try {
+          const result = await tools.compactStore.execute({ force, vacuum });
+          if (result.skipped) {
+            return createResponse("Compaction skipped: database is running in memory.");
+          }
+          return createResponse(
+            `Database compacted successfully.\n` +
+              `- Reclaimed: ${(result.reclaimedBytes / (1024 * 1024)).toFixed(2)} MB\n` +
+              `- Before: ${(result.beforeBytes / (1024 * 1024)).toFixed(2)} MB\n` +
+              `- After: ${(result.afterBytes / (1024 * 1024)).toFixed(2)} MB\n` +
+              `- VACUUM executed: ${result.vacuumed ? "yes" : "no"}`,
+          );
+        } catch (error) {
+          return createError(error);
+        }
+      },
+    );
   }
 
   // Search docs tool
@@ -310,6 +359,154 @@ ${r.content}\n`,
           );
         }
         return createResponse(formattedResults.join(""));
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
+  // Read page tool
+  server.tool(
+    "read_page",
+    "Read the full Markdown documentation of a specific page from a library without re-scraping the web.\n" +
+      "Use this after finding a relevant URL via `search_docs` or `list_pages` to get complete code examples and instructions.",
+    {
+      library: z.string().trim().describe("Library name."),
+      pathOrUrl: z
+        .string()
+        .trim()
+        .min(1)
+        .describe(
+          "Page URL or path (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+        ),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      maxChars: z
+        .number()
+        .positive()
+        .optional()
+        .default(30000)
+        .describe(
+          "Maximum characters to return (default 30000, covers ~95% of full guides while preventing context overflow).",
+        ),
+    },
+    {
+      title: "Read Full Documentation Page",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
+    async ({ library, pathOrUrl, version, maxChars }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "read_page",
+        context: "mcp_server",
+        library,
+        version,
+        pathOrUrl: pathOrUrl.split("?")[0],
+      });
+
+      try {
+        const result = await tools.readPage.execute({
+          library,
+          pathOrUrl,
+          version,
+          maxChars,
+        });
+
+        const header = `> Source: ${result.url}\n\n`;
+        const notice = result.truncated
+          ? `\n\n> [!NOTE]\n> Content was truncated at ${result.charCount} characters to avoid context overflow. If you need more content, explicitly increase maxChars.`
+          : "";
+
+        return createResponse(`${header}${result.content}${notice}`);
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
+  // List pages tool
+  server.tool(
+    "list_pages",
+    "List indexed documentation pages and sitemap for a library version with pagination.\n" +
+      "Use this to explore what topics, guides, and API pages exist in an indexed library.",
+    {
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      prefix: z
+        .string()
+        .trim()
+        .optional()
+        .describe(
+          "Filter page URLs starting with or containing this prefix (e.g. '/docs/components').",
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(200)
+        .optional()
+        .default(50)
+        .describe("Maximum pages to return (default 50, max 200)."),
+      offset: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Starting index for pagination (default 0)."),
+    },
+    {
+      title: "List Library Pages",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
+    async ({ library, version, prefix, limit, offset }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "list_pages",
+        context: "mcp_server",
+        library,
+        version,
+        prefix,
+        limit,
+        offset,
+      });
+
+      try {
+        const result = await tools.listPages.execute({
+          library,
+          version,
+          prefix,
+          limit,
+          offset,
+        });
+
+        if (result.pages.length === 0) {
+          return createResponse(
+            `No pages found for '${library}'${result.version ? `@${result.version}` : ""}${prefix ? ` matching prefix '${prefix}'` : ""}.`,
+          );
+        }
+
+        const lines = result.pages.map((p) => {
+          const safeTitle = (p.title || p.url)
+            .replace(/\[/g, "\\[")
+            .replace(/\]/g, "\\]");
+          return `- [${safeTitle}](<${p.url}>)${p.depth !== null ? ` (depth: ${p.depth})` : ""}`;
+        });
+
+        let responseText = `Indexed pages for ${result.library}${result.version ? `@${result.version}` : ""} (${result.total} total pages, showing ${result.offset + 1}-${result.offset + result.pages.length}):\n\n${lines.join("\n")}`;
+
+        if (result.hasMore) {
+          responseText += `\n\nUse offset: ${result.offset + result.pages.length} to see the next batch of pages.`;
+        }
+
+        return createResponse(responseText);
       } catch (error) {
         return createError(error);
       }

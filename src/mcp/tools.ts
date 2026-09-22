@@ -8,11 +8,14 @@ import { AutoDetectFetcher } from "../scraper/fetcher";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import {
   CancelJobTool,
+  CompactStoreTool,
   FetchUrlTool,
   FindVersionTool,
   GetJobInfoTool,
   ListJobsTool,
   ListLibrariesTool,
+  ListPagesTool,
+  ReadPageTool,
   RefreshVersionTool,
   RemoveTool,
   ScrapeTool,
@@ -25,6 +28,8 @@ import type { AppConfig } from "../utils/config";
  */
 export interface McpServerTools {
   listLibraries: ListLibrariesTool;
+  listPages: ListPagesTool;
+  readPage: ReadPageTool;
   findVersion: FindVersionTool;
   scrape: ScrapeTool;
   refresh: RefreshVersionTool;
@@ -34,6 +39,7 @@ export interface McpServerTools {
   cancelJob: CancelJobTool;
   remove: RemoveTool;
   fetchUrl: FetchUrlTool;
+  compactStore: CompactStoreTool;
 }
 
 /**
@@ -51,6 +57,8 @@ export async function initializeTools(
 ): Promise<McpServerTools> {
   const tools: McpServerTools = {
     listLibraries: new ListLibrariesTool(docService),
+    listPages: new ListPagesTool(docService),
+    readPage: new ReadPageTool(docService),
     findVersion: new FindVersionTool(docService),
     scrape: new ScrapeTool(pipeline, config.scraper),
     refresh: new RefreshVersionTool(pipeline),
@@ -61,6 +69,7 @@ export async function initializeTools(
     // clearCompletedJobs: new ClearCompletedJobsTool(pipeline),
     remove: new RemoveTool(docService, pipeline),
     fetchUrl: new FetchUrlTool(new AutoDetectFetcher(config.scraper), config),
+    compactStore: new CompactStoreTool(docService),
   };
 
   return tools;
