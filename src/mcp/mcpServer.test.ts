@@ -2,8 +2,13 @@
  * Tests for MCP server read-only mode functionality
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../utils/config";
 import { createMcpServerInstance } from "./mcpServer";
 import type { McpServerTools } from "./tools";
@@ -11,11 +16,13 @@ import type { McpServerTools } from "./tools";
 // Mock config
 const mockConfig = {
   app: { readOnly: false },
+  server: { name: "docs-mcp-server" },
   scraper: { maxPages: 100, maxDepth: 3 },
 } as unknown as AppConfig;
 
 const mockReadOnlyConfig = {
   app: { readOnly: true },
+  server: { name: "docs-mcp-server" },
   scraper: { maxPages: 100, maxDepth: 3 },
 } as unknown as AppConfig;
 
@@ -180,5 +187,100 @@ describe("MCP Server Read-Only Mode", () => {
       "/version-v0.3/",
       "/version-v0.2/",
     ]);
+  });
+});
+
+/**
+ * Connects a real MCP client to the server over an in-memory transport so the
+ * initialize handshake can be observed end to end.
+ */
+async function connectClient(server: McpServer): Promise<Client> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test-client", version: "1.0.0" });
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+  return client;
+}
+
+describe("MCP Server identity", () => {
+  it("reports the configured server name and the package version", async () => {
+    const config = {
+      ...mockConfig,
+      server: { name: "acme-docs" },
+    } as unknown as AppConfig;
+
+    const client = await connectClient(createMcpServerInstance(mockTools, config));
+
+    expect(client.getServerVersion()).toEqual({
+      name: "acme-docs",
+      version: __APP_VERSION__,
+    });
+  });
+
+  it("sends configured inline instructions to the client", async () => {
+    const config = {
+      ...mockConfig,
+      server: { name: "acme-docs", instructions: "Search acme docs before answering." },
+    } as unknown as AppConfig;
+
+    const client = await connectClient(createMcpServerInstance(mockTools, config));
+
+    expect(client.getInstructions()).toBe("Search acme docs before answering.");
+  });
+
+  it("sends no instructions when none are configured", async () => {
+    const client = await connectClient(createMcpServerInstance(mockTools, mockConfig));
+
+    expect(client.getInstructions()).toBeUndefined();
+  });
+
+  describe("instructions file", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-instructions-"));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("reads instructions from the configured file", async () => {
+      const instructionsFile = path.join(tmpDir, "instructions.md");
+      fs.writeFileSync(instructionsFile, "# Acme docs\n\nAlways search first.\n");
+      const config = {
+        ...mockConfig,
+        server: { name: "acme-docs", instructionsFile },
+      } as unknown as AppConfig;
+
+      const client = await connectClient(createMcpServerInstance(mockTools, config));
+
+      expect(client.getInstructions()).toBe("# Acme docs\n\nAlways search first.\n");
+    });
+
+    it("prefers inline instructions over the file", async () => {
+      const instructionsFile = path.join(tmpDir, "instructions.md");
+      fs.writeFileSync(instructionsFile, "from file");
+      const config = {
+        ...mockConfig,
+        server: { name: "acme-docs", instructions: "inline", instructionsFile },
+      } as unknown as AppConfig;
+
+      const client = await connectClient(createMcpServerInstance(mockTools, config));
+
+      expect(client.getInstructions()).toBe("inline");
+    });
+
+    it("fails at startup when the instructions file cannot be read", () => {
+      const instructionsFile = path.join(tmpDir, "missing.md");
+      const config = {
+        ...mockConfig,
+        server: { name: "acme-docs", instructionsFile },
+      } as unknown as AppConfig;
+
+      expect(() => createMcpServerInstance(mockTools, config)).toThrow(
+        /instructions file/i,
+      );
+    });
   });
 });

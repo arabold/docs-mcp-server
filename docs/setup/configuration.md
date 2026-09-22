@@ -116,6 +116,7 @@ Common settings have dedicated CLI flags:
 docs-mcp-server --port 8080 --host 0.0.0.0
 docs-mcp-server --host 0.0.0.0 --public-origin https://docs.example.com
 docs-mcp-server --store-path /data/docs --read-only
+docs-mcp-server --server-name acme-docs --server-instructions-file ./instructions.md
 ```
 
 ## CLI Configuration Commands
@@ -165,6 +166,9 @@ Settings for the API and MCP servers.
 
 | Option | Default | Description |
 |:-------|:--------|:------------|
+| `name` | `docs-mcp-server` | Server name reported to MCP clients during initialization. Set this to tell instances apart when running more than one. |
+| `instructions` | - | Instructions text sent to MCP clients during initialization. Clients inject it into the model's context, so use it to describe what this server indexes and how to use it. |
+| `instructionsFile` | - | Path to a file whose contents are used as `instructions`. Read once at startup; a missing or unreadable file fails startup. Ignored when `instructions` is set. |
 | `protocol` | `auto` | Server protocol (`stdio`, `http`, or `auto`). |
 | `host` | `127.0.0.1` | Host interface to bind to. Use `0.0.0.0` to listen on all IPv4 interfaces. |
 | `publicOrigin` | - | Externally reachable origin advertised to clients, such as `https://docs.example.com`. Set this when the bind host is not the URL clients should use. |
