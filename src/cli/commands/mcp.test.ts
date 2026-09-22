@@ -156,4 +156,32 @@ describe("mcp command", () => {
     expect(stdioModule.startStdioServer).toHaveBeenCalled();
     expect(appModule.startAppServer).not.toHaveBeenCalled();
   });
+  it("passes the server identity flags through to the config loader", async () => {
+    const parser = yargs().scriptName("test").strict();
+    createMcpCommand(parser);
+
+    const services = await import("../services");
+    // @ts-expect-error
+    services.registerGlobalServices.mockImplementationOnce(() => {
+      throw new Error("Simulated Stop");
+    });
+
+    try {
+      await parser.parse(
+        `mcp --protocol stdio --server-name acme-docs --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
+      );
+    } catch (e: any) {
+      if (e.message !== "Simulated Stop") throw e;
+    }
+
+    const configModule = await import("../../utils/config");
+    expect(configModule.loadConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serverName: "acme-docs",
+        serverInstructions: "Use acme docs",
+        serverInstructionsFile: "/tmp/acme.md",
+      }),
+      expect.anything(),
+    );
+  });
 });

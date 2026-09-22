@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v3";
 import { PipelineJobStatus } from "../pipeline/types";
@@ -66,6 +67,31 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
 });
 
 /**
+ * Resolves the instructions text advertised to MCP clients during initialization.
+ * An inline `server.instructions` value takes precedence over `server.instructionsFile`.
+ * @param config The application configuration.
+ * @returns The instructions text, or `undefined` when none are configured.
+ * @throws {Error} If the configured instructions file cannot be read.
+ */
+export function resolveServerInstructions(config: AppConfig): string | undefined {
+  if (config.server.instructions !== undefined) {
+    return config.server.instructions;
+  }
+  const filePath = config.server.instructionsFile;
+  if (filePath === undefined) {
+    return undefined;
+  }
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to read MCP server instructions file "${filePath}": ${reason}`,
+    );
+  }
+}
+
+/**
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
@@ -78,14 +104,15 @@ export function createMcpServerInstance(
   const readOnly = config.app.readOnly;
   const server = new McpServer(
     {
-      name: "docs-mcp-server",
-      version: "0.1.0",
+      name: config.server.name,
+      version: __APP_VERSION__,
     },
     {
       capabilities: {
         tools: {},
         resources: {},
       },
+      instructions: resolveServerInstructions(config),
     },
   );
 

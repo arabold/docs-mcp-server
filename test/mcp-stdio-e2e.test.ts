@@ -99,6 +99,36 @@ describe("MCP stdio server E2E", () => {
     expect(toolNames).toContain("list_libraries");
   }, 30000);
 
+  it("should report the configured server name and instructions on initialize", async () => {
+    const projectRoot = path.resolve(import.meta.dirname, "..");
+
+    const testEnv = { ...process.env };
+    delete testEnv.VITEST_WORKER_ID;
+
+    const { cmd, args } = getCliCommand();
+
+    transport = new StdioClientTransport({
+      command: cmd,
+      args: args,
+      cwd: projectRoot,
+      env: {
+        ...testEnv,
+        DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-stdio"),
+        DOCS_MCP_TELEMETRY: "false",
+        DOCS_MCP_SERVER_NAME: "acme-docs",
+        DOCS_MCP_SERVER_INSTRUCTIONS: "Search acme docs before answering.",
+      },
+    });
+
+    client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+
+    await client.connect(transport);
+
+    expect(client.getServerVersion()?.name).toBe("acme-docs");
+    expect(client.getServerVersion()?.version).not.toBe("0.1.0");
+    expect(client.getInstructions()).toBe("Search acme docs before answering.");
+  }, 30000);
+
   it("should handle shutdown gracefully", async () => {
     const projectRoot = path.resolve(import.meta.dirname, "..");
     const entryPoint = path.join(projectRoot, "src", "index.ts");

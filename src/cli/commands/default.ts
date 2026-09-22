@@ -53,6 +53,22 @@ export function createDefaultAction(cli: Argv) {
               "Public origin advertised to clients (e.g., https://docs.example.com)",
             alias: "publicOrigin",
           })
+          .option("server-name", {
+            type: "string",
+            description: "Server name reported to MCP clients (default: docs-mcp-server)",
+            alias: "serverName",
+          })
+          .option("server-instructions", {
+            type: "string",
+            description: "Instructions text sent to MCP clients during initialization",
+            alias: "serverInstructions",
+          })
+          .option("server-instructions-file", {
+            type: "string",
+            description:
+              "Path to a file whose contents are sent to MCP clients as instructions (ignored when --server-instructions is set)",
+            alias: "serverInstructionsFile",
+          })
           .option("embedding-model", {
             type: "string",
             description:

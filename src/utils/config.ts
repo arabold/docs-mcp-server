@@ -53,14 +53,20 @@ const envBoolean = z
   })
   .pipe(z.boolean());
 
+/**
+ * Treats blank strings (empty env vars, `--flag ""`) as an absent value so that
+ * defaults and fallbacks apply instead of an empty string.
+ */
+const blankToUndefined = (value: unknown): unknown => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+};
+
 const publicOriginSchema = z
-  .preprocess((value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }, z.string().optional())
+  .preprocess(blankToUndefined, z.string().optional())
   .transform((value, ctx) => {
     try {
       return normalizePublicOrigin(value);
@@ -83,6 +89,9 @@ export const DEFAULT_CONFIG = {
     embeddingModel: "text-embedding-3-small",
   },
   server: {
+    name: "docs-mcp-server",
+    instructions: undefined as string | undefined,
+    instructionsFile: undefined as string | undefined,
     protocol: "auto",
     host: "127.0.0.1",
     publicOrigin: undefined as string | undefined,
@@ -191,6 +200,12 @@ export const AppConfigSchema = z.object({
     .default(DEFAULT_CONFIG.app),
   server: z
     .object({
+      name: z.preprocess(
+        blankToUndefined,
+        z.string().default(DEFAULT_CONFIG.server.name),
+      ),
+      instructions: z.preprocess(blankToUndefined, z.string().optional()),
+      instructionsFile: z.preprocess(blankToUndefined, z.string().optional()),
       protocol: z.string().default(DEFAULT_CONFIG.server.protocol),
       host: z.string().default(DEFAULT_CONFIG.server.host),
       publicOrigin: publicOriginSchema.optional(),
@@ -205,6 +220,7 @@ export const AppConfigSchema = z.object({
       heartbeatMs: z.coerce.number().int().default(DEFAULT_CONFIG.server.heartbeatMs),
     })
     .default({
+      name: DEFAULT_CONFIG.server.name,
       protocol: DEFAULT_CONFIG.server.protocol,
       host: DEFAULT_CONFIG.server.host,
       ports: DEFAULT_CONFIG.server.ports,
@@ -469,6 +485,17 @@ const configMappings: ConfigMapping[] = [
     path: ["server", "publicOrigin"],
     env: ["DOCS_MCP_SERVER_PUBLIC_ORIGIN"],
     cli: "publicOrigin",
+  },
+  { path: ["server", "name"], env: ["DOCS_MCP_SERVER_NAME"], cli: "serverName" },
+  {
+    path: ["server", "instructions"],
+    env: ["DOCS_MCP_SERVER_INSTRUCTIONS"],
+    cli: "serverInstructions",
+  },
+  {
+    path: ["server", "instructionsFile"],
+    env: ["DOCS_MCP_SERVER_INSTRUCTIONS_FILE"],
+    cli: "serverInstructionsFile",
   },
   {
     path: ["app", "embeddingModel"],

@@ -50,6 +50,9 @@ describe("Configuration Loading", () => {
     delete process.env.DOCS_MCP_STORE_PATH;
     delete process.env.DOCS_MCP_AUTH_ENABLED;
     delete process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN;
+    delete process.env.DOCS_MCP_SERVER_NAME;
+    delete process.env.DOCS_MCP_SERVER_INSTRUCTIONS;
+    delete process.env.DOCS_MCP_SERVER_INSTRUCTIONS_FILE;
   });
 
   afterEach(() => {
@@ -164,6 +167,83 @@ describe("Configuration Loading", () => {
       );
 
       expect(config.server.publicOrigin).toBeUndefined();
+    });
+
+    it("defaults server.name to docs-mcp-server", () => {
+      const config = loadConfig({}, { configPath: path.join(tmpDir, "none.yaml") });
+
+      expect(config.server.name).toBe("docs-mcp-server");
+    });
+
+    it("applies server.name precedence from CLI over env and config file", () => {
+      const configPath = path.join(tmpDir, "server-name.yaml");
+      fs.writeFileSync(configPath, "server:\n  name: file-name\n");
+      process.env.DOCS_MCP_SERVER_NAME = "env-name";
+
+      const config = loadConfig({ serverName: "cli-name" }, { configPath });
+
+      expect(config.server.name).toBe("cli-name");
+    });
+
+    it("applies server.instructions precedence from CLI over env and config file", () => {
+      const configPath = path.join(tmpDir, "server-instructions.yaml");
+      fs.writeFileSync(configPath, "server:\n  instructions: from file\n");
+      process.env.DOCS_MCP_SERVER_INSTRUCTIONS = "from env";
+
+      const config = loadConfig({ serverInstructions: "from cli" }, { configPath });
+
+      expect(config.server.instructions).toBe("from cli");
+    });
+
+    it("applies server.instructionsFile precedence from CLI over env and config file", () => {
+      const configPath = path.join(tmpDir, "server-instructions-file.yaml");
+      fs.writeFileSync(configPath, "server:\n  instructionsFile: /from/file.md\n");
+      process.env.DOCS_MCP_SERVER_INSTRUCTIONS_FILE = "/from/env.md";
+
+      const config = loadConfig(
+        { serverInstructionsFile: "/from/cli.md" },
+        { configPath },
+      );
+
+      expect(config.server.instructionsFile).toBe("/from/cli.md");
+    });
+
+    it("treats an empty server.name env var as absent", () => {
+      process.env.DOCS_MCP_SERVER_NAME = "";
+
+      const config = loadConfig({}, { configPath: path.join(tmpDir, "empty-name.yaml") });
+
+      expect(config.server.name).toBe("docs-mcp-server");
+    });
+
+    it("treats empty server.instructions and server.instructionsFile env vars as absent", () => {
+      process.env.DOCS_MCP_SERVER_INSTRUCTIONS = "";
+      process.env.DOCS_MCP_SERVER_INSTRUCTIONS_FILE = "  ";
+
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "empty-instructions.yaml") },
+      );
+
+      expect(config.server.instructions).toBeUndefined();
+      expect(config.server.instructionsFile).toBeUndefined();
+    });
+
+    it("leaves server.instructions and server.instructionsFile unset by default", () => {
+      const config = loadConfig({}, { configPath: path.join(tmpDir, "none.yaml") });
+
+      expect(config.server.instructions).toBeUndefined();
+      expect(config.server.instructionsFile).toBeUndefined();
+    });
+
+    it("applies server.name from env over config file", () => {
+      const configPath = path.join(tmpDir, "server-name-env.yaml");
+      fs.writeFileSync(configPath, "server:\n  name: file-name\n");
+      process.env.DOCS_MCP_SERVER_NAME = "env-name";
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.server.name).toBe("env-name");
     });
 
     it.each([
