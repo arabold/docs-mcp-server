@@ -166,4 +166,76 @@ describe("dataRouter - chunk explorer procedures", () => {
       expect(result.vacuumed).toBe(false);
     });
   });
+
+  describe("getPageContent", () => {
+    it("retrieves full page content through tRPC wire procedure", async () => {
+      const result = await caller.getPageContent({
+        library: "router-test-lib",
+        version: "1.0.0",
+        pathOrUrl: "https://example.com/page1",
+      });
+
+      expect(result.url).toBe("https://example.com/page1");
+      expect(result.title).toBe("Page 1");
+      expect(result.content).toContain("Alpha content about routers");
+      expect(result.content).toContain("Beta content about switches");
+      expect(result.charCount).toBeGreaterThan(0);
+      expect(result.chunksCount).toBe(2);
+      expect(result.truncated).toBe(false);
+    });
+
+    it("supports maxChars truncation via tRPC procedure", async () => {
+      const result = await caller.getPageContent({
+        library: "router-test-lib",
+        version: "1.0.0",
+        pathOrUrl: "/page1",
+        options: { maxChars: 20 },
+      });
+
+      expect(result.url).toBe("https://example.com/page1");
+      expect(result.content.length).toBeLessThanOrEqual(25);
+      expect(result.truncated).toBe(true);
+    });
+
+    it("rejects empty library or pathOrUrl via zod validation", async () => {
+      await expect(
+        caller.getPageContent({ library: "", pathOrUrl: "/page1" }),
+      ).rejects.toThrow();
+      await expect(
+        caller.getPageContent({ library: "router-test-lib", pathOrUrl: "" }),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe("listPages", () => {
+    it("returns indexed pages and pagination metadata through tRPC procedure", async () => {
+      const result = await caller.listPages({
+        library: "router-test-lib",
+        version: "1.0.0",
+        options: {
+          limit: 10,
+          offset: 0,
+        },
+      });
+
+      expect(result.total).toBe(2);
+      expect(result.pages).toHaveLength(2);
+      expect(result.pages.some((p) => p.url === "https://example.com/page1")).toBe(true);
+      expect(result.pages.some((p) => p.url === "https://example.com/page2")).toBe(true);
+      expect(result.hasMore).toBe(false);
+    });
+
+    it("applies prefix filtering through tRPC procedure", async () => {
+      const result = await caller.listPages({
+        library: "router-test-lib",
+        version: "1.0.0",
+        options: {
+          prefix: "page2",
+        },
+      });
+
+      expect(result.total).toBe(1);
+      expect(result.pages[0].url).toBe("https://example.com/page2");
+    });
+  });
 });

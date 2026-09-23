@@ -34,8 +34,11 @@ import type {
   EmbeddingConfigInfo,
   FindVersionResult,
   LibrarySummary,
+  ListPagesOptions,
+  ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentResult,
   ScraperConfig,
   StoreSearchResult,
   VersionChunkStats,
@@ -702,6 +705,35 @@ export class DocumentManagementService {
   ): Promise<StoreSearchResult[]> {
     const normalizedVersion = normalizeVersionLabel(version);
     return this.documentRetriever.search(library, normalizedVersion, query, limit);
+  }
+
+  /**
+   * Retrieves full markdown page documentation for a library version.
+   */
+  async getPageContent(
+    library: string,
+    version: string | null | undefined,
+    pathOrUrl: string,
+    options?: { maxChars?: number },
+  ): Promise<PageContentResult> {
+    await this.validateLibraryExists(library);
+    const versionResult = await this.findBestVersion(library, version ?? undefined);
+    const resolvedVersion = versionResult.bestMatch ?? "";
+    return this.store.getPageContent(library, resolvedVersion, pathOrUrl, options);
+  }
+
+  /**
+   * Lists indexed pages for a library version.
+   */
+  async listPages(
+    library: string,
+    version: string | null | undefined,
+    options?: ListPagesOptions,
+  ): Promise<ListPagesResult> {
+    await this.validateLibraryExists(library);
+    const versionResult = await this.findBestVersion(library, version ?? undefined);
+    const resolvedVersion = versionResult.bestMatch ?? "";
+    return this.store.listPages(library, resolvedVersion, options);
   }
 
   // Deprecated simple listing removed: enriched listLibraries() is canonical

@@ -251,25 +251,90 @@ export function createMcpServerInstance(
         }
       },
     );
+
+    // Compact store tool
+    server.tool(
+      "compact_store",
+      "Reclaim unused SQLite disk space and truncate the WAL file after large scrapes or deletions.",
+      {
+        force: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("Always VACUUM even if no free pages are detected."),
+        vacuum: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe(
+            "Run VACUUM (reclaims disk space). When false, only checkpoints WAL.",
+          ),
+      },
+      {
+        title: "Compact Store",
+        readOnlyHint: false,
+        destructiveHint: false,
+      },
+      async ({ force, vacuum }) => {
+        telemetry.track(TelemetryEvent.TOOL_USED, {
+          tool: "compact_store",
+          context: "mcp_server",
+          force,
+          vacuum,
+        });
+
+        try {
+          const result = await tools.compactStore.execute({ force, vacuum });
+          if (result.skipped) {
+            return createResponse("Compaction skipped: database is running in memory.");
+          }
+          return createResponse(
+            `Database compacted successfully.\n` +
+              `- Reclaimed: ${(result.reclaimedBytes / (1024 * 1024)).toFixed(2)} MB\n` +
+              `- Before: ${(result.beforeBytes / (1024 * 1024)).toFixed(2)} MB\n` +
+              `- After: ${(result.afterBytes / (1024 * 1024)).toFixed(2)} MB\n` +
+              `- VACUUM executed: ${result.vacuumed ? "yes" : "no"}`,
+          );
+        } catch (error) {
+          return createError(error);
+        }
+      },
+    );
   }
 
   // Search docs tool
   server.tool(
     "search_docs",
-    "Search up-to-date documentation for a library or package. Examples:\n\n" +
-      '- {library: "react", query: "hooks lifecycle"} -> matches latest version of React\n' +
-      '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> matches React 18.0.0 or earlier\n' +
-      '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
-      '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
+    "Search library documentation using hybrid full-text (BM25) and vector search.\n\n" +
+      "HOW TO SEARCH EFFECTIVELY:\n" +
+      "1. Exact Symbols Win (Highest Precision): Query exact API names, functions, hooks, types, or interfaces (e.g. 'useEffect', 'tabs.onUpdated', 'createSlice').\n" +
+      "2. Keep It Short: Use 1-3 targeted keywords only. Do NOT stack 5+ words or write full sentences.\n" +
+      "3. No Boolean Operators: Do NOT use 'or', 'and', 'how to' — search keywords directly.\n" +
+      "4. Next Step: Search returns concise content snippets. To read the complete guide, full API contract, or code examples, take the resulting URL and call `read_page`.\n" +
+      "5. Fallback: If unsure about available topics or search returns empty, call `list_pages` to browse the sitemap.",
     {
-      library: z.string().trim().describe("Library name."),
+      library: z
+        .string()
+        .trim()
+        .describe(
+          "Library name (use `list_libraries` first to verify available libraries).",
+        ),
       version: z
         .string()
         .trim()
         .optional()
         .describe("Library version (exact or X-Range, optional)."),
-      query: z.string().trim().describe("Documentation search query."),
-      limit: z.number().optional().default(5).describe("Maximum number of results."),
+      query: z
+        .string()
+        .trim()
+        .describe(
+          "1-3 targeted keywords or exact API symbol (e.g. 'tabs.onUpdated', 'useCallback'). Avoid long sentences.",
+        ),
+      limit: z
+        .number()
+        .optional()
+        .default(5)
+        .describe("Maximum number of results (default 5, max 100)."),
     },
     {
       title: "Search Library Documentation",
@@ -316,10 +381,162 @@ ${r.content}\n`,
     },
   );
 
+  // Read page tool
+  server.tool(
+    "read_page",
+    "Read the full Markdown documentation of a specific page from a library without re-scraping the web.\n" +
+      "Call this with a page URL obtained from `search_docs` or `list_pages` to inspect complete implementations, type signatures, and code examples without token waste.",
+    {
+      library: z
+        .string()
+        .trim()
+        .describe("Library name (verify with `list_libraries` first)."),
+      pathOrUrl: z
+        .string()
+        .trim()
+        .min(1)
+        .describe(
+          "Page URL or path (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+        ),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      maxChars: z
+        .number()
+        .positive()
+        .optional()
+        .default(30000)
+        .describe(
+          "Maximum characters to return (default 30000, covers ~95% of full guides while preventing context overflow).",
+        ),
+    },
+    {
+      title: "Read Full Documentation Page",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
+    async ({ library, pathOrUrl, version, maxChars }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "read_page",
+        context: "mcp_server",
+        library,
+        version,
+      });
+
+      try {
+        const result = await tools.readPage.execute({
+          library,
+          pathOrUrl,
+          version,
+          maxChars,
+        });
+
+        const header = `> Source: ${result.url}\n\n`;
+        const notice = result.truncated
+          ? `\n\n> [!NOTE]\n> Content was truncated at ${result.charCount} characters to avoid context overflow. If you need more content, explicitly increase maxChars.`
+          : "";
+
+        return createResponse(`${header}${result.content}${notice}`);
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
+  // List pages tool
+  server.tool(
+    "list_pages",
+    "List indexed documentation pages and sitemap for a library version with pagination.\n" +
+      "Call this when exploring a library's architecture, when you do not know exact function names, or when `search_docs` returns no relevant results.",
+    {
+      library: z
+        .string()
+        .trim()
+        .describe("Library name (verify with `list_libraries` first)."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      prefix: z
+        .string()
+        .trim()
+        .optional()
+        .describe(
+          "Filter page URLs starting with or containing this prefix (e.g. '/docs/components').",
+        ),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(200)
+        .optional()
+        .default(50)
+        .describe("Maximum pages to return (default 50, max 200)."),
+      offset: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Starting index for pagination (default 0)."),
+    },
+    {
+      title: "List Library Pages",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
+    async ({ library, version, prefix, limit, offset }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "list_pages",
+        context: "mcp_server",
+        library,
+        version,
+        limit,
+        offset,
+      });
+
+      try {
+        const result = await tools.listPages.execute({
+          library,
+          version,
+          prefix,
+          limit,
+          offset,
+        });
+
+        if (result.pages.length === 0) {
+          return createResponse(
+            `No pages found for '${library}'${result.version ? `@${result.version}` : ""}${prefix ? ` matching prefix '${prefix}'` : ""}.`,
+          );
+        }
+
+        const lines = result.pages.map((p) => {
+          const safeTitle = (p.title || p.url)
+            .replace(/\[/g, "\\[")
+            .replace(/\]/g, "\\]");
+          return `- [${safeTitle}](<${p.url}>)${p.depth !== null ? ` (depth: ${p.depth})` : ""}`;
+        });
+
+        let responseText = `Indexed pages for ${result.library}${result.version ? `@${result.version}` : ""} (${result.total} total pages, showing ${result.offset + 1}-${result.offset + result.pages.length}):\n\n${lines.join("\n")}`;
+
+        if (result.hasMore) {
+          responseText += `\n\nUse offset: ${result.offset + result.pages.length} to see the next batch of pages.`;
+        }
+
+        return createResponse(responseText);
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
   // List libraries tool
   server.tool(
     "list_libraries",
-    "List all indexed libraries.",
+    "PRIMARY ENTRYPOINT — call FIRST before searching or reading docs to verify which libraries and versions are available locally.",
     {
       // no params
     },
