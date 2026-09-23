@@ -1,0 +1,30 @@
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    example.com/ingress: enabled
+  hosts:
+    - host: docs.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: docs-example-tls
+      hosts:
+        - docs.example.com
+route:
+  enabled: true
+  host: docs.apps.example.com
+  annotations:
+    example.com/route: enabled
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+extraResources:
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: '{{ include "docs-mcp-server.fullname" . }}-extra'
+    data:
+      release: '{{ .Release.Name }}'

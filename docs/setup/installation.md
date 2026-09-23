@@ -33,9 +33,42 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
-**Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). The named volumes in the example above (`docs-mcp-data`, `docs-mcp-config`) inherit this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make sure it is writable by uid 1000 — either `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
+**Non-root runtime:** The container defaults to uid 1000 but also supports an arbitrary non-root uid, including the identity assigned by OpenShift. Empty named volumes inherit the image's root-group-writable directory permissions. A bind mount replaces those permissions, so prepare both mounted directories for the selected uid or group, for example with `chgrp -R 0 ./data ./config && chmod -R g+rwX ./data ./config`, or start Docker with `--user "$(id -u):$(id -g)"` to match your host user.
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
+
+### Option 3: Kubernetes or OpenShift with Helm
+
+The starter chart deploys one unified Docs MCP Server image with persistent
+volumes for `/data` and `/config`:
+
+```bash
+helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
+  --namespace docs-mcp --create-namespace
+```
+
+The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup`. OpenShift can
+assign an arbitrary non-root identity through its Security Context Constraint.
+On other Kubernetes clusters, set an allowed `podSecurityContext.fsGroup` when
+the storage driver requires a supplemental group to make mounted volumes
+writable.
+
+Enable an OpenShift Route with a values file:
+
+```yaml
+route:
+  enabled: true
+  host: docs-mcp.apps.example.com
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+The chart also accepts `extraResources`, a list of administrator-supplied
+Kubernetes objects whose strings may reference the Helm release context. See
+the [chart README](../../deployment/helm/docs-mcp-server/README.md) for storage,
+Route, local-document mount, and extension examples.
 
 ### Configure Your Client
 

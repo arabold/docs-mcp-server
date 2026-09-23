@@ -1,0 +1,45 @@
+{{- if and .Values.dataPersistence.enabled (not .Values.dataPersistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "docs-mcp-server.dataClaimName" . }}
+  labels:
+    {{- include "docs-mcp-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with .Values.dataPersistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.dataPersistence.accessModes | nindent 4 }}
+  {{- if .Values.dataPersistence.storageClass }}
+  storageClassName: {{ .Values.dataPersistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.dataPersistence.size }}
+---
+{{- end }}
+{{- if and .Values.configPersistence.enabled (not .Values.configPersistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "docs-mcp-server.configClaimName" . }}
+  labels:
+    {{- include "docs-mcp-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with .Values.configPersistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.configPersistence.accessModes | nindent 4 }}
+  {{- if .Values.configPersistence.storageClass }}
+  storageClassName: {{ .Values.configPersistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.configPersistence.size }}
+{{- end }}

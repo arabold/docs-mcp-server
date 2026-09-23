@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "docs-mcp-server.fullname" . }}-test-connection
+  labels:
+    {{- include "docs-mcp-server.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: connection
+      image: {{ include "docs-mcp-server.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: { drop: ["ALL"] }
+        runAsNonRoot: true
+      command: ["node"]
+      args:
+        - "-e"
+        - >-
+          fetch('http://{{ include "docs-mcp-server.fullname" . }}:{{ .Values.service.port }}/')
+          .then((response) => { if (!response.ok) process.exit(1); })
+          .catch(() => process.exit(1))

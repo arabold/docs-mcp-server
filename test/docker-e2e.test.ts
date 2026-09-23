@@ -17,6 +17,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,7 @@ const PREBUILT_TAG = process.env.DOCKER_IMAGE_TAG;
 const IMAGE_TAG = PREBUILT_TAG ?? "docs-mcp-server:e2e-test";
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
 const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
+const ARBITRARY_UID = "1000710000";
 
 interface DockerResult {
   status: number | null;
@@ -133,7 +135,70 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(r.status, `id -u failed: ${r.stderr}`).toBe(0);
     const uid = r.stdout.trim();
     expect(uid).not.toBe("0");
-    expect(uid).toBe("1000"); // the `node` user shipped by the base image
+    expect(uid).toBe("1000"); // numeric default retained for ordinary Docker runs
+  });
+
+  it("supports an arbitrary non-root uid while keeping application code read-only", async () => {
+    const r = await docker([
+      "run",
+      "--rm",
+      "--user",
+      `${ARBITRARY_UID}:0`,
+      "--entrypoint",
+      "sh",
+      IMAGE_TAG,
+      "-c",
+      [
+        `test "$(id -u)" = "${ARBITRARY_UID}"`,
+        'test "$(id -g)" = "0"',
+        "test -w /data",
+        "test -w /config",
+        "test ! -w /app",
+        "touch /data/arbitrary-uid-data",
+        "touch /config/arbitrary-uid-config",
+      ].join(" && "),
+    ]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+  });
+
+  it("fails clearly when a mounted store denies the arbitrary uid", async () => {
+    const volumeName = `docs-mcp-denied-${randomUUID()}`;
+    try {
+      const created = await docker(["volume", "create", volumeName]);
+      expect(created.status, created.stderr).toBe(0);
+      const prepared = await docker([
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--mount",
+        `type=volume,src=${volumeName},dst=/data,volume-nocopy`,
+        "--entrypoint",
+        "sh",
+        IMAGE_TAG,
+        "-c",
+        "touch /data/initialized && chmod 0700 /data",
+      ]);
+      expect(prepared.status, prepared.stderr).toBe(0);
+
+      const r = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${ARBITRARY_UID}:0`,
+        "-v",
+        `${volumeName}:/data`,
+        "--entrypoint",
+        "node",
+        IMAGE_TAG,
+        "-e",
+        'require("node:fs").writeFileSync("/data/denied", "content")',
+      ]);
+      expect(r.status).not.toBe(0);
+      expect(r.stdout + r.stderr).toMatch(/EACCES|permission denied/i);
+    } finally {
+      await docker(["volume", "rm", "-f", volumeName]);
+    }
   });
 
   it("ships Chromium where the Playwright runtime expects it", async () => {
@@ -159,6 +224,8 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
         [
           "run",
           "--rm",
+          "--user",
+          `${ARBITRARY_UID}:0`,
           "-v",
           `${dataDir}:/data`,
           "-e",
@@ -197,6 +264,8 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
         [
           "run",
           "--rm",
+          "--user",
+          `${ARBITRARY_UID}:0`,
           "-v",
           `${dataDir}:/data`,
           "-v",
@@ -316,6 +385,8 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       "run",
       "-d",
       "--rm",
+      "--user",
+      `${ARBITRARY_UID}:0`,
       "-P",
       "-e",
       "DOCS_MCP_TELEMETRY=false",
