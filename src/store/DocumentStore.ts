@@ -2282,8 +2282,13 @@ export class DocumentStore {
         throw new PageNotFoundInStoreError(library, version, pathOrUrl);
       }
 
-      // 1. Normalize Windows backslashes and strip enclosing angle brackets (<...>) and quotes ("..." or '...')
-      let cleanPath = rawInput
+      // 1. Decode only HTML-escaped link wrappers; raw indexed URLs may contain literal &amp;.
+      const htmlWrapped = /^&lt;.*&gt;$/i.test(rawInput);
+      let cleanPath = (
+        htmlWrapped
+          ? rawInput.replace(/^&lt;|&gt;$/gi, "").replace(/&amp;/gi, "&")
+          : rawInput
+      )
         .replace(/\\/g, "/")
         .replace(/^[<"']+|[>"']+$/g, "")
         .trim();
@@ -2330,7 +2335,7 @@ export class DocumentStore {
           !normalizedPath.startsWith("http://") &&
           !normalizedPath.startsWith("https://")
         ) {
-          if (!normalizedPath.startsWith("/")) {
+          if (!normalizedPath.startsWith("/") && !normalizedPath.startsWith("#")) {
             normalizedPath = `/${normalizedPath}`;
           }
           normalizedPath = normalizedPath.replace(/\/+$/, "");

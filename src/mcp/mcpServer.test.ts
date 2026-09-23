@@ -4,9 +4,15 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
+import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { createMcpServerInstance } from "./mcpServer";
 import type { McpServerTools } from "./tools";
+
+vi.mock("../telemetry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../telemetry")>()),
+  telemetry: { track: vi.fn() },
+}));
 
 // Mock config
 const mockConfig = {
@@ -147,6 +153,53 @@ describe("MCP Server Read-Only Mode", () => {
     );
     expect(response.content[0].text).toContain("> Source: https://example.com");
     expect(response.content[0].text).toContain("# Test");
+  });
+
+  it("should not send read_page URLs or paths to telemetry", async () => {
+    vi.mocked(telemetry.track).mockClear();
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const readPageTool = (server as any)._registeredTools.read_page;
+    const secretUrl = "file:///private/documents/secret.md#token";
+
+    await readPageTool.handler({ library: "react", pathOrUrl: secretUrl });
+
+    const event = vi
+      .mocked(telemetry.track)
+      .mock.calls.find(([, data]) => data?.tool === "read_page");
+    expect(event).toBeDefined();
+    expect(JSON.stringify(event)).not.toContain("secret");
+    expect(JSON.stringify(event)).not.toContain("file://");
+    expect(mockTools.readPage.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ pathOrUrl: secretUrl }),
+    );
+  });
+
+  it("should not send list_pages prefixes to telemetry", async () => {
+    vi.mocked(telemetry.track).mockClear();
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const listPagesTool = (server as any)._registeredTools.list_pages;
+    const prefix = "/private/secret/path";
+
+    await listPagesTool.handler({ library: "react", prefix });
+
+    const event = vi
+      .mocked(telemetry.track)
+      .mock.calls.find(([, data]) => data?.tool === "list_pages");
+    expect(event).toBeDefined();
+    expect(JSON.stringify(event)).not.toContain("secret");
+    expect(mockTools.listPages.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ prefix }),
+    );
+  });
+
+  it("should describe the supported search limit of 100", () => {
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const schema = (server as any)._registeredTools.search_docs.inputSchema;
+
+    expect(schema.shape.limit.description).toContain("max 100");
+    expect(schema.parse({ library: "react", query: "useEffect", limit: 100 }).limit).toBe(
+      100,
+    );
   });
 
   it("should handle list_pages tool execution and format links with depth", async () => {

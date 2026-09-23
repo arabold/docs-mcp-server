@@ -311,6 +311,55 @@ describe("DocumentStore - getPageContent and listPages", () => {
     expect(result.url).toBe("https://example.com/app#/guide");
   });
 
+  it("should resolve a hash-only SPA route to its indexed page", async () => {
+    await documentStore.addDocuments(
+      "mylib",
+      "1.0.0",
+      1,
+      createMultiChunkScrapeResult("SPA Guide", "https://example.com/app#/guide", [
+        "# SPA Guide",
+      ]),
+    );
+
+    const result = await documentStore.getPageContent("mylib", "1.0.0", "#/guide");
+    expect(result.url).toBe("https://example.com/app#/guide");
+  });
+
+  it("should resolve HTML-escaped URL wrappers from page listings", async () => {
+    const url = "https://example.com/docs/quickstart?lang=en&view=full";
+    await documentStore.addDocuments(
+      "mylib",
+      "1.0.0",
+      1,
+      createMultiChunkScrapeResult("Quickstart", url, ["# Quickstart"]),
+    );
+
+    const result = await documentStore.getPageContent(
+      "mylib",
+      "1.0.0",
+      "&lt;https://example.com/docs/quickstart?lang=en&amp;view=full&gt;",
+    );
+    expect(result.url).toBe(url);
+  });
+
+  it("should preserve literal HTML entities in indexed page URLs", async () => {
+    const url = "https://example.com/docs/page?x=1&amp;y=2";
+    await documentStore.addDocuments(
+      "mylib",
+      "1.0.0",
+      1,
+      createMultiChunkScrapeResult("Literal Entity", url, ["# Literal Entity"]),
+    );
+
+    const listed = await documentStore.listPages("mylib", "1.0.0");
+    const result = await documentStore.getPageContent(
+      "mylib",
+      "1.0.0",
+      listed.pages[0].url,
+    );
+    expect(result.url).toBe(url);
+  });
+
   it("should normalize Windows backslash paths in getPageContent", async () => {
     const page = createMultiChunkScrapeResult(
       "Windows Test",

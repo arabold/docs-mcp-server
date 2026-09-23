@@ -334,7 +334,7 @@ export function createMcpServerInstance(
         .number()
         .optional()
         .default(5)
-        .describe("Maximum number of results (default 5, max 20)."),
+        .describe("Maximum number of results (default 5, max 100)."),
     },
     {
       title: "Search Library Documentation",
@@ -423,7 +423,6 @@ ${r.content}\n`,
         context: "mcp_server",
         library,
         version,
-        pathOrUrl: pathOrUrl.split("?")[0],
       });
 
       try {
@@ -495,7 +494,6 @@ ${r.content}\n`,
         context: "mcp_server",
         library,
         version,
-        prefix,
         limit,
         offset,
       });
