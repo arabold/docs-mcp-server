@@ -4,6 +4,19 @@ This chart deploys one unified Docs MCP Server container. It does not deploy the
 
 ## Install
 
+Build and publish the image from this branch before installing. The chart uses
+`ghcr.io/brtydse100/docs-mcp-server:nonroot`; the upstream image does not contain
+these branch changes. Authenticate to your registry, then run from the repository root:
+
+```bash
+docker build -t ghcr.io/brtydse100/docs-mcp-server:nonroot .
+docker push ghcr.io/brtydse100/docs-mcp-server:nonroot
+```
+
+Set `image.repository` and `image.tag` for another registry or tag, or set
+`image.digest` to pin an immutable build. Private registries require
+`imagePullSecrets`; both the Deployment and the Helm test Pod use these secrets.
+
 ```bash
 helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
   --namespace docs-mcp --create-namespace
@@ -26,15 +39,31 @@ configPersistence:
   existingClaim: docs-mcp-config
 ```
 
-Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. The storage driver, OpenShift SCC, or a permitted `podSecurityContext.fsGroup` must make each volume writable by the assigned identity.
+Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `fsGroup: 1000` to make supported volumes writable. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
+
+The unified server runs one embedded worker against a SQLite store. The chart
+requires `replicaCount: 1` and uses `Recreate` upgrades so two workers do not
+overlap and ReadWriteOnce volumes can detach before the replacement starts.
+Upgrades briefly interrupt service.
 
 ## OpenShift
 
-The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup` by default. OpenShift can assign values from the namespace's permitted ranges. The container requires a non-root identity with write access to `/data`, `/config`, and `/tmp`; it does not require privilege escalation or Linux capabilities.
+Set `openshift.enabled: true` when installing on OpenShift. This omits the
+Kubernetes default `fsGroup`, allowing the SCC to assign values from the namespace's
+permitted ranges. The chart leaves `runAsUser` and `runAsGroup` unset in both modes.
+Explicit `podSecurityContext` fields are still honored, so omit fixed IDs from
+OpenShift values unless your SCC permits them.
+
+The image defaults to UID 1000 and GID 0, uses `/data` as its working directory,
+and keeps application code in `/app`. Home and cache writes go to `/tmp`;
+configuration goes to `/config`. The chart mounts all three writable paths and
+uses a read-only root filesystem.
 
 Enable an OpenShift Route with:
 
 ```yaml
+openshift:
+  enabled: true
 route:
   enabled: true
   host: docs-mcp.apps.example.com
@@ -43,6 +72,9 @@ route:
     termination: edge
     insecureEdgeTerminationPolicy: Redirect
 ```
+
+Only edge TLS termination is supported: the server's backend port speaks HTTP.
+Passthrough and re-encrypt routes require a TLS-enabled backend.
 
 ## Extra resources
 

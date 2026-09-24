@@ -138,22 +138,30 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(uid).toBe("1000"); // numeric default retained for ordinary Docker runs
   });
 
-  it("supports an arbitrary non-root uid while keeping application code read-only", async () => {
+  it.each([
+    { name: "default user", userArgs: [], uid: "1000" },
+    { name: "arbitrary uid", userArgs: ["--user", `${ARBITRARY_UID}:0`], uid: ARBITRARY_UID },
+  ])("provides writable runtime paths for $name", async ({ userArgs, uid }) => {
     const r = await docker([
       "run",
       "--rm",
-      "--user",
-      `${ARBITRARY_UID}:0`,
+      ...userArgs,
       "--entrypoint",
       "sh",
       IMAGE_TAG,
       "-c",
       [
-        `test "$(id -u)" = "${ARBITRARY_UID}"`,
+        `test "$(id -u)" = "${uid}"`,
         'test "$(id -g)" = "0"',
+        'test "$PWD" = "/data"',
+        'test -w "$HOME"',
         "test -w /data",
         "test -w /config",
         "test ! -w /app",
+        "test -r /app/dist/index.js",
+        "test -x /app",
+        "touch relative-runtime-cache",
+        'mkdir -p "$XDG_CACHE_HOME" && touch "$XDG_CACHE_HOME/runtime-cache"',
         "touch /data/arbitrary-uid-data",
         "touch /config/arbitrary-uid-config",
       ].join(" && "),
@@ -226,6 +234,11 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
           "--rm",
           "--user",
           `${ARBITRARY_UID}:0`,
+          "--read-only",
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs",
+          "/tmp:rw,nosuid,nodev,mode=1777",
           "-v",
           `${dataDir}:/data`,
           "-e",
@@ -266,6 +279,11 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
           "--rm",
           "--user",
           `${ARBITRARY_UID}:0`,
+          "--read-only",
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs",
+          "/tmp:rw,nosuid,nodev,mode=1777",
           "-v",
           `${dataDir}:/data`,
           "-v",
@@ -376,7 +394,10 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     }
   }, 240_000);
 
-  it("serves the web UI over HTTP (SPA shell, hashed asset, deep-link fallback, and API)", async () => {
+  it.each([
+    { name: "default user", userArgs: [] },
+    { name: "arbitrary uid", userArgs: ["--user", `${ARBITRARY_UID}:0`] },
+  ])("serves the web UI with a read-only root filesystem as $name", async ({ userArgs }) => {
     // Run the web server detached and let Docker pick a free host port (-P), so
     // the test never clashes with a port already bound on the CI host. The
     // image sets DOCS_MCP_STORE_PATH=/data (writable), so no mount is needed —
@@ -385,8 +406,12 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       "run",
       "-d",
       "--rm",
-      "--user",
-      `${ARBITRARY_UID}:0`,
+      ...userArgs,
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,mode=1777",
       "-P",
       "-e",
       "DOCS_MCP_TELEMETRY=false",

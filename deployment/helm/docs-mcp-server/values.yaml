@@ -1,9 +1,9 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/arabold/docs-mcp-server
-  pullPolicy: IfNotPresent
-  tag: ""
+  repository: ghcr.io/brtydse100/docs-mcp-server
+  pullPolicy: Always
+  tag: "nonroot"
   digest: ""
 
 imagePullSecrets: []
@@ -21,8 +21,13 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
-# OpenShift assigns runAsUser/runAsGroup through its SCC. Leave identity fields
-# unset unless the target cluster policy explicitly requires them.
+# Enable on OpenShift to let the SCC assign fsGroup from the namespace range.
+# Ordinary Kubernetes defaults to fsGroup 1000 so mounted volumes are writable.
+openshift:
+  enabled: false
+
+# Explicit values override the Kubernetes defaults. No runAsUser/runAsGroup is
+# pinned, so OpenShift can assign an arbitrary non-root identity.
 podSecurityContext:
   seccompProfile:
     type: RuntimeDefault

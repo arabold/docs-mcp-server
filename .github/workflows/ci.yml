@@ -119,7 +119,21 @@ jobs:
           helm lint "$chart" -f "$chart/ci/ephemeral-values.yaml"
           helm lint "$chart" -f "$chart/ci/existing-claims-values.yaml"
           helm lint "$chart" -f "$chart/ci/exposure-values.yaml"
-          helm template default "$chart" >/dev/null
+          helm lint "$chart" -f "$chart/ci/openshift-values.yaml"
+          default="$(helm template default "$chart")"
+          grep -q 'fsGroup: 1000' <<<"$default"
+          grep -q 'type: Recreate' <<<"$default"
+          openshift="$(helm template openshift "$chart" -f "$chart/ci/openshift-values.yaml")"
+          if grep -Eq 'fsGroup:|runAsUser:|runAsGroup:' <<<"$openshift"; then
+            echo 'OpenShift defaults must leave identity assignment to the SCC'
+            exit 1
+          fi
+          for invalid in replicaCount=2 route.tls.termination=passthrough route.tls.termination=reencrypt; do
+            if helm template invalid "$chart" --set "$invalid" >/dev/null 2>&1; then
+              echo "Expected chart validation to reject $invalid"
+              exit 1
+            fi
+          done
           helm template ephemeral "$chart" -f "$chart/ci/ephemeral-values.yaml" >/dev/null
           existing="$(helm template existing "$chart" -f "$chart/ci/existing-claims-values.yaml")"
           ! grep -q 'kind: PersistentVolumeClaim' <<<"$existing"
@@ -149,6 +163,21 @@ jobs:
             --wait --timeout 5m
           kubectl rollout status deployment/docs-mcp-docs-mcp-server \
             --namespace docs-mcp --timeout=2m
+          helm test docs-mcp --namespace docs-mcp --timeout 2m
+
+          # Exercise the same image with an arbitrary uid and a namespace-style
+          # supplemental group, without relying on image-layer volume ownership.
+          helm upgrade docs-mcp deployment/helm/docs-mcp-server \
+            --namespace docs-mcp \
+            -f deployment/helm/docs-mcp-server/ci/ephemeral-values.yaml \
+            --set openshift.enabled=true \
+            --set podSecurityContext.runAsUser=1000710000 \
+            --set podSecurityContext.runAsGroup=0 \
+            --set podSecurityContext.fsGroup=1000710000 \
+            --set image.repository=docs-mcp-server \
+            --set image.tag=e2e-test \
+            --set image.pullPolicy=Never \
+            --wait --timeout 5m
           helm test docs-mcp --namespace docs-mcp --timeout 2m
 
       - name: Collect Helm failure diagnostics

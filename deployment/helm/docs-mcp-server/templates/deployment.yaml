@@ -6,6 +6,10 @@ metadata:
     {{- include "docs-mcp-server.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # A single embedded worker owns the SQLite store. Avoid overlapping pods and
+  # ReadWriteOnce volume attachment conflicts during upgrades.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "docs-mcp-server.selectorLabels" . | nindent 6 }}
@@ -24,7 +28,7 @@ spec:
       serviceAccountName: {{ include "docs-mcp-server.serviceAccountName" . }}
       automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- include "docs-mcp-server.podSecurityContext" . | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

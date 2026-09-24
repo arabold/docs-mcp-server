@@ -63,14 +63,18 @@ COPY --from=builder /app/dist ./dist
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
+ENV XDG_DATA_HOME=/data
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV HOME=/tmp
 
-# Create writable runtime directories for both the default `node` user and
+# Create writable runtime directories for both the default non-root user and
 # platforms such as OpenShift that assign an arbitrary uid in group 0. `g=u`
 # mirrors owner permissions onto the root group without making these paths
 # world-writable. `/app` stays root-owned and non-writable at runtime.
 RUN mkdir -p /data /config \
   && chgrp -R 0 /data /config \
-  && chmod -R g=u /data /config
+  && chmod -R g=u /data /config \
+  && chmod -R a+rX /app
 
 # Define volumes
 VOLUME /data
@@ -84,7 +88,11 @@ ENV HOST=0.0.0.0
 # Use a numeric non-root default so Kubernetes can verify `runAsNonRoot`.
 # OpenShift and other runtimes may override it with an arbitrary uid. Mounted
 # volumes must grant that uid or one of its supplemental groups write access.
-USER 1000
+USER 1000:0
+
+# Dependencies may write relative caches. Keep their working directory on the
+# writable data volume, and resolve application code with an absolute path.
+WORKDIR /data
 
 # Set the command to run the application
-ENTRYPOINT ["sh", "-c", "umask 0002; exec node --enable-source-maps dist/index.js \"$@\"", "--"]
+ENTRYPOINT ["sh", "-c", "umask 0002; exec node --enable-source-maps /app/dist/index.js \"$@\"", "--"]

@@ -33,7 +33,7 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
-**Non-root runtime:** The container defaults to uid 1000 but also supports an arbitrary non-root uid, including the identity assigned by OpenShift. Empty named volumes inherit the image's root-group-writable directory permissions. A bind mount replaces those permissions, so prepare both mounted directories for the selected uid or group, for example with `chgrp -R 0 ./data ./config && chmod -R g+rwX ./data ./config`, or start Docker with `--user "$(id -u):$(id -g)"` to match your host user.
+**Non-root runtime (this branch's image):** The container defaults to uid 1000 and gid 0 and supports an arbitrary non-root uid, including the identity assigned by OpenShift. Application code lives in `/app`; the working directory is `/data`, and home/cache writes use `/tmp`. Empty named volumes inherit the image's root-group-writable directory permissions. A bind mount replaces those permissions, so prepare both mounted directories for the selected uid or group, for example with `chgrp -R 0 ./data ./config && chmod -R g+rwX ./data ./config`, or start Docker with `--user "$(id -u):$(id -g)"` to match your host user. Existing named volumes also retain their old ownership and may need a one-time permissions adjustment.
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
@@ -42,20 +42,25 @@ docker run --rm \
 The starter chart deploys one unified Docs MCP Server image with persistent
 volumes for `/data` and `/config`:
 
+Build and publish this branch's image first, following the
+[chart README](../../deployment/helm/docs-mcp-server/README.md#install).
+The chart defaults to `ghcr.io/brtydse100/docs-mcp-server:nonroot`.
+
 ```bash
 helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
   --namespace docs-mcp --create-namespace
 ```
 
-The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup`. OpenShift can
-assign an arbitrary non-root identity through its Security Context Constraint.
-On other Kubernetes clusters, set an allowed `podSecurityContext.fsGroup` when
-the storage driver requires a supplemental group to make mounted volumes
-writable.
+The chart leaves `runAsUser` and `runAsGroup` unset. On ordinary Kubernetes it
+defaults to `fsGroup: 1000` for writable volumes. On OpenShift, set
+`openshift.enabled: true` to omit that default and let the Security Context
+Constraint assign the namespace's permitted identity and group.
 
 Enable an OpenShift Route with a values file:
 
 ```yaml
+openshift:
+  enabled: true
 route:
   enabled: true
   host: docs-mcp.apps.example.com

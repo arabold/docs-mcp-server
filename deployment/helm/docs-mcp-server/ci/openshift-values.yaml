@@ -1,0 +1,6 @@
+openshift:
+  enabled: true
+route:
+  enabled: true
+  tls:
+    enabled: true

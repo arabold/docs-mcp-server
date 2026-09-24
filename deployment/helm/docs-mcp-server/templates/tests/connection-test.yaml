@@ -9,21 +9,25 @@ metadata:
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  activeDeadlineSeconds: 60
+  serviceAccountName: {{ include "docs-mcp-server.serviceAccountName" . }}
   automountServiceAccountToken: false
   securityContext:
-    seccompProfile: { type: RuntimeDefault }
+    {{- include "docs-mcp-server.podSecurityContext" . | nindent 4 }}
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   containers:
     - name: connection
-      image: {{ include "docs-mcp-server.image" . }}
+      image: {{ include "docs-mcp-server.image" . | quote }}
       imagePullPolicy: {{ .Values.image.pullPolicy }}
       securityContext:
-        allowPrivilegeEscalation: false
-        capabilities: { drop: ["ALL"] }
-        runAsNonRoot: true
+        {{- toYaml .Values.containerSecurityContext | nindent 8 }}
       command: ["node"]
       args:
         - "-e"
         - >-
-          fetch('http://{{ include "docs-mcp-server.fullname" . }}:{{ .Values.service.port }}/')
+          fetch('http://{{ include "docs-mcp-server.fullname" . }}:{{ .Values.service.port }}/', { signal: AbortSignal.timeout(10000) })
           .then((response) => { if (!response.ok) process.exit(1); })
           .catch(() => process.exit(1))
