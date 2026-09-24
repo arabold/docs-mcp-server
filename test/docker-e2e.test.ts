@@ -17,6 +17,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,7 @@ const PREBUILT_TAG = process.env.DOCKER_IMAGE_TAG;
 const IMAGE_TAG = PREBUILT_TAG ?? "docs-mcp-server:e2e-test";
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
 const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
+const ARBITRARY_UID = "1000710000";
 
 interface DockerResult {
   status: number | null;
@@ -133,7 +135,89 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(r.status, `id -u failed: ${r.stderr}`).toBe(0);
     const uid = r.stdout.trim();
     expect(uid).not.toBe("0");
-    expect(uid).toBe("1000"); // the `node` user shipped by the base image
+    expect(uid).toBe("65534"); // nobody, matching the image USER directive
+  });
+
+  it.each([
+    { name: "default user", userArgs: [], uid: "65534", gid: "65534" },
+    { name: "explicit nobody", userArgs: ["--user", "65534:65534"], uid: "65534", gid: "65534" },
+    { name: "arbitrary uid", userArgs: ["--user", `${ARBITRARY_UID}:0`], uid: ARBITRARY_UID, gid: "0" },
+  ])("provides writable runtime paths for $name", async ({ userArgs, uid, gid }) => {
+    const r = await docker([
+      "run",
+      "--rm",
+      ...userArgs,
+      "--entrypoint",
+      "sh",
+      IMAGE_TAG,
+      "-c",
+      [
+        `test "$(id -u)" = "${uid}"`,
+        `test "$(id -g)" = "${gid}"`,
+        'test "$PWD" = "/app"',
+        'test "$HOME" = "/app/.runtime"',
+        'test -w "$HOME"',
+        "test -w /data",
+        "test -w /config",
+        "test ! -w /app/dist",
+        "test ! -w /app/public",
+        "test ! -w /app/db",
+        "test ! -w /app/node_modules",
+        "test ! -w /usr/bin",
+        "test ! -w /etc/passwd",
+        "test -r /app/dist/index.js",
+        "test -x /app",
+        "for dir in /app/.runtime /app/.runtime/cache /nonexistent /data /config /tmp; do touch \"$dir/permission-check\" || exit 1; done",
+        'mkdir -p "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" && touch "$XDG_CACHE_HOME/runtime-cache" "$NPM_CONFIG_CACHE/npm-cache"',
+        "touch /data/arbitrary-uid-data",
+        "touch /config/arbitrary-uid-config",
+        // Newly created files keep group 0 even when nobody's primary gid is
+        // 65534, so a later arbitrary-uid run can reuse the same named volumes.
+        'test "$(stat -c %g /data/arbitrary-uid-data)" = "0"',
+        'test "$(stat -c %g /config/arbitrary-uid-config)" = "0"',
+      ].join(" && "),
+    ]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+  });
+
+  it("fails clearly when a mounted store denies the arbitrary uid", async () => {
+    const volumeName = `docs-mcp-denied-${randomUUID()}`;
+    try {
+      const created = await docker(["volume", "create", volumeName]);
+      expect(created.status, created.stderr).toBe(0);
+      const prepared = await docker([
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--mount",
+        `type=volume,src=${volumeName},dst=/data,volume-nocopy`,
+        "--entrypoint",
+        "sh",
+        IMAGE_TAG,
+        "-c",
+        "touch /data/initialized && chmod 0700 /data",
+      ]);
+      expect(prepared.status, prepared.stderr).toBe(0);
+
+      const r = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${ARBITRARY_UID}:0`,
+        "-v",
+        `${volumeName}:/data`,
+        "--entrypoint",
+        "node",
+        IMAGE_TAG,
+        "-e",
+        'require("node:fs").writeFileSync("/data/denied", "content")',
+      ]);
+      expect(r.status).not.toBe(0);
+      expect(r.stdout + r.stderr).toMatch(/EACCES|permission denied/i);
+    } finally {
+      await docker(["volume", "rm", "-f", volumeName]);
+    }
   });
 
   it("ships Chromium where the Playwright runtime expects it", async () => {
@@ -152,13 +236,19 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
 
   it("scrapes a live web page through the Playwright pipeline", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-web-"));
-    // Make sure the host-side dir is writable by uid 1000 (the container user).
+    // Make sure the host-side dir is writable by uid 65534 (the container user).
     fs.chmodSync(dataDir, 0o777);
     try {
       const r = await docker(
         [
           "run",
           "--rm",
+          "--user",
+          `${ARBITRARY_UID}:0`,
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs",
+          "/tmp:rw,nosuid,nodev,mode=1777",
           "-v",
           `${dataDir}:/data`,
           "-e",
@@ -197,6 +287,12 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
         [
           "run",
           "--rm",
+          "--user",
+          `${ARBITRARY_UID}:0`,
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs",
+          "/tmp:rw,nosuid,nodev,mode=1777",
           "-v",
           `${dataDir}:/data`,
           "-v",
@@ -241,7 +337,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-docs-"));
     fs.chmodSync(dataDir, 0o777);
     // The container reads the docs mount, so it needs to be traversable by
-    // the unprivileged runtime user (uid 1000); the writable /data mount
+    // the unprivileged runtime user (uid 65534); the writable /data mount
     // above is the only place the app actually writes.
     fs.chmodSync(docsDir, 0o755);
     try {
@@ -307,7 +403,10 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     }
   }, 240_000);
 
-  it("serves the web UI over HTTP (SPA shell, hashed asset, deep-link fallback, and API)", async () => {
+  it.each([
+    { name: "default user", userArgs: [] },
+    { name: "arbitrary uid", userArgs: ["--user", `${ARBITRARY_UID}:0`] },
+  ])("serves the web UI with a read-only root filesystem as $name", async ({ userArgs }) => {
     // Run the web server detached and let Docker pick a free host port (-P), so
     // the test never clashes with a port already bound on the CI host. The
     // image sets DOCS_MCP_STORE_PATH=/data (writable), so no mount is needed —
@@ -316,6 +415,14 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       "run",
       "-d",
       "--rm",
+      ...userArgs,
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,mode=1777",
+      "--tmpfs",
+      "/app/.runtime:rw,nosuid,nodev,mode=1777",
       "-P",
       "-e",
       "DOCS_MCP_TELEMETRY=false",

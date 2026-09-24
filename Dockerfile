@@ -63,13 +63,26 @@ COPY --from=builder /app/dist ./dist
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
+ENV XDG_DATA_HOME=/data
+ENV HOME=/app/.runtime
+ENV XDG_CACHE_HOME=/app/.runtime/cache
+ENV NPM_CONFIG_CACHE=/app/.runtime/cache/npm
+ENV TMPDIR=/tmp
 
-# Create the writable runtime directories and hand ownership to the
-# unprivileged `node` user that ships with the base image (uid 1000).
-# `/app` is intentionally left root-owned so the runtime user cannot
-# tamper with code or `node_modules` if it is ever compromised.
-RUN mkdir -p /data /config \
-  && chown node:node /data /config
+# Follow LiteLLM's OpenShift-compatible non-root pattern: the default nobody
+# user owns only the paths that need runtime writes, while group 0 receives
+# matching permissions for OpenShift-assigned arbitrary uids. Application code
+# remains root-owned and read-only; no chmod 777 or fixed OpenShift uid is used.
+RUN test "$(id -u nobody)" = 65534 \
+  && test "$(id -g nobody)" = 65534 \
+  && mkdir -p /data /config /app/.runtime/cache/npm /nonexistent \
+  && chown -R nobody:root /data /config /app/.runtime /nonexistent \
+  && chmod -R g=u /data /config /app/.runtime /nonexistent \
+  && chmod -R g+w /data /config /app/.runtime /nonexistent \
+  && chmod -R g+rX /data /config /app/.runtime /nonexistent \
+  && find /data /config /app/.runtime /nonexistent -type d -exec chmod g+s {} + \
+  && chmod -R a+rX /app/dist /app/public /app/db /app/node_modules \
+  && chmod 1777 /tmp
 
 # Define volumes
 VOLUME /data
@@ -80,11 +93,27 @@ EXPOSE 6280
 ENV PORT=6280
 ENV HOST=0.0.0.0
 
-# Drop privileges before running the app. Named Docker volumes inherit
-# this ownership automatically; if you bind-mount a host directory onto
-# /data or /config instead, it must be writable by uid 1000 — e.g.
-# `chown 1000:1000 ./data` or `docker run --user "$(id -u):$(id -g)"`.
-USER node
+# Use a numeric non-root default so Kubernetes can verify `runAsNonRoot`.
+# OpenShift and other runtimes may override it with an arbitrary uid. Mounted
+# volumes must grant that uid or one of its supplemental groups write access.
+USER 65534
+
+# Keep execution in the application directory while HOME and all cache writes
+# resolve to the dedicated runtime directory.
+WORKDIR /app
+
+# Fail the build if the default identity cannot write its runtime paths or can
+# modify shipped application code.
+RUN test "$(id -u)" = 65534 \
+  && test "$(id -g)" = 65534 \
+  && for dir in /app/.runtime /app/.runtime/cache /app/.runtime/cache/npm \
+      /data /config /nonexistent /tmp; do \
+    touch "$dir/.permission-check" && rm "$dir/.permission-check" || exit 1; \
+  done \
+  && test ! -w /app/dist \
+  && test ! -w /app/public \
+  && test ! -w /app/db \
+  && test ! -w /app/node_modules
 
 # Set the command to run the application
-ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]
+ENTRYPOINT ["sh", "-c", "umask 0002; exec node --enable-source-maps /app/dist/index.js \"$@\"", "--"]

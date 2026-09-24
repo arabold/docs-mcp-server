@@ -106,3 +106,94 @@ jobs:
           # Reuse the image built above instead of rebuilding inside the test.
           DOCKER_IMAGE_TAG: docs-mcp-server:e2e-test
         run: npm run test:docker
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.3.0
+
+      - name: Lint and render Helm chart
+        run: |
+          chart=deployment/helm/docs-mcp-server
+          helm lint "$chart"
+          helm lint "$chart" -f "$chart/ci/ephemeral-values.yaml"
+          helm lint "$chart" -f "$chart/ci/existing-claims-values.yaml"
+          helm lint "$chart" -f "$chart/ci/exposure-values.yaml"
+          helm lint "$chart" -f "$chart/ci/openshift-values.yaml"
+          default="$(helm template default "$chart")"
+          grep -q 'fsGroup: 65534' <<<"$default"
+          grep -q 'runAsUser: 65534' <<<"$default"
+          grep -q 'runAsGroup: 65534' <<<"$default"
+          grep -q 'readOnlyRootFilesystem: true' <<<"$default"
+          grep -q 'type: Recreate' <<<"$default"
+          openshift="$(helm template openshift "$chart" -f "$chart/ci/openshift-values.yaml")"
+          if grep -Eq 'fsGroup:|runAsUser:|runAsGroup:' <<<"$openshift"; then
+            echo 'OpenShift defaults must leave identity assignment to the SCC'
+            exit 1
+          fi
+          for invalid in replicaCount=2 route.tls.termination=passthrough route.tls.termination=reencrypt; do
+            if helm template invalid "$chart" --set "$invalid" >/dev/null 2>&1; then
+              echo "Expected chart validation to reject $invalid"
+              exit 1
+            fi
+          done
+          helm template ephemeral "$chart" -f "$chart/ci/ephemeral-values.yaml" >/dev/null
+          existing="$(helm template existing "$chart" -f "$chart/ci/existing-claims-values.yaml")"
+          ! grep -q 'kind: PersistentVolumeClaim' <<<"$existing"
+          grep -q 'claimName: existing-data' <<<"$existing"
+          grep -q 'claimName: existing-config' <<<"$existing"
+          exposure="$(helm template exposure "$chart" -f "$chart/ci/exposure-values.yaml")"
+          grep -q 'kind: Ingress' <<<"$exposure"
+          grep -q 'kind: Route' <<<"$exposure"
+          grep -q "name: 'exposure-docs-mcp-server-extra'" <<<"$exposure"
+          grep -q "release: 'exposure'" <<<"$exposure"
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.12.0
+        with:
+          version: v0.27.0
+          cluster_name: docs-mcp-e2e
+
+      - name: Install and test Helm release
+        run: |
+          kind load docker-image docs-mcp-server:e2e-test --name docs-mcp-e2e
+          helm upgrade --install docs-mcp deployment/helm/docs-mcp-server \
+            --namespace docs-mcp --create-namespace \
+            -f deployment/helm/docs-mcp-server/ci/ephemeral-values.yaml \
+            --set image.repository=docs-mcp-server \
+            --set image.tag=e2e-test \
+            --set image.pullPolicy=Never \
+            --wait --timeout 5m
+          kubectl rollout status deployment/docs-mcp-docs-mcp-server \
+            --namespace docs-mcp --timeout=2m
+          helm test docs-mcp --namespace docs-mcp --timeout 2m
+
+          kubectl exec deployment/docs-mcp-docs-mcp-server --namespace docs-mcp -- \
+            sh -ec 'test "$(id -u)" = 65534; test "$(id -g)" = 65534; for dir in /app/.runtime /data /config /nonexistent /tmp; do touch "$dir/.permission-check"; rm "$dir/.permission-check"; done; for dir in /app/dist /app/node_modules /app/public /app/db; do test ! -w "$dir"; done'
+
+          # Exercise the same image with an arbitrary uid and a namespace-style
+          # supplemental group, without relying on image-layer volume ownership.
+          helm upgrade docs-mcp deployment/helm/docs-mcp-server \
+            --namespace docs-mcp \
+            -f deployment/helm/docs-mcp-server/ci/ephemeral-values.yaml \
+            --set openshift.enabled=true \
+            --set podSecurityContext.runAsUser=1000710000 \
+            --set podSecurityContext.runAsGroup=0 \
+            --set podSecurityContext.fsGroup=1000710000 \
+            --set image.repository=docs-mcp-server \
+            --set image.tag=e2e-test \
+            --set image.pullPolicy=Never \
+            --wait --timeout 5m
+          helm test docs-mcp --namespace docs-mcp --timeout 2m
+
+          kubectl exec deployment/docs-mcp-docs-mcp-server --namespace docs-mcp -- \
+            sh -ec 'test "$(id -u)" = 1000710000; for dir in /app/.runtime /data /config /nonexistent /tmp; do touch "$dir/.arbitrary-uid-check"; rm "$dir/.arbitrary-uid-check"; done; for dir in /app/dist /app/node_modules /app/public /app/db; do test ! -w "$dir"; done'
+
+      - name: Collect Helm failure diagnostics
+        if: failure()
+        run: |
+          kubectl get all,pvc --namespace docs-mcp -o wide || true
+          kubectl describe pods --namespace docs-mcp || true
+          kubectl logs --namespace docs-mcp \
+            --selector app.kubernetes.io/instance=docs-mcp \
+            --all-containers --tail=-1 || true

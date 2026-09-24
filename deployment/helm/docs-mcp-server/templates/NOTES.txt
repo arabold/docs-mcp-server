@@ -1,0 +1,5 @@
+Docs MCP Server is available inside the cluster at:
+  http://{{ include "docs-mcp-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+
+Run the chart smoke test with:
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }}

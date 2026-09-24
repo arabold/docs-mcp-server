@@ -33,9 +33,49 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
-**Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). The named volumes in the example above (`docs-mcp-data`, `docs-mcp-config`) inherit this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make sure it is writable by uid 1000 — either `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
+**Non-root runtime (this branch's image):** The container uses uid 65534 (`nobody`, primary gid 65534). Following LiteLLM's OpenShift pattern, writable runtime paths are owned by `nobody`, assigned to group 0, and receive matching group permissions for arbitrary OpenShift UIDs. The dedicated home/cache path is `/app/.runtime`; application code under `/app` remains read-only. Data, configuration, and temporary files use `/data`, `/config`, and `/tmp`. Empty named volumes inherit image ownership, while bind mounts replace it. Prepare bind-mounted directories for uid 65534, for example with `sudo chown -R 65534:65534 ./data ./config && sudo chmod -R u+rwX ./data ./config`. On OpenShift, the storage driver and SCC-assigned `fsGroup` must make mounted volumes writable. Existing volumes retain their old ownership and may need a one-time permissions adjustment.
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
+
+### Option 3: Kubernetes or OpenShift with Helm
+
+The starter chart deploys one unified Docs MCP Server image with persistent
+volumes for `/data` and `/config`:
+
+Build and publish this branch's image first, following the
+[chart README](../../deployment/helm/docs-mcp-server/README.md#install).
+The chart defaults to `ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0`.
+
+```bash
+helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
+  --namespace docs-mcp --create-namespace
+```
+
+On ordinary Kubernetes the chart defaults to `runAsUser: 65534`,
+`runAsGroup: 65534`, and `fsGroup: 65534` for writable volumes. The root
+filesystem is read-only; the chart mounts writable storage at `/data`,
+`/config`, `/tmp`, and `/app/.runtime`.
+On OpenShift, set `openshift.enabled: true` to omit these identity defaults and
+let the Security Context Constraint assign the namespace's permitted UID and group.
+
+Enable an OpenShift Route with a values file:
+
+```yaml
+openshift:
+  enabled: true
+route:
+  enabled: true
+  host: docs-mcp.apps.example.com
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+The chart also accepts `extraResources`, a list of administrator-supplied
+Kubernetes objects whose strings may reference the Helm release context. See
+the [chart README](../../deployment/helm/docs-mcp-server/README.md) for storage,
+Route, local-document mount, and extension examples.
 
 ### Configure Your Client
 

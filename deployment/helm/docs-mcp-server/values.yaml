@@ -1,0 +1,111 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/brtydse100/docs-mcp-server-nonroot
+  pullPolicy: Always
+  tag: "3.2.0"
+  digest: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+command: []
+args: ["--protocol", "http", "--host", "0.0.0.0", "--port", "6280"]
+
+serviceAccount:
+  create: true
+  automountServiceAccountToken: false
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# Enable on OpenShift to let the SCC assign uid/gid/fsGroup from its ranges.
+# Ordinary Kubernetes defaults to uid/gid/fsGroup 65534 (nobody).
+openshift:
+  enabled: false
+
+# Explicit values override the Kubernetes defaults. OpenShift mode leaves
+# identity fields unset so its SCC can assign an arbitrary non-root identity.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  # Writable paths are mounted separately at /data, /config, /tmp, and
+  # /app/.runtime, so shipped application code remains read-only.
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+
+service:
+  type: ClusterIP
+  port: 6280
+  annotations: {}
+
+dataPersistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes: ["ReadWriteOnce"]
+  size: 5Gi
+  annotations: {}
+
+configPersistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes: ["ReadWriteOnce"]
+  size: 1Gi
+  annotations: {}
+
+tmpVolume:
+  emptyDir: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: docs-mcp.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+route:
+  enabled: false
+  host: ""
+  annotations: {}
+  wildcardPolicy: None
+  tls:
+    enabled: false
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+resources: {}
+startupProbe:
+  tcpSocket: { port: http }
+  failureThreshold: 30
+  periodSeconds: 2
+readinessProbe:
+  tcpSocket: { port: http }
+  periodSeconds: 10
+  timeoutSeconds: 3
+livenessProbe:
+  tcpSocket: { port: http }
+  periodSeconds: 20
+  timeoutSeconds: 3
+
+extraEnv: []
+envFrom: []
+extraVolumes: []
+extraVolumeMounts: []
+extraResources: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
