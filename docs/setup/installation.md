@@ -33,7 +33,7 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
-**Non-root runtime (this branch's image):** The container uses uid 65534 (`nobody`, primary gid 65534). It owns `/app`, `/data`, `/config`, and `/nonexistent`, with matching group-0 access for arbitrary OpenShift UIDs. Both the home and working directory are `/app`; caches use `/app/.cache`, and temporary files use `/tmp`. Empty named volumes inherit the image's directory ownership. A bind mount replaces those permissions, so prepare both mounted directories for uid 65534, for example with `sudo chown -R 65534:65534 ./data ./config && sudo chmod -R u+rwX ./data ./config`. For OpenShift, provision mounted volume permissions through the storage driver and SCC-assigned `fsGroup`. Existing named volumes also retain their old ownership and may need a one-time permissions adjustment. Read-only root filesystems block writes even when the directories are owned by nobody.
+**Non-root runtime (this branch's image):** The container uses uid 65534 (`nobody`, primary gid 65534). Following LiteLLM's OpenShift pattern, writable runtime paths are owned by `nobody`, assigned to group 0, and receive matching group permissions for arbitrary OpenShift UIDs. The dedicated home/cache path is `/app/.runtime`; application code under `/app` remains read-only. Data, configuration, and temporary files use `/data`, `/config`, and `/tmp`. Empty named volumes inherit image ownership, while bind mounts replace it. Prepare bind-mounted directories for uid 65534, for example with `sudo chown -R 65534:65534 ./data ./config && sudo chmod -R u+rwX ./data ./config`. On OpenShift, the storage driver and SCC-assigned `fsGroup` must make mounted volumes writable. Existing volumes retain their old ownership and may need a one-time permissions adjustment.
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
@@ -52,8 +52,9 @@ helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
 ```
 
 On ordinary Kubernetes the chart defaults to `runAsUser: 65534`,
-`runAsGroup: 65534`, and `fsGroup: 65534` for writable volumes. It keeps the
-root filesystem writable so `/app` can accept runtime writes as nobody.
+`runAsGroup: 65534`, and `fsGroup: 65534` for writable volumes. The root
+filesystem is read-only; the chart mounts writable storage at `/data`,
+`/config`, `/tmp`, and `/app/.runtime`.
 On OpenShift, set `openshift.enabled: true` to omit these identity defaults and
 let the Security Context Constraint assign the namespace's permitted UID and group.
 

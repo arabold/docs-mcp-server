@@ -124,7 +124,7 @@ jobs:
           grep -q 'fsGroup: 65534' <<<"$default"
           grep -q 'runAsUser: 65534' <<<"$default"
           grep -q 'runAsGroup: 65534' <<<"$default"
-          grep -q 'readOnlyRootFilesystem: false' <<<"$default"
+          grep -q 'readOnlyRootFilesystem: true' <<<"$default"
           grep -q 'type: Recreate' <<<"$default"
           openshift="$(helm template openshift "$chart" -f "$chart/ci/openshift-values.yaml")"
           if grep -Eq 'fsGroup:|runAsUser:|runAsGroup:' <<<"$openshift"; then
@@ -169,7 +169,7 @@ jobs:
           helm test docs-mcp --namespace docs-mcp --timeout 2m
 
           kubectl exec deployment/docs-mcp-docs-mcp-server --namespace docs-mcp -- \
-            sh -ec 'test "$(id -u)" = 65534; test "$(id -g)" = 65534; for dir in /app /app/.cache /app/dist /app/node_modules /app/public /app/db /data /config /nonexistent /tmp; do touch "$dir/.permission-check"; rm "$dir/.permission-check"; done'
+            sh -ec 'test "$(id -u)" = 65534; test "$(id -g)" = 65534; for dir in /app/.runtime /data /config /nonexistent /tmp; do touch "$dir/.permission-check"; rm "$dir/.permission-check"; done; for dir in /app/dist /app/node_modules /app/public /app/db; do test ! -w "$dir"; done'
 
           # Exercise the same image with an arbitrary uid and a namespace-style
           # supplemental group, without relying on image-layer volume ownership.
@@ -187,7 +187,7 @@ jobs:
           helm test docs-mcp --namespace docs-mcp --timeout 2m
 
           kubectl exec deployment/docs-mcp-docs-mcp-server --namespace docs-mcp -- \
-            sh -ec 'test "$(id -u)" = 1000710000; for dir in /app /app/.cache /data /config /nonexistent /tmp; do touch "$dir/.arbitrary-uid-check"; rm "$dir/.arbitrary-uid-check"; done'
+            sh -ec 'test "$(id -u)" = 1000710000; for dir in /app/.runtime /data /config /nonexistent /tmp; do touch "$dir/.arbitrary-uid-check"; rm "$dir/.arbitrary-uid-check"; done; for dir in /app/dist /app/node_modules /app/public /app/db; do test ! -w "$dir"; done'
 
       - name: Collect Helm failure diagnostics
         if: failure()

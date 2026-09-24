@@ -47,9 +47,9 @@ spec:
             {{- toYaml .Values.args | nindent 12 }}
           env:
             - name: HOME
-              value: /app
+              value: /app/.runtime
             - name: XDG_CACHE_HOME
-              value: /app/.cache
+              value: /app/.runtime/cache
             - name: DOCS_MCP_STORE_PATH
               value: /data
             - name: XDG_CONFIG_HOME
@@ -77,6 +77,7 @@ spec:
             - { name: data, mountPath: /data }
             - { name: config, mountPath: /config }
             - { name: tmp, mountPath: /tmp }
+            - { name: runtime, mountPath: /app/.runtime }
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -97,6 +98,8 @@ spec:
           {{- end }}
         - name: tmp
           {{- toYaml .Values.tmpVolume | nindent 10 }}
+        - name: runtime
+          emptyDir: {}
         {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

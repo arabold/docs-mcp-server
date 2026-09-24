@@ -64,22 +64,24 @@ COPY --from=builder /app/dist ./dist
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
 ENV XDG_DATA_HOME=/data
-ENV XDG_CACHE_HOME=/app/.cache
-ENV NPM_CONFIG_CACHE=/app/.cache/npm
-ENV HOME=/app
+ENV HOME=/app/.runtime
+ENV XDG_CACHE_HOME=/app/.runtime/cache
+ENV NPM_CONFIG_CACHE=/app/.runtime/cache/npm
 ENV TMPDIR=/tmp
 
-# Match the nobody ownership model used by LiteLLM's non-root image. The
-# default uid owns every application/runtime path, including relative caches
-# and the passwd home fallback. Group 0 receives the same access for OpenShift
-# arbitrary uids. System binaries remain root-owned; no chmod 777 is needed.
+# Follow LiteLLM's OpenShift-compatible non-root pattern: the default nobody
+# user owns only the paths that need runtime writes, while group 0 receives
+# matching permissions for OpenShift-assigned arbitrary uids. Application code
+# remains root-owned and read-only; no chmod 777 or fixed OpenShift uid is used.
 RUN test "$(id -u nobody)" = 65534 \
   && test "$(id -g nobody)" = 65534 \
-  && mkdir -p /data /config /app/.cache/npm /nonexistent \
-  && chown -R 65534:0 /app /data /config /nonexistent \
-  && chmod -R u+rwX /app /data /config /nonexistent \
-  && chmod -R g=u /app /data /config /nonexistent \
-  && find /app /data /config /nonexistent -type d -exec chmod g+s {} + \
+  && mkdir -p /data /config /app/.runtime/cache/npm /nonexistent \
+  && chown -R nobody:root /data /config /app/.runtime /nonexistent \
+  && chmod -R g=u /data /config /app/.runtime /nonexistent \
+  && chmod -R g+w /data /config /app/.runtime /nonexistent \
+  && chmod -R g+rX /data /config /app/.runtime /nonexistent \
+  && find /data /config /app/.runtime /nonexistent -type d -exec chmod g+s {} + \
+  && chmod -R a+rX /app/dist /app/public /app/db /app/node_modules \
   && chmod 1777 /tmp
 
 # Define volumes
@@ -96,17 +98,22 @@ ENV HOST=0.0.0.0
 # volumes must grant that uid or one of its supplemental groups write access.
 USER 65534
 
-# HOME and the working directory are owned by nobody, so both home-relative
-# and cwd-relative writes work without root privileges.
+# Keep execution in the application directory while HOME and all cache writes
+# resolve to the dedicated runtime directory.
 WORKDIR /app
 
-# Fail the build if the final runtime identity cannot write its runtime paths.
+# Fail the build if the default identity cannot write its runtime paths or can
+# modify shipped application code.
 RUN test "$(id -u)" = 65534 \
   && test "$(id -g)" = 65534 \
-  && for dir in /app /app/dist /app/public /app/db /app/node_modules \
-      /app/.cache /app/.cache/npm /data /config /nonexistent /tmp; do \
+  && for dir in /app/.runtime /app/.runtime/cache /app/.runtime/cache/npm \
+      /data /config /nonexistent /tmp; do \
     touch "$dir/.permission-check" && rm "$dir/.permission-check" || exit 1; \
-  done
+  done \
+  && test ! -w /app/dist \
+  && test ! -w /app/public \
+  && test ! -w /app/db \
+  && test ! -w /app/node_modules
 
 # Set the command to run the application
 ENTRYPOINT ["sh", "-c", "umask 0002; exec node --enable-source-maps /app/dist/index.js \"$@\"", "--"]

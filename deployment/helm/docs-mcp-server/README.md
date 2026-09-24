@@ -55,28 +55,26 @@ Explicit `podSecurityContext` fields are still honored, so omit fixed IDs from
 OpenShift values unless your SCC permits them.
 
 The image uses `USER 65534` (`nobody`, primary group 65534), following LiteLLM's
-non-root ownership approach. `/app`, `/data`, `/config`, and `/nonexistent` are
-owned by UID 65534, with matching group-0 permissions for OpenShift's arbitrary
-UIDs. Directories use the setgid bit so new files inherit group 0; the entrypoint's
-`umask 0002` preserves group write access. Both the home and working directory
-are `/app`. Runtime paths are:
+OpenShift-compatible ownership approach. Writable paths are owned by nobody and
+group 0 receives matching permissions for arbitrary UIDs. Directories use the
+setgid bit so new files inherit group 0; the entrypoint's `umask 0002` preserves
+group write access. Application code remains root-owned and read-only. The
+working directory is `/app` and the home directory is `/app/.runtime`.
 
 | Path | Purpose |
 | --- | --- |
-| `/app` | Application files, home-relative and working-directory-relative writes |
-| `/app/.cache` | XDG and dependency caches |
-| `/app/.cache/npm` | npm cache |
+| `/app/.runtime` | Home-relative runtime state |
+| `/app/.runtime/cache` | XDG and dependency caches |
+| `/app/.runtime/cache/npm` | npm cache |
 | `/data` | SQLite database and application data |
 | `/config` | Application and Chromium configuration |
 | `/nonexistent` | Home fallback from the nobody passwd entry |
 | `/tmp` | Temporary files and browser profiles |
 
-The chart uses `readOnlyRootFilesystem: false` so ownership actually permits
-application-directory writes. It still requires a non-root process, drops all
-capabilities, and disables privilege escalation. Application/cache writes in
-the container layer are ephemeral; `/data` and `/config` use the configured
-volumes. Turning on a read-only root filesystem requires writable mounts for
-every runtime write path; changing ownership alone cannot make it writable.
+The chart uses `readOnlyRootFilesystem: true`, requires a non-root process,
+drops all capabilities, and disables privilege escalation. It mounts writable
+volumes at `/data`, `/config`, `/tmp`, and `/app/.runtime`, keeping application
+code immutable while allowing runtime caches under restricted SCCs.
 
 OpenShift may replace UID 65534 with a namespace-assigned UID. To require exactly
 65534 on OpenShift, your SCC must permit that UID before setting

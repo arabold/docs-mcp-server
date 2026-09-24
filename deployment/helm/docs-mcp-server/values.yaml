@@ -36,8 +36,9 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: ["ALL"]
-  # /app is owned by nobody and supports runtime/home-relative writes.
-  readOnlyRootFilesystem: false
+  # Writable paths are mounted separately at /data, /config, /tmp, and
+  # /app/.runtime, so shipped application code remains read-only.
+  readOnlyRootFilesystem: true
   runAsNonRoot: true
 
 service:

@@ -32,7 +32,7 @@ The chart will create a Deployment and ClusterIP Service for the existing unifie
 
 ### Preserve a safe default user but support arbitrary UID overrides
 
-The image retains `USER node` for direct Docker use. Image-owned writable directories become root-group owned and group permissions mirror owner permissions. Code under `/app` remains root-owned and non-writable. Removing `USER` was rejected because direct Docker execution would then regress to root; pinning UID 1000 in Kubernetes was rejected because it conflicts with restricted OpenShift policies.
+The image uses numeric `USER 65534` (`nobody`) for direct Docker use. Following LiteLLM's OpenShift-compatible pattern, only `/app/.runtime`, `/data`, `/config`, and fallback runtime paths are owned by the default identity, assigned to group 0, and granted matching group permissions. Code under `/app` remains root-owned and non-writable. The chart mounts an `emptyDir` at `/app/.runtime`, allowing a read-only root filesystem while OpenShift assigns an arbitrary UID and permitted supplemental groups. Removing `USER` was rejected because direct Docker execution would regress to root; pinning an image UID in OpenShift manifests was rejected because it conflicts with restricted SCC ranges.
 
 ### Delegate mounted-volume ownership to the runtime
 
@@ -106,13 +106,13 @@ helm install/upgrade
     values.schema.json validates public inputs
     templates render
         persistentvolumeclaims.yaml selects created/existing/ephemeral storage
-        deployment.yaml mounts /data and /config and starts explicit HTTP mode
+        deployment.yaml mounts /data, /config, /tmp, and /app/.runtime and starts explicit HTTP mode
         service.yaml exposes the named HTTP target port
         ingress.yaml or route.yaml optionally exposes the Service
         extra-resources.yaml evaluates operator objects in release context
     Kubernetes/OpenShift admission assigns allowed identity and groups
     storage driver prepares mounted volumes according to cluster policy
-    container starts without root and writes only runtime mount paths and /tmp
+    container starts without root and writes only mounted runtime paths
 ```
 
 The invariant is that no chart-owned template requires a fixed UID, privileged execution, added capabilities, or a root init container.
@@ -124,7 +124,7 @@ The invariant is that no chart-owned template requires a fixed UID, privileged e
 - [A TCP probe can pass before higher-level initialization is complete] -> Use startup/readiness thresholds and a Helm HTTP test; defer a dedicated health endpoint to a separate application change.
 - [`extraResources` can create unsafe or release-conflicting objects] -> Treat it as an administrator-controlled escape hatch and document that chart validation cannot guarantee arbitrary resource semantics.
 - [Route manifests cannot be installed on vanilla Kubernetes] -> Render the Route only when explicitly enabled and cover disabled defaults in the generic cluster test.
-- [A read-only root filesystem may expose an undocumented Chromium write path] -> Exercise Playwright under the chart security context and mount a writable `emptyDir` at `/tmp`.
+- [A read-only root filesystem may expose an undocumented cache or Chromium write path] -> Exercise Playwright under the chart security context and mount writable `emptyDir` volumes at `/tmp` and `/app/.runtime`.
 
 ## Migration Plan
 

@@ -155,17 +155,19 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
         `test "$(id -u)" = "${uid}"`,
         `test "$(id -g)" = "${gid}"`,
         'test "$PWD" = "/app"',
-        'test "$HOME" = "/app"',
+        'test "$HOME" = "/app/.runtime"',
         'test -w "$HOME"',
         "test -w /data",
         "test -w /config",
-        "test -w /app",
+        "test ! -w /app/dist",
+        "test ! -w /app/public",
+        "test ! -w /app/db",
+        "test ! -w /app/node_modules",
         "test ! -w /usr/bin",
         "test ! -w /etc/passwd",
         "test -r /app/dist/index.js",
         "test -x /app",
-        "for dir in /app /app/dist /app/public /app/db /app/node_modules /app/.cache /nonexistent /data /config /tmp; do touch \"$dir/permission-check\" || exit 1; done",
-        "touch relative-runtime-cache",
+        "for dir in /app/.runtime /app/.runtime/cache /nonexistent /data /config /tmp; do touch \"$dir/permission-check\" || exit 1; done",
         'mkdir -p "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" && touch "$XDG_CACHE_HOME/runtime-cache" "$NPM_CONFIG_CACHE/npm-cache"',
         "touch /data/arbitrary-uid-data",
         "touch /config/arbitrary-uid-config",
@@ -404,7 +406,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
   it.each([
     { name: "default user", userArgs: [] },
     { name: "arbitrary uid", userArgs: ["--user", `${ARBITRARY_UID}:0`] },
-  ])("serves the web UI with writable runtime paths as $name", async ({ userArgs }) => {
+  ])("serves the web UI with a read-only root filesystem as $name", async ({ userArgs }) => {
     // Run the web server detached and let Docker pick a free host port (-P), so
     // the test never clashes with a port already bound on the CI host. The
     // image sets DOCS_MCP_STORE_PATH=/data (writable), so no mount is needed —
@@ -414,10 +416,13 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       "-d",
       "--rm",
       ...userArgs,
+      "--read-only",
       "--cap-drop=ALL",
       "--security-opt=no-new-privileges",
       "--tmpfs",
       "/tmp:rw,nosuid,nodev,mode=1777",
+      "--tmpfs",
+      "/app/.runtime:rw,nosuid,nodev,mode=1777",
       "-P",
       "-e",
       "DOCS_MCP_TELEMETRY=false",

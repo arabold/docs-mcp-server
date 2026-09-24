@@ -24,6 +24,12 @@ spec:
       imagePullPolicy: {{ .Values.image.pullPolicy }}
       securityContext:
         {{- toYaml .Values.containerSecurityContext | nindent 8 }}
+      env:
+        - { name: HOME, value: /app/.runtime }
+        - { name: XDG_CACHE_HOME, value: /app/.runtime/cache }
+      volumeMounts:
+        - { name: tmp, mountPath: /tmp }
+        - { name: runtime, mountPath: /app/.runtime }
       command: ["node"]
       args:
         - "-e"
@@ -31,3 +37,8 @@ spec:
           fetch('http://{{ include "docs-mcp-server.fullname" . }}:{{ .Values.service.port }}/', { signal: AbortSignal.timeout(10000) })
           .then((response) => { if (!response.ok) process.exit(1); })
           .catch(() => process.exit(1))
+  volumes:
+    - name: tmp
+      emptyDir: {}
+    - name: runtime
+      emptyDir: {}
