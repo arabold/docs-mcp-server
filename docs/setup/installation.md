@@ -44,7 +44,7 @@ volumes for `/data` and `/config`:
 
 Build and publish this branch's image first, following the
 [chart README](../../deployment/helm/docs-mcp-server/README.md#install).
-The chart defaults to `ghcr.io/brtydse100/docs-mcp-server:nonroot`.
+The chart defaults to `ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0`.
 
 ```bash
 helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \

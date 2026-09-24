@@ -5,12 +5,12 @@ This chart deploys one unified Docs MCP Server container. It does not deploy the
 ## Install
 
 Build and publish the image from this branch before installing. The chart uses
-`ghcr.io/brtydse100/docs-mcp-server:nonroot`; the upstream image does not contain
+`ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0`; the upstream image does not contain
 these branch changes. Authenticate to your registry, then run from the repository root:
 
 ```bash
-docker build -t ghcr.io/brtydse100/docs-mcp-server:nonroot .
-docker push ghcr.io/brtydse100/docs-mcp-server:nonroot
+docker build -t ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0 .
+docker push ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0
 ```
 
 Set `image.repository` and `image.tag` for another registry or tag, or set

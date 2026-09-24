@@ -1,9 +1,9 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/brtydse100/docs-mcp-server
+  repository: ghcr.io/brtydse100/docs-mcp-server-nonroot
   pullPolicy: Always
-  tag: "nonroot"
+  tag: "3.2.0"
   digest: ""
 
 imagePullSecrets: []
