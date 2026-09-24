@@ -29,8 +29,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- define "docs-mcp-server.podSecurityContext" -}}
 {{- $context := deepCopy .Values.podSecurityContext -}}
-{{- if and (not .Values.openshift.enabled) (not (hasKey $context "fsGroup")) -}}
-{{- $_ := set $context "fsGroup" 1000 -}}
+{{- if not .Values.openshift.enabled -}}
+{{- range $key := list "runAsUser" "runAsGroup" "fsGroup" -}}
+{{- if not (hasKey $context $key) -}}
+{{- $_ := set $context $key 65534 -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- toYaml $context -}}
 {{- end }}

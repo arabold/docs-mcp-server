@@ -64,17 +64,23 @@ COPY --from=builder /app/dist ./dist
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
 ENV XDG_DATA_HOME=/data
-ENV XDG_CACHE_HOME=/tmp/.cache
-ENV HOME=/tmp
+ENV XDG_CACHE_HOME=/app/.cache
+ENV NPM_CONFIG_CACHE=/app/.cache/npm
+ENV HOME=/app
+ENV TMPDIR=/tmp
 
-# Create writable runtime directories for both the default non-root user and
-# platforms such as OpenShift that assign an arbitrary uid in group 0. `g=u`
-# mirrors owner permissions onto the root group without making these paths
-# world-writable. `/app` stays root-owned and non-writable at runtime.
-RUN mkdir -p /data /config \
-  && chgrp -R 0 /data /config \
-  && chmod -R g=u /data /config \
-  && chmod -R a+rX /app
+# Match the nobody ownership model used by LiteLLM's non-root image. The
+# default uid owns every application/runtime path, including relative caches
+# and the passwd home fallback. Group 0 receives the same access for OpenShift
+# arbitrary uids. System binaries remain root-owned; no chmod 777 is needed.
+RUN test "$(id -u nobody)" = 65534 \
+  && test "$(id -g nobody)" = 65534 \
+  && mkdir -p /data /config /app/.cache/npm /nonexistent \
+  && chown -R 65534:0 /app /data /config /nonexistent \
+  && chmod -R u+rwX /app /data /config /nonexistent \
+  && chmod -R g=u /app /data /config /nonexistent \
+  && find /app /data /config /nonexistent -type d -exec chmod g+s {} + \
+  && chmod 1777 /tmp
 
 # Define volumes
 VOLUME /data
@@ -88,11 +94,19 @@ ENV HOST=0.0.0.0
 # Use a numeric non-root default so Kubernetes can verify `runAsNonRoot`.
 # OpenShift and other runtimes may override it with an arbitrary uid. Mounted
 # volumes must grant that uid or one of its supplemental groups write access.
-USER 1000:0
+USER 65534
 
-# Dependencies may write relative caches. Keep their working directory on the
-# writable data volume, and resolve application code with an absolute path.
-WORKDIR /data
+# HOME and the working directory are owned by nobody, so both home-relative
+# and cwd-relative writes work without root privileges.
+WORKDIR /app
+
+# Fail the build if the final runtime identity cannot write its runtime paths.
+RUN test "$(id -u)" = 65534 \
+  && test "$(id -g)" = 65534 \
+  && for dir in /app /app/dist /app/public /app/db /app/node_modules \
+      /app/.cache /app/.cache/npm /data /config /nonexistent /tmp; do \
+    touch "$dir/.permission-check" && rm "$dir/.permission-check" || exit 1; \
+  done
 
 # Set the command to run the application
 ENTRYPOINT ["sh", "-c", "umask 0002; exec node --enable-source-maps /app/dist/index.js \"$@\"", "--"]

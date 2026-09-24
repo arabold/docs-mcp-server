@@ -47,7 +47,9 @@ spec:
             {{- toYaml .Values.args | nindent 12 }}
           env:
             - name: HOME
-              value: /tmp
+              value: /app
+            - name: XDG_CACHE_HOME
+              value: /app/.cache
             - name: DOCS_MCP_STORE_PATH
               value: /data
             - name: XDG_CONFIG_HOME

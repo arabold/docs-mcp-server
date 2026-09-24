@@ -21,13 +21,13 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
-# Enable on OpenShift to let the SCC assign fsGroup from the namespace range.
-# Ordinary Kubernetes defaults to fsGroup 1000 so mounted volumes are writable.
+# Enable on OpenShift to let the SCC assign uid/gid/fsGroup from its ranges.
+# Ordinary Kubernetes defaults to uid/gid/fsGroup 65534 (nobody).
 openshift:
   enabled: false
 
-# Explicit values override the Kubernetes defaults. No runAsUser/runAsGroup is
-# pinned, so OpenShift can assign an arbitrary non-root identity.
+# Explicit values override the Kubernetes defaults. OpenShift mode leaves
+# identity fields unset so its SCC can assign an arbitrary non-root identity.
 podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
@@ -36,7 +36,8 @@ containerSecurityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop: ["ALL"]
-  readOnlyRootFilesystem: true
+  # /app is owned by nobody and supports runtime/home-relative writes.
+  readOnlyRootFilesystem: false
   runAsNonRoot: true
 
 service:

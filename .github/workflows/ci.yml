@@ -121,7 +121,10 @@ jobs:
           helm lint "$chart" -f "$chart/ci/exposure-values.yaml"
           helm lint "$chart" -f "$chart/ci/openshift-values.yaml"
           default="$(helm template default "$chart")"
-          grep -q 'fsGroup: 1000' <<<"$default"
+          grep -q 'fsGroup: 65534' <<<"$default"
+          grep -q 'runAsUser: 65534' <<<"$default"
+          grep -q 'runAsGroup: 65534' <<<"$default"
+          grep -q 'readOnlyRootFilesystem: false' <<<"$default"
           grep -q 'type: Recreate' <<<"$default"
           openshift="$(helm template openshift "$chart" -f "$chart/ci/openshift-values.yaml")"
           if grep -Eq 'fsGroup:|runAsUser:|runAsGroup:' <<<"$openshift"; then
@@ -165,6 +168,9 @@ jobs:
             --namespace docs-mcp --timeout=2m
           helm test docs-mcp --namespace docs-mcp --timeout 2m
 
+          kubectl exec deployment/docs-mcp-docs-mcp-server --namespace docs-mcp -- \
+            sh -ec 'test "$(id -u)" = 65534; test "$(id -g)" = 65534; for dir in /app /app/.cache /app/dist /app/node_modules /app/public /app/db /data /config /nonexistent /tmp; do touch "$dir/.permission-check"; rm "$dir/.permission-check"; done'
+
           # Exercise the same image with an arbitrary uid and a namespace-style
           # supplemental group, without relying on image-layer volume ownership.
           helm upgrade docs-mcp deployment/helm/docs-mcp-server \
@@ -179,6 +185,9 @@ jobs:
             --set image.pullPolicy=Never \
             --wait --timeout 5m
           helm test docs-mcp --namespace docs-mcp --timeout 2m
+
+          kubectl exec deployment/docs-mcp-docs-mcp-server --namespace docs-mcp -- \
+            sh -ec 'test "$(id -u)" = 1000710000; for dir in /app /app/.cache /data /config /nonexistent /tmp; do touch "$dir/.arbitrary-uid-check"; rm "$dir/.arbitrary-uid-check"; done'
 
       - name: Collect Helm failure diagnostics
         if: failure()

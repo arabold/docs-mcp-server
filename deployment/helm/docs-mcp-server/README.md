@@ -39,7 +39,7 @@ configPersistence:
   existingClaim: docs-mcp-config
 ```
 
-Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `fsGroup: 1000` to make supported volumes writable. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
+Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `runAsUser: 65534`, `runAsGroup: 65534`, and `fsGroup: 65534` so the nobody user can write supported volumes. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
 
 The unified server runs one embedded worker against a SQLite store. The chart
 requires `replicaCount: 1` and uses `Recreate` upgrades so two workers do not
@@ -49,15 +49,38 @@ Upgrades briefly interrupt service.
 ## OpenShift
 
 Set `openshift.enabled: true` when installing on OpenShift. This omits the
-Kubernetes default `fsGroup`, allowing the SCC to assign values from the namespace's
-permitted ranges. The chart leaves `runAsUser` and `runAsGroup` unset in both modes.
+Kubernetes defaults for `runAsUser`, `runAsGroup`, and `fsGroup`, allowing the SCC
+to assign values from the namespace's permitted ranges.
 Explicit `podSecurityContext` fields are still honored, so omit fixed IDs from
 OpenShift values unless your SCC permits them.
 
-The image defaults to UID 1000 and GID 0, uses `/data` as its working directory,
-and keeps application code in `/app`. Home and cache writes go to `/tmp`;
-configuration goes to `/config`. The chart mounts all three writable paths and
-uses a read-only root filesystem.
+The image uses `USER 65534` (`nobody`, primary group 65534), following LiteLLM's
+non-root ownership approach. `/app`, `/data`, `/config`, and `/nonexistent` are
+owned by UID 65534, with matching group-0 permissions for OpenShift's arbitrary
+UIDs. Directories use the setgid bit so new files inherit group 0; the entrypoint's
+`umask 0002` preserves group write access. Both the home and working directory
+are `/app`. Runtime paths are:
+
+| Path | Purpose |
+| --- | --- |
+| `/app` | Application files, home-relative and working-directory-relative writes |
+| `/app/.cache` | XDG and dependency caches |
+| `/app/.cache/npm` | npm cache |
+| `/data` | SQLite database and application data |
+| `/config` | Application and Chromium configuration |
+| `/nonexistent` | Home fallback from the nobody passwd entry |
+| `/tmp` | Temporary files and browser profiles |
+
+The chart uses `readOnlyRootFilesystem: false` so ownership actually permits
+application-directory writes. It still requires a non-root process, drops all
+capabilities, and disables privilege escalation. Application/cache writes in
+the container layer are ephemeral; `/data` and `/config` use the configured
+volumes. Turning on a read-only root filesystem requires writable mounts for
+every runtime write path; changing ownership alone cannot make it writable.
+
+OpenShift may replace UID 65534 with a namespace-assigned UID. To require exactly
+65534 on OpenShift, your SCC must permit that UID before setting
+`podSecurityContext.runAsUser: 65534`.
 
 Enable an OpenShift Route with:
 

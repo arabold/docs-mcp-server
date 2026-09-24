@@ -2,7 +2,7 @@ apiVersion: v2
 name: docs-mcp-server
 description: Deploy the unified Docs MCP Server on Kubernetes or OpenShift
 type: application
-version: 0.1.1
+version: 0.1.2
 appVersion: "3.2.0"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/brtydse100/docs-mcp-server
