@@ -821,7 +821,10 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     let nextSeq = 0;
     let nextToAdmit = 0;
 
-    while (this.pagesIndexed < maxPages) {
+    // Runs until nothing is left running. Reaching `maxPages` only stops new
+    // items from starting: an item counts its page before storing it, so exiting
+    // on the count alone would resolve the crawl with that write still pending.
+    while (true) {
       // Check for cancellation at the start of each loop iteration
       if (signal?.aborted) {
         logger.debug(`${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal.`);

@@ -2079,6 +2079,37 @@ describe("BaseScraperStrategy concurrent processing", () => {
     expect(processed.find((item) => item.url.endsWith("/X"))?.depth).toBe(2);
   });
 
+  it("does not finish while a page at the limit is still being stored", async () => {
+    // Reaching maxPages stops new items from starting, but a running item may
+    // have counted its page and still be storing it. The crawl must not resolve
+    // before that write settles, or the job completes with a write pending.
+    const strategy = new TestScraperStrategy(loadConfig());
+    const store = gate();
+    strategy.processItem.mockImplementation(async (item: QueueItem) =>
+      page(
+        item.url,
+        item.depth === 0 ? ["https://example.com/a", "https://example.com/b"] : [],
+      ),
+    );
+    const cb = vi.fn(async (event: ScraperProgressEvent) => {
+      if (event.currentUrl === "https://example.com/a") await store.closed;
+    });
+
+    let settled = false;
+    const crawl = strategy.scrape(opts({ maxPages: 3 }), cb).finally(() => {
+      settled = true;
+    });
+    await vi.waitFor(() =>
+      expect(cb.mock.calls.map(([e]) => e.currentUrl)).toContain("https://example.com/b"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(settled).toBe(false);
+    store.open();
+    await crawl;
+    expect(cb.mock.calls.at(-1)?.[0]).toMatchObject({ pagesIndexed: 3 });
+  });
+
   it("refills a freed slot without indexing past maxPages", async () => {
     // A slot freed by an item that stored nothing may be refilled, but only
     // while the running items could not already reach the limit between them.
