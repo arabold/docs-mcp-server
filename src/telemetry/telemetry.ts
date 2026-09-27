@@ -7,6 +7,7 @@
  * - Telemtry: High-level coordinator providing public API with global context
  */
 
+import { getPostHogApiKey } from "../utils/buildInfo";
 import { logger } from "../utils/logger";
 import type { TelemetryEventPropertiesMap } from "./eventTypes";
 import { PostHogClient } from "./postHogClient";
@@ -42,7 +43,8 @@ export class Telemetry {
     const config = TelemetryConfig.getInstance();
 
     // Single determination point for enabled status
-    const shouldEnable = config.isEnabled() && !!__POSTHOG_API_KEY__;
+    const apiKey = getPostHogApiKey();
+    const shouldEnable = config.isEnabled() && !!apiKey;
 
     const telemetry = new Telemetry(shouldEnable);
 
@@ -51,7 +53,7 @@ export class Telemetry {
       logger.debug("Telemetry enabled");
     } else if (!config.isEnabled()) {
       logger.debug("Telemetry disabled (user preference)");
-    } else if (!__POSTHOG_API_KEY__) {
+    } else if (!apiKey) {
       logger.debug("Telemetry disabled (no API key configured)");
     } else {
       logger.debug("Telemetry disabled");

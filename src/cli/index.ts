@@ -11,6 +11,7 @@ import {
   TelemetryService,
   telemetry,
 } from "../telemetry";
+import { getAppVersion } from "../utils/buildInfo";
 import { loadConfig } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
 // Commands
@@ -47,7 +48,7 @@ export function createCli(argv: string[]): Argv {
     .scriptName("docs-mcp-server")
     .strict()
     .usage("Usage: $0 <command> [options]")
-    .version(__APP_VERSION__)
+    .version(getAppVersion())
     // Global Options
     .option("verbose", {
       type: "boolean",
@@ -136,7 +137,7 @@ export function createCli(argv: string[]): Argv {
       if (shouldEnableTelemetry() && telemetry.isEnabled()) {
         const commandName = argv._[0]?.toString() || "default";
         telemetry.setGlobalContext({
-          appVersion: __APP_VERSION__,
+          appVersion: getAppVersion(),
           appPlatform: process.platform,
           appNodeVersion: process.version,
           appInterface: "cli",
