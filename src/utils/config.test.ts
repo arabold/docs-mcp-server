@@ -8,6 +8,7 @@ import {
   camelToUpperSnake,
   collectLeafPaths,
   defaults,
+  getConfigMappedCliKeys,
   getConfigValue,
   isValidConfigPath,
   isVectorDimensionExplicit,
@@ -381,6 +382,16 @@ describe("Environment Variable Helpers", () => {
 });
 
 describe("Config CLI Helpers", () => {
+  describe("getConfigMappedCliKeys", () => {
+    it("lists the CLI options that map onto settings", () => {
+      const keys = getConfigMappedCliKeys();
+
+      expect(keys).toContain("authEnabled");
+      expect(keys).toContain("readOnly");
+      expect(keys).toContain("protocol");
+    });
+  });
+
   describe("isValidConfigPath", () => {
     it("returns true for valid paths", () => {
       expect(isValidConfigPath("scraper.maxPages")).toBe(true);

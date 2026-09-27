@@ -543,6 +543,19 @@ const configMappings: ConfigMapping[] = [
   // Add other mappings as needed for CLI/Env overrides
 ];
 
+/**
+ * CLI option keys (camelCase) that map onto a configuration setting.
+ *
+ * An option with one of these keys must not declare a yargs `default`: yargs
+ * would put that value into argv even when the flag is omitted, and it would
+ * then override the environment and the config file.
+ *
+ * @returns The mapped keys, e.g. `authEnabled`, `readOnly`, `protocol`.
+ */
+export function getConfigMappedCliKeys(): ReadonlySet<string> {
+  return new Set(configMappings.flatMap((mapping) => (mapping.cli ? [mapping.cli] : [])));
+}
+
 // --- Loader Logic ---
 
 export interface LoadConfigOptions {

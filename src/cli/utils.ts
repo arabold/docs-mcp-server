@@ -219,9 +219,9 @@ export function parseHeaders(headerOptions: string[]): Record<string, string> {
 }
 
 /**
- * Parses auth configuration from CLI options.
- * Environment variables are handled by createOptionWithEnv in command definitions.
- * Precedence: CLI flags > env vars (handled by commander) > defaults
+ * Parses auth configuration from the loaded application configuration, which
+ * has already merged CLI flags, environment variables, the config file and
+ * defaults (in that order of precedence).
  */
 export function parseAuthConfig(options: {
   authEnabled?: boolean;

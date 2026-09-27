@@ -37,7 +37,7 @@ export function createDefaultAction(cli: Argv) {
             type: "string",
             description: "Protocol for MCP server",
             choices: ["auto", "stdio", "http"],
-            default: "auto",
+            defaultDescription: "auto",
           })
           .option("port", {
             type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
@@ -73,14 +73,14 @@ export function createDefaultAction(cli: Argv) {
             type: "boolean",
             description:
               "Run in read-only mode (only expose read tools, disable write/job tools)",
-            default: false,
+            defaultDescription: "false",
             alias: "readOnly",
           })
           // Auth options
           .option("auth-enabled", {
             type: "boolean",
             description: "Enable OAuth2/OIDC authentication for MCP endpoints",
-            default: false,
+            defaultDescription: "false",
             alias: "authEnabled",
           })
           .option("auth-issuer-url", {
@@ -96,17 +96,26 @@ export function createDefaultAction(cli: Argv) {
       );
     },
     async (argv) => {
+      // Options the user did not pass are absent from argv, so the protocol,
+      // read-only mode and auth come from env, config file or defaults here.
+      // The logger writes to stderr, so loading before the stdio log level is
+      // set cannot corrupt the protocol stream on stdout.
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string,
+      });
+
       await telemetry.track(TelemetryEvent.CLI_COMMAND, {
         command: "default",
-        protocol: argv.protocol,
+        protocol: appConfig.server.protocol,
         port: argv.port,
         host: argv.host,
         resume: argv.resume,
-        readOnly: argv.readOnly,
-        authEnabled: !!argv.authEnabled,
+        readOnly: appConfig.app.readOnly,
+        authEnabled: appConfig.auth.enabled,
       });
 
-      const resolvedProtocol = resolveProtocol(argv.protocol as string);
+      const resolvedProtocol = resolveProtocol(appConfig.server.protocol);
       if (resolvedProtocol === "stdio") {
         setLogLevel(LogLevel.ERROR);
       } else {
@@ -117,20 +126,6 @@ export function createDefaultAction(cli: Argv) {
       }
 
       logger.debug("No subcommand specified, starting unified server by default...");
-
-      // Validate inputs if provided, otherwise validation happens after config load?
-      // Old logic validated options.port etc. but yargs parsing might be loose?
-      // Since we don't have defaults in Yargs, argv.port might be undefined.
-      // logic below uses loadConfig which fills defaults.
-      // So validation should happen AFTER loadConfig on the RESULTING config?
-      // OR we validate argv if present?
-      // The old logic validated valid integers.
-      // We will rely on Zod schema validation inside loadConfig.
-
-      const appConfig = loadConfig(argv, {
-        configPath: argv.config as string,
-        searchDir: argv.storePath as string,
-      });
 
       // Propagate resolved store path? loadConfig logic handled it?
       // loadConfig takes argv, so it mapped `storePath` to `app.storePath`.

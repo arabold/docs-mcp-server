@@ -37,7 +37,7 @@ export function createMcpCommand(cli: Argv) {
             type: "string",
             description: "Protocol for MCP server",
             choices: ["auto", "stdio", "http"],
-            default: "auto",
+            defaultDescription: "auto",
           })
           .option("port", {
             type: "string",
@@ -74,14 +74,14 @@ export function createMcpCommand(cli: Argv) {
             type: "boolean",
             description:
               "Run in read-only mode (only expose read tools, disable write/job tools)",
-            default: false,
+            defaultDescription: "false",
             alias: "readOnly",
           })
           // Auth options
           .option("auth-enabled", {
             type: "boolean",
             description: "Enable OAuth2/OIDC authentication for MCP endpoints",
-            default: false,
+            defaultDescription: "false",
             alias: "authEnabled",
           })
           .option("auth-issuer-url", {
@@ -97,16 +97,6 @@ export function createMcpCommand(cli: Argv) {
       );
     },
     async (argv) => {
-      await telemetry.track(TelemetryEvent.CLI_COMMAND, {
-        command: "mcp",
-        protocol: argv.protocol,
-        port: argv.port,
-        host: argv.host,
-        useServerUrl: !!argv.serverUrl,
-        readOnly: argv.readOnly,
-        authEnabled: !!argv.authEnabled,
-      });
-
       const _port = validatePort((argv.port as string) || "6280"); // fallback for validation if undefined, but loadConfig handles defaults.
       // Wait, validatePort throws if invalid. If undefined, we should rely on loadConfig.
       // Current logic calls validatePort(cmdOptions.port). If undefined, what happens?
@@ -115,7 +105,26 @@ export function createMcpCommand(cli: Argv) {
       // I should modify validation or defer it.
       // loadConfig will fill default.
       // So I should load config FIRST.
-      const resolvedProtocol = resolveProtocol(argv.protocol as string);
+      // Options the user did not pass are absent from argv, so the protocol,
+      // read-only mode and auth come from env, config file or defaults here.
+      // The logger writes to stderr, so loading before the stdio log level is
+      // set cannot corrupt the protocol stream on stdout.
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string, // resolvedStorePath passed via argv by middleware
+      });
+
+      await telemetry.track(TelemetryEvent.CLI_COMMAND, {
+        command: "mcp",
+        protocol: appConfig.server.protocol,
+        port: argv.port,
+        host: argv.host,
+        useServerUrl: !!argv.serverUrl,
+        readOnly: appConfig.app.readOnly,
+        authEnabled: appConfig.auth.enabled,
+      });
+
+      const resolvedProtocol = resolveProtocol(appConfig.server.protocol);
       if (resolvedProtocol === "stdio") {
         setLogLevel(LogLevel.ERROR);
       } else {
@@ -124,11 +133,6 @@ export function createMcpCommand(cli: Argv) {
           quiet: argv.quiet as boolean,
         });
       }
-
-      const appConfig = loadConfig(argv, {
-        configPath: argv.config as string,
-        searchDir: argv.storePath as string, // resolvedStorePath passed via argv by middleware
-      });
 
       // Now we have appConfig with defaults.
       // Validate resolved values?
