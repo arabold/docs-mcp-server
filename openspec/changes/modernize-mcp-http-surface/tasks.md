@@ -182,7 +182,7 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
 ## 9. Verification
 
 - [x] 9.1 Run `npm run lint`, then `npm run typecheck` with a cold cache (delete `*.tsbuildinfo` first), then `npm test` on Node 22. Verify all pass.
-- [ ] 9.2 Manually connect a client that speaks `2026-07-28` through a local prefix-stripping proxy at `/docs`, with auth against the Clerk dev instance. Use the MCP Inspector if its current release speaks that revision; otherwise use a script on the v2 client pinned to `2026-07-28`. Verify:
+- [x] 9.2 Manually connect a client that speaks `2026-07-28` through a local prefix-stripping proxy at `/docs`, with auth against the Clerk dev instance. This is `test/clerk-auth-live.ts` (`npm run test:auth:clerk -- --app <app_id>`): it reads the issuer and checks the OAuth settings with the Clerk CLI, starts the built CLI with auth set through env only, runs the SDK's discovery, registration and sign-in on the v2 client pinned to `2026-07-28`, and deletes the registered client afterwards. Verify:
   - the client discovers the metadata, signs in, receives a token with `aud` equal to `<publicUrl>/mcp`, and lists tools;
   - a request without a token gets 401 with `resource_metadata`.
 - [x] 9.3 Run `openspec validate modernize-mcp-http-surface --strict`. Verify it reports no issues.
