@@ -80,6 +80,15 @@ interface HeaderRow {
   value: string;
 }
 
+let headerRowSeq = 0;
+
+// A counter, not crypto.randomUUID(): that API exists only in secure contexts,
+// so it throws when the portal is reached over plain HTTP on a LAN address.
+function nextHeaderRowId(): string {
+  headerRowSeq += 1;
+  return `header-${headerRowSeq}`;
+}
+
 function findVersion(
   libraries: LibrarySummaryLike[] | undefined,
   library: string | undefined,
@@ -116,7 +125,7 @@ function parseNonNegativeInt(raw: string): number | undefined {
 
 function headersToRows(headers: Record<string, string> | undefined): HeaderRow[] {
   return Object.entries(headers ?? {}).map(([name, value]) => ({
-    id: crypto.randomUUID(),
+    id: nextHeaderRowId(),
     name,
     value,
   }));
@@ -279,7 +288,7 @@ function DrawerForm({ open, mode, library, version, onClose }: DrawerFormProps) 
   const scopeHint = useMemo(() => scopeHintFor(url, scope), [url, scope]);
 
   const addHeaderRow = useCallback(() => {
-    setHeaders((prev) => [...prev, { id: crypto.randomUUID(), name: "", value: "" }]);
+    setHeaders((prev) => [...prev, { id: nextHeaderRowId(), name: "", value: "" }]);
   }, []);
   const removeHeaderRow = useCallback((index: number) => {
     setHeaders((prev) => prev.filter((_, i) => i !== index));
