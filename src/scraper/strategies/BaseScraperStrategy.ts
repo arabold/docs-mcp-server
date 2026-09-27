@@ -76,6 +76,12 @@ export interface ProcessItemResult {
 
 class FailureThresholdExceededError extends ScraperError {}
 
+/** Abort state shared by the items of one crawl. */
+interface CrawlAbortState {
+  /** Set once the child-page failure rate trips; running items stop on it. */
+  abortError: FailureThresholdExceededError | null;
+}
+
 export abstract class BaseScraperStrategy implements ScraperStrategy {
   private static readonly FAILURE_RATE_MIN_SAMPLE = 10;
 
@@ -88,7 +94,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
    * Usage flow:
    * 1. Initial queue setup: Root URL and initialQueue items are added to visited
    * 2. During processing: When a page returns links, each link is checked against visited
-   * 3. In processBatch deduplication: Only links NOT in visited are added to the queue AND to visited
+   * 3. In admitToQueue deduplication: Only links NOT in visited are added to the queue AND to visited
    *
    * This approach ensures:
    * - No URL is processed more than once
@@ -322,388 +328,404 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     }
   }
 
-  protected async processBatch(
-    batch: QueueItem[],
+  /**
+   * Processes one dequeued item to its outcome and returns the queue items it
+   * offers.
+   *
+   * The offered items have passed every discovered-link filter but are not yet
+   * deduplicated: admission belongs to {@link admitToQueue}, which the crawl loop
+   * calls in dequeue order so the queue stays breadth-first however the
+   * concurrent items finish.
+   *
+   * @param item The dequeued item.
+   * @param baseUrl Base for resolving links when the item has no final URL.
+   * @param options Scraper options for this crawl.
+   * @param progressCallback Receives the item's outcome.
+   * @param crawl Abort state shared by every item of this crawl.
+   * @param signal Cancels the crawl.
+   * @returns The queue items discovered by this item.
+   */
+  protected async processQueueItem(
+    item: QueueItem,
     baseUrl: URL,
     options: ScraperOptions,
     progressCallback: ProgressCallback<ScraperProgressEvent>,
-    signal?: AbortSignal, // Add signal
+    crawl: CrawlAbortState,
+    signal?: AbortSignal,
   ): Promise<QueueItem[]> {
-    let batchAbortError: FailureThresholdExceededError | null = null;
-
     const ensureFailureRateWithinThreshold = (): void => {
       try {
         this.ensureFailureRateWithinThreshold();
       } catch (error) {
         if (error instanceof FailureThresholdExceededError) {
-          batchAbortError ??= error;
+          crawl.abortError ??= error;
         }
         throw error;
       }
     };
 
-    const throwIfBatchAborted = (): void => {
-      if (batchAbortError) {
-        throw batchAbortError;
+    // Items still running when the failure threshold trips stop at their next
+    // checkpoint instead of reporting outcomes for a crawl that has ended.
+    const throwIfCrawlAborted = (): void => {
+      if (crawl.abortError) {
+        throw crawl.abortError;
       }
       if (signal?.aborted) {
-        throw new CancellationError("Scraping cancelled during batch processing");
+        throw new CancellationError("Scraping cancelled while processing");
       }
     };
 
-    const results = await Promise.all(
-      batch.map(async (item) => {
-        // Check signal before processing each item in the batch
-        throwIfBatchAborted();
-        // Resolved for the progress log and the enqueue-time depth filter below.
-        // Items are no longer dropped here: every queued item reaches an outcome,
-        // which is what lets the processed count converge on the queued total.
-        const maxDepth = options.maxDepth ?? this.config.scraper.maxDepth;
+    // Check signal before processing the item
+    throwIfCrawlAborted();
+    // Resolved for the progress log and the enqueue-time depth filter below.
+    // Items are no longer dropped here: every queued item reaches an outcome,
+    // which is what lets the processed count converge on the queued total.
+    const maxDepth = options.maxDepth ?? this.config.scraper.maxDepth;
 
-        // Every dequeued item reaches exactly one outcome and advances the
-        // processed count once, which is what makes it converge on the queued
-        // total. Only `Stored` additionally advances the indexed count.
-        //
-        // Declared outside the try so the failure path reports through it too:
-        // the counter protocol has one implementation, not two.
-        const report = async (
-          outcome: PageOutcome,
-          extra: Partial<
-            Pick<ScraperProgressEvent, "currentUrl" | "result" | "emptyPage" | "deleted">
-          > = {},
-        ): Promise<void> => {
-          const pagesScraped = ++this.pageCount;
+    // Every dequeued item reaches exactly one outcome and advances the
+    // processed count once, which is what makes it converge on the queued
+    // total. Only `Stored` additionally advances the indexed count.
+    //
+    // Declared outside the try so the failure path reports through it too:
+    // the counter protocol has one implementation, not two.
+    const report = async (
+      outcome: PageOutcome,
+      extra: Partial<
+        Pick<ScraperProgressEvent, "currentUrl" | "result" | "emptyPage" | "deleted">
+      > = {},
+    ): Promise<void> => {
+      const pagesScraped = ++this.pageCount;
 
-          // Two routes can reach one document — an llms.txt `.md` entry and the
-          // crawled HTML page — and both are sent to the store, which decides
-          // which representation to keep. Only the first of them is a new page:
-          // counting the second would let one document consume two units of the
-          // page budget and leave the crawl short of what the user asked for.
-          const identity = extra.result?.url ?? extra.emptyPage?.url;
-          const alreadyStored =
-            identity !== undefined && this.storedIdentities.has(identity);
-          const isNewPage = outcome === PageOutcome.Stored && !alreadyStored;
-          if (isNewPage) {
-            if (identity !== undefined) this.storedIdentities.add(identity);
-            this.pagesIndexed++;
-          } else {
-            this.retuneEffectiveTotal(options);
-          }
+      // Two routes can reach one document — an llms.txt `.md` entry and the
+      // crawled HTML page — and both are sent to the store, which decides
+      // which representation to keep. Only the first of them is a new page:
+      // counting the second would let one document consume two units of the
+      // page budget and leave the crawl short of what the user asked for.
+      const identity = extra.result?.url ?? extra.emptyPage?.url;
+      const alreadyStored = identity !== undefined && this.storedIdentities.has(identity);
+      const isNewPage = outcome === PageOutcome.Stored && !alreadyStored;
+      if (isNewPage) {
+        if (identity !== undefined) this.storedIdentities.add(identity);
+        this.pagesIndexed++;
+      } else {
+        this.retuneEffectiveTotal(options);
+      }
 
-          logger.info(
-            `🌐 Scraping page ${pagesScraped}/${this.effectiveTotal} (depth ${item.depth}/${maxDepth}): ${item.url}`,
+      logger.info(
+        `🌐 Scraping page ${pagesScraped}/${this.effectiveTotal} (depth ${item.depth}/${maxDepth}): ${item.url}`,
+      );
+
+      await progressCallback({
+        pagesScraped,
+        totalPages: this.effectiveTotal,
+        totalDiscovered: this.totalDiscovered,
+        pagesIndexed: this.pagesIndexed,
+        currentUrl: item.url,
+        depth: item.depth,
+        maxDepth,
+        outcome,
+        result: null,
+        pageId: item.pageId,
+        ...extra,
+        // Told to the store rather than derived there: only the crawl knows
+        // whether it has already stored this identity during this run, and
+        // that is what separates "a competing representation" from "the new
+        // state of the page", which are resolved in opposite directions.
+        ...(extra.result
+          ? { result: { ...extra.result, isAdditionalRepresentation: alreadyStored } }
+          : {}),
+        ...(extra.emptyPage
+          ? {
+              emptyPage: {
+                ...extra.emptyPage,
+                isAdditionalRepresentation: alreadyStored,
+              },
+            }
+          : {}),
+      });
+    };
+
+    try {
+      // Pass signal to processItem
+      const result = await this.processItem(item, options, signal);
+      throwIfCrawlAborted();
+
+      if (result.status === FetchStatus.NOT_MODIFIED) {
+        // File/page hasn't changed, skip processing but count as processed
+        logger.debug(`Page unchanged (304): ${item.url}`);
+        await report(PageOutcome.Unchanged);
+        this.recordChildPageCompletion(item, options, result);
+        ensureFailureRateWithinThreshold();
+        throwIfCrawlAborted();
+        return result.queueItems ?? [];
+      }
+
+      if (result.status === FetchStatus.NOT_FOUND) {
+        // A 404 at a representation is not a statement about the page. A
+        // refresh asks the location the content came from, which for a
+        // published Markdown file is not the page's own URL; a site that
+        // withdraws those files still serves the pages they described.
+        // Ask the identity before concluding anything, and send no stored
+        // validator with it — that one was issued by the resource that is
+        // now gone. If the identity 404s too, this item carries no further
+        // fallback and the page is deleted then.
+        const identityFallback: QueueItem[] =
+          item.identityUrl !== undefined && item.identityUrl !== item.url
+            ? // Spread so the item keeps whatever else governs how it is
+              // fetched and scoped; only the address and the validator
+              // change. `etag` is dropped because it was issued by the
+              // resource that just answered 404, and `identityUrl` because
+              // this IS the identity — a second 404 here is the page.
+              [{ ...item, url: item.identityUrl, etag: null, identityUrl: undefined }]
+            : [];
+        // Deliberately not named `isRefreshDeletion`: the method of that
+        // name answers "is this a refresh 404?" and is still consulted by
+        // `shouldCountTowardFailureThreshold`, which must keep ignoring
+        // these. This narrower question is whether the page is actually
+        // removed, which a pending fallback defers.
+        const deletesStoredPage =
+          this.isRefreshDeletion(item, result) && identityFallback.length === 0;
+        const fallbackQueueItems = [...(result.queueItems ?? []), ...identityFallback];
+        const hasNewFallbackQueueItem = fallbackQueueItems.some(
+          (queueItem) =>
+            !this.visited.has(
+              normalizeUrl(queueItem.url, this.getUrlNormalizerOptions(options)),
+            ),
+        );
+
+        // Only the user's actual requested root should be fatal on 404 — an
+        // llms.txt-seeded depth-0 item is just one of several discovery seeds
+        // and a dead entry there shouldn't abort a scrape whose real root URL
+        // resolved fine (see llmstxt-discovery spec: llms.txt link failures
+        // are not supposed to fail the overall scrape).
+        if (
+          this.isRequestedRoot(item, options) &&
+          !deletesStoredPage &&
+          !hasNewFallbackQueueItem
+        ) {
+          throw new ScraperError(`Root page not found: ${item.url}`, false);
+        }
+
+        if (!deletesStoredPage) {
+          this.recordChildPageFailure(item, options);
+          ensureFailureRateWithinThreshold();
+        }
+
+        throwIfCrawlAborted();
+
+        // File/page was deleted, count as processed
+        logger.debug(`Page deleted (404): ${item.url}`);
+        await report(PageOutcome.Absent, deletesStoredPage ? { deleted: true } : {});
+        return fallbackQueueItems;
+      }
+
+      if (result.status === FetchStatus.SKIPPED) {
+        // The resource was fetched but nothing can read its content type, so
+        // the body was abandoned at the headers. This is neither a success nor
+        // a failure: no page is stored, and the child-page failure rate is left
+        // untouched so an asset-heavy site cannot trip abortOnFailureRate.
+        // Only the user's actual requested root is fatal, matching the 404
+        // branch above. An llms.txt seed is one of several discovery seeds,
+        // and a refresh replays stored pages at their stored depth — neither
+        // should abort a scrape whose real root resolved fine.
+        if (item.depth === 0 && !item.fromLlmsTxt && item.pageId === undefined) {
+          // Name the type: the user picked this URL, and "some content type"
+          // does not tell them whether they mistyped it or asked for a format
+          // this server cannot read.
+          const contentType = result.sourceContentType ?? "unknown content type";
+          throw new ScraperError(
+            `Cannot process ${contentType} at ${item.url}: no pipeline can read it`,
+            false,
           );
+        }
+        logger.debug(`Skipped (unprocessable content): ${item.url}`);
+        await report(PageOutcome.Skipped);
+        return result.queueItems ?? [];
+      }
 
-          await progressCallback({
-            pagesScraped,
-            totalPages: this.effectiveTotal,
-            totalDiscovered: this.totalDiscovered,
-            pagesIndexed: this.pagesIndexed,
-            currentUrl: item.url,
-            depth: item.depth,
-            maxDepth,
-            outcome,
-            result: null,
-            pageId: item.pageId,
-            ...extra,
-            // Told to the store rather than derived there: only the crawl knows
-            // whether it has already stored this identity during this run, and
-            // that is what separates "a competing representation" from "the new
-            // state of the page", which are resolved in opposite directions.
-            ...(extra.result
-              ? { result: { ...extra.result, isAdditionalRepresentation: alreadyStored } }
-              : {}),
-            ...(extra.emptyPage
-              ? {
-                  emptyPage: {
-                    ...extra.emptyPage,
-                    isAdditionalRepresentation: alreadyStored,
-                  },
-                }
-              : {}),
-          });
-        };
+      if (result.status !== FetchStatus.SUCCESS) {
+        // Unreachable while FetchStatus has only the four handled members, but
+        // reporting here keeps "every dequeued item reaches exactly one
+        // outcome" true by construction rather than by enumeration.
+        logger.error(`❌ Unknown fetch status: ${result.status}`);
+        await report(PageOutcome.Failed);
+        return [];
+      }
 
-        try {
-          // Pass signal to processItem
-          const result = await this.processItem(item, options, signal);
-          throwIfBatchAborted();
+      // Handle successful processing - report result with content
+      // Use the final URL from the result (which may differ due to redirects)
+      //
+      // Canonicalised so that spellings differing only by a trailing slash or
+      // a fragment resolve to one page. Two routes to the same document —
+      // `/config/` from a crawl and `/config.md` from an llms.txt index —
+      // otherwise land as separate rows and split a page in two.
+      const finalUrl = this.canonicalizeStoredUrl(result.url || item.url, options);
 
-          if (result.status === FetchStatus.NOT_MODIFIED) {
-            // File/page hasn't changed, skip processing but count as processed
-            logger.debug(`Page unchanged (304): ${item.url}`);
-            await report(PageOutcome.Unchanged);
-            this.recordChildPageCompletion(item, options, result);
-            ensureFailureRateWithinThreshold();
-            throwIfBatchAborted();
-            return result.queueItems ?? [];
-          }
+      // Register the resolved identity so the other route to this page is
+      // recognised as already seen. The identity is only known after the
+      // response, which is why it cannot be settled when the URL is queued.
+      this.visited.add(normalizeUrl(finalUrl, this.getUrlNormalizerOptions(options)));
 
-          if (result.status === FetchStatus.NOT_FOUND) {
-            // A 404 at a representation is not a statement about the page. A
-            // refresh asks the location the content came from, which for a
-            // published Markdown file is not the page's own URL; a site that
-            // withdraws those files still serves the pages they described.
-            // Ask the identity before concluding anything, and send no stored
-            // validator with it — that one was issued by the resource that is
-            // now gone. If the identity 404s too, this item carries no further
-            // fallback and the page is deleted then.
-            const identityFallback: QueueItem[] =
-              item.identityUrl !== undefined && item.identityUrl !== item.url
-                ? // Spread so the item keeps whatever else governs how it is
-                  // fetched and scoped; only the address and the validator
-                  // change. `etag` is dropped because it was issued by the
-                  // resource that just answered 404, and `identityUrl` because
-                  // this IS the identity — a second 404 here is the page.
-                  [{ ...item, url: item.identityUrl, etag: null, identityUrl: undefined }]
-                : [];
-            // Deliberately not named `isRefreshDeletion`: the method of that
-            // name answers "is this a refresh 404?" and is still consulted by
-            // `shouldCountTowardFailureThreshold`, which must keep ignoring
-            // these. This narrower question is whether the page is actually
-            // removed, which a pending fallback defers.
-            const deletesStoredPage =
-              this.isRefreshDeletion(item, result) && identityFallback.length === 0;
-            const fallbackQueueItems = [
-              ...(result.queueItems ?? []),
-              ...identityFallback,
-            ];
-            const hasNewFallbackQueueItem = fallbackQueueItems.some(
-              (queueItem) =>
-                !this.visited.has(
-                  normalizeUrl(queueItem.url, this.getUrlNormalizerOptions(options)),
-                ),
-            );
-
-            // Only the user's actual requested root should be fatal on 404 — an
-            // llms.txt-seeded depth-0 item is just one of several discovery seeds
-            // and a dead entry there shouldn't abort a scrape whose real root URL
-            // resolved fine (see llmstxt-discovery spec: llms.txt link failures
-            // are not supposed to fail the overall scrape).
-            if (
-              this.isRequestedRoot(item, options) &&
-              !deletesStoredPage &&
-              !hasNewFallbackQueueItem
-            ) {
-              throw new ScraperError(`Root page not found: ${item.url}`, false);
-            }
-
-            if (!deletesStoredPage) {
-              this.recordChildPageFailure(item, options);
-              ensureFailureRateWithinThreshold();
-            }
-
-            throwIfBatchAborted();
-
-            // File/page was deleted, count as processed
-            logger.debug(`Page deleted (404): ${item.url}`);
-            await report(PageOutcome.Absent, deletesStoredPage ? { deleted: true } : {});
-            return fallbackQueueItems;
-          }
-
-          if (result.status === FetchStatus.SKIPPED) {
-            // The resource was fetched but nothing can read its content type, so
-            // the body was abandoned at the headers. This is neither a success nor
-            // a failure: no page is stored, and the child-page failure rate is left
-            // untouched so an asset-heavy site cannot trip abortOnFailureRate.
-            // Only the user's actual requested root is fatal, matching the 404
-            // branch above. An llms.txt seed is one of several discovery seeds,
-            // and a refresh replays stored pages at their stored depth — neither
-            // should abort a scrape whose real root resolved fine.
-            if (item.depth === 0 && !item.fromLlmsTxt && item.pageId === undefined) {
-              // Name the type: the user picked this URL, and "some content type"
-              // does not tell them whether they mistyped it or asked for a format
-              // this server cannot read.
-              const contentType = result.sourceContentType ?? "unknown content type";
-              throw new ScraperError(
-                `Cannot process ${contentType} at ${item.url}: no pipeline can read it`,
-                false,
-              );
-            }
-            logger.debug(`Skipped (unprocessable content): ${item.url}`);
-            await report(PageOutcome.Skipped);
-            return result.queueItems ?? [];
-          }
-
-          if (result.status !== FetchStatus.SUCCESS) {
-            // Unreachable while FetchStatus has only the four handled members, but
-            // reporting here keeps "every dequeued item reaches exactly one
-            // outcome" true by construction rather than by enumeration.
-            logger.error(`❌ Unknown fetch status: ${result.status}`);
-            await report(PageOutcome.Failed);
-            return [];
-          }
-
-          // Handle successful processing - report result with content
-          // Use the final URL from the result (which may differ due to redirects)
-          //
-          // Canonicalised so that spellings differing only by a trailing slash or
-          // a fragment resolve to one page. Two routes to the same document —
-          // `/config/` from a crawl and `/config.md` from an llms.txt index —
-          // otherwise land as separate rows and split a page in two.
-          const finalUrl = this.canonicalizeStoredUrl(result.url || item.url, options);
-
-          // Register the resolved identity so the other route to this page is
-          // recognised as already seen. The identity is only known after the
-          // response, which is why it cannot be settled when the URL is queued.
-          this.visited.add(normalizeUrl(finalUrl, this.getUrlNormalizerOptions(options)));
-
-          // A result carrying no text is not a stored page. `WebScraperStrategy`
-          // already gates on this, but the local-file and GitHub processors pass
-          // their pipeline result through unconditionally, so an empty file would
-          // otherwise report Stored, inflate the indexed count and consume the
-          // page budget for a document the store then drops for having no chunks.
-          const producedContent = !!result.content?.textContent?.trim();
-          if (result.content && producedContent) {
-            await report(PageOutcome.Stored, {
-              currentUrl: finalUrl,
-              result: {
+      // A result carrying no text is not a stored page. `WebScraperStrategy`
+      // already gates on this, but the local-file and GitHub processors pass
+      // their pipeline result through unconditionally, so an empty file would
+      // otherwise report Stored, inflate the indexed count and consume the
+      // page budget for a document the store then drops for having no chunks.
+      const producedContent = !!result.content?.textContent?.trim();
+      if (result.content && producedContent) {
+        await report(PageOutcome.Stored, {
+          currentUrl: finalUrl,
+          result: {
+            url: finalUrl,
+            // Canonicalisation can move the identity too (`/docs/` to
+            // `/docs`), and then the bytes came from somewhere the identity
+            // no longer names. Record whichever URL actually served them.
+            contentUrl:
+              result.contentUrl ??
+              (result.url && result.url !== finalUrl ? result.url : undefined),
+            title: result.content.title?.trim() || result.title?.trim() || "",
+            sourceContentType: result.sourceContentType || result.contentType || "",
+            contentType: result.contentType || "",
+            textContent: result.content.textContent || "",
+            links: result.content.links || [],
+            errors: result.content.errors || [],
+            chunks: result.content.chunks || [],
+            etag: result.etag || null,
+            lastModified: result.lastModified || null,
+          } satisfies ScrapeResult,
+        });
+        throwIfCrawlAborted();
+      } else {
+        // Fetched successfully but produced nothing to store: a directory
+        // listing, or a page whose pipeline extracted no text. Either way the
+        // item was processed, so it is reported rather than advancing the
+        // counter silently.
+        // A container that yields links — a directory listing, an archive — is
+        // processed and produces nothing, but it is not a page and must not be
+        // recorded as one.
+        const wasPage = result.isContainer !== true;
+        await report(PageOutcome.Empty, {
+          currentUrl: finalUrl,
+          emptyPage: !wasPage
+            ? undefined
+            : {
                 url: finalUrl,
-                // Canonicalisation can move the identity too (`/docs/` to
-                // `/docs`), and then the bytes came from somewhere the identity
-                // no longer names. Record whichever URL actually served them.
+                // An empty page still has a retrieval location: `/guide` can
+                // be empty and have been read from `/guide.md`. Dropping it
+                // would send the next refresh to the identity carrying a
+                // validator the identity never issued.
                 contentUrl:
                   result.contentUrl ??
                   (result.url && result.url !== finalUrl ? result.url : undefined),
-                title: result.content.title?.trim() || result.title?.trim() || "",
-                sourceContentType: result.sourceContentType || result.contentType || "",
-                contentType: result.contentType || "",
-                textContent: result.content.textContent || "",
-                links: result.content.links || [],
-                errors: result.content.errors || [],
-                chunks: result.content.chunks || [],
-                etag: result.etag || null,
-                lastModified: result.lastModified || null,
-              } satisfies ScrapeResult,
-            });
-            throwIfBatchAborted();
-          } else {
-            // Fetched successfully but produced nothing to store: a directory
-            // listing, or a page whose pipeline extracted no text. Either way the
-            // item was processed, so it is reported rather than advancing the
-            // counter silently.
-            // A container that yields links — a directory listing, an archive — is
-            // processed and produces nothing, but it is not a page and must not be
-            // recorded as one.
-            const wasPage = result.isContainer !== true;
-            await report(PageOutcome.Empty, {
-              currentUrl: finalUrl,
-              emptyPage: !wasPage
-                ? undefined
-                : {
-                    url: finalUrl,
-                    // An empty page still has a retrieval location: `/guide` can
-                    // be empty and have been read from `/guide.md`. Dropping it
-                    // would send the next refresh to the identity carrying a
-                    // validator the identity never issued.
-                    contentUrl:
-                      result.contentUrl ??
-                      (result.url && result.url !== finalUrl ? result.url : undefined),
-                    title: result.title?.trim() || "",
-                    sourceContentType: result.sourceContentType ?? null,
-                    contentType: result.contentType ?? null,
-                    // Withheld when the pipeline errored: storing the validator against
-                    // a failure we do not understand would make the next refresh answer
-                    // 304 and never retry, turning a transient fault permanent.
-                    etag: result.pipelineFailed ? null : (result.etag ?? null),
-                    lastModified: result.pipelineFailed
-                      ? null
-                      : (result.lastModified ?? null),
-                    pipelineFailed: result.pipelineFailed === true,
-                  },
-            });
-            throwIfBatchAborted();
-          }
+                title: result.title?.trim() || "",
+                sourceContentType: result.sourceContentType ?? null,
+                contentType: result.contentType ?? null,
+                // Withheld when the pipeline errored: storing the validator against
+                // a failure we do not understand would make the next refresh answer
+                // 304 and never retry, turning a transient fault permanent.
+                etag: result.pipelineFailed ? null : (result.etag ?? null),
+                lastModified: result.pipelineFailed
+                  ? null
+                  : (result.lastModified ?? null),
+                pipelineFailed: result.pipelineFailed === true,
+              },
+        });
+        throwIfCrawlAborted();
+      }
 
-          // Extract discovered links - use the final URL as the base for resolving relative links
-          const nextItems = result.links || [];
-          const linkBaseUrl = finalUrl ? new URL(finalUrl) : baseUrl;
-          const internalAllowedFileRoots =
-            result.internalAllowedFileRoots ?? item.internalAllowedFileRoots;
+      // Extract discovered links - use the final URL as the base for resolving relative links
+      const nextItems = result.links || [];
+      const linkBaseUrl = finalUrl ? new URL(finalUrl) : baseUrl;
+      const internalAllowedFileRoots =
+        result.internalAllowedFileRoots ?? item.internalAllowedFileRoots;
 
-          this.recordChildPageCompletion(item, options, result);
-          ensureFailureRateWithinThreshold();
-          throwIfBatchAborted();
+      this.recordChildPageCompletion(item, options, result);
+      ensureFailureRateWithinThreshold();
+      throwIfCrawlAborted();
 
-          // Depth is invariant across these links, so reject the whole set at
-          // once rather than parsing each URL and discarding it.
-          //
-          // Rejecting here rather than at dequeue is what keeps the progress
-          // denominator honest, and the rejection deliberately does NOT add the
-          // URL to `visited`. The queue is breadth-first in a normal crawl, so a
-          // URL is first offered at its minimum reachable depth and this cannot
-          // lose anything — but refresh mode builds its initial queue in database
-          // order, which is not sorted by depth, so the same URL can legitimately
-          // be offered again at a shallower depth later. Consuming a dedup slot
-          // here would discard it.
-          const childDepth = item.depth + 1;
-          const linkQueueItems = (childDepth > maxDepth ? [] : nextItems)
-            .map((value) => {
-              try {
-                const targetUrl = new URL(value, linkBaseUrl);
-                // Filter using shouldProcessUrl
-                if (
-                  !this.shouldProcessUrl(targetUrl.href, options, {
-                    internalAllowedFileRoots,
-                  })
-                ) {
-                  return null;
-                }
-                return {
-                  url: targetUrl.href,
-                  depth: childDepth,
-                  ...(internalAllowedFileRoots ? { internalAllowedFileRoots } : {}),
-                } satisfies QueueItem;
-              } catch (_error) {
-                // Invalid URL or path
-                logger.warn(`❌ Invalid URL: ${value}`);
-              }
+      // Depth is invariant across these links, so reject the whole set at
+      // once rather than parsing each URL and discarding it.
+      //
+      // Rejecting here rather than at dequeue is what keeps the progress
+      // denominator honest, and the rejection deliberately does NOT add the
+      // URL to `visited`. The queue is breadth-first in a normal crawl, so a
+      // URL is first offered at its minimum reachable depth and this cannot
+      // lose anything — but refresh mode builds its initial queue in database
+      // order, which is not sorted by depth, so the same URL can legitimately
+      // be offered again at a shallower depth later. Consuming a dedup slot
+      // here would discard it.
+      const childDepth = item.depth + 1;
+      const linkQueueItems = (childDepth > maxDepth ? [] : nextItems)
+        .map((value) => {
+          try {
+            const targetUrl = new URL(value, linkBaseUrl);
+            // Filter using shouldProcessUrl
+            if (
+              !this.shouldProcessUrl(targetUrl.href, options, {
+                internalAllowedFileRoots,
+              })
+            ) {
               return null;
-            })
-            .filter((item): item is QueueItem => item !== null);
-
-          return [...(result.queueItems ?? []), ...linkQueueItems];
-        } catch (error) {
-          if (
-            error instanceof FailureThresholdExceededError ||
-            error instanceof CancellationError
-          ) {
-            throw error;
+            }
+            return {
+              url: targetUrl.href,
+              depth: childDepth,
+              ...(internalAllowedFileRoots ? { internalAllowedFileRoots } : {}),
+            } satisfies QueueItem;
+          } catch (_error) {
+            // Invalid URL or path
+            logger.warn(`❌ Invalid URL: ${value}`);
           }
+          return null;
+        })
+        .filter((item): item is QueueItem => item !== null);
 
-          // Never ignore errors for the root URL (depth 0) - if it fails, the job should fail
-          // There's no point in "successfully" completing with 0 documents
-          if (this.isRequestedRoot(item, options)) {
-            throw error;
-          }
+      return [...(result.queueItems ?? []), ...linkQueueItems];
+    } catch (error) {
+      if (
+        error instanceof FailureThresholdExceededError ||
+        error instanceof CancellationError
+      ) {
+        throw error;
+      }
 
-          if (batchAbortError) {
-            throw batchAbortError;
-          }
+      // Never ignore errors for the root URL (depth 0) - if it fails, the job should fail
+      // There's no point in "successfully" completing with 0 documents
+      if (this.isRequestedRoot(item, options)) {
+        throw error;
+      }
 
-          this.recordChildPageFailure(item, options);
-          ensureFailureRateWithinThreshold();
+      if (crawl.abortError) {
+        throw crawl.abortError;
+      }
 
-          if (options.ignoreErrors) {
-            logger.error(`❌ Failed to process ${item.url}: ${error}`);
-            await report(PageOutcome.Failed);
-            return [];
-          }
-          throw error;
-        }
-      }),
-    );
+      this.recordChildPageFailure(item, options);
+      ensureFailureRateWithinThreshold();
 
-    // After all concurrent processing is done, deduplicate the results
-    const allLinks = results.flat().filter((item): item is QueueItem => item !== null);
-    const uniqueLinks: QueueItem[] = [];
+      if (options.ignoreErrors) {
+        logger.error(`❌ Failed to process ${item.url}: ${error}`);
+        await report(PageOutcome.Failed);
+        return [];
+      }
+      throw error;
+    }
+  }
 
-    // Now perform deduplication once, after all parallel processing is complete
-    for (const item of allLinks) {
+  /**
+   * Admits the offered items not yet seen and advances the queue totals.
+   *
+   * @param offered Items offered by one processed item, in discovery order.
+   * @param options Scraper options supplying the effective page limit.
+   * @returns The items admitted to the queue.
+   */
+  private admitToQueue(offered: QueueItem[], options: ScraperOptions): QueueItem[] {
+    const admitted: QueueItem[] = [];
+
+    for (const item of offered) {
       const normalizedUrl = normalizeUrl(item.url, this.getUrlNormalizerOptions(options));
       if (!this.visited.has(normalizedUrl)) {
         this.visited.add(normalizedUrl);
-        uniqueLinks.push(item);
+        admitted.push(item);
 
         // Always increment the unlimited counter
         this.totalDiscovered++;
@@ -716,7 +738,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
       }
     }
 
-    return uniqueLinks;
+    return admitted;
   }
 
   async scrape(
@@ -788,7 +810,18 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     // `maxPages` bounds pages that produce content, not items processed: asking
     // for 100 pages should yield 100 pages, not stop at 100 attempts of which
     // some produced nothing.
-    while (queue.length > 0 && this.pagesIndexed < maxPages) {
+    //
+    // Items run in a sliding window: a slot is refilled as soon as its item
+    // finishes. Fixed batches waited for their slowest member, so one URL
+    // spending seconds in retry backoff idled every other slot and the crawl
+    // looked frozen on whichever page happened to finish last.
+    const crawl: CrawlAbortState = { abortError: null };
+    const running = new Map<number, Promise<number>>();
+    const finished = new Map<number, QueueItem[]>();
+    let nextSeq = 0;
+    let nextToAdmit = 0;
+
+    while (this.pagesIndexed < maxPages) {
       // Check for cancellation at the start of each loop iteration
       if (signal?.aborted) {
         logger.debug(`${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal.`);
@@ -797,28 +830,52 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         );
       }
 
-      const remainingPages = maxPages - this.pagesIndexed;
-      if (remainingPages <= 0) {
+      // Counting running items against the remaining budget is what stops
+      // concurrent work overshooting the limit: at most `maxPages - pagesIndexed`
+      // items run, so at most that many of them can index.
+      while (
+        running.size < maxConcurrency &&
+        this.pagesIndexed + running.size < maxPages
+      ) {
+        const item = queue.shift();
+        if (!item) break;
+        const seq = nextSeq++;
+        // Always use latest canonical base (may have been updated after first fetch)
+        baseUrl = this.canonicalBaseUrl ?? baseUrl;
+        running.set(
+          seq,
+          this.processQueueItem(
+            item,
+            baseUrl,
+            options,
+            progressCallback,
+            crawl,
+            signal,
+          ).then((offered) => {
+            finished.set(seq, offered);
+            return seq;
+          }),
+        );
+      }
+
+      if (running.size === 0) {
         break;
       }
 
-      // Bounding the batch by the remaining budget is what stops a concurrent
-      // batch overshooting the limit: at most `remainingPages` items run, so at
-      // most `remainingPages` of them can index.
-      const batchSize = Math.min(maxConcurrency, remainingPages, queue.length);
-      const batch = queue.splice(0, batchSize);
+      running.delete(await Promise.race(running.values()));
 
-      // Always use latest canonical base (may have been updated after first fetch)
-      baseUrl = this.canonicalBaseUrl ?? baseUrl;
-      const newUrls = await this.processBatch(
-        batch,
-        baseUrl,
-        options,
-        progressCallback,
-        signal,
-      );
-
-      queue.push(...newUrls);
+      // Admit in dequeue order, not completion order, so the queue stays
+      // breadth-first: a URL is first offered at its shortest depth however the
+      // running items finish, and the crawl order does not depend on timing.
+      for (
+        let offered = finished.get(nextToAdmit);
+        offered !== undefined;
+        offered = finished.get(nextToAdmit)
+      ) {
+        finished.delete(nextToAdmit);
+        nextToAdmit++;
+        queue.push(...this.admitToQueue(offered, options));
+      }
     }
   }
 
