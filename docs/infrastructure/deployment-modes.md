@@ -112,6 +112,8 @@ Job recovery behavior depends on deployment mode:
 
 Behind a reverse proxy, set `--public-url` (or `DOCS_MCP_SERVER_PUBLIC_URL`) to the URL clients use, including any path such as `https://example.com/docs`. See [Reverse Proxy Deployment](./reverse-proxy.md).
 
+The server answers to IP addresses, `localhost` and single-label names such as a Compose service name. If clients reach the container under a dotted name, such as `nas.local`, set the public URL to it. See [Host Names the Server Answers To](../setup/configuration.md#host-names-the-server-answers-to).
+
 ### Single Container
 
 ```dockerfile

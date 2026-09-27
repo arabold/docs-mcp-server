@@ -45,7 +45,9 @@ import {
 import type { AppServerConfig } from "./AppServerConfig";
 import { injectBaseHref, servesSpaShell, stripBasePath } from "./basePath";
 import {
+  createHostPolicy,
   createOriginPolicy,
+  type HostPolicy,
   isLoopbackBindHost,
   type OriginPolicy,
   sanitizeRequestedHeaders,
@@ -55,6 +57,9 @@ function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/** Distinct refused host names that get a warning; later ones are only refused. */
+const MAX_REFUSED_HOST_WARNINGS = 20;
+
 /**
  * Central application server that provides modular service composition.
  */
@@ -63,6 +68,8 @@ export class AppServer {
   /** Authentication for the MCP endpoint; set only when auth is enabled and MCP is served. */
   private mcpAuth: McpEndpointAuth | undefined;
   private readonly originPolicy: OriginPolicy;
+  private readonly hostPolicy: HostPolicy;
+  private readonly refusedHosts = new Set<string>();
   private serverConfig: AppServerConfig;
   private readonly appConfig: AppConfig;
   private readonly systemInfo: SystemInfo;
@@ -85,6 +92,10 @@ export class AppServer {
       logger.warn(`⚠️  ${warning}`);
     }
     this.originPolicy = createOriginPolicy({
+      publicOrigin: this.hasPublicUrl() ? this.location.origin : undefined,
+      allowedOrigins: appConfig.server.allowedOrigins,
+    });
+    this.hostPolicy = createHostPolicy({
       publicHostname: this.hasPublicUrl()
         ? new URL(this.location.url).hostname
         : undefined,
@@ -98,6 +109,27 @@ export class AppServer {
       // path and proxies that strip it.
       rewriteUrl: (request) => stripBasePath(request.url ?? "/", basePath),
     });
+  }
+
+  /**
+   * Whether a request's `Host` header may be served, warning once per refused
+   * name so an operator reaching the server under an unknown name sees why.
+   */
+  private acceptsHost(host: string | undefined): boolean {
+    if (this.hostPolicy.isAllowed(host)) {
+      return true;
+    }
+    const name = JSON.stringify(String(host).slice(0, 100));
+    if (
+      !this.refusedHosts.has(name) &&
+      this.refusedHosts.size < MAX_REFUSED_HOST_WARNINGS
+    ) {
+      this.refusedHosts.add(name);
+      logger.warn(
+        `⚠️  Refused a request for host ${name}. If clients reach the server under this name, set server.publicUrl to it or add its origin to server.allowedOrigins.`,
+      );
+    }
+    return false;
   }
 
   /** Whether an operator configured where clients reach this server. */
@@ -378,6 +410,15 @@ export class AppServer {
     // Setup global error handling for telemetry
     this.setupErrorHandling();
 
+    // Refuse host names that could belong to an attacker's page: a DNS-rebound
+    // page sends same-origin GET requests without an Origin header, so the
+    // origin checks alone cannot recognize it.
+    this.server.addHook("onRequest", async (request, reply) => {
+      if (!this.acceptsHost(headerValue(request.headers.host))) {
+        return reply.code(403).send({ error: "Forbidden: host not allowed." });
+      }
+    });
+
     // Setup remote event proxy if using an external worker
     this.setupRemoteEventProxy();
 
@@ -492,11 +533,13 @@ export class AppServer {
     // Handle HTTP upgrade requests for WebSocket connections
     const checkOrigin = isLoopbackBindHost(this.appConfig.server.host);
     this.server.server.on("upgrade", (request, socket, head) => {
-      // Upgrades bypass Fastify routing, so the API's origin shield is applied
-      // here as well: a foreign page must not open the live-update stream.
+      // Upgrades bypass Fastify routing, so the host check and the API's origin
+      // shield are applied here as well: a foreign page must not open the
+      // live-update stream.
       if (
-        checkOrigin &&
-        this.originPolicy.check(headerValue(request.headers.origin)) === "denied"
+        !this.acceptsHost(headerValue(request.headers.host)) ||
+        (checkOrigin &&
+          this.originPolicy.check(headerValue(request.headers.origin)) === "denied")
       ) {
         socket.write(
           "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",

@@ -64,6 +64,9 @@ export interface McpServiceDeps {
   location: PublicLocation;
 }
 
+/** Legacy SSE streams open at once; more connections get 503. */
+export const LEGACY_SSE_MAX_SESSIONS = 100;
+
 const ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 
 function headerValue(value: string | string[] | undefined): string | undefined {
@@ -222,11 +225,26 @@ function registerLegacySseTransport(
   const sessions = new Map<string, SSEServerTransport>();
   const messagesPath = `${deps.location.basePath}/messages`;
   let warned = false;
+  let capWarned = false;
 
   server.get(
     "/sse",
     { onRequest: createOriginCheck(deps.originPolicy) },
     async (request, reply) => {
+      // Each stream holds an MCP server instance until the client leaves, so
+      // cap them rather than let one client exhaust the process.
+      if (sessions.size >= LEGACY_SSE_MAX_SESSIONS) {
+        if (!capWarned) {
+          capWarned = true;
+          logger.warn(
+            `⚠️  Refusing legacy SSE connections: ${LEGACY_SSE_MAX_SESSIONS} streams are already open.`,
+          );
+        }
+        return reply
+          .code(503)
+          .header("Retry-After", "30")
+          .send(jsonRpcError("Too many open SSE streams."));
+      }
       if (!warned) {
         warned = true;
         logger.warn(

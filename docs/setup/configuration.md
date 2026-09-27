@@ -169,12 +169,24 @@ Settings for the API and MCP servers.
 | `host` | `127.0.0.1` | Host interface to bind to. Use `0.0.0.0` to listen on all IPv4 interfaces. |
 | `publicUrl` | - | The URL clients use to reach the server, optionally with a path, such as `https://example.com/docs`. Every advertised URL derives from it, and the server serves its routes under the path. Required when authentication is enabled. See [Reverse Proxy Deployment](../infrastructure/reverse-proxy.md). |
 | `publicOrigin` | - | Deprecated: use `publicUrl`. Accepted as a public URL without a path; ignored when `publicUrl` is set. |
-| `allowedOrigins` | `[]` | Browser origins, beyond loopback and the public URL's host, allowed to call the MCP endpoint (e.g. `["https://inspector.example.com"]`). |
+| `allowedOrigins` | `[]` | Browser origins, beyond loopback and the public URL's origin, allowed to call the MCP endpoint (e.g. `["https://inspector.example.com"]`). Their host names are also accepted as the server's own name (see below). |
 | `ports.default` | `6280` | Default port for the main server. |
 | `ports.worker` | `8080` | Port for the background worker service. |
 | `ports.mcp` | `6280` | Port for the specific MCP interface. |
 | `ports.web` | `6281` | Port for the web dashboard. |
 | `heartbeatMs` | `30000` | Interval (ms) of the keep-alive comments on the deprecated SSE transport. |
+
+#### Host Names the Server Answers To
+
+To stop DNS rebinding, the server refuses (`403`) any request whose `Host` header names a host it doesn't know. It answers to:
+
+- IP addresses, such as `127.0.0.1` or `192.168.1.20`;
+- `localhost`;
+- single-label names, such as the Docker service name `docs-mcp-server`;
+- the host of `publicUrl`;
+- the hosts of `allowedOrigins`.
+
+If you reach the server under another name, such as `nas.local`, set `publicUrl` to it or add `http://nas.local:6280` to `allowedOrigins`. The server logs a warning naming each refused host.
 
 ### Authentication (`auth`)
 

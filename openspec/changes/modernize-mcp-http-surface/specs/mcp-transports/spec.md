@@ -10,11 +10,12 @@ Defines how MCP clients reach the server. For the Streamable HTTP endpoint that 
 
 The MCP endpoint SHALL check each request in this order, and answer with the first check that fails:
 
-1. the `Origin` header (403);
-2. a CORS preflight, which is answered at this point;
-3. the HTTP method (405);
-4. authentication, when enabled (401);
-5. MCP processing.
+1. the `Host` header (403), as the server checks it for every request;
+2. the `Origin` header (403);
+3. a CORS preflight, which is answered at this point;
+4. the HTTP method (405);
+5. authentication, when enabled (401);
+6. MCP processing.
 
 Requirements that describe MCP processing apply only to requests that pass the earlier checks.
 
@@ -118,6 +119,7 @@ While authentication is disabled, the server SHALL keep serving the deprecated H
 - A GET to the public URL followed by `/sse` SHALL open an event stream. Its first event, `endpoint`, SHALL name the message URL: the public URL's path followed by `/messages` and a `sessionId` query parameter.
 - A POST to that message URL SHALL deliver a JSON-RPC message to the session, and responses SHALL arrive on the event stream.
 - An open stream SHALL receive keep-alive comments while idle, so proxies and clients don't close it.
+- The server SHALL keep at most 100 streams open at once. A GET to `/sse` beyond that SHALL get HTTP 503.
 - Both endpoints SHALL reject a request whose `Origin` header is present but not an allowed origin, as defined for the MCP endpoint, with HTTP 403.
 - The first connection after startup SHALL produce a deprecation warning that names the MCP endpoint as the replacement.
 
@@ -141,6 +143,13 @@ When authentication is enabled, the server SHALL NOT serve this transport.
 - **AND** a GET to `/sse` carries `Origin: https://attacker.example`
 - **THEN** the response SHALL be HTTP 403
 
+#### Scenario: Too many open streams
+
+- **WHEN** authentication is disabled
+- **AND** 100 streams are open
+- **AND** a client sends GET `/sse`
+- **THEN** the response SHALL be HTTP 503
+
 #### Scenario: Deprecation warning
 
 - **WHEN** authentication is disabled
@@ -152,7 +161,7 @@ When authentication is enabled, the server SHALL NOT serve this transport.
 The MCP endpoint SHALL reject, with HTTP 403, a request whose `Origin` header is present but is not an allowed origin. The allowed origins are:
 
 - any origin whose host is `localhost`, `127.0.0.1` or `[::1]`, on any scheme and port;
-- any origin whose host is the host of the configured public URL, when one is configured;
+- the origin (scheme, host and port) of the configured public URL, when one is configured;
 - each origin listed in `server.allowedOrigins`, matched exactly.
 
 A request without an `Origin` header SHALL be processed normally.
@@ -172,6 +181,12 @@ A request without an `Origin` header SHALL be processed normally.
 - **WHEN** the public URL is `https://example.com/docs`
 - **AND** a request to the MCP endpoint carries `Origin: https://example.com`
 - **THEN** the request SHALL be processed normally
+
+#### Scenario: Public host on another scheme or port
+
+- **WHEN** the public URL is `https://example.com/docs`
+- **AND** a request to the MCP endpoint carries `Origin: http://example.com` or `Origin: https://example.com:8443`
+- **THEN** the response SHALL be HTTP 403
 
 #### Scenario: Listed hosted client
 

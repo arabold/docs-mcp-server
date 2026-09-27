@@ -18,7 +18,7 @@ import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
-import { registerMcpService } from "./mcpService";
+import { LEGACY_SSE_MAX_SESSIONS, registerMcpService } from "./mcpService";
 
 vi.mock("../mcp/tools", () => ({
   initializeTools: vi.fn().mockResolvedValue({
@@ -128,7 +128,7 @@ async function startServer(options: { withAuth?: boolean } = {}) {
       pipeline: {} as IPipeline,
       config,
       originPolicy: createOriginPolicy({
-        publicHostname: "example.com",
+        publicOrigin: "https://example.com",
         allowedOrigins: ["https://inspector.example.com"],
       }),
       location: {
@@ -493,6 +493,24 @@ describe("Deprecated HTTP+SSE transport", () => {
       expect(response.statusCode).toBe(404);
     },
   );
+
+  it("refuses streams beyond the cap with 503", async () => {
+    const baseUrl = await listen(await startServer());
+    const streams = await Promise.all(
+      Array.from({ length: LEGACY_SSE_MAX_SESSIONS }, () => openSseStream(baseUrl)),
+    );
+
+    try {
+      const response = await fetch(`${baseUrl}${BASE_PATH}/sse`);
+
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("30");
+    } finally {
+      for (const stream of streams) {
+        stream.close();
+      }
+    }
+  });
 
   it("sends keep-alive comments on an idle stream", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });

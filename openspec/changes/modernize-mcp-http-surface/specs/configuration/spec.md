@@ -43,7 +43,7 @@ A trailing slash SHALL be ignored.
 - **THEN** configuration loading MUST reject the value with an error explaining that the path's first segment collides with a route the server serves
 
 ### Requirement: Allowed Browser Origins Configuration
-The configuration system SHALL expose an optional `server.allowedOrigins` setting: a list of browser origins, beyond loopback and the public URL's host, that may call the MCP endpoint. It SHALL default to an empty list. It SHALL be settable from the configuration file and from the environment variable `DOCS_MCP_SERVER_ALLOWED_ORIGINS` as a JSON array. Each entry SHALL be an origin (`scheme://host` with an optional port and no path). Configuration loading SHALL reject any other value with a clear validation error. A trailing slash on an entry SHALL be ignored.
+The configuration system SHALL expose an optional `server.allowedOrigins` setting: a list of browser origins, beyond loopback and the public URL's origin, that may call the MCP endpoint. The hosts of these origins are also accepted in the `Host` header. It SHALL default to an empty list. It SHALL be settable from the configuration file and from the environment variable `DOCS_MCP_SERVER_ALLOWED_ORIGINS` as a JSON array. Each entry SHALL be an origin (`scheme://host` with an optional port and no path). Configuration loading SHALL reject any other value with a clear validation error. A trailing slash on an entry SHALL be ignored.
 
 #### Scenario: Allowed origins from environment variable
 - **WHEN** `DOCS_MCP_SERVER_ALLOWED_ORIGINS` is set to `["https://inspector.example.com"]`

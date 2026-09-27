@@ -187,6 +187,17 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
   - a request without a token gets 401 with `resource_metadata`.
 - [x] 9.3 Run `openspec validate modernize-mcp-http-surface --strict`. Verify it reports no issues.
 
-## 10. Archive follow-up
+## 10. Security review follow-ups
 
-- [ ] 10.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.
+- [x] 10.1 Add `createHostPolicy` to `src/app/originPolicy.ts` and apply it in `AppServer` as a global `onRequest` hook and in the `upgrade` handler, on every bind. Log each refused host once, up to 20. Verify:
+  - `originPolicy.test.ts` covers accepted and refused hosts;
+  - `test/mcp-http-e2e.test.ts` gets 403 for `/api/ping`, `/`, `/mcp` and `/sse` with a foreign `Host` and no `Origin`, and a refused WebSocket;
+  - the reviewer's rebinding PoC now gets 403.
+- [x] 10.2 Match the public URL's exact origin in `createOriginPolicy`. Verify `originPolicy.test.ts` denies the public host on another scheme or port.
+- [x] 10.3 Reject tokens with one generic `error_description`, and log the reason at debug level. Verify `JwtAccessTokenVerifier.test.ts` asserts the same description for every rejection, and the reviewer's token PoC sees only that description.
+- [x] 10.4 Cap the legacy SSE transport at `LEGACY_SSE_MAX_SESSIONS` (100) open streams, answering 503 with `Retry-After` beyond it. Verify with the cap test in `mcpService.test.ts`.
+- [x] 10.5 Update the specs, design, proposal and the docs that describe allowed origins and hosts (`authentication.md`, `configuration.md`, `reverse-proxy.md`, `deployment-modes.md`). Verify `openspec validate modernize-mcp-http-surface --strict` passes.
+
+## 11. Archive follow-up
+
+- [ ] 11.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.

@@ -143,11 +143,13 @@ describe("Authentication End-to-End", () => {
       expect(response.status).toBe(404);
     });
 
-    it("never takes the metadata from a spoofed Host header", async () => {
+    it("never takes the metadata from the Host header", async () => {
+      // An IP literal passes the host check, so this reaches the metadata route
+      // with a Host that differs from the public URL.
       const body = await new Promise<string>((resolve, reject) => {
         const request = http.request(
           `${origin}/docs/.well-known/oauth-protected-resource/mcp`,
-          { headers: { host: "attacker.example" } },
+          { headers: { host: "10.9.8.7:6280" } },
           (response) => {
             let data = "";
             response.on("data", (chunk) => {
@@ -161,7 +163,7 @@ describe("Authentication End-to-End", () => {
       });
 
       expect(JSON.parse(body).resource).toBe(audience);
-      expect(body).not.toContain("attacker.example");
+      expect(body).not.toContain("10.9.8.7");
     });
   });
 

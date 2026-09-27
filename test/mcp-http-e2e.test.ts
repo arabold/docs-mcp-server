@@ -10,6 +10,7 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
+import http from "node:http";
 import net from "node:net";
 import path from "node:path";
 import {
@@ -136,6 +137,21 @@ async function tryWebSocketFromOrigin(url: string, origin: string): Promise<"ope
       resolve("open");
     });
     socket.on("error", () => resolve("refused"));
+  });
+}
+
+/**
+ * Sends a request with an explicit `Host` and no `Origin`, the way a page on a
+ * DNS-rebound domain fetches its own origin, and returns the status code.
+ */
+async function requestWithHost(url: string, host: string, method = "GET"): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const request = http.request(url, { method, headers: { host } }, (response) => {
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+    request.on("error", reject);
+    request.end();
   });
 }
 
@@ -305,5 +321,47 @@ describe("MCP HTTP server E2E", () => {
     expect(await tryNodeWebSocket(wsUrl)).toBe("open");
     expect(await tryWebSocketFromOrigin(wsUrl, new URL(baseUrl).origin)).toBe("open");
     expect(await tryWebSocketFromOrigin(wsUrl, "https://attacker.example")).toBe("refused");
+  });
+
+  it.each([
+    ["GET", "/api/ping"],
+    ["GET", "/"],
+    ["POST", "/mcp"],
+    ["GET", "/sse"],
+  ])("refuses %s %s for a foreign host name without an Origin header", async (method, path) => {
+    const port = new URL(baseUrl).port;
+
+    const status = await requestWithHost(
+      new URL(path, baseUrl).href,
+      `attacker.rebind.example:${port}`,
+      method,
+    );
+
+    expect(status).toBe(403);
+  });
+
+  it("serves requests addressed to localhost by name", async () => {
+    const port = new URL(baseUrl).port;
+
+    expect(await requestWithHost(new URL("/api/ping", baseUrl).href, `localhost:${port}`)).toBe(
+      200,
+    );
+  });
+
+  it("refuses the WebSocket for a foreign host name", async () => {
+    const wsUrl = new URL("/api", baseUrl).href.replace(/^http/, "ws");
+    const socket = new WsClient(wsUrl, {
+      headers: { host: `attacker.rebind.example:${new URL(baseUrl).port}` },
+    });
+
+    const outcome = await new Promise<"open" | "refused">((resolve) => {
+      socket.on("open", () => {
+        socket.close();
+        resolve("open");
+      });
+      socket.on("error", () => resolve("refused"));
+    });
+
+    expect(outcome).toBe("refused");
   });
 });
