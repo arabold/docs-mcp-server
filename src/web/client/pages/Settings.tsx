@@ -127,7 +127,7 @@ export default function Settings() {
     {
       key: "mcp",
       label: "MCP server",
-      caption: "Protocol endpoints for AI assistants",
+      caption: "Endpoint AI assistants connect to",
       value: health.mcp.enabled ? (
         <>
           <Pill variant="ok">enabled</Pill>
@@ -173,7 +173,7 @@ export default function Settings() {
     {
       key: "oauth",
       label: "OAuth2 / OIDC",
-      caption: "Protect the web UI and MCP endpoints",
+      caption: "Protects the MCP endpoint; the web UI and API are not protected",
       value: (
         <Pill variant={health.auth.enabled ? "ok" : "idle"}>
           {health.auth.enabled ? "enabled" : "disabled"}

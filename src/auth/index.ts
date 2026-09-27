@@ -1,13 +1,20 @@
 /**
- * OAuth2/OIDC authentication module for MCP Authorization spec compliance.
+ * OAuth 2.0 resource-server support for the MCP endpoint.
  *
- * This module provides optional OAuth2/OIDC authentication for MCP endpoints
- * while keeping local usage frictionless (auth disabled by default).
+ * Authentication is optional and off by default. When enabled, the MCP
+ * endpoint accepts only JWT access tokens that the configured issuer issued
+ * for it, and publishes protected resource metadata so clients can find that
+ * issuer.
  */
 
-export { createAuthMiddleware } from "./middleware";
-export { ProxyAuthManager } from "./ProxyAuthManager";
-export type {
-  AuthConfig,
-  AuthContext,
-} from "./types";
+export {
+  authorizationServerMetadataUrls,
+  JwtAccessTokenVerifier,
+} from "./JwtAccessTokenVerifier";
+export {
+  buildProtectedResourceMetadata,
+  missingTokenChallenge,
+  protectedResourceMetadataPaths,
+  protectedResourceMetadataUrl,
+} from "./protectedResourceMetadata";
+export type { AuthConfig } from "./types";

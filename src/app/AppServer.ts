@@ -5,9 +5,7 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import formBody from "@fastify/formbody";
 import fastifyStatic from "@fastify/static";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import Fastify, {
   type FastifyError,
   type FastifyInstance,
@@ -15,11 +13,20 @@ import Fastify, {
   type FastifyRequest,
 } from "fastify";
 import { WebSocketServer } from "ws";
-import { ProxyAuthManager } from "../auth";
+import { JwtAccessTokenVerifier } from "../auth/JwtAccessTokenVerifier";
+import {
+  buildProtectedResourceMetadata,
+  protectedResourceMetadataPaths,
+  protectedResourceMetadataUrl,
+} from "../auth/protectedResourceMetadata";
 import type { EventBusService } from "../events";
 import { RemoteEventProxy } from "../events/RemoteEventProxy";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
-import { cleanupMcpService, registerMcpService } from "../services/mcpService";
+import {
+  MCP_ENDPOINT_PATH,
+  type McpEndpointAuth,
+  registerMcpService,
+} from "../services/mcpService";
 import { buildSystemInfo, type SystemInfo } from "../services/systemInfo";
 import { applyTrpcWebSocketHandler, registerTrpcService } from "../services/trpcService";
 import { registerWorkerService, stopWorkerService } from "../services/workerService";
@@ -30,21 +37,39 @@ import { printBanner } from "../utils/banner";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
-import { getCanonicalServerOrigin, isWildcardBindHost } from "../utils/serverOrigin";
+import {
+  describePublicLocationWarnings,
+  type PublicLocation,
+  resolvePublicLocation,
+} from "../utils/serverOrigin";
 import type { AppServerConfig } from "./AppServerConfig";
+import { injectBaseHref, servesSpaShell, stripBasePath } from "./basePath";
+import {
+  createOriginPolicy,
+  isLoopbackBindHost,
+  type OriginPolicy,
+  sanitizeRequestedHeaders,
+} from "./originPolicy";
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 /**
  * Central application server that provides modular service composition.
  */
 export class AppServer {
   private server: FastifyInstance;
-  private mcpServer: McpServer | null = null;
-  private authManager: ProxyAuthManager | null = null;
+  /** Authentication for the MCP endpoint; set only when auth is enabled and MCP is served. */
+  private mcpAuth: McpEndpointAuth | undefined;
+  private readonly originPolicy: OriginPolicy;
   private serverConfig: AppServerConfig;
   private readonly appConfig: AppConfig;
   private readonly systemInfo: SystemInfo;
   private remoteEventProxy: RemoteEventProxy | null = null;
   private wss: WebSocketServer | null = null;
+  /** Where clients reach this server; every advertised URL derives from it. */
+  private readonly location: PublicLocation;
 
   constructor(
     private docService: IDocumentManagement,
@@ -55,10 +80,37 @@ export class AppServer {
   ) {
     this.serverConfig = serverConfig;
     this.appConfig = appConfig;
-    this.systemInfo = buildSystemInfo(serverConfig, appConfig);
+    this.location = resolvePublicLocation(appConfig, serverConfig.port);
+    for (const warning of describePublicLocationWarnings(appConfig)) {
+      logger.warn(`⚠️  ${warning}`);
+    }
+    this.originPolicy = createOriginPolicy({
+      publicHostname: this.hasPublicUrl()
+        ? new URL(this.location.url).hostname
+        : undefined,
+      allowedOrigins: appConfig.server.allowedOrigins,
+    });
+    this.systemInfo = buildSystemInfo(serverConfig, appConfig, this.mcpEndpointUrl());
+    const basePath = this.location.basePath;
     this.server = Fastify({
       logger: false, // Use our own logger
+      // One set of root-mounted routes serves proxies that forward the base
+      // path and proxies that strip it.
+      rewriteUrl: (request) => stripBasePath(request.url ?? "/", basePath),
     });
+  }
+
+  /** Whether an operator configured where clients reach this server. */
+  private hasPublicUrl(): boolean {
+    return Boolean(
+      this.appConfig.server.publicUrl?.trim() ||
+        this.appConfig.server.publicOrigin?.trim(),
+    );
+  }
+
+  /** Public URL of the MCP endpoint: the resource identifier and default token audience. */
+  private mcpEndpointUrl(): string {
+    return `${this.location.url}${MCP_ENDPOINT_PATH}`;
   }
 
   /**
@@ -166,7 +218,7 @@ export class AppServer {
         this.remoteEventProxy.connect();
       }
 
-      this.logStartupInfo(this.getCanonicalOrigin());
+      this.logStartupInfo(this.location.url);
       return this.server;
     } catch (error) {
       logger.error(`❌ Failed to start AppServer: ${error}`);
@@ -188,11 +240,6 @@ export class AppServer {
       // Stop worker service if enabled
       if (this.serverConfig.enableWorker) {
         await stopWorkerService(this.pipeline);
-      }
-
-      // Cleanup MCP service if enabled
-      if (this.mcpServer) {
-        await cleanupMcpService(this.mcpServer);
       }
 
       // Close WebSocket server if it exists
@@ -334,32 +381,22 @@ export class AppServer {
     // Setup remote event proxy if using an external worker
     this.setupRemoteEventProxy();
 
-    // Initialize authentication if enabled
-    if (this.appConfig.auth.enabled) {
-      await this.initializeAuth();
-    }
+    // Authentication covers the MCP endpoint only; set it up before the
+    // endpoint registers so every request goes through the same checks.
+    await this.setupAuthentication();
 
-    // Register core Fastify plugins
-    await this.server.register(formBody);
-
-    // Add request logging middleware for OAuth debugging
-    if (this.appConfig.auth.enabled) {
-      this.server.addHook("onRequest", async (request) => {
-        if (
-          request.url.includes("/oauth") ||
-          request.url.includes("/auth") ||
-          request.url.includes("/register")
-        ) {
-          logger.debug(
-            `${request.method} ${request.url} - Headers: ${JSON.stringify(request.headers)}`,
-          );
+    // On a loopback bind no reverse proxy stands in front of the API, so shield
+    // it from foreign web pages (DNS rebinding) the same way as the MCP endpoint.
+    if (isLoopbackBindHost(this.appConfig.server.host)) {
+      this.server.addHook("onRequest", async (request, reply) => {
+        const pathname = request.url.split("?")[0];
+        if (pathname !== "/api" && !pathname.startsWith("/api/")) {
+          return;
+        }
+        if (this.originPolicy.check(headerValue(request.headers.origin)) === "denied") {
+          return reply.code(403).send({ error: "Forbidden: origin not allowed." });
         }
       });
-    }
-
-    // Add protected resource metadata endpoint for RFC9728 compliance
-    if (this.appConfig.auth.enabled && this.authManager) {
-      await this.setupAuthMetadataEndpoint();
     }
 
     // Conditionally enable services based on configuration
@@ -405,12 +442,16 @@ export class AppServer {
    * Enable MCP server service.
    */
   private async enableMcpServer(): Promise<void> {
-    this.mcpServer = await registerMcpService(
+    await registerMcpService(
       this.server,
-      this.docService,
-      this.pipeline,
-      this.appConfig,
-      this.authManager || undefined,
+      {
+        docService: this.docService,
+        pipeline: this.pipeline,
+        config: this.appConfig,
+        originPolicy: this.originPolicy,
+        location: this.location,
+      },
+      this.mcpAuth,
     );
     logger.debug("MCP server service enabled");
   }
@@ -449,7 +490,20 @@ export class AppServer {
     });
 
     // Handle HTTP upgrade requests for WebSocket connections
+    const checkOrigin = isLoopbackBindHost(this.appConfig.server.host);
     this.server.server.on("upgrade", (request, socket, head) => {
+      // Upgrades bypass Fastify routing, so the API's origin shield is applied
+      // here as well: a foreign page must not open the live-update stream.
+      if (
+        checkOrigin &&
+        this.originPolicy.check(headerValue(request.headers.origin)) === "denied"
+      ) {
+        socket.write(
+          "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+        );
+        socket.destroy();
+        return;
+      }
       // Let the WebSocket server handle all upgrade requests.
       // tRPC's WebSocket handler manages routing internally after connection is established.
       this.wss?.handleUpgrade(request, socket, head, (ws) => {
@@ -500,13 +554,15 @@ export class AppServer {
     // literal match over the plugin's "/*" wildcard, so this takes priority
     // without conflicting with it.
     this.server.get("/", serveSpaShell);
+    // The shell must always carry its <base> element, so it is never served
+    // raw by the static handler either.
+    this.server.get("/index.html", serveSpaShell);
 
-    // SPA fallback: serve index.html for any other unmatched GET request
-    // (client-side routes like /libraries or /jobs), excluding /api calls,
-    // so deep links and page refreshes work. Non-GET or /api requests still
-    // receive a plain 404.
+    // SPA fallback: serve the shell for any other unmatched GET request
+    // (client-side routes like /libraries or /jobs) so deep links and page
+    // refreshes work. API, MCP, metadata and asset paths get a JSON 404.
     this.server.setNotFoundHandler(async (request, reply) => {
-      if (request.method !== "GET" || request.url.startsWith("/api")) {
+      if (!servesSpaShell(request.method, request.url)) {
         reply.code(404).send({ error: "Not Found" });
         return;
       }
@@ -517,8 +573,9 @@ export class AppServer {
 
   /**
    * Creates a request handler that responds with the built SPA's
-   * `index.html`, falling back to a 404 if the file cannot be read (e.g. the
-   * frontend has not been built yet).
+   * `index.html`, with a `<base>` element for the public URL's path, falling
+   * back to a 404 if the file cannot be read (e.g. the frontend has not been
+   * built yet).
    */
   private createSpaShellHandler(
     indexHtmlPath: string,
@@ -530,7 +587,10 @@ export class AppServer {
     return async (_request, reply) => {
       try {
         if (cachedHtml === null) {
-          cachedHtml = await readFile(indexHtmlPath, "utf-8");
+          cachedHtml = injectBaseHref(
+            await readFile(indexHtmlPath, "utf-8"),
+            this.location.basePath,
+          );
         }
         reply.type("text/html").send(cachedHtml);
       } catch (error) {
@@ -541,55 +601,73 @@ export class AppServer {
   }
 
   /**
-   * Initialize OAuth2/OIDC authentication manager.
+   * Set up authentication for the MCP endpoint: this server is an OAuth 2.0
+   * resource server that verifies tokens the configured issuer issued for it,
+   * and publishes protected resource metadata so clients can find that issuer.
+   *
+   * @throws Error when authentication is enabled for the MCP endpoint without
+   *   an issuer or a public URL, or when the issuer can't be discovered.
    */
-  private async initializeAuth(): Promise<void> {
+  private async setupAuthentication(): Promise<void> {
     if (!this.appConfig.auth.enabled) {
       return;
     }
-
-    if (!this.appConfig.auth.issuerUrl || !this.appConfig.auth.audience) {
-      throw new Error(
-        "Authentication is enabled but auth.issuerUrl or auth.audience is not configured.",
+    if (!this.serverConfig.enableMcpServer) {
+      logger.warn(
+        "⚠️  Authentication is enabled, but this process serves no MCP endpoint, so it protects nothing here. The web UI and API are never protected by authentication.",
       );
-    }
-
-    this.authManager = new ProxyAuthManager({
-      enabled: true,
-      issuerUrl: this.appConfig.auth.issuerUrl,
-      audience: this.appConfig.auth.audience,
-      scopes: ["openid", "profile"],
-    });
-    await this.authManager.initialize();
-    logger.debug("Proxy auth manager initialized");
-  }
-
-  /**
-   * Setup OAuth2 endpoints using ProxyAuthManager.
-   */
-  private async setupAuthMetadataEndpoint(): Promise<void> {
-    if (!this.authManager) {
       return;
     }
 
-    // ProxyAuthManager handles all OAuth2 endpoints automatically
-    const baseUrl = new URL(this.getCanonicalOrigin());
-    this.authManager.registerRoutes(this.server, baseUrl);
-
-    if (
-      !this.appConfig.server.publicOrigin &&
-      isWildcardBindHost(this.appConfig.server.host)
-    ) {
-      logger.warn(
-        "⚠️  Authentication is enabled with a wildcard bind host and no public origin. Configure server.publicOrigin or --public-origin for remote OAuth clients.",
+    const issuerUrl = this.appConfig.auth.issuerUrl?.trim();
+    if (!issuerUrl) {
+      throw new Error(
+        "Authentication is enabled but auth.issuerUrl is not set. Set it to your identity provider's issuer URL.",
+      );
+    }
+    if (!this.hasPublicUrl()) {
+      throw new Error(
+        "Authentication is enabled but no public URL is configured. Set server.publicUrl (or --public-url) to the URL clients use to reach this server.",
       );
     }
 
-    logger.debug("OAuth2 proxy endpoints registered");
-  }
+    const mcpEndpointUrl = this.mcpEndpointUrl();
+    const verifier = await JwtAccessTokenVerifier.create({
+      issuerUrl,
+      audience: this.appConfig.auth.audience?.trim() || mcpEndpointUrl,
+    });
 
-  private getCanonicalOrigin(): string {
-    return getCanonicalServerOrigin(this.appConfig, this.serverConfig.port);
+    const document = buildProtectedResourceMetadata({ mcpEndpointUrl, issuerUrl });
+    for (const metadataPath of protectedResourceMetadataPaths(this.location.basePath)) {
+      this.server.route({
+        method: ["GET", "HEAD"],
+        url: metadataPath,
+        handler: async (_request, reply) =>
+          reply
+            .header("Access-Control-Allow-Origin", "*")
+            .type("application/json")
+            .send(document),
+      });
+      this.server.options(metadataPath, async (request, reply) => {
+        reply
+          .header("Access-Control-Allow-Origin", "*")
+          .header("Access-Control-Allow-Methods", "GET")
+          .header("Access-Control-Max-Age", "600");
+        const requestedHeaders = sanitizeRequestedHeaders(
+          headerValue(request.headers["access-control-request-headers"]),
+        );
+        if (requestedHeaders) {
+          reply.header("Access-Control-Allow-Headers", requestedHeaders);
+        }
+        return reply.code(204).send();
+      });
+    }
+
+    this.mcpAuth = {
+      verifier,
+      resourceMetadataUrl: protectedResourceMetadataUrl(this.location),
+    };
+    logger.debug(`Protected resource metadata served for ${mcpEndpointUrl}`);
   }
 
   /**
@@ -638,9 +716,16 @@ export class AppServer {
       enabledServices.push(`Web interface: ${address}`);
     }
 
-    // MCP endpoints: always show if enabled
+    // MCP endpoint: always show if enabled
     if (this.serverConfig.enableMcpServer) {
-      enabledServices.push(`MCP endpoints: ${address}/mcp, ${address}/sse`);
+      enabledServices.push(`MCP endpoint: ${this.mcpEndpointUrl()}`);
+    }
+
+    // Authentication boundary: say exactly what is and isn't protected
+    if (this.mcpAuth) {
+      enabledServices.push(
+        `Authentication: protects ${this.mcpEndpointUrl()} only; the web UI and API are not protected`,
+      );
     }
 
     // Worker: only show external worker URL (internal is implied)

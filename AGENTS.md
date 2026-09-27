@@ -118,8 +118,9 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 |---|---|---|---|
 | `cli-e2e.test.ts` | CLI smoke: help, version, unknown-arg handling | none | yes |
 | `mcp-stdio-e2e.test.ts` | MCP server over stdio: spawn, protocol handshake, basic tools | none | yes |
-| `mcp-http-e2e.test.ts` | MCP server over HTTP/SSE (legacy `/sse` endpoint included) | none | yes |
-| `auth-e2e.test.ts` | OAuth2/OIDC end-to-end against a real provider | `.env` with auth config; skips otherwise | yes (skips if no env) |
+| `mcp-http-e2e.test.ts` | MCP over Streamable HTTP (protocol 2026-07-28): client connect, tools/resources, handshake-era client on the same endpoint, deprecated `/sse` transport with auth off, 405/404 surface, API/WebSocket origin checks | none | yes |
+| `auth-e2e.test.ts` | Resource-server auth against a local issuer: challenge, protected resource metadata, token acceptance/rejection, `/sse` not served; optional live-provider discovery | none (live block needs `DOCS_MCP_AUTH_ISSUER_URL`) | yes |
+| `base-path-e2e.test.ts` | Serving under `/docs` behind a strip-prefix and a forward-prefix proxy: shell, assets, API, WebSocket, MCP, metadata, the deprecated `/sse` endpoint event without auth; Playwright drives the web UI and a cross-origin client | Chromium (Playwright) | yes |
 | `telemetry-e2e.test.ts` | `DOCS_MCP_TELEMETRY` env var controls PostHog init | none (parses debug logs) | yes |
 | `html-pipeline-basic-e2e.test.ts` | HTML scrape pipeline against stable endpoints (httpbin.org) | network | yes |
 | `html-pipeline-nonhtml-e2e.test.ts` | Non-HTML content (text/plain) bypasses Playwright cleanly | none | yes |

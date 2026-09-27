@@ -237,12 +237,13 @@ export function parseAuthConfig(options: {
     enabled: true,
     issuerUrl: options.authIssuerUrl,
     audience: options.authAudience,
-    scopes: ["openid", "profile"], // Default scopes for OAuth2/OIDC
   };
 }
 
 /**
- * Validates auth configuration when auth is enabled.
+ * Validates the format of auth settings that are present. Whether a setting
+ * is required depends on what the process serves, so the server checks that
+ * at startup.
  */
 export function validateAuthConfig(authConfig: AuthConfig): void {
   if (!authConfig.enabled) {
@@ -251,10 +252,7 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
 
   const errors: string[] = [];
 
-  // Issuer URL is required when auth is enabled
-  if (!authConfig.issuerUrl) {
-    errors.push("--auth-issuer-url is required when auth is enabled");
-  } else {
+  if (authConfig.issuerUrl) {
     try {
       const url = new URL(authConfig.issuerUrl);
       if (url.protocol !== "https:") {
@@ -265,10 +263,8 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
     }
   }
 
-  // Audience is required when auth is enabled
-  if (!authConfig.audience) {
-    errors.push("--auth-audience is required when auth is enabled");
-  } else {
+  // Audience is optional: it defaults to the MCP endpoint's public URL.
+  if (authConfig.audience) {
     // Audience can be any valid URI (URL or URN)
     // Examples: https://api.example.com, urn:docs-mcp-server:api, urn:company:service
     try {
@@ -298,9 +294,6 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
       }
     }
   }
-
-  // Scopes are not validated in binary authentication mode
-  // They're handled internally by the OAuth proxy
 
   if (errors.length > 0) {
     throw new Error(`Auth configuration validation failed:\n${errors.join("\n")}`);

@@ -31,7 +31,7 @@ export type SystemInfoWorker =
 /** MCP protocol exposure, when enabled. */
 export interface SystemInfoMcp {
   enabled: boolean;
-  /** Relative endpoint paths the MCP server answers on (empty when disabled). */
+  /** Advertised absolute URLs of the MCP endpoint (empty when disabled). */
   endpoints: string[];
 }
 
@@ -68,11 +68,13 @@ export interface SystemInfo {
  * Assembles the {@link SystemInfo} snapshot from server + app configuration.
  * @param serverConfig - Service composition/runtime wiring for this process.
  * @param appConfig - Resolved application configuration (env/YAML/CLI merged).
+ * @param mcpEndpointUrl - The advertised public URL of the MCP endpoint.
  * @returns The distilled system info to thread through the tRPC context.
  */
 export function buildSystemInfo(
   serverConfig: AppServerConfig,
   appConfig: AppConfig,
+  mcpEndpointUrl: string,
 ): SystemInfo {
   const mcpEnabled = Boolean(serverConfig.enableMcpServer);
   const authEnabled = Boolean(appConfig.auth.enabled);
@@ -92,7 +94,7 @@ export function buildSystemInfo(
       : { mode: "embedded", maxConcurrency: appConfig.scraper.maxConcurrency },
     mcp: {
       enabled: mcpEnabled,
-      endpoints: mcpEnabled ? ["/mcp", "/sse"] : [],
+      endpoints: mcpEnabled ? [mcpEndpointUrl] : [],
     },
     auth: {
       enabled: authEnabled,

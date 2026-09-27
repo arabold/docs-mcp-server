@@ -1,8 +1,7 @@
 /**
  * Tests for MCP server read-only mode functionality
  */
-
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../utils/config";
 import { createMcpServerInstance } from "./mcpServer";
@@ -180,5 +179,106 @@ describe("MCP Server Read-Only Mode", () => {
       "/version-v0.3/",
       "/version-v0.2/",
     ]);
+  });
+});
+
+/**
+ * Lists tools the way a 2026-07-28 client sees them: a real `tools/list`
+ * request through the SDK's HTTP handler, so the assertions cover the
+ * advertised JSON Schema rather than the server's internal registry.
+ */
+async function listToolsOverTheWire(config: AppConfig) {
+  const handler = createMcpHandler(() => createMcpServerInstance(mockTools, config), {
+    legacy: "reject",
+  });
+  const response = await handler.fetch(
+    new Request("http://127.0.0.1/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/list",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as {
+    result: {
+      tools: Array<{
+        name: string;
+        description?: string;
+        inputSchema: Record<string, any>;
+      }>;
+    };
+  };
+  return body.result.tools;
+}
+
+describe("MCP tool advertisement over protocol 2026-07-28", () => {
+  it("advertises every tool in normal mode", async () => {
+    const tools = await listToolsOverTheWire(mockConfig);
+
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "cancel_job",
+      "fetch_url",
+      "find_version",
+      "get_job_info",
+      "list_jobs",
+      "list_libraries",
+      "refresh_version",
+      "remove_docs",
+      "scrape_docs",
+      "search_docs",
+    ]);
+  });
+
+  it("advertises only read tools in read-only mode", async () => {
+    const tools = await listToolsOverTheWire(mockReadOnlyConfig);
+
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "fetch_url",
+      "find_version",
+      "list_libraries",
+      "search_docs",
+    ]);
+  });
+
+  it("advertises pattern arguments as a string or an array of strings", async () => {
+    const tools = await listToolsOverTheWire(mockConfig);
+    const scrape = tools.find((tool) => tool.name === "scrape_docs");
+    const includePatterns = scrape?.inputSchema.properties.includePatterns;
+
+    expect(includePatterns.anyOf).toEqual([
+      { type: "string" },
+      { type: "array", items: { type: "string" } },
+    ]);
+  });
+
+  it("keeps argument descriptions in the advertised schema", async () => {
+    const tools = await listToolsOverTheWire(mockConfig);
+    const scrape = tools.find((tool) => tool.name === "scrape_docs");
+    const search = tools.find((tool) => tool.name === "search_docs");
+
+    expect(scrape?.inputSchema.properties.url.description).toBe(
+      "Documentation root URL to scrape.",
+    );
+    expect(scrape?.inputSchema.properties.includePatterns.description).toMatch(
+      /^Patterns for including URLs during scraping/,
+    );
+    for (const [name, property] of Object.entries(search?.inputSchema.properties ?? {})) {
+      expect((property as { description?: string }).description, name).toBeTruthy();
+    }
   });
 });

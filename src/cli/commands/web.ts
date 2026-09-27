@@ -33,10 +33,15 @@ export function createWebCommand(cli: Argv) {
           type: "string",
           description: "Host to bind the web interface to",
         })
-        .option("public-origin", {
+        .option("public-url", {
           type: "string",
           description:
-            "Public origin advertised to clients (e.g., https://docs.example.com)",
+            "Public URL clients use to reach the server, optionally with a path (e.g., https://example.com/docs)",
+          alias: "publicUrl",
+        })
+        .option("public-origin", {
+          type: "string",
+          description: "Deprecated: use --public-url",
           alias: "publicOrigin",
         })
         .option("embedding-model", {

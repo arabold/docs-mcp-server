@@ -1,348 +1,263 @@
 /**
- * End-to-end authentication tests for the MCP server.
- * 
- * These tests validate that authentication works correctly using a real OAuth2/OIDC provider.
- * The tests use environment variables from the .env file to configure the authentication.
+ * End-to-end tests for authentication on the MCP endpoint.
+ *
+ * Runs the real server against a local OAuth authorization server (a `jose`
+ * key pair with RFC 8414 metadata and a JWKS), so the suite needs no external
+ * provider. The server is hosted under a base path, which is where discovery
+ * URLs are easiest to get wrong.
+ *
+ * An optional block checks discovery against a real provider when
+ * `DOCS_MCP_AUTH_ISSUER_URL` is set.
  */
 
-import { beforeAll, afterAll, describe, expect, it } from "vitest";
-import { config } from "dotenv";
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
-import { join } from "path";
-import { startAppServer } from "../src/app";
-import { createLocalDocumentManagement } from "../src/store";
-import { PipelineFactory } from "../src/pipeline/PipelineFactory";
+import { mkdtempSync, rmSync } from "node:fs";
+import http from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { config as loadDotenv } from "dotenv";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { type AppServer, startAppServer } from "../src/app";
+import { JwtAccessTokenVerifier } from "../src/auth/JwtAccessTokenVerifier";
 import { createAppServerConfig } from "../src/cli/utils";
-import { LogLevel, setLogLevel } from "../src/utils/logger";
 import { EventBusService } from "../src/events";
+import { PipelineFactory } from "../src/pipeline/PipelineFactory";
+import type { IPipeline } from "../src/pipeline/trpc/interfaces";
+import { createLocalDocumentManagement } from "../src/store";
+import type { IDocumentManagement } from "../src/store/trpc/interfaces";
 import { loadConfig } from "../src/utils/config";
+import { LogLevel, setLogLevel } from "../src/utils/logger";
+import { getFreePort, type LocalIssuer, startLocalIssuer } from "./test-helpers";
 
-// Load environment variables from .env file
-config();
+loadDotenv();
 
-describe("Authentication End-to-End Tests", () => {
-  let appServer: any;
-  let docService: any;
-  let pipeline: any;
-  let serverPort: number;
-  let baseUrl: string;
-  let tempDir: string;
-  const appConfig = loadConfig();
+const META = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientCapabilities": {},
+};
+
+describe("Authentication End-to-End", () => {
+  let issuer: LocalIssuer;
+  let appServer: AppServer | undefined;
+  let docService: IDocumentManagement | undefined;
+  let pipeline: IPipeline | undefined;
+  let tempDir = "";
+  let origin = "";
+  let publicUrl = "";
+  let audience = "";
+
+  function mcpRequest(authorization?: string) {
+    return fetch(`${publicUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/list",
+        ...(authorization ? { authorization } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: { _meta: META } }),
+    });
+  }
 
   beforeAll(async () => {
-    // Skip tests if authentication environment variables are not set
-    if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-      console.log("⚠️  Skipping authentication tests - DOCS_MCP_AUTH_ISSUER_URL or DOCS_MCP_AUTH_AUDIENCE not found in .env");
-      return;
-    }
-
-    // Set quiet logging for tests
     setLogLevel(LogLevel.ERROR);
+    issuer = await startLocalIssuer();
 
-    // Create temporary directory for test database
-    tempDir = mkdtempSync(join(tmpdir(), "auth-e2e-test-"));
+    const port = await getFreePort();
+    origin = `http://127.0.0.1:${port}`;
+    publicUrl = `${origin}/docs`;
+    audience = `${publicUrl}/mcp`;
 
-    // Find an available port for the test server
-    serverPort = 9876; // Use a specific port for testing
-    baseUrl = `http://localhost:${serverPort}`;
-
-    // Initialize services with temporary directory
-    const eventBus = new EventBusService();
+    tempDir = mkdtempSync(join(tmpdir(), "auth-e2e-"));
+    const appConfig = loadConfig();
     appConfig.app.storePath = tempDir;
-    appConfig.app.embeddingModel = ""; // disable embeddings for auth e2e
-
-    // AppServer reads auth settings from AppConfig (source of truth)
-    appConfig.server.host = "localhost";
+    appConfig.app.embeddingModel = "";
+    appConfig.server.host = "127.0.0.1";
+    appConfig.server.publicUrl = publicUrl;
     appConfig.auth.enabled = true;
-    appConfig.auth.issuerUrl = process.env.DOCS_MCP_AUTH_ISSUER_URL;
-    appConfig.auth.audience = process.env.DOCS_MCP_AUTH_AUDIENCE;
+    appConfig.auth.issuerUrl = issuer.url;
+    appConfig.auth.audience = "";
 
-    docService = await createLocalDocumentManagement(eventBus, appConfig); // Use temp dir for test database
-    pipeline = await PipelineFactory.createPipeline(docService, eventBus, {
-      appConfig: appConfig,
+    const eventBus = new EventBusService();
+    docService = await createLocalDocumentManagement(eventBus, appConfig);
+    pipeline = await PipelineFactory.createPipeline(docService as never, eventBus, {
+      appConfig,
     });
-
-    // Configure server with authentication enabled
-    const config = createAppServerConfig({
-      enableWebInterface: false,
-      enableMcpServer: true,
-      enableApiServer: false,
-      enableWorker: true, // Enable worker for MCP server
-      port: serverPort,
-      startupContext: {
-        cliCommand: "test",
-        mcpProtocol: "http",
-      },
-    });
-
-    // Start the server
-    appServer = await startAppServer(docService, pipeline, eventBus, config, appConfig);
-    
-    // Give the server a moment to start
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    appServer = await startAppServer(
+      docService,
+      pipeline,
+      eventBus,
+      createAppServerConfig({
+        enableWebInterface: false,
+        enableMcpServer: true,
+        enableApiServer: true,
+        enableWorker: true,
+        port,
+        showLogo: false,
+        startupContext: { cliCommand: "test", mcpProtocol: "http" },
+      }),
+      appConfig,
+    );
   }, 30000);
 
   afterAll(async () => {
-    if (appServer) {
-      await appServer.stop();
-    }
-    if (pipeline) {
-      await pipeline.stop();
-    }
-    if (docService) {
-      await docService.shutdown();
-    }
-    // Clean up temporary directory
+    await appServer?.stop();
+    await pipeline?.stop();
+    await docService?.shutdown();
+    await issuer?.close();
     if (tempDir) {
-      try {
-        rmSync(tempDir, { recursive: true, force: true });
-      } catch (error) {
-        // Ignore cleanup errors
-      }
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  describe("Protected Endpoint Access", () => {
-    it("should return 401 when accessing protected endpoint without token", async () => {
-      // Skip if no auth config
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      const response = await fetch(`${baseUrl}/mcp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/list",
-          id: 1,
-        }),
-      });
+  describe("discovery", () => {
+    it("challenges a request without a token, pointing at the metadata under the base path", async () => {
+      const response = await mcpRequest();
 
       expect(response.status).toBe(401);
-      const responseText = await response.text();
-      expect(responseText.toLowerCase()).toContain("unauthorized");
-    }, 10000);
-
-    it("should return 401 when accessing protected endpoint with invalid token", async () => {
-      // Skip if no auth config
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      const response = await fetch(`${baseUrl}/mcp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer invalid-token-12345",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/list",
-          id: 1,
-        }),
-      });
-
-      expect(response.status).toBe(401);
-      const responseText = await response.text();
-      expect(responseText.toLowerCase()).toContain("invalid_token");
-    }, 10000);
-
-    it("should return 401 when accessing protected endpoint with malformed token", async () => {
-      // Skip if no auth config
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      const response = await fetch(`${baseUrl}/mcp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer not.a.valid.jwt.token",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          method: "tools/list",
-          id: 1,
-        }),
-      });
-
-      expect(response.status).toBe(401);
-      const responseText = await response.text();
-      expect(responseText.toLowerCase()).toContain("invalid_token");
-    }, 10000);
-  });
-
-  describe("OAuth Proxy Endpoint Hardening", () => {
-    // These tests exercise the rejection paths added in the OAuth proxy
-    // hardening change. They run entirely against the local server — the
-    // proxy validates and short-circuits before any upstream AS discovery,
-    // so a reachable Clerk instance is not required for these cases.
-
-    it("should reject /oauth/token requests with missing grant_type as invalid_request", async () => {
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      const response = await fetch(`${baseUrl}/oauth/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ code: "anything" }).toString(),
-      });
-
-      expect(response.status).toBe(400);
-      const body = (await response.json()) as { error: string };
-      expect(body.error).toBe("invalid_request");
-    }, 10000);
-
-    it("should reject /oauth/token requests with unsupported grant_type", async () => {
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      const response = await fetch(`${baseUrl}/oauth/token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "client_credentials",
-          client_id: "x",
-          client_secret: "y",
-        }).toString(),
-      });
-
-      expect(response.status).toBe(400);
-      const body = (await response.json()) as { error: string };
-      expect(body.error).toBe("unsupported_grant_type");
-    }, 10000);
-
-    it("should reject /oauth/authorize requests with unsupported response_type", async () => {
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      const url = new URL(`${baseUrl}/oauth/authorize`);
-      url.searchParams.set("response_type", "token");
-      url.searchParams.set("client_id", "x");
-
-      const response = await fetch(url.toString(), { redirect: "manual" });
-
-      expect(response.status).toBe(400);
-      const body = (await response.json()) as { error: string };
-      expect(body.error).toBe("unsupported_response_type");
-    }, 10000);
-
-    it("should advertise only allow-listed grant/response types in AS metadata", async () => {
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      const response = await fetch(
-        `${baseUrl}/.well-known/oauth-authorization-server`,
+      const challenge = response.headers.get("www-authenticate") ?? "";
+      expect(challenge).toBe(
+        `Bearer resource_metadata="${publicUrl}/.well-known/oauth-protected-resource/mcp"`,
       );
+      expect(challenge).not.toContain("error=");
+    });
+
+    it.each([
+      ["the advertised location", "/docs/.well-known/oauth-protected-resource/mcp"],
+      ["the RFC 9728 host-root location", "/.well-known/oauth-protected-resource/docs/mcp"],
+    ])("serves the protected resource metadata at %s", async (_label, pathname) => {
+      const response = await fetch(`${origin}${pathname}`);
+
       expect(response.status).toBe(200);
-      const metadata = (await response.json()) as {
-        response_types_supported: string[];
-        grant_types_supported: string[];
-      };
-
-      expect(metadata.response_types_supported).toEqual(["code"]);
-      expect(metadata.grant_types_supported).toEqual([
-        "authorization_code",
-        "refresh_token",
-      ]);
-    }, 10000);
-  });
-
-  describe("Environment Variable Configuration", () => {
-    it("should load authentication configuration from environment variables", () => {
-      // Skip if no auth config
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
-
-      expect(process.env.DOCS_MCP_AUTH_ISSUER_URL).toBe("https://engaging-cowbird-70.clerk.accounts.dev");
-      expect(process.env.DOCS_MCP_AUTH_AUDIENCE).toBe("https://mcp.grounded.tools");
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(await response.json()).toMatchObject({
+        resource: audience,
+        authorization_servers: [issuer.url],
+        bearer_methods_supported: ["header"],
+      });
     });
 
-    it("should validate issuer URL format", () => {
-      // Skip if no auth config
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
+    it("serves no metadata document at the root well-known location", async () => {
+      const response = await fetch(`${origin}/.well-known/oauth-protected-resource`);
 
-      const issuerUrl = process.env.DOCS_MCP_AUTH_ISSUER_URL!;
-      expect(issuerUrl).toMatch(/^https:\/\/.+/);
-      
-      // Verify it's a valid URL
-      expect(() => new URL(issuerUrl)).not.toThrow();
+      expect(response.status).toBe(404);
     });
 
-    it("should validate audience format", () => {
-      // Skip if no auth config
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
+    it("never takes the metadata from a spoofed Host header", async () => {
+      const body = await new Promise<string>((resolve, reject) => {
+        const request = http.request(
+          `${origin}/docs/.well-known/oauth-protected-resource/mcp`,
+          { headers: { host: "attacker.example" } },
+          (response) => {
+            let data = "";
+            response.on("data", (chunk) => {
+              data += chunk;
+            });
+            response.on("end", () => resolve(data));
+          },
+        );
+        request.on("error", reject);
+        request.end();
+      });
 
-      const audience = process.env.DOCS_MCP_AUTH_AUDIENCE!;
-      expect(audience).toMatch(/^https:\/\/.+/);
-      
-      // Verify it's a valid URL
-      expect(() => new URL(audience)).not.toThrow();
+      expect(JSON.parse(body).resource).toBe(audience);
+      expect(body).not.toContain("attacker.example");
     });
   });
 
-  describe("Manual Testing Guide", () => {
-    it("should document how to manually test with valid token", () => {
-      // Skip if no auth config
-      if (!process.env.DOCS_MCP_AUTH_ISSUER_URL || !process.env.DOCS_MCP_AUTH_AUDIENCE) {
-        console.log("⚠️  Skipping test - authentication not configured");
-        return;
-      }
+  describe("token acceptance", () => {
+    it("accepts a token issued for the MCP endpoint", async () => {
+      const response = await mcpRequest(`Bearer ${await issuer.mint({ aud: audience })}`);
 
-      console.log(`
-📋 MANUAL TESTING GUIDE FOR AUTHENTICATION:
-
-To test authentication with a valid token, follow these steps:
-
-1. Set the environment variables in your .env file:
-   DOCS_MCP_AUTH_ISSUER_URL=${process.env.DOCS_MCP_AUTH_ISSUER_URL}
-   DOCS_MCP_AUTH_AUDIENCE=${process.env.DOCS_MCP_AUTH_AUDIENCE}
-
-2. Start the server with authentication enabled:
-   npm run dev -- --auth-enabled --auth-issuer-url "${process.env.DOCS_MCP_AUTH_ISSUER_URL}" --auth-audience "${process.env.DOCS_MCP_AUTH_AUDIENCE}"
-
-3. Obtain a valid JWT token from the Clerk authentication system:
-   - Visit: ${process.env.DOCS_MCP_AUTH_ISSUER_URL}
-   - Follow the authentication flow
-   - Extract the JWT token from the response
-
-4. Test the protected endpoint with the valid token:
-   curl -X POST ${baseUrl}/mcp \\
-     -H "Content-Type: application/json" \\
-     -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
-     -d '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}'
-
-5. Expected result: 200 OK with the list of available tools
-
-⚠️  Note: This test is documented here but not automated because obtaining
-   a valid JWT token requires a full OAuth2 flow with user interaction.
-      `);
-      
-      // This test always passes - it's just documentation
-      expect(true).toBe(true);
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.tools.length).toBeGreaterThan(0);
     });
+
+    it("serves a handshake-era client that presents a valid token", async () => {
+      const response = await fetch(`${publicUrl}/mcp`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${await issuer.mint({ aud: audience })}`,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: {
+            protocolVersion: "2025-06-18",
+            capabilities: {},
+            clientInfo: { name: "legacy", version: "1" },
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('"protocolVersion":"2025-06-18"');
+    });
+
+    it.each([
+      ["issued for another resource", { aud: "https://other.example/mcp" }],
+      ["from another issuer", { iss: "https://other-issuer.example" }],
+      ["expired", { exp: Math.floor(Date.now() / 1000) - 60 }],
+    ])("rejects a token %s", async (_label, claims) => {
+      const token = await issuer.mint({ aud: audience, ...claims });
+
+      const response = await mcpRequest(`Bearer ${token}`);
+
+      expect(response.status).toBe(401);
+      expect(response.headers.get("www-authenticate")).toContain('error="invalid_token"');
+    });
+
+    it("rejects a token signed with a key the issuer does not publish", async () => {
+      const token = await issuer.mint({ aud: audience }, issuer.foreignKeys);
+
+      const response = await mcpRequest(`Bearer ${token}`);
+
+      expect(response.status).toBe(401);
+    });
+
+    it("rejects an opaque token", async () => {
+      const response = await mcpRequest("Bearer oat_opaqueTokenTheIssuerWouldAccept");
+
+      expect(response.status).toBe(401);
+    });
+  });
+
+  describe("boundary", () => {
+    it("leaves the HTTP API reachable without a token", async () => {
+      const response = await fetch(`${publicUrl}/api/ping`);
+
+      expect(response.status).toBe(200);
+    });
+
+    it.each([
+      ["GET", "/sse"],
+      ["POST", "/messages?sessionId=abc"],
+    ])("does not serve the deprecated SSE transport at %s %s", async (method, path) => {
+      const response = await fetch(`${publicUrl}${path}`, {
+        method,
+        headers: { "content-type": "application/json" },
+        body: method === "POST" ? JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) : undefined,
+      });
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get("content-type") ?? "").not.toContain("text/html");
+    });
+  });
+});
+
+describe.skipIf(!process.env.DOCS_MCP_AUTH_ISSUER_URL)("Live identity provider", () => {
+  it("discovers the configured provider's metadata and signing keys", async () => {
+    const issuerUrl = process.env.DOCS_MCP_AUTH_ISSUER_URL ?? "";
+    const publicUrl = process.env.DOCS_MCP_SERVER_PUBLIC_URL ?? "https://example.com";
+
+    await expect(
+      JwtAccessTokenVerifier.create({
+        issuerUrl,
+        audience: process.env.DOCS_MCP_AUTH_AUDIENCE || `${publicUrl}/mcp`,
+      }),
+    ).resolves.toBeInstanceOf(JwtAccessTokenVerifier);
   });
 });

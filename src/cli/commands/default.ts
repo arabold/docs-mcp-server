@@ -47,10 +47,15 @@ export function createDefaultAction(cli: Argv) {
             type: "string",
             description: "Host to bind the server to",
           })
-          .option("public-origin", {
+          .option("public-url", {
             type: "string",
             description:
-              "Public origin advertised to clients (e.g., https://docs.example.com)",
+              "Public URL clients use to reach the server, optionally with a path (e.g., https://example.com/docs)",
+            alias: "publicUrl",
+          })
+          .option("public-origin", {
+            type: "string",
+            description: "Deprecated: use --public-url",
             alias: "publicOrigin",
           })
           .option("embedding-model", {
@@ -132,16 +137,26 @@ export function createDefaultAction(cli: Argv) {
       // But `argv.storePath` was resolved by middleware in index.ts?
       // Yes. So appConfig has resolved path.
 
-      // Parse and validate auth config
-      const authConfig = parseAuthConfig({
-        authEnabled: appConfig.auth.enabled,
-        authIssuerUrl: appConfig.auth.issuerUrl,
-        authAudience: appConfig.auth.audience,
-      });
+      // Authentication applies to MCP over HTTP only. Over stdio the host
+      // launching the process is the trust boundary, so auth settings are
+      // ignored; the warning goes to stderr, which never carries protocol data.
+      if (resolvedProtocol === "stdio") {
+        if (appConfig.auth.enabled) {
+          console.error(
+            "⚠️  Authentication does not apply to MCP over stdio; auth settings are ignored.",
+          );
+        }
+      } else {
+        const authConfig = parseAuthConfig({
+          authEnabled: appConfig.auth.enabled,
+          authIssuerUrl: appConfig.auth.issuerUrl,
+          authAudience: appConfig.auth.audience,
+        });
 
-      if (authConfig) {
-        validateAuthConfig(authConfig);
-        warnHttpUsage(authConfig, appConfig.server.ports.default);
+        if (authConfig) {
+          validateAuthConfig(authConfig);
+          warnHttpUsage(authConfig, appConfig.server.ports.default);
+        }
       }
 
       ensurePlaywrightBrowsersInstalled();

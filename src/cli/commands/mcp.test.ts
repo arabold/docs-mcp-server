@@ -156,4 +156,39 @@ describe("mcp command", () => {
     expect(stdioModule.startStdioServer).toHaveBeenCalled();
     expect(appModule.startAppServer).not.toHaveBeenCalled();
   });
+
+  it("ignores authentication over stdio, with a warning instead of an error", async () => {
+    const parser = yargs().scriptName("test");
+    createMcpCommand(parser);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const { loadConfig } = await import("../../utils/config");
+    vi.mocked(loadConfig).mockReturnValueOnce({
+      app: { embeddingModel: "mock-model", storePath: "/mock/store" },
+      server: { ports: { mcp: 6280 } },
+      auth: { enabled: true, issuerUrl: "", audience: "" },
+    } as unknown as ReturnType<typeof loadConfig>);
+
+    const services = await import("../services");
+    // @ts-expect-error
+    services.registerGlobalServices.mockImplementationOnce(() => {
+      throw new Error("Simulated Stop");
+    });
+    const utils = await import("../utils");
+    // @ts-expect-error
+    utils.resolveProtocol.mockReturnValueOnce("stdio");
+
+    try {
+      await parser.parse(`mcp --protocol stdio`);
+    } catch (e: any) {
+      if (e.message !== "Simulated Stop") throw e;
+    }
+
+    expect(stdioModule.startStdioServer).toHaveBeenCalled();
+    expect(utils.validateAuthConfig).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Authentication does not apply to MCP over stdio"),
+    );
+    errorSpy.mockRestore();
+  });
 });

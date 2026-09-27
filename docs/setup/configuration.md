@@ -114,7 +114,7 @@ Common settings have dedicated CLI flags:
 
 ```bash
 docs-mcp-server --port 8080 --host 0.0.0.0
-docs-mcp-server --host 0.0.0.0 --public-origin https://docs.example.com
+docs-mcp-server --host 0.0.0.0 --public-url https://example.com/docs
 docs-mcp-server --store-path /data/docs --read-only
 ```
 
@@ -167,22 +167,24 @@ Settings for the API and MCP servers.
 |:-------|:--------|:------------|
 | `protocol` | `auto` | Server protocol (`stdio`, `http`, or `auto`). |
 | `host` | `127.0.0.1` | Host interface to bind to. Use `0.0.0.0` to listen on all IPv4 interfaces. |
-| `publicOrigin` | - | Externally reachable origin advertised to clients, such as `https://docs.example.com`. Set this when the bind host is not the URL clients should use. |
-| `heartbeatMs` | `30000` | MCP protocol heartbeat interval (ms). |
+| `publicUrl` | - | The URL clients use to reach the server, optionally with a path, such as `https://example.com/docs`. Every advertised URL derives from it, and the server serves its routes under the path. Required when authentication is enabled. See [Reverse Proxy Deployment](../infrastructure/reverse-proxy.md). |
+| `publicOrigin` | - | Deprecated: use `publicUrl`. Accepted as a public URL without a path; ignored when `publicUrl` is set. |
+| `allowedOrigins` | `[]` | Browser origins, beyond loopback and the public URL's host, allowed to call the MCP endpoint (e.g. `["https://inspector.example.com"]`). |
 | `ports.default` | `6280` | Default port for the main server. |
 | `ports.worker` | `8080` | Port for the background worker service. |
 | `ports.mcp` | `6280` | Port for the specific MCP interface. |
 | `ports.web` | `6281` | Port for the web dashboard. |
+| `heartbeatMs` | `30000` | Interval (ms) of the keep-alive comments on the deprecated SSE transport. |
 
 ### Authentication (`auth`)
 
-Security settings for the HTTP server.
+Bearer-token authentication for the MCP endpoint over HTTP. See [Authentication](../infrastructure/authentication.md).
 
 | Option | Default | Description |
 |:-------|:--------|:------------|
-| `enabled` | `false` | Enable JWT authentication. |
-| `issuerUrl` | - | OIDC Issuer URL (e.g., Clerk, Auth0). |
-| `audience` | - | Expected JWT audience claim. |
+| `enabled` | `false` | Require a JWT access token on the MCP endpoint. |
+| `issuerUrl` | - | The identity provider's issuer identifier (e.g., Clerk, Auth0). Must match the provider's published `issuer` exactly. |
+| `audience` | - | Expected token audience. Defaults to `<publicUrl>/mcp`; set it only for providers that issue a fixed audience. |
 
 ### Scraper (`scraper`)
 

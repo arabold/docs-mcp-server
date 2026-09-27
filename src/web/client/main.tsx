@@ -14,8 +14,14 @@ import { trpc } from "./api/trpc";
 import "./styles/theme.css";
 import "./styles/components.css";
 
-const httpUrl = `${window.location.origin}/api`;
-const wsUrl = `${window.location.origin.replace(/^http/, "ws")}/api`;
+// The server injects <base href> for the public URL's path (e.g. "/docs/"),
+// so the app, its API and its live updates all live under that path.
+const baseUrl = new URL(
+  document.querySelector("base")?.href ?? `${window.location.origin}/`,
+);
+const basename = baseUrl.pathname.replace(/\/$/, "") || "/";
+const httpUrl = new URL("api", baseUrl).href;
+const wsUrl = httpUrl.replace(/^http/, "ws");
 
 const wsClient = createWSClient({ url: wsUrl });
 
@@ -40,7 +46,7 @@ createRoot(container).render(
   <StrictMode>
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
+        <BrowserRouter basename={basename}>
           <App />
         </BrowserRouter>
       </QueryClientProvider>
