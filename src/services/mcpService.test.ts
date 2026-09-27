@@ -16,6 +16,7 @@ import {
 } from "@modelcontextprotocol/server";
 import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripBasePath } from "../app/basePath";
 import { createOriginPolicy } from "../app/originPolicy";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
@@ -119,10 +120,7 @@ async function startServer(options: { withAuth?: boolean; config?: AppConfig } =
   // Strips the base path the way AppServer does, so URLs match production.
   server = Fastify({
     logger: false,
-    rewriteUrl: (request) => {
-      const url = request.url ?? "/";
-      return url.startsWith(`${BASE_PATH}/`) ? url.slice(BASE_PATH.length) : url;
-    },
+    rewriteUrl: (request) => stripBasePath(request.url ?? "/", BASE_PATH),
   });
   await registerMcpService(
     server,
@@ -135,6 +133,7 @@ async function startServer(options: { withAuth?: boolean; config?: AppConfig } =
         allowedOrigins: ["https://inspector.example.com"],
       }),
       location: {
+        configured: true,
         url: `https://example.com${BASE_PATH}`,
         origin: "https://example.com",
         basePath: BASE_PATH,

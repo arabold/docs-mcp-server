@@ -10,22 +10,12 @@
  * `DOCS_MCP_AUTH_ISSUER_URL` is set.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppServer, startAppServer } from "../src/app";
 import { JwtAccessTokenVerifier } from "../src/auth/JwtAccessTokenVerifier";
-import { createAppServerConfig } from "../src/cli/utils";
-import { EventBusService } from "../src/events";
-import { PipelineFactory } from "../src/pipeline/PipelineFactory";
-import type { IPipeline } from "../src/pipeline/trpc/interfaces";
-import { createLocalDocumentManagement } from "../src/store";
-import type { IDocumentManagement } from "../src/store/trpc/interfaces";
-import { loadConfig } from "../src/utils/config";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
+import { startInProcessServer } from "./in-process-server";
 import { getFreePort, type LocalIssuer, startLocalIssuer } from "./test-helpers";
 
 loadDotenv();
@@ -37,10 +27,7 @@ const META = {
 
 describe("Authentication End-to-End", () => {
   let issuer: LocalIssuer;
-  let appServer: AppServer | undefined;
-  let docService: IDocumentManagement | undefined;
-  let pipeline: IPipeline | undefined;
-  let tempDir = "";
+  let server: Awaited<ReturnType<typeof startInProcessServer>> | undefined;
   let origin = "";
   let publicUrl = "";
   let audience = "";
@@ -67,47 +54,17 @@ describe("Authentication End-to-End", () => {
     origin = `http://127.0.0.1:${port}`;
     publicUrl = `${origin}/docs`;
     audience = `${publicUrl}/mcp`;
-
-    tempDir = mkdtempSync(join(tmpdir(), "auth-e2e-"));
-    const appConfig = loadConfig();
-    appConfig.app.storePath = tempDir;
-    appConfig.app.embeddingModel = "";
-    appConfig.server.host = "127.0.0.1";
-    appConfig.server.publicUrl = publicUrl;
-    appConfig.auth.enabled = true;
-    appConfig.auth.issuerUrl = issuer.url;
-    appConfig.auth.audience = "";
-
-    const eventBus = new EventBusService();
-    docService = await createLocalDocumentManagement(eventBus, appConfig);
-    pipeline = await PipelineFactory.createPipeline(docService as never, eventBus, {
-      appConfig,
+    server = await startInProcessServer({
+      port,
+      publicUrl,
+      issuerUrl: issuer.url,
+      enableWebInterface: false,
     });
-    appServer = await startAppServer(
-      docService,
-      pipeline,
-      eventBus,
-      createAppServerConfig({
-        enableWebInterface: false,
-        enableMcpServer: true,
-        enableApiServer: true,
-        enableWorker: true,
-        port,
-        showLogo: false,
-        startupContext: { cliCommand: "test", mcpProtocol: "http" },
-      }),
-      appConfig,
-    );
   }, 30000);
 
   afterAll(async () => {
-    await appServer?.stop();
-    await pipeline?.stop();
-    await docService?.shutdown();
+    await server?.stop();
     await issuer?.close();
-    if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   describe("discovery", () => {

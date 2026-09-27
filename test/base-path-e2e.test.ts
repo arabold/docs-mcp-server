@@ -9,168 +9,27 @@
  * Playwright then drives the web UI under the base path.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
-import http, { createServer, type IncomingMessage, type Server } from "node:http";
-import net from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createServer } from "node:http";
 import { Client, SSEClientTransport } from "@modelcontextprotocol/client";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppServer, startAppServer } from "../src/app";
-import { createAppServerConfig } from "../src/cli/utils";
-import { EventBusService } from "../src/events";
-import { PipelineFactory } from "../src/pipeline/PipelineFactory";
-import type { IPipeline } from "../src/pipeline/trpc/interfaces";
-import { createLocalDocumentManagement } from "../src/store";
-import type { IDocumentManagement } from "../src/store/trpc/interfaces";
-import { loadConfig } from "../src/utils/config";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
+import { startInProcessServer } from "./in-process-server";
 import {
   getFreePort,
   type LocalIssuer,
   listenOnFreePort,
   startLocalIssuer,
+  startPrefixProxy,
+  tryNodeWebSocket,
 } from "./test-helpers";
 
 const BASE_PATH = "/docs";
 
-type ProxyMode = "strip" | "forward";
-
-/** A reverse proxy for `/docs/*` whose prefix handling can be switched. */
-async function startProxy(upstreamPort: number) {
-  let mode: ProxyMode = "strip";
-  const hostRootMetadata = `/.well-known/oauth-protected-resource${BASE_PATH}/mcp`;
-
-  const rewrite = (url: string): string | undefined => {
-    const pathname = url.split("?")[0];
-    if (pathname === hostRootMetadata) {
-      return url;
-    }
-    if (pathname !== BASE_PATH && !url.startsWith(`${BASE_PATH}/`) && !url.startsWith(`${BASE_PATH}?`)) {
-      return undefined;
-    }
-    if (mode === "forward") {
-      return url;
-    }
-    const rest = url.slice(BASE_PATH.length);
-    return rest.startsWith("/") ? rest : `/${rest}`;
-  };
-
-  const server: Server = createServer((request, response) => {
-    const path = rewrite(request.url ?? "/");
-    if (path === undefined) {
-      response.writeHead(404, { "content-type": "text/plain" }).end("no proxy location\n");
-      return;
-    }
-    const upstream = http.request(
-      { host: "127.0.0.1", port: upstreamPort, method: request.method, path, headers: request.headers },
-      (upstreamResponse) => {
-        response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-        upstreamResponse.pipe(response);
-      },
-    );
-    upstream.on("error", () => response.writeHead(502).end());
-    request.pipe(upstream);
-  });
-
-  server.on("upgrade", (request: IncomingMessage, socket: net.Socket, head: Buffer) => {
-    const path = rewrite(request.url ?? "/");
-    if (path === undefined) {
-      socket.destroy();
-      return;
-    }
-    const upstream = net.connect(upstreamPort, "127.0.0.1", () => {
-      const headerLines: string[] = [];
-      for (let i = 0; i < request.rawHeaders.length; i += 2) {
-        headerLines.push(`${request.rawHeaders[i]}: ${request.rawHeaders[i + 1]}`);
-      }
-      upstream.write(`${request.method} ${path} HTTP/1.1\r\n${headerLines.join("\r\n")}\r\n\r\n`);
-      if (head.length > 0) {
-        upstream.write(head);
-      }
-      socket.pipe(upstream);
-      upstream.pipe(socket);
-    });
-    upstream.on("error", () => socket.destroy());
-    socket.on("error", () => upstream.destroy());
-  });
-
-  const port = await listenOnFreePort(server);
-  return {
-    port,
-    setMode(next: ProxyMode) {
-      mode = next;
-    },
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  };
-}
-
-/**
- * Starts the full application on `port` with `server.publicUrl` set, with
- * authentication against `issuerUrl` when one is given.
- */
-async function startDocsServer(options: { port: number; publicUrl: string; issuerUrl?: string }) {
-  const tempDir = mkdtempSync(join(tmpdir(), "base-path-e2e-"));
-  const appConfig = loadConfig();
-  appConfig.app.storePath = tempDir;
-  appConfig.app.embeddingModel = "";
-  appConfig.server.host = "127.0.0.1";
-  appConfig.server.publicUrl = options.publicUrl;
-  appConfig.auth.enabled = options.issuerUrl !== undefined;
-  appConfig.auth.issuerUrl = options.issuerUrl ?? "";
-  appConfig.auth.audience = "";
-
-  const eventBus = new EventBusService();
-  const docService = await createLocalDocumentManagement(eventBus, appConfig);
-  const pipeline = await PipelineFactory.createPipeline(docService as never, eventBus, {
-    appConfig,
-  });
-  const appServer = await startAppServer(
-    docService,
-    pipeline,
-    eventBus,
-    createAppServerConfig({
-      enableWebInterface: true,
-      enableMcpServer: true,
-      enableApiServer: true,
-      enableWorker: true,
-      port: options.port,
-      showLogo: false,
-      startupContext: { cliCommand: "test", mcpProtocol: "http" },
-    }),
-    appConfig,
-  );
-
-  return {
-    async stop() {
-      await appServer.stop();
-      await pipeline.stop();
-      await docService.shutdown();
-      rmSync(tempDir, { recursive: true, force: true });
-    },
-  };
-}
-
-async function openNodeWebSocket(url: string): Promise<"open" | "refused"> {
-  const socket = new WebSocket(url);
-  return await new Promise((resolve) => {
-    socket.addEventListener("open", () => {
-      socket.close();
-      resolve("open");
-    });
-    socket.addEventListener("error", () => resolve("refused"));
-  });
-}
-
 describe("Serving under a base path behind a reverse proxy", () => {
   let issuer: LocalIssuer;
-  let proxy: Awaited<ReturnType<typeof startProxy>>;
-  let docsServer: Awaited<ReturnType<typeof startDocsServer>> | undefined;
+  let proxy: Awaited<ReturnType<typeof startPrefixProxy>>;
+  let docsServer: Awaited<ReturnType<typeof startInProcessServer>> | undefined;
   let proxyOrigin = "";
   let publicUrl = "";
 
@@ -178,10 +37,10 @@ describe("Serving under a base path behind a reverse proxy", () => {
     setLogLevel(LogLevel.ERROR);
     issuer = await startLocalIssuer();
     const upstreamPort = await getFreePort();
-    proxy = await startProxy(upstreamPort);
+    proxy = await startPrefixProxy(upstreamPort, BASE_PATH);
     proxyOrigin = `http://127.0.0.1:${proxy.port}`;
     publicUrl = `${proxyOrigin}${BASE_PATH}`;
-    docsServer = await startDocsServer({ port: upstreamPort, publicUrl, issuerUrl: issuer.url });
+    docsServer = await startInProcessServer({ port: upstreamPort, publicUrl, issuerUrl: issuer.url });
   }, 30000);
 
   afterAll(async () => {
@@ -219,7 +78,7 @@ describe("Serving under a base path behind a reverse proxy", () => {
       const api = await fetch(`${publicUrl}/api/ping`);
 
       expect(api.status).toBe(200);
-      expect(await openNodeWebSocket(`${publicUrl.replace(/^http/, "ws")}/api`)).toBe("open");
+      expect(await tryNodeWebSocket(`${publicUrl.replace(/^http/, "ws")}/api`)).toBe("open");
     });
 
     it("serves MCP under the path", async () => {
@@ -350,16 +209,16 @@ describe("Serving under a base path behind a reverse proxy", () => {
 });
 
 describe("Deprecated SSE transport under a base path, without authentication", () => {
-  let proxy: Awaited<ReturnType<typeof startProxy>>;
-  let docsServer: Awaited<ReturnType<typeof startDocsServer>> | undefined;
+  let proxy: Awaited<ReturnType<typeof startPrefixProxy>>;
+  let docsServer: Awaited<ReturnType<typeof startInProcessServer>> | undefined;
   let publicUrl = "";
 
   beforeAll(async () => {
     setLogLevel(LogLevel.ERROR);
     const upstreamPort = await getFreePort();
-    proxy = await startProxy(upstreamPort);
+    proxy = await startPrefixProxy(upstreamPort, BASE_PATH);
     publicUrl = `http://127.0.0.1:${proxy.port}${BASE_PATH}`;
-    docsServer = await startDocsServer({ port: upstreamPort, publicUrl });
+    docsServer = await startInProcessServer({ port: upstreamPort, publicUrl });
   }, 30000);
 
   afterAll(async () => {

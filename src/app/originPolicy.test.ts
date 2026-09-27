@@ -70,7 +70,7 @@ describe("createOriginPolicy", () => {
 
 describe("createHostPolicy", () => {
   const policy = createHostPolicy({
-    publicHostname: "docs.example.com",
+    publicOrigin: "https://docs.example.com",
     allowedOrigins: ["http://nas.local:6280"],
   });
 
@@ -134,11 +134,12 @@ describe("setCorsPreflightHeaders", () => {
   it("allows POST and echoes the requested headers", () => {
     const res = createResponse();
 
-    setCorsPreflightHeaders(
-      res,
-      "http://localhost:6274",
-      "authorization, content-type, mcp-protocol-version, mcp-param-region",
-    );
+    setCorsPreflightHeaders(res, {
+      origin: "http://localhost:6274",
+      methods: "POST",
+      requestedHeaders:
+        "authorization, content-type, mcp-protocol-version, mcp-param-region",
+    });
 
     expect(res.getHeader("Access-Control-Allow-Origin")).toBe("http://localhost:6274");
     expect(res.getHeader("Access-Control-Allow-Methods")).toBe("POST");
@@ -152,11 +153,11 @@ describe("setCorsPreflightHeaders", () => {
   it("drops requested header names that are not valid tokens", () => {
     const res = createResponse();
 
-    setCorsPreflightHeaders(
-      res,
-      "http://localhost:6274",
-      "content-type, bad header, x\r\ny",
-    );
+    setCorsPreflightHeaders(res, {
+      origin: "http://localhost:6274",
+      methods: "POST",
+      requestedHeaders: "content-type, bad header, x\r\ny",
+    });
 
     expect(res.getHeader("Access-Control-Allow-Headers")).toBe("content-type");
   });

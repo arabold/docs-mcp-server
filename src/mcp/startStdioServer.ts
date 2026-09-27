@@ -1,7 +1,7 @@
 import { type StdioServerHandle, serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
-import { createMcpServerInstance, resolveServerInstructions } from "./mcpServer";
+import { createMcpServerFactory } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
 /**
@@ -19,9 +19,7 @@ export async function startStdioServer(
   tools: McpServerTools,
   config: AppConfig,
 ): Promise<StdioServerHandle> {
-  // Read once at startup: every connection gets the same instructions.
-  const instructions = resolveServerInstructions(config);
-  const handle = serveStdio(() => createMcpServerInstance(tools, config, instructions), {
+  const handle = serveStdio(createMcpServerFactory(tools, config), {
     legacy: "serve",
     onerror: (error) => logger.error(`❌ MCP stdio transport error: ${error.message}`),
   });

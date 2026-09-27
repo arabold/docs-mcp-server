@@ -11,7 +11,6 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import http from "node:http";
-import net from "node:net";
 import path from "node:path";
 import {
   Client,
@@ -20,25 +19,8 @@ import {
 } from "@modelcontextprotocol/client";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { WebSocket as WsClient } from "ws";
-import { getCliCommand } from "./test-helpers";
-
-async function getAvailablePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("Failed to resolve an available port"));
-        return;
-      }
-      const { port } = address;
-      server.close((error) => (error ? reject(error) : resolve(port)));
-    });
-    server.on("error", reject);
-  });
-}
+import { type ClientOptions, WebSocket as WsClient } from "ws";
+import { getCliCommand, getFreePort, tryNodeWebSocket } from "./test-helpers";
 
 /** Spawns the server and resolves with its advertised base URL once it is ready. */
 async function startServer(port: number): Promise<{ process: ChildProcess; url: string }> {
@@ -114,23 +96,11 @@ async function connectClient(baseUrl: string): Promise<Client> {
 }
 
 /**
- * Opens a WebSocket with Node's global client, the one the worker link uses
- * through tRPC, and reports whether the upgrade succeeded.
+ * Opens a WebSocket with explicit handshake options, such as the `Origin` a
+ * browser page sends or a rebound `Host`.
  */
-async function tryNodeWebSocket(url: string): Promise<"open" | "refused"> {
-  const socket = new WebSocket(url);
-  return await new Promise((resolve) => {
-    socket.addEventListener("open", () => {
-      socket.close();
-      resolve("open");
-    });
-    socket.addEventListener("error", () => resolve("refused"));
-  });
-}
-
-/** Opens a WebSocket that carries an explicit `Origin`, as a browser page would. */
-async function tryWebSocketFromOrigin(url: string, origin: string): Promise<"open" | "refused"> {
-  const socket = new WsClient(url, { origin });
+async function tryWebSocketWith(url: string, options: ClientOptions): Promise<"open" | "refused"> {
+  const socket = new WsClient(url, options);
   return await new Promise((resolve) => {
     socket.on("open", () => {
       socket.close();
@@ -160,7 +130,7 @@ describe("MCP HTTP server E2E", () => {
   let baseUrl = "";
 
   beforeAll(async () => {
-    server = await startServer(await getAvailablePort());
+    server = await startServer(await getFreePort());
     baseUrl = server.url;
   }, 60000);
 
@@ -319,8 +289,8 @@ describe("MCP HTTP server E2E", () => {
     const wsUrl = new URL("/api", baseUrl).href.replace(/^http/, "ws");
 
     expect(await tryNodeWebSocket(wsUrl)).toBe("open");
-    expect(await tryWebSocketFromOrigin(wsUrl, new URL(baseUrl).origin)).toBe("open");
-    expect(await tryWebSocketFromOrigin(wsUrl, "https://attacker.example")).toBe("refused");
+    expect(await tryWebSocketWith(wsUrl, { origin: new URL(baseUrl).origin })).toBe("open");
+    expect(await tryWebSocketWith(wsUrl, { origin: "https://attacker.example" })).toBe("refused");
   });
 
   it.each([
@@ -350,16 +320,9 @@ describe("MCP HTTP server E2E", () => {
 
   it("refuses the WebSocket for a foreign host name", async () => {
     const wsUrl = new URL("/api", baseUrl).href.replace(/^http/, "ws");
-    const socket = new WsClient(wsUrl, {
-      headers: { host: `attacker.rebind.example:${new URL(baseUrl).port}` },
-    });
 
-    const outcome = await new Promise<"open" | "refused">((resolve) => {
-      socket.on("open", () => {
-        socket.close();
-        resolve("open");
-      });
-      socket.on("error", () => resolve("refused"));
+    const outcome = await tryWebSocketWith(wsUrl, {
+      headers: { host: `attacker.rebind.example:${new URL(baseUrl).port}` },
     });
 
     expect(outcome).toBe("refused");

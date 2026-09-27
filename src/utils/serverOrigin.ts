@@ -15,27 +15,15 @@ export function normalizePublicOrigin(
   origin: string | undefined,
   settingName = "server.publicOrigin",
 ): string | undefined {
-  const trimmed = origin?.trim();
-  if (!trimmed) {
+  const configured = parseConfiguredUrl(
+    origin,
+    settingName,
+    "origin without path, query, or fragment",
+  );
+  if (!configured) {
     return undefined;
   }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error(
-      `${settingName} must be an absolute HTTP(S) origin without path, query, or fragment.`,
-    );
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`${settingName} must use the http or https protocol.`);
-  }
-
-  if (parsed.username || parsed.password) {
-    throw new Error(`${settingName} must not include credentials.`);
-  }
+  const { parsed } = configured;
 
   if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
     throw new Error(`${settingName} must not include a path, query string, or fragment.`);
@@ -45,10 +33,10 @@ export function normalizePublicOrigin(
 }
 
 /**
- * First path segments a public URL must not start with, because the server
- * itself serves routes there. Stripping such a base path from a request the
- * proxy already stripped would remove the route itself (`/mcp` under a base
- * path of `/mcp` would become `/`).
+ * First path segments of the server's own root routes. A public URL must not
+ * start with one: stripping such a base path from a request the proxy already
+ * stripped would remove the route itself (`/mcp` under a base path of `/mcp`
+ * would become `/`). These paths also never fall back to the web UI.
  */
 export const RESERVED_ROOT_SEGMENTS: readonly string[] = [
   "mcp",
@@ -73,27 +61,15 @@ export const RESERVED_ROOT_SEGMENTS: readonly string[] = [
  *   collides with a route the server serves at its root.
  */
 export function normalizePublicUrl(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
+  const configured = parseConfiguredUrl(
+    value,
+    "server.publicUrl",
+    "URL without query string or fragment",
+  );
+  if (!configured) {
     return undefined;
   }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error(
-      "server.publicUrl must be an absolute HTTP(S) URL without query string or fragment.",
-    );
-  }
-
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("server.publicUrl must use the http or https protocol.");
-  }
-
-  if (parsed.username || parsed.password) {
-    throw new Error("server.publicUrl must not include credentials.");
-  }
+  const { parsed, trimmed } = configured;
 
   if (parsed.search || parsed.hash || trimmed.includes("?") || trimmed.includes("#")) {
     throw new Error("server.publicUrl must not include a query string or fragment.");
@@ -111,10 +87,49 @@ export function normalizePublicUrl(value: string | undefined): string | undefine
 }
 
 /**
+ * Parse a configured HTTP(S) URL and apply the checks every such setting shares.
+ * Empty values count as absent.
+ * @returns The parsed URL and the trimmed input, or `undefined` when absent.
+ * @throws Error naming the setting when the value is not an HTTP(S) URL or has credentials.
+ */
+function parseConfiguredUrl(
+  value: string | undefined,
+  settingName: string,
+  expectedShape: string,
+): { parsed: URL; trimmed: string } | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`${settingName} must be an absolute HTTP(S) ${expectedShape}.`);
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`${settingName} must use the http or https protocol.`);
+  }
+
+  if (parsed.username || parsed.password) {
+    throw new Error(`${settingName} must not include credentials.`);
+  }
+
+  return { parsed, trimmed };
+}
+
+/**
  * Where clients reach the server, split into the parts that URL generation and
  * request routing need.
  */
 export interface PublicLocation {
+  /**
+   * Whether an operator configured the location (`server.publicUrl` or the
+   * deprecated `server.publicOrigin`), rather than it being derived from the bind address.
+   */
+  configured: boolean;
   /** Canonical base URL without a trailing slash, e.g. `https://example.com/docs`. */
   url: string;
   /** Scheme, host and port, e.g. `https://example.com`. */
@@ -134,12 +149,17 @@ export interface PublicLocation {
  *   normally rejects those earlier).
  */
 export function resolvePublicLocation(config: AppConfig, port: number): PublicLocation {
-  const url =
+  const configuredUrl =
     normalizePublicUrl(config.server.publicUrl) ??
-    normalizePublicOrigin(config.server.publicOrigin) ??
-    buildBindOrigin(config.server.host, port);
+    normalizePublicOrigin(config.server.publicOrigin);
+  const url = configuredUrl ?? buildBindOrigin(config.server.host, port);
   const origin = new URL(url).origin;
-  return { url, origin, basePath: url.slice(origin.length) };
+  return {
+    configured: configuredUrl !== undefined,
+    url,
+    origin,
+    basePath: url.slice(origin.length),
+  };
 }
 
 /**
@@ -167,35 +187,11 @@ export function describePublicLocationWarnings(config: AppConfig): string[] {
  * Build an HTTP origin from the local bind host and port.
  *
  * The server itself listens over HTTP; deployments that terminate TLS should
- * configure server.publicOrigin to advertise an HTTPS origin.
+ * configure server.publicUrl to advertise an HTTPS URL.
  */
 export function buildBindOrigin(host: string, port: number): string {
   const formattedHost = formatHostForUrl(host);
   return new URL(`http://${formattedHost}:${port}`).origin;
-}
-
-/**
- * Resolve the canonical origin used for generated endpoint URLs.
- */
-export function getCanonicalServerOrigin(config: AppConfig, port: number): string {
-  return (
-    normalizePublicOrigin(config.server.publicOrigin) ??
-    buildBindOrigin(config.server.host, port)
-  );
-}
-
-/**
- * Return true when a host value represents a wildcard bind address.
- */
-export function isWildcardBindHost(host: string): boolean {
-  const normalized = stripIpv6Brackets(host.trim().toLowerCase());
-  return (
-    normalized === "0.0.0.0" ||
-    normalized === "::" ||
-    normalized === "::0" ||
-    normalized === "0:0:0:0:0:0:0:0" ||
-    normalized === "0000:0000:0000:0000:0000:0000:0000:0000"
-  );
 }
 
 function formatHostForUrl(host: string): string {
@@ -207,6 +203,12 @@ function formatHostForUrl(host: string): string {
   return trimmed;
 }
 
-function stripIpv6Brackets(host: string): string {
+/**
+ * Remove the brackets around an IPv6 address literal, as URLs and `Host`
+ * headers write it. Other values are returned unchanged.
+ * @param host - A host, e.g. `[::1]` or `example.com`.
+ * @returns The host without brackets, e.g. `::1`.
+ */
+export function stripIpv6Brackets(host: string): string {
   return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 }

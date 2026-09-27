@@ -70,10 +70,8 @@ vi.mock("../utils", () => ({
   validatePort: vi.fn((p) => parseInt(p || "6280", 10)),
   validateHost: vi.fn((h) => h || "127.0.0.1"),
   resolveProtocol: vi.fn((p) => p || "http"),
-  parseAuthConfig: vi.fn(() => null),
-  validateAuthConfig: vi.fn(),
+  checkAuthForProtocol: vi.fn(),
   createAppServerConfig: vi.fn((config) => config),
-  warnHttpUsage: vi.fn(),
   handleEmbeddingModelChange: vi.fn(),
   CliContext: {},
   setupLogging: vi.fn(),
@@ -195,10 +193,9 @@ describe("mcp command", () => {
     );
   });
 
-  it("ignores authentication over stdio, with a warning instead of an error", async () => {
+  it("checks the auth settings for the stdio transport it serves", async () => {
     const parser = yargs().scriptName("test");
     createMcpCommand(parser);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const { loadConfig } = await import("../../utils/config");
     vi.mocked(loadConfig).mockReturnValueOnce({
@@ -223,11 +220,11 @@ describe("mcp command", () => {
     }
 
     expect(stdioModule.startStdioServer).toHaveBeenCalled();
-    expect(utils.validateAuthConfig).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Authentication does not apply to MCP over stdio"),
+    expect(utils.checkAuthForProtocol).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true }),
+      "stdio",
+      6280,
     );
-    errorSpy.mockRestore();
   });
 });
 

@@ -70,8 +70,8 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
 
 /**
  * Resolves the instructions text advertised to MCP clients during initialization.
- * Call this once at startup and pass the result to `createMcpServerInstance()`, so the
- * instructions file is read a single time rather than for every client session.
+ * `createMcpServerFactory()` calls this once at startup, so the instructions file
+ * is read a single time rather than for every client session.
  * `server.instructions` and `server.instructionsFile` are mutually exclusive. When
  * neither is set, the built-in instructions for the current mode are used.
  * @param config The application configuration.
@@ -115,17 +115,215 @@ function decodeUriVariable(value: string | string[]): string {
 }
 
 /**
+ * Build the input schemas of every tool. They depend only on configuration,
+ * which does not change while the process runs, so one set serves every MCP
+ * server instance. Over HTTP an instance is created per request.
+ * @param config The application configuration.
+ * @returns The input schema for each tool, keyed by the tool's camel-cased name.
+ */
+export function createToolInputSchemas(config: AppConfig) {
+  return {
+    scrapeDocs: z.object({
+      url: z.string().url().describe("Documentation root URL to scrape."),
+      library: z.string().trim().describe("Library name."),
+      version: z.string().trim().optional().describe("Library version (optional)."),
+      maxPages: z
+        .number()
+        .optional()
+        .default(config.scraper.maxPages)
+        .describe(
+          `Maximum number of pages to scrape (default: ${config.scraper.maxPages}).`,
+        ),
+      maxDepth: z
+        .number()
+        .optional()
+        .default(config.scraper.maxDepth)
+        .describe(`Maximum navigation depth (default: ${config.scraper.maxDepth}).`),
+      scope: z
+        .enum(["subpages", "hostname", "domain"])
+        .optional()
+        .default("subpages")
+        .describe("Crawling boundary: 'subpages', 'hostname', or 'domain'."),
+      followRedirects: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("Follow HTTP redirects (3xx responses)."),
+      replace: z
+        .boolean()
+        .optional()
+        .default(false)
+        .describe(
+          "Rebuild the version from scratch if it already exists. Without it, an existing version is left untouched and the request fails.",
+        ),
+      preserveHashes: z
+        .boolean()
+        .optional()
+        .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
+      includePatterns: patternsSchema
+        .optional()
+        .describe(
+          "Patterns for including URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Regex patterns must be wrapped in slashes, e.g. /pattern/. If not set, all are included by default.",
+        ),
+      excludePatterns: patternsSchema
+        .optional()
+        .describe(
+          "Patterns for excluding URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Exclude takes precedence over include. Regex patterns must be wrapped in slashes, e.g. /pattern/.",
+        ),
+    }),
+    refreshVersion: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (optional, refreshes latest if omitted)."),
+    }),
+    searchDocs: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      query: z.string().trim().describe("Documentation search query."),
+      limit: z.number().optional().default(5).describe("Maximum number of results."),
+    }),
+    readPage: z.object({
+      library: z.string().trim().describe("Library name."),
+      pathOrUrl: z
+        .string()
+        .trim()
+        .min(1)
+        .describe(
+          "Page URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+        ),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      startChunk: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Chunk to start from, as given by a previous response (default 0)."),
+      maxChars: z
+        .number()
+        .positive()
+        .optional()
+        .default(30000)
+        .describe(
+          "Maximum characters to return (default 30000). Only whole chunks are returned, so a single longer chunk is returned on its own.",
+        ),
+    }),
+    listPages: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      contains: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Only list pages whose URL contains this text (e.g. '/components')."),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(200)
+        .optional()
+        .default(50)
+        .describe("Maximum pages to return (default 50, max 200)."),
+      offset: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Number of pages to skip (default 0)."),
+    }),
+    listLibraries: z.object({
+      // no params
+    }),
+    findVersion: z.object({
+      library: z.string().trim().describe("Library name."),
+      targetVersion: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Version pattern to match (exact or X-Range, optional)."),
+    }),
+    listJobs: z.object({
+      status: z
+        .enum(["queued", "running", "completed", "failed", "cancelling", "cancelled"])
+        .optional()
+        .describe("Filter jobs by status (optional)."),
+    }),
+    getJobInfo: z.object({
+      jobId: z.string().uuid().describe("Job ID to query."),
+    }),
+    cancelJob: z.object({
+      jobId: z.string().uuid().describe("Job ID to cancel."),
+    }),
+    removeDocs: z.object({
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (optional, removes latest if omitted)."),
+    }),
+    fetchUrl: z.object({
+      url: z.string().url().describe("URL to fetch and convert to Markdown."),
+      followRedirects: z
+        .boolean()
+        .optional()
+        .default(true)
+        .describe("Follow HTTP redirects (3xx responses)."),
+    }),
+  };
+}
+
+/** Input schemas for every tool, as built by {@link createToolInputSchemas}. */
+export type ToolInputSchemas = ReturnType<typeof createToolInputSchemas>;
+
+/**
+ * Build a factory for MCP server instances that share one set of tool input
+ * schemas and one instructions text, for transports that create an instance
+ * per request or connection. Both are resolved here, once, at startup.
+ * @param tools The shared tool instances to use for server operations.
+ * @param config The application configuration.
+ * @returns A function that creates a configured McpServer instance.
+ * @throws {Error} If the configured instructions cannot be resolved.
+ */
+export function createMcpServerFactory(
+  tools: McpServerTools,
+  config: AppConfig,
+): () => McpServer {
+  const instructions = resolveServerInstructions(config);
+  const schemas = createToolInputSchemas(config);
+  return () => createMcpServerInstance(tools, config, instructions, schemas);
+}
+
+/**
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
  * @param instructions Instructions text sent to clients during initialization, as
  *   returned by `resolveServerInstructions()`.
+ * @param schemas Prebuilt tool input schemas; built from `config` when omitted.
  * @returns A configured McpServer instance.
  */
 export function createMcpServerInstance(
   tools: McpServerTools,
   config: AppConfig,
   instructions: string,
+  schemas: ToolInputSchemas = createToolInputSchemas(config),
 ): McpServer {
   const readOnly = config.app.readOnly;
   const { name, title } = config.server;
@@ -154,54 +352,7 @@ export function createMcpServerInstance(
       {
         description:
           "Scrape and index documentation from a URL for a library. Use this tool to index a new library or a new version. Scraping a library version that already exists is rejected unless `replace` is true; use refresh_version to update an existing version in place.",
-        inputSchema: z.object({
-          url: z.string().url().describe("Documentation root URL to scrape."),
-          library: z.string().trim().describe("Library name."),
-          version: z.string().trim().optional().describe("Library version (optional)."),
-          maxPages: z
-            .number()
-            .optional()
-            .default(config.scraper.maxPages)
-            .describe(
-              `Maximum number of pages to scrape (default: ${config.scraper.maxPages}).`,
-            ),
-          maxDepth: z
-            .number()
-            .optional()
-            .default(config.scraper.maxDepth)
-            .describe(`Maximum navigation depth (default: ${config.scraper.maxDepth}).`),
-          scope: z
-            .enum(["subpages", "hostname", "domain"])
-            .optional()
-            .default("subpages")
-            .describe("Crawling boundary: 'subpages', 'hostname', or 'domain'."),
-          followRedirects: z
-            .boolean()
-            .optional()
-            .default(true)
-            .describe("Follow HTTP redirects (3xx responses)."),
-          replace: z
-            .boolean()
-            .optional()
-            .default(false)
-            .describe(
-              "Rebuild the version from scratch if it already exists. Without it, an existing version is left untouched and the request fails.",
-            ),
-          preserveHashes: z
-            .boolean()
-            .optional()
-            .describe("Preserve hash fragments for hash-routed SPA documentation sites."),
-          includePatterns: patternsSchema
-            .optional()
-            .describe(
-              "Patterns for including URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Regex patterns must be wrapped in slashes, e.g. /pattern/. If not set, all are included by default.",
-            ),
-          excludePatterns: patternsSchema
-            .optional()
-            .describe(
-              "Patterns for excluding URLs during scraping. Pass one or more patterns as a comma-separated string or as an array. Commas inside { }, [ ] or ( ) are preserved; escape a literal comma with a backslash. Exclude takes precedence over include. Regex patterns must be wrapped in slashes, e.g. /pattern/.",
-            ),
-        }),
+        inputSchema: schemas.scrapeDocs,
         annotations: {
           title: "Scrape New Library Documentation",
           destructiveHint: true, // replaces existing docs
@@ -275,14 +426,7 @@ export function createMcpServerInstance(
       {
         description:
           "Re-scrape a previously indexed library version, updating only changed pages.",
-        inputSchema: z.object({
-          library: z.string().trim().describe("Library name."),
-          version: z
-            .string()
-            .trim()
-            .optional()
-            .describe("Library version (optional, refreshes latest if omitted)."),
-        }),
+        inputSchema: schemas.refreshVersion,
         annotations: {
           title: "Refresh Library Version",
           destructiveHint: false, // Only updates changed content
@@ -333,16 +477,7 @@ export function createMcpServerInstance(
         '- {library: "react", version: "18.0.0", query: "hooks lifecycle"} -> matches React 18.0.0 or earlier\n' +
         '- {library: "typescript", version: "5.x", query: "ReturnType example"} -> any TypeScript 5.x.x version\n' +
         '- {library: "typescript", version: "5.2.x", query: "ReturnType example"} -> any TypeScript 5.2.x version',
-      inputSchema: z.object({
-        library: z.string().trim().describe("Library name."),
-        version: z
-          .string()
-          .trim()
-          .optional()
-          .describe("Library version (exact or X-Range, optional)."),
-        query: z.string().trim().describe("Documentation search query."),
-        limit: z.number().optional().default(5).describe("Maximum number of results."),
-      }),
+      inputSchema: schemas.searchDocs,
       annotations: {
         title: "Search Library Documentation",
         readOnlyHint: true,
@@ -396,36 +531,7 @@ ${r.content}\n`,
       description:
         "Read the full content of an indexed documentation page, for example a URL returned by `search_docs` or `list_pages`. " +
         "Long pages are returned in parts; the response says how to continue.",
-      inputSchema: z.object({
-        library: z.string().trim().describe("Library name."),
-        pathOrUrl: z
-          .string()
-          .trim()
-          .min(1)
-          .describe(
-            "Page URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
-          ),
-        version: z
-          .string()
-          .trim()
-          .optional()
-          .describe("Library version (exact or X-Range, optional)."),
-        startChunk: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .default(0)
-          .describe("Chunk to start from, as given by a previous response (default 0)."),
-        maxChars: z
-          .number()
-          .positive()
-          .optional()
-          .default(30000)
-          .describe(
-            "Maximum characters to return (default 30000). Only whole chunks are returned, so a single longer chunk is returned on its own.",
-          ),
-      }),
+      inputSchema: schemas.readPage,
       annotations: {
         title: "Read Documentation Page",
         readOnlyHint: true,
@@ -475,34 +581,7 @@ ${r.content}\n`,
     {
       description:
         "List the indexed pages of a library version, with an optional URL filter and pagination.",
-      inputSchema: z.object({
-        library: z.string().trim().describe("Library name."),
-        version: z
-          .string()
-          .trim()
-          .optional()
-          .describe("Library version (exact or X-Range, optional)."),
-        contains: z
-          .string()
-          .trim()
-          .optional()
-          .describe("Only list pages whose URL contains this text (e.g. '/components')."),
-        limit: z
-          .number()
-          .int()
-          .positive()
-          .max(200)
-          .optional()
-          .default(50)
-          .describe("Maximum pages to return (default 50, max 200)."),
-        offset: z
-          .number()
-          .int()
-          .nonnegative()
-          .optional()
-          .default(0)
-          .describe("Number of pages to skip (default 0)."),
-      }),
+      inputSchema: schemas.listPages,
       annotations: {
         title: "List Library Pages",
         readOnlyHint: true,
@@ -560,9 +639,7 @@ ${r.content}\n`,
     {
       description:
         "List all indexed libraries and their versions. Use this to find the correct library name.",
-      inputSchema: z.object({
-        // no params
-      }),
+      inputSchema: schemas.listLibraries,
       annotations: {
         title: "List Libraries",
         readOnlyHint: true,
@@ -597,14 +674,7 @@ ${r.content}\n`,
     {
       description:
         "Find the best matching version for a library. Use to identify available or closest versions.",
-      inputSchema: z.object({
-        library: z.string().trim().describe("Library name."),
-        targetVersion: z
-          .string()
-          .trim()
-          .optional()
-          .describe("Version pattern to match (exact or X-Range, optional)."),
-      }),
+      inputSchema: schemas.findVersion,
       annotations: {
         title: "Find Library Version",
         readOnlyHint: true,
@@ -641,12 +711,7 @@ ${r.content}\n`,
       "list_jobs",
       {
         description: "List all indexing jobs. Optionally filter by status.",
-        inputSchema: z.object({
-          status: z
-            .enum(["queued", "running", "completed", "failed", "cancelling", "cancelled"])
-            .optional()
-            .describe("Filter jobs by status (optional)."),
-        }),
+        inputSchema: schemas.listJobs,
         annotations: {
           title: "List Indexing Jobs",
           readOnlyHint: true,
@@ -689,9 +754,7 @@ ${r.content}\n`,
       {
         description:
           "Get details for a specific indexing job. Use the 'list_jobs' tool to find the job ID.",
-        inputSchema: z.object({
-          jobId: z.string().uuid().describe("Job ID to query."),
-        }),
+        inputSchema: schemas.getJobInfo,
         annotations: {
           title: "Get Indexing Job Info",
           readOnlyHint: true,
@@ -725,9 +788,7 @@ ${r.content}\n`,
       {
         description:
           "Cancel a queued or running indexing job. Use the 'list_jobs' tool to find the job ID.",
-        inputSchema: z.object({
-          jobId: z.string().uuid().describe("Job ID to cancel."),
-        }),
+        inputSchema: schemas.cancelJob,
         annotations: {
           title: "Cancel Indexing Job",
           destructiveHint: true,
@@ -758,14 +819,7 @@ ${r.content}\n`,
       {
         description:
           "Remove indexed documentation for a library version. Use only if explicitly instructed.",
-        inputSchema: z.object({
-          library: z.string().trim().describe("Library name."),
-          version: z
-            .string()
-            .trim()
-            .optional()
-            .describe("Library version (optional, removes latest if omitted)."),
-        }),
+        inputSchema: schemas.removeDocs,
         annotations: {
           title: "Remove Library Documentation",
           destructiveHint: true,
@@ -799,14 +853,7 @@ ${r.content}\n`,
     {
       description:
         "Fetch a single URL and convert its content to Markdown. Use this tool to read the content of any web page.",
-      inputSchema: z.object({
-        url: z.string().url().describe("URL to fetch and convert to Markdown."),
-        followRedirects: z
-          .boolean()
-          .optional()
-          .default(true)
-          .describe("Follow HTTP redirects (3xx responses)."),
-      }),
+      inputSchema: schemas.fetchUrl,
       annotations: {
         title: "Fetch URL",
         readOnlyHint: true,

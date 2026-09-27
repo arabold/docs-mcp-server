@@ -15,6 +15,7 @@
 import type { ServerResponse } from "node:http";
 import { isIP } from "node:net";
 import { localhostAllowedOrigins } from "@modelcontextprotocol/server";
+import { stripIpv6Brackets } from "../utils/serverOrigin";
 
 /** How a request's `Origin` header relates to the policy. */
 export type OriginVerdict = "absent" | "allowed" | "denied";
@@ -30,16 +31,21 @@ export interface OriginPolicy {
   check(origin: string | undefined): OriginVerdict;
 }
 
+/** What both policies are built from. */
+export interface BrowserPolicyOptions {
+  /** Origin (`scheme://host[:port]`) of the configured public URL, when one is configured. */
+  publicOrigin?: string;
+  /** Canonical origins (`scheme://host[:port]`) of hosted browser clients. */
+  allowedOrigins: readonly string[];
+}
+
 /**
- * Build the origin policy.
- * @param options.publicOrigin - Origin (`scheme://host[:port]`) of the configured public URL, when one is configured.
- * @param options.allowedOrigins - Canonical origins (`scheme://host[:port]`) that are allowed exactly.
+ * Build the origin policy. Loopback origins, the public URL's origin and each
+ * allowed origin (matched exactly) are allowed.
+ * @param options - The public origin and the allowed origins.
  * @returns The policy.
  */
-export function createOriginPolicy(options: {
-  publicOrigin?: string;
-  allowedOrigins: readonly string[];
-}): OriginPolicy {
+export function createOriginPolicy(options: BrowserPolicyOptions): OriginPolicy {
   const loopbackHosts = new Set(
     localhostAllowedOrigins().map((host) => host.toLowerCase()),
   );
@@ -92,20 +98,17 @@ const HOST_HEADER =
  * pointed at an attacker's page through public DNS, which is what DNS
  * rebinding needs. A request without a `Host` header is served.
  *
- * @param options.publicHostname - Hostname of the configured public URL, when one is configured.
- * @param options.allowedOrigins - Canonical allowed origins; their hosts are accepted too.
+ * @param options - The public origin and the allowed origins, whose hosts are accepted.
  * @returns The policy.
  */
-export function createHostPolicy(options: {
-  publicHostname?: string;
-  allowedOrigins: readonly string[];
-}): HostPolicy {
+export function createHostPolicy(options: BrowserPolicyOptions): HostPolicy {
+  const knownOrigins = [
+    ...options.allowedOrigins,
+    ...(options.publicOrigin === undefined ? [] : [options.publicOrigin]),
+  ];
   const knownHosts = new Set(
-    options.allowedOrigins.map((origin) => new URL(origin).hostname.toLowerCase()),
+    knownOrigins.map((origin) => new URL(origin).hostname.toLowerCase()),
   );
-  if (options.publicHostname !== undefined) {
-    knownHosts.add(options.publicHostname.toLowerCase());
-  }
 
   return {
     isAllowed(host) {
@@ -116,12 +119,8 @@ export function createHostPolicy(options: {
         return false;
       }
       const hostname = new URL(`http://${host}`).hostname.toLowerCase();
-      const unbracketed =
-        hostname.startsWith("[") && hostname.endsWith("]")
-          ? hostname.slice(1, -1)
-          : hostname;
       return (
-        isIP(unbracketed) !== 0 ||
+        isIP(stripIpv6Brackets(hostname)) !== 0 ||
         hostname === "localhost" ||
         !hostname.includes(".") ||
         knownHosts.has(hostname)
@@ -176,21 +175,20 @@ export function setCorsResponseHeaders(res: ServerResponse, origin: string): voi
 }
 
 /**
- * Set the headers of a CORS preflight answer for an allowed origin: allow POST
- * and echo the request headers the preflight names. The caller sends the
- * `204`. Call only for an `"allowed"` verdict.
+ * Set the headers of a CORS preflight answer: allow the given methods and echo
+ * the request headers the preflight names. The caller sends the `204`.
  * @param res - The response to decorate.
- * @param origin - The request's `Origin` header value.
- * @param requestedHeaders - The preflight's `Access-Control-Request-Headers` value.
+ * @param options.origin - The allowed origin to echo (only for an `"allowed"` verdict), or `*`.
+ * @param options.methods - The methods to allow, e.g. `POST`.
+ * @param options.requestedHeaders - The preflight's `Access-Control-Request-Headers` value.
  */
 export function setCorsPreflightHeaders(
   res: ServerResponse,
-  origin: string,
-  requestedHeaders: string | undefined,
+  options: { origin: string; methods: string; requestedHeaders: string | undefined },
 ): void {
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Methods", "POST");
-  const headers = sanitizeRequestedHeaders(requestedHeaders);
+  res.setHeader("Access-Control-Allow-Origin", options.origin);
+  res.setHeader("Access-Control-Allow-Methods", options.methods);
+  const headers = sanitizeRequestedHeaders(options.requestedHeaders);
   if (headers) {
     res.setHeader("Access-Control-Allow-Headers", headers);
   }
@@ -205,11 +203,7 @@ export function setCorsPreflightHeaders(
  * @returns `true` for `localhost`, `127.0.0.0/8` and `::1`.
  */
 export function isLoopbackBindHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase();
-  const unbracketed =
-    normalized.startsWith("[") && normalized.endsWith("]")
-      ? normalized.slice(1, -1)
-      : normalized;
+  const unbracketed = stripIpv6Brackets(host.trim().toLowerCase());
   return (
     unbracketed === "localhost" || unbracketed === "::1" || /^127\./.test(unbracketed)
   );

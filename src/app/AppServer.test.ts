@@ -292,6 +292,7 @@ describe("AppServer Behavior Tests", () => {
           config: appConfig,
           originPolicy: expect.objectContaining({ check: expect.any(Function) }),
           location: {
+            configured: false,
             url: "http://127.0.0.1:3000",
             origin: "http://127.0.0.1:3000",
             basePath: "",
@@ -710,8 +711,6 @@ describe("AppServer Behavior Tests", () => {
     });
 
     it("checks the host on every bind and shields the API from foreign origins only on a loopback bind", async () => {
-      const onRequestHooks = () =>
-        mockFastify.addHook.mock.calls.filter(([name]) => name === "onRequest").length;
       const apiConfig: AppServerConfig = {
         enableWebInterface: false,
         enableMcpServer: false,
@@ -720,30 +719,40 @@ describe("AppServer Behavior Tests", () => {
         port: 6280,
         showLogo: false,
       };
-      const loopback: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      loopback.server.host = "127.0.0.1";
-      await new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        apiConfig,
-        loopback,
-      ).start();
-      // The host check plus the API's origin shield.
-      expect(onRequestHooks()).toBe(2);
 
-      mockFastify.addHook.mockClear();
-      const exposed: AppConfig = JSON.parse(JSON.stringify(appConfig));
-      exposed.server.host = "0.0.0.0";
-      await new AppServer(
-        mockDocService as DocumentManagementService,
-        mockPipeline as IPipeline,
-        eventBus,
-        apiConfig,
-        exposed,
-      ).start();
-      // The host check only.
-      expect(onRequestHooks()).toBe(1);
+      /** Start a server bound to `host` and run a request through its admission hook. */
+      const admit = async (
+        host: string,
+        headers: Record<string, string>,
+        url = "/api/ping",
+      ) => {
+        mockFastify.addHook.mockClear();
+        const config: AppConfig = JSON.parse(JSON.stringify(appConfig));
+        config.server.host = host;
+        await new AppServer(
+          mockDocService as DocumentManagementService,
+          mockPipeline as IPipeline,
+          eventBus,
+          apiConfig,
+          config,
+        ).start();
+        const hook = mockFastify.addHook.mock.calls.find(
+          ([name]) => name === "onRequest",
+        )?.[1] as (request: unknown, reply: unknown) => Promise<unknown>;
+        const reply = { code: vi.fn().mockReturnThis(), send: vi.fn().mockReturnThis() };
+        await hook({ url, headers }, reply);
+        return reply.code.mock.calls[0]?.[0] as number | undefined;
+      };
+
+      const foreignOrigin = {
+        host: "127.0.0.1:6280",
+        origin: "https://attacker.example",
+      };
+      expect(await admit("127.0.0.1", foreignOrigin)).toBe(403);
+      expect(await admit("127.0.0.1", foreignOrigin, "/assets/app.js")).toBeUndefined();
+      expect(await admit("0.0.0.0", foreignOrigin)).toBeUndefined();
+      expect(await admit("0.0.0.0", { host: "attacker.example:6280" })).toBe(403);
+      expect(await admit("127.0.0.1", { host: "localhost:6280" })).toBeUndefined();
     });
 
     it("warns that server.publicOrigin is deprecated when it is in effect", () => {
