@@ -8,8 +8,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { Client } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
@@ -112,7 +112,39 @@ describe("MCP stdio server E2E", () => {
     const toolNames = toolsResult.tools.map((t) => t.name);
     expect(toolNames).toContain("search_docs");
     expect(toolNames).toContain("list_libraries");
+
+    // A client left at defaults opens with the handshake of an earlier
+    // revision, which stdio keeps serving.
+    expect(client.getProtocolEra()).toBe("legacy");
   }, 30000);
+
+  it("serves a client on protocol revision 2026-07-28", async () => {
+    const projectRoot = path.resolve(import.meta.dirname, "..");
+    const testEnv = { ...process.env };
+    delete testEnv.VITEST_WORKER_ID;
+    const { cmd, args } = getCliCommand();
+
+    transport = new StdioClientTransport({
+      command: cmd,
+      args: args,
+      cwd: projectRoot,
+      env: {
+        ...testEnv,
+        DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-stdio"),
+        DOCS_MCP_TELEMETRY: "false",
+      },
+    });
+    client = new Client(
+      { name: "modern-client", version: "1.0.0" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+
+    await client.connect(transport);
+
+    expect(client.getProtocolEra()).toBe("modern");
+    const toolsResult = await client.listTools();
+    expect(toolsResult.tools.map((t) => t.name)).toContain("search_docs");
+  }, 60000);
 
   it("should report the configured server name, title and instructions on initialize", async () => {
     const projectRoot = path.resolve(import.meta.dirname, "..");

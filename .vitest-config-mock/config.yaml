@@ -10,6 +10,7 @@ server:
   name: docs-mcp-server
   protocol: auto
   host: 127.0.0.1
+  allowedOrigins: []
   ports:
     default: 6280
     worker: 8080

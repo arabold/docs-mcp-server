@@ -1,22 +1,31 @@
 /**
- * Tests for MCP service functionality including SSE heartbeat.
+ * Behavior tests for the MCP endpoint: request-check order, protocol revision,
+ * browser origins and CORS, and the authentication challenge. Also covers the
+ * deprecated HTTP+SSE transport served while authentication is off.
  */
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Fastify from "fastify";
+import { Client, SSEClientTransport } from "@modelcontextprotocol/client";
+import {
+  type AuthInfo,
+  OAuthError,
+  OAuthErrorCode,
+  type OAuthTokenVerifier,
+} from "@modelcontextprotocol/server";
+import Fastify, { type FastifyInstance } from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMcpServerInstance, resolveServerInstructions } from "../mcp/mcpServer";
+import { createOriginPolicy } from "../app/originPolicy";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { type AppConfig, loadConfig } from "../utils/config";
-import { cleanupMcpService, registerMcpService } from "./mcpService";
+import type { AppConfig } from "../utils/config";
+import { logger } from "../utils/logger";
+import { registerMcpService } from "./mcpService";
 
-// Mock the dependencies
 vi.mock("../mcp/tools", () => ({
   initializeTools: vi.fn().mockResolvedValue({
-    listLibraries: { execute: vi.fn() },
+    listLibraries: { execute: vi.fn(async () => ({ libraries: [] })) },
     findVersion: { execute: vi.fn() },
     search: { execute: vi.fn() },
     fetchUrl: { execute: vi.fn() },
@@ -29,202 +38,528 @@ vi.mock("../mcp/tools", () => ({
   }),
 }));
 
-vi.mock("../mcp/mcpServer", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../mcp/mcpServer")>();
-  return {
-    createMcpServerInstance: vi.fn().mockReturnValue({
-      connect: vi.fn().mockResolvedValue(undefined),
-      close: vi.fn().mockResolvedValue(undefined),
-    }),
-    resolveServerInstructions: vi.fn(actual.resolveServerInstructions),
-  };
-});
-
 vi.mock("../telemetry", () => ({
-  telemetry: {
-    isEnabled: () => false,
-  },
+  telemetry: { isEnabled: () => false, track: vi.fn() },
+  TelemetryEvent: {},
 }));
 
-describe("MCP Service", () => {
-  let server: ReturnType<typeof Fastify>;
-  let mockDocService: IDocumentManagement;
-  let mockPipeline: IPipeline;
-  let appConfig: AppConfig;
+const config = {
+  app: { readOnly: false },
+  scraper: { maxPages: 100, maxDepth: 3 },
+  server: { name: "docs-mcp-server", heartbeatMs: 30_000 },
+} as unknown as AppConfig;
+
+const RESOURCE_METADATA_URL =
+  "https://example.com/docs/.well-known/oauth-protected-resource/mcp";
+
+const verifier: OAuthTokenVerifier = {
+  async verifyAccessToken(token): Promise<AuthInfo> {
+    if (token === "good") {
+      return {
+        token,
+        clientId: "client",
+        scopes: [],
+        expiresAt: Math.floor(Date.now() / 1000) + 3600,
+      };
+    }
+    if (token === "outage") {
+      throw new OAuthError(OAuthErrorCode.ServerError, "Issuer keys unavailable");
+    }
+    throw new OAuthError(OAuthErrorCode.InvalidToken, "Token rejected");
+  },
+};
+
+const META = {
+  "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+  "io.modelcontextprotocol/clientCapabilities": {},
+};
+
+function modernRequest(method: string, extraHeaders: Record<string, string> = {}) {
+  return {
+    method: "POST" as const,
+    url: "/mcp",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": method,
+      ...extraHeaders,
+    },
+    payload: { jsonrpc: "2.0", id: 1, method, params: { _meta: META } },
+  };
+}
+
+function legacyInitialize(extraHeaders: Record<string, string> = {}) {
+  return {
+    method: "POST" as const,
+    url: "/mcp",
+    headers: {
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      ...extraHeaders,
+    },
+    payload: {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-06-18",
+        capabilities: {},
+        clientInfo: { name: "legacy", version: "1" },
+      },
+    },
+  };
+}
+
+let server: FastifyInstance | undefined;
+
+const BASE_PATH = "/docs";
+
+async function startServer(options: { withAuth?: boolean; config?: AppConfig } = {}) {
+  // Strips the base path the way AppServer does, so URLs match production.
+  server = Fastify({
+    logger: false,
+    rewriteUrl: (request) => {
+      const url = request.url ?? "/";
+      return url.startsWith(`${BASE_PATH}/`) ? url.slice(BASE_PATH.length) : url;
+    },
+  });
+  await registerMcpService(
+    server,
+    {
+      docService: {} as IDocumentManagement,
+      pipeline: {} as IPipeline,
+      config: options.config ?? config,
+      originPolicy: createOriginPolicy({
+        publicHostname: "example.com",
+        allowedOrigins: ["https://inspector.example.com"],
+      }),
+      location: {
+        url: `https://example.com${BASE_PATH}`,
+        origin: "https://example.com",
+        basePath: BASE_PATH,
+      },
+    },
+    options.withAuth
+      ? { verifier, resourceMetadataUrl: RESOURCE_METADATA_URL }
+      : undefined,
+  );
+  return server;
+}
+
+async function listen(app: FastifyInstance): Promise<string> {
+  await app.listen({ port: 0, host: "127.0.0.1" });
+  const address = app.server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return `http://127.0.0.1:${port}`;
+}
+
+/** Opens `/docs/sse` and returns the stream plus the message URL from its `endpoint` event. */
+async function openSseStream(baseUrl: string) {
+  const abort = new AbortController();
+  const response = await fetch(`${baseUrl}${BASE_PATH}/sse`, {
+    headers: { accept: "text/event-stream" },
+    signal: abort.signal,
+  });
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("SSE response has no body");
+  }
+  const decoder = new TextDecoder();
+  let buffered = "";
+  const readUntil = async (pattern: RegExp): Promise<RegExpMatchArray> => {
+    for (;;) {
+      const match = buffered.match(pattern);
+      if (match) {
+        buffered = buffered.slice((match.index ?? 0) + match[0].length);
+        return match;
+      }
+      const { value, done } = await reader.read();
+      if (done) {
+        throw new Error(`SSE stream ended before ${pattern}`);
+      }
+      buffered += decoder.decode(value, { stream: true });
+    }
+  };
+  const [, endpoint] = await readUntil(/event: endpoint\ndata: (.+)\n\n/);
+  return { response, endpoint, readUntil, close: () => abort.abort() };
+}
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await server?.close();
+  server = undefined;
+});
+
+describe("MCP endpoint protocol", () => {
+  it("answers a current-revision tools/list", async () => {
+    const app = await startServer();
+
+    const response = await app.inject(modernRequest("tools/list"));
+
+    expect(response.statusCode).toBe(200);
+    expect(
+      response.json().result.tools.map((tool: { name: string }) => tool.name),
+    ).toContain("search_docs");
+  });
+
+  it("lists 2026-07-28 as the only supported revision in server/discover", async () => {
+    const app = await startServer();
+
+    const response = await app.inject(modernRequest("server/discover"));
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.supportedVersions).toEqual(["2026-07-28"]);
+  });
+
+  it("answers a handshake-era initialize statelessly, without a session", async () => {
+    const app = await startServer();
+
+    const response = await app.inject(legacyInitialize());
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain('"protocolVersion":"2025-06-18"');
+    expect(response.headers["mcp-session-id"]).toBeUndefined();
+  });
+
+  it.each(["GET", "DELETE"] as const)(
+    "answers %s with 405 and Allow: POST",
+    async (method) => {
+      const app = await startServer();
+
+      const response = await app.inject({ method, url: "/mcp" });
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it("marks event-stream responses as unbuffered for proxies", async () => {
+    const app = await startServer();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const address = app.server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const abort = new AbortController();
+
+    const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+      method: "POST",
+      signal: abort.signal,
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "subscriptions/listen",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "subscriptions/listen",
+        params: { notifications: { toolsListChanged: true }, _meta: META },
+      }),
+    });
+    abort.abort();
+
+    expect(response.headers.get("content-type")).toBe("text/event-stream");
+    expect(response.headers.get("x-accel-buffering")).toBe("no");
+  });
+});
+
+describe("MCP endpoint browser origins", () => {
+  it("processes requests without an Origin header", async () => {
+    const app = await startServer();
+
+    const response = await app.inject(modernRequest("tools/list"));
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it.each([
+    "http://localhost:6274",
+    "https://example.com",
+    "https://inspector.example.com",
+  ])(
+    "processes requests from allowed origin %s and lets the page read them",
+    async (origin) => {
+      const app = await startServer();
+
+      const response = await app.inject(modernRequest("tools/list", { origin }));
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["access-control-allow-origin"]).toBe(origin);
+      expect(response.headers.vary).toContain("Origin");
+    },
+  );
+
+  it("rejects a foreign origin with 403 even when the token is valid", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject(
+      modernRequest("tools/list", {
+        origin: "https://attacker.example",
+        authorization: "Bearer good",
+      }),
+    );
+
+    expect(response.statusCode).toBe(403);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("answers a preflight from an allowed origin without a token", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject({
+      method: "OPTIONS",
+      url: "/mcp",
+      headers: {
+        origin: "http://localhost:6274",
+        "access-control-request-method": "POST",
+        "access-control-request-headers":
+          "authorization, content-type, mcp-protocol-version",
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:6274");
+    expect(response.headers["access-control-allow-methods"]).toBe("POST");
+    expect(response.headers["access-control-allow-headers"]).toBe(
+      "authorization, content-type, mcp-protocol-version",
+    );
+  });
+
+  it("rejects a preflight from a foreign origin", async () => {
+    const app = await startServer();
+
+    const response = await app.inject({
+      method: "OPTIONS",
+      url: "/mcp",
+      headers: {
+        origin: "https://attacker.example",
+        "access-control-request-method": "POST",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});
+
+describe("MCP endpoint authentication", () => {
+  it("checks the method before authentication", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject({ method: "GET", url: "/mcp" });
+
+    expect(response.statusCode).toBe(405);
+  });
+
+  it("authenticates before protocol processing", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject(legacyInitialize());
+
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("challenges a request without a token with resource_metadata and no error code", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject(modernRequest("tools/list"));
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["www-authenticate"]).toBe(
+      `Bearer resource_metadata="${RESOURCE_METADATA_URL}"`,
+    );
+  });
+
+  it("makes the challenge readable by a page on an allowed origin", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject(
+      modernRequest("tools/list", { origin: "http://localhost:6274" }),
+    );
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:6274");
+    expect(response.headers["access-control-expose-headers"]).toContain(
+      "WWW-Authenticate",
+    );
+  });
+
+  it("challenges a rejected token with invalid_token and resource_metadata", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject(
+      modernRequest("tools/list", { authorization: "Bearer bad" }),
+    );
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["www-authenticate"]).toContain('error="invalid_token"');
+    expect(response.headers["www-authenticate"]).toContain(
+      `resource_metadata="${RESOURCE_METADATA_URL}"`,
+    );
+  });
+
+  it("answers an issuer outage with a server error, not a token rejection", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject(
+      modernRequest("tools/list", { authorization: "Bearer outage" }),
+    );
+
+    expect(response.statusCode).toBeGreaterThanOrEqual(500);
+    expect(response.headers["www-authenticate"] ?? "").not.toContain("invalid_token");
+  });
+
+  it("processes a request carrying a valid token", async () => {
+    const app = await startServer({ withAuth: true });
+
+    const response = await app.inject(
+      modernRequest("tools/list", { authorization: "Bearer good" }),
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.tools.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Deprecated HTTP+SSE transport", () => {
+  it("names a message URL under the base path in the endpoint event", async () => {
+    const baseUrl = await listen(await startServer());
+
+    const stream = await openSseStream(baseUrl);
+    stream.close();
+
+    expect(stream.response.headers.get("content-type")).toBe("text/event-stream");
+    expect(stream.response.headers.get("x-accel-buffering")).toBe("no");
+    expect(stream.endpoint).toMatch(/^\/docs\/messages\?sessionId=[\w-]+$/);
+  });
+
+  it("serves a handshake-era client end to end", async () => {
+    const baseUrl = await listen(await startServer());
+    const client = new Client({ name: "legacy-sse", version: "1.0.0" });
+
+    await client.connect(new SSEClientTransport(new URL(`${baseUrl}${BASE_PATH}/sse`)));
+    try {
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("answers a message for an unknown session with 404", async () => {
+    const app = await startServer();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `${BASE_PATH}/messages?sessionId=unknown`,
+      headers: { "content-type": "application/json" },
+      payload: { jsonrpc: "2.0", id: 1, method: "ping" },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it.each([
+    ["GET", "/sse"],
+    ["POST", "/messages?sessionId=abc"],
+  ] as const)("rejects %s %s from a foreign origin with 403", async (method, path) => {
+    const app = await startServer();
+
+    const response = await app.inject({
+      method,
+      url: `${BASE_PATH}${path}`,
+      headers: { origin: "https://attacker.example", "content-type": "application/json" },
+      payload: method === "POST" ? { jsonrpc: "2.0", id: 1, method: "ping" } : undefined,
+    });
+
+    expect(response.statusCode).toBe(403);
+  });
+
+  it.each([
+    ["GET", "/sse"],
+    ["POST", "/messages?sessionId=abc"],
+  ] as const)(
+    "does not serve %s %s with authentication enabled",
+    async (method, path) => {
+      const app = await startServer({ withAuth: true });
+
+      const response = await app.inject({
+        method,
+        url: `${BASE_PATH}${path}`,
+        headers: { "content-type": "application/json" },
+        payload:
+          method === "POST" ? { jsonrpc: "2.0", id: 1, method: "ping" } : undefined,
+      });
+
+      expect(response.statusCode).toBe(404);
+    },
+  );
+
+  it("sends keep-alive comments on an idle stream", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const baseUrl = await listen(await startServer());
+    const stream = await openSseStream(baseUrl);
+
+    vi.advanceTimersByTime(config.server.heartbeatMs);
+    const [comment] = await stream.readUntil(/: keepalive\n\n/);
+    stream.close();
+
+    expect(comment).toBe(": keepalive\n\n");
+  });
+
+  it("warns once that the transport is deprecated, naming the MCP endpoint", async () => {
+    const warn = vi.mocked(logger.warn);
+    warn.mockClear();
+    const baseUrl = await listen(await startServer());
+
+    const first = await openSseStream(baseUrl);
+    const second = await openSseStream(baseUrl);
+    first.close();
+    second.close();
+
+    const deprecations = warn.mock.calls.filter(([message]) =>
+      String(message).includes("deprecated HTTP+SSE"),
+    );
+    expect(deprecations).toHaveLength(1);
+    expect(String(deprecations[0][0])).toContain("https://example.com/docs/mcp");
+  });
+});
+
+describe("Server instructions", () => {
+  let tmpDir: string;
 
   beforeEach(() => {
-    vi.useFakeTimers();
-    server = Fastify({ logger: false });
-
-    mockDocService = {} as IDocumentManagement;
-    mockPipeline = {} as IPipeline;
-    appConfig = loadConfig();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-service-instructions-"));
   });
 
-  afterEach(async () => {
-    vi.useRealTimers();
-    await server.close();
-    vi.clearAllMocks();
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  describe("SSE Heartbeat", () => {
-    // Note: Actual heartbeat message verification is done in the E2E test (test/mcp-http-e2e.test.ts)
-    // which can observe raw SSE stream data. Unit tests here focus on setup and cleanup.
+  function withInstructionsFile(instructionsFile: string): AppConfig {
+    return { ...config, server: { ...config.server, instructionsFile } } as AppConfig;
+  }
 
-    it("should cleanup heartbeat intervals on service cleanup", async () => {
-      // Register the MCP service
-      const mcpServer = await registerMcpService(
-        server,
-        mockDocService,
-        mockPipeline,
-        appConfig,
+  it("reads the instructions file once at startup and sends it with every request", async () => {
+    const instructionsFile = path.join(tmpDir, "instructions.md");
+    fs.writeFileSync(instructionsFile, "Search acme docs before answering.");
+    const app = await startServer({ config: withInstructionsFile(instructionsFile) });
+    // Requests after startup no longer need the file.
+    fs.rmSync(instructionsFile);
+
+    for (const _request of [1, 2]) {
+      const response = await app.inject(legacyInitialize());
+      expect(response.body).toContain(
+        '"instructions":"Search acme docs before answering."',
       );
-
-      // Verify the heartbeat intervals map is attached
-      const mcpServerWithInternals = mcpServer as unknown as {
-        _heartbeatIntervals: Record<string, NodeJS.Timeout>;
-      };
-      expect(mcpServerWithInternals._heartbeatIntervals).toBeDefined();
-
-      // Cleanup should not throw
-      await expect(cleanupMcpService(mcpServer)).resolves.not.toThrow();
-    });
-
-    it("should store transport references for cleanup", async () => {
-      // Register the MCP service
-      const mcpServer = await registerMcpService(
-        server,
-        mockDocService,
-        mockPipeline,
-        appConfig,
-      );
-
-      // Verify the transports map is attached
-      const mcpServerWithInternals = mcpServer as unknown as {
-        _sseTransports: Record<string, unknown>;
-        _heartbeatIntervals: Record<string, NodeJS.Timeout>;
-      };
-      expect(mcpServerWithInternals._sseTransports).toBeDefined();
-      expect(mcpServerWithInternals._heartbeatIntervals).toBeDefined();
-
-      // Cleanup
-      await cleanupMcpService(mcpServer);
-    });
+    }
   });
 
-  describe("Route Registration", () => {
-    it("should register /sse endpoint", async () => {
-      const mcpServer = await registerMcpService(
-        server,
-        mockDocService,
-        mockPipeline,
-        appConfig,
-      );
-
-      // Check that routes are registered (printRoutes uses a tree format)
-      const routes = server.printRoutes();
-      expect(routes).toContain("sse");
-
-      await cleanupMcpService(mcpServer);
-    });
-
-    it("should register /messages endpoint", async () => {
-      const mcpServer = await registerMcpService(
-        server,
-        mockDocService,
-        mockPipeline,
-        appConfig,
-      );
-
-      // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.
-      // Routes /messages and /mcp share the "m" prefix, so they appear as:
-      //   └── m
-      //       ├── essages (POST)
-      //       └── cp (POST)
-      // We check for "essages" which is the unique suffix for /messages.
-      const routes = server.printRoutes();
-      expect(routes).toContain("essages");
-
-      await cleanupMcpService(mcpServer);
-    });
-
-    it("should register /mcp endpoint", async () => {
-      const mcpServer = await registerMcpService(
-        server,
-        mockDocService,
-        mockPipeline,
-        appConfig,
-      );
-
-      // Fastify's printRoutes() uses a radix tree format where common prefixes are shared.
-      // Routes /messages and /mcp share the "m" prefix, so /mcp appears as "cp" in the tree.
-      // We check for "cp (POST)" which uniquely identifies the /mcp route.
-      const routes = server.printRoutes();
-      expect(routes).toContain("cp (POST");
-
-      await cleanupMcpService(mcpServer);
-    });
-  });
-
-  describe("Server instructions", () => {
-    let tmpDir: string;
-
-    beforeEach(() => {
-      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-service-instructions-"));
-    });
-
-    afterEach(() => {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    });
-
-    it("reads the instructions file once at startup, not per request", async () => {
-      // Fastify's inject() schedules work on real timers.
-      vi.useRealTimers();
-      const instructionsFile = path.join(tmpDir, "instructions.md");
-      fs.writeFileSync(instructionsFile, "Search acme docs before answering.");
-      const config = {
-        ...appConfig,
-        server: { ...appConfig.server, instructionsFile },
-      } as AppConfig;
-
-      const mcpServer = await registerMcpService(
-        server,
-        mockDocService,
-        mockPipeline,
-        config,
-      );
-      fs.rmSync(instructionsFile);
-
-      // The per-request server only needs to be created; failing its connect ends the
-      // request immediately instead of waiting on a transport the mock never wires up.
-      vi.mocked(createMcpServerInstance).mockReturnValueOnce({
-        connect: vi.fn().mockRejectedValue(new Error("stop")),
-        close: vi.fn().mockResolvedValue(undefined),
-      } as unknown as ReturnType<typeof createMcpServerInstance>);
-      await server.inject({ method: "POST", url: "/mcp", payload: {} });
-
-      expect(resolveServerInstructions).toHaveBeenCalledTimes(1);
-      const createCalls = vi.mocked(createMcpServerInstance).mock.calls;
-      expect(createCalls).toHaveLength(2);
-      for (const call of createCalls) {
-        expect(call[2]).toBe("Search acme docs before answering.");
-      }
-
-      await cleanupMcpService(mcpServer);
-    });
-
-    it("fails to register when the instructions cannot be resolved", async () => {
-      const config = {
-        ...appConfig,
-        server: {
-          ...appConfig.server,
-          instructionsFile: path.join(tmpDir, "missing.md"),
-        },
-      } as AppConfig;
-
-      await expect(
-        registerMcpService(server, mockDocService, mockPipeline, config),
-      ).rejects.toThrow(/instructions file/i);
-    });
+  it("fails to register when the instructions file cannot be read", async () => {
+    await expect(
+      startServer({ config: withInstructionsFile(path.join(tmpDir, "missing.md")) }),
+    ).rejects.toThrow(/instructions file/i);
   });
 });

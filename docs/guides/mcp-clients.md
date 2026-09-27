@@ -6,11 +6,13 @@ The Docs MCP Server is compatible with any client that supports the [Model Conte
 
 Most clients support two connection modes:
 1.  **Remote/HTTP**: Connects to a running server instance (e.g., via Docker).
-    *   **SSE URL**: `http://localhost:6280/sse`
-    *   **HTTP URL**: `http://localhost:6280/mcp` (Streamable HTTP)
-2.  **Local/Stdio**: Spawns the server process directly.
+    *   **URL**: `http://localhost:6280/mcp` (Streamable HTTP)
+    *   The HTTP endpoint speaks MCP protocol revision **2026-07-28** and earlier revisions.
+2.  **Local/Stdio**: Spawns the server process directly. Works with every client and protocol revision.
     *   **Command**: `npx`
     *   **Args**: `["-y", "@arabold/docs-mcp-server@latest"]`
+
+Behind a reverse proxy, use the public URL plus `/mcp`, e.g. `https://example.com/docs/mcp`. See [Reverse Proxy Deployment](../infrastructure/reverse-proxy.md).
 
 ---
 
@@ -26,8 +28,8 @@ Edit your configuration file:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "type": "sse",
-      "url": "http://localhost:6280/sse"
+      "type": "http",
+      "url": "http://localhost:6280/mcp"
     }
   }
 }
@@ -50,8 +52,8 @@ Edit your configuration file:
 2. Click **Add new MCP server**.
 
 **Remote:**
-*   **Type**: SSE (or streamableHttp)
-*   **URL**: `http://localhost:6280/mcp` (for streamableHttp) or `http://localhost:6280/sse`
+*   **Type**: streamableHttp
+*   **URL**: `http://localhost:6280/mcp`
 
 **Local:**
 *   **Type**: stdio
@@ -308,3 +310,9 @@ If you prefer using Docker for the client connection:
   }
 }
 ```
+
+---
+
+## Legacy SSE Transport (Deprecated)
+
+Older clients that only speak the HTTP+SSE transport can still connect at `http://localhost:6280/sse` (or the public URL plus `/sse`). This works only while authentication is disabled, and the transport will be removed in a future major release. Move these clients to `/mcp` or stdio. The server logs a deprecation warning when the first such client connects.
