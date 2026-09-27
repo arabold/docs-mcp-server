@@ -80,6 +80,51 @@ OpenShift may replace UID 10001 with a namespace-assigned UID. To require exactl
 10001 on OpenShift, your SCC must permit that UID before setting
 `podSecurityContext.runAsUser: 10001`.
 
+### Validate an OpenShift-style identity with Podman
+
+The image was validated with UID and GID `1000640000`, with no membership in
+UID 0, GID 0, or group 0. Rootless Podman normally cannot map IDs outside the
+host user's subordinate-ID range, so the following Windows commands use the
+Podman machine's rootful engine for the test harness. The application process
+inside the container still runs exclusively as `1000640000:1000640000`.
+
+Authenticate the rootful Podman store and pull the published image:
+
+```powershell
+gh auth token | podman machine ssh "sudo podman login ghcr.io --username brtydse100 --password-stdin"
+podman machine ssh "sudo podman pull ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0"
+```
+
+Create a Podman pod and start the same explicit HTTP mode used by this chart:
+
+```powershell
+podman machine ssh "sudo podman pod create --name docs-mcp-highuid -p 16281:6280"
+podman machine ssh "sudo podman run -d --name docs-mcp-highuid --pod docs-mcp-highuid --user 1000640000:1000640000 ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0 --protocol http --host 0.0.0.0 --port 6280"
+```
+
+Verify the exact identity, writable runtime paths, immutable application code,
+and HTTP response:
+
+```powershell
+podman machine ssh "sudo podman exec docs-mcp-highuid id"
+podman machine ssh "sudo podman exec docs-mcp-highuid sh -c 'touch /data/highuid-test /config/highuid-test /app/.runtime/highuid-test && test ! -w /app/dist && echo permissions-ok'"
+podman machine ssh "curl -sS -o /dev/null -w 'http=%{http_code}\n' http://127.0.0.1:16281/"
+```
+
+Expected output includes:
+
+```text
+uid=1000640000 gid=1000640000 groups=1000640000
+permissions-ok
+http=200
+```
+
+Remove the disposable pod after testing:
+
+```powershell
+podman machine ssh "sudo podman pod rm -f docs-mcp-highuid"
+```
+
 Enable an OpenShift Route with:
 
 ```yaml
