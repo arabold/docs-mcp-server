@@ -33,7 +33,7 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
-**Non-root runtime (this branch's image):** The container uses a dedicated runtime account at uid 10001 with primary gid 0. Writable runtime paths are owned by that account and receive matching group-0 permissions for arbitrary OpenShift UIDs. The dedicated home/cache path is `/app/.runtime`; application code under `/app` remains read-only. Data, configuration, and temporary files use `/data`, `/config`, and `/tmp`. Empty named volumes inherit image ownership, while bind mounts replace it. Prepare bind-mounted directories for uid 10001 or for a group granted to the container, for example with `sudo chown -R 10001:0 ./data ./config && sudo chmod -R g+rwX ./data ./config`. On OpenShift, the storage driver and SCC-assigned groups must make mounted volumes writable. Existing volumes retain their old ownership and may need a one-time permissions adjustment.
+**Non-root runtime (this branch's image):** The container uses a dedicated runtime account at uid 10001 with primary gid 10001 by default. Its narrowly scoped runtime paths are writable by arbitrary non-root UID/GID combinations, while application code under `/app` remains read-only. The dedicated home/cache path is `/app/.runtime`; data, configuration, and temporary files use `/data`, `/config`, and `/tmp`. Empty named volumes inherit image permissions, while bind mounts replace them. Prepare bind-mounted directories for the runtime identity or a group granted to the container. On OpenShift, the storage driver and SCC-assigned groups must make mounted volumes writable. Existing volumes retain their old ownership and may need a one-time permissions adjustment.
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
@@ -52,7 +52,7 @@ helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
 ```
 
 On ordinary Kubernetes the chart defaults to `runAsUser: 10001`,
-`runAsGroup: 0`, and `fsGroup: 0` for writable volumes. The root
+`runAsGroup: 10001`, and `fsGroup: 10001` for writable volumes. The root
 filesystem is read-only; the chart mounts writable storage at `/data`,
 `/config`, `/tmp`, and `/app/.runtime`.
 On OpenShift, set `openshift.enabled: true` to omit these identity defaults and

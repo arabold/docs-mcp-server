@@ -32,7 +32,7 @@ The chart will create a Deployment and ClusterIP Service for the existing unifie
 
 ### Preserve a safe default user but support arbitrary UID overrides
 
-The image uses a dedicated numeric `USER 10001:0` for direct container-engine use, inspired by Litegate's dedicated runtime account. Only `/app/.runtime`, `/data`, `/config`, and fallback runtime paths are owned by the default identity, assigned to group 0, and granted matching group permissions. Code under `/app` remains root-owned and non-writable. The chart mounts an `emptyDir` at `/app/.runtime`, allowing a read-only root filesystem while OpenShift assigns an arbitrary UID and permitted supplemental groups. Removing `USER` was rejected because direct execution would regress to root; pinning an image UID in OpenShift manifests was rejected because it conflicts with restricted SCC ranges.
+The image uses a dedicated numeric `USER 10001:10001` for direct container-engine use, inspired by Litegate's dedicated runtime account. Only `/app/.runtime`, `/data`, `/config`, and fallback runtime paths are writable by arbitrary identities, and the entrypoint uses `umask 0000` so data remains writable after a platform changes the runtime UID and GID. Code under `/app` remains root-owned and non-writable. The chart mounts an `emptyDir` at `/app/.runtime`, allowing a read-only root filesystem while OpenShift assigns an arbitrary UID and permitted supplemental groups. Removing `USER` was rejected because direct execution would regress to root; pinning an image UID in OpenShift manifests was rejected because it conflicts with restricted SCC ranges.
 
 ### Delegate mounted-volume ownership to the runtime
 

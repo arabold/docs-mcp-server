@@ -10,7 +10,7 @@ Ensures the production container runs safely with platform-assigned non-root ide
 The production container SHALL start and provide its supported application behavior when run with an arbitrary non-zero user ID, without depending on that identity being present in the image's account database.
 
 #### Scenario: Platform-assigned user
-- **WHEN** the container runtime starts the image with an arbitrary non-zero user ID and a permitted group that can access its runtime paths
+- **WHEN** the container runtime starts the image with an arbitrary non-zero user ID and group ID
 - **THEN** the application starts and serves its configured interface
 
 #### Scenario: Default Docker user
@@ -18,7 +18,7 @@ The production container SHALL start and provide its supported application behav
 - **THEN** the image starts with a non-root default identity
 
 ### Requirement: Writable runtime paths
-The container SHALL keep application code non-writable while allowing an arbitrary runtime identity with suitable group permissions to write data, configuration, and temporary runtime files.
+The container SHALL keep application code non-writable while allowing an arbitrary runtime identity to write image-owned data, configuration, and temporary runtime paths without membership in a predefined group.
 
 #### Scenario: Compatible mounted volumes
 - **WHEN** writable volumes grant the runtime identity access to the data and configuration mount roots

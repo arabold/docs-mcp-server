@@ -70,17 +70,18 @@ ENV NPM_CONFIG_CACHE=/app/.runtime/cache/npm
 ENV TMPDIR=/tmp
 
 # Use a dedicated runtime account for ordinary container engines. OpenShift may
-# replace its uid with an arbitrary value, so writable paths belong to group 0
-# and grant the group the same access as their owner. Application code remains
-# root-owned and non-writable; no world-writable application paths are used.
-RUN useradd --system --uid 10001 --gid 0 --home-dir /app/.runtime \
+# replace its uid and gid with arbitrary values, so only the dedicated runtime
+# paths are writable by any non-root identity. Application code remains
+# root-owned and non-writable.
+RUN groupadd --system --gid 10001 docs-mcp \
+  && useradd --system --uid 10001 --gid 10001 --home-dir /app/.runtime \
     --no-create-home --shell /usr/sbin/nologin docs-mcp \
   && mkdir -p /data /config /app/.runtime/cache/npm /nonexistent \
-  && chown -R docs-mcp:root /data /config /app/.runtime /nonexistent \
+  && chown -R docs-mcp:docs-mcp /data /config /app/.runtime /nonexistent \
   && chmod -R g=u /data /config /app/.runtime /nonexistent \
   && chmod -R g+w /data /config /app/.runtime /nonexistent \
   && chmod -R g+rX /data /config /app/.runtime /nonexistent \
-  && find /data /config /app/.runtime /nonexistent -type d -exec chmod g+s {} + \
+  && chmod -R a+rwX /data /config /app/.runtime /nonexistent \
   && chmod -R a+rX /app/dist /app/public /app/db /app/node_modules \
   && chmod 1777 /tmp
 
@@ -96,7 +97,7 @@ ENV HOST=0.0.0.0
 # Use a numeric non-root default so Kubernetes can verify `runAsNonRoot`.
 # OpenShift and other runtimes may override it with an arbitrary uid. Mounted
 # volumes must grant that uid or one of its supplemental groups write access.
-USER 10001:0
+USER 10001:10001
 
 # Keep execution in the application directory while HOME and all cache writes
 # resolve to the dedicated runtime directory.
@@ -105,7 +106,7 @@ WORKDIR /app
 # Fail the build if the default identity cannot write its runtime paths or can
 # modify shipped application code.
 RUN test "$(id -u)" = 10001 \
-  && test "$(id -g)" = 0 \
+  && test "$(id -g)" = 10001 \
   && for dir in /app/.runtime /app/.runtime/cache /app/.runtime/cache/npm \
       /data /config /nonexistent /tmp; do \
     touch "$dir/.permission-check" && rm "$dir/.permission-check" || exit 1; \
@@ -116,4 +117,4 @@ RUN test "$(id -u)" = 10001 \
   && test ! -w /app/node_modules
 
 # Set the command to run the application
-ENTRYPOINT ["sh", "-c", "umask 0002; exec node --enable-source-maps /app/dist/index.js \"$@\"", "--"]
+ENTRYPOINT ["sh", "-c", "umask 0000; exec node --enable-source-maps /app/dist/index.js \"$@\"", "--"]

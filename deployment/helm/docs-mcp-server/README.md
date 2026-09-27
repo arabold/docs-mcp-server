@@ -39,7 +39,7 @@ configPersistence:
   existingClaim: docs-mcp-config
 ```
 
-Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `runAsUser: 10001`, `runAsGroup: 0`, and `fsGroup: 0` so the dedicated runtime user can write supported volumes. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
+Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `runAsUser: 10001`, `runAsGroup: 10001`, and `fsGroup: 10001` so the dedicated runtime user can write supported volumes. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
 
 The unified server runs one embedded worker against a SQLite store. The chart
 requires `replicaCount: 1` and uses `Recreate` upgrades so two workers do not
@@ -54,11 +54,11 @@ to assign values from the namespace's permitted ranges.
 Explicit `podSecurityContext` fields are still honored, so omit fixed IDs from
 OpenShift values unless your SCC permits them.
 
-The image uses a dedicated `USER 10001:0` runtime account, following Litegate's
-OpenShift-compatible ownership approach. Writable paths are owned by the runtime user and
-group 0 receives matching permissions for arbitrary UIDs. Directories use the
-setgid bit so new files inherit group 0; the entrypoint's `umask 0002` preserves
-group write access. Application code remains root-owned and read-only. The
+The image uses a dedicated `USER 10001:10001` runtime account, following Litegate's
+OpenShift-compatible ownership approach. Only the runtime paths are writable by
+arbitrary non-root UID/GID combinations. The entrypoint's `umask 0000` keeps
+runtime data writable if the platform changes both IDs. Application code remains
+root-owned and read-only. The
 working directory is `/app` and the home directory is `/app/.runtime`.
 
 | Path | Purpose |

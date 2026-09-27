@@ -42,6 +42,7 @@ const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
 // remaining portable; Docker keeps the representative OpenShift-range value.
 const ARBITRARY_UID = process.env.CONTAINER_ARBITRARY_UID ??
   (CONTAINER_ENGINE === "podman" ? "12345" : "1000710000");
+const ARBITRARY_GID = process.env.CONTAINER_ARBITRARY_GID ?? ARBITRARY_UID;
 
 interface DockerResult {
   status: number | null;
@@ -173,9 +174,19 @@ describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => 
   });
 
   it.each([
-    { name: "default user", userArgs: [], uid: "10001", gid: "0" },
-    { name: "explicit runtime user", userArgs: ["--user", "10001:0"], uid: "10001", gid: "0" },
-    { name: "arbitrary uid", userArgs: ["--user", `${ARBITRARY_UID}:0`], uid: ARBITRARY_UID, gid: "0" },
+    { name: "default user", userArgs: [], uid: "10001", gid: "10001" },
+    {
+      name: "explicit runtime user",
+      userArgs: ["--user", "10001:10001"],
+      uid: "10001",
+      gid: "10001",
+    },
+    {
+      name: "arbitrary uid and gid",
+      userArgs: ["--user", `${ARBITRARY_UID}:${ARBITRARY_GID}`],
+      uid: ARBITRARY_UID,
+      gid: ARBITRARY_GID,
+    },
   ])("provides writable runtime paths for $name", async ({ userArgs, uid, gid }) => {
     const r = await docker([
       "run",
@@ -205,10 +216,8 @@ describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => 
         'mkdir -p "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" && touch "$XDG_CACHE_HOME/runtime-cache" "$NPM_CONFIG_CACHE/npm-cache"',
         "touch /data/arbitrary-uid-data",
         "touch /config/arbitrary-uid-config",
-        // Newly created files keep group 0, so a later arbitrary-uid run can
-        // reuse the same named volumes.
-        'test "$(stat -c %g /data/arbitrary-uid-data)" = "0"',
-        'test "$(stat -c %g /config/arbitrary-uid-config)" = "0"',
+        `test "$(stat -c %g /data/arbitrary-uid-data)" = "${gid}"`,
+        `test "$(stat -c %g /config/arbitrary-uid-config)" = "${gid}"`,
       ].join(" && "),
     ]);
     expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
@@ -238,7 +247,7 @@ describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => 
         "run",
         "--rm",
         "--user",
-        `${ARBITRARY_UID}:0`,
+        `${ARBITRARY_UID}:${ARBITRARY_GID}`,
         "-v",
         `${volumeName}:/data`,
         "--entrypoint",
@@ -278,7 +287,7 @@ describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => 
           "run",
           "--rm",
           "--user",
-          `${ARBITRARY_UID}:0`,
+          `${ARBITRARY_UID}:${ARBITRARY_GID}`,
           "--cap-drop=ALL",
           "--security-opt=no-new-privileges",
           "--tmpfs",
@@ -322,7 +331,7 @@ describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => 
           "run",
           "--rm",
           "--user",
-          `${ARBITRARY_UID}:0`,
+          `${ARBITRARY_UID}:${ARBITRARY_GID}`,
           "--cap-drop=ALL",
           "--security-opt=no-new-privileges",
           "--tmpfs",
@@ -439,7 +448,10 @@ describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => 
 
   it.each([
     { name: "default user", userArgs: [] },
-    { name: "arbitrary uid", userArgs: ["--user", `${ARBITRARY_UID}:0`] },
+    {
+      name: "arbitrary uid and gid",
+      userArgs: ["--user", `${ARBITRARY_UID}:${ARBITRARY_GID}`],
+    },
   ])("serves the web UI with a read-only root filesystem as $name", async ({ userArgs }) => {
     // Run the web server detached and let Docker pick a free host port (-P), so
     // the test never clashes with a port already bound on the CI host. The
