@@ -1,6 +1,7 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v3";
 import { PipelineJobStatus } from "../pipeline/types";
+import { libraryNamesMatch } from "../store/types";
 import { TelemetryEvent, telemetry } from "../telemetry";
 import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
@@ -66,6 +67,19 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
 });
 
 /**
+ * Decodes a URI template variable once. The SDK hands variables over still
+ * percent-encoded; a malformed escape is kept verbatim rather than failing.
+ */
+function decodeUriVariable(value: string | string[]): string {
+  const raw = Array.isArray(value) ? value.join("/") : value;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
@@ -96,7 +110,7 @@ export function createMcpServerInstance(
     // Scrape docs tool - suppress deep inference issues
     server.tool(
       "scrape_docs",
-      "Scrape and index documentation from a URL for a library. Use this tool to index a new library or a new version.",
+      "Scrape and index documentation from a URL for a library. Use this tool to index a new library or a new version. Scraping a library version that already exists is rejected unless `replace` is true; use refresh_version to update an existing version in place.",
       {
         url: z.string().url().describe("Documentation root URL to scrape."),
         library: z.string().trim().describe("Library name."),
@@ -123,6 +137,13 @@ export function createMcpServerInstance(
           .optional()
           .default(true)
           .describe("Follow HTTP redirects (3xx responses)."),
+        replace: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe(
+            "Rebuild the version from scratch if it already exists. Without it, an existing version is left untouched and the request fails.",
+          ),
         preserveHashes: z
           .boolean()
           .optional()
@@ -151,6 +172,7 @@ export function createMcpServerInstance(
         maxDepth,
         scope,
         followRedirects,
+        replace,
         preserveHashes,
         includePatterns,
         excludePatterns,
@@ -173,6 +195,7 @@ export function createMcpServerInstance(
             url,
             library,
             version,
+            replace,
             waitForCompletion: false, // Don't wait for completion
             // onProgress: undefined, // Explicitly undefined or omitted
             options: {
@@ -603,7 +626,12 @@ ${r.content}\n`,
     async (uri: URL, { library }) => {
       const result = await tools.listLibraries.execute();
 
-      const lib = result.libraries.find((l: { name: string }) => l.name === library);
+      // The template variable arrives percent-encoded (a name containing "/" must
+      // be sent as %2F), and names match case-insensitively.
+      const requested = decodeUriVariable(library);
+      const lib = result.libraries.find((l: { name: string }) =>
+        libraryNamesMatch(l.name, requested),
+      );
       if (!lib) {
         return { contents: [] };
       }

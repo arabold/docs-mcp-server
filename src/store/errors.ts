@@ -54,6 +54,55 @@ export class VersionNotFoundInStoreError extends StoreError {
   }
 }
 
+// Library names are written with JSON.stringify so control characters in a
+// rejected or legacy name are escaped rather than reaching terminals and logs.
+
+/**
+ * Error thrown when a request to create a new library finds that library already exists.
+ * Raised only for an explicit "Add library" request.
+ */
+export class LibraryAlreadyExistsError extends StoreError {
+  constructor(
+    /** The existing library's stored display name. */
+    public readonly library: string,
+  ) {
+    super(`Library ${JSON.stringify(library)} already exists. Open it to add a version.`);
+  }
+}
+
+/**
+ * Error thrown when a scrape would clear an existing version without requesting replacement.
+ */
+export class VersionAlreadyExistsError extends StoreError {
+  constructor(
+    /** The library's stored display name. */
+    public readonly library: string,
+    /** The normalized version label; empty for unversioned documentation. */
+    public readonly version: string,
+  ) {
+    const target = version
+      ? `Version ${JSON.stringify(version)} of library ${JSON.stringify(library)}`
+      : `Unversioned documentation for library ${JSON.stringify(library)}`;
+    super(
+      `${target} already exists. To rebuild it, scrape again with --replace (CLI) or replace: true (MCP), or refresh it to update in place.`,
+    );
+  }
+}
+
+/**
+ * Error thrown when a new library's name breaks a naming rule.
+ */
+export class InvalidLibraryNameError extends StoreError {
+  constructor(
+    /** The submitted name. */
+    public readonly library: string,
+    /** The broken rule, as returned by `describeLibraryNameProblem`. */
+    public readonly reason: string,
+  ) {
+    super(`Invalid library name ${JSON.stringify(library)}: ${reason}.`);
+  }
+}
+
 /**
  * Error thrown when an embedding model's vector dimension exceeds the database's fixed dimension.
  * This occurs when trying to use a model that produces vectors larger than the database can store.

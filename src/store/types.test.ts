@@ -1,9 +1,15 @@
 /**
- * Unit tests for store-level version label normalization.
+ * Unit tests for store-level version label and library name normalization.
  */
 
 import { describe, expect, it } from "vitest";
-import { normalizeVersionLabel, normalizeVersionRef } from "./types";
+import {
+  describeLibraryNameProblem,
+  normalizeLibraryDisplayName,
+  normalizeLibraryName,
+  normalizeVersionLabel,
+  normalizeVersionRef,
+} from "./types";
 
 describe("normalizeVersionLabel", () => {
   it("should strip surrounding whitespace", () => {
@@ -50,4 +56,51 @@ describe("normalizeVersionRef", () => {
       );
     }
   });
+});
+
+describe("normalizeLibraryName", () => {
+  it("should not apply full case folding", () => {
+    expect(normalizeLibraryName("Straße")).not.toBe(normalizeLibraryName("STRASSE"));
+  });
+
+  it("should fold casing and surrounding whitespace to one key", () => {
+    expect(normalizeLibraryName(" React ")).toBe(normalizeLibraryName("REACT"));
+  });
+});
+
+describe("normalizeLibraryDisplayName", () => {
+  it("should trim only, preserving case, punctuation and inner spacing", () => {
+    expect(normalizeLibraryDisplayName("  Next.js  Docs ")).toBe("Next.js  Docs");
+  });
+});
+
+describe("describeLibraryNameProblem", () => {
+  it.each([
+    ["an empty name", ""],
+    ["a whitespace-only name", "   "],
+    ["a newline", "React\nDocs"],
+    ["a tab", "React\tDocs"],
+    ["a C1 control (U+0085)", "React\u0085Docs"],
+    ["101 code points", "a".repeat(101)],
+  ])("should reject %s", (_label, name) => {
+    expect(describeLibraryNameProblem(name)).not.toBeNull();
+  });
+
+  it("should accept exactly 100 code points, counting astral characters once", () => {
+    expect(describeLibraryNameProblem("a".repeat(100))).toBeNull();
+    expect(describeLibraryNameProblem("😀".repeat(100))).toBeNull();
+    expect(describeLibraryNameProblem("😀".repeat(101))).not.toBeNull();
+  });
+
+  it("should accept an emoji ZWJ sequence, since format characters are allowed", () => {
+    expect(describeLibraryNameProblem("Team 👩‍💻 Docs")).toBeNull();
+  });
+
+  it.each(["Vue Router", "C#", "@tanstack/query", "Über Lib"])(
+    "should accept %s and keep it unchanged as the display name",
+    (name) => {
+      expect(describeLibraryNameProblem(` ${name} `)).toBeNull();
+      expect(normalizeLibraryDisplayName(` ${name} `)).toBe(name);
+    },
+  );
 });

@@ -51,6 +51,20 @@ Local files are also supported using the `file://` URL scheme:
 npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/docs/my-library
 ```
 
+Scraping a library version that already exists fails and leaves it untouched. To re-index it from scratch, pass `--replace`; to update it in place, skipping unchanged pages, use `refresh`; to add more documents to it, pass `--no-clean`:
+
+```bash
+npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react --version 19.0.0 --replace
+npx @arabold/docs-mcp-server@latest refresh react --version 19.0.0
+```
+
+### Library Names
+
+- A library keeps the name as you entered it (`React`, `Next.js Docs`), and names are matched case-insensitively, so `react` and `REACT` reach the same library.
+- In the Web UI, **Add library** refuses a name that already exists — add a version to the existing library instead.
+- A new library's name must not be empty, must not contain control characters (such as tabs or line breaks), and can be at most 100 characters.
+- No character in a name has a special meaning: `react@18` is a library named `react@18`. Use `--version 18` to index a version.
+
 ### Search the Index
 
 Query indexed documentation by library name and a natural-language query:

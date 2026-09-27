@@ -4,6 +4,8 @@
  * `.topbar`.
  */
 import { useLocation, useParams } from "react-router-dom";
+import { libraryNamesMatch } from "../../../store/types";
+import { useListLibraries } from "../api/hooks";
 import { useDocumentationDrawer } from "./AddEditDocumentationDrawer";
 import { Button } from "./Button";
 import { Icon } from "./Icon";
@@ -17,11 +19,17 @@ interface RouteTitle {
 function useRouteTitle(): RouteTitle {
   const { pathname } = useLocation();
   const params = useParams<{ library?: string }>();
+  const { data: libraries } = useListLibraries();
 
   if (pathname === "/") return { title: "Overview", crumb: "/ dashboard" };
   if (pathname === "/libraries") return { title: "Libraries", crumb: "/ libraries" };
   if (pathname.startsWith("/libraries/") && params.library) {
-    const library = decodeURIComponent(params.library);
+    // React Router already decodes params; decoding again would mangle a name
+    // containing "%" (or throw). Title with the stored display name, falling back
+    // to the route parameter only while the library list is still loading.
+    const name = params.library;
+    const listed = libraries?.find((l) => libraryNamesMatch(l.library, name));
+    const library = listed?.library ?? name;
     return { title: library, crumb: `/ libraries / ${library}` };
   }
   if (pathname === "/jobs") return { title: "Jobs & Queue", crumb: "/ jobs" };

@@ -5,11 +5,13 @@
  * using the MCP protocol, and verifies basic functionality works correctly.
  */
 
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getCliCommand } from "./test-helpers";
+import { getCliCommand, writeTestConfig } from "./test-helpers";
 
 describe("MCP stdio server E2E", () => {
   let client: Client | null = null;
@@ -145,5 +147,52 @@ describe("MCP stdio server E2E", () => {
     // Close the transport
     await transport.close();
     transport = null;
+  }, 30000);
+
+  it("rejects scrape_docs for an existing version and names the replace argument", async () => {
+    const projectRoot = path.resolve(import.meta.dirname, "..");
+    const storePath = mkdtempSync(path.join(tmpdir(), "mcp-stdio-replace-"));
+    const configPath = writeTestConfig(storePath);
+
+    const testEnv = { ...process.env };
+    delete testEnv.VITEST_WORKER_ID;
+    const { cmd, args } = getCliCommand();
+    transport = new StdioClientTransport({
+      command: cmd,
+      args,
+      cwd: projectRoot,
+      env: {
+        ...testEnv,
+        DOCS_MCP_STORE_PATH: storePath,
+        DOCS_MCP_CONFIG: configPath,
+        DOCS_MCP_TELEMETRY: "false",
+      },
+    });
+    client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+
+    try {
+      await client.connect(transport);
+      const scrape = () =>
+        client?.callTool({
+          name: "scrape_docs",
+          arguments: {
+            library: "Stdio Lib",
+            url: `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`,
+          },
+        });
+
+      const first = await scrape();
+      expect(first?.isError).toBeFalsy();
+
+      const second = await scrape();
+      expect(second?.isError).toBe(true);
+      const text = (second?.content as Array<{ text: string }>)[0].text;
+      expect(text).toContain('"Stdio Lib"');
+      expect(text).toContain("replace: true");
+    } finally {
+      await client.close().catch(() => {});
+      client = null;
+      rmSync(storePath, { recursive: true, force: true });
+    }
   }, 30000);
 });

@@ -107,4 +107,24 @@ describe("scrape command", () => {
       }),
     );
   });
+
+  it("passes --replace through to ScrapeTool", async () => {
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse(["scrape", "react", "https://react.dev", "--replace"]);
+
+    const execute = vi.mocked(ScrapeTool).mock.results[0]?.value.execute;
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ replace: true }));
+  });
+
+  it("does not replace by default", async () => {
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse(["scrape", "react", "https://react.dev"]);
+
+    const execute = vi.mocked(ScrapeTool).mock.results[0]?.value.execute;
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({ replace: false }));
+  });
 });
