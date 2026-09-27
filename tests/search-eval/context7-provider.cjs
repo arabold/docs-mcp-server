@@ -8,8 +8,8 @@
  * stdout as JSON, and feeds the result through the same IR + LLM-judged
  * assertion stack.
  *
- * No vite-node, no TypeScript transform — pure Node + the `https` builtin so
- * provider cold-start is ~100ms instead of ~5s.
+ * No TypeScript transform — the Bun runtime's `https` compatibility keeps
+ * provider cold-start around 100ms instead of ~5s.
  *
  * Reads CONTEXT7_API_KEY from env if set; the endpoints currently accept
  * anonymous requests within reasonable limits, but providing a key is the

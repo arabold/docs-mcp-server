@@ -20,9 +20,9 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
 import { ZipArchive } from "archiver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { openSqliteDatabase } from "../src/store/sqlite";
 
 const DOCKER_AVAILABLE = (() => {
   const r = spawnSync("docker", ["version", "--format", "{{.Server.Version}}"], {
@@ -96,7 +96,7 @@ async function createZipFixture(zipPath: string): Promise<void> {
 }
 
 function listIndexedUrls(dbPath: string): string[] {
-  const db = new Database(dbPath, { readonly: true });
+  const db = openSqliteDatabase(dbPath, { readonly: true });
   try {
     const rows = db
       .prepare("SELECT url FROM pages ORDER BY url")
@@ -133,7 +133,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(r.status, `id -u failed: ${r.stderr}`).toBe(0);
     const uid = r.stdout.trim();
     expect(uid).not.toBe("0");
-    expect(uid).toBe("1000"); // the `node` user shipped by the base image
+    expect(uid).toBe("1000"); // the unprivileged runtime user
   });
 
   it("ships Chromium where the Playwright runtime expects it", async () => {

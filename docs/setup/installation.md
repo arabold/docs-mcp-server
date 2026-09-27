@@ -6,17 +6,21 @@ This guide covers the various ways to install and run the Docs MCP Server.
 
 The easiest way to get started is using the standalone server, which includes both the MCP endpoints and the web interface in a single process.
 
-### Option 1: Node.js (npx)
+### Option 1: Bun
 
-If you have Node.js 22.x installed (recommended for local development), you can run the server directly with a single command. Use `nvm use 22` and run `npm rebuild` if you recently changed Node versions:
+Install Bun 1.4.2 or newer, then run the server directly:
 
 ```bash
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 This runs the server on port 6280 by default. Open **[http://localhost:6280](http://localhost:6280)** to access the web interface.
 
 **Optional:** Prefix with `OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
+
+**macOS SQLite extension support:** The server loads `sqlite-vec` through SQLite's extension API. macOS's system SQLite disables extension loading, so install Homebrew SQLite with `brew install sqlite`. The server detects the standard Homebrew paths; set `DOCS_MCP_SQLITE_LIBRARY` if the library is installed elsewhere.
+
+**Existing database files:** Bun's driver uses standard SQLite files. Existing `documents.db` files do not need conversion; the server applies any pending schema migrations on startup.
 
 ### Option 2: Docker
 
@@ -33,7 +37,7 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
-**Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). The named volumes in the example above (`docs-mcp-data`, `docs-mcp-config`) inherit this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make sure it is writable by uid 1000 — either `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
+**Non-root runtime:** The container runs as the unprivileged `bun` user (uid 1000). The named volumes in the example above (`docs-mcp-data`, `docs-mcp-config`) inherit this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make sure it is writable by uid 1000 — either `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
 
@@ -72,7 +76,7 @@ Add this to your MCP settings (VS Code, Claude Desktop, etc.):
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
+      "command": "bunx",
       "args": ["@arabold/docs-mcp-server@latest"],
       "disabled": false,
       "autoApprove": []
@@ -87,7 +91,7 @@ Add this to your MCP settings (VS Code, Claude Desktop, etc.):
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
+      "command": "bunx",
       "args": ["@arabold/docs-mcp-server@latest"],
       "env": {
         "OPENAI_API_KEY": "sk-proj-..."
@@ -109,13 +113,13 @@ For agents and scripts, the CLI is the simplest way to use Grounded Docs — no 
 
 ```bash
 # Index documentation
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
+bunx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 
 # Query the index
-npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
+bunx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
 
 # Fetch a single page as Markdown
-npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+bunx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
 ```
 
 The server and CLI share the same local database. Start the server without arguments to run the MCP endpoint and web interface, then use the CLI in parallel to query from an agent or script.

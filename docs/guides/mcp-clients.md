@@ -9,8 +9,8 @@ Most clients support two connection modes:
     *   **SSE URL**: `http://localhost:6280/sse`
     *   **HTTP URL**: `http://localhost:6280/mcp` (Streamable HTTP)
 2.  **Local/Stdio**: Spawns the server process directly.
-    *   **Command**: `npx`
-    *   **Args**: `["-y", "@arabold/docs-mcp-server@latest"]`
+    *   **Command**: `bunx`
+    *   **Args**: `["@arabold/docs-mcp-server@latest"]`
 
 ---
 
@@ -38,8 +38,8 @@ Edit your configuration file:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -55,7 +55,7 @@ Edit your configuration file:
 
 **Local:**
 *   **Type**: stdio
-*   **Command**: `npx -y @arabold/docs-mcp-server@latest`
+*   **Command**: `bunx @arabold/docs-mcp-server@latest`
 
 ### Windsurf
 Open your Windsurf MCP configuration:
@@ -66,8 +66,8 @@ Open your Windsurf MCP configuration:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -80,8 +80,8 @@ Add to your Zed `settings.json`:
 {
   "context_servers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -94,8 +94,8 @@ Go to **Program** → **Install** → **Edit mcp.json**:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -127,8 +127,8 @@ Go to **Program** → **Install** → **Edit mcp.json**:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -141,8 +141,8 @@ Edit your Roo Code MCP config:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -156,8 +156,8 @@ Edit `~/.continue/config.json`:
   "mcpServers": [
     {
       "name": "docs-mcp-server",
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   ]
 }
@@ -170,8 +170,8 @@ See [Trae documentation](https://docs.trae.ai/ide/model-context-protocol) for de
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -184,10 +184,10 @@ See [Trae documentation](https://docs.trae.ai/ide/model-context-protocol) for de
 ### Claude Code
 ```bash
 # Current project
-claude mcp add docs-mcp-server -- npx -y @arabold/docs-mcp-server@latest
+claude mcp add docs-mcp-server -- bunx @arabold/docs-mcp-server@latest
 
 # Global (all projects)
-claude mcp add --scope user docs-mcp-server -- npx -y @arabold/docs-mcp-server@latest
+claude mcp add --scope user docs-mcp-server -- bunx @arabold/docs-mcp-server@latest
 ```
 
 ### Opencode
@@ -196,7 +196,7 @@ claude mcp add --scope user docs-mcp-server -- npx -y @arabold/docs-mcp-server@l
   "mcp": {
     "docs-mcp-server": {
       "type": "local",
-      "command": ["npx", "-y", "@arabold/docs-mcp-server@latest"],
+      "command": ["bunx", "@arabold/docs-mcp-server@latest"],
       "enabled": true
     }
   }
@@ -210,8 +210,8 @@ Open `~/.gemini/settings.json`:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -224,8 +224,8 @@ See [Amazon Q Developer docs](https://docs.aws.amazon.com/amazonq/latest/qdevelo
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -239,8 +239,8 @@ Open `~/.copilot/mcp-config.json`:
   "mcpServers": {
     "docs-mcp-server": {
       "type": "local",
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -259,8 +259,8 @@ Open `~/.copilot/mcp-config.json`:
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -274,8 +274,8 @@ See [Microsoft Docs](https://learn.microsoft.com/visualstudio/ide/mcp-servers).
   "servers": {
     "docs-mcp-server": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@arabold/docs-mcp-server@latest"]
+      "command": "bunx",
+      "args": ["@arabold/docs-mcp-server@latest"]
     }
   }
 }
@@ -285,7 +285,7 @@ See [Microsoft Docs](https://learn.microsoft.com/visualstudio/ide/mcp-servers).
 To install via Smithery:
 
 ```bash
-npx -y @smithery/cli@latest install @arabold/docs-mcp-server --client <CLIENT_NAME>
+bunx -y @smithery/cli@latest install @arabold/docs-mcp-server --client <CLIENT_NAME>
 ```
 
 ---

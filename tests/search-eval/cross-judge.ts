@@ -125,8 +125,8 @@ export function runCrossJudge(opts: CrossJudgeOptions): CrossJudgeAgreement[] {
 
   const env = { ...process.env, DOCS_EVAL_JUDGE_RESOLVED: opts.secondaryJudgeId };
   const child = spawnSync(
-    "npx",
-    ["-y", "promptfoo@0.121.11", "eval", "-c", tempConfigPath],
+    process.execPath,
+    ["x", "promptfoo@0.121.11", "eval", "-c", tempConfigPath],
     { stdio: "inherit", env },
   );
   // Mirror the main runner's treatment of promptfoo exit codes:

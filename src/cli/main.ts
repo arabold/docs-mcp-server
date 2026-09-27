@@ -216,7 +216,7 @@ export async function runCli(): Promise<void> {
   }
 }
 
-// Handle HMR for vite-node --watch
+// Handle hot reloads from Bun's --watch mode.
 if (import.meta.hot) {
   import.meta.hot.on("vite:beforeFullReload", async () => {
     logger.info("🔥 Hot reload detected");

@@ -7,7 +7,7 @@
  * promise rejection warnings when a job fails before a consumer awaits it.
  */
 
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID } from "node:crypto";
 import type { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
 import { ScraperRegistry, ScraperService } from "../scraper";
@@ -266,7 +266,7 @@ export class PipelineManager implements IPipeline {
 
     const normalizedOptions = this.normalizeScraperOptions(options);
 
-    const jobId = uuidv4();
+    const jobId = randomUUID();
     const abortController = new AbortController();
     let resolveCompletion!: () => void;
     let rejectCompletion!: (reason?: unknown) => void;

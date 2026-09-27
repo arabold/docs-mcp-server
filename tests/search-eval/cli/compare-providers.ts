@@ -6,7 +6,7 @@
  * LLM-judged scores, structural pass rates.
  *
  * Usage:
- *   vite-node tests/search-eval/cli/compare-providers.ts <baselineA> <baselineB>
+ *   bun tests/search-eval/cli/compare-providers.ts <baselineA> <baselineB>
  *
  * Both baselines must be recorded against the same dataset for the
  * comparison to be meaningful — otherwise per-query qrels differ. The

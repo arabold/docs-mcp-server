@@ -1,7 +1,6 @@
-// Enable source maps (Node.js 20+)
+// Enable source maps for useful stack traces.
 process.setSourceMapsEnabled(true);
 
-import "dotenv/config";
 import { sanitizeEnvironment } from "./utils/env";
 import { logger } from "./utils/logger";
 

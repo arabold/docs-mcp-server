@@ -35,7 +35,7 @@ src/web/client/
 `AppRouter` (the merged tRPC router type) lives at `src/services/appRouter.ts` and is
 always imported here as a **type-only** import (`import type { AppRouter } from
 "../../../services/appRouter"`), so no server code or its dependencies (e.g.
-better-sqlite3) is ever bundled into the browser build.
+`bun:sqlite`) is ever bundled into the browser build.
 
 ## Adding a page + route
 

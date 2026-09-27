@@ -4,7 +4,7 @@ Once the server is running, you can interact with it via the Web Interface, CLI,
 
 ## üåê Web Interface
 
-If you are running the Standalone Server (Docker or npx), the web interface is available at:
+If you are running the Standalone Server (Docker or Bun), the web interface is available at:
 
 **`http://localhost:6280`**
 
@@ -19,7 +19,7 @@ Use this interface to:
 If you are using the [Embedded Server](../setup/installation.md#embedded-server) (running inside your AI tool), it does not expose a web interface by default. You can launch a temporary web UI that connects to the same database:
 
 ```bash
-OPENAI_API_KEY="your-key" npx @arabold/docs-mcp-server@latest web --port 6281
+OPENAI_API_KEY="your-key" bunx @arabold/docs-mcp-server@latest web --port 6281
 ```
 
 Open `http://localhost:6281`. Stop the process (`Ctrl+C`) when finished.
@@ -35,20 +35,20 @@ The CLI lets you index and query documentation directly from the command line ‚Ä
 Download and index documentation from a URL or local directory:
 
 ```bash
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
+bunx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 ```
 
 You can tag a specific version, limit crawl depth, and more:
 
 ```bash
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react \
+bunx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react \
   --version 19.0.0 --max-pages 200 --max-depth 3
 ```
 
 Local files are also supported using the `file://` URL scheme:
 
 ```bash
-npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/docs/my-library
+bunx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/docs/my-library
 ```
 
 ### Search the Index
@@ -56,13 +56,13 @@ npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/docs/my-librar
 Query indexed documentation by library name and a natural-language query:
 
 ```bash
-npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
+bunx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
 ```
 
 Use `--version` to target a specific version and `--limit` to control the number of results:
 
 ```bash
-npx @arabold/docs-mcp-server@latest search react "server components" --version 19.x --limit 3
+bunx @arabold/docs-mcp-server@latest search react "server components" --version 19.x --limit 3
 ```
 
 ### Fetch a Single Page
@@ -70,7 +70,7 @@ npx @arabold/docs-mcp-server@latest search react "server components" --version 1
 Fetch any URL and convert it to Markdown without adding it to the index:
 
 ```bash
-npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+bunx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
 ```
 
 ### Other Commands
@@ -83,7 +83,7 @@ npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/
 | `remove <library>` | Delete a library or version from the index |
 | `compact` | Reclaim unused SQLite pages and shrink the store. Takes an exclusive lock, may block searches, and needs temporary disk space while it runs. |
 
-Run `npx @arabold/docs-mcp-server@latest --help` for the full command reference.
+Run `bunx @arabold/docs-mcp-server@latest --help` for the full command reference.
 
 ### Output Behavior
 
@@ -98,7 +98,7 @@ Run `npx @arabold/docs-mcp-server@latest --help` for the full command reference.
 Starting the server without any command runs both the MCP endpoint and the web interface:
 
 ```bash
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 You can then use the CLI in parallel to query the same local database, for example from an AI coding agent, while managing documentation through the web UI at **[http://localhost:6280](http://localhost:6280)**.

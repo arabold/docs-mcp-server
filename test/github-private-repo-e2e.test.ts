@@ -10,16 +10,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { config } from "dotenv";
 import { createLocalDocumentManagement } from "../src/store";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
 import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
-
-// Load environment variables from .env file
-config();
 
 // Private test repository - intentionally hardcoded for testing
 const PRIVATE_REPO_URL = "https://github.com/arabold/private-test-repo";
