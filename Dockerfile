@@ -69,14 +69,14 @@ ENV XDG_CACHE_HOME=/app/.runtime/cache
 ENV NPM_CONFIG_CACHE=/app/.runtime/cache/npm
 ENV TMPDIR=/tmp
 
-# Follow LiteLLM's OpenShift-compatible non-root pattern: the default nobody
-# user owns only the paths that need runtime writes, while group 0 receives
-# matching permissions for OpenShift-assigned arbitrary uids. Application code
-# remains root-owned and read-only; no chmod 777 or fixed OpenShift uid is used.
-RUN test "$(id -u nobody)" = 65534 \
-  && test "$(id -g nobody)" = 65534 \
+# Use a dedicated runtime account for ordinary container engines. OpenShift may
+# replace its uid with an arbitrary value, so writable paths belong to group 0
+# and grant the group the same access as their owner. Application code remains
+# root-owned and non-writable; no world-writable application paths are used.
+RUN useradd --system --uid 10001 --gid 0 --home-dir /app/.runtime \
+    --no-create-home --shell /usr/sbin/nologin docs-mcp \
   && mkdir -p /data /config /app/.runtime/cache/npm /nonexistent \
-  && chown -R nobody:root /data /config /app/.runtime /nonexistent \
+  && chown -R docs-mcp:root /data /config /app/.runtime /nonexistent \
   && chmod -R g=u /data /config /app/.runtime /nonexistent \
   && chmod -R g+w /data /config /app/.runtime /nonexistent \
   && chmod -R g+rX /data /config /app/.runtime /nonexistent \
@@ -96,7 +96,7 @@ ENV HOST=0.0.0.0
 # Use a numeric non-root default so Kubernetes can verify `runAsNonRoot`.
 # OpenShift and other runtimes may override it with an arbitrary uid. Mounted
 # volumes must grant that uid or one of its supplemental groups write access.
-USER 65534
+USER 10001:0
 
 # Keep execution in the application directory while HOME and all cache writes
 # resolve to the dedicated runtime directory.
@@ -104,8 +104,8 @@ WORKDIR /app
 
 # Fail the build if the default identity cannot write its runtime paths or can
 # modify shipped application code.
-RUN test "$(id -u)" = 65534 \
-  && test "$(id -g)" = 65534 \
+RUN test "$(id -u)" = 10001 \
+  && test "$(id -g)" = 0 \
   && for dir in /app/.runtime /app/.runtime/cache /app/.runtime/cache/npm \
       /data /config /nonexistent /tmp; do \
     touch "$dir/.permission-check" && rm "$dir/.permission-check" || exit 1; \

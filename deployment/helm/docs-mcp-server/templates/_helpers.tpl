@@ -32,7 +32,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if not .Values.openshift.enabled -}}
 {{- range $key := list "runAsUser" "runAsGroup" "fsGroup" -}}
 {{- if not (hasKey $context $key) -}}
-{{- $_ := set $context $key 65534 -}}
+{{- $_ := set $context $key (ternary 10001 0 (eq $key "runAsUser")) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

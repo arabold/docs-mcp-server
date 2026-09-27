@@ -22,7 +22,7 @@ podAnnotations: {}
 podLabels: {}
 
 # Enable on OpenShift to let the SCC assign uid/gid/fsGroup from its ranges.
-# Ordinary Kubernetes defaults to uid/gid/fsGroup 65534 (nobody).
+# Ordinary Kubernetes defaults to uid 10001 and group/fsGroup 0.
 openshift:
   enabled: false
 

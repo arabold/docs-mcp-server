@@ -39,7 +39,7 @@ configPersistence:
   existingClaim: docs-mcp-config
 ```
 
-Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `runAsUser: 65534`, `runAsGroup: 65534`, and `fsGroup: 65534` so the nobody user can write supported volumes. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
+Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `runAsUser: 10001`, `runAsGroup: 0`, and `fsGroup: 0` so the dedicated runtime user can write supported volumes. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
 
 The unified server runs one embedded worker against a SQLite store. The chart
 requires `replicaCount: 1` and uses `Recreate` upgrades so two workers do not
@@ -54,8 +54,8 @@ to assign values from the namespace's permitted ranges.
 Explicit `podSecurityContext` fields are still honored, so omit fixed IDs from
 OpenShift values unless your SCC permits them.
 
-The image uses `USER 65534` (`nobody`, primary group 65534), following LiteLLM's
-OpenShift-compatible ownership approach. Writable paths are owned by nobody and
+The image uses a dedicated `USER 10001:0` runtime account, following Litegate's
+OpenShift-compatible ownership approach. Writable paths are owned by the runtime user and
 group 0 receives matching permissions for arbitrary UIDs. Directories use the
 setgid bit so new files inherit group 0; the entrypoint's `umask 0002` preserves
 group write access. Application code remains root-owned and read-only. The
@@ -68,7 +68,7 @@ working directory is `/app` and the home directory is `/app/.runtime`.
 | `/app/.runtime/cache/npm` | npm cache |
 | `/data` | SQLite database and application data |
 | `/config` | Application and Chromium configuration |
-| `/nonexistent` | Home fallback from the nobody passwd entry |
+| `/nonexistent` | Compatibility fallback for libraries without a writable home |
 | `/tmp` | Temporary files and browser profiles |
 
 The chart uses `readOnlyRootFilesystem: true`, requires a non-root process,
@@ -76,9 +76,9 @@ drops all capabilities, and disables privilege escalation. It mounts writable
 volumes at `/data`, `/config`, `/tmp`, and `/app/.runtime`, keeping application
 code immutable while allowing runtime caches under restricted SCCs.
 
-OpenShift may replace UID 65534 with a namespace-assigned UID. To require exactly
-65534 on OpenShift, your SCC must permit that UID before setting
-`podSecurityContext.runAsUser: 65534`.
+OpenShift may replace UID 10001 with a namespace-assigned UID. To require exactly
+10001 on OpenShift, your SCC must permit that UID before setting
+`podSecurityContext.runAsUser: 10001`.
 
 Enable an OpenShift Route with:
 
