@@ -5,6 +5,7 @@ import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   authorizationServerMetadataUrls,
+  INVALID_TOKEN_DESCRIPTION,
   JwtAccessTokenVerifier,
 } from "./JwtAccessTokenVerifier";
 
@@ -90,6 +91,10 @@ async function expectRejection(promise: Promise<unknown>, code: OAuthErrorCode) 
   );
   expect(error).toBeInstanceOf(OAuthError);
   expect((error as OAuthError).code).toBe(code);
+  if (code === OAuthErrorCode.InvalidToken) {
+    // Every rejection reads the same, so the client learns nothing about why.
+    expect((error as OAuthError).message).toBe(INVALID_TOKEN_DESCRIPTION);
+  }
 }
 
 const closers: Array<() => Promise<void>> = [];

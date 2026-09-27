@@ -1,14 +1,19 @@
 /**
- * Browser-origin policy shared by the MCP endpoint, the HTTP API and its
- * WebSocket upgrade.
+ * Browser-origin and host-name policies shared by the MCP endpoint, the HTTP
+ * API and its WebSocket upgrade.
  *
  * An `Origin` header is allowed when its host is loopback (any scheme and
- * port), when its host is the public URL's host, or when it exactly matches a
+ * port), when it is the public URL's origin, or when it exactly matches a
  * configured allowed origin. Requests without an `Origin` header come from
  * non-browser clients and are never refused because of it.
+ *
+ * The host policy closes the gap the origin check leaves: browsers send no
+ * `Origin` on same-origin GET requests, so a page on an attacker's domain that
+ * DNS-rebinds to this server is recognized by its `Host` header instead.
  */
 
 import type { ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { localhostAllowedOrigins } from "@modelcontextprotocol/server";
 
 /** How a request's `Origin` header relates to the policy. */
@@ -27,19 +32,21 @@ export interface OriginPolicy {
 
 /**
  * Build the origin policy.
- * @param options.publicHostname - Hostname of the configured public URL, when one is configured.
+ * @param options.publicOrigin - Origin (`scheme://host[:port]`) of the configured public URL, when one is configured.
  * @param options.allowedOrigins - Canonical origins (`scheme://host[:port]`) that are allowed exactly.
  * @returns The policy.
  */
 export function createOriginPolicy(options: {
-  publicHostname?: string;
+  publicOrigin?: string;
   allowedOrigins: readonly string[];
 }): OriginPolicy {
   const loopbackHosts = new Set(
     localhostAllowedOrigins().map((host) => host.toLowerCase()),
   );
   const exactOrigins = new Set(options.allowedOrigins);
-  const publicHostname = options.publicHostname?.toLowerCase();
+  if (options.publicOrigin !== undefined) {
+    exactOrigins.add(new URL(options.publicOrigin).origin);
+  }
 
   return {
     check(origin) {
@@ -59,10 +66,66 @@ export function createOriginPolicy(options: {
       if (loopbackHosts.has(hostname)) {
         return "allowed";
       }
-      if (publicHostname !== undefined && hostname === publicHostname) {
-        return "allowed";
-      }
       return exactOrigins.has(parsed.origin) ? "allowed" : "denied";
+    },
+  };
+}
+
+/** Decides which `Host` header values the server answers. */
+export interface HostPolicy {
+  /**
+   * Whether a request's `Host` header names a host this server answers to.
+   * @param host - The raw header value, or `undefined` when the header is missing.
+   * @returns `true` when the request may be served.
+   */
+  isAllowed(host: string | undefined): boolean;
+}
+
+/** `host[:port]` or `[ipv6][:port]`, the only shapes a browser sends. */
+const HOST_HEADER =
+  /^(?:[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])(?::\d{1,5})?$/i;
+
+/**
+ * Build the host policy. A host is accepted when it is an IP address literal,
+ * `localhost`, a single-label name (no dot, such as a Docker service name),
+ * the public URL's host, or the host of an allowed origin. None of these can be
+ * pointed at an attacker's page through public DNS, which is what DNS
+ * rebinding needs. A request without a `Host` header is served.
+ *
+ * @param options.publicHostname - Hostname of the configured public URL, when one is configured.
+ * @param options.allowedOrigins - Canonical allowed origins; their hosts are accepted too.
+ * @returns The policy.
+ */
+export function createHostPolicy(options: {
+  publicHostname?: string;
+  allowedOrigins: readonly string[];
+}): HostPolicy {
+  const knownHosts = new Set(
+    options.allowedOrigins.map((origin) => new URL(origin).hostname.toLowerCase()),
+  );
+  if (options.publicHostname !== undefined) {
+    knownHosts.add(options.publicHostname.toLowerCase());
+  }
+
+  return {
+    isAllowed(host) {
+      if (host === undefined || host === "") {
+        return true;
+      }
+      if (!HOST_HEADER.test(host)) {
+        return false;
+      }
+      const hostname = new URL(`http://${host}`).hostname.toLowerCase();
+      const unbracketed =
+        hostname.startsWith("[") && hostname.endsWith("]")
+          ? hostname.slice(1, -1)
+          : hostname;
+      return (
+        isIP(unbracketed) !== 0 ||
+        hostname === "localhost" ||
+        !hostname.includes(".") ||
+        knownHosts.has(hostname)
+      );
     },
   };
 }

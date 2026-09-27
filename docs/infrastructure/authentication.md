@@ -137,5 +137,6 @@ With Clerk, a missing `aud` or an opaque token means the settings above aren't e
 ## Security Considerations
 
 - Serve the MCP endpoint over HTTPS in production, typically through TLS termination at a reverse proxy.
-- The MCP endpoint rejects browser requests from origins other than loopback, the public URL's host, and `server.allowedOrigins`. List hosted browser-based MCP clients there.
+- The MCP endpoint rejects browser requests from origins other than loopback, the public URL's origin, and `server.allowedOrigins`. List hosted browser-based MCP clients there.
+- Every request whose `Host` header names an unknown host is refused with `403`, which stops DNS rebinding. The server answers to IP addresses, `localhost`, single-label names such as Docker service names, the public URL's host, and the hosts of `server.allowedOrigins`.
 - Authentication controls who may call MCP tools. It does not restrict where scraping may connect: outbound requests follow `scraper.security`. See [Infrastructure Security](./security.md).

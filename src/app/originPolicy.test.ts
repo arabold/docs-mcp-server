@@ -2,6 +2,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { describe, expect, it } from "vitest";
 import {
+  createHostPolicy,
   createOriginPolicy,
   isLoopbackBindHost,
   setCorsPreflightHeaders,
@@ -14,7 +15,7 @@ function createResponse(): ServerResponse {
 
 describe("createOriginPolicy", () => {
   const policy = createOriginPolicy({
-    publicHostname: "example.com",
+    publicOrigin: "https://example.com",
     allowedOrigins: ["https://inspector.example.com"],
   });
 
@@ -31,10 +32,17 @@ describe("createOriginPolicy", () => {
     expect(policy.check(origin)).toBe("allowed");
   });
 
-  it("allows the public URL's host on any scheme and port", () => {
+  it("allows the public URL's origin", () => {
     expect(policy.check("https://example.com")).toBe("allowed");
-    expect(policy.check("http://example.com:8080")).toBe("allowed");
+    expect(policy.check("https://example.com:443")).toBe("allowed");
   });
+
+  it.each(["http://example.com", "https://example.com:8443", "http://example.com:8080"])(
+    "denies the public host on another scheme or port: %s",
+    (origin) => {
+      expect(policy.check(origin)).toBe("denied");
+    },
+  );
 
   it("allows a configured origin only as an exact match", () => {
     expect(policy.check("https://inspector.example.com")).toBe("allowed");
@@ -57,6 +65,55 @@ describe("createOriginPolicy", () => {
     const local = createOriginPolicy({ allowedOrigins: [] });
     expect(local.check("http://localhost:6274")).toBe("allowed");
     expect(local.check("https://example.com")).toBe("denied");
+  });
+});
+
+describe("createHostPolicy", () => {
+  const policy = createHostPolicy({
+    publicHostname: "docs.example.com",
+    allowedOrigins: ["http://nas.local:6280"],
+  });
+
+  it("serves a request without a Host header", () => {
+    expect(policy.isAllowed(undefined)).toBe(true);
+    expect(policy.isAllowed("")).toBe(true);
+  });
+
+  it.each([
+    "127.0.0.1:6280",
+    "10.0.0.5",
+    "192.168.1.20:6280",
+    "[::1]:6280",
+    "[fe80::1]",
+    "localhost:6280",
+    "LOCALHOST",
+    "docs-mcp-server:6280",
+    "docs.example.com",
+    "DOCS.example.com:443",
+    "nas.local:6280",
+    "nas.local",
+  ])("accepts %s", (host) => {
+    expect(policy.isAllowed(host)).toBe(true);
+  });
+
+  it.each([
+    "attacker.example:6280",
+    "attacker.rebind.example",
+    "docs.example.com.attacker.example",
+    "localhost.",
+    "localhost.attacker.example",
+    "127.0.0.1.nip.io",
+    "evil.example@127.0.0.1",
+    "127.0.0.1/evil",
+    "a b",
+  ])("refuses %s", (host) => {
+    expect(policy.isAllowed(host)).toBe(false);
+  });
+
+  it("refuses every dotted name without a public URL or allowed origins", () => {
+    const local = createHostPolicy({ allowedOrigins: [] });
+    expect(local.isAllowed("docs.example.com")).toBe(false);
+    expect(local.isAllowed("localhost:6280")).toBe(true);
   });
 });
 

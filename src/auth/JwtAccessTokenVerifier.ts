@@ -12,6 +12,14 @@ import {
   type OAuthTokenVerifier,
 } from "@modelcontextprotocol/server";
 import { createRemoteJWKSet, errors, type JWTPayload, jwtVerify } from "jose";
+import { logger } from "../utils/logger";
+
+/**
+ * The description every rejected token gets. The reason stays in the debug
+ * log: telling the client which check failed would show an attacker which of
+ * their tokens are close to valid.
+ */
+export const INVALID_TOKEN_DESCRIPTION = "The access token is invalid.";
 
 /** How long one metadata discovery request may take before the next URL is tried. */
 const DISCOVERY_TIMEOUT_MS = 10_000;
@@ -151,8 +159,10 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
           "The issuer's signing keys could not be retrieved.",
         );
       }
-      const reason = error instanceof Error ? error.message : "Invalid token";
-      throw new OAuthError(OAuthErrorCode.InvalidToken, reason);
+      logger.debug(
+        `Access token rejected: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new OAuthError(OAuthErrorCode.InvalidToken, INVALID_TOKEN_DESCRIPTION);
     }
 
     return {

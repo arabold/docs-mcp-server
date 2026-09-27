@@ -86,11 +86,11 @@ Every value in the document SHALL come from configuration, never from the reques
 - **WHEN** a client sends GET `/.well-known/oauth-protected-resource`
 - **THEN** the response SHALL be HTTP 404
 
-#### Scenario: Spoofed Host header
+#### Scenario: Host header differs from the public URL
 
-- **WHEN** a metadata request carries `Host: attacker.example`
+- **WHEN** a metadata request carries `Host: 10.9.8.7:6280`
 - **THEN** the document SHALL still describe the configured public URL
-- **AND** it SHALL NOT mention `attacker.example`
+- **AND** it SHALL NOT mention `10.9.8.7`
 
 #### Scenario: Read from a browser on another origin
 
@@ -102,7 +102,7 @@ Every value in the document SHALL come from configuration, never from the reques
 When authentication is enabled, the MCP endpoint SHALL answer a request that lacks a valid bearer token with HTTP 401. The response SHALL carry a `WWW-Authenticate` header using the `Bearer` scheme, whose `resource_metadata` parameter is the public URL followed by `/.well-known/oauth-protected-resource/mcp`.
 
 - When the request carried no bearer token, the challenge SHALL carry no error code.
-- When a token was presented and rejected, the challenge SHALL carry `error="invalid_token"`.
+- When a token was presented and rejected, the challenge SHALL carry `error="invalid_token"`. Its description SHALL be the same for every rejection reason, so the response does not reveal which check the token failed.
 
 #### Scenario: No token
 
@@ -116,6 +116,11 @@ When authentication is enabled, the MCP endpoint SHALL answer a request that lac
 - **WHEN** a request to the MCP endpoint carries a bearer token the server rejects
 - **THEN** the response SHALL be HTTP 401
 - **AND** its `WWW-Authenticate` header SHALL carry `error="invalid_token"` and `resource_metadata`
+
+#### Scenario: Rejection reason is not disclosed
+
+- **WHEN** one request carries a token with the wrong audience and another carries a token with an invalid signature
+- **THEN** both responses SHALL carry the same `error_description`
 
 ### Requirement: Only tokens issued for this server are accepted
 
@@ -192,6 +197,48 @@ At startup with authentication enabled, the server SHALL state which endpoint au
 - **WHEN** authentication is enabled
 - **AND** a request to the HTTP API carries no token
 - **THEN** the request SHALL NOT be refused for lack of authentication
+
+### Requirement: Requests for unknown host names are refused
+
+On every bind, the server SHALL answer HTTP 403 to any request, and refuse any WebSocket upgrade, whose `Host` header names a host other than:
+
+- an IP address literal;
+- `localhost`;
+- a single-label name (one without a dot, such as a Docker service name);
+- the host of the configured public URL;
+- the host of an origin listed in `server.allowedOrigins`.
+
+A request without a `Host` header SHALL be served. The server SHALL log a warning naming a refused host, at most once per host.
+
+This stops DNS rebinding: a page on an attacker's domain that resolves to the server sends same-origin GET requests without an `Origin` header, and only its `Host` header gives it away.
+
+#### Scenario: DNS-rebound page reads the API
+
+- **WHEN** the server is bound to `127.0.0.1` with no public URL
+- **AND** a GET to the HTTP API carries `Host: attacker.example:6280` and no `Origin` header
+- **THEN** the response SHALL be HTTP 403
+
+#### Scenario: DNS-rebound page opens the WebSocket
+
+- **WHEN** a WebSocket upgrade to the API carries `Host: attacker.example:6280`
+- **THEN** the upgrade SHALL be refused
+
+#### Scenario: Reached by address, by localhost or by service name
+
+- **WHEN** a request carries `Host: 192.168.1.20:6280`, `Host: localhost:6280` or `Host: docs-mcp-server:6280`
+- **THEN** the request SHALL be served
+
+#### Scenario: Reached under the public URL's host
+
+- **WHEN** the public URL is `https://docs.example.com`
+- **AND** a request carries `Host: docs.example.com`
+- **THEN** the request SHALL be served
+
+#### Scenario: LAN name that is not configured
+
+- **WHEN** neither the public URL nor `server.allowedOrigins` names `nas.local`
+- **AND** a request carries `Host: nas.local:6280`
+- **THEN** the response SHALL be HTTP 403
 
 ### Requirement: The API rejects foreign browser origins on a loopback bind
 

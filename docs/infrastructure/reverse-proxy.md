@@ -20,6 +20,7 @@ Open the web UI under the path, e.g. `https://example.com/docs/`. With a base pa
 
 - **Streaming responses, unbuffered.** MCP responses may be event streams. The server marks them `X-Accel-Buffering: no`, and turning buffering off for the location makes sure.
 - **WebSocket upgrades** on `<path>/api`, for the web UI's live updates.
+- **The original `Host` header**, or an upstream address the server answers to. The server refuses host names it doesn't know (see [Host Names the Server Answers To](../setup/configuration.md#host-names-the-server-answers-to)). nginx with `proxy_set_header Host $host` and Traefik's default both send the public host.
 - **The host-root metadata location**, when authentication is enabled and the server lives under a path. RFC 9728 places the metadata at `/.well-known/oauth-protected-resource/docs/mcp` on the host root, outside `/docs/`. MCP clients use the URL from the server's `401` challenge first, which lives under `/docs/`. The extra rule is for clients that skip it.
 
 ## nginx
@@ -97,7 +98,7 @@ Exclude the MCP endpoint and its metadata from that sign-in (`/docs/mcp`, `/docs
 
 ## Browser-Based MCP Clients
 
-The MCP endpoint accepts browser requests from loopback origins, from the public URL's host, and from origins listed in `server.allowedOrigins`. A hosted browser-based client, such as a web app calling the server directly, must be listed there:
+The MCP endpoint accepts browser requests from loopback origins, from the public URL's origin, and from origins listed in `server.allowedOrigins`. A hosted browser-based client, such as a web app calling the server directly, must be listed there:
 
 ```bash
 DOCS_MCP_SERVER_ALLOWED_ORIGINS='["https://inspector.example.com"]'

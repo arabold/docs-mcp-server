@@ -709,7 +709,9 @@ describe("AppServer Behavior Tests", () => {
       });
     });
 
-    it("shields the API from foreign origins only on a loopback bind", async () => {
+    it("checks the host on every bind and shields the API from foreign origins only on a loopback bind", async () => {
+      const onRequestHooks = () =>
+        mockFastify.addHook.mock.calls.filter(([name]) => name === "onRequest").length;
       const apiConfig: AppServerConfig = {
         enableWebInterface: false,
         enableMcpServer: false,
@@ -727,7 +729,8 @@ describe("AppServer Behavior Tests", () => {
         apiConfig,
         loopback,
       ).start();
-      expect(mockFastify.addHook).toHaveBeenCalledWith("onRequest", expect.any(Function));
+      // The host check plus the API's origin shield.
+      expect(onRequestHooks()).toBe(2);
 
       mockFastify.addHook.mockClear();
       const exposed: AppConfig = JSON.parse(JSON.stringify(appConfig));
@@ -739,10 +742,8 @@ describe("AppServer Behavior Tests", () => {
         apiConfig,
         exposed,
       ).start();
-      expect(mockFastify.addHook).not.toHaveBeenCalledWith(
-        "onRequest",
-        expect.any(Function),
-      );
+      // The host check only.
+      expect(onRequestHooks()).toBe(1);
     });
 
     it("warns that server.publicOrigin is deprecated when it is in effect", () => {

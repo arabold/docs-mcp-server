@@ -46,11 +46,11 @@ See proposal.md for the motivation and specs/ for the contracts. This section re
 
 **Mount the v2 handler on our Fastify route.** The route is `app.all("/mcp")`. After our own checks it calls `reply.hijack()` and hands `request.raw`, `reply.raw` and `request.body` to `toNodeHandler(createMcpHandler(factory, { legacy: "stateless" }))`. The SDK's Fastify guide mounts the same node handler on a route of its own `createMcpFastifyApp`. We keep our instance, because that app is a new Fastify instance and would split the web UI, tRPC and MCP. `hijack()` stops Fastify from also trying to send. `legacy: "stateless"` keeps serving handshake-era clients the way the endpoint always has: a fresh instance per request, no session. That makes the new protocol an addition rather than a breaking change. `"reject"` would make the endpoint modern-only.
 
-**Check requests in one fixed order, in our route.** The order is origin → CORS preflight → method → authentication → MCP. We answer non-POST methods ourselves with `405` and `Allow: POST`: RFC 9110 requires `Allow` on a 405, and the SDK omits it. Doing it before auth also means a GET gets 405 whether or not auth is enabled. The preflight is answered before auth because browsers never attach credentials to it.
+**Check requests in one fixed order, in our route.** The order is host → origin → CORS preflight → method → authentication → MCP. We answer non-POST methods ourselves with `405` and `Allow: POST`: RFC 9110 requires `Allow` on a 405, and the SDK omits it. Doing it before auth also means a GET gets 405 whether or not auth is enabled. The preflight is answered before auth because browsers never attach credentials to it.
 
 **One origin policy, shared by `/mcp`, `/api` and the WebSocket upgrade.** `createOriginPolicy` classifies an `Origin` as absent, allowed or denied. Allowed means:
 - a loopback hostname from the SDK's `localhostAllowedOrigins()`, on any port;
-- the public URL's hostname;
+- the public URL's origin (scheme, host and port);
 - an exact match in `server.allowedOrigins`.
 
 `null` and unparsable values are denied.
@@ -58,6 +58,17 @@ See proposal.md for the motivation and specs/ for the contracts. This section re
 - `/api` (a Fastify `onRequest` hook scoped to that prefix) and the `upgrade` handler apply it only when the bind host is loopback. A network-exposed bind is the operator's choice, and a reverse proxy protects it. Checking there would break LAN access by IP or hostname without buying anything.
 - A denied upgrade gets `HTTP/1.1 403 Forbidden` written to the socket before it is destroyed.
 - *Alternative: the SDK's `originValidation`.* Rejected. It matches hostnames only, while `allowedOrigins` entries are exact origins, and the CORS headers need the same verdict.
+
+**Check the `Host` header on every request and bind.** The origin policy cannot stop DNS rebinding on its own. A page on an attacker's domain that resolves to the server makes same-origin GET requests, and browsers send no `Origin` on those, so the policy sees `"absent"`. The security review confirmed it: a rebound page read every tRPC query, including the stored scrape headers. `createHostPolicy` therefore accepts only host names an attacker cannot point at their page through public DNS:
+- IP address literals;
+- `localhost`;
+- single-label names, which keeps Docker service names working behind nginx's default `Host: <service>:<port>`;
+- the public URL's host;
+- hosts of `server.allowedOrigins` entries.
+
+A global `onRequest` hook applies it on every bind, before any route, and the `upgrade` handler applies it too. Refused names are logged once each, up to 20, so an operator who reaches the server under an unknown LAN name learns which setting to change.
+- *Alternative: the SDK's `validateHostHeader` with `localhostAllowedHostnames()`.* Rejected. It takes an exact hostname list, so it cannot accept any IP literal, which LAN access needs.
+- *Alternative: check only on a loopback bind.* Rejected. In Docker the server binds `0.0.0.0` and the host maps the port to `localhost`, so a rebound page reaches it the same way.
 
 **CORS on `/mcp` for allowed origins; metadata readable from anywhere.**
 - A preflight gets `204` with:
@@ -216,7 +227,12 @@ export type OriginVerdict = "absent" | "allowed" | "denied"; // "null" and unpar
 export interface OriginPolicy {
   check(origin: string | undefined): OriginVerdict;
 }
-export function createOriginPolicy(o: { publicHostname?: string; allowedOrigins: readonly string[] }): OriginPolicy;
+export function createOriginPolicy(o: { publicOrigin?: string; allowedOrigins: readonly string[] }): OriginPolicy;
+export interface HostPolicy {
+  isAllowed(host: string | undefined): boolean;
+}
+/** IP literals, localhost, single-label names, the public host and allowed-origin hosts. */
+export function createHostPolicy(o: { publicHostname?: string; allowedOrigins: readonly string[] }): HostPolicy;
 /** ACAO echo, Vary: Origin, Expose-Headers: WWW-Authenticate. Call only for "allowed". */
 export function setCorsResponseHeaders(res: ServerResponse, origin: string): void;
 /** Preflight headers: allow-methods POST, requested headers echoed. The caller sends the 204. Call only for "allowed". */
@@ -291,7 +307,8 @@ Startup order in `AppServer`:
 ```
 constructor
 +   location = resolvePublicLocation(appConfig, port)    # warns: publicOrigin deprecated / ignored
-+   originPolicy = createOriginPolicy({ publicHostname, allowedOrigins })
++   originPolicy = createOriginPolicy({ publicOrigin, allowedOrigins })
++   hostPolicy = createHostPolicy({ publicHostname, allowedOrigins })
 ~   Fastify({ logger: false, rewriteUrl: (req) => stripBasePath(req.url, location.basePath) })
 ~   systemInfo = buildSystemInfo(serverConfig, appConfig, location)
 setupServer()
@@ -337,5 +354,6 @@ This is a breaking release for authentication only: HTTP and stdio clients, the 
 - Enable JWT access tokens with an `aud` claim at the identity provider.
 - Drop `auth.audience` unless the provider issues a fixed audience.
 - List hosted browser clients in `server.allowedOrigins`.
+- If you reach the server under a dotted LAN name (for example `nas.local`), set `server.publicUrl` to it or list its origin in `server.allowedOrigins`. Requests for other host names are refused.
 
 Rollback means reinstalling 3.x; there is no data migration.
