@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import http, { createServer, type IncomingMessage, type Server } from "node:http";
+import net, { type AddressInfo } from "node:net";
 import path from "node:path";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 
@@ -91,4 +91,117 @@ export async function startLocalIssuer(): Promise<LocalIssuer> {
     },
     close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };
+}
+
+/** How a {@link startPrefixProxy} forwards the base path to the upstream server. */
+export type PrefixProxyMode = "strip" | "forward";
+
+/**
+ * A reverse proxy that serves an upstream server under `basePath` on a free
+ * loopback port, standing in for nginx or Traefik. In `strip` mode it removes
+ * the prefix before forwarding, in `forward` mode it keeps it. It also forwards
+ * the RFC 9728 host-root metadata location and WebSocket upgrades.
+ * @param upstreamPort - The port of the server behind the proxy.
+ * @param basePath - The path prefix, e.g. `/docs`.
+ * @returns The proxy's port, a mode switch and `close`.
+ */
+export async function startPrefixProxy(upstreamPort: number, basePath: string) {
+  let mode: PrefixProxyMode = "strip";
+  const hostRootMetadata = `/.well-known/oauth-protected-resource${basePath}/mcp`;
+
+  const rewrite = (url: string): string | undefined => {
+    const pathname = url.split("?")[0];
+    if (pathname === hostRootMetadata) {
+      return url;
+    }
+    if (
+      pathname !== basePath &&
+      !url.startsWith(`${basePath}/`) &&
+      !url.startsWith(`${basePath}?`)
+    ) {
+      return undefined;
+    }
+    if (mode === "forward") {
+      return url;
+    }
+    const rest = url.slice(basePath.length);
+    return rest.startsWith("/") ? rest : `/${rest}`;
+  };
+
+  const server: Server = createServer((request, response) => {
+    const upstreamPath = rewrite(request.url ?? "/");
+    if (upstreamPath === undefined) {
+      response.writeHead(404, { "content-type": "text/plain" }).end("no proxy location\n");
+      return;
+    }
+    const upstream = http.request(
+      {
+        host: "127.0.0.1",
+        port: upstreamPort,
+        method: request.method,
+        path: upstreamPath,
+        headers: request.headers,
+      },
+      (upstreamResponse) => {
+        response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        upstreamResponse.pipe(response);
+      },
+    );
+    upstream.on("error", () => response.writeHead(502).end());
+    request.pipe(upstream);
+  });
+
+  server.on("upgrade", (request: IncomingMessage, socket: net.Socket, head: Buffer) => {
+    const upstreamPath = rewrite(request.url ?? "/");
+    if (upstreamPath === undefined) {
+      socket.destroy();
+      return;
+    }
+    const upstream = net.connect(upstreamPort, "127.0.0.1", () => {
+      const headerLines: string[] = [];
+      for (let i = 0; i < request.rawHeaders.length; i += 2) {
+        headerLines.push(`${request.rawHeaders[i]}: ${request.rawHeaders[i + 1]}`);
+      }
+      upstream.write(
+        `${request.method} ${upstreamPath} HTTP/1.1\r\n${headerLines.join("\r\n")}\r\n\r\n`,
+      );
+      if (head.length > 0) {
+        upstream.write(head);
+      }
+      socket.pipe(upstream);
+      upstream.pipe(socket);
+    });
+    upstream.on("error", () => socket.destroy());
+    socket.on("error", () => upstream.destroy());
+  });
+
+  const port = await listenOnFreePort(server);
+  return {
+    port,
+    setMode(next: PrefixProxyMode) {
+      mode = next;
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+/**
+ * Open a WebSocket with Node's global client, the one the worker link uses
+ * through tRPC, and report whether the upgrade succeeded.
+ * @param url - The `ws://` URL.
+ * @returns `"open"` or `"refused"`.
+ */
+export async function tryNodeWebSocket(url: string): Promise<"open" | "refused"> {
+  const socket = new WebSocket(url);
+  return await new Promise((resolve) => {
+    socket.addEventListener("open", () => {
+      socket.close();
+      resolve("open");
+    });
+    socket.addEventListener("error", () => resolve("refused"));
+  });
 }

@@ -12,52 +12,42 @@ import { EmbeddingModelChangedError } from "../../store/errors";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import { withAuthOptions, withPublicUrlOptions } from "../options";
 import { applyGlobalCliOutputMode } from "../output";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
+  checkAuthForProtocol,
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
-  parseAuthConfig,
   resolveProtocol,
-  validateAuthConfig,
-  warnHttpUsage,
 } from "../utils";
 
 export function createDefaultAction(cli: Argv) {
   cli.command(
     ["$0", "server"],
     "Starts the Docs MCP server (Unified Mode)",
-    (yargs) => {
-      return (
-        yargs
-          .option("protocol", {
-            type: "string",
-            description: "Protocol for MCP server",
-            choices: ["auto", "stdio", "http"],
-            defaultDescription: "auto",
-          })
-          .option("port", {
-            type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
-            description: "Port for the server",
-          })
-          .option("host", {
-            type: "string",
-            description: "Host to bind the server to",
-          })
-          .option("public-url", {
-            type: "string",
-            description:
-              "Public URL clients use to reach the server, optionally with a path (e.g., https://example.com/docs)",
-            alias: "publicUrl",
-          })
-          .option("public-origin", {
-            type: "string",
-            description: "Deprecated: use --public-url",
-            alias: "publicOrigin",
-          })
+    (yargs) =>
+      withAuthOptions(
+        withPublicUrlOptions(
+          yargs
+            .option("protocol", {
+              type: "string",
+              description: "Protocol for MCP server",
+              choices: ["auto", "stdio", "http"],
+              defaultDescription: "auto",
+            })
+            .option("port", {
+              type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
+              description: "Port for the server",
+            })
+            .option("host", {
+              type: "string",
+              description: "Host to bind the server to",
+            }),
+        )
           .option("embedding-model", {
             type: "string",
             description:
@@ -75,26 +65,8 @@ export function createDefaultAction(cli: Argv) {
               "Run in read-only mode (only expose read tools, disable write/job tools)",
             defaultDescription: "false",
             alias: "readOnly",
-          })
-          // Auth options
-          .option("auth-enabled", {
-            type: "boolean",
-            description: "Enable OAuth2/OIDC authentication for MCP endpoints",
-            defaultDescription: "false",
-            alias: "authEnabled",
-          })
-          .option("auth-issuer-url", {
-            type: "string",
-            description: "Issuer/discovery URL for OAuth2/OIDC provider",
-            alias: "authIssuerUrl",
-          })
-          .option("auth-audience", {
-            type: "string",
-            description: "JWT audience claim (identifies this protected resource)",
-            alias: "authAudience",
-          })
-      );
-    },
+          }),
+      ),
     async (argv) => {
       // Options the user did not pass are absent from argv, so the protocol,
       // read-only mode and auth come from env, config file or defaults here.
@@ -127,32 +99,11 @@ export function createDefaultAction(cli: Argv) {
 
       logger.debug("No subcommand specified, starting unified server by default...");
 
-      // Propagate resolved store path? loadConfig logic handled it?
-      // loadConfig takes argv, so it mapped `storePath` to `app.storePath`.
-      // But `argv.storePath` was resolved by middleware in index.ts?
-      // Yes. So appConfig has resolved path.
-
-      // Authentication applies to MCP over HTTP only. Over stdio the host
-      // launching the process is the trust boundary, so auth settings are
-      // ignored; the warning goes to stderr, which never carries protocol data.
-      if (resolvedProtocol === "stdio") {
-        if (appConfig.auth.enabled) {
-          console.error(
-            "⚠️  Authentication does not apply to MCP over stdio; auth settings are ignored.",
-          );
-        }
-      } else {
-        const authConfig = parseAuthConfig({
-          authEnabled: appConfig.auth.enabled,
-          authIssuerUrl: appConfig.auth.issuerUrl,
-          authAudience: appConfig.auth.audience,
-        });
-
-        if (authConfig) {
-          validateAuthConfig(authConfig);
-          warnHttpUsage(authConfig, appConfig.server.ports.default);
-        }
-      }
+      checkAuthForProtocol(
+        appConfig.auth,
+        resolvedProtocol,
+        appConfig.server.ports.default,
+      );
 
       ensurePlaywrightBrowsersInstalled();
 

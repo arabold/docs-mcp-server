@@ -219,25 +219,31 @@ export function parseHeaders(headerOptions: string[]): Record<string, string> {
 }
 
 /**
- * Parses auth configuration from the loaded application configuration, which
- * has already merged CLI flags, environment variables, the config file and
- * defaults (in that order of precedence).
+ * Check the auth settings for the transport a command serves. Authentication
+ * applies to MCP over HTTP only. Over stdio the host launching the process is
+ * the trust boundary, so auth settings are ignored with a warning on stderr,
+ * which never carries protocol data.
+ * @param auth - The loaded auth settings.
+ * @param protocol - The resolved transport.
+ * @param port - The HTTP port, for the plain-HTTP warning.
+ * @throws Error when an auth setting over HTTP is malformed.
  */
-export function parseAuthConfig(options: {
-  authEnabled?: boolean;
-  authIssuerUrl?: string;
-  authAudience?: string;
-}): AuthConfig | undefined {
-  // Check if auth is enabled via CLI flag (environment variables handled by commander/yargs)
-  if (!options.authEnabled) {
-    return undefined;
+export function checkAuthForProtocol(
+  auth: AuthConfig,
+  protocol: "stdio" | "http",
+  port: number,
+): void {
+  if (!auth.enabled) {
+    return;
   }
-
-  return {
-    enabled: true,
-    issuerUrl: options.authIssuerUrl,
-    audience: options.authAudience,
-  };
+  if (protocol === "stdio") {
+    console.error(
+      "⚠️  Authentication does not apply to MCP over stdio; auth settings are ignored.",
+    );
+    return;
+  }
+  validateAuthConfig(auth);
+  warnHttpUsage(auth, port);
 }
 
 /**

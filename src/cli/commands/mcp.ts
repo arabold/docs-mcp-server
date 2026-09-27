@@ -13,16 +13,16 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import { withAuthOptions, withPublicUrlOptions } from "../options";
 import { applyGlobalCliOutputMode } from "../output";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
+  checkAuthForProtocol,
   createAppServerConfig,
   getEventBus,
   handleEmbeddingModelChange,
-  parseAuthConfig,
   resolveProtocol,
-  validateAuthConfig,
   validatePort,
 } from "../utils";
 
@@ -30,34 +30,25 @@ export function createMcpCommand(cli: Argv) {
   cli.command(
     "mcp",
     "Start the MCP server (Standalone Mode)",
-    (yargs) => {
-      return (
-        yargs
-          .option("protocol", {
-            type: "string",
-            description: "Protocol for MCP server",
-            choices: ["auto", "stdio", "http"],
-            defaultDescription: "auto",
-          })
-          .option("port", {
-            type: "string",
-            description: "Port for the MCP server",
-          })
-          .option("host", {
-            type: "string",
-            description: "Host to bind the MCP server to",
-          })
-          .option("public-url", {
-            type: "string",
-            description:
-              "Public URL clients use to reach the server, optionally with a path (e.g., https://example.com/docs)",
-            alias: "publicUrl",
-          })
-          .option("public-origin", {
-            type: "string",
-            description: "Deprecated: use --public-url",
-            alias: "publicOrigin",
-          })
+    (yargs) =>
+      withAuthOptions(
+        withPublicUrlOptions(
+          yargs
+            .option("protocol", {
+              type: "string",
+              description: "Protocol for MCP server",
+              choices: ["auto", "stdio", "http"],
+              defaultDescription: "auto",
+            })
+            .option("port", {
+              type: "string",
+              description: "Port for the MCP server",
+            })
+            .option("host", {
+              type: "string",
+              description: "Host to bind the MCP server to",
+            }),
+        )
           .option("embedding-model", {
             type: "string",
             description:
@@ -76,35 +67,11 @@ export function createMcpCommand(cli: Argv) {
               "Run in read-only mode (only expose read tools, disable write/job tools)",
             defaultDescription: "false",
             alias: "readOnly",
-          })
-          // Auth options
-          .option("auth-enabled", {
-            type: "boolean",
-            description: "Enable OAuth2/OIDC authentication for MCP endpoints",
-            defaultDescription: "false",
-            alias: "authEnabled",
-          })
-          .option("auth-issuer-url", {
-            type: "string",
-            description: "Issuer/discovery URL for OAuth2/OIDC provider",
-            alias: "authIssuerUrl",
-          })
-          .option("auth-audience", {
-            type: "string",
-            description: "JWT audience claim (identifies this protected resource)",
-            alias: "authAudience",
-          })
-      );
-    },
+          }),
+      ),
     async (argv) => {
-      const _port = validatePort((argv.port as string) || "6280"); // fallback for validation if undefined, but loadConfig handles defaults.
-      // Wait, validatePort throws if invalid. If undefined, we should rely on loadConfig.
-      // Current logic calls validatePort(cmdOptions.port). If undefined, what happens?
-      // In Yargs, if no default, argv.port is undefined.
-      // validatePort(undefined) -> depends on impl. It expects string.
-      // I should modify validation or defer it.
-      // loadConfig will fill default.
-      // So I should load config FIRST.
+      // Reject a malformed --port before anything starts.
+      validatePort((argv.port as string) || "6280");
       // Options the user did not pass are absent from argv, so the protocol,
       // read-only mode and auth come from env, config file or defaults here.
       // The logger writes to stderr, so loading before the stdio log level is
@@ -134,32 +101,7 @@ export function createMcpCommand(cli: Argv) {
         });
       }
 
-      // Now we have appConfig with defaults.
-      // Validate resolved values?
-      // validatePort(appConfig.server.ports.mcp.toString());
-      // The old code validated CLI input explicitly?
-      // Yes. I will validate from appConfig.
-
-      // Authentication applies to MCP over HTTP only. Over stdio the host
-      // launching the process is the trust boundary, so auth settings are
-      // ignored; the warning goes to stderr, which never carries protocol data.
-      if (resolvedProtocol === "stdio") {
-        if (appConfig.auth.enabled) {
-          console.error(
-            "⚠️  Authentication does not apply to MCP over stdio; auth settings are ignored.",
-          );
-        }
-      } else {
-        const authConfig = parseAuthConfig({
-          authEnabled: appConfig.auth.enabled,
-          authIssuerUrl: appConfig.auth.issuerUrl,
-          authAudience: appConfig.auth.audience,
-        });
-
-        if (authConfig) {
-          validateAuthConfig(authConfig);
-        }
-      }
+      checkAuthForProtocol(appConfig.auth, resolvedProtocol, appConfig.server.ports.mcp);
 
       try {
         const serverUrl = argv.serverUrl as string | undefined;

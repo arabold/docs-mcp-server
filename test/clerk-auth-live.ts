@@ -28,7 +28,7 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import http, { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -43,7 +43,12 @@ import {
   UnauthorizedError,
 } from "@modelcontextprotocol/client";
 import { decodeJwt } from "jose";
-import { getCliCommand, getFreePort, listenOnFreePort } from "./test-helpers";
+import {
+  getCliCommand,
+  getFreePort,
+  listenOnFreePort,
+  startPrefixProxy,
+} from "./test-helpers";
 
 const BASE_PATH = "/docs";
 const CLIENT_NAME = "docs-mcp-server auth E2E (safe to delete)";
@@ -92,48 +97,6 @@ function clerkApi(endpoint: string, extra: string[] = []): unknown {
     throw new Error(`clerk ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
   }
   return result.stdout.trim() ? JSON.parse(result.stdout) : undefined;
-}
-
-/** A proxy that serves `upstreamPort` under `/docs`, strips the prefix, and forwards the RFC 9728 host-root metadata path. */
-async function startProxy(upstreamPort: number): Promise<{ port: number; close: () => Promise<void> }> {
-  const hostRootMetadata = `/.well-known/oauth-protected-resource${BASE_PATH}/mcp`;
-  const server: Server = createServer((request, response) => {
-    const url = request.url ?? "/";
-    let upstreamPath: string | undefined;
-    if (url.split("?")[0] === hostRootMetadata) {
-      upstreamPath = url;
-    } else if (url === BASE_PATH || url.startsWith(`${BASE_PATH}/`)) {
-      upstreamPath = url.slice(BASE_PATH.length) || "/";
-    }
-    if (upstreamPath === undefined) {
-      response.writeHead(404, { "content-type": "text/plain" }).end("no proxy location\n");
-      return;
-    }
-    const upstream = http.request(
-      {
-        host: "127.0.0.1",
-        port: upstreamPort,
-        method: request.method,
-        path: upstreamPath,
-        headers: request.headers,
-      },
-      (upstreamResponse) => {
-        response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
-        upstreamResponse.pipe(response);
-      },
-    );
-    upstream.on("error", () => response.writeHead(502).end());
-    request.pipe(upstream);
-  });
-  const port = await listenOnFreePort(server);
-  return {
-    port,
-    close: () =>
-      new Promise((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  };
 }
 
 /** Start the built CLI with authentication configured through the environment only. */
@@ -203,37 +166,35 @@ async function stopDocsServer(child: ChildProcess | undefined): Promise<void> {
 }
 
 /** Wait for the browser to come back to the redirect URI with the authorization response. */
-function startCallbackServer(): Promise<{ redirectUri: string; response: Promise<URLSearchParams> }> {
-  return new Promise((resolveServer) => {
-    let resolveResponse: (params: URLSearchParams) => void = () => {};
-    let rejectResponse: (error: Error) => void = () => {};
-    const response = new Promise<URLSearchParams>((resolve, reject) => {
-      resolveResponse = resolve;
-      rejectResponse = reject;
-    });
-    const server = createServer((request, reply) => {
-      const url = new URL(request.url ?? "/", "http://127.0.0.1");
-      if (url.pathname !== "/callback") {
-        reply.writeHead(404).end();
-        return;
-      }
-      reply
-        .writeHead(200, { "content-type": "text/plain" })
-        .end("Signed in. You can close this tab and return to the terminal.\n");
-      clearTimeout(timer);
-      server.close();
-      resolveResponse(url.searchParams);
-    });
-    const timer = setTimeout(() => {
-      server.close();
-      rejectResponse(new Error("Timed out after 5 minutes waiting for the browser sign-in"));
-    }, SIGN_IN_TIMEOUT_MS);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      resolveServer({ redirectUri: `http://127.0.0.1:${port}/callback`, response });
-    });
+async function startCallbackServer(): Promise<{
+  redirectUri: string;
+  response: Promise<URLSearchParams>;
+}> {
+  let resolveResponse: (params: URLSearchParams) => void = () => {};
+  let rejectResponse: (error: Error) => void = () => {};
+  const response = new Promise<URLSearchParams>((resolve, reject) => {
+    resolveResponse = resolve;
+    rejectResponse = reject;
   });
+  const server = createServer((request, reply) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname !== "/callback") {
+      reply.writeHead(404).end();
+      return;
+    }
+    reply
+      .writeHead(200, { "content-type": "text/plain" })
+      .end("Signed in. You can close this tab and return to the terminal.\n");
+    clearTimeout(timer);
+    server.close();
+    resolveResponse(url.searchParams);
+  });
+  const timer = setTimeout(() => {
+    server.close();
+    rejectResponse(new Error("Timed out after 5 minutes waiting for the browser sign-in"));
+  }, SIGN_IN_TIMEOUT_MS);
+  const port = await listenOnFreePort(server);
+  return { redirectUri: `http://127.0.0.1:${port}/callback`, response };
 }
 
 /** An in-memory OAuth client that hands the authorization URL to the script instead of redirecting. */
@@ -395,7 +356,7 @@ async function main(): Promise<void> {
   // 2. Server behind a prefix-stripping proxy
   const storeDir = mkdtempSync(path.join(tmpdir(), "docs-mcp-clerk-e2e-"));
   const upstreamPort = await getFreePort();
-  const proxy = await startProxy(upstreamPort);
+  const proxy = await startPrefixProxy(upstreamPort, BASE_PATH);
   const publicUrl = `http://127.0.0.1:${proxy.port}${BASE_PATH}`;
   const mcpUrl = `${publicUrl}/mcp`;
   const metadataUrl = `${publicUrl}/.well-known/oauth-protected-resource/mcp`;

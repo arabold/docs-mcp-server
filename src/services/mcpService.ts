@@ -35,7 +35,7 @@ import {
   setCorsResponseHeaders,
 } from "../app/originPolicy";
 import { missingTokenChallenge } from "../auth/protectedResourceMetadata";
-import { createMcpServerInstance } from "../mcp/mcpServer";
+import { createMcpServerFactory } from "../mcp/mcpServer";
 import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
@@ -69,12 +69,38 @@ export const LEGACY_SSE_MAX_SESSIONS = 100;
 
 const ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 function jsonRpcError(message: string) {
   return { jsonrpc: "2.0", error: { code: -32000, message }, id: null };
+}
+
+/**
+ * Answer 403 for a denied origin. For an allowed one, set the CORS headers.
+ * @returns `"denied"` when the reply was sent, otherwise the allowed origin
+ *   (`undefined` for a request without an `Origin` header).
+ */
+function applyOriginPolicy(
+  originPolicy: OriginPolicy,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): "denied" | string | undefined {
+  const origin = request.headers.origin;
+  const verdict = originPolicy.check(origin);
+  if (verdict === "denied") {
+    reply.code(403).send(jsonRpcError("Forbidden: origin not allowed."));
+    return "denied";
+  }
+  if (verdict === "allowed" && origin !== undefined) {
+    setCorsResponseHeaders(reply.raw, origin);
+    return origin;
+  }
+  return undefined;
+}
+
+/** An `onRequest` hook that applies only the origin policy. */
+function createOriginCheck(originPolicy: OriginPolicy) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    applyOriginPolicy(originPolicy, request, reply);
+  };
 }
 
 /**
@@ -84,28 +110,22 @@ function jsonRpcError(message: string) {
  */
 function createPreflightChecks(originPolicy: OriginPolicy) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const origin = headerValue(request.headers.origin);
-    const verdict = originPolicy.check(origin);
-    if (verdict === "denied") {
-      return reply.code(403).send(jsonRpcError("Forbidden: origin not allowed."));
+    const allowedOrigin = applyOriginPolicy(originPolicy, request, reply);
+    if (allowedOrigin === "denied") {
+      return reply;
     }
 
-    const allowedOrigin = verdict === "allowed" ? origin : undefined;
     if (
       request.method === "OPTIONS" &&
       allowedOrigin !== undefined &&
       request.headers["access-control-request-method"] !== undefined
     ) {
-      setCorsPreflightHeaders(
-        reply.raw,
-        allowedOrigin,
-        headerValue(request.headers["access-control-request-headers"]),
-      );
+      setCorsPreflightHeaders(reply.raw, {
+        origin: allowedOrigin,
+        methods: "POST",
+        requestedHeaders: request.headers["access-control-request-headers"],
+      });
       return reply.code(204).send();
-    }
-
-    if (allowedOrigin !== undefined) {
-      setCorsResponseHeaders(reply.raw, allowedOrigin);
     }
 
     if (request.method !== "POST") {
@@ -115,29 +135,6 @@ function createPreflightChecks(originPolicy: OriginPolicy) {
         .send(jsonRpcError("Method not allowed."));
     }
   };
-}
-
-/** Answers 403 for a denied origin, and sets CORS headers for an allowed one. */
-function createOriginCheck(originPolicy: OriginPolicy) {
-  return async (request: FastifyRequest, reply: FastifyReply) => {
-    const origin = headerValue(request.headers.origin);
-    const verdict = originPolicy.check(origin);
-    if (verdict === "denied") {
-      return reply.code(403).send(jsonRpcError("Forbidden: origin not allowed."));
-    }
-    if (verdict === "allowed" && origin !== undefined) {
-      setCorsResponseHeaders(reply.raw, origin);
-    }
-  };
-}
-
-/** Copy a web-standard `Response` produced by the SDK onto the Fastify reply. */
-async function sendWebResponse(reply: FastifyReply, response: Response) {
-  reply.code(response.status);
-  response.headers.forEach((value, name) => {
-    reply.header(name, value);
-  });
-  return reply.send(await response.text());
 }
 
 /**
@@ -153,9 +150,11 @@ export async function registerMcpService(
   auth?: McpEndpointAuth,
 ): Promise<void> {
   const tools = await initializeTools(deps.docService, deps.pipeline, deps.config);
-  const createServer = () => createMcpServerInstance(tools, deps.config);
+  const createServer = createMcpServerFactory(tools, deps.config);
+  const onerror = (error: Error) => logger.error(`❌ Error in MCP endpoint: ${error}`);
   const handleMcpRequest = toNodeHandler(
-    createMcpHandler(createServer, { legacy: "stateless" }),
+    createMcpHandler(createServer, { legacy: "stateless", onerror }),
+    { onerror },
   );
 
   server.route({
@@ -165,7 +164,7 @@ export async function registerMcpService(
     handler: async (request, reply) => {
       let authInfo: AuthInfo | undefined;
       if (auth) {
-        const authorization = headerValue(request.headers.authorization);
+        const authorization = request.headers.authorization;
         if (!authorization || !/^Bearer\s+\S/i.test(authorization)) {
           return reply
             .code(401)
@@ -179,8 +178,7 @@ export async function registerMcpService(
           });
         } catch (error) {
           logger.debug(`MCP request rejected by token verification: ${error}`);
-          return sendWebResponse(
-            reply,
+          return reply.send(
             bearerAuthChallengeResponse(error, {
               resourceMetadataUrl: auth.resourceMetadataUrl,
             }),
@@ -193,15 +191,8 @@ export async function registerMcpService(
       if (authInfo) {
         raw.auth = authInfo;
       }
-      try {
-        await handleMcpRequest(raw, reply.raw, request.body);
-      } catch (error) {
-        logger.error(`❌ Error in MCP endpoint: ${error}`);
-        if (!reply.raw.headersSent) {
-          reply.raw.writeHead(500, { "Content-Type": "application/json" });
-          reply.raw.end(JSON.stringify(jsonRpcError("Internal server error.")));
-        }
-      }
+      // The adapter answers 500 itself and reports the failure to `onerror`.
+      await handleMcpRequest(raw, reply.raw, request.body);
     },
   });
 
@@ -220,7 +211,7 @@ export async function registerMcpService(
 function registerLegacySseTransport(
   server: FastifyInstance,
   deps: McpServiceDeps,
-  createServer: () => ReturnType<typeof createMcpServerInstance>,
+  createServer: ReturnType<typeof createMcpServerFactory>,
 ): void {
   const sessions = new Map<string, SSEServerTransport>();
   const messagesPath = `${deps.location.basePath}/messages`;

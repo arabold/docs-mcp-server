@@ -1,5 +1,6 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { buildDiscoveryUrls } from "@modelcontextprotocol/client";
 import { OAuthError, OAuthErrorCode } from "@modelcontextprotocol/server";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -129,6 +130,15 @@ describe("authorizationServerMetadataUrls", () => {
       "https://auth.example.com/tenant1/.well-known/openid-configuration",
     ]);
   });
+
+  it.each(["https://auth.example.com", "https://auth.example.com/tenant1"])(
+    "looks where the SDK's MCP clients look for %s",
+    (issuer) => {
+      expect(authorizationServerMetadataUrls(issuer)).toEqual(
+        buildDiscoveryUrls(issuer).map(({ url }) => url.href),
+      );
+    },
+  );
 });
 
 describe("JwtAccessTokenVerifier.create", () => {

@@ -53,49 +53,41 @@ const envBoolean = z
   })
   .pipe(z.boolean());
 
-const publicOriginSchema = z
-  .preprocess((value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }, z.string().optional())
-  .transform((value, ctx) => {
-    try {
-      return normalizePublicOrigin(value);
-    } catch (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return z.NEVER;
-    }
+/** Report a normalizer's error as the validation issue of the setting. */
+function addNormalizationIssue(ctx: z.RefinementCtx, error: unknown): void {
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: error instanceof Error ? error.message : String(error),
   });
+}
 
-const publicUrlSchema = z
-  .preprocess((value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }, z.string().optional())
-  .transform((value, ctx) => {
-    try {
-      return normalizePublicUrl(value);
-    } catch (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      return z.NEVER;
-    }
-  });
+/**
+ * An optional string setting that `normalize` validates and canonicalizes.
+ * The normalizer treats empty values as absent and throws a message naming
+ * the setting for invalid ones.
+ */
+function normalizedStringSchema<T>(normalize: (value: string | undefined) => T) {
+  return z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      try {
+        return normalize(value);
+      } catch (error) {
+        addNormalizationIssue(ctx, error);
+        return z.NEVER;
+      }
+    });
+}
+
+const publicOriginSchema = normalizedStringSchema((value) =>
+  normalizePublicOrigin(value),
+);
+const publicUrlSchema = normalizedStringSchema(normalizePublicUrl);
 
 /**
  * Browser origins allowed to call the MCP endpoint in addition to loopback and
- * the public URL's host. Each entry must be an exact origin
+ * the public URL's origin. Each entry must be an exact origin
  * (`scheme://host[:port]`); a trailing slash is ignored.
  */
 const allowedOriginsSchema = envStringArray.transform((values, ctx) => {
@@ -107,10 +99,7 @@ const allowedOriginsSchema = envStringArray.transform((values, ctx) => {
         origins.push(origin);
       }
     } catch (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      addNormalizationIssue(ctx, error);
       return z.NEVER;
     }
   }

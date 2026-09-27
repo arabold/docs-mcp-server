@@ -3,8 +3,6 @@ import type { AppConfig } from "./config";
 import {
   buildBindOrigin,
   describePublicLocationWarnings,
-  getCanonicalServerOrigin,
-  isWildcardBindHost,
   normalizePublicOrigin,
   normalizePublicUrl,
   resolvePublicLocation,
@@ -46,27 +44,6 @@ describe("server origin helpers", () => {
   it("builds bind-derived origins for IPv6 addresses", () => {
     expect(buildBindOrigin("::", 6280)).toBe("http://[::]:6280");
     expect(buildBindOrigin("[::1]", 6280)).toBe("http://[::1]:6280");
-  });
-
-  it("prefers public origin over bind-derived origin", () => {
-    const config = {
-      server: {
-        host: "0.0.0.0",
-        publicOrigin: "https://docs.example.com",
-      },
-    } as AppConfig;
-
-    expect(getCanonicalServerOrigin(config, 6280)).toBe("https://docs.example.com");
-  });
-
-  it("falls back to bind-derived origin when public origin is absent", () => {
-    const config = {
-      server: {
-        host: "0.0.0.0",
-      },
-    } as AppConfig;
-
-    expect(getCanonicalServerOrigin(config, 6280)).toBe("http://0.0.0.0:6280");
   });
 
   it("normalizes absent and empty public URLs", () => {
@@ -120,6 +97,7 @@ describe("server origin helpers", () => {
     } as AppConfig;
 
     expect(resolvePublicLocation(config, 6280)).toEqual({
+      configured: true,
       url: "https://example.com/docs",
       origin: "https://example.com",
       basePath: "/docs",
@@ -132,6 +110,7 @@ describe("server origin helpers", () => {
     } as AppConfig;
 
     expect(resolvePublicLocation(config, 6280)).toEqual({
+      configured: true,
       url: "https://docs.example.com",
       origin: "https://docs.example.com",
       basePath: "",
@@ -154,6 +133,7 @@ describe("server origin helpers", () => {
     expect(
       resolvePublicLocation({ server: { host: "0.0.0.0" } } as AppConfig, 6280),
     ).toEqual({
+      configured: false,
       url: "http://0.0.0.0:6280",
       origin: "http://0.0.0.0:6280",
       basePath: "",
@@ -188,14 +168,5 @@ describe("server origin helpers", () => {
         server: { publicUrl: "https://example.com/docs" },
       } as AppConfig),
     ).toEqual([]);
-  });
-
-  it("detects wildcard bind hosts", () => {
-    expect(isWildcardBindHost("0.0.0.0")).toBe(true);
-    expect(isWildcardBindHost("::")).toBe(true);
-    expect(isWildcardBindHost("[::]")).toBe(true);
-    expect(isWildcardBindHost("::0")).toBe(true);
-    expect(isWildcardBindHost("127.0.0.1")).toBe(false);
-    expect(isWildcardBindHost("localhost")).toBe(false);
   });
 });

@@ -8,8 +8,6 @@
  * that binding.
  */
 
-import type { PublicLocation } from "../utils/serverOrigin";
-
 const WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource";
 
 /**
@@ -39,12 +37,16 @@ export function buildProtectedResourceMetadata(options: {
  * the server also answers the location RFC 9728 derives from the MCP endpoint
  * URL, which sits at the host root: `/.well-known/oauth-protected-resource/docs/mcp`.
  * @param basePath - The public URL's path, `""` or e.g. `/docs`.
+ * @param endpointPath - The MCP endpoint's path under the public URL, e.g. `/mcp`.
  * @returns One or two paths.
  */
-export function protectedResourceMetadataPaths(basePath: string): string[] {
-  const paths = [`${WELL_KNOWN_PREFIX}/mcp`];
+export function protectedResourceMetadataPaths(
+  basePath: string,
+  endpointPath: string,
+): string[] {
+  const paths = [`${WELL_KNOWN_PREFIX}${endpointPath}`];
   if (basePath) {
-    paths.push(`${WELL_KNOWN_PREFIX}${basePath}/mcp`);
+    paths.push(`${WELL_KNOWN_PREFIX}${basePath}${endpointPath}`);
   }
   return paths;
 }
@@ -52,11 +54,15 @@ export function protectedResourceMetadataPaths(basePath: string): string[] {
 /**
  * The metadata URL advertised in the discovery challenge. It lives under the
  * public URL's path, so a reverse proxy forwarding only that path reaches it.
- * @param location - The resolved public location.
+ * @param publicUrl - The public URL, without a trailing slash.
+ * @param endpointPath - The MCP endpoint's path under the public URL, e.g. `/mcp`.
  * @returns The absolute metadata URL.
  */
-export function protectedResourceMetadataUrl(location: PublicLocation): string {
-  return `${location.url}${WELL_KNOWN_PREFIX}/mcp`;
+export function protectedResourceMetadataUrl(
+  publicUrl: string,
+  endpointPath: string,
+): string {
+  return `${publicUrl}${WELL_KNOWN_PREFIX}${endpointPath}`;
 }
 
 /**

@@ -10,6 +10,7 @@ import type { IDocumentManagement } from "../../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { withPublicUrlOptions } from "../options";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
@@ -24,26 +25,17 @@ export function createWebCommand(cli: Argv) {
     "web",
     "Start the web dashboard (Standalone Mode)",
     (yargs) => {
-      return yargs
-        .option("port", {
-          type: "string",
-          description: "Port for the web interface",
-        })
-        .option("host", {
-          type: "string",
-          description: "Host to bind the web interface to",
-        })
-        .option("public-url", {
-          type: "string",
-          description:
-            "Public URL clients use to reach the server, optionally with a path (e.g., https://example.com/docs)",
-          alias: "publicUrl",
-        })
-        .option("public-origin", {
-          type: "string",
-          description: "Deprecated: use --public-url",
-          alias: "publicOrigin",
-        })
+      return withPublicUrlOptions(
+        yargs
+          .option("port", {
+            type: "string",
+            description: "Port for the web interface",
+          })
+          .option("host", {
+            type: "string",
+            description: "Host to bind the web interface to",
+          }),
+      )
         .option("embedding-model", {
           type: "string",
           description:

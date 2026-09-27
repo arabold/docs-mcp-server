@@ -11,7 +11,13 @@ import {
   OAuthErrorCode,
   type OAuthTokenVerifier,
 } from "@modelcontextprotocol/server";
-import { createRemoteJWKSet, errors, type JWTPayload, jwtVerify } from "jose";
+import {
+  createRemoteJWKSet,
+  errors,
+  type JWTPayload,
+  type JWTVerifyGetKey,
+  jwtVerify,
+} from "jose";
 import { logger } from "../utils/logger";
 
 /**
@@ -70,19 +76,34 @@ function stringClaim(payload: JWTPayload, name: string): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** The issuer's signing keys could not be retrieved; the token itself may be fine. */
+class KeyRetrievalError extends Error {}
+
 /**
- * Whether a verification failure means the issuer's keys could not be
- * retrieved, as opposed to something wrong with the token itself.
+ * Wrap the key lookup so a failure to retrieve the keys is told apart from a
+ * token that no published key fits: only the latter is the token's fault.
  */
-function isKeyRetrievalFailure(error: unknown): boolean {
-  if (error instanceof errors.JWKSTimeout || error instanceof errors.JWKSInvalid) {
-    return true;
-  }
-  if (!(error instanceof errors.JOSEError)) {
-    // Network failures from fetching the key set surface as plain errors.
-    return true;
-  }
-  return error.code === "ERR_JOSE_GENERIC" && /JSON Web Key Set/i.test(error.message);
+function withKeyRetrievalErrors(
+  getKey: ReturnType<typeof createRemoteJWKSet>,
+): JWTVerifyGetKey {
+  return async (header, token) => {
+    try {
+      return await getKey(header, token);
+    } catch (error) {
+      if (
+        error instanceof errors.JWKSNoMatchingKey ||
+        error instanceof errors.JWKSMultipleMatchingKeys
+      ) {
+        throw error;
+      }
+      throw new KeyRetrievalError(
+        error instanceof Error ? error.message : String(error),
+        {
+          cause: error,
+        },
+      );
+    }
+  };
 }
 
 /** Verifies JWT access tokens against the configured issuer and audience. */
@@ -90,7 +111,7 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
   private constructor(
     private readonly issuer: string,
     private readonly audience: string,
-    private readonly keys: ReturnType<typeof createRemoteJWKSet>,
+    private readonly keys: JWTVerifyGetKey,
   ) {}
 
   /**
@@ -133,7 +154,7 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
     return new JwtAccessTokenVerifier(
       options.issuerUrl,
       options.audience,
-      createRemoteJWKSet(new URL(metadata.jwks_uri)),
+      withKeyRetrievalErrors(createRemoteJWKSet(new URL(metadata.jwks_uri))),
     );
   }
 
@@ -153,7 +174,7 @@ export class JwtAccessTokenVerifier implements OAuthTokenVerifier {
         requiredClaims: ["exp"],
       }));
     } catch (error) {
-      if (isKeyRetrievalFailure(error)) {
+      if (error instanceof KeyRetrievalError) {
         throw new OAuthError(
           OAuthErrorCode.ServerError,
           "The issuer's signing keys could not be retrieved.",

@@ -4,6 +4,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import type { IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import fastifyStatic from "@fastify/static";
 import Fastify, {
@@ -43,19 +44,15 @@ import {
   resolvePublicLocation,
 } from "../utils/serverOrigin";
 import type { AppServerConfig } from "./AppServerConfig";
-import { injectBaseHref, servesSpaShell, stripBasePath } from "./basePath";
+import { injectBaseHref, isUnderPath, servesSpaShell, stripBasePath } from "./basePath";
 import {
   createHostPolicy,
   createOriginPolicy,
   type HostPolicy,
   isLoopbackBindHost,
   type OriginPolicy,
-  sanitizeRequestedHeaders,
+  setCorsPreflightHeaders,
 } from "./originPolicy";
-
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
 
 /** Distinct refused host names that get a warning; later ones are only refused. */
 const MAX_REFUSED_HOST_WARNINGS = 20;
@@ -70,6 +67,11 @@ export class AppServer {
   private readonly originPolicy: OriginPolicy;
   private readonly hostPolicy: HostPolicy;
   private readonly refusedHosts = new Set<string>();
+  /**
+   * On a loopback bind no reverse proxy stands in front of the API, so it is
+   * shielded from foreign web pages the same way as the MCP endpoint.
+   */
+  private readonly shieldsApi: boolean;
   private serverConfig: AppServerConfig;
   private readonly appConfig: AppConfig;
   private readonly systemInfo: SystemInfo;
@@ -77,6 +79,8 @@ export class AppServer {
   private wss: WebSocketServer | null = null;
   /** Where clients reach this server; every advertised URL derives from it. */
   private readonly location: PublicLocation;
+  /** Public URL of the MCP endpoint: the resource identifier and default token audience. */
+  private readonly mcpEndpointUrl: string;
 
   constructor(
     private docService: IDocumentManagement,
@@ -91,17 +95,15 @@ export class AppServer {
     for (const warning of describePublicLocationWarnings(appConfig)) {
       logger.warn(`⚠️  ${warning}`);
     }
-    this.originPolicy = createOriginPolicy({
-      publicOrigin: this.hasPublicUrl() ? this.location.origin : undefined,
+    this.mcpEndpointUrl = `${this.location.url}${MCP_ENDPOINT_PATH}`;
+    const browserPolicy = {
+      publicOrigin: this.location.configured ? this.location.origin : undefined,
       allowedOrigins: appConfig.server.allowedOrigins,
-    });
-    this.hostPolicy = createHostPolicy({
-      publicHostname: this.hasPublicUrl()
-        ? new URL(this.location.url).hostname
-        : undefined,
-      allowedOrigins: appConfig.server.allowedOrigins,
-    });
-    this.systemInfo = buildSystemInfo(serverConfig, appConfig, this.mcpEndpointUrl());
+    };
+    this.originPolicy = createOriginPolicy(browserPolicy);
+    this.hostPolicy = createHostPolicy(browserPolicy);
+    this.shieldsApi = isLoopbackBindHost(appConfig.server.host);
+    this.systemInfo = buildSystemInfo(serverConfig, appConfig, this.mcpEndpointUrl);
     const basePath = this.location.basePath;
     this.server = Fastify({
       logger: false, // Use our own logger
@@ -132,17 +134,26 @@ export class AppServer {
     return false;
   }
 
-  /** Whether an operator configured where clients reach this server. */
-  private hasPublicUrl(): boolean {
-    return Boolean(
-      this.appConfig.server.publicUrl?.trim() ||
-        this.appConfig.server.publicOrigin?.trim(),
-    );
-  }
-
-  /** Public URL of the MCP endpoint: the resource identifier and default token audience. */
-  private mcpEndpointUrl(): string {
-    return `${this.location.url}${MCP_ENDPOINT_PATH}`;
+  /**
+   * Why a request or WebSocket upgrade is refused before routing, if it is:
+   * an unknown host name (DNS rebinding), or a foreign origin calling the API
+   * on a loopback bind.
+   * @param headers - The request headers.
+   * @param reachesApi - Whether the request targets the API or its WebSocket.
+   * @returns The refusal message, or `undefined` when the request may proceed.
+   */
+  private refusal(headers: IncomingHttpHeaders, reachesApi: boolean): string | undefined {
+    if (!this.acceptsHost(headers.host)) {
+      return "Forbidden: host not allowed.";
+    }
+    if (
+      reachesApi &&
+      this.shieldsApi &&
+      this.originPolicy.check(headers.origin) === "denied"
+    ) {
+      return "Forbidden: origin not allowed.";
+    }
+    return undefined;
   }
 
   /**
@@ -410,12 +421,14 @@ export class AppServer {
     // Setup global error handling for telemetry
     this.setupErrorHandling();
 
-    // Refuse host names that could belong to an attacker's page: a DNS-rebound
-    // page sends same-origin GET requests without an Origin header, so the
-    // origin checks alone cannot recognize it.
+    // Refuse host names that could belong to an attacker's page (a DNS-rebound
+    // page sends same-origin GET requests without an Origin header, so origin
+    // checks alone cannot recognize it), and shield the API on a loopback bind.
     this.server.addHook("onRequest", async (request, reply) => {
-      if (!this.acceptsHost(headerValue(request.headers.host))) {
-        return reply.code(403).send({ error: "Forbidden: host not allowed." });
+      const reachesApi = isUnderPath(request.url.split("?")[0], "/api");
+      const refusal = this.refusal(request.headers, reachesApi);
+      if (refusal) {
+        return reply.code(403).send({ error: refusal });
       }
     });
 
@@ -425,20 +438,6 @@ export class AppServer {
     // Authentication covers the MCP endpoint only; set it up before the
     // endpoint registers so every request goes through the same checks.
     await this.setupAuthentication();
-
-    // On a loopback bind no reverse proxy stands in front of the API, so shield
-    // it from foreign web pages (DNS rebinding) the same way as the MCP endpoint.
-    if (isLoopbackBindHost(this.appConfig.server.host)) {
-      this.server.addHook("onRequest", async (request, reply) => {
-        const pathname = request.url.split("?")[0];
-        if (pathname !== "/api" && !pathname.startsWith("/api/")) {
-          return;
-        }
-        if (this.originPolicy.check(headerValue(request.headers.origin)) === "denied") {
-          return reply.code(403).send({ error: "Forbidden: origin not allowed." });
-        }
-      });
-    }
 
     // Conditionally enable services based on configuration
     if (this.serverConfig.enableMcpServer) {
@@ -531,16 +530,11 @@ export class AppServer {
     });
 
     // Handle HTTP upgrade requests for WebSocket connections
-    const checkOrigin = isLoopbackBindHost(this.appConfig.server.host);
     this.server.server.on("upgrade", (request, socket, head) => {
-      // Upgrades bypass Fastify routing, so the host check and the API's origin
-      // shield are applied here as well: a foreign page must not open the
-      // live-update stream.
-      if (
-        !this.acceptsHost(headerValue(request.headers.host)) ||
-        (checkOrigin &&
-          this.originPolicy.check(headerValue(request.headers.origin)) === "denied")
-      ) {
+      // Upgrades bypass Fastify routing, so the same admission check runs here:
+      // a foreign page must not open the live-update stream, which is the only
+      // WebSocket the server serves.
+      if (this.refusal(request.headers, true)) {
         socket.write(
           "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
         );
@@ -668,20 +662,23 @@ export class AppServer {
         "Authentication is enabled but auth.issuerUrl is not set. Set it to your identity provider's issuer URL.",
       );
     }
-    if (!this.hasPublicUrl()) {
+    if (!this.location.configured) {
       throw new Error(
         "Authentication is enabled but no public URL is configured. Set server.publicUrl (or --public-url) to the URL clients use to reach this server.",
       );
     }
 
-    const mcpEndpointUrl = this.mcpEndpointUrl();
+    const mcpEndpointUrl = this.mcpEndpointUrl;
     const verifier = await JwtAccessTokenVerifier.create({
       issuerUrl,
       audience: this.appConfig.auth.audience?.trim() || mcpEndpointUrl,
     });
 
     const document = buildProtectedResourceMetadata({ mcpEndpointUrl, issuerUrl });
-    for (const metadataPath of protectedResourceMetadataPaths(this.location.basePath)) {
+    for (const metadataPath of protectedResourceMetadataPaths(
+      this.location.basePath,
+      MCP_ENDPOINT_PATH,
+    )) {
       this.server.route({
         method: ["GET", "HEAD"],
         url: metadataPath,
@@ -692,23 +689,21 @@ export class AppServer {
             .send(document),
       });
       this.server.options(metadataPath, async (request, reply) => {
-        reply
-          .header("Access-Control-Allow-Origin", "*")
-          .header("Access-Control-Allow-Methods", "GET")
-          .header("Access-Control-Max-Age", "600");
-        const requestedHeaders = sanitizeRequestedHeaders(
-          headerValue(request.headers["access-control-request-headers"]),
-        );
-        if (requestedHeaders) {
-          reply.header("Access-Control-Allow-Headers", requestedHeaders);
-        }
+        setCorsPreflightHeaders(reply.raw, {
+          origin: "*",
+          methods: "GET",
+          requestedHeaders: request.headers["access-control-request-headers"],
+        });
         return reply.code(204).send();
       });
     }
 
     this.mcpAuth = {
       verifier,
-      resourceMetadataUrl: protectedResourceMetadataUrl(this.location),
+      resourceMetadataUrl: protectedResourceMetadataUrl(
+        this.location.url,
+        MCP_ENDPOINT_PATH,
+      ),
     };
     logger.debug(`Protected resource metadata served for ${mcpEndpointUrl}`);
   }
@@ -761,13 +756,13 @@ export class AppServer {
 
     // MCP endpoint: always show if enabled
     if (this.serverConfig.enableMcpServer) {
-      enabledServices.push(`MCP endpoint: ${this.mcpEndpointUrl()}`);
+      enabledServices.push(`MCP endpoint: ${this.mcpEndpointUrl}`);
     }
 
     // Authentication boundary: say exactly what is and isn't protected
     if (this.mcpAuth) {
       enabledServices.push(
-        `Authentication: protects ${this.mcpEndpointUrl()} only; the web UI and API are not protected`,
+        `Authentication: protects ${this.mcpEndpointUrl} only; the web UI and API are not protected`,
       );
     }
 

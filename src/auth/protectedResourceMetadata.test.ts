@@ -32,13 +32,13 @@ describe("buildProtectedResourceMetadata", () => {
 
 describe("protectedResourceMetadataPaths", () => {
   it("serves one location when there is no base path", () => {
-    expect(protectedResourceMetadataPaths("")).toEqual([
+    expect(protectedResourceMetadataPaths("", "/mcp")).toEqual([
       "/.well-known/oauth-protected-resource/mcp",
     ]);
   });
 
   it("adds the RFC 9728 host-root location for a base path", () => {
-    expect(protectedResourceMetadataPaths("/docs")).toEqual([
+    expect(protectedResourceMetadataPaths("/docs", "/mcp")).toEqual([
       "/.well-known/oauth-protected-resource/mcp",
       "/.well-known/oauth-protected-resource/docs/mcp",
     ]);
@@ -47,13 +47,9 @@ describe("protectedResourceMetadataPaths", () => {
 
 describe("protectedResourceMetadataUrl", () => {
   it("places the advertised document under the public URL's path", () => {
-    expect(
-      protectedResourceMetadataUrl({
-        url: "https://example.com/docs",
-        origin: "https://example.com",
-        basePath: "/docs",
-      }),
-    ).toBe("https://example.com/docs/.well-known/oauth-protected-resource/mcp");
+    expect(protectedResourceMetadataUrl("https://example.com/docs", "/mcp")).toBe(
+      "https://example.com/docs/.well-known/oauth-protected-resource/mcp",
+    );
   });
 });
 

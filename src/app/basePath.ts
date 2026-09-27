@@ -4,6 +4,8 @@
  * prefix.
  */
 
+import { RESERVED_ROOT_SEGMENTS } from "../utils/serverOrigin";
+
 /**
  * Remove the base path from a request URL, so a single set of root-mounted
  * routes serves both proxy styles. The match is segment-aware: `/docs` and
@@ -56,19 +58,24 @@ export function injectBaseHref(html: string, basePath: string): string {
 }
 
 /**
- * Paths that never fall back to the web UI: the API, MCP, metadata and assets,
- * plus the removed HTTP+SSE and OAuth proxy endpoints, so clients probing
- * those get a clean 404 instead of an HTML page.
+ * Whether a path is `prefix` itself or lies below it: `/api` and `/api/x`
+ * match `/api`, `/apix` does not.
+ * @param pathname - A request path without query string.
+ * @param prefix - A path without a trailing slash.
+ * @returns `true` when the path is under the prefix.
  */
-const NON_SPA_PREFIXES = [
-  "/api",
-  "/mcp",
-  "/sse",
-  "/messages",
-  "/oauth",
-  "/.well-known",
-  "/assets",
-];
+export function isUnderPath(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+/**
+ * Paths that never fall back to the web UI: the server's own root routes, plus
+ * the removed OAuth proxy endpoints, so clients probing those get a clean 404
+ * instead of an HTML page.
+ */
+const NON_SPA_PREFIXES = [...RESERVED_ROOT_SEGMENTS, "oauth"].map(
+  (segment) => `/${segment}`,
+);
 
 /**
  * Whether an unmatched request should get the web UI shell, so client-side
@@ -82,7 +89,5 @@ export function servesSpaShell(method: string, url: string): boolean {
     return false;
   }
   const pathname = url.split("?")[0];
-  return !NON_SPA_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
+  return !NON_SPA_PREFIXES.some((prefix) => isUnderPath(pathname, prefix));
 }
