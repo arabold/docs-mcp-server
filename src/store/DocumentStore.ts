@@ -20,7 +20,11 @@ import {
   ConnectionError,
   DimensionError,
   EmbeddingModelChangedError,
+  InvalidLibraryNameError,
+  LibraryAlreadyExistsError,
+  quoteName,
   StoreError,
+  VersionAlreadyExistsError,
 } from "./errors";
 import type {
   ActivityHistory,
@@ -44,6 +48,9 @@ import {
   type DbVersion,
   type DbVersionWithLibrary,
   denormalizeVersionName,
+  describeLibraryNameProblem,
+  type ExistingTargetPolicy,
+  normalizeLibraryDisplayName,
   normalizeLibraryName,
   normalizeVersionLabel,
   normalizeVersionName,
@@ -182,7 +189,7 @@ export class DocumentStore {
       [string, string, string, bigint, string, number]
     >;
     getParentChunk: Database.Statement<[string, string, string, string, bigint]>;
-    insertLibrary: Database.Statement<[string]>;
+    insertLibrary: Database.Statement<[string, string]>;
     getLibraryIdByName: Database.Statement<[string]>;
     getLibraryById: Database.Statement<[number]>;
     // New version-related statements
@@ -332,11 +339,12 @@ export class DocumentStore {
       getPageId: this.db.prepare<[number, string]>(
         "SELECT id, source_content_type FROM pages WHERE version_id = ? AND url = ?",
       ),
-      insertLibrary: this.db.prepare<[string]>(
-        "INSERT INTO libraries (name) VALUES (?) ON CONFLICT(name) DO NOTHING",
+      // Plain insert: callers look the library up first, inside the same transaction.
+      insertLibrary: this.db.prepare<[string, string]>(
+        "INSERT INTO libraries (name, display_name) VALUES (?, ?)",
       ),
       getLibraryIdByName: this.db.prepare<[string]>(
-        "SELECT id FROM libraries WHERE name = ?",
+        "SELECT id, display_name FROM libraries WHERE name = ?",
       ),
       getLibraryById: this.db.prepare<[number]>("SELECT * FROM libraries WHERE id = ?"),
       // New version-related statements
@@ -400,7 +408,7 @@ export class DocumentStore {
       // Library/version aggregation including versions without documents and status/progress fields
       queryLibraryVersions: this.db.prepare<[]>(
         `SELECT
-          l.name as library,
+          l.display_name as library,
           COALESCE(v.name, '') as version,
           v.id as versionId,
           v.status as status,
@@ -491,7 +499,7 @@ export class DocumentStore {
         "UPDATE versions SET progress_pages = ?, progress_max_pages = ?, progress_pages_indexed = COALESCE(?, progress_pages_indexed), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
       ),
       getVersionsByStatus: this.db.prepare<[string]>(
-        "SELECT v.*, l.name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.status IN (SELECT value FROM json_each(?))",
+        "SELECT v.*, l.display_name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.status IN (SELECT value FROM json_each(?))",
       ),
       // Scraper options statements
       updateVersionScraperOptions: this.db.prepare<[string, string, number]>(
@@ -501,7 +509,7 @@ export class DocumentStore {
         "SELECT * FROM versions WHERE id = ?",
       ),
       getVersionsBySourceUrl: this.db.prepare<[string]>(
-        "SELECT v.*, l.name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.source_url = ? ORDER BY v.created_at DESC",
+        "SELECT v.*, l.display_name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.source_url = ? ORDER BY v.created_at DESC",
       ),
       // Version and library deletion statements
       deleteVersionById: this.db.prepare<[number]>("DELETE FROM versions WHERE id = ?"),
@@ -510,7 +518,7 @@ export class DocumentStore {
         "SELECT COUNT(*) as count FROM versions WHERE library_id = ?",
       ),
       getVersionId: this.db.prepare<[string, string]>(
-        `SELECT v.id, v.library_id FROM versions v
+        `SELECT v.id, v.library_id, l.display_name FROM versions v
          JOIN libraries l ON v.library_id = l.id
          WHERE l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')`,
       ),
@@ -1321,39 +1329,122 @@ export class DocumentStore {
 
   /**
    * Resolves a library name and version string to version_id.
-   * Creates library and version records if they don't exist.
+   * Creates library and version records if they don't exist, in one transaction.
    */
   async resolveVersionId(library: string, version: string): Promise<number> {
-    const normalizedLibrary = normalizeLibraryName(library);
+    return (await this.claimVersion(library, version, "replace")).versionId;
+  }
+
+  /**
+   * Creates or verifies the library and version an indexing job writes into.
+   *
+   * Runs as one IMMEDIATE transaction with no `await` inside, so the database
+   * decides a race: two connections claiming the same target cannot both win.
+   *
+   * @param library Library name as submitted; its display name is kept when the library is new.
+   * @param version Version label; normalized like every other write.
+   * @param policy What to do when the library or version already exists.
+   * @returns The version id and the library's stored display name.
+   * @throws {LibraryAlreadyExistsError} Policy `reject-library` and the library exists.
+   * @throws {VersionAlreadyExistsError} Policy `reject-version` and the version exists.
+   * @throws {InvalidLibraryNameError} The library is new and its name fails validation.
+   */
+  async claimVersion(
+    library: string,
+    version: string,
+    policy: ExistingTargetPolicy,
+  ): Promise<{ versionId: number; library: string }> {
     // Last point every write passes through: apply the single version label
     // contract here so an entry point that forgets to normalize cannot create a
     // duplicate bucket (e.g. " 1.0.0 " alongside "1.0.0").
-    const normalizedVersion = denormalizeVersionName(normalizeVersionLabel(version));
+    const label = normalizeVersionLabel(version);
+    const storedVersion = denormalizeVersionName(label);
 
-    // Insert or get library_id
-    this.statements.insertLibrary.run(normalizedLibrary);
-    const libraryIdRow = this.statements.getLibraryIdByName.get(normalizedLibrary) as
-      | { id: number }
+    const claim = this.db.transaction((): { versionId: number; library: string } => {
+      const libraryRow = this.getOrCreateLibraryRow(library, policy === "reject-library");
+
+      // Insert-or-ignore; inside the IMMEDIATE transaction, an insert that
+      // changed nothing means the version already exists.
+      const inserted = this.statements.insertVersion.run(libraryRow.id, storedVersion);
+      if (inserted.changes === 0 && policy === "reject-version") {
+        throw new VersionAlreadyExistsError(libraryRow.displayName, label);
+      }
+
+      const versionIdRow = this.statements.resolveVersionId.get(
+        libraryRow.id,
+        storedVersion,
+      ) as { id: number } | undefined;
+      if (!versionIdRow) {
+        throw new StoreError(
+          `Failed to resolve version_id for library: ${quoteName(library)}, version: ${quoteName(version)}`,
+        );
+      }
+      return { versionId: versionIdRow.id, library: libraryRow.displayName };
+    });
+    return claim.immediate();
+  }
+
+  /**
+   * Looks up a version without creating anything.
+   *
+   * @param library Library name in any casing or padding.
+   * @param version Version label; empty for unversioned documentation.
+   * @returns The version id, or `null` when the library or version does not exist.
+   */
+  async findVersionId(library: string, version: string): Promise<number | null> {
+    return (await this.findVersion(library, version))?.versionId ?? null;
+  }
+
+  /**
+   * Looks up a version without creating anything, with its library's display name.
+   *
+   * @param library Library name in any casing or padding.
+   * @param version Version label; empty for unversioned documentation.
+   * @returns The version id and the library's stored display name, or `null`
+   *   when the library or version does not exist.
+   */
+  async findVersion(
+    library: string,
+    version: string,
+  ): Promise<{ versionId: number; library: string } | null> {
+    const row = this.statements.getVersionId.get(
+      normalizeLibraryName(library),
+      normalizeVersionLabel(version),
+    ) as { id: number; display_name: string } | undefined;
+    return row ? { versionId: row.id, library: row.display_name } : null;
+  }
+
+  /**
+   * The single place a library row is created. Must run inside a transaction
+   * together with the version insert that accompanies it.
+   *
+   * @param library Library name as submitted.
+   * @param mustBeNew Whether an existing library is an error (explicit "Add library").
+   * @throws {LibraryAlreadyExistsError} `mustBeNew` and the library exists.
+   * @throws {InvalidLibraryNameError} The library is new and its name fails validation.
+   */
+  private getOrCreateLibraryRow(
+    library: string,
+    mustBeNew: boolean,
+  ): { id: number; displayName: string } {
+    const key = normalizeLibraryName(library);
+    const existing = this.statements.getLibraryIdByName.get(key) as
+      | { id: number; display_name: string }
       | undefined;
-    if (!libraryIdRow || typeof libraryIdRow.id !== "number") {
-      throw new StoreError(`Failed to resolve library_id for library: ${library}`);
-    }
-    const libraryId = libraryIdRow.id;
-
-    // Insert or get version_id
-    // Reuse existing unversioned entry if present; storing '' ensures UNIQUE constraint applies
-    this.statements.insertVersion.run(libraryId, normalizedVersion);
-    const versionIdRow = this.statements.resolveVersionId.get(
-      libraryId,
-      normalizedVersion,
-    ) as { id: number } | undefined;
-    if (!versionIdRow || typeof versionIdRow.id !== "number") {
-      throw new StoreError(
-        `Failed to resolve version_id for library: ${library}, version: ${version}`,
-      );
+    if (existing) {
+      if (mustBeNew) {
+        throw new LibraryAlreadyExistsError(existing.display_name);
+      }
+      return { id: existing.id, displayName: existing.display_name };
     }
 
-    return versionIdRow.id;
+    const displayName = normalizeLibraryDisplayName(library);
+    const problem = describeLibraryNameProblem(displayName);
+    if (problem) {
+      throw new InvalidLibraryNameError(displayName, problem);
+    }
+    const result = this.statements.insertLibrary.run(key, displayName);
+    return { id: Number(result.lastInsertRowid), displayName };
   }
 
   /**
@@ -1462,16 +1553,18 @@ export class DocumentStore {
    * @param name The library name to retrieve
    * @returns The library record, or null if not found
    */
-  async getLibrary(name: string): Promise<{ id: number; name: string } | null> {
+  async getLibrary(
+    name: string,
+  ): Promise<{ id: number; name: string; displayName: string } | null> {
     try {
       const normalizedName = normalizeLibraryName(name);
       const row = this.statements.getLibraryIdByName.get(normalizedName) as
-        | { id: number }
+        | { id: number; display_name: string }
         | undefined;
       if (!row) {
         return null;
       }
-      return { id: row.id, name: normalizedName };
+      return { id: row.id, name: normalizedName, displayName: row.display_name };
     } catch (error) {
       throw new StoreError(`Failed to get library by name: ${error}`);
     }
@@ -2135,21 +2228,24 @@ export class DocumentStore {
    */
   async deletePages(library: string, version: string): Promise<number> {
     try {
-      const normalizedVersion = normalizeVersionLabel(version);
-
-      // First delete documents
-      const result = this.statements.deleteDocuments.run(
+      return this.deleteVersionContent(
         normalizeLibraryName(library),
-        normalizedVersion,
+        normalizeVersionLabel(version),
       );
-
-      // Then delete the pages (after documents are gone, due to foreign key constraints)
-      this.statements.deletePages.run(normalizeLibraryName(library), normalizedVersion);
-
-      return result.changes;
     } catch (error) {
       throw new ConnectionError("Failed to delete documents", error);
     }
+  }
+
+  /**
+   * Deletes a version's documents, then its pages (documents reference pages).
+   * Synchronous so it can run inside a caller's transaction.
+   * @returns The number of documents deleted.
+   */
+  private deleteVersionContent(libraryKey: string, version: string): number {
+    const { changes } = this.statements.deleteDocuments.run(libraryKey, version);
+    this.statements.deletePages.run(libraryKey, version);
+    return changes;
   }
 
   /**
@@ -2211,53 +2307,47 @@ export class DocumentStore {
       const normalizedLibrary = normalizeLibraryName(library);
       const normalizedVersion = normalizeVersionLabel(version);
 
-      // First, get the version ID and library ID
-      const versionResult = this.statements.getVersionId.get(
-        normalizedLibrary,
-        normalizedVersion,
-      ) as { id: number; library_id: number } | undefined;
+      // One transaction for every delete, so a failure part-way through cannot
+      // leave a library without versions, or a version without its pages.
+      const remove = this.db.transaction(() => {
+        const versionResult = this.statements.getVersionId.get(
+          normalizedLibrary,
+          normalizedVersion,
+        ) as { id: number; library_id: number } | undefined;
 
-      if (!versionResult) {
-        // Version doesn't exist, return zero counts
-        return { documentsDeleted: 0, versionDeleted: false, libraryDeleted: false };
-      }
-
-      const { id: versionId, library_id: libraryId } = versionResult;
-
-      // Delete in order to respect foreign key constraints:
-      // 1. documents (page_id → pages.id)
-      // 2. pages (version_id → versions.id)
-      // 3. versions (library_id → libraries.id)
-      // 4. libraries (if empty)
-
-      // Delete all documents for this version
-      const documentsDeleted = await this.deletePages(library, version);
-
-      // Delete all pages for this version (must be done after documents, before version)
-      this.statements.deletePages.run(normalizedLibrary, normalizedVersion);
-
-      // Delete the version record
-      const versionDeleteResult = this.statements.deleteVersionById.run(versionId);
-      const versionDeleted = versionDeleteResult.changes > 0;
-
-      let libraryDeleted = false;
-
-      // Check if we should remove the library
-      if (removeLibraryIfEmpty && versionDeleted) {
-        // Count remaining versions for this library
-        const countResult = this.statements.countVersionsByLibraryId.get(libraryId) as
-          | { count: number }
-          | undefined;
-        const remainingVersions = countResult?.count ?? 0;
-
-        if (remainingVersions === 0) {
-          // No versions left, delete the library
-          const libraryDeleteResult = this.statements.deleteLibraryById.run(libraryId);
-          libraryDeleted = libraryDeleteResult.changes > 0;
+        if (!versionResult) {
+          // Version doesn't exist, return zero counts
+          return { documentsDeleted: 0, versionDeleted: false, libraryDeleted: false };
         }
-      }
 
-      return { documentsDeleted, versionDeleted, libraryDeleted };
+        const { id: versionId, library_id: libraryId } = versionResult;
+
+        // Delete in order to respect foreign key constraints:
+        // 1. documents (page_id → pages.id)
+        // 2. pages (version_id → versions.id)
+        // 3. versions (library_id → libraries.id)
+        // 4. libraries (if empty)
+        const documentsDeleted = this.deleteVersionContent(
+          normalizedLibrary,
+          normalizedVersion,
+        );
+
+        const versionDeleted =
+          this.statements.deleteVersionById.run(versionId).changes > 0;
+
+        let libraryDeleted = false;
+        if (removeLibraryIfEmpty && versionDeleted) {
+          const countResult = this.statements.countVersionsByLibraryId.get(libraryId) as
+            | { count: number }
+            | undefined;
+          if ((countResult?.count ?? 0) === 0) {
+            libraryDeleted = this.statements.deleteLibraryById.run(libraryId).changes > 0;
+          }
+        }
+
+        return { documentsDeleted, versionDeleted, libraryDeleted };
+      });
+      return remove.immediate();
     } catch (error) {
       throw new ConnectionError("Failed to remove version", error);
     }

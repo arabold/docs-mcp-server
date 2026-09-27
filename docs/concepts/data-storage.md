@@ -17,8 +17,8 @@ erDiagram
     libraries {
         int id PK
         text name UK
+        text display_name
         datetime created_at
-        datetime updated_at
     }
     
     versions {
@@ -70,12 +70,16 @@ erDiagram
 Core library metadata and organization.
 
 **Schema:**
-- `id` (INTEGER PRIMARY KEY): Auto-increment identifier
-- `name` (TEXT UNIQUE): Library name (case-insensitive)
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT): Identifier; ids of deleted libraries are never reused
+- `name` (TEXT NOT NULL UNIQUE): Lookup key — the name trimmed and lowercased (`normalizeLibraryName()`).
+  Every lookup compares against it, so `React`, `react` and ` REACT ` reach the same library.
+- `display_name` (TEXT NOT NULL): The name as entered, trimmed only (`Next.js Docs`). Set when the
+  library is created and never changed by later writes; shown wherever a library is presented.
 - `created_at` (DATETIME): Creation timestamp
-- `updated_at` (DATETIME): Last update timestamp
 
-**Purpose:** Library name normalization and metadata storage.
+**Purpose:** Library identity. A library record exists only while it holds at least one version:
+creating a library inserts its first version in the same transaction, and removing its last version
+removes the library. Names are opaque — no character in a name carries meaning.
 
 **Code Reference:** `src/store/types.ts` - Type definitions used throughout DocumentManagementService
 
@@ -174,6 +178,12 @@ Sequential SQL migrations in `db/migrations/`:
 12. `011-add-vector-triggers.sql` - FTS and vector table trigger maintenance
 13. `012-add-source-content-type.sql` - Source content type tracking on pages
 14. `013-create-metadata-table.sql` - Key-value metadata table for embedding model tracking
+15. `014-rebuild-vector-partition-keys.sql` - Vector table partition keys for library/version filtering
+16. `015-add-progress-pages-indexed.sql` - Indexed-page progress counter
+17. `016-add-content-url-to-pages.sql` - Where a page's content was retrieved from
+18. `017-add-library-display-name.sql` - Case-preserving `display_name` (required, filled in from `name`
+    during the migration); removes library records without versions and re-keys names stored with
+    surrounding whitespace
 
 **Code Reference:** All migration files in `db/migrations/` directory
 
@@ -228,8 +238,10 @@ Handles document lifecycle operations with normalized schema access.
 
 ### Document Storage Flow
 
-1. Create or resolve library record (case-insensitive name)
-2. Create version record with job configuration
+1. Claim the library and version in one transaction: create them when missing, or reject the
+   request when it would overwrite an existing version without an explicit replace (or, for "Add
+   library", when the library already exists)
+2. Store the job configuration on the version record
 3. Create page records for each unique URL
 4. Process and store document chunks linked to pages
 5. Generate and store embeddings as binary BLOB

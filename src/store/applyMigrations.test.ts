@@ -6,6 +6,7 @@ import path from "node:path";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { restorePre017Libraries } from "../../test/test-helpers";
 import { logger } from "../utils/logger";
 import { applyMigrations, parseMigrationSteps } from "./applyMigrations";
 
@@ -199,7 +200,10 @@ describe("Database Migrations", () => {
     await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     // Insert a library and version but no documents
-    db.prepare("INSERT INTO libraries (name) VALUES (?)").run("empty-lib");
+    db.prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)").run(
+      "empty-lib",
+      "empty-lib",
+    );
     const emptyLibraryIdResult = db
       .prepare("SELECT id FROM libraries WHERE name = ?")
       .get("empty-lib") as { id: number } | undefined;
@@ -254,7 +258,10 @@ describe("Database Migrations", () => {
     expect(ddl.sql).toContain("library_id INTEGER partition key");
     expect(ddl.sql).toContain("version_id INTEGER partition key");
 
-    db.prepare("INSERT INTO libraries (name) VALUES (?)").run("partition-lib");
+    db.prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)").run(
+      "partition-lib",
+      "partition-lib",
+    );
     const { id: libraryId } = db
       .prepare("SELECT id FROM libraries WHERE name = ?")
       .get("partition-lib") as { id: number };
@@ -375,7 +382,10 @@ describe("Database Migrations", () => {
   it("should keep a custom vector dimension when rebuilding partition keys", async () => {
     await expect(applyMigrations(db)).resolves.toBeUndefined();
 
-    db.prepare("INSERT INTO libraries (name) VALUES (?)").run("custom-dim-lib");
+    db.prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)").run(
+      "custom-dim-lib",
+      "custom-dim-lib",
+    );
     const { id: libraryId } = db
       .prepare("SELECT id FROM libraries WHERE name = ?")
       .get("custom-dim-lib") as { id: number };
@@ -481,7 +491,9 @@ describe("Database Migrations", () => {
     try {
       await expect(applyMigrations(migrationDb)).resolves.toBeUndefined();
 
-      migrationDb.prepare("INSERT INTO libraries (name) VALUES (?)").run("rollback-lib");
+      migrationDb
+        .prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)")
+        .run("rollback-lib", "rollback-lib");
       const { id: libraryId } = migrationDb
         .prepare("SELECT id FROM libraries WHERE name = ?")
         .get("rollback-lib") as { id: number };
@@ -601,7 +613,10 @@ describe("Database Migrations", () => {
     await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     // Insert test library and version
-    db.prepare("INSERT INTO libraries (name) VALUES (?)").run("test-lib");
+    db.prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)").run(
+      "test-lib",
+      "test-lib",
+    );
     const libraryResult = db
       .prepare("SELECT id FROM libraries WHERE name = ?")
       .get("test-lib") as { id: number } | undefined;
@@ -809,7 +824,10 @@ describe("Database Migrations", () => {
     await expect(applyMigrations(db)).resolves.toBeUndefined();
 
     // Insert test library and version
-    db.prepare("INSERT INTO libraries (name) VALUES (?)").run("docs-lib");
+    db.prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)").run(
+      "docs-lib",
+      "docs-lib",
+    );
     const libraryResult = db
       .prepare("SELECT id FROM libraries WHERE name = ?")
       .get("docs-lib") as { id: number } | undefined;
@@ -1085,5 +1103,181 @@ describe("Database Migrations", () => {
       const bestPartialScore = Math.min(...partialMatchResults.map((r) => r.bm25_score));
       expect(bestExactScore).toBeLessThanOrEqual(bestPartialScore);
     }
+  });
+
+  describe("017 library display names", () => {
+    const MIGRATION_017 = "017-add-library-display-name.sql";
+
+    /**
+     * Applies every migration, then puts `libraries` back into its pre-017 shape and forgets 017, so the
+     * next `applyMigrations` call runs 017 against rows seeded in the old shape.
+     */
+    async function prepareLegacyLibraries(): Promise<void> {
+      await applyMigrations(db);
+      restorePre017Libraries(db);
+    }
+
+    function seedLibrary(name: string, versions: string[] = []): number {
+      const id = Number(
+        db.prepare("INSERT INTO libraries (name) VALUES (?)").run(name).lastInsertRowid,
+      );
+      for (const version of versions) {
+        db.prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)").run(
+          id,
+          version,
+        );
+      }
+      return id;
+    }
+
+    function libraryRows() {
+      return db
+        .prepare("SELECT id, name, display_name, created_at FROM libraries ORDER BY id")
+        .all() as Array<{
+        id: number;
+        name: string;
+        display_name: string;
+        created_at: string;
+      }>;
+    }
+
+    it("backfills display names, keeps ids and version references, and prunes empty libraries", async () => {
+      await prepareLegacyLibraries();
+      const reactId = seedLibrary("react", ["18.0.0", ""]);
+      const vueId = seedLibrary("vue", ["3.0.0"]);
+      seedLibrary("ghost");
+      const versionId = (
+        db
+          .prepare("SELECT id FROM versions WHERE library_id = ? AND name = ?")
+          .get(reactId, "18.0.0") as { id: number }
+      ).id;
+      db.prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)").run(
+        versionId,
+        "https://example.com/react",
+        "React",
+      );
+      const before = db
+        .prepare("SELECT id, created_at FROM libraries WHERE id IN (?, ?) ORDER BY id")
+        .all(reactId, vueId);
+
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+      const rows = libraryRows();
+      expect(rows.map(({ id, created_at }) => ({ id, created_at }))).toEqual(before);
+      expect(rows.map((row) => [row.name, row.display_name])).toEqual([
+        ["react", "react"],
+        ["vue", "vue"],
+      ]);
+      const versionOwners = db
+        .prepare("SELECT DISTINCT library_id FROM versions ORDER BY library_id")
+        .all() as Array<{ library_id: number }>;
+      expect(versionOwners.map((row) => row.library_id)).toEqual([reactId, vueId]);
+      expect(db.pragma("foreign_key_check")).toEqual([]);
+    });
+
+    it("requires a display name and keeps foreign keys enforced", async () => {
+      await prepareLegacyLibraries();
+      const reactId = seedLibrary("react", ["1.0.0"]);
+      await applyMigrations(db);
+
+      expect(() =>
+        db.prepare("INSERT INTO libraries (name) VALUES (?)").run("no-display"),
+      ).toThrow(expect.objectContaining({ code: "SQLITE_CONSTRAINT_NOTNULL" }));
+      expect(() => db.prepare("DELETE FROM libraries WHERE id = ?").run(reactId)).toThrow(
+        expect.objectContaining({ code: "SQLITE_CONSTRAINT_FOREIGNKEY" }),
+      );
+    });
+
+    it("preserves the id sequence so deleted library ids are never reused", async () => {
+      await prepareLegacyLibraries();
+      seedLibrary("kept", ["1.0.0"]);
+      const deletedId = seedLibrary("deleted", ["1.0.0"]);
+      db.prepare("DELETE FROM versions WHERE library_id = ?").run(deletedId);
+      db.prepare("DELETE FROM libraries WHERE id = ?").run(deletedId);
+      await applyMigrations(db);
+
+      const newId = Number(
+        db
+          .prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)")
+          .run("new", "new").lastInsertRowid,
+      );
+      expect(newId).toBeGreaterThan(deletedId);
+    });
+
+    it("preserves the id sequence when the prune leaves the table empty", async () => {
+      await prepareLegacyLibraries();
+      const ghostId = seedLibrary("ghost");
+      await applyMigrations(db);
+
+      expect(libraryRows()).toEqual([]);
+      const newId = Number(
+        db
+          .prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)")
+          .run("new", "new").lastInsertRowid,
+      );
+      expect(newId).toBeGreaterThan(ghostId);
+    });
+
+    it("rolls back the rebuild when a later step fails", async () => {
+      await prepareLegacyLibraries();
+      seedLibrary("react", ["1.0.0"]);
+      const originalExec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql: string) => {
+        if (sql.includes("CREATE UNIQUE INDEX idx_libraries_lower_name ON libraries")) {
+          throw new Error("injected failure after the rebuild");
+        }
+        return originalExec(sql);
+      });
+
+      await expect(applyMigrations(db)).rejects.toThrow(
+        `Migration failed: ${MIGRATION_017}`,
+      );
+
+      const columns = (
+        db.prepare("PRAGMA table_info(libraries)").all() as Array<{ name: string }>
+      ).map((column) => column.name);
+      expect(columns).not.toContain("display_name");
+      expect(db.prepare("SELECT name FROM libraries").all()).toEqual([{ name: "react" }]);
+      expect(
+        db.prepare("SELECT id FROM _schema_migrations WHERE id = ?").get(MIGRATION_017),
+      ).toBeUndefined();
+    });
+
+    it("keeps an empty legacy name instead of failing the upgrade", async () => {
+      await prepareLegacyLibraries();
+      seedLibrary("", ["1.0.0"]);
+
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+      expect(libraryRows().map((row) => [row.name, row.display_name])).toEqual([
+        ["", ""],
+      ]);
+    });
+
+    it("turns deferred foreign-key checks off again", async () => {
+      await prepareLegacyLibraries();
+      seedLibrary("react", ["1.0.0"]);
+      await applyMigrations(db);
+
+      expect(db.pragma("defer_foreign_keys", { simple: true })).toBe(0);
+    });
+
+    it("re-keys padded legacy names unless the trimmed key is taken", async () => {
+      await prepareLegacyLibraries();
+      seedLibrary(" react ", ["1.0.0"]);
+      seedLibrary(" vue ", ["1.0.0"]);
+      seedLibrary("vue", ["2.0.0"]);
+      // Padding the lookup key also trims: NBSP, an ideographic space, a BOM
+      seedLibrary("\u00a0svelte\u3000\ufeff", ["1.0.0"]);
+
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+      expect(libraryRows().map((row) => [row.name, row.display_name])).toEqual([
+        ["react", "react"],
+        [" vue ", "vue"],
+        ["vue", "vue"],
+        ["svelte", "svelte"],
+      ]);
+    });
   });
 });

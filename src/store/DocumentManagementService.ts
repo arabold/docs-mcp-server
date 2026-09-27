@@ -44,7 +44,11 @@ import type {
   VersionStatus,
   VersionSummary,
 } from "./types";
-import { normalizeVersionLabel, normalizeVersionRef } from "./types";
+import {
+  type ExistingTargetPolicy,
+  normalizeVersionLabel,
+  normalizeVersionRef,
+} from "./types";
 
 /**
  * Provides semantic search capabilities across different versions of library documentation.
@@ -180,8 +184,62 @@ export class DocumentManagementService {
    * Delegates to existing ensureLibraryAndVersion for storage.
    */
   async ensureVersion(ref: VersionRef): Promise<number> {
-    const normalized = normalizeVersionRef(ref);
-    return this.ensureLibraryAndVersion(normalized.library, normalized.version);
+    return this.ensureLibraryAndVersion(ref.library, ref.version);
+  }
+
+  /**
+   * Creates or verifies the library and version an indexing job writes into, atomically.
+   * See {@link DocumentStore.claimVersion} for the policy semantics and errors.
+   */
+  async claimVersion(
+    library: string,
+    version: string,
+    policy: ExistingTargetPolicy,
+  ): Promise<{ versionId: number; library: string }> {
+    return this.store.claimVersion(library, version, policy);
+  }
+
+  /**
+   * Looks up a version without creating anything.
+   * @returns The version id, or `null` when the library or version does not exist.
+   */
+  async findVersionId(ref: VersionRef): Promise<number | null> {
+    return this.store.findVersionId(ref.library, ref.version);
+  }
+
+  /**
+   * Looks up a version that must already exist, without creating anything.
+   *
+   * @returns The version id and the library's stored display name.
+   * @throws {LibraryNotFoundInStoreError} When the library does not exist (with suggestions).
+   * @throws {VersionNotFoundInStoreError} When the library exists but the version does not.
+   */
+  async requireVersion(ref: VersionRef): Promise<{ versionId: number; library: string }> {
+    const found = await this.store.findVersion(ref.library, ref.version);
+    if (found) {
+      return found;
+    }
+    throw await this.versionNotFound(ref.library, normalizeVersionLabel(ref.version));
+  }
+
+  /**
+   * Builds the error for a version that does not resolve: library-not-found
+   * (with suggestions) when the library itself is missing, otherwise
+   * version-not-found naming the library as it is stored.
+   */
+  private async versionNotFound(
+    library: string,
+    version: string,
+  ): Promise<LibraryNotFoundInStoreError | VersionNotFoundInStoreError> {
+    const libraryRecord = await this.store.getLibrary(library);
+    if (!libraryRecord) {
+      return this.libraryNotFound(library);
+    }
+    return new VersionNotFoundInStoreError(
+      libraryRecord.displayName,
+      version,
+      await this.listAvailableLabels(library),
+    );
   }
 
   /**
@@ -238,27 +296,32 @@ export class DocumentManagementService {
     const libraryRecord = await this.store.getLibrary(library);
 
     if (!libraryRecord) {
-      logger.warn(`⚠️  Library '${library}' not found.`);
-
-      // Library doesn't exist, fetch all libraries to provide suggestions
-      const allLibraries = await this.listLibraries();
-      const libraryNames = allLibraries.map((lib) => lib.library);
-
-      let suggestions: string[] = [];
-      if (libraryNames.length > 0) {
-        const fuse = new Fuse(libraryNames, {
-          threshold: 0.7, // Adjust threshold for desired fuzziness (0=exact, 1=match anything)
-        });
-        const results = fuse.search(library.toLowerCase());
-        // Take top 3 suggestions
-        suggestions = results.slice(0, 3).map((result) => result.item);
-        logger.info(`🔍 Found suggestions: ${suggestions.join(", ")}`);
-      }
-
-      throw new LibraryNotFoundInStoreError(library, suggestions);
+      throw await this.libraryNotFound(library);
     }
 
     logger.info(`✅ Library '${library}' confirmed to exist.`);
+  }
+
+  /** Builds the library-not-found error, suggesting similarly named libraries. */
+  private async libraryNotFound(library: string): Promise<LibraryNotFoundInStoreError> {
+    logger.warn(`⚠️  Library '${library}' not found.`);
+
+    // Library doesn't exist, fetch all libraries to provide suggestions
+    const allLibraries = await this.listLibraries();
+    const libraryNames = allLibraries.map((lib) => lib.library);
+
+    let suggestions: string[] = [];
+    if (libraryNames.length > 0) {
+      const fuse = new Fuse(libraryNames, {
+        threshold: 0.7, // Adjust threshold for desired fuzziness (0=exact, 1=match anything)
+      });
+      const results = fuse.search(library.toLowerCase());
+      // Take top 3 suggestions
+      suggestions = results.slice(0, 3).map((result) => result.item);
+      logger.info(`🔍 Found suggestions: ${suggestions.join(", ")}`);
+    }
+
+    return new LibraryNotFoundInStoreError(library, suggestions);
   }
 
   /**
@@ -444,11 +507,7 @@ export class DocumentManagementService {
     // documentation is never silently skipped. Only when nothing resolves does
     // unversioned content come into play, and failing that we report the error.
     if (!bestMatch && !hasUnversioned) {
-      throw new VersionNotFoundInStoreError(
-        library,
-        targetVersion ?? "",
-        await this.listAvailableLabels(library),
-      );
+      throw await this.versionNotFound(library, targetVersion ?? "");
     }
 
     return { bestMatch, hasUnversioned };
@@ -711,17 +770,10 @@ export class DocumentManagementService {
    * Creates the library and version records if they don't exist.
    */
   async ensureLibraryAndVersion(library: string, version: string): Promise<number> {
-    // Use the same resolution logic as addDocuments but return the version ID
-    const normalizedLibrary = library.toLowerCase();
-    const normalizedVersion = normalizeVersionLabel(version);
-
-    // This will create the library and version if they don't exist
-    const versionId = await this.store.resolveVersionId(
-      normalizedLibrary,
-      normalizedVersion,
-    );
-
-    return versionId;
+    // Same resolution as addDocuments, which creates the library and version if
+    // they don't exist. Both halves go through as submitted: the store computes
+    // the lookup key, normalizes the version, and keeps a new library's display name.
+    return this.store.resolveVersionId(library, version);
   }
 
   /**

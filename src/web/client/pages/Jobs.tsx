@@ -175,6 +175,8 @@ export default function Jobs() {
       await enqueueScrapeJob.mutateAsync({
         library: job.library,
         version: job.version || undefined,
+        // The failed version still exists, so retrying rebuilds it in place.
+        onExisting: "replace",
         options: {
           ...job.scraperOptions,
           url: job.sourceUrl ?? job.scraperOptions.url,

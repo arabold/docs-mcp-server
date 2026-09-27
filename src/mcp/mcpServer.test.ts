@@ -4,6 +4,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
+import { VersionAlreadyExistsError } from "../store/errors";
 import type { AppConfig } from "../utils/config";
 import { createMcpServerInstance } from "./mcpServer";
 import type { McpServerTools } from "./tools";
@@ -179,6 +180,71 @@ describe("MCP Server Read-Only Mode", () => {
     expect(parse("/version-v0.3/, , /version-v0.2/")).toEqual([
       "/version-v0.3/",
       "/version-v0.2/",
+    ]);
+  });
+
+  it("should pass replace to ScrapeTool and default it to false", async () => {
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const scrapeTool = (server as any)._registeredTools.scrape_docs;
+
+    expect(
+      scrapeTool.inputSchema.parse({ url: "https://example.com", library: "lib" })
+        .replace,
+    ).toBe(false);
+
+    await scrapeTool.handler(
+      scrapeTool.inputSchema.parse({
+        url: "https://example.com",
+        library: "lib",
+        replace: true,
+      }),
+    );
+
+    expect(mockTools.scrape.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ replace: true }),
+    );
+  });
+
+  it("should return an existing-version conflict as a tool error naming the remedy", async () => {
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const scrapeTool = (server as any)._registeredTools.scrape_docs;
+    vi.mocked(mockTools.scrape.execute).mockRejectedValueOnce(
+      new VersionAlreadyExistsError("React", ""),
+    );
+
+    const result = await scrapeTool.handler(
+      scrapeTool.inputSchema.parse({ url: "https://example.com", library: "react" }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("replace: true");
+  });
+});
+
+describe("MCP versions resource", () => {
+  const listedLibraries = {
+    libraries: [
+      { name: "React", versions: [{ version: "19.0.0" }] },
+      { name: "@tanstack/query", versions: [{ version: "5.0.0" }] },
+    ],
+  };
+
+  async function readVersions(uri: string) {
+    vi.mocked(mockTools.listLibraries.execute).mockResolvedValue(listedLibraries as any);
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const template = (server as any)._registeredResourceTemplates.versions;
+    const variables = template.resourceTemplate.uriTemplate.match(uri);
+    const result = await template.readCallback(new URL(uri), variables, {});
+    return result.contents.map((c: { text: string }) => c.text);
+  }
+
+  it("matches a library name case-insensitively", async () => {
+    expect(await readVersions("docs://libraries/react/versions")).toEqual(["19.0.0"]);
+  });
+
+  it("decodes a percent-encoded name containing a slash", async () => {
+    expect(await readVersions("docs://libraries/%40tanstack%2Fquery/versions")).toEqual([
+      "5.0.0",
     ]);
   });
 });

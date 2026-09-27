@@ -7,7 +7,13 @@ import type { Chunk } from "../splitter/types";
 import { loadConfig, markVectorDimensionSource } from "../utils/config";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
-import { DimensionError, EmbeddingModelChangedError } from "./errors";
+import {
+  DimensionError,
+  EmbeddingModelChangedError,
+  InvalidLibraryNameError,
+  LibraryAlreadyExistsError,
+  VersionAlreadyExistsError,
+} from "./errors";
 import { VersionStatus } from "./types";
 
 const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
@@ -191,6 +197,12 @@ describe("DocumentStore - With Embeddings", () => {
       const c = await store.resolveVersionId("REACT", "");
       expect(a).toBe(b);
       expect(b).toBe(c);
+
+      // The first write's casing is the display name; later casings do not change it.
+      expect([...(await store.queryLibraryVersions()).keys()]).toEqual(["React"]);
+      expect(await store.getLibrary(" rEaCt ")).toEqual(
+        expect.objectContaining({ name: "react", displayName: "React" }),
+      );
     });
 
     it("should handle document deletion correctly", async () => {
@@ -1350,6 +1362,222 @@ describe("DocumentStore - Common Functionality", () => {
       const v3 = await store.resolveVersionId("mixcase", "ALPHA");
       expect(v1).toBe(v2);
       expect(v2).toBe(v3);
+    });
+  });
+
+  describe("Library Identity", () => {
+    type StatementMap = Record<string, { run: (...args: unknown[]) => unknown }>;
+    const statementsOf = (target: DocumentStore) =>
+      (target as unknown as { statements: StatementMap }).statements;
+
+    const listedLibraries = async () => [...(await store.queryLibraryVersions()).keys()];
+
+    it("stores the trimmed name as entered and keeps it on later writes", async () => {
+      const first = await store.resolveVersionId(" Next.js Docs ", "");
+      const second = await store.resolveVersionId("next.js docs", "");
+
+      expect(second).toBe(first);
+      expect(await listedLibraries()).toEqual(["Next.js Docs"]);
+    });
+
+    it.each(["", "   ", "React\nDocs", "React\tDocs"])(
+      "rejects the new library name %j and creates nothing",
+      async (name) => {
+        await expect(store.resolveVersionId(name, "")).rejects.toBeInstanceOf(
+          InvalidLibraryNameError,
+        );
+        expect(await listedLibraries()).toEqual([]);
+      },
+    );
+
+    it("treats separator-like characters as part of an opaque name", async () => {
+      await store.resolveVersionId("react@18", "");
+      await store.resolveVersionId("python/pandoc", "");
+
+      const libraries = await store.queryLibraryVersions();
+      expect([...libraries.keys()].sort()).toEqual(["python/pandoc", "react@18"]);
+      expect(libraries.get("react@18")?.map((v) => v.version)).toEqual([""]);
+      expect(await store.getLibrary("react")).toBeNull();
+      expect(await store.getLibrary("pandoc")).toBeNull();
+    });
+
+    it("creates a library and its first version atomically", async () => {
+      vi.spyOn(statementsOf(store).insertVersion, "run").mockImplementation(() => {
+        throw new Error("injected version insert failure");
+      });
+
+      await expect(store.resolveVersionId("Atomic", "1.0.0")).rejects.toThrow(
+        "injected version insert failure",
+      );
+      vi.restoreAllMocks();
+
+      expect(await store.getLibrary("Atomic")).toBeNull();
+    });
+
+    describe("claimVersion", () => {
+      async function seedIndexedVersion(library: string, version: string) {
+        await store.addDocuments(
+          library,
+          version,
+          0,
+          createScrapeResult(
+            "Doc",
+            `https://example.com/${version || "latest"}`,
+            "content",
+          ),
+        );
+        const versionId = await store.resolveVersionId(library, version);
+        await store.updateVersionStatus(versionId, VersionStatus.COMPLETED);
+        await store.storeScraperOptions(versionId, {
+          url: "https://example.com/docs",
+          library,
+          version,
+          maxPages: 7,
+        });
+        return versionId;
+      }
+
+      async function expectVersionUntouched(
+        library: string,
+        version: string,
+        versionId: number,
+      ) {
+        expect((await store.getVersionById(versionId))?.status).toBe(
+          VersionStatus.COMPLETED,
+        );
+        expect((await store.getScraperOptions(versionId))?.options.maxPages).toBe(7);
+        expect(await store.checkDocumentExists(library, version)).toBe(true);
+      }
+
+      it.each(["reject-library", "reject-version", "replace"] as const)(
+        "%s creates a missing library and version",
+        async (policy) => {
+          const claimed = await store.claimVersion("Svelte", "5.0.0", policy);
+
+          expect(claimed.library).toBe("Svelte");
+          expect(await store.findVersionId("svelte", "5.0.0")).toBe(claimed.versionId);
+        },
+      );
+
+      it("reject-library fails for an existing library in any casing, whatever its versions", async () => {
+        const versionId = await seedIndexedVersion("React", "18.0.0");
+
+        await expect(
+          store.claimVersion(" REACT ", "19.0.0", "reject-library"),
+        ).rejects.toThrow(new LibraryAlreadyExistsError("React"));
+        expect(await store.findVersionId("react", "19.0.0")).toBeNull();
+        await expectVersionUntouched("react", "18.0.0", versionId);
+      });
+
+      it("reject-version adds a new version to an existing library", async () => {
+        await seedIndexedVersion("React", "18.0.0");
+
+        const claimed = await store.claimVersion("react", "19.0.0", "reject-version");
+
+        expect(claimed.library).toBe("React");
+        expect((await store.queryLibraryVersions()).get("React")?.length).toBe(2);
+      });
+
+      it("reject-version fails for an existing version and leaves it untouched", async () => {
+        const versionId = await seedIndexedVersion("React", "");
+
+        await expect(store.claimVersion("react", "", "reject-version")).rejects.toThrow(
+          new VersionAlreadyExistsError("React", ""),
+        );
+        await expectVersionUntouched("react", "", versionId);
+      });
+
+      it("replace returns the existing version without creating another", async () => {
+        const versionId = await seedIndexedVersion("React", "19.0.0");
+
+        const claimed = await store.claimVersion("react", "19.0.0", "replace");
+
+        expect(claimed).toEqual({ versionId, library: "React" });
+      });
+
+      it("validates the name only when the library is new", async () => {
+        await expect(
+          store.claimVersion("a".repeat(101), "", "replace"),
+        ).rejects.toBeInstanceOf(InvalidLibraryNameError);
+        expect(await listedLibraries()).toEqual([]);
+      });
+    });
+
+    describe("findVersionId", () => {
+      it("returns null for an unknown library or version and creates nothing", async () => {
+        await store.resolveVersionId("React", "18.0.0");
+        const before = await store.queryLibraryVersions();
+
+        expect(await store.findVersionId("vue", "")).toBeNull();
+        expect(await store.findVersionId("react", "99.0.0")).toBeNull();
+        expect(await store.queryLibraryVersions()).toEqual(before);
+      });
+    });
+
+    describe("removeVersion", () => {
+      it("removes the library with its last version and frees the name", async () => {
+        await store.addDocuments(
+          "react",
+          "",
+          0,
+          createScrapeResult("Doc", "https://example.com/react", "content"),
+        );
+
+        await store.removeVersion("React", "");
+
+        expect(await store.getLibrary("react")).toBeNull();
+        const claimed = await store.claimVersion("REACT", "", "reject-library");
+        expect(claimed.library).toBe("REACT");
+      });
+
+      it("rolls back every delete when a later one fails", async () => {
+        await store.addDocuments(
+          "React",
+          "",
+          0,
+          createScrapeResult("Doc", "https://example.com/react", "content"),
+        );
+        vi.spyOn(statementsOf(store).deleteLibraryById, "run").mockImplementation(() => {
+          throw new Error("injected library delete failure");
+        });
+
+        await expect(store.removeVersion("react", "")).rejects.toThrow();
+        vi.restoreAllMocks();
+
+        expect(await store.findVersionId("react", "")).not.toBeNull();
+        expect(await store.checkDocumentExists("react", "")).toBe(true);
+        expect(
+          (await store.queryLibraryVersions()).get("React")?.[0].uniqueUrlCount,
+        ).toBe(1);
+      });
+    });
+
+    it("lets the database arbitrate claims made through separate connections", async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-claim-"));
+      const dbPath = join(tempDir, "claims.sqlite");
+      appConfig.app.embeddingModel = "";
+      const first = new DocumentStore(dbPath, appConfig);
+      await first.initialize();
+      const second = new DocumentStore(dbPath, appConfig);
+      await second.initialize();
+
+      try {
+        const results = await Promise.allSettled([
+          first.claimVersion("Svelte", "", "reject-library"),
+          second.claimVersion("svelte", "", "reject-library"),
+        ]);
+
+        expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+        const rejected = results.filter((r) => r.status === "rejected");
+        expect(rejected).toHaveLength(1);
+        expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+          LibraryAlreadyExistsError,
+        );
+      } finally {
+        await first.shutdown();
+        await second.shutdown();
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -2610,7 +2838,10 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
 
       // @ts-expect-error Accessing private property for testing
       const db = store.db;
-      db.prepare("INSERT INTO libraries (name) VALUES (?)").run("legacyvec");
+      db.prepare("INSERT INTO libraries (name, display_name) VALUES (?, ?)").run(
+        "legacyvec",
+        "legacyvec",
+      );
       const { id: libraryId } = db
         .prepare("SELECT id FROM libraries WHERE name = ?")
         .get("legacyvec") as { id: number };

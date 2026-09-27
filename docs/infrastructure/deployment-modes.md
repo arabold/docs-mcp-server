@@ -50,6 +50,10 @@ Separate coordinator and worker processes for scaling. The coordinator handles i
 
 The worker may expose a simple `/health` or container-level healthcheck for monitoring. Coordinators communicate with the worker via Pipeline RPC.
 
+### Upgrading
+
+Upgrade the worker together with, or before, its coordinators. The worker owns the document store and applies database migrations, and newer coordinators may send request options an older worker does not know. An older worker ignores them silently: for example, it would overwrite an existing library version that a newer coordinator asked it to protect.
+
 ## Protocol Auto-Detection
 
 The system automatically selects communication protocol based on execution environment:

@@ -20,12 +20,22 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vite
 import { EventBusService } from "../events/EventBusService";
 import type { ScraperProgressEvent } from "../scraper/types";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
+import { LibraryNotFoundInStoreError, VersionAlreadyExistsError } from "../store/errors";
 import { ListJobsTool } from "../tools/ListJobsTool";
 import { type AppConfig, loadConfig } from "../utils/config";
 import { PipelineManager } from "./PipelineManager";
 import { PipelineWorker } from "./PipelineWorker";
 import type { InternalPipelineJob, PipelineJob, PipelineManagerCallbacks } from "./types";
 import { PipelineJobStatus } from "./types";
+
+/** A `requireVersion` implementation that finds the version and echoes the submitted name. */
+const foundVersion =
+  (versionId: number) =>
+  async ({ library }: { library: string }) => ({ versionId, library });
+
+/** A `claimVersion` mock whose claims succeed and echo the submitted name as the display name. */
+const echoClaim = () =>
+  vi.fn().mockImplementation(async (library: string) => ({ versionId: 1, library }));
 
 // Mock dependencies
 vi.mock("../store/DocumentManagementService");
@@ -116,11 +126,12 @@ describe("PipelineManager", () => {
     mockStore = {
       // Database status tracking methods
       ensureLibraryAndVersion: vi.fn().mockResolvedValue(1), // Return mock version ID
+      claimVersion: echoClaim(),
       updateVersionStatus: vi.fn().mockResolvedValue(undefined),
       updateVersionProgress: vi.fn().mockResolvedValue(undefined), // For progress tests
       getVersionsByStatus: vi.fn().mockResolvedValue([]),
-      // Refresh job methods
-      ensureVersion: vi.fn().mockResolvedValue(1),
+      // Refresh job methods (lookup-only)
+      requireVersion: vi.fn().mockImplementation(foundVersion(1)),
       getPagesByVersionId: vi.fn().mockResolvedValue([]),
       getScraperOptions: vi.fn().mockResolvedValue(null),
       getVersionById: vi.fn().mockResolvedValue({
@@ -180,11 +191,13 @@ describe("PipelineManager", () => {
   });
 
   it("should normalize version labels so entry points share one bucket", async () => {
-    // " LATEST " and "latest" are the same version; enqueueing the second must
-    // abort the first as a duplicate rather than queue a parallel job.
+    // " LATEST " and "latest" are the same version; a replacing enqueue of the
+    // second must abort the first as a duplicate rather than queue a parallel job.
     const options = { url: "http://a.com", library: "libN", version: "latest" };
     const jobId1 = await manager.enqueueScrapeJob("libN", " LATEST ", options);
-    const jobId2 = await manager.enqueueScrapeJob("libN", "latest", options);
+    const jobId2 = await manager.enqueueScrapeJob("libN", "latest", options, {
+      onExisting: "replace",
+    });
 
     expect(jobId1).not.toBe(jobId2);
     const job1 = await manager.getJob(jobId1);
@@ -201,14 +214,92 @@ describe("PipelineManager", () => {
     // pages the first had already written — and both reported success.
     const options = { url: "http://a.com", library: "LibN", version: "1.0" };
     const jobId1 = await manager.enqueueScrapeJob("LibN", "1.0", options);
-    const jobId2 = await manager.enqueueScrapeJob(" libn ", "1.0", {
-      ...options,
-      library: " libn ",
-    });
+    const jobId2 = await manager.enqueueScrapeJob(
+      " libn ",
+      "1.0",
+      { ...options, library: " libn " },
+      { onExisting: "replace" },
+    );
 
     expect(jobId1).not.toBe(jobId2);
     const job1 = await manager.getJob(jobId1);
     expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
+  });
+
+  describe("overwrite protection", () => {
+    const options = { url: "http://a.com", library: "React", version: "19.0.0" };
+
+    it("claims the target with the default reject-version policy", async () => {
+      await manager.enqueueScrapeJob("React", "19.0.0", options);
+
+      expect(mockStore.claimVersion).toHaveBeenCalledWith(
+        "React",
+        "19.0.0",
+        "reject-version",
+      );
+    });
+
+    it("creates no job and cancels nothing when the claim rejects", async () => {
+      const jobId1 = await manager.enqueueScrapeJob("React", "19.0.0", options);
+      (mockStore.claimVersion as Mock).mockRejectedValueOnce(
+        new VersionAlreadyExistsError("React", "19.0.0"),
+      );
+
+      await expect(
+        manager.enqueueScrapeJob("react", "19.0.0", options),
+      ).rejects.toBeInstanceOf(VersionAlreadyExistsError);
+
+      const jobs = await manager.getJobs();
+      expect(jobs).toHaveLength(1);
+      expect((await manager.getJob(jobId1))?.status).toBe(PipelineJobStatus.QUEUED);
+    });
+
+    it("lets a replacing enqueue supersede the in-flight job", async () => {
+      const jobId1 = await manager.enqueueScrapeJob("React", "19.0.0", options);
+      const jobId2 = await manager.enqueueScrapeJob("React", "19.0.0", options, {
+        onExisting: "replace",
+      });
+
+      expect(mockStore.claimVersion).toHaveBeenLastCalledWith(
+        "React",
+        "19.0.0",
+        "replace",
+      );
+      expect((await manager.getJob(jobId1))?.status).toBe(PipelineJobStatus.CANCELLED);
+      expect((await manager.getJob(jobId2))?.status).toBe(PipelineJobStatus.QUEUED);
+    });
+
+    it("treats an append as not overwriting", async () => {
+      await manager.enqueueScrapeJob("React", "19.0.0", { ...options, clean: false });
+
+      expect(mockStore.claimVersion).toHaveBeenCalledWith("React", "19.0.0", "replace");
+    });
+
+    it("never relaxes an explicit reject-library for an append", async () => {
+      await manager.enqueueScrapeJob(
+        "React",
+        "19.0.0",
+        { ...options, clean: false },
+        { onExisting: "reject-library" },
+      );
+
+      expect(mockStore.claimVersion).toHaveBeenCalledWith(
+        "React",
+        "19.0.0",
+        "reject-library",
+      );
+    });
+
+    it("reports the job under the stored display name", async () => {
+      (mockStore.claimVersion as Mock).mockResolvedValueOnce({
+        versionId: 1,
+        library: "React",
+      });
+
+      const jobId = await manager.enqueueScrapeJob("react", "19.0.0", options);
+
+      expect((await manager.getJob(jobId))?.library).toBe("React");
+    });
   });
 
   it("should start a queued job and transition to RUNNING", async () => {
@@ -521,11 +612,12 @@ describe("PipelineManager", () => {
       // Create fresh mock store with all methods needed for enqueueRefreshJob
       const recoveryMockStore = {
         ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
+        claimVersion: echoClaim(),
         updateVersionStatus: vi.fn().mockResolvedValue(undefined),
         updateVersionProgress: vi.fn().mockResolvedValue(undefined),
         getVersionsByStatus: vi.fn().mockResolvedValue(mockInterruptedVersions),
-        ensureVersion: vi.fn().mockImplementation(({ library }) => {
-          return Promise.resolve(library === "test-lib" ? 1 : 2);
+        requireVersion: vi.fn().mockImplementation(({ library }) => {
+          return Promise.resolve({ versionId: library === "test-lib" ? 1 : 2, library });
         }),
         getVersionById: vi.fn().mockImplementation((id: number) => {
           return Promise.resolve({
@@ -662,7 +754,7 @@ describe("PipelineManager", () => {
         { id: 3, url: "https://example.com/page3", depth: 1, etag: "etag3" },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(456);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com",
@@ -693,12 +785,65 @@ describe("PipelineManager", () => {
       expect(scraperOpts?.maxPages).toBeUndefined();
     });
 
+    it("should replace rather than reject when refreshing a completed version", async () => {
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([
+        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
+      ]);
+
+      await manager.enqueueRefreshJob("test-lib", "1.0.0");
+
+      expect(mockStore.claimVersion).toHaveBeenCalledWith("test-lib", "1.0.0", "replace");
+    });
+
+    it("should replace when an incomplete version falls back to a full re-scrape", async () => {
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
+      (mockStore.getVersionById as Mock).mockResolvedValue({
+        id: 456,
+        library_id: 1,
+        name: "1.0.0",
+        status: "failed",
+      });
+      (mockStore.getScraperOptions as Mock).mockResolvedValue({
+        sourceUrl: "https://example.com",
+        options: {},
+      });
+
+      await manager.enqueueRefreshJob("test-lib", "1.0.0");
+
+      expect(mockStore.claimVersion).toHaveBeenCalledWith("test-lib", "1.0.0", "replace");
+    });
+
+    it("should fail for an unknown library without creating anything", async () => {
+      (mockStore.requireVersion as Mock).mockRejectedValue(
+        new LibraryNotFoundInStoreError("Reakt", []),
+      );
+
+      await expect(manager.enqueueRefreshJob("Reakt", "")).rejects.toBeInstanceOf(
+        LibraryNotFoundInStoreError,
+      );
+      expect(mockStore.claimVersion).not.toHaveBeenCalled();
+      expect(mockStore.ensureLibraryAndVersion).not.toHaveBeenCalled();
+    });
+
+    it("should name the library as it is stored in refresh errors", async () => {
+      (mockStore.requireVersion as Mock).mockResolvedValue({
+        versionId: 7,
+        library: "React",
+      });
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
+
+      await expect(manager.enqueueRefreshJob("react", "1.0.0")).rejects.toThrow(
+        "No pages found for React@1.0.0",
+      );
+    });
+
     it("should handle unversioned libraries during refresh", async () => {
       const mockPages = [
         { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(789);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(789));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com",
@@ -719,7 +864,7 @@ describe("PipelineManager", () => {
 
     it("should throw error when refreshing a version with no pages", async () => {
       // Setup: Mock empty pages array
-      (mockStore.ensureVersion as Mock).mockResolvedValue(999);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(999));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
 
       // Action & Assertion: Should throw with clear error message
@@ -730,7 +875,7 @@ describe("PipelineManager", () => {
 
     it("should throw error when refreshing latest library with no pages", async () => {
       // Setup: Mock empty pages array for latest library
-      (mockStore.ensureVersion as Mock).mockResolvedValue(888);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(888));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
 
       // Action & Assertion: Should throw with clear error message including "latest"
@@ -745,7 +890,7 @@ describe("PipelineManager", () => {
         { id: 11, url: "https://example.com/shallow", depth: 0, etag: null },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(111);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(111));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com",
@@ -788,7 +933,7 @@ describe("PipelineManager", () => {
         { id: 2, url: "https://example.com/page2", depth: 1, etag: "etag2" },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(555);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(555));
       (mockStore.getVersionById as Mock).mockResolvedValue({
         id: 555,
         library_id: 1,
@@ -824,7 +969,7 @@ describe("PipelineManager", () => {
 
     it("should perform full re-scrape for queued versions during refresh", async () => {
       // Setup: Mock a queued version (never started)
-      (mockStore.ensureVersion as Mock).mockResolvedValue(666);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(666));
       (mockStore.getVersionById as Mock).mockResolvedValue({
         id: 666,
         library_id: 2,
@@ -859,7 +1004,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(777);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(777));
       (mockStore.getVersionById as Mock).mockResolvedValue({
         id: 777,
         library_id: 3,
@@ -913,7 +1058,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(888);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(888));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com/#/guide",
@@ -931,7 +1076,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(889);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(889));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com/#/guide",
@@ -951,7 +1096,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.ensureVersion as Mock).mockResolvedValue(890);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(890));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com/#/guide",
@@ -985,6 +1130,7 @@ describe("PipelineManager", () => {
 
         const recoveryMockStore = {
           ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
+          claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
             if (statuses.includes("running") || statuses.includes("queued")) {
@@ -1034,6 +1180,7 @@ describe("PipelineManager", () => {
 
         const recoveryMockStore = {
           ensureLibraryAndVersion: vi.fn().mockResolvedValue(2),
+          claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
             if (statuses.includes("running") || statuses.includes("queued")) {
@@ -1087,6 +1234,7 @@ describe("PipelineManager", () => {
 
         const recoveryMockStore = {
           ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
+          claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockResolvedValue(mockInterruptedVersions),
         };
@@ -1136,6 +1284,7 @@ describe("PipelineManager", () => {
 
         const recoveryMockStore = {
           ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
+          claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           updateVersionProgress: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
@@ -1144,7 +1293,9 @@ describe("PipelineManager", () => {
             }
             return Promise.resolve([]);
           }),
-          ensureVersion: vi.fn().mockResolvedValue(1),
+          requireVersion: vi
+            .fn()
+            .mockResolvedValue({ versionId: 1, library: "test-lib" }),
           getVersionById: vi.fn().mockResolvedValue({
             id: 1,
             library_id: 1,
@@ -1199,6 +1350,7 @@ describe("PipelineManager", () => {
 
         const recoveryMockStore = {
           ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
+          claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
             if (statuses.includes("running") || statuses.includes("queued")) {
@@ -1206,7 +1358,9 @@ describe("PipelineManager", () => {
             }
             return Promise.resolve([]);
           }),
-          ensureVersion: vi.fn().mockResolvedValue(1),
+          requireVersion: vi
+            .fn()
+            .mockResolvedValue({ versionId: 1, library: "test-lib" }),
           getVersionById: vi.fn().mockResolvedValue({
             id: 1,
             library_id: 1,
