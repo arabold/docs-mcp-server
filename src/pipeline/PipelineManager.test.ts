@@ -28,6 +28,11 @@ import { PipelineWorker } from "./PipelineWorker";
 import type { InternalPipelineJob, PipelineJob, PipelineManagerCallbacks } from "./types";
 import { PipelineJobStatus } from "./types";
 
+/** A `requireVersion` implementation that finds the version and echoes the submitted name. */
+const foundVersion =
+  (versionId: number) =>
+  async ({ library }: { library: string }) => ({ versionId, library });
+
 /** A `claimVersion` mock whose claims succeed and echo the submitted name as the display name. */
 const echoClaim = () =>
   vi.fn().mockImplementation(async (library: string) => ({ versionId: 1, library }));
@@ -126,7 +131,7 @@ describe("PipelineManager", () => {
       updateVersionProgress: vi.fn().mockResolvedValue(undefined), // For progress tests
       getVersionsByStatus: vi.fn().mockResolvedValue([]),
       // Refresh job methods (lookup-only)
-      requireVersionId: vi.fn().mockResolvedValue(1),
+      requireVersion: vi.fn().mockImplementation(foundVersion(1)),
       getPagesByVersionId: vi.fn().mockResolvedValue([]),
       getScraperOptions: vi.fn().mockResolvedValue(null),
       getVersionById: vi.fn().mockResolvedValue({
@@ -611,8 +616,8 @@ describe("PipelineManager", () => {
         updateVersionStatus: vi.fn().mockResolvedValue(undefined),
         updateVersionProgress: vi.fn().mockResolvedValue(undefined),
         getVersionsByStatus: vi.fn().mockResolvedValue(mockInterruptedVersions),
-        requireVersionId: vi.fn().mockImplementation(({ library }) => {
-          return Promise.resolve(library === "test-lib" ? 1 : 2);
+        requireVersion: vi.fn().mockImplementation(({ library }) => {
+          return Promise.resolve({ versionId: library === "test-lib" ? 1 : 2, library });
         }),
         getVersionById: vi.fn().mockImplementation((id: number) => {
           return Promise.resolve({
@@ -749,7 +754,7 @@ describe("PipelineManager", () => {
         { id: 3, url: "https://example.com/page3", depth: 1, etag: "etag3" },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(456);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com",
@@ -781,7 +786,7 @@ describe("PipelineManager", () => {
     });
 
     it("should replace rather than reject when refreshing a completed version", async () => {
-      (mockStore.requireVersionId as Mock).mockResolvedValue(456);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue([
         { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
       ]);
@@ -792,7 +797,7 @@ describe("PipelineManager", () => {
     });
 
     it("should replace when an incomplete version falls back to a full re-scrape", async () => {
-      (mockStore.requireVersionId as Mock).mockResolvedValue(456);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
       (mockStore.getVersionById as Mock).mockResolvedValue({
         id: 456,
         library_id: 1,
@@ -810,7 +815,7 @@ describe("PipelineManager", () => {
     });
 
     it("should fail for an unknown library without creating anything", async () => {
-      (mockStore.requireVersionId as Mock).mockRejectedValue(
+      (mockStore.requireVersion as Mock).mockRejectedValue(
         new LibraryNotFoundInStoreError("Reakt", []),
       );
 
@@ -821,12 +826,24 @@ describe("PipelineManager", () => {
       expect(mockStore.ensureLibraryAndVersion).not.toHaveBeenCalled();
     });
 
+    it("should name the library as it is stored in refresh errors", async () => {
+      (mockStore.requireVersion as Mock).mockResolvedValue({
+        versionId: 7,
+        library: "React",
+      });
+      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
+
+      await expect(manager.enqueueRefreshJob("react", "1.0.0")).rejects.toThrow(
+        "No pages found for React@1.0.0",
+      );
+    });
+
     it("should handle unversioned libraries during refresh", async () => {
       const mockPages = [
         { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(789);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(789));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com",
@@ -847,7 +864,7 @@ describe("PipelineManager", () => {
 
     it("should throw error when refreshing a version with no pages", async () => {
       // Setup: Mock empty pages array
-      (mockStore.requireVersionId as Mock).mockResolvedValue(999);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(999));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
 
       // Action & Assertion: Should throw with clear error message
@@ -858,7 +875,7 @@ describe("PipelineManager", () => {
 
     it("should throw error when refreshing latest library with no pages", async () => {
       // Setup: Mock empty pages array for latest library
-      (mockStore.requireVersionId as Mock).mockResolvedValue(888);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(888));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
 
       // Action & Assertion: Should throw with clear error message including "latest"
@@ -873,7 +890,7 @@ describe("PipelineManager", () => {
         { id: 11, url: "https://example.com/shallow", depth: 0, etag: null },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(111);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(111));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com",
@@ -916,7 +933,7 @@ describe("PipelineManager", () => {
         { id: 2, url: "https://example.com/page2", depth: 1, etag: "etag2" },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(555);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(555));
       (mockStore.getVersionById as Mock).mockResolvedValue({
         id: 555,
         library_id: 1,
@@ -952,7 +969,7 @@ describe("PipelineManager", () => {
 
     it("should perform full re-scrape for queued versions during refresh", async () => {
       // Setup: Mock a queued version (never started)
-      (mockStore.requireVersionId as Mock).mockResolvedValue(666);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(666));
       (mockStore.getVersionById as Mock).mockResolvedValue({
         id: 666,
         library_id: 2,
@@ -987,7 +1004,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(777);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(777));
       (mockStore.getVersionById as Mock).mockResolvedValue({
         id: 777,
         library_id: 3,
@@ -1041,7 +1058,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(888);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(888));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com/#/guide",
@@ -1059,7 +1076,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(889);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(889));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com/#/guide",
@@ -1079,7 +1096,7 @@ describe("PipelineManager", () => {
         { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
       ];
 
-      (mockStore.requireVersionId as Mock).mockResolvedValue(890);
+      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(890));
       (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
       (mockStore.getScraperOptions as Mock).mockResolvedValue({
         sourceUrl: "https://example.com/#/guide",
@@ -1276,7 +1293,9 @@ describe("PipelineManager", () => {
             }
             return Promise.resolve([]);
           }),
-          requireVersionId: vi.fn().mockResolvedValue(1),
+          requireVersion: vi
+            .fn()
+            .mockResolvedValue({ versionId: 1, library: "test-lib" }),
           getVersionById: vi.fn().mockResolvedValue({
             id: 1,
             library_id: 1,
@@ -1339,7 +1358,9 @@ describe("PipelineManager", () => {
             }
             return Promise.resolve([]);
           }),
-          requireVersionId: vi.fn().mockResolvedValue(1),
+          requireVersion: vi
+            .fn()
+            .mockResolvedValue({ versionId: 1, library: "test-lib" }),
           getVersionById: vi.fn().mockResolvedValue({
             id: 1,
             library_id: 1,

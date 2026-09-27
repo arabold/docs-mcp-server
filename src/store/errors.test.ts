@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 import {
   InvalidLibraryNameError,
   LibraryAlreadyExistsError,
+  LibraryNotFoundInStoreError,
   VersionAlreadyExistsError,
+  VersionNotFoundInStoreError,
 } from "./errors";
 
 describe("library identity errors", () => {
@@ -37,16 +39,24 @@ describe("library identity errors", () => {
     expect(error.message).toBe('Invalid library name "": is empty.');
   });
 
+  // C0 controls, DEL and C1 controls (Unicode Cc); JSON.stringify alone leaves the last two raw
+  const NAME = "a\nb\t\u001bc\u007fd\u0085e";
+  const ESCAPED = String.raw`a\nb\t\u001bc\u007fd\u0085e`;
+
   it.each([
-    ["LibraryAlreadyExistsError", new LibraryAlreadyExistsError("a\nb\t\u001bc")],
-    ["VersionAlreadyExistsError", new VersionAlreadyExistsError("a\nb\t\u001bc", "1\n0")],
+    ["LibraryAlreadyExistsError", new LibraryAlreadyExistsError(NAME)],
+    ["VersionAlreadyExistsError", new VersionAlreadyExistsError(NAME, "1\u00850")],
     [
       "InvalidLibraryNameError",
-      new InvalidLibraryNameError("a\nb\t\u001bc", "contains a control character"),
+      new InvalidLibraryNameError(NAME, "contains a control character"),
     ],
-  ])("%s escapes control characters in names", (_label, error) => {
-    expect(error.message).toContain(String.raw`a\nb\t\u001bc`);
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting their absence
-    expect(error.message).not.toMatch(/[\u0000-\u001f]/);
+    ["LibraryNotFoundInStoreError", new LibraryNotFoundInStoreError(NAME, [NAME])],
+    [
+      "VersionNotFoundInStoreError",
+      new VersionNotFoundInStoreError(NAME, "1\u00850", [NAME]),
+    ],
+  ])("%s escapes every control character in names", (_label, error) => {
+    expect(error.message).toContain(ESCAPED);
+    expect(error.message).not.toMatch(/\p{Cc}/u);
   });
 });

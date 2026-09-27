@@ -62,10 +62,11 @@ task 8.4 checks that none were missed. Use Node 22 (`nvm use 22`) for every comm
 - [x] 2.2 Add `LibraryAlreadyExistsError`, `VersionAlreadyExistsError` and `InvalidLibraryNameError` to
       `src/store/errors.ts`, with the per-error messages from the D10 table. Only
       `VersionAlreadyExistsError` names a version and the `--replace` / `replace: true` / refresh
-      remedy, and it has an unversioned wording. Every name is written with `JSON.stringify()`. Verify
-      with message assertions for each error, including the unversioned case. Check that a name
-      containing `\n`, `\t` and `\u001b` produces a message with those characters escaped and no raw
-      byte below 0x20.
+      remedy, and it has an unversioned wording. Every name goes through the shared `quoteName()` /
+      `escapeControlCharacters()` helpers, which also cover the existing not-found errors. Verify with
+      message assertions for each error, including the unversioned case. Check that a name containing
+      `\n`, `\t`, `\u001b`, U+007F and U+0085 produces a message with all of them escaped and no raw
+      Unicode Cc character.
 
 ## 3. Store: display name, single creation path, claim and lookup
 
@@ -134,10 +135,11 @@ task 8.4 checks that none were missed. Use Node 22 (`nvm use 22`) for every comm
       - the completed-version route, whose `enqueueScrapeJob` call carries `isRefresh`;
       - `enqueueJobWithStoredOptions`.
 
-      Both go through `DocumentManagementService.requireVersionId()`, which is built on
-      `findVersionId()` and throws `LibraryNotFoundInStoreError` (through `validateLibraryExists`) or
+      Both go through `DocumentManagementService.requireVersion()`, a lookup-only helper that returns
+      the version id and the library's stored display name. The refresh errors and logs then name the
+      library as stored. It throws `LibraryNotFoundInStoreError`, with suggestions, or
       `VersionNotFoundInStoreError` when the lookup misses. Switch the refresh tests (~665-954) from
-      mocking `ensureVersion` to mocking `requireVersionId`. Verify that:
+      mocking `ensureVersion` to mocking `requireVersion`. Verify that:
       - refreshing a completed version enqueues with `onExisting: "replace"`;
       - the not-completed fall-back does the same;
       - refreshing an unknown library throws and never calls a creating store method;
