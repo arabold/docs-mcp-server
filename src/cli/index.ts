@@ -30,25 +30,31 @@ import { createWorkerCommand } from "./commands/worker";
 import { applyGlobalCliOutputMode, registerGlobalOutputOptions } from "./output";
 import { registerGlobalServices } from "./services";
 
-/**
- * Creates and configures the main CLI program with all commands.
- */
+/** Every command the CLI registers. */
+export const COMMAND_FACTORIES: ReadonlyArray<(cli: Argv) => void> = [
+  createCompactCommand,
+  createConfigCommand,
+  createDefaultAction,
+  createFetchUrlCommand,
+  createFindVersionCommand,
+  createListCommand,
+  createMcpCommand,
+  createRefreshCommand,
+  createRemoveCommand,
+  createScrapeCommand,
+  createSearchCommand,
+  createWebCommand,
+  createWorkerCommand,
+];
 
 /**
- * Creates and configures the main CLI program with all commands.
+ * Declares the options that every command accepts.
+ *
+ * @param cli - The root yargs instance.
+ * @returns The same instance, for chaining.
  */
-export function createCli(argv: string[]): Argv {
-  // Global service instances
-  let globalEventBus: EventBusService | null = null;
-  let globalTelemetryService: TelemetryService | null = null;
-  const commandStartTimes = new Map<string, number>();
-
-  const cli = registerGlobalOutputOptions(yargs(hideBin(argv)))
-    .scriptName("docs-mcp-server")
-    .strict()
-    .usage("Usage: $0 <command> [options]")
-    .version(__APP_VERSION__)
-    // Global Options
+export function registerGlobalOptions<T>(cli: Argv<T>) {
+  return registerGlobalOutputOptions(cli)
     .option("verbose", {
       type: "boolean",
       description: "Enable verbose (debug) logging",
@@ -82,7 +88,23 @@ export function createCli(argv: string[]): Argv {
       type: "boolean",
       description: "Show ASCII art logo on startup",
       default: true,
-    })
+    });
+}
+
+/**
+ * Creates and configures the main CLI program with all commands.
+ */
+export function createCli(argv: string[]): Argv {
+  // Global service instances
+  let globalEventBus: EventBusService | null = null;
+  let globalTelemetryService: TelemetryService | null = null;
+  const commandStartTimes = new Map<string, number>();
+
+  const cli = registerGlobalOptions(yargs(hideBin(argv)))
+    .scriptName("docs-mcp-server")
+    .strict()
+    .usage("Usage: $0 <command> [options]")
+    .version(__APP_VERSION__)
     // Middleware for Global Setup (similar to preAction)
     .middleware(async (argv) => {
       // 0. Validate Options
@@ -164,20 +186,9 @@ export function createCli(argv: string[]): Argv {
     .alias("help", "h")
     .showHelpOnFail(true);
 
-  // Register Commands
-  createCompactCommand(cli);
-  createConfigCommand(cli);
-  createDefaultAction(cli);
-  createFetchUrlCommand(cli);
-  createFindVersionCommand(cli);
-  createListCommand(cli);
-  createMcpCommand(cli);
-  createRefreshCommand(cli);
-  createRemoveCommand(cli);
-  createScrapeCommand(cli);
-  createSearchCommand(cli);
-  createWebCommand(cli);
-  createWorkerCommand(cli);
+  for (const registerCommand of COMMAND_FACTORIES) {
+    registerCommand(cli);
+  }
 
   return cli;
 }
