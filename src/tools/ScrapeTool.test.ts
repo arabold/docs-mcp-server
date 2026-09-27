@@ -14,6 +14,8 @@ describe("ScrapeTool", () => {
   let scrapeTool: ScrapeTool;
 
   const MOCK_JOB_ID = "test-job-123";
+  // Without replace, ScrapeTool leaves the overwrite default to the pipeline
+  const DEFAULT_INTENT = { onExisting: undefined };
   const mockConfig = { scraper: defaults } as any;
 
   beforeEach(() => {
@@ -80,6 +82,7 @@ describe("ScrapeTool", () => {
         "test-lib",
         expectedInternal,
         expect.objectContaining({ url: options.url, version: expectedInternal ?? "" }),
+        DEFAULT_INTENT,
       );
       expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
     },
@@ -97,6 +100,7 @@ describe("ScrapeTool", () => {
         "test-lib",
         label,
         expect.objectContaining({ url: options.url }),
+        DEFAULT_INTENT,
       );
     },
   );
@@ -131,6 +135,7 @@ describe("ScrapeTool", () => {
         ignoreErrors: false, // Overridden
         scrapeMode: ScrapeMode.Auto, // Use enum
       },
+      DEFAULT_INTENT,
     );
     expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
   });
@@ -199,6 +204,7 @@ describe("ScrapeTool", () => {
           "X-Custom-Header": "custom-value",
         },
       }),
+      DEFAULT_INTENT,
     );
   });
 
@@ -218,6 +224,30 @@ describe("ScrapeTool", () => {
       expect.objectContaining({
         preserveHashes: true,
       }),
+      DEFAULT_INTENT,
     );
+  });
+
+  it("should request replacement only when replace is true", async () => {
+    await scrapeTool.execute({ ...getBaseOptions("2.0.0"), replace: true });
+
+    const call = (mockManagerInstance.enqueueScrapeJob as Mock).mock.calls[0];
+    expect(call[3]).toEqual({ onExisting: "replace" });
+  });
+
+  it("should leave the overwrite default to the pipeline when replace is omitted", async () => {
+    await scrapeTool.execute(getBaseOptions("2.0.0"));
+
+    const call = (mockManagerInstance.enqueueScrapeJob as Mock).mock.calls[0];
+    expect(call[3]).toEqual({ onExisting: undefined });
+  });
+
+  it("should never persist replace as a scraper option", async () => {
+    await scrapeTool.execute({ ...getBaseOptions("2.0.0"), replace: true });
+
+    const scraperOptions = (mockManagerInstance.enqueueScrapeJob as Mock).mock
+      .calls[0][2];
+    expect(scraperOptions).not.toHaveProperty("replace");
+    expect(scraperOptions).not.toHaveProperty("onExisting");
   });
 });

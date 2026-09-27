@@ -1,4 +1,4 @@
-import type { IPipeline } from "../pipeline/trpc/interfaces";
+import type { EnqueueScrapeOptions, IPipeline } from "../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../scraper/types";
 import { normalizeVersionLabel } from "../store/types";
 import type { AppConfig } from "../utils/config";
@@ -62,6 +62,12 @@ export interface ScrapeToolOptions {
   };
   /** If false, returns jobId immediately without waiting. Defaults to true. */
   waitForCompletion?: boolean;
+  /**
+   * Rebuild the version when it already exists. Without it, scraping an
+   * existing library version is rejected rather than clearing it.
+   * @default false
+   */
+  replace?: boolean;
 }
 
 export interface ScrapeResult {
@@ -91,6 +97,7 @@ export class ScrapeTool {
       url,
       options: scraperOptions,
       waitForCompletion = true,
+      replace = false,
     } = options;
 
     // Store initialization and manager start should happen externally
@@ -110,24 +117,34 @@ export class ScrapeTool {
     // Normalize pipeline version argument: use null for unversioned to be explicit cross-platform
     const enqueueVersion: string | null = internalVersion === "" ? null : internalVersion;
 
+    // Only an explicit replace is passed on; otherwise the pipeline applies its
+    // own default ("reject-version"), so that default lives in one place.
+    const enqueue: EnqueueScrapeOptions = { onExisting: replace ? "replace" : undefined };
+
     // Enqueue the job using the injected pipeline
-    const jobId = await pipeline.enqueueScrapeJob(library, enqueueVersion, {
-      url: url,
-      library: library,
-      version: internalVersion,
-      scope: scraperOptions?.scope ?? "subpages",
-      followRedirects: scraperOptions?.followRedirects ?? true,
-      maxPages: scraperOptions?.maxPages ?? this.scraperConfig.maxPages,
-      maxDepth: scraperOptions?.maxDepth ?? this.scraperConfig.maxDepth,
-      maxConcurrency: scraperOptions?.maxConcurrency ?? this.scraperConfig.maxConcurrency,
-      ignoreErrors: scraperOptions?.ignoreErrors ?? true,
-      scrapeMode: scraperOptions?.scrapeMode ?? ScrapeMode.Auto, // Pass scrapeMode enum
-      includePatterns: scraperOptions?.includePatterns,
-      excludePatterns: scraperOptions?.excludePatterns,
-      preserveHashes: scraperOptions?.preserveHashes,
-      headers: scraperOptions?.headers, // <-- propagate headers
-      clean: scraperOptions?.clean, // <-- propagate clean option
-    });
+    const jobId = await pipeline.enqueueScrapeJob(
+      library,
+      enqueueVersion,
+      {
+        url: url,
+        library: library,
+        version: internalVersion,
+        scope: scraperOptions?.scope ?? "subpages",
+        followRedirects: scraperOptions?.followRedirects ?? true,
+        maxPages: scraperOptions?.maxPages ?? this.scraperConfig.maxPages,
+        maxDepth: scraperOptions?.maxDepth ?? this.scraperConfig.maxDepth,
+        maxConcurrency:
+          scraperOptions?.maxConcurrency ?? this.scraperConfig.maxConcurrency,
+        ignoreErrors: scraperOptions?.ignoreErrors ?? true,
+        scrapeMode: scraperOptions?.scrapeMode ?? ScrapeMode.Auto, // Pass scrapeMode enum
+        includePatterns: scraperOptions?.includePatterns,
+        excludePatterns: scraperOptions?.excludePatterns,
+        preserveHashes: scraperOptions?.preserveHashes,
+        headers: scraperOptions?.headers, // <-- propagate headers
+        clean: scraperOptions?.clean, // <-- propagate clean option
+      },
+      enqueue,
+    );
 
     // Conditionally wait for completion
     if (waitForCompletion) {

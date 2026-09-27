@@ -6,10 +6,18 @@
  * allowing us to compose multiple routers under a single /api endpoint.
  */
 
-import { initTRPC } from "@trpc/server";
+import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { z } from "zod";
 import type { ScraperOptions } from "../../scraper/types";
+import {
+  InvalidLibraryNameError,
+  LibraryAlreadyExistsError,
+  LibraryNotFoundInStoreError,
+  VersionAlreadyExistsError,
+  VersionNotFoundInStoreError,
+} from "../../store/errors";
+import { EXISTING_TARGET_POLICIES } from "../../store/types";
 import { PipelineJobStatus } from "../types";
 import type { IPipeline } from "./interfaces";
 
@@ -42,7 +50,33 @@ const enqueueScrapeInput = z.object({
   library: nonEmptyTrimmed,
   version: optionalTrimmed,
   options: z.custom<ScraperOptions>(),
+  // Omitted means "reject-version"; the default is applied by the pipeline.
+  onExisting: z.enum(EXISTING_TARGET_POLICIES).optional(),
 });
+
+/**
+ * Maps the enqueue errors a caller can act on to tRPC codes (409, 400, 404 over
+ * HTTP), keeping their messages. Anything else, including a `TRPCError` relayed
+ * from a remote worker, passes through unchanged.
+ */
+function toEnqueueError(error: unknown): unknown {
+  if (
+    error instanceof LibraryAlreadyExistsError ||
+    error instanceof VersionAlreadyExistsError
+  ) {
+    return new TRPCError({ code: "CONFLICT", message: error.message, cause: error });
+  }
+  if (error instanceof InvalidLibraryNameError) {
+    return new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+  }
+  if (
+    error instanceof LibraryNotFoundInStoreError ||
+    error instanceof VersionNotFoundInStoreError
+  ) {
+    return new TRPCError({ code: "NOT_FOUND", message: error.message, cause: error });
+  }
+  return error;
+}
 
 const enqueueRefreshInput = z.object({
   library: nonEmptyTrimmed,
@@ -76,13 +110,17 @@ export function createPipelineRouter(trpc: unknown) {
           ctx: PipelineTrpcContext;
           input: z.infer<typeof enqueueScrapeInput>;
         }) => {
-          const jobId = await ctx.pipeline.enqueueScrapeJob(
-            input.library,
-            input.version ?? null,
-            input.options,
-          );
-
-          return { jobId };
+          try {
+            const jobId = await ctx.pipeline.enqueueScrapeJob(
+              input.library,
+              input.version ?? null,
+              input.options,
+              { onExisting: input.onExisting },
+            );
+            return { jobId };
+          } catch (error) {
+            throw toEnqueueError(error);
+          }
         },
       ),
 
@@ -96,13 +134,16 @@ export function createPipelineRouter(trpc: unknown) {
           ctx: PipelineTrpcContext;
           input: z.infer<typeof enqueueRefreshInput>;
         }) => {
-          const jobId = await ctx.pipeline.enqueueRefreshJob(
-            input.library,
-            input.version ?? null,
-            input.options,
-          );
-
-          return { jobId };
+          try {
+            const jobId = await ctx.pipeline.enqueueRefreshJob(
+              input.library,
+              input.version ?? null,
+              input.options,
+            );
+            return { jobId };
+          } catch (error) {
+            throw toEnqueueError(error);
+          }
         },
       ),
 

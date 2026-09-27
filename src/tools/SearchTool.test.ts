@@ -101,6 +101,37 @@ describe("SearchTool", () => {
     expect(mockDocService.searchStore).not.toHaveBeenCalled();
   });
 
+  it("should name the stored library and its versions when the request uses other casing", async () => {
+    (mockDocService.validateLibraryExists as Mock).mockResolvedValue(undefined);
+    (mockDocService.listLibraries as Mock).mockResolvedValue([
+      {
+        library: "React",
+        versions: [
+          {
+            id: 1,
+            ref: { library: "React", version: "18.0.0" },
+            status: "COMPLETED",
+            counts: { documents: 1, uniqueUrls: 1 },
+            indexedAt: "2024-01-01T00:00:00Z",
+            sourceUrl: null,
+          },
+        ],
+      },
+    ]);
+
+    const failure = searchTool.execute({
+      library: "react",
+      query: "hooks",
+      exactMatch: true,
+    });
+
+    await expect(failure).rejects.toBeInstanceOf(VersionNotFoundInStoreError);
+    await expect(failure).rejects.toMatchObject({
+      library: "React",
+      availableVersions: ["18.0.0"],
+    });
+  });
+
   it("should throw VersionNotFoundInStoreError when exactMatch is true with 'latest' version", async () => {
     const options: SearchToolOptions = {
       ...baseOptions,

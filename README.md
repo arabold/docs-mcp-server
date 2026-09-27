@@ -46,6 +46,12 @@ For agents and scripts, the CLI is usually the simplest way to use Grounded Docs
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 ```
 
+Scraping a library version that already exists fails rather than overwriting it. Re-index it with `--replace`, or update it in place with `refresh`:
+
+```bash
+npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react --replace
+```
+
 For hash-routed SPA docs sites, enable hash preservation explicitly:
 
 ```bash
@@ -105,6 +111,8 @@ See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo
 
 `scrape_docs` also accepts `preserveHashes: true` for documentation sites that use hash-based client-side routing.
 Use it only for hash-routed SPAs; normal sites typically use hash fragments for in-page anchors.
+
+`scrape_docs` rejects a library version that is already indexed; pass `replace: true` to rebuild it, or use `refresh_version` to update it in place.
 
 <details>
 <summary>Alternative: Run with Docker</summary>

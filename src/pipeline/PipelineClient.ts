@@ -11,15 +11,37 @@ import {
   splitLink,
   wsLink,
 } from "@trpc/client";
+import { TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import type { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
 import { normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
-import type { IPipeline } from "./trpc/interfaces";
+import type { EnqueueScrapeOptions, IPipeline } from "./trpc/interfaces";
 import type { PipelineRouter } from "./trpc/router";
 import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "./types";
+
+/**
+ * Re-raises a worker's enqueue error as a `TRPCError` with the same code and
+ * message, so this process's own router relays it unchanged (the web UI then
+ * sees the same 409/400/404 as in front of a local pipeline). The worker's router
+ * already decided which errors a caller can act on; anything it left as an
+ * internal error, or a failure that never reached it, is not relayed.
+ *
+ * @returns The error to rethrow, or `null` when there is no actionable code.
+ */
+function relayEnqueueError(error: unknown): TRPCError | null {
+  const code = (error as { data?: { code?: unknown } } | null)?.data?.code;
+  if (typeof code !== "string" || code === "INTERNAL_SERVER_ERROR") {
+    return null;
+  }
+  return new TRPCError({
+    code: code as TRPCError["code"],
+    message: error instanceof Error ? error.message : String(error),
+    cause: error,
+  });
+}
 
 /**
  * HTTP client that implements the IPipeline interface by delegating to external worker.
@@ -87,6 +109,7 @@ export class PipelineClient implements IPipeline {
     library: string,
     version: string | undefined | null,
     options: ScraperOptions,
+    enqueue?: EnqueueScrapeOptions,
   ): Promise<string> {
     try {
       const normalizedVersion = normalizeVersionLabel(version) || null;
@@ -94,10 +117,15 @@ export class PipelineClient implements IPipeline {
         library,
         version: normalizedVersion,
         options,
+        onExisting: enqueue?.onExisting,
       });
       logger.debug(`Job ${result.jobId} enqueued successfully`);
       return result.jobId;
     } catch (error) {
+      const relayed = relayEnqueueError(error);
+      if (relayed) {
+        throw relayed;
+      }
       throw new Error(
         `Failed to enqueue job: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -119,6 +147,10 @@ export class PipelineClient implements IPipeline {
       logger.debug(`Refresh job ${result.jobId} enqueued successfully`);
       return result.jobId;
     } catch (error) {
+      const relayed = relayEnqueueError(error);
+      if (relayed) {
+        throw relayed;
+      }
       throw new Error(
         `Failed to enqueue refresh job: ${error instanceof Error ? error.message : String(error)}`,
       );

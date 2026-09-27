@@ -1,6 +1,6 @@
 import { VersionNotFoundInStoreError } from "../store";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import type { StoreSearchResult } from "../store/types";
+import { libraryNamesMatch, type StoreSearchResult } from "../store/types";
 import { logger } from "../utils/logger";
 import { ValidationError } from "./errors";
 
@@ -70,12 +70,15 @@ export class SearchTool {
       await this.docService.validateLibraryExists(library);
       // Fetch detailed versions using listLibraries and find the specific library
       const allLibraries = await this.docService.listLibraries();
-      const libraryInfo = allLibraries.find((lib) => lib.library === library);
+      const libraryInfo = allLibraries.find((lib) =>
+        libraryNamesMatch(lib.library, library),
+      );
       const availableVersions = libraryInfo
         ? libraryInfo.versions.map((v) => v.ref.version)
         : [];
+      // Name the library as it is stored, not as the caller typed it
       throw new VersionNotFoundInStoreError(
-        library,
+        libraryInfo?.library ?? library,
         version ?? "latest",
         availableVersions,
       );
