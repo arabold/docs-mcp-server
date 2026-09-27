@@ -21,12 +21,12 @@ tests/search-eval/
   promptfoo.yaml           # Promptfoo config. Run via run.ts, never directly.
                            # Provider field is templated by DOCS_EVAL_PROVIDER.
   run-provider.sh          # Promptfoo exec-provider wrapper around search-provider.ts (local).
-  context7-provider.cjs    # Pure-Node Context7 provider implementation.
+  context7-provider.cjs    # Bun-compatible Context7 provider implementation.
   run-context7-provider.sh # Promptfoo exec-provider wrapper around context7-provider.cjs.
 
   types.ts                 # Shared TypeScript types.
   loader.ts                # Dataset loader + spec-constraint validator.
-  preflight.ts             # `npm run evaluate:search:preflight` — libraries indexed?
+  preflight.ts             # `bun run evaluate:search:preflight` — libraries indexed?
   judges.ts                # Judge allowlist; rejects deprecated models at startup.
   rubrics.ts               # TS copies of the rubric strings (rubrics/*.txt is canonical).
   aggregate.ts             # promptfoo raw → summary.json.
@@ -48,7 +48,7 @@ tests/search-eval/
   results/                 # Gitignored. Per-run output: promptfoo-raw.json,
                            # summary.json, cross-judge.json, dataset.flat.yaml.
   cli/
-    preflight.ts           # `npm run evaluate:search:preflight` entry.
+    preflight.ts           # `bun run evaluate:search:preflight` entry.
     aggregate.ts           # Stand-alone aggregator entry.
     cross-judge.ts         # Stand-alone cross-judge entry.
     compare-providers.ts   # Side-by-side report between two baseline files.
@@ -134,8 +134,8 @@ tests/search-eval/
 - **Cross-judge requires a *different* provider for meaningful signal.** Setting
   `DOCS_EVAL_CROSS_JUDGE` to a sibling of the primary judge (e.g. both OpenAI)
   yields near-zero deltas and is just expensive — pick a different provider.
-- **Node 22.** `better-sqlite3` is ABI-pinned. Preflight (which opens the
-  store) fails on Node 24+.
+- **Bun 1.4.2+.** On macOS, install Homebrew SQLite (`brew install sqlite`) so
+  `bun:sqlite` can load the `sqlite-vec` extension.
 - **Stale cache after a re-index.** Promptfoo caches provider output by
   `(provider id, prompt, vars)`. After a re-scrape / re-index the underlying
   store changes but promptfoo doesn't know — set `DOCS_EVAL_NO_CACHE=1` once

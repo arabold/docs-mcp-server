@@ -174,7 +174,7 @@ The following table details all telemetry properties, their usage patterns, and 
 | **Global Context (Application-level)** |          |        |                        |                                                         |
 | `appVersion`                           | string   | Global | All events             | Application version from package.json                   |
 | `appPlatform`                          | string   | Global | All events             | Node.js platform (darwin, linux, win32)                 |
-| `appNodeVersion`                       | string   | Global | All events             | Node.js version                                         |
+| `appNodeVersion`                       | string   | Global | All events             | Node.js compatibility version reported by the runtime  |
 | `appServicesEnabled`                   | string[] | Global | All events             | List of enabled services                                |
 | `appAuthEnabled`                       | boolean  | Global | All events             | Whether authentication is configured                    |
 | `appReadOnly`                          | boolean  | Global | All events             | Whether app is in read-only mode                        |

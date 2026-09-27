@@ -97,7 +97,7 @@ export function ensurePlaywrightBrowsersInstalled(): void {
       });
     } catch (_installErr) {
       logger.error(
-        "❌ Failed to install Playwright browsers automatically. Please run:\n  npx playwright install --no-shell --with-deps chromium\nand try again.",
+        "❌ Failed to install Playwright browsers automatically. Please run:\n  bunx playwright install --no-shell --with-deps chromium\nand try again.",
       );
       process.exit(1);
     }

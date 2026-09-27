@@ -12,7 +12,7 @@ export default defineConfig({
         const indexBundle = bundle['index.js'];
         if (indexBundle && indexBundle.type === 'chunk' && indexBundle.code) {
           // Add shebang to the beginning of the file
-          indexBundle.code = '#!/usr/bin/env node\n' + indexBundle.code;
+          indexBundle.code = '#!/usr/bin/env bun\n' + indexBundle.code;
         }
       },
       writeBundle(options) {
@@ -32,6 +32,10 @@ export default defineConfig({
   resolve: {
     // Keep existing resolve extensions
     extensions: [".ts", ".tsx", ".js", ".jsx", ".json"],
+  },
+  ssr: {
+    external: ["bun:sqlite"],
+    noExternal: ["zod"],
   },
   optimizeDeps: {
     force: true
@@ -53,11 +57,11 @@ export default defineConfig({
       // Externalize dependencies and node built-ins
       external: [
         /^node:/, // Externalize all node built-ins (e.g., 'node:fs', 'node:path')
+        "bun:sqlite",
         ...Object.keys(packageJson.dependencies || {}),
         // Explicitly externalize potentially problematic packages if needed
         'fingerprint-generator',
         'header-generator',
-        'better-sqlite3', // Often needs to be external due to native bindings
         'playwright', // Playwright should definitely be external
         'sqlite-vec', // Likely involves native bindings
       ],
@@ -68,8 +72,7 @@ export default defineConfig({
         // entryFileNames: '[name].js', // Adjust naming if needed
       },
     },
-    // Target Node.js environment based on the version running the build
-    target: `node${process.versions.node.split('.')[0]}`,
+    target: "es2022",
     ssr: true, // Explicitly mark this as an SSR/Node build
   },
   test: {

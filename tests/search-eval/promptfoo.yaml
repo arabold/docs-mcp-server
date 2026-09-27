@@ -1,6 +1,6 @@
 # Search-quality benchmark configuration.
 #
-# Don't run promptfoo against this file directly — use `npm run evaluate:search`,
+# Don't run promptfoo against this file directly — use `bun run evaluate:search`,
 # which validates the judge model against the allowlist (tests/search-eval/judges.ts),
 # sets DOCS_EVAL_JUDGE_RESOLVED, and runs the comparator afterwards.
 

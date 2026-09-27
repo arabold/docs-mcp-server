@@ -45,7 +45,7 @@ describe("MCP stdio server E2E", () => {
   });
 
   it("should start, respond to initialize, and list tools", async () => {
-    // Using vite-node to run TypeScript directly
+    // Bun runs TypeScript source files directly.
     const projectRoot = path.resolve(import.meta.dirname, "..");
     const entryPoint = path.join(projectRoot, "src", "index.ts");
 

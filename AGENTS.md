@@ -4,8 +4,8 @@
 ## Repository Context
 
 - **Repository**: `arabold/docs-mcp-server`
-- **Core Stack**: Node.js 22.x, TypeScript, Vite, AlpineJS, TailwindCSS, SQLite (better-sqlite3)
-  - **Node Version**: Always use **Node.js v22** for local development and builds, even if `package.json` allows older versions. If `nvm` is installed, run `nvm use 22` before local commands.
+- **Core Stack**: Bun 1.4.2+, TypeScript, Vite, AlpineJS, TailwindCSS, SQLite (`bun:sqlite`)
+  - **Bun Version**: Use the latest stable Bun for local development and builds.
 - **Tooling**: Biome (lint/format), Vitest (test), Husky (pre-commit)
 - **Critical Documentation**:
   - 📖 **Read `README.md`** first for project structure, setup, and configuration details.
@@ -17,14 +17,14 @@
 
 | Task | Command | Description |
 |------|---------|-------------|
-| **Setup** | `npm install` | Install dependencies |
-| **Build** | `npm run build` | Build both server and web assets |
-| **Lint** | `npm run lint` | Check code issues with Biome |
-| **Fix** | `npm run lint:fix` | Auto-fix lint issues (add `-- --unsafe` if needed) |
-| **Typecheck** | `npm run typecheck` | Run TypeScript compiler checks |
-| **Format** | `npm run format` | Format code with Biome |
-| **Test All** | `npm test` | Run all tests with Vitest |
-| **Test Single** | `npx vitest run <path>` | Run a specific test file (e.g., `src/utils/foo.test.ts`) |
+| **Setup** | `bun install --frozen-lockfile` | Install dependencies |
+| **Build** | `bun run build` | Build both server and web assets |
+| **Lint** | `bun run lint` | Check code issues with Biome |
+| **Fix** | `bun run lint:fix` | Auto-fix lint issues (add `-- --unsafe` if needed) |
+| **Typecheck** | `bun run typecheck` | Run TypeScript compiler checks |
+| **Format** | `bun run format` | Format code with Biome |
+| **Test All** | `bun run test` | Run all tests with Vitest |
+| **Test Single** | `bun --bun run vitest run <path>` | Run a specific test file (e.g., `src/utils/foo.test.ts`) |
 
 ### Git Workflow
 
@@ -34,10 +34,8 @@
 
 ### Dependency Hygiene
 
-- Use `npm ci` (not `npm install`) when you just need `node_modules`; it installs from the lockfile without mutating it. Reserve `npm install` for intentional dependency changes.
-- Keep Node 22 — `better-sqlite3` ships a Node-ABI-pinned native binary. Do not bump the engine floor to v24+.
-- For occasional CLI tools that aren't part of the runtime (e.g. `promptfoo` for search evals), invoke them via `npx -y <pkg>@<version>` from `package.json` scripts rather than declaring them as dependencies — keeps the dep tree and lockfile clean.
-- npm 10 does not record `libc` in `package-lock.json`, so `npm ci` on Linux installs **both** the glibc and musl builds of every prebuilt native package (`@xberg-io/xberg`, `@biomejs/cli`, `lightningcss`, …). The `Dockerfile` prunes the musl copies after `npm ci`. If the lockfile is ever regenerated from scratch with npm 11+, the `libc` fields appear and that prune becomes redundant.
+- Use `bun install --frozen-lockfile` for reproducible dependency installs. Update `bun.lock` with `bun install` when intentionally changing dependencies.
+- Use `bunx -y <pkg>@<version>` for occasional CLI tools that aren't part of the runtime (e.g. `promptfoo`) rather than declaring them as dependencies.
 
 ### Commit Messages
 
@@ -105,16 +103,16 @@ Strictly enforced by `commitlint`. Commits will fail if format is incorrect.
   - **E2E**: Place system-wide end-to-end tests in `test/*-e2e.test.ts`.
 
 ### Best Practices
-- **Environment**: Node 22. Use `test/setup-env.ts` for polyfills.
+- **Environment**: Bun 1.4.2+. Use `test/setup-env.ts` for polyfills.
 - **Isolation**: Each test should check **one** behavior.
 - **Performance**: Keep unit tests <100ms.
 - **Mocks**: Use `vi.mock()` sparingly; prefer real dependencies where feasible.
 
 ### Test Inventory
 
-Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src/foo.test.ts`) — the single-file policy above. The table below catalogues the system-wide E2E suites under `test/`. Run a single suite with `npx vitest run test/<file>`.
+Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src/foo.test.ts`) — the single-file policy above. The table below catalogues the system-wide E2E suites under `test/`. Run a single suite with `bun --bun run vitest run test/<file>`.
 
-| Suite | Covers | Requirements | In default `npm test`? |
+| Suite | Covers | Requirements | In default `bun run test`? |
 |---|---|---|---|
 | `cli-e2e.test.ts` | CLI smoke: help, version, unknown-arg handling | none | yes |
 | `mcp-stdio-e2e.test.ts` | MCP server over stdio: spawn, protocol handshake, basic tools | none | yes |
@@ -123,7 +121,7 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 | `telemetry-e2e.test.ts` | `DOCS_MCP_TELEMETRY` env var controls PostHog init | none (parses debug logs) | yes |
 | `html-pipeline-basic-e2e.test.ts` | HTML scrape pipeline against stable endpoints (httpbin.org) | network | yes |
 | `html-pipeline-nonhtml-e2e.test.ts` | Non-HTML content (text/plain) bypasses Playwright cleanly | none | yes |
-| `html-pipeline-live-e2e.test.ts` | HTML pipeline against real documentation sites (anti-scrape, JS-heavy) | network; slow & flaky | **no** — `npm run test:live` (uses `vite.config.live.ts`) |
+| `html-pipeline-live-e2e.test.ts` | HTML pipeline against real documentation sites (anti-scrape, JS-heavy) | network; slow & flaky | **no** — `bun run test:live` (uses `vite.config.live.ts`) |
 | `refresh-pipeline-e2e.test.ts` | Refresh handling: 200/304/404, broken links, etag flow | none (mock server) | yes |
 | `scrape-progress-e2e.test.ts` | Progress counter semantics: the `pagesScraped`/`totalPages` invariant, `maxPages` bounding indexed pages, counters persisted to the job record and read back through `GetJobInfoTool` | none (mock server) | yes |
 | `unprocessable-content-e2e.test.ts` | Queue-time and fetch-time unprocessable-content gates: no request for filtered links, skips store nothing, skips stay out of `abortOnFailureRate` | none (mock server) | yes |
@@ -135,10 +133,10 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 | `vector-persistence-e2e.test.ts` | Embeddings land in `documents_vec` virtual table | MSW-mocked OpenAI | yes |
 | `vector-search-e2e.test.ts` | Full pipeline: scrape → split → embed → index → search | MSW-mocked OpenAI | yes |
 | `github-private-repo-e2e.test.ts` | Auth flow for private GitHub repo scraping | `GITHUB_TOKEN`; skips otherwise | yes (skips if no token) |
-| `docker-e2e.test.ts` | Production image: non-root user, Chromium present, Playwright scrape, Xberg PDF, bind-mounted docs folder recursively indexed via `file:///` | Docker daemon; `DOCKER_IMAGE_TAG` to reuse a prebuilt image | **no** — `npm run test:docker` |
+| `docker-e2e.test.ts` | Production image: non-root user, Chromium present, Playwright scrape, Xberg PDF, bind-mounted docs folder recursively indexed via `file:///` | Docker daemon; `DOCKER_IMAGE_TAG` to reuse a prebuilt image | **no** — `bun run test:docker` |
 
 Notes:
-- The "live" and "docker" suites are excluded from `npm test` / `npm run test:e2e` because they need external network or a Docker daemon. CI runs `docker-e2e.test.ts` in a dedicated `docker-test` job.
-- The live suite is excluded in `vite.config.ts` so a bare `vitest` (and watch mode) never hits real sites. `--exclude` only *adds* globs and `mergeConfig` concatenates them, so nothing on the CLI can undo that — `npm run test:live` therefore points at `vite.config.live.ts`, which replaces the exclude list and drops the MSW mock-server setup that would otherwise intercept the real requests.
+- The "live" and "docker" suites are excluded from `bun run test` / `bun run test:e2e` because they need external network or a Docker daemon. CI runs `docker-e2e.test.ts` in a dedicated `docker-test` job.
+- The live suite is excluded in `vite.config.ts` so a bare `vitest` (and watch mode) never hits real sites. `--exclude` only *adds* globs and `mergeConfig` concatenates them, so nothing on the CLI can undo that — `bun run test:live` therefore points at `vite.config.live.ts`, which replaces the exclude list and drops the MSW mock-server setup that would otherwise intercept the real requests.
 - Suites that "skip gracefully" check for their required env at startup and short-circuit when it's missing — safe to leave in the default run.
 - Fixtures (sample PDF, docx, xlsx, archive, etc.) live in `test/fixtures/`. Reuse them rather than generating new files on the fly.

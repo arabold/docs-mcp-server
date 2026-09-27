@@ -16,16 +16,25 @@ import { FixedDimensionEmbeddings } from "./FixedDimensionEmbeddings";
 // Suppress logger output during tests
 
 // Mock process.env for each test
-const originalEnv = process.env;
+const originalProcess = process;
 const appConfig = loadConfig();
 const runtimeConfig = {
   vectorDimension: appConfig.embeddings.vectorDimension,
   config: appConfig.embeddings,
 };
 
+function processWithEnv(env: NodeJS.ProcessEnv): NodeJS.Process {
+  return new Proxy(originalProcess, {
+    get(target, property) {
+      return property === "env" ? env : Reflect.get(target, property, target);
+    },
+  });
+}
+
 beforeEach(() => {
-  vi.stubGlobal("process", {
-    env: {
+  vi.stubGlobal(
+    "process",
+    processWithEnv({
       OPENAI_API_KEY: "test-openai-key",
       GOOGLE_APPLICATION_CREDENTIALS: "credentials.json",
       GOOGLE_API_KEY: "test-gemini-key",
@@ -36,12 +45,12 @@ beforeEach(() => {
       AZURE_OPENAI_API_INSTANCE_NAME: "test-instance",
       AZURE_OPENAI_API_DEPLOYMENT_NAME: "test-deployment",
       AZURE_OPENAI_API_VERSION: "2024-02-01",
-    },
-  });
+    }),
+  );
 });
 
 afterEach(() => {
-  vi.stubGlobal("process", { env: originalEnv });
+  vi.stubGlobal("process", originalProcess);
   vi.resetModules();
 });
 
@@ -63,11 +72,7 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should throw MissingCredentialsError for OpenAI without OPENAI_API_KEY", () => {
-    vi.stubGlobal("process", {
-      env: {
-        // Missing OPENAI_API_KEY
-      },
-    });
+    vi.stubGlobal("process", processWithEnv({}));
 
     expect(() => createEmbeddingModel("text-embedding-3-small", runtimeConfig)).toThrow(
       MissingCredentialsError,
@@ -126,11 +131,7 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should throw MissingCredentialsError for Vertex AI without GOOGLE_APPLICATION_CREDENTIALS", () => {
-    vi.stubGlobal("process", {
-      env: {
-        // Missing GOOGLE_APPLICATION_CREDENTIALS
-      },
-    });
+    vi.stubGlobal("process", processWithEnv({}));
 
     expect(() =>
       createEmbeddingModel("vertex:text-embedding-004", runtimeConfig),
@@ -138,11 +139,7 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should throw MissingCredentialsError for Gemini without GOOGLE_API_KEY", () => {
-    vi.stubGlobal("process", {
-      env: {
-        // Missing GOOGLE_API_KEY
-      },
-    });
+    vi.stubGlobal("process", processWithEnv({}));
 
     expect(() =>
       createEmbeddingModel("gemini:gemini-embedding-exp-03-07", runtimeConfig),
@@ -197,14 +194,15 @@ describe("createEmbeddingModel", () => {
 
   test("should throw MissingCredentialsError for Azure OpenAI without required env vars", () => {
     // Override env to simulate missing Azure variables
-    vi.stubGlobal("process", {
-      env: {
+    vi.stubGlobal(
+      "process",
+      processWithEnv({
         AZURE_OPENAI_API_KEY: "test-azure-key",
         // Missing AZURE_OPENAI_API_INSTANCE_NAME
         AZURE_OPENAI_API_DEPLOYMENT_NAME: "test-deployment",
         AZURE_OPENAI_API_VERSION: "2024-02-01",
-      },
-    });
+      }),
+    );
 
     expect(() =>
       createEmbeddingModel("microsoft:text-embedding-ada-002", runtimeConfig),
@@ -213,11 +211,7 @@ describe("createEmbeddingModel", () => {
 
   test("should throw MissingCredentialsError for AWS Bedrock without required env vars", () => {
     // Override env to simulate missing AWS credentials
-    vi.stubGlobal("process", {
-      env: {
-        // Missing AWS credentials
-      },
-    });
+    vi.stubGlobal("process", processWithEnv({}));
 
     expect(() =>
       createEmbeddingModel("aws:amazon.titan-embed-text-v1", runtimeConfig),
@@ -225,12 +219,13 @@ describe("createEmbeddingModel", () => {
   });
 
   test("should create AWS Bedrock embeddings with only AWS_PROFILE set", () => {
-    vi.stubGlobal("process", {
-      env: {
+    vi.stubGlobal(
+      "process",
+      processWithEnv({
         AWS_PROFILE: "test-profile",
         BEDROCK_AWS_REGION: "us-east-1",
-      },
-    });
+      }),
+    );
     const model = createEmbeddingModel("aws:amazon.titan-embed-text-v1", runtimeConfig);
     expect(model).toBeInstanceOf(BedrockEmbeddings);
     expect(model).toMatchObject({
@@ -289,18 +284,20 @@ describe("createEmbeddingModel", () => {
     test("should store full-length non-zero vectors from a float-only provider", async () => {
       const nativeDimension = 1024;
       const { server, received } = startProvider(nativeDimension);
+      vi.stubGlobal("process", originalProcess);
       await new Promise<void>((resolve) =>
         server.listen(0, "127.0.0.1", () => resolve()),
       );
       const { port } = server.address() as AddressInfo;
 
       try {
-        vi.stubGlobal("process", {
-          env: {
+        vi.stubGlobal(
+          "process",
+          processWithEnv({
             OPENAI_API_KEY: "test-openai-key",
             OPENAI_API_BASE: `http://127.0.0.1:${port}/v1`,
-          },
-        });
+          }),
+        );
 
         const model = createEmbeddingModel("openai:mistral-embed", {
           vectorDimension: nativeDimension,
@@ -315,6 +312,7 @@ describe("createEmbeddingModel", () => {
         expect(vector.every((value) => value === 0)).toBe(false);
         expect(vector.filter((value) => value !== 0)).toHaveLength(nativeDimension);
       } finally {
+        vi.stubGlobal("process", originalProcess);
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
     });
@@ -327,7 +325,7 @@ describe("createEmbeddingModel", () => {
         OPENAI_API_BASE: '"http://localhost:11434/v1"',
       };
       sanitizeEnvironment(env);
-      vi.stubGlobal("process", { env });
+      vi.stubGlobal("process", processWithEnv(env));
 
       const model = createEmbeddingModel("openai:nomic-embed-text", runtimeConfig);
       expect(model).toBeInstanceOf(OpenAIEmbeddings);

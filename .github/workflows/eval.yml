@@ -39,14 +39,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v6
+      - uses: oven-sh/setup-bun@v2
         with:
-          node-version: "22.x"
-          cache: "npm"
+          bun-version: latest
 
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
-      - run: npm run build
+      - run: bun run build
 
       # Cache the indexed docs store so we don't re-scrape every run.
       # Bust the cache by bumping the `key` (e.g. when adding a library
@@ -69,22 +68,22 @@ jobs:
         if: steps.store-cache.outputs.cache-hit != 'true'
         run: |
           set -e
-          npx @arabold/docs-mcp-server@latest scrape react https://react.dev \
+          bunx @arabold/docs-mcp-server@latest scrape react https://react.dev \
             --exclude-pattern '/^https:\/\/react\.dev\/[a-z]{2}(-[a-z]+)?\//' \
             --max-pages 300
-          npx @arabold/docs-mcp-server@latest scrape python https://docs.python.org/3/ \
+          bunx @arabold/docs-mcp-server@latest scrape python https://docs.python.org/3/ \
             --exclude-pattern '/^https:\/\/docs\.python\.org\/3\/[a-z]{2}(-[a-z]+)?\//' \
             --max-pages 500
-          npx @arabold/docs-mcp-server@latest scrape fastapi https://fastapi.tiangolo.com/ \
+          bunx @arabold/docs-mcp-server@latest scrape fastapi https://fastapi.tiangolo.com/ \
             --exclude-pattern '/^https:\/\/fastapi\.tiangolo\.com\/[a-z]{2}(-[a-z]+)?\//' \
             --max-pages 200
-          npx @arabold/docs-mcp-server@latest scrape vite https://vitejs.dev/guide/ \
+          bunx @arabold/docs-mcp-server@latest scrape vite https://vitejs.dev/guide/ \
             --max-pages 200
-          npx @arabold/docs-mcp-server@latest scrape tailwindcss https://tailwindcss.com/docs \
+          bunx @arabold/docs-mcp-server@latest scrape tailwindcss https://tailwindcss.com/docs \
             --max-pages 300
 
       - name: Run benchmark
-        run: npm run evaluate:search
+        run: bun run evaluate:search
 
       # Always upload the summary, even when the previous step exits 1 on
       # regression — we want the data either way.

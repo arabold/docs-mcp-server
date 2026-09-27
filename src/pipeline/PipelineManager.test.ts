@@ -1,24 +1,7 @@
-import { PageOutcome } from "../scraper/types";
-
-// Patch: Move UUID mock to top-level before imports
-vi.mock("uuid", () => {
-  let uuidCall = 0;
-  const uuidSequence = [
-    "mock-uuid-1",
-    "mock-uuid-2",
-    "mock-uuid-3",
-    "mock-uuid-4",
-    "mock-uuid-5",
-    "mock-uuid-6",
-  ];
-  return {
-    v4: () => uuidSequence[uuidCall++ % uuidSequence.length],
-  };
-});
-
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { EventBusService } from "../events/EventBusService";
 import type { ScraperProgressEvent } from "../scraper/types";
+import { PageOutcome } from "../scraper/types";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
 import { ListJobsTool } from "../tools/ListJobsTool";
 import { type AppConfig, loadConfig } from "../utils/config";
@@ -174,6 +157,9 @@ describe("PipelineManager", () => {
     const options = { url: "http://a.com", library: "libA", version: "1.0" };
     const jobId = await manager.enqueueScrapeJob("libA", "1.0", options);
     const job = await manager.getJob(jobId);
+    expect(jobId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
     expect(job?.status).toBe(PipelineJobStatus.QUEUED);
     expect(job?.library).toBe("libA");
     expect(job?.sourceUrl).toBe("http://a.com");

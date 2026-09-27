@@ -61,16 +61,16 @@ Tests in `test/*-live-e2e.test.ts` are excluded from the default test run becaus
 - May be rate-limited or blocked
 - Can fail due to external factors
 
-Run them manually when needed with `npm test:live`.
+Run them manually when needed with `bun run test:live`.
 
 ## Type Checking
 
 ```bash
 # Type check all code (src + tests)
-npm run typecheck
+bun run typecheck
 
 # Type check only production code (no tests)
-npm run typecheck:build
+bun run typecheck:build
 ```
 
 ## Configuration Files

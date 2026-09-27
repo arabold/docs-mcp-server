@@ -1,6 +1,6 @@
 /**
  * Script to create minimal test fixtures for Office documents.
- * Run with: npx vite-node test/fixtures/create-office-fixtures.ts
+ * Run with: bun test/fixtures/create-office-fixtures.ts
  */
 
 import { execSync } from "node:child_process";

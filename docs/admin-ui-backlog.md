@@ -69,7 +69,7 @@ real data for every feature that has a backing API today.
   derived `SseEventName`) from `src/events/types.ts` — existed only for the
   deleted SSE endpoint.
 - Added `.claude/launch.json` so run/preview tooling can boot the app
-  (`node dist/index.js web --port <port>`).
+  (`bun dist/index.js web --port <port>`).
 - Re-enabled the four temporarily-suppressed Biome rules and fixed the code:
   `SegmentedControl` renders a `<fieldset>`, the Libraries row is a real
   `<Link>`, header rows / search results use stable keys, and the chunk-explorer

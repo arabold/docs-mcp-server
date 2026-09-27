@@ -10,7 +10,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import path from "path";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
-import { config } from "dotenv";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
 import { createLocalDocumentManagement } from "../src/store";
 import {
@@ -21,9 +20,6 @@ import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
 import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
-
-// Load environment variables from .env file
-config();
 
 describe("Vector Search End-to-End Tests", () => {
   let docService: any;

@@ -1,3 +1,4 @@
+import type { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +9,7 @@ import { loadConfig, markVectorDimensionSource } from "../utils/config";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
 import { DimensionError, EmbeddingModelChangedError } from "./errors";
+import { getPragmaNumber, setPragma } from "./sqlite";
 import { VersionStatus } from "./types";
 
 const mockEmbeddingDimension = vi.hoisted(() => ({ value: 1536 }));
@@ -2703,11 +2705,6 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
 describe("DocumentStore - compaction", () => {
   let store: DocumentStore | undefined;
   let tempDir: string;
-  type TestDb = {
-    pragma(sql: string, options?: { simple?: boolean }): unknown;
-    exec(sql: string): unknown;
-  };
-
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-compact-"));
   });
@@ -2789,22 +2786,22 @@ describe("DocumentStore - compaction", () => {
     store = new DocumentStore(join(tempDir, "documents.db"), cfg);
     await store.initialize();
 
-    const db = (store as unknown as { db: TestDb }).db;
-    db.pragma("temp_store = MEMORY");
+    const db = (store as unknown as { db: Database }).db;
+    setPragma(db, "temp_store = MEMORY");
 
     const originalExec = db.exec.bind(db);
     let tempStoreDuringVacuum: number | undefined;
-    db.exec = (sql: string): unknown => {
+    db.exec = (sql: string): void => {
       if (sql === "VACUUM") {
-        tempStoreDuringVacuum = Number(db.pragma("temp_store", { simple: true }));
+        tempStoreDuringVacuum = getPragmaNumber(db, "temp_store");
       }
-      return originalExec(sql);
+      originalExec(sql);
     };
 
     await store.compact({ force: true });
 
     expect(tempStoreDuringVacuum).toBe(1);
-    expect(Number(db.pragma("temp_store", { simple: true }))).toBe(2);
+    expect(getPragmaNumber(db, "temp_store")).toBe(2);
   });
 });
 
@@ -3067,7 +3064,7 @@ describe("DocumentStore - concurrent writes to one identity", () => {
     //
     // It does not discriminate the in-transaction re-read that guards the
     // read-then-write window — reverting that still passes here, because
-    // better-sqlite3 transactions are synchronous and a writer that enters one
+    // Bun SQLite transactions are synchronous and a writer that enters one
     // completes before the other starts. The re-read is justified by reasoning
     // rather than by this test.
     blockEmbeddingsUntilBothArrive(2);

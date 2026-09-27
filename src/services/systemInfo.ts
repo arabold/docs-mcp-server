@@ -10,6 +10,7 @@
  * separately; see {@link ./appRouter}.
  */
 import type { AppServerConfig } from "../app/AppServerConfig";
+import { getAppVersion } from "../utils/buildInfo";
 import type { AppConfig } from "../utils/config";
 
 /** Which top-level services this process was started with. */
@@ -78,7 +79,7 @@ export function buildSystemInfo(
   const authEnabled = Boolean(appConfig.auth.enabled);
 
   return {
-    version: __APP_VERSION__,
+    version: getAppVersion(),
     readOnly: Boolean(appConfig.app.readOnly),
     telemetryEnabled: Boolean(appConfig.app.telemetryEnabled),
     services: {

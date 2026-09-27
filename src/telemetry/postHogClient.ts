@@ -5,6 +5,7 @@
  */
 
 import { PostHog } from "posthog-node";
+import { getPostHogApiKey } from "../utils/buildInfo";
 import { logger } from "../utils/logger";
 
 /**
@@ -111,14 +112,15 @@ export class PostHogClient {
       return; // Early return if analytics is disabled
     }
 
-    if (!__POSTHOG_API_KEY__) {
+    const apiKey = getPostHogApiKey();
+    if (!apiKey) {
       logger.debug("PostHog API key not provided");
       this.enabled = false;
       return;
     }
 
     try {
-      this.client = new PostHog(__POSTHOG_API_KEY__, {
+      this.client = new PostHog(apiKey, {
         host: PostHogClient.CONFIG.host,
         flushAt: PostHogClient.CONFIG.flushAt,
         flushInterval: PostHogClient.CONFIG.flushInterval,

@@ -9,6 +9,19 @@ import { resolveStorePath } from "../utils/paths";
 import { createCli } from "./index";
 import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
 
+const originalProcess = process;
+
+function processWithTTY(isTTY: boolean): NodeJS.Process {
+  return new Proxy(originalProcess, {
+    get(target, property) {
+      if (property === "stdin" || property === "stdout") {
+        return { isTTY };
+      }
+      return Reflect.get(target, property, target);
+    },
+  });
+}
+
 // Mocks for execution tests will be defined below in dedicated describe block
 
 // Mock CLI utils early to prevent side effects (like Playwright installation)
@@ -310,22 +323,14 @@ describe("CLI Validation Logic", () => {
 
     it("should auto-detect stdio when no TTY", () => {
       // Mock no TTY environment (like CI/CD or VS Code)
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: { isTTY: false },
-        stdout: { isTTY: false },
-      });
+      vi.stubGlobal("process", processWithTTY(false));
 
       expect(resolveProtocol("auto")).toBe("stdio");
     });
 
     it("should auto-detect http when TTY is available", () => {
       // Mock TTY environment (like terminal)
-      vi.stubGlobal("process", {
-        ...process,
-        stdin: { isTTY: true },
-        stdout: { isTTY: true },
-      });
+      vi.stubGlobal("process", processWithTTY(true));
 
       expect(resolveProtocol("auto")).toBe("http");
     });
