@@ -14,6 +14,7 @@ import { ScraperRegistry, ScraperService } from "../scraper";
 import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
+import { escapeControlCharacters } from "../store/errors";
 import {
   normalizeLibraryName,
   normalizeVersionLabel,
@@ -356,11 +357,13 @@ export class PipelineManager implements IPipeline {
 
     try {
       // Look the version up without creating it: refreshing an unknown library
-      // or version fails with a not-found error and leaves nothing behind.
-      const versionId = await this.store.requireVersionId({
+      // or version fails with a not-found error and leaves nothing behind. From
+      // here on, the library is named as it is stored.
+      const { versionId, library: displayName } = await this.store.requireVersion({
         library,
         version: normalizedVersion,
       });
+      const label = `${escapeControlCharacters(displayName)}@${normalizedVersion || "latest"}`;
 
       // Check the version's status to detect incomplete scrapes
       const versionInfo = await this.store.getVersionById(versionId);
@@ -378,9 +381,9 @@ export class PipelineManager implements IPipeline {
       // or failed. In this case, perform a full re-scrape instead of a refresh.
       if (versionInfo && versionInfo.status !== VersionStatus.COMPLETED) {
         logger.info(
-          `⚠️  Version ${library}@${normalizedVersion || "latest"} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
+          `⚠️  Version ${label} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
         );
-        return this.enqueueJobWithStoredOptions(library, normalizedVersion, options);
+        return this.enqueueJobWithStoredOptions(displayName, normalizedVersion, options);
       }
 
       // Get all pages for this version with their ETags and depths
@@ -395,13 +398,11 @@ export class PipelineManager implements IPipeline {
 
       if (pages.length === 0) {
         throw new Error(
-          `No pages found for ${library}@${normalizedVersion || "latest"}. Use scrape_docs to index it first.`,
+          `No pages found for ${label}. Use scrape_docs to index it first.`,
         );
       }
 
-      logger.info(
-        `🔄 Preparing refresh job for ${library}@${normalizedVersion || "latest"} with ${pages.length} page(s)`,
-      );
+      logger.info(`🔄 Preparing refresh job for ${label} with ${pages.length} page(s)`);
 
       // Build initialQueue from pages with original depth values.
       //
@@ -427,7 +428,7 @@ export class PipelineManager implements IPipeline {
       // Build scraper options with initialQueue and isRefresh flag
       const scraperOptions = {
         url: storedOptions?.sourceUrl || pages[0].url, // Required but not used when initialQueue is set
-        library,
+        library: displayName,
         version: normalizedVersion,
         ...(storedOptions?.options || {}), // Include stored options if available (spread first)
         ...(options?.preserveHashes !== undefined
@@ -439,12 +440,10 @@ export class PipelineManager implements IPipeline {
       };
 
       // Enqueue as a standard scrape job with the initialQueue
-      logger.info(
-        `📝 Enqueueing refresh job for ${library}@${normalizedVersion || "latest"}`,
-      );
+      logger.info(`📝 Enqueueing refresh job for ${label}`);
       // A refresh acts on an existing version by definition, so it replaces
       // rather than being rejected; isRefresh keeps the worker from clearing it.
-      return this.enqueueScrapeJob(library, normalizedVersion, scraperOptions, {
+      return this.enqueueScrapeJob(displayName, normalizedVersion, scraperOptions, {
         onExisting: "replace",
       });
     } catch (error) {
@@ -466,16 +465,15 @@ export class PipelineManager implements IPipeline {
 
     try {
       // Get the version ID to retrieve stored options, without creating it
-      const versionId = await this.store.requireVersionId({
+      const { versionId, library: displayName } = await this.store.requireVersion({
         library,
         version: normalizedVersion,
       });
+      const label = `${escapeControlCharacters(displayName)}@${normalizedVersion || "latest"}`;
       const stored = await this.store.getScraperOptions(versionId);
 
       if (!stored) {
-        throw new Error(
-          `No stored scraper options found for ${library}@${normalizedVersion || "latest"}`,
-        );
+        throw new Error(`No stored scraper options found for ${label}`);
       }
 
       const storedOptions = stored.options;
@@ -483,7 +481,7 @@ export class PipelineManager implements IPipeline {
       // Reconstruct complete scraper options
       const completeOptions: ScraperOptions = {
         url: stored.sourceUrl,
-        library,
+        library: displayName,
         version: normalizedVersion,
         ...storedOptions,
         ...(options?.preserveHashes !== undefined
@@ -491,12 +489,10 @@ export class PipelineManager implements IPipeline {
           : {}),
       };
 
-      logger.info(
-        `🔄 Re-indexing ${library}@${normalizedVersion || "latest"} with stored options from ${stored.sourceUrl}`,
-      );
+      logger.info(`🔄 Re-indexing ${label} with stored options from ${stored.sourceUrl}`);
 
       // Re-indexes an existing version (refresh fall-back, recovery), so it replaces
-      return this.enqueueScrapeJob(library, normalizedVersion, completeOptions, {
+      return this.enqueueScrapeJob(displayName, normalizedVersion, completeOptions, {
         onExisting: "replace",
       });
     } catch (error) {

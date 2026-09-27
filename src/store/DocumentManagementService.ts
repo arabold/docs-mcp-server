@@ -210,14 +210,14 @@ export class DocumentManagementService {
   /**
    * Looks up a version that must already exist, without creating anything.
    *
-   * @returns The version id.
+   * @returns The version id and the library's stored display name.
    * @throws {LibraryNotFoundInStoreError} When the library does not exist (with suggestions).
    * @throws {VersionNotFoundInStoreError} When the library exists but the version does not.
    */
-  async requireVersionId(ref: VersionRef): Promise<number> {
-    const versionId = await this.findVersionId(ref);
-    if (versionId !== null) {
-      return versionId;
+  async requireVersion(ref: VersionRef): Promise<{ versionId: number; library: string }> {
+    const found = await this.store.findVersion(ref.library, ref.version);
+    if (found) {
+      return found;
     }
     throw await this.versionNotFound(ref.library, normalizeVersionLabel(ref.version));
   }

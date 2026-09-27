@@ -22,6 +22,7 @@ import {
   EmbeddingModelChangedError,
   InvalidLibraryNameError,
   LibraryAlreadyExistsError,
+  quoteName,
   StoreError,
   VersionAlreadyExistsError,
 } from "./errors";
@@ -517,7 +518,7 @@ export class DocumentStore {
         "SELECT COUNT(*) as count FROM versions WHERE library_id = ?",
       ),
       getVersionId: this.db.prepare<[string, string]>(
-        `SELECT v.id, v.library_id FROM versions v
+        `SELECT v.id, v.library_id, l.display_name FROM versions v
          JOIN libraries l ON v.library_id = l.id
          WHERE l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')`,
       ),
@@ -1375,7 +1376,7 @@ export class DocumentStore {
       ) as { id: number } | undefined;
       if (!versionIdRow) {
         throw new StoreError(
-          `Failed to resolve version_id for library: ${JSON.stringify(library)}, version: ${JSON.stringify(version)}`,
+          `Failed to resolve version_id for library: ${quoteName(library)}, version: ${quoteName(version)}`,
         );
       }
       return { versionId: versionIdRow.id, library: libraryRow.displayName };
@@ -1391,11 +1392,26 @@ export class DocumentStore {
    * @returns The version id, or `null` when the library or version does not exist.
    */
   async findVersionId(library: string, version: string): Promise<number | null> {
+    return (await this.findVersion(library, version))?.versionId ?? null;
+  }
+
+  /**
+   * Looks up a version without creating anything, with its library's display name.
+   *
+   * @param library Library name in any casing or padding.
+   * @param version Version label; empty for unversioned documentation.
+   * @returns The version id and the library's stored display name, or `null`
+   *   when the library or version does not exist.
+   */
+  async findVersion(
+    library: string,
+    version: string,
+  ): Promise<{ versionId: number; library: string } | null> {
     const row = this.statements.getVersionId.get(
       normalizeLibraryName(library),
       normalizeVersionLabel(version),
-    ) as { id: number } | undefined;
-    return row?.id ?? null;
+    ) as { id: number; display_name: string } | undefined;
+    return row ? { versionId: row.id, library: row.display_name } : null;
   }
 
   /**

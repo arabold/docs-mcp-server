@@ -155,8 +155,11 @@ A failure at any point rolls back the whole operation, so a versionless library 
 behind.
 
 The migration also re-keys padded legacy names (see Context): `name` becomes the name with surrounding
-spaces, tabs and line breaks removed, unless that trimmed key already exists. The display name is filled
-from the trimmed value.
+whitespace removed, unless that trimmed key already exists. The display name is filled from the trimmed
+value. "Whitespace" is exactly the set `String.prototype.trim()` removes, spelled out as code points in
+a temp table the migration's `trim()` calls share (tab, LF, VT, FF, CR, space, NBSP, U+1680,
+U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, BOM). A narrower SQL set would leave keys that
+the lookup key's trim still reaches past, so they would stay unreachable.
 
 There is no `CHECK (display_name <> '')`. Older releases accepted an empty name through MCP (`z.string()
 .trim()` without a length check), so such a row would abort the migration and block startup.
@@ -279,10 +282,17 @@ The store raises typed errors, and each one's message is written for the surface
 | `LibraryAlreadyExistsError` | "Add library" only | `Library "React" already exists. Open it to add a version.` |
 | `InvalidLibraryNameError` | any creation | `Invalid library name "React\n": contains a control character.` |
 
-Every library name in these messages is written with `JSON.stringify()`, which also supplies the quotes.
-A rejected name can contain tab, newline, ESC or other Cc characters by definition, and legacy display
-names were never validated. Escaping keeps those bytes out of CLI output, logs, and MCP and HTTP error
-bodies, so they cannot inject terminal control sequences or forge log lines.
+Every library name, version or suggestion that an error repeats goes through one of two helpers in
+`src/store/errors.ts`:
+- `quoteName()` is used by the three new errors. It adds quotes, and escapes quotes, backslashes and
+  control characters.
+- `escapeControlCharacters()` is used by the existing not-found errors and the refresh errors, whose
+  message formats are unchanged.
+
+Both escape every Unicode Cc character. `JSON.stringify()` alone is not enough: it escapes C0 controls
+but leaves DEL and C1 controls such as U+0085 raw. A rejected name can contain these characters by
+definition, and legacy display names were never validated. Escaping keeps them out of CLI output, logs,
+and MCP and HTTP error bodies, so they cannot inject terminal control sequences or forge log lines.
 
 The pipeline tRPC router maps errors to `TRPCError` codes and keeps each message:
 - `CONFLICT` for the two already-exists errors;
@@ -490,17 +500,18 @@ constraint (D3). Mark the steps as two `@migration-step` blocks.
 **Block "rebuild libraries"**
 1. `DELETE FROM libraries WHERE id NOT IN (SELECT library_id FROM versions)`. This removes the
    versionless leftovers. Nothing references them, so no foreign key is affected.
-2. Re-key padded legacy names: set `name = trim(name, char(32, 9, 10, 13))` where that changes the name,
-   unless the trimmed key already exists. Foreign keys reference `id`, so none is affected.
+2. Re-key padded legacy names: set `name` to its value trimmed of the `String.prototype.trim()` whitespace
+   set (D3), where that changes the name, unless the trimmed key already exists. Foreign keys reference
+   `id`, so none is affected.
 3. `PRAGMA defer_foreign_keys = ON`.
 4. Copy `id`, `name` and `created_at` into a temp table, and capture the current `sqlite_sequence` value
    for `libraries`.
 5. `DROP TABLE libraries`. This also drops `idx_libraries_lower_name`.
 6. `CREATE TABLE libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
    display_name TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`.
-7. Re-insert every row with its original `id` and `created_at`. Set `display_name` to the name with
-   surrounding spaces, tabs and line breaks removed. After step 2 that equals `name` for every row
-   except a padded key that collided.
+7. Re-insert every row with its original `id` and `created_at`. Set `display_name` to the name trimmed
+   of the same whitespace set. After step 2 that equals `name` for every row except a padded key that
+   collided.
 8. If a sequence value was captured in step 4, write it back to `sqlite_sequence`, inserting the row if
    necessary. The rebuild otherwise resets the value to `MAX(id)`, and AUTOINCREMENT would then reuse
    the ids of deleted libraries.

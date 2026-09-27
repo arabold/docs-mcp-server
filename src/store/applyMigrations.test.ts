@@ -1267,6 +1267,8 @@ describe("Database Migrations", () => {
       seedLibrary(" react ", ["1.0.0"]);
       seedLibrary(" vue ", ["1.0.0"]);
       seedLibrary("vue", ["2.0.0"]);
+      // Padding the lookup key also trims: NBSP, an ideographic space, a BOM
+      seedLibrary("\u00a0svelte\u3000\ufeff", ["1.0.0"]);
 
       await expect(applyMigrations(db)).resolves.toBeUndefined();
 
@@ -1274,6 +1276,7 @@ describe("Database Migrations", () => {
         ["react", "react"],
         [" vue ", "vue"],
         ["vue", "vue"],
+        ["svelte", "svelte"],
       ]);
     });
   });
