@@ -43,6 +43,8 @@ const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
 const ARBITRARY_UID = process.env.CONTAINER_ARBITRARY_UID ??
   (CONTAINER_ENGINE === "podman" ? "12345" : "1000710000");
 const ARBITRARY_GID = process.env.CONTAINER_ARBITRARY_GID ?? ARBITRARY_UID;
+const REPLACEMENT_UID = CONTAINER_ENGINE === "podman" ? "12346" : "1000710001";
+const REPLACEMENT_GID = REPLACEMENT_UID;
 
 interface DockerResult {
   status: number | null;
@@ -258,6 +260,64 @@ describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => 
       ]);
       expect(r.status).not.toBe(0);
       expect(r.stdout + r.stderr).toMatch(/EACCES|permission denied/i);
+    } finally {
+      await docker(["volume", "rm", "-f", volumeName]);
+    }
+  });
+
+  it("reopens a persisted SQLite store after both uid and gid change", async () => {
+    const volumeName = `docs-mcp-identity-change-${randomUUID()}`;
+    try {
+      const created = await docker(["volume", "create", volumeName]);
+      expect(created.status, created.stderr).toBe(0);
+
+      const initialized = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${ARBITRARY_UID}:${ARBITRARY_GID}`,
+        "-v",
+        `${volumeName}:/data`,
+        "--entrypoint",
+        "node",
+        IMAGE_TAG,
+        "-e",
+        [
+          'const fs = require("node:fs");',
+          'const Database = require("better-sqlite3");',
+          'new Database("/data/documents.db").close();',
+          'console.log((fs.statSync("/data/documents.db").mode & 0o777).toString(8));',
+        ].join(""),
+      ]);
+      expect(initialized.status, initialized.stderr).toBe(0);
+      expect(initialized.stdout.trim()).toBe("644");
+
+      const migrated = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${REPLACEMENT_UID}:${REPLACEMENT_GID}`,
+        "-v",
+        `${volumeName}:/data`,
+        IMAGE_TAG,
+        "--version",
+      ]);
+      expect(migrated.status, migrated.stderr).toBe(0);
+
+      const reopened = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${REPLACEMENT_UID}:${REPLACEMENT_GID}`,
+        "-v",
+        `${volumeName}:/data`,
+        "--entrypoint",
+        "node",
+        IMAGE_TAG,
+        "-e",
+        'const Database = require("better-sqlite3"); const db = new Database("/data/documents.db"); db.exec("CREATE TABLE identity_test (id INTEGER)"); db.close();',
+      ]);
+      expect(reopened.status, reopened.stderr).toBe(0);
     } finally {
       await docker(["volume", "rm", "-f", volumeName]);
     }

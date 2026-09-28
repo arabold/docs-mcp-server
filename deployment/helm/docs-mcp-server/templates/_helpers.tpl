@@ -28,15 +28,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- default (printf "%s-data" (include "docs-mcp-server.fullname" .)) .Values.dataPersistence.existingClaim }}
 {{- end }}
 {{- define "docs-mcp-server.podSecurityContext" -}}
-{{- $context := deepCopy .Values.podSecurityContext -}}
-{{- if not .Values.openshift.enabled -}}
-{{- range $key := list "runAsUser" "runAsGroup" "fsGroup" -}}
-{{- if not (hasKey $context $key) -}}
-{{- $_ := set $context $key 10001 -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- toYaml $context -}}
+{{- toYaml .Values.podSecurityContext -}}
 {{- end }}
 {{- define "docs-mcp-server.configClaimName" -}}
 {{- default (printf "%s-config" (include "docs-mcp-server.fullname" .)) .Values.configPersistence.existingClaim }}

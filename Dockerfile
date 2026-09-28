@@ -59,6 +59,7 @@ COPY db db
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/dist ./dist
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docs-mcp-entrypoint
 
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data
@@ -117,4 +118,4 @@ RUN test "$(id -u)" = 10001 \
   && test ! -w /app/node_modules
 
 # Set the command to run the application
-ENTRYPOINT ["sh", "-c", "umask 0000; exec node --enable-source-maps /app/dist/index.js \"$@\"", "--"]
+ENTRYPOINT ["/usr/local/bin/docs-mcp-entrypoint"]

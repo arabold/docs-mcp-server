@@ -51,18 +51,15 @@ helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
   --namespace docs-mcp --create-namespace
 ```
 
-On ordinary Kubernetes the chart defaults to `runAsUser: 10001`,
-`runAsGroup: 10001`, and `fsGroup: 10001` for writable volumes. The root
-filesystem is read-only; the chart mounts writable storage at `/data`,
-`/config`, `/tmp`, and `/app/.runtime`.
-On OpenShift, set `openshift.enabled: true` to omit these identity defaults and
-let the Security Context Constraint assign the namespace's permitted UID and group.
+The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup`. Kubernetes uses
+the image's default `10001:10001` identity, while an OpenShift Security Context
+Constraint can assign the namespace's permitted UID and groups without a separate
+chart mode. The root filesystem is read-only; the chart mounts writable storage
+at `/data`, `/config`, `/tmp`, and `/app/.runtime`.
 
 Enable an OpenShift Route with a values file:
 
 ```yaml
-openshift:
-  enabled: true
 route:
   enabled: true
   host: docs-mcp.apps.example.com

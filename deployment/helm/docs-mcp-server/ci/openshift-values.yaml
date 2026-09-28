@@ -1,5 +1,3 @@
-openshift:
-  enabled: true
 route:
   enabled: true
   tls:

@@ -24,12 +24,6 @@
     "serviceAccount": { "$ref": "#/definitions/serviceAccount" },
     "podAnnotations": { "type": "object" },
     "podLabels": { "type": "object" },
-    "openshift": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["enabled"],
-      "properties": { "enabled": { "type": "boolean" } }
-    },
     "podSecurityContext": { "type": "object" },
     "containerSecurityContext": { "type": "object" },
     "service": { "$ref": "#/definitions/service" },

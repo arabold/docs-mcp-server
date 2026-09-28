@@ -39,7 +39,7 @@ configPersistence:
   existingClaim: docs-mcp-config
 ```
 
-Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. On ordinary Kubernetes the chart defaults to `runAsUser: 10001`, `runAsGroup: 10001`, and `fsGroup: 10001` so the dedicated runtime user can write supported volumes. Override `podSecurityContext.fsGroup` if the storage driver or cluster policy requires another group. Storage drivers that do not support ownership management need pre-provisioned permissions.
+Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup`: Kubernetes uses the image's `10001:10001` identity, while admission controllers may assign another identity. Set `podSecurityContext.fsGroup` only when the storage driver or cluster policy requires it. Storage drivers that do not support ownership management need pre-provisioned permissions.
 
 The unified server runs one embedded worker against a SQLite store. The chart
 requires `replicaCount: 1` and uses `Recreate` upgrades so two workers do not
@@ -48,11 +48,10 @@ Upgrades briefly interrupt service.
 
 ## OpenShift
 
-Set `openshift.enabled: true` when installing on OpenShift. This omits the
-Kubernetes defaults for `runAsUser`, `runAsGroup`, and `fsGroup`, allowing the SCC
-to assign values from the namespace's permitted ranges.
-Explicit `podSecurityContext` fields are still honored, so omit fixed IDs from
-OpenShift values unless your SCC permits them.
+The same chart values run on Kubernetes and OpenShift. The chart leaves
+`runAsUser`, `runAsGroup`, and `fsGroup` unset, allowing an OpenShift SCC to assign
+values from the namespace's permitted ranges. Explicit `podSecurityContext`
+fields are honored, so omit fixed IDs unless the cluster policy permits them.
 
 The image uses a dedicated `USER 10001:10001` runtime account, following Litegate's
 OpenShift-compatible ownership approach. Only the runtime paths are writable by
@@ -119,6 +118,17 @@ permissions-ok
 http=200
 ```
 
+The automated Podman suite also verifies the persisted SQLite failure mode: it
+creates `/data/documents.db` as one arbitrary UID/GID, reuses the same named
+volume as a different arbitrary UID/GID, and confirms that the second identity
+can reopen and modify the database:
+
+```powershell
+$env:CONTAINER_ENGINE = "podman"
+$env:DOCKER_IMAGE_TAG = "ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0"
+npm run test:docker
+```
+
 Remove the disposable pod after testing:
 
 ```powershell
@@ -128,8 +138,6 @@ podman machine ssh "sudo podman pod rm -f docs-mcp-highuid"
 Enable an OpenShift Route with:
 
 ```yaml
-openshift:
-  enabled: true
 route:
   enabled: true
   host: docs-mcp.apps.example.com

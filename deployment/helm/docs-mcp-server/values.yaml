@@ -21,13 +21,8 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
-# Enable on OpenShift to let the SCC assign uid/gid/fsGroup from its ranges.
-# Ordinary Kubernetes defaults to uid/gid/fsGroup 10001.
-openshift:
-  enabled: false
-
-# Explicit values override the Kubernetes defaults. OpenShift mode leaves
-# identity fields unset so its SCC can assign an arbitrary non-root identity.
+# Identity fields are unset by default. Kubernetes uses the image's numeric
+# non-root user, while platforms such as OpenShift may assign another identity.
 podSecurityContext:
   seccompProfile:
     type: RuntimeDefault

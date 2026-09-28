@@ -24,6 +24,10 @@ The container SHALL keep application code non-writable while allowing an arbitra
 - **WHEN** writable volumes grant the runtime identity access to the data and configuration mount roots
 - **THEN** the application persists its database and configuration on those volumes
 
+#### Scenario: Runtime identity changes
+- **WHEN** a replacement container receives a different non-root UID and GID while reusing readable runtime data
+- **THEN** the entrypoint makes runtime files writable by the new identity before the application opens them
+
 #### Scenario: Incompatible bind mount permissions
 - **WHEN** a mounted data or configuration path denies access to the runtime identity and its groups
 - **THEN** the application fails clearly instead of silently persisting outside the configured mount
