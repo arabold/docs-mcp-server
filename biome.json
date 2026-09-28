@@ -27,6 +27,23 @@
   },
   "overrides": [
     {
+      "includes": ["**/src/web/client/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": {
+                  "crypto": "crypto.randomUUID and crypto.subtle exist only in secure contexts, and the web portal is often served over plain HTTP on a LAN address, where they throw."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["**/src/**/*.test.ts", "**/src/**/*.test.tsx"],
       "linter": {
         "rules": {

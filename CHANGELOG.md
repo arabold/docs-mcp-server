@@ -1,3 +1,10 @@
+## [3.2.1](https://github.com/arabold/docs-mcp-server/compare/v3.2.0...v3.2.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **web:** keep add header working when the portal is served over plain http ([3d45d67](https://github.com/arabold/docs-mcp-server/commit/3d45d672984229997e328eeb35b3e1b4c71428b8)), closes [#514](https://github.com/arabold/docs-mcp-server/issues/514)
+
 # [3.2.0](https://github.com/arabold/docs-mcp-server/compare/v3.1.0...v3.2.0) (2026-09-21)
 
 
