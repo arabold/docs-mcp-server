@@ -310,12 +310,18 @@ HTMX and AlpineJS integration uses custom events to decouple component interacti
 
 ### MCP Protocol Integration
 
-The MCP server exposes tools as protocol-compliant endpoints. Multiple transports are supported:
+The MCP server exposes tools as protocol-compliant endpoints, built on the MCP TypeScript SDK v2. Two transports are supported:
 
-- **stdio transport**: For command-line integration and AI tools
-- **HTTP transport**: Provides `/mcp` (Streamable HTTP) and `/sse` (Server-Sent Events) endpoints
+- **stdio transport**: For command-line integration and AI tools. Serves clients on protocol revision 2026-07-28 and on earlier, handshake-based revisions.
+- **HTTP transport**: Streamable HTTP at `/mcp`, for protocol revision 2026-07-28 and, statelessly, for clients on earlier handshake-based revisions. The SDK's per-request handler is mounted on the application's Fastify route. Before it, the route checks the browser `Origin`, answers CORS preflights and non-POST methods, and verifies bearer tokens when authentication is enabled.
+- **Host check**: a global hook refuses (`403`) every request and WebSocket upgrade whose `Host` names an unknown host, which stops DNS rebinding. Accepted are IP literals, `localhost`, single-label names, the public URL's host and the hosts of `server.allowedOrigins` (`createHostPolicy` in `src/app/originPolicy.ts`).
+- **Deprecated HTTP+SSE transport**: `GET /sse` and `POST /messages`, registered only while authentication is off, for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
 
 Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP transport for interactive terminals (has TTY).
+
+When authentication is enabled, the HTTP transport acts as an OAuth 2.0 resource server. It publishes protected resource metadata and accepts only JWTs the configured identity provider issued for its public URL; see [Authentication](docs/infrastructure/authentication.md).
+
+All advertised URLs derive from one resolved public location (`server.publicUrl`). The server answers every route with or without that URL's path prefix, so it runs behind reverse proxies that strip the prefix or forward it; see [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md).
 
 Available MCP tools mirror CLI functionality: document scraping, search, library management, and job control. Tools maintain identical interfaces across CLI and MCP access methods.
 
@@ -395,7 +401,8 @@ Detailed documentation for specific architectural areas:
 ### Infrastructure
 
 - [Deployment Modes](docs/infrastructure/deployment-modes.md) - Protocol detection and server modes
-- [Authentication](docs/infrastructure/authentication.md) - OAuth2 authentication and security
+- [Authentication](docs/infrastructure/authentication.md) - OAuth 2.0 resource-server authentication for the MCP endpoint
+- [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md) - Serving under a public URL and path behind nginx or Traefik
 - [Telemetry](docs/infrastructure/telemetry.md) - Privacy-first telemetry architecture
 
 ## Benchmarking

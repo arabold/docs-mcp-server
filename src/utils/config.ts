@@ -5,7 +5,7 @@ import yaml from "yaml";
 import { z } from "zod";
 import { normalizeEnvValue } from "./env";
 import { logger } from "./logger";
-import { normalizePublicOrigin } from "./serverOrigin";
+import { normalizePublicOrigin, normalizePublicUrl } from "./serverOrigin";
 
 const managedConfigVectorDimensionOmissionMarker =
   "docs-mcp-server-managed-vector-dimension-omitted";
@@ -53,25 +53,58 @@ const envBoolean = z
   })
   .pipe(z.boolean());
 
-const publicOriginSchema = z
-  .preprocess((value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }, z.string().optional())
-  .transform((value, ctx) => {
+/** Report a normalizer's error as the validation issue of the setting. */
+function addNormalizationIssue(ctx: z.RefinementCtx, error: unknown): void {
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
+
+/**
+ * An optional string setting that `normalize` validates and canonicalizes.
+ * The normalizer treats empty values as absent and throws a message naming
+ * the setting for invalid ones.
+ */
+function normalizedStringSchema<T>(normalize: (value: string | undefined) => T) {
+  return z
+    .string()
+    .optional()
+    .transform((value, ctx) => {
+      try {
+        return normalize(value);
+      } catch (error) {
+        addNormalizationIssue(ctx, error);
+        return z.NEVER;
+      }
+    });
+}
+
+const publicOriginSchema = normalizedStringSchema((value) =>
+  normalizePublicOrigin(value),
+);
+const publicUrlSchema = normalizedStringSchema(normalizePublicUrl);
+
+/**
+ * Browser origins allowed to call the MCP endpoint in addition to loopback and
+ * the public URL's origin. Each entry must be an exact origin
+ * (`scheme://host[:port]`); a trailing slash is ignored.
+ */
+const allowedOriginsSchema = envStringArray.transform((values, ctx) => {
+  const origins: string[] = [];
+  for (const value of values) {
     try {
-      return normalizePublicOrigin(value);
+      const origin = normalizePublicOrigin(value, "server.allowedOrigins");
+      if (origin) {
+        origins.push(origin);
+      }
     } catch (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      addNormalizationIssue(ctx, error);
       return z.NEVER;
     }
-  });
+  }
+  return origins;
+});
 
 // --- Default Global Configuration ---
 
@@ -85,7 +118,9 @@ export const DEFAULT_CONFIG = {
   server: {
     protocol: "auto",
     host: "127.0.0.1",
+    publicUrl: undefined as string | undefined,
     publicOrigin: undefined as string | undefined,
+    allowedOrigins: [] as string[],
     ports: {
       default: 6280,
       worker: 8080,
@@ -193,7 +228,9 @@ export const AppConfigSchema = z.object({
     .object({
       protocol: z.string().default(DEFAULT_CONFIG.server.protocol),
       host: z.string().default(DEFAULT_CONFIG.server.host),
+      publicUrl: publicUrlSchema.optional(),
       publicOrigin: publicOriginSchema.optional(),
+      allowedOrigins: allowedOriginsSchema.default(DEFAULT_CONFIG.server.allowedOrigins),
       ports: z
         .object({
           default: z.coerce.number().int().default(DEFAULT_CONFIG.server.ports.default),
@@ -207,6 +244,7 @@ export const AppConfigSchema = z.object({
     .default({
       protocol: DEFAULT_CONFIG.server.protocol,
       host: DEFAULT_CONFIG.server.host,
+      allowedOrigins: DEFAULT_CONFIG.server.allowedOrigins,
       ports: DEFAULT_CONFIG.server.ports,
       heartbeatMs: DEFAULT_CONFIG.server.heartbeatMs,
     }),
@@ -466,6 +504,11 @@ const configMappings: ConfigMapping[] = [
   },
   { path: ["server", "host"], env: ["DOCS_MCP_HOST", "HOST"], cli: "host" },
   {
+    path: ["server", "publicUrl"],
+    env: ["DOCS_MCP_SERVER_PUBLIC_URL"],
+    cli: "publicUrl",
+  },
+  {
     path: ["server", "publicOrigin"],
     env: ["DOCS_MCP_SERVER_PUBLIC_ORIGIN"],
     cli: "publicOrigin",
@@ -488,6 +531,19 @@ const configMappings: ConfigMapping[] = [
   },
   // Add other mappings as needed for CLI/Env overrides
 ];
+
+/**
+ * CLI option keys (camelCase) that map onto a configuration setting.
+ *
+ * An option with one of these keys must not declare a yargs `default`: yargs
+ * would put that value into argv even when the flag is omitted, and it would
+ * then override the environment and the config file.
+ *
+ * @returns The mapped keys, e.g. `authEnabled`, `readOnly`, `protocol`.
+ */
+export function getConfigMappedCliKeys(): ReadonlySet<string> {
+  return new Set(configMappings.flatMap((mapping) => (mapping.cli ? [mapping.cli] : [])));
+}
 
 // --- Loader Logic ---
 
@@ -579,10 +635,14 @@ export function loadConfig(
     );
   }
 
-  if (hasParseIssueAtPath(parseResult.error, ["server", "publicOrigin"])) {
-    throw new Error(
-      `Invalid configuration for server.publicOrigin: ${parseResult.error.message}`,
-    );
+  // Invalid public-location settings are operator errors, not a corrupted
+  // file: fail loudly instead of quietly resetting to defaults below.
+  for (const setting of ["publicUrl", "publicOrigin", "allowedOrigins"]) {
+    if (hasParseIssueAtPath(parseResult.error, ["server", setting])) {
+      throw new Error(
+        `Invalid configuration for server.${setting}: ${parseResult.error.message}`,
+      );
+    }
   }
 
   // The file on disk is structurally wrong (e.g., array fields saved as

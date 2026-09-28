@@ -8,7 +8,7 @@ The system supports two deployment patterns with automatic protocol detection fo
 
 Single process containing all services on one port (default: 6280). This mode combines:
 
-- MCP server accessible via `/mcp` and `/sse` endpoints
+- MCP server accessible via the `/mcp` endpoint (Streamable HTTP, protocol revision 2026-07-28)
 - Web interface for job management
 - Embedded worker for document processing
 - API (tRPC over HTTP) for programmatic access
@@ -73,7 +73,7 @@ if (!process.stdin.isTTY && !process.stdout.isTTY) {
 
 ### HTTP Mode
 
-- Server-Sent Events transport for MCP
+- Streamable HTTP transport for MCP at `/mcp` (protocol revision 2026-07-28)
 - Full web interface available
 - API accessible at `/api`
 - Suitable for browser access
@@ -109,6 +109,10 @@ Job recovery behavior depends on deployment mode:
 - Safe for concurrent CLI usage
 
 ## Container Deployment
+
+Behind a reverse proxy, set `--public-url` (or `DOCS_MCP_SERVER_PUBLIC_URL`) to the URL clients use, including any path such as `https://example.com/docs`. See [Reverse Proxy Deployment](./reverse-proxy.md).
+
+The server answers to IP addresses, `localhost` and single-label names such as a Compose service name. If clients reach the container under a dotted name, such as `nas.local`, set the public URL to it. See [Host Names the Server Answers To](../setup/configuration.md#host-names-the-server-answers-to).
 
 ### Single Container
 

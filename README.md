@@ -94,14 +94,14 @@ npx @arabold/docs-mcp-server@latest
 {
   "mcpServers": {
     "docs-mcp-server": {
-      "type": "sse",
-      "url": "http://localhost:6280/sse"
+      "type": "http",
+      "url": "http://localhost:6280/mcp"
     }
   }
 }
 ```
 
-See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo) and other setup options.
+The HTTP endpoint speaks MCP over Streamable HTTP, for protocol revision 2026-07-28 as well as earlier revisions. See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo) and other setup options, and **[Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md)** to serve it under a path such as `https://example.com/docs`.
 
 `scrape_docs` also accepts `preserveHashes: true` for documentation sites that use hash-based client-side routing.
 Use it only for hash-routed SPAs; normal sites typically use hash fragments for in-page anchors.
