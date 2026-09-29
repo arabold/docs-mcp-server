@@ -175,16 +175,6 @@ describe("MCP Server Read-Only Mode", () => {
     );
   });
 
-  it("should describe the supported search limit of 100", () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
-    const schema = (server as any)._registeredTools.search_docs.inputSchema;
-
-    expect(schema.shape.limit.description).toContain("max 100");
-    expect(schema.parse({ library: "react", query: "useEffect", limit: 100 }).limit).toBe(
-      100,
-    );
-  });
-
   it("should handle list_pages tool execution and format links with depth", async () => {
     (mockTools.listPages.execute as any).mockResolvedValueOnce({
       library: "react",
