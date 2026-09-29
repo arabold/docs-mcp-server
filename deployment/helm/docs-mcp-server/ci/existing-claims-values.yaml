@@ -1,0 +1,4 @@
+dataPersistence:
+  existingClaim: existing-data
+configPersistence:
+  existingClaim: existing-config
