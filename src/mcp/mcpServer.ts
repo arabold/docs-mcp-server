@@ -319,40 +319,44 @@ ${r.content}\n`,
   // Read page tool
   server.tool(
     "read_page",
-    "Read the full Markdown documentation of a specific page from a library without re-scraping the web.\n" +
-      "Call this with a page URL obtained from `search_docs` or `list_pages` to inspect complete implementations, type signatures, and code examples without token waste.",
+    "Read the full content of an indexed documentation page, for example a URL returned by `search_docs` or `list_pages`. " +
+      "Long pages are returned in parts; the response says how to continue.",
     {
-      library: z
-        .string()
-        .trim()
-        .describe("Library name (verify with `list_libraries` first)."),
+      library: z.string().trim().describe("Library name."),
       pathOrUrl: z
         .string()
         .trim()
         .min(1)
         .describe(
-          "Page URL or path (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+          "Page URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
         ),
       version: z
         .string()
         .trim()
         .optional()
         .describe("Library version (exact or X-Range, optional)."),
+      startChunk: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Chunk to start from, as given by a previous response (default 0)."),
       maxChars: z
         .number()
         .positive()
         .optional()
         .default(30000)
         .describe(
-          "Maximum characters to return (default 30000, covers ~95% of full guides while preventing context overflow).",
+          "Maximum characters to return (default 30000). Only whole chunks are returned, so a single longer chunk is returned on its own.",
         ),
     },
     {
-      title: "Read Full Documentation Page",
+      title: "Read Documentation Page",
       readOnlyHint: true,
       destructiveHint: false,
     },
-    async ({ library, pathOrUrl, version, maxChars }) => {
+    async ({ library, pathOrUrl, version, startChunk, maxChars }) => {
       telemetry.track(TelemetryEvent.TOOL_USED, {
         tool: "read_page",
         context: "mcp_server",
@@ -365,15 +369,24 @@ ${r.content}\n`,
           library,
           pathOrUrl,
           version,
+          startChunk,
           maxChars,
         });
 
-        const header = `> Source: ${result.url}\n\n`;
-        const notice = result.truncated
-          ? `\n\n> [!NOTE]\n> Content was truncated at ${result.charCount} characters to avoid context overflow. If you need more content, explicitly increase maxChars.`
-          : "";
+        if (result.startChunk >= result.totalChunks && result.totalChunks > 0) {
+          return createResponse(
+            `startChunk ${result.startChunk} is past the end of ${result.url}, which has ${result.totalChunks} chunks.`,
+          );
+        }
 
-        return createResponse(`${header}${result.content}${notice}`);
+        const end = result.nextChunk ?? result.totalChunks;
+        const notice =
+          result.nextChunk !== null
+            ? `\n\n> Showing chunks ${result.startChunk + 1}-${end} of ${result.totalChunks}. ` +
+              `To continue, call read_page again with startChunk: ${result.nextChunk}.`
+            : "";
+
+        return createResponse(`> Source: ${result.url}\n\n${result.content}${notice}`);
       } catch (error) {
         return createError(error);
       }
@@ -383,25 +396,19 @@ ${r.content}\n`,
   // List pages tool
   server.tool(
     "list_pages",
-    "List indexed documentation pages and sitemap for a library version with pagination.\n" +
-      "Call this when exploring a library's architecture, when you do not know exact function names, or when `search_docs` returns no relevant results.",
+    "List the indexed pages of a library version, with an optional URL filter and pagination.",
     {
-      library: z
-        .string()
-        .trim()
-        .describe("Library name (verify with `list_libraries` first)."),
+      library: z.string().trim().describe("Library name."),
       version: z
         .string()
         .trim()
         .optional()
         .describe("Library version (exact or X-Range, optional)."),
-      prefix: z
+      contains: z
         .string()
         .trim()
         .optional()
-        .describe(
-          "Filter page URLs starting with or containing this prefix (e.g. '/docs/components').",
-        ),
+        .describe("Only list pages whose URL contains this text (e.g. '/components')."),
       limit: z
         .number()
         .int()
@@ -416,14 +423,14 @@ ${r.content}\n`,
         .nonnegative()
         .optional()
         .default(0)
-        .describe("Starting index for pagination (default 0)."),
+        .describe("Number of pages to skip (default 0)."),
     },
     {
       title: "List Library Pages",
       readOnlyHint: true,
       destructiveHint: false,
     },
-    async ({ library, version, prefix, limit, offset }) => {
+    async ({ library, version, contains, limit, offset }) => {
       telemetry.track(TelemetryEvent.TOOL_USED, {
         tool: "list_pages",
         context: "mcp_server",
@@ -437,14 +444,14 @@ ${r.content}\n`,
         const result = await tools.listPages.execute({
           library,
           version,
-          prefix,
+          contains,
           limit,
           offset,
         });
 
         if (result.pages.length === 0) {
           return createResponse(
-            `No pages found for '${library}'${result.version ? `@${result.version}` : ""}${prefix ? ` matching prefix '${prefix}'` : ""}.`,
+            `No pages found for '${library}'${result.version ? `@${result.version}` : ""}${contains ? ` with URLs containing '${contains}'` : ""}.`,
           );
         }
 

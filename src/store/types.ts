@@ -501,23 +501,36 @@ export interface CompactResult {
 }
 
 /**
- * Result of reading full page documentation.
+ * Options for reading a stored page.
+ */
+export interface PageContentOptions {
+  /** Index of the first chunk to return (default 0). */
+  startChunk?: number;
+  /** Maximum characters to return. Whole chunks only; a single longer chunk is returned on its own. */
+  maxChars?: number;
+}
+
+/**
+ * A window of consecutive chunks of a stored page, assembled for its content type.
  */
 export interface PageContentResult {
   url: string;
   title: string | null;
-  content: string;
   contentType: string | null;
-  charCount: number;
-  chunksCount: number;
-  truncated?: boolean;
+  content: string;
+  /** Index of the first chunk in `content`. */
+  startChunk: number;
+  totalChunks: number;
+  /** `startChunk` for the next call, or null when `content` reaches the end of the page. */
+  nextChunk: number | null;
 }
 
 /**
  * Options for listing pages in a library version.
  */
 export interface ListPagesOptions {
-  prefix?: string;
+  /** Keeps only pages whose URL contains this text. */
+  contains?: string;
   limit?: number;
   offset?: number;
 }

@@ -3102,3 +3102,124 @@ describe("DocumentStore - concurrent writes to one identity", () => {
     expect(chunks[0].content).toBe("from markdown");
   });
 });
+
+describe("DocumentStore - Page Lookup", () => {
+  let store: DocumentStore;
+
+  const addPage = (url: string, depth = 1, extra: Partial<ScrapeResult> = {}) =>
+    store.addDocuments("lib", "1.0", depth, {
+      ...createScrapeResult(`Title of ${url}`, url, `content of ${url}`),
+      ...extra,
+    });
+
+  beforeEach(async () => {
+    appConfig.app.embeddingModel = "";
+    store = new DocumentStore(":memory:", appConfig);
+    await store.initialize();
+  });
+
+  afterEach(async () => {
+    await store.shutdown();
+  });
+
+  describe("findPageUrls", () => {
+    it("returns the page whose URL equals one of the candidates", async () => {
+      await addPage("https://x.dev/docs/My%20Page");
+      await addPage("https://x.dev/docs/other");
+
+      const urls = await store.findPageUrls("lib", "1.0", [
+        "https://x.dev/docs/My Page",
+        "https://x.dev/docs/My%20Page",
+      ]);
+
+      expect(urls).toEqual(["https://x.dev/docs/My%20Page"]);
+    });
+
+    it("finds a page by the content URL it was fetched from", async () => {
+      await addPage("https://x.dev/guide", 1, { contentUrl: "https://x.dev/guide.md" });
+
+      const urls = await store.findPageUrls("lib", "1.0", ["https://x.dev/guide.md"]);
+
+      expect(urls).toEqual(["https://x.dev/guide"]);
+    });
+
+    it("returns nothing for a library version that does not exist", async () => {
+      await addPage("https://x.dev/docs");
+
+      const urls = await store.findPageUrls("lib", "2.0", ["https://x.dev/docs"]);
+
+      expect(urls).toEqual([]);
+    });
+  });
+
+  describe("findPageUrlsBySuffix", () => {
+    it("returns every page whose URL ends with the suffix", async () => {
+      await addPage("https://x.dev/v1/api");
+      await addPage("https://x.dev/v2/api");
+      await addPage("https://x.dev/v2/myapi");
+
+      const urls = await store.findPageUrlsBySuffix("lib", "1.0", ["/api"], 10);
+
+      expect(urls.sort()).toEqual(["https://x.dev/v1/api", "https://x.dev/v2/api"]);
+    });
+
+    it("ignores a trailing slash on the stored URL", async () => {
+      await addPage("https://x.dev/docs/guide/");
+
+      const urls = await store.findPageUrlsBySuffix("lib", "1.0", ["/docs/guide"], 10);
+
+      expect(urls).toEqual(["https://x.dev/docs/guide/"]);
+    });
+
+    it("treats LIKE wildcards in the suffix as literal characters", async () => {
+      await addPage("https://x.dev/docs/a_b");
+      await addPage("https://x.dev/docs/axb");
+
+      const urls = await store.findPageUrlsBySuffix("lib", "1.0", ["/docs/a_b"], 10);
+
+      expect(urls).toEqual(["https://x.dev/docs/a_b"]);
+    });
+  });
+
+  describe("listPages", () => {
+    it("lists pages ordered by depth, then URL, with the total count", async () => {
+      await addPage("https://x.dev/docs/b", 2);
+      await addPage("https://x.dev/docs/a", 2);
+      await addPage("https://x.dev/", 0);
+
+      const result = await store.listPages("lib", "1.0", {});
+
+      expect(result.total).toBe(3);
+      expect(result.pages.map((p) => p.url)).toEqual([
+        "https://x.dev/",
+        "https://x.dev/docs/a",
+        "https://x.dev/docs/b",
+      ]);
+    });
+
+    it("returns the requested page of results", async () => {
+      await addPage("https://x.dev/a");
+      await addPage("https://x.dev/b");
+      await addPage("https://x.dev/c");
+
+      const result = await store.listPages("lib", "1.0", { limit: 1, offset: 1 });
+
+      expect(result.total).toBe(3);
+      expect(result.pages.map((p) => p.url)).toEqual(["https://x.dev/b"]);
+    });
+
+    it("keeps only pages whose URL contains the filter anywhere", async () => {
+      await addPage("https://x.dev/docs/components/button");
+      await addPage("https://x.dev/blog/components");
+      await addPage("https://x.dev/docs/hooks");
+
+      const result = await store.listPages("lib", "1.0", { contains: "components" });
+
+      expect(result.total).toBe(2);
+      expect(result.pages.map((p) => p.url).sort()).toEqual([
+        "https://x.dev/blog/components",
+        "https://x.dev/docs/components/button",
+      ]);
+    });
+  });
+});

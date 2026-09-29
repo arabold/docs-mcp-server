@@ -9,6 +9,8 @@ import type {
   DbVersionWithLibrary,
   EmbeddingConfigInfo,
   FindVersionResult,
+  ListPagesOptions,
+  PageContentOptions,
   StoreSearchResult,
   VersionStatus,
 } from "../types";
@@ -108,6 +110,7 @@ export function createDataRouter(trpc: unknown) {
           pathOrUrl: nonEmpty,
           options: z
             .object({
+              startChunk: z.number().int().nonnegative().optional(),
               maxChars: z.number().positive().optional(),
             })
             .optional(),
@@ -123,7 +126,7 @@ export function createDataRouter(trpc: unknown) {
             library: string;
             version: string | null | undefined;
             pathOrUrl: string;
-            options?: { maxChars?: number };
+            options?: PageContentOptions;
           };
         }) => {
           return await ctx.docService.getPageContent(
@@ -142,7 +145,7 @@ export function createDataRouter(trpc: unknown) {
           version: optionalVersion,
           options: z
             .object({
-              prefix: z.string().optional(),
+              contains: z.string().optional(),
               limit: z.number().int().positive().max(200).optional(),
               offset: z.number().int().nonnegative().optional(),
             })
@@ -158,7 +161,7 @@ export function createDataRouter(trpc: unknown) {
           input: {
             library: string;
             version: string | null | undefined;
-            options?: { prefix?: string; limit?: number; offset?: number };
+            options?: ListPagesOptions;
           };
         }) => {
           return await ctx.docService.listPages(

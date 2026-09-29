@@ -34,14 +34,14 @@ describe("ListPagesTool", () => {
 
     await tool.execute({ library: "react", limit: 500 });
     expect(mockDocService.listPages).toHaveBeenCalledWith("react", undefined, {
-      prefix: undefined,
+      contains: undefined,
       limit: 200,
       offset: 0,
     });
 
     await tool.execute({ library: "react", limit: -10 });
     expect(mockDocService.listPages).toHaveBeenCalledWith("react", undefined, {
-      prefix: undefined,
+      contains: undefined,
       limit: 50,
       offset: 0,
     });
@@ -64,11 +64,31 @@ describe("ListPagesTool", () => {
 
     const result = await tool.execute({
       library: "openrouter",
-      prefix: "/docs",
+      contains: "/docs",
       limit: 50,
       offset: 0,
     });
 
     expect(result).toEqual(mockResult);
+  });
+
+  it("should forward the trimmed contains filter", async () => {
+    (mockDocService.listPages as ReturnType<typeof vi.fn>).mockResolvedValue({
+      library: "react",
+      version: "",
+      total: 0,
+      pages: [],
+      limit: 50,
+      offset: 0,
+      hasMore: false,
+    });
+
+    await tool.execute({ library: "react", contains: "  /hooks  " });
+
+    expect(mockDocService.listPages).toHaveBeenCalledWith("react", undefined, {
+      contains: "/hooks",
+      limit: 50,
+      offset: 0,
+    });
   });
 });

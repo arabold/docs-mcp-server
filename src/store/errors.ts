@@ -75,6 +75,24 @@ export class PageNotFoundInStoreError extends StoreError {
 }
 
 /**
+ * Error thrown when a page path matches more than one stored page.
+ * Lists the matching URLs so the caller can pass the full URL of the intended page.
+ */
+export class AmbiguousPageInStoreError extends StoreError {
+  constructor(
+    public readonly library: string,
+    public readonly version: string,
+    public readonly pathOrUrl: string,
+    public readonly matches: string[],
+  ) {
+    const versionText = version ? ` (version: ${version})` : "";
+    super(
+      `Page '${pathOrUrl}' for library '${library}'${versionText} matches more than one page: ${matches.join(", ")}. Pass the full URL of the page to read.`,
+    );
+  }
+}
+
+/**
  * Error thrown when an embedding model's vector dimension exceeds the database's fixed dimension.
  * This occurs when trying to use a model that produces vectors larger than the database can store.
  */

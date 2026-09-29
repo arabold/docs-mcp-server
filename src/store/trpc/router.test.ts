@@ -179,12 +179,11 @@ describe("dataRouter - chunk explorer procedures", () => {
       expect(result.title).toBe("Page 1");
       expect(result.content).toContain("Alpha content about routers");
       expect(result.content).toContain("Beta content about switches");
-      expect(result.charCount).toBeGreaterThan(0);
-      expect(result.chunksCount).toBe(2);
-      expect(result.truncated).toBe(false);
+      expect(result.totalChunks).toBe(2);
+      expect(result.nextChunk).toBeNull();
     });
 
-    it("supports maxChars truncation via tRPC procedure", async () => {
+    it("returns a window of whole chunks and where to continue", async () => {
       const result = await caller.getPageContent({
         library: "router-test-lib",
         version: "1.0.0",
@@ -193,8 +192,8 @@ describe("dataRouter - chunk explorer procedures", () => {
       });
 
       expect(result.url).toBe("https://example.com/page1");
-      expect(result.content.length).toBeLessThanOrEqual(25);
-      expect(result.truncated).toBe(true);
+      expect(result.content).toBe("Alpha content about routers");
+      expect(result.nextChunk).toBe(1);
     });
 
     it("rejects empty library or pathOrUrl via zod validation", async () => {
@@ -203,6 +202,12 @@ describe("dataRouter - chunk explorer procedures", () => {
       ).rejects.toThrow();
       await expect(
         caller.getPageContent({ library: "router-test-lib", pathOrUrl: "" }),
+      ).rejects.toThrow();
+    });
+
+    it("rejects a whitespace-only pathOrUrl instead of passing it on as empty", async () => {
+      await expect(
+        caller.getPageContent({ library: "router-test-lib", pathOrUrl: "   " }),
       ).rejects.toThrow();
     });
   });
@@ -225,12 +230,12 @@ describe("dataRouter - chunk explorer procedures", () => {
       expect(result.hasMore).toBe(false);
     });
 
-    it("applies prefix filtering through tRPC procedure", async () => {
+    it("applies the contains filter through tRPC procedure", async () => {
       const result = await caller.listPages({
         library: "router-test-lib",
         version: "1.0.0",
         options: {
-          prefix: "page2",
+          contains: "page2",
         },
       });
 

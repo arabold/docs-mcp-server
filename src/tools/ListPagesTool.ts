@@ -5,7 +5,7 @@ import { ValidationError } from "./errors";
 export interface ListPagesToolOptions {
   library: string;
   version?: string;
-  prefix?: string;
+  contains?: string;
   limit?: number;
   offset?: number;
 }
@@ -23,7 +23,7 @@ export class ListPagesTool {
   }
 
   async execute(options: ListPagesToolOptions): Promise<ListPagesToolResult> {
-    const { library, version, prefix, offset = 0 } = options;
+    const { library, version, contains, offset = 0 } = options;
 
     if (!library || typeof library !== "string" || library.trim() === "") {
       throw new ValidationError(
@@ -45,7 +45,7 @@ export class ListPagesTool {
         : 0;
 
     return this.docService.listPages(library.trim(), version?.trim(), {
-      prefix: prefix?.trim(),
+      contains: contains?.trim(),
       limit,
       offset: safeOffset,
     });

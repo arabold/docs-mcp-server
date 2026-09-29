@@ -72,11 +72,11 @@ const mockTools: McpServerTools = {
     execute: vi.fn(async () => ({
       url: "https://example.com",
       title: "Test",
-      content: "# Test",
       contentType: "text/markdown",
-      charCount: 6,
-      chunksCount: 1,
-      truncated: false,
+      content: "# Test",
+      startChunk: 0,
+      totalChunks: 1,
+      nextChunk: null,
     })),
   } as any,
 };
@@ -138,6 +138,55 @@ describe("MCP Server Read-Only Mode", () => {
     expect(response.content[0].text).toContain("# Test");
   });
 
+  it("should forward startChunk and tell the agent how to continue a long page", async () => {
+    (mockTools.readPage.execute as any).mockResolvedValueOnce({
+      url: "https://example.com/long",
+      title: "Long",
+      contentType: "text/markdown",
+      content: "part two",
+      startChunk: 2,
+      totalChunks: 5,
+      nextChunk: 4,
+    });
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const readPageTool = (server as any)._registeredTools.read_page;
+
+    const response = await readPageTool.handler({
+      library: "react",
+      pathOrUrl: "/long",
+      startChunk: 2,
+    });
+
+    expect(mockTools.readPage.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ startChunk: 2 }),
+    );
+    expect(response.content[0].text).toContain("chunks 3-4 of 5");
+    expect(response.content[0].text).toContain("startChunk: 4");
+  });
+
+  it("should say when startChunk is past the end of the page", async () => {
+    (mockTools.readPage.execute as any).mockResolvedValueOnce({
+      url: "https://example.com/short",
+      title: "Short",
+      contentType: "text/markdown",
+      content: "",
+      startChunk: 9,
+      totalChunks: 3,
+      nextChunk: null,
+    });
+    const server = createMcpServerInstance(mockTools, mockConfig);
+    const readPageTool = (server as any)._registeredTools.read_page;
+
+    const response = await readPageTool.handler({
+      library: "react",
+      pathOrUrl: "/short",
+      startChunk: 9,
+    });
+
+    expect(response.content[0].text).toContain("past the end");
+    expect(response.content[0].text).toContain("3 chunks");
+  });
+
   it("should not send read_page URLs or paths to telemetry", async () => {
     vi.mocked(telemetry.track).mockClear();
     const server = createMcpServerInstance(mockTools, mockConfig);
@@ -157,13 +206,13 @@ describe("MCP Server Read-Only Mode", () => {
     );
   });
 
-  it("should not send list_pages prefixes to telemetry", async () => {
+  it("should not send list_pages URL filters to telemetry", async () => {
     vi.mocked(telemetry.track).mockClear();
     const server = createMcpServerInstance(mockTools, mockConfig);
     const listPagesTool = (server as any)._registeredTools.list_pages;
-    const prefix = "/private/secret/path";
+    const contains = "/private/secret/path";
 
-    await listPagesTool.handler({ library: "react", prefix });
+    await listPagesTool.handler({ library: "react", contains });
 
     const event = vi
       .mocked(telemetry.track)
@@ -171,7 +220,7 @@ describe("MCP Server Read-Only Mode", () => {
     expect(event).toBeDefined();
     expect(JSON.stringify(event)).not.toContain("secret");
     expect(mockTools.listPages.execute).toHaveBeenCalledWith(
-      expect.objectContaining({ prefix }),
+      expect.objectContaining({ contains }),
     );
   });
 

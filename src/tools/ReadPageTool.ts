@@ -6,14 +6,32 @@ export interface ReadPageToolOptions {
   library: string;
   pathOrUrl: string;
   version?: string;
+  startChunk?: number;
   maxChars?: number;
 }
 
 export type ReadPageToolResult = PageContentResult;
 
 /**
- * Tool for retrieving the full Markdown documentation of a specific page
- * directly from the local store without re-scraping the web.
+ * Strips what agents tend to copy along with a link: the HTML-escaped `&lt;…&gt;`
+ * wrapper, angle brackets and quotes, `./` and `../` prefixes, and Windows
+ * backslashes. Percent-encoding is left as given.
+ */
+function cleanPageInput(input: string): string {
+  let value = input.trim();
+  if (/^&lt;.*&gt;$/i.test(value)) {
+    value = value.slice(4, -4).replace(/&amp;/gi, "&");
+  }
+  return value
+    .replace(/\\/g, "/")
+    .replace(/^[<"']+|[>"']+$/g, "")
+    .trim()
+    .replace(/^(\.\.?\/)+/, "");
+}
+
+/**
+ * Tool for reading a stored documentation page without scraping it again.
+ * Long pages are read in windows of whole chunks, continued with `startChunk`.
  */
 export class ReadPageTool {
   private docService: IDocumentManagement;
@@ -23,7 +41,7 @@ export class ReadPageTool {
   }
 
   async execute(options: ReadPageToolOptions): Promise<ReadPageToolResult> {
-    const { library, pathOrUrl, version, maxChars } = options;
+    const { library, pathOrUrl, version, startChunk, maxChars } = options;
 
     if (!library || typeof library !== "string" || library.trim() === "") {
       throw new ValidationError(
@@ -32,7 +50,8 @@ export class ReadPageTool {
       );
     }
 
-    if (!pathOrUrl || typeof pathOrUrl !== "string" || pathOrUrl.trim() === "") {
+    const target = typeof pathOrUrl === "string" ? cleanPageInput(pathOrUrl) : "";
+    if (!target) {
       throw new ValidationError(
         "Path or URL is required and must be a non-empty string.",
         this.constructor.name,
@@ -46,11 +65,16 @@ export class ReadPageTool {
       );
     }
 
-    return this.docService.getPageContent(
-      library.trim(),
-      version?.trim(),
-      pathOrUrl.trim(),
-      { maxChars },
-    );
+    if (startChunk !== undefined && (!Number.isInteger(startChunk) || startChunk < 0)) {
+      throw new ValidationError(
+        "startChunk must be a non-negative integer if provided.",
+        this.constructor.name,
+      );
+    }
+
+    return this.docService.getPageContent(library.trim(), version?.trim(), target, {
+      startChunk,
+      maxChars,
+    });
   }
 }

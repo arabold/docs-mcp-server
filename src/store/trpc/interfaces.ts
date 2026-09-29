@@ -15,6 +15,7 @@ import type {
   ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentOptions,
   PageContentResult,
   StoredScraperOptions,
   StoreSearchResult,
@@ -50,7 +51,7 @@ export interface IDocumentManagement {
     library: string,
     version: string | null | undefined,
     pathOrUrl: string,
-    options?: { maxChars?: number },
+    options?: PageContentOptions,
   ): Promise<PageContentResult>;
   removeAllDocuments(library: string, version?: string | null): Promise<void>;
   removeVersion(library: string, version?: string | null): Promise<void>;

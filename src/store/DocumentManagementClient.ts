@@ -20,6 +20,7 @@ import type {
   ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentOptions,
   PageContentResult,
   StoredScraperOptions,
   StoreSearchResult,
@@ -92,7 +93,7 @@ export class DocumentManagementClient implements IDocumentManagement {
     library: string,
     version: string | null | undefined,
     pathOrUrl: string,
-    options?: { maxChars?: number },
+    options?: PageContentOptions,
   ): Promise<PageContentResult> {
     return this.client.getPageContent.query({
       library,
