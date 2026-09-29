@@ -478,7 +478,7 @@ ${r.content}\n`,
   // List libraries tool
   server.tool(
     "list_libraries",
-    "List all indexed libraries.",
+    "List all indexed libraries and their versions. Use this to find the correct library name.",
     {
       // no params
     },
