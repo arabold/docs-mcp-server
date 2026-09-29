@@ -251,55 +251,6 @@ export function createMcpServerInstance(
         }
       },
     );
-
-    // Compact store tool
-    server.tool(
-      "compact_store",
-      "Reclaim unused SQLite disk space and truncate the WAL file after large scrapes or deletions.",
-      {
-        force: z
-          .boolean()
-          .optional()
-          .default(false)
-          .describe("Always VACUUM even if no free pages are detected."),
-        vacuum: z
-          .boolean()
-          .optional()
-          .default(true)
-          .describe(
-            "Run VACUUM (reclaims disk space). When false, only checkpoints WAL.",
-          ),
-      },
-      {
-        title: "Compact Store",
-        readOnlyHint: false,
-        destructiveHint: false,
-      },
-      async ({ force, vacuum }) => {
-        telemetry.track(TelemetryEvent.TOOL_USED, {
-          tool: "compact_store",
-          context: "mcp_server",
-          force,
-          vacuum,
-        });
-
-        try {
-          const result = await tools.compactStore.execute({ force, vacuum });
-          if (result.skipped) {
-            return createResponse("Compaction skipped: database is running in memory.");
-          }
-          return createResponse(
-            `Database compacted successfully.\n` +
-              `- Reclaimed: ${(result.reclaimedBytes / (1024 * 1024)).toFixed(2)} MB\n` +
-              `- Before: ${(result.beforeBytes / (1024 * 1024)).toFixed(2)} MB\n` +
-              `- After: ${(result.afterBytes / (1024 * 1024)).toFixed(2)} MB\n` +
-              `- VACUUM executed: ${result.vacuumed ? "yes" : "no"}`,
-          );
-        } catch (error) {
-          return createError(error);
-        }
-      },
-    );
   }
 
   // Search docs tool

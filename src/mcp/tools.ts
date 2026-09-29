@@ -8,7 +8,6 @@ import { AutoDetectFetcher } from "../scraper/fetcher";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import {
   CancelJobTool,
-  CompactStoreTool,
   FetchUrlTool,
   FindVersionTool,
   GetJobInfoTool,
@@ -39,7 +38,6 @@ export interface McpServerTools {
   cancelJob: CancelJobTool;
   remove: RemoveTool;
   fetchUrl: FetchUrlTool;
-  compactStore: CompactStoreTool;
 }
 
 /**
@@ -69,7 +67,6 @@ export async function initializeTools(
     // clearCompletedJobs: new ClearCompletedJobsTool(pipeline),
     remove: new RemoveTool(docService, pipeline),
     fetchUrl: new FetchUrlTool(new AutoDetectFetcher(config.scraper), config),
-    compactStore: new CompactStoreTool(docService),
   };
 
   return tools;
