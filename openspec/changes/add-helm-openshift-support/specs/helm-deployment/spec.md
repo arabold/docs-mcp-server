@@ -36,6 +36,10 @@ The chart SHALL run without requiring a fixed user ID, root privileges, privileg
 - **WHEN** an operator configures a permitted supplemental filesystem group
 - **THEN** the rendered workload requests that group for mounted storage
 
+#### Scenario: Existing NFS volume
+- **WHEN** an existing NFS export grants write access to a numeric group
+- **THEN** the chart accepts that group through the pod security context without fixing the runtime user ID
+
 ### Requirement: Optional external exposure
 The chart SHALL optionally expose the Service through either a Kubernetes Ingress or an OpenShift Route, with both resources disabled by default.
 

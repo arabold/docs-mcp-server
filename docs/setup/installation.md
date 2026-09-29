@@ -57,6 +57,21 @@ Constraint can assign the namespace's permitted UID and groups without a separat
 chart mode. The root filesystem is read-only; the chart mounts writable storage
 at `/data`, `/config`, `/tmp`, and `/app/.runtime`.
 
+For an existing NFS PV, the server-side ownership remains authoritative. If
+the export is group-writable, supply its numeric GID without pinning the
+OpenShift-assigned UID:
+
+```yaml
+podSecurityContext:
+  supplementalGroups:
+    - 1000000 # replace with the NFS export directory's GID
+```
+
+After recreating the pod, `id` must include that group. NFS exports that remain
+unwritable require server-side owner, group, mode, export, or SELinux changes;
+image-layer permissions and a different mount path cannot change an NFS
+export. See the [chart's NFS guidance](../../deployment/helm/docs-mcp-server/README.md#nfs-persistent-volumes).
+
 Enable an OpenShift Route with a values file:
 
 ```yaml

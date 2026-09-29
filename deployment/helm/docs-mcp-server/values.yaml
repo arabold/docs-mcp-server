@@ -23,6 +23,8 @@ podLabels: {}
 
 # Identity fields are unset by default. Kubernetes uses the image's numeric
 # non-root user, while platforms such as OpenShift may assign another identity.
+# For an NFS-backed PV, set supplementalGroups to the export directory's GID;
+# NFS normally preserves server-side ownership instead of applying fsGroup.
 podSecurityContext:
   seccompProfile:
     type: RuntimeDefault

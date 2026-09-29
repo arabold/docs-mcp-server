@@ -41,6 +41,47 @@ configPersistence:
 
 Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup`: Kubernetes uses the image's `10001:10001` identity, while admission controllers may assign another identity. Set `podSecurityContext.fsGroup` only when the storage driver or cluster policy requires it. Storage drivers that do not support ownership management need pre-provisioned permissions.
 
+### NFS persistent volumes
+
+NFS preserves the ownership and mode configured on the server. A PVC bound to
+an existing NFS PV therefore keeps the export directory's numeric UID, GID, and
+permissions; mounting it over `/data` or `/config` hides the permissions from
+the container image. Kubernetes `fsGroup` ownership changes are not reliable
+for NFS, and a root init container may still be blocked by `root_squash`.
+
+Inspect the mounted directory and the pod identity:
+
+```bash
+oc exec <pod> -- id
+oc exec <pod> -- stat -c '%A %a %u:%g %n' /data
+```
+
+When the export is group-writable, grant the pod that existing numeric GID
+through the generic pod security context. For example, an export owned by GID
+`1000000` with mode `0770` uses:
+
+```yaml
+podSecurityContext:
+  supplementalGroups:
+    - 1000000
+```
+
+The number is an installation value, not an image or chart default. OpenShift's
+default `restricted-v2` SCC permits requested supplemental groups, but cluster
+administrators may install stricter policies. Recreate the pod after changing
+the value, then verify that `id` includes the export GID and that a direct write
+succeeds:
+
+```bash
+oc exec <pod> -- id
+oc exec <pod> -- sh -c 'touch /data/write-test && rm /data/write-test'
+```
+
+If the group is present but the write still fails, prepare the export on the
+NFS server with a writable owner/group and compatible SELinux/export settings.
+There is no safe universal GID to hard-code because independently provisioned
+NFS exports can use different groups.
+
 An `extraVolumeMount` targeting `/data` or `/config` replaces the chart-managed
 mount and claim for that path. This allows one volume, including one PVC, to
 back both paths:

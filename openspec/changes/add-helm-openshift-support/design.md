@@ -36,7 +36,7 @@ The image uses a dedicated numeric `USER 10001:10001` for direct container-engin
 
 ### Delegate mounted-volume ownership to the runtime
 
-The chart always leaves `runAsUser`, `runAsGroup`, and `fsGroup` unset by default; there is no platform-mode switch. Kubernetes uses the image's numeric default identity, while OpenShift can assign UID and group ranges through its security policy. Operators may supply pod and container security-context maps, including an allowed `fsGroup` for storage that needs it. A chown init container was rejected because it typically requires root and still cannot fix every storage backend.
+The chart always leaves `runAsUser`, `runAsGroup`, and `fsGroup` unset by default; there is no platform-mode switch. Kubernetes uses the image's numeric default identity, while OpenShift can assign UID and group ranges through its security policy. Operators may supply pod and container security-context maps, including an allowed `fsGroup` for storage that supports ownership management or `supplementalGroups` matching a group-writable NFS export. NFS retains server-side numeric ownership, so the chart cannot infer a universal group. A chown init container was rejected because it typically requires root and NFS `root_squash` can prevent it from changing the export anyway.
 
 ### Use TCP probes for the starter chart
 
@@ -120,6 +120,7 @@ The invariant is that no chart-owned template requires a fixed UID, privileged e
 ## Risks / Trade-offs
 
 - [Some storage drivers ignore or cannot apply supplemental group ownership] -> Keep security contexts configurable and document that operators must provision compatible permissions.
+- [NFS preserves server-side UID/GID and mode] -> Document `supplementalGroups` for a group-writable export and require storage-side preparation when the export remains inaccessible.
 - [Docker host bind mounts replace image directory permissions] -> Test and document explicit host UID/group preparation; do not claim the image can repair inaccessible mounts.
 - [A TCP probe can pass before higher-level initialization is complete] -> Use startup/readiness thresholds and a Helm HTTP test; defer a dedicated health endpoint to a separate application change.
 - [`extraResources` can create unsafe or release-conflicting objects] -> Treat it as an administrator-controlled escape hatch and document that chart validation cannot guarantee arbitrary resource semantics.

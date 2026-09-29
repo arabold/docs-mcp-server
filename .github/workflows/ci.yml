@@ -148,6 +148,9 @@ jobs:
           custom_volumes="$(helm template custom-volumes "$chart" -f "$chart/ci/custom-volumes-values.yaml")"
           ! grep -q 'kind: PersistentVolumeClaim' <<<"$custom_volumes"
           ! grep -q 'kind: ServiceAccount' <<<"$custom_volumes"
+          nfs="$(helm template nfs "$chart" --set-json 'podSecurityContext.supplementalGroups=[1000000]')"
+          grep -q 'supplementalGroups:' <<<"$nfs"
+          grep -q -- '- 1000000' <<<"$nfs"
           grep -q 'serviceAccountName: default' <<<"$custom_volumes"
           ! grep -q 'should-be-ignored' <<<"$custom_volumes"
           test "$(grep -c 'name: storage' <<<"$custom_volumes")" -eq 3
