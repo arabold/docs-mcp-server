@@ -120,6 +120,7 @@ jobs:
           helm lint "$chart" -f "$chart/ci/existing-claims-values.yaml"
           helm lint "$chart" -f "$chart/ci/exposure-values.yaml"
           helm lint "$chart" -f "$chart/ci/openshift-values.yaml"
+          helm lint "$chart" -f "$chart/ci/custom-volumes-values.yaml"
           default="$(helm template default "$chart")"
           if grep -Eq 'fsGroup:|runAsUser:|runAsGroup:' <<<"$default"; then
             echo 'Chart defaults must leave identity assignment to the image or admission policy'
@@ -144,6 +145,16 @@ jobs:
           grep -q 'kind: Route' <<<"$exposure"
           grep -q "name: 'exposure-docs-mcp-server-extra'" <<<"$exposure"
           grep -q "release: 'exposure'" <<<"$exposure"
+          custom_volumes="$(helm template custom-volumes "$chart" -f "$chart/ci/custom-volumes-values.yaml")"
+          ! grep -q 'kind: PersistentVolumeClaim' <<<"$custom_volumes"
+          ! grep -q 'kind: ServiceAccount' <<<"$custom_volumes"
+          grep -q 'serviceAccountName: default' <<<"$custom_volumes"
+          ! grep -q 'should-be-ignored' <<<"$custom_volumes"
+          test "$(grep -c 'name: storage' <<<"$custom_volumes")" -eq 3
+          grep -q 'claimName: shared-storage' <<<"$custom_volumes"
+          grep -q 'mountPath: /data' <<<"$custom_volumes"
+          grep -q 'mountPath: /config' <<<"$custom_volumes"
+          grep -q 'name: DOCS_MCP_TELEMETRY' <<<"$custom_volumes"
 
       - name: Create kind cluster
         uses: helm/kind-action@v1.12.0

@@ -41,6 +41,36 @@ configPersistence:
 
 Set either persistence block's `enabled` value to `false` to use an ephemeral `emptyDir`. Mounted volumes replace the permissions built into the image. The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup`: Kubernetes uses the image's `10001:10001` identity, while admission controllers may assign another identity. Set `podSecurityContext.fsGroup` only when the storage driver or cluster policy requires it. Storage drivers that do not support ownership management need pre-provisioned permissions.
 
+An `extraVolumeMount` targeting `/data` or `/config` replaces the chart-managed
+mount and claim for that path. This allows one volume, including one PVC, to
+back both paths:
+
+```yaml
+extraVolumes:
+  - name: storage
+    persistentVolumeClaim:
+      claimName: docs-mcp-storage
+extraVolumeMounts:
+  - { name: storage, mountPath: /data, subPath: data }
+  - { name: storage, mountPath: /config, subPath: config }
+```
+
+Disabled resources only require their enablement flag; their remaining settings
+can be omitted:
+
+```yaml
+serviceAccount:
+  enabled: false
+ingress:
+  enabled: false
+route:
+  enabled: false
+```
+
+For backward compatibility, `serviceAccount.create: false` also disables service
+account creation. When disabled, the Deployment uses the namespace's `default`
+service account and ignores any configured name.
+
 The unified server runs one embedded worker against a SQLite store. The chart
 requires `replicaCount: 1` and uses `Recreate` upgrades so two workers do not
 overlap and ReadWriteOnce volumes can detach before the replacement starts.

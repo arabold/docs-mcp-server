@@ -26,7 +26,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "docs-mcp-server.serviceAccountName" . }}
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      automountServiceAccountToken: {{ dig "automountServiceAccountToken" false (.Values.serviceAccount | default dict) }}
       securityContext:
         {{- include "docs-mcp-server.podSecurityContext" . | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
@@ -54,7 +54,7 @@ spec:
               value: /data
             - name: XDG_CONFIG_HOME
               value: /config
-            {{- with .Values.extraEnv }}
+            {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- with .Values.envFrom }}
@@ -74,14 +74,19 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if not (include "docs-mcp-server.hasDataVolumeMount" .) }}
             - { name: data, mountPath: /data }
+            {{- end }}
+            {{- if not (include "docs-mcp-server.hasConfigVolumeMount" .) }}
             - { name: config, mountPath: /config }
+            {{- end }}
             - { name: tmp, mountPath: /tmp }
             - { name: runtime, mountPath: /app/.runtime }
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
+        {{- if not (include "docs-mcp-server.hasDataVolumeMount" .) }}
         - name: data
           {{- if .Values.dataPersistence.enabled }}
           persistentVolumeClaim:
@@ -89,6 +94,8 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- if not (include "docs-mcp-server.hasConfigVolumeMount" .) }}
         - name: config
           {{- if .Values.configPersistence.enabled }}
           persistentVolumeClaim:
@@ -96,6 +103,7 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
         - name: tmp
           {{- toYaml .Values.tmpVolume | nindent 10 }}
         - name: runtime

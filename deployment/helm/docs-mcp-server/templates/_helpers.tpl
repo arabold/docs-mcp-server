@@ -19,17 +19,26 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 {{- define "docs-mcp-server.serviceAccountName" -}}
-{{- if .Values.serviceAccount.create }}{{ default (include "docs-mcp-server.fullname" .) .Values.serviceAccount.name }}{{- else }}{{ default "default" .Values.serviceAccount.name }}{{- end }}
+{{- $serviceAccount := .Values.serviceAccount | default dict -}}
+{{- $enabled := dig "enabled" true $serviceAccount -}}
+{{- $create := dig "create" true $serviceAccount -}}
+{{- if and $enabled $create }}{{ default (include "docs-mcp-server.fullname" .) (get $serviceAccount "name") }}{{- else }}default{{- end }}
+{{- end }}
+{{- define "docs-mcp-server.hasDataVolumeMount" -}}
+{{- range (.Values.extraVolumeMounts | default list) }}{{- if eq .mountPath "/data" }}true{{- end }}{{- end }}
+{{- end }}
+{{- define "docs-mcp-server.hasConfigVolumeMount" -}}
+{{- range (.Values.extraVolumeMounts | default list) }}{{- if eq .mountPath "/config" }}true{{- end }}{{- end }}
 {{- end }}
 {{- define "docs-mcp-server.image" -}}
 {{- if .Values.image.digest }}{{ printf "%s@%s" .Values.image.repository .Values.image.digest }}{{- else }}{{ printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) }}{{- end }}
 {{- end }}
 {{- define "docs-mcp-server.dataClaimName" -}}
-{{- default (printf "%s-data" (include "docs-mcp-server.fullname" .)) .Values.dataPersistence.existingClaim }}
+{{- default (printf "%s-data" (include "docs-mcp-server.fullname" .)) (get (.Values.dataPersistence | default dict) "existingClaim") }}
 {{- end }}
 {{- define "docs-mcp-server.podSecurityContext" -}}
 {{- toYaml .Values.podSecurityContext -}}
 {{- end }}
 {{- define "docs-mcp-server.configClaimName" -}}
-{{- default (printf "%s-config" (include "docs-mcp-server.fullname" .)) .Values.configPersistence.existingClaim }}
+{{- default (printf "%s-config" (include "docs-mcp-server.fullname" .)) (get (.Values.configPersistence | default dict) "existingClaim") }}
 {{- end }}

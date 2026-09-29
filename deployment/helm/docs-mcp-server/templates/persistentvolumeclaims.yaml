@@ -1,4 +1,4 @@
-{{- if and .Values.dataPersistence.enabled (not .Values.dataPersistence.existingClaim) }}
+{{- if and .Values.dataPersistence .Values.dataPersistence.enabled (not .Values.dataPersistence.existingClaim) (not (include "docs-mcp-server.hasDataVolumeMount" .)) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -21,7 +21,7 @@ spec:
       storage: {{ .Values.dataPersistence.size }}
 ---
 {{- end }}
-{{- if and .Values.configPersistence.enabled (not .Values.configPersistence.existingClaim) }}
+{{- if and .Values.configPersistence .Values.configPersistence.enabled (not .Values.configPersistence.existingClaim) (not (include "docs-mcp-server.hasConfigVolumeMount" .)) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

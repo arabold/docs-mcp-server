@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["image", "service", "dataPersistence", "configPersistence", "ingress", "route"],
+  "required": ["image", "service"],
   "properties": {
     "replicaCount": { "type": "integer", "minimum": 1, "maximum": 1 },
     "image": {
@@ -36,7 +36,7 @@
     "startupProbe": { "type": "object" },
     "readinessProbe": { "type": "object" },
     "livenessProbe": { "type": "object" },
-    "extraEnv": { "type": "array", "items": { "type": "object" } },
+    "env": { "type": "array", "items": { "type": "object" } },
     "envFrom": { "type": "array", "items": { "type": "object" } },
     "extraVolumes": { "type": "array", "items": { "type": "object" } },
     "extraVolumeMounts": { "type": "array", "items": { "type": "object" } },
@@ -49,8 +49,8 @@
   "definitions": {
     "serviceAccount": {
       "type": "object",
-      "required": ["create", "automountServiceAccountToken", "annotations", "name"],
       "properties": {
+        "enabled": { "type": "boolean" },
         "create": { "type": "boolean" },
         "automountServiceAccountToken": { "type": "boolean" },
         "annotations": { "type": "object" },
@@ -68,7 +68,6 @@
     },
     "persistence": {
       "type": "object",
-      "required": ["enabled", "existingClaim", "storageClass", "accessModes", "size", "annotations"],
       "properties": {
         "enabled": { "type": "boolean" },
         "existingClaim": { "type": "string" },
@@ -80,7 +79,6 @@
     },
     "ingress": {
       "type": "object",
-      "required": ["enabled", "className", "annotations", "hosts", "tls"],
       "properties": {
         "enabled": { "type": "boolean" },
         "className": { "type": "string" },
@@ -91,7 +89,6 @@
     },
     "route": {
       "type": "object",
-      "required": ["enabled", "host", "annotations", "wildcardPolicy", "tls"],
       "properties": {
         "enabled": { "type": "boolean" },
         "host": { "type": "string" },
@@ -99,7 +96,6 @@
         "wildcardPolicy": { "enum": ["None", "Subdomain"] },
         "tls": {
           "type": "object",
-          "required": ["enabled", "termination", "insecureEdgeTerminationPolicy"],
           "properties": {
             "enabled": { "type": "boolean" },
             "termination": { "enum": ["edge"] },
