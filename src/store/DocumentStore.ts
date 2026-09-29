@@ -30,6 +30,7 @@ import type {
   LibraryVersionSummary,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageListItem,
   StoredScraperOptions,
   VersionChunkListItem,
   VersionChunkStats,
@@ -2187,6 +2188,126 @@ export class DocumentStore {
       return result;
     } catch (error) {
       throw new ConnectionError("Failed to get pages by version ID", error);
+    }
+  }
+
+  /**
+   * Finds pages whose URL or content URL equals one of the candidates.
+   *
+   * @param library Library name.
+   * @param version Version label.
+   * @param candidates URLs to match exactly.
+   * @returns Page URLs, pages matched by `url` before pages matched by `content_url`.
+   */
+  async findPageUrls(
+    library: string,
+    version: string,
+    candidates: string[],
+  ): Promise<string[]> {
+    if (candidates.length === 0) return [];
+    try {
+      const placeholders = candidates.map(() => "?").join(", ");
+      const rows = this.db
+        .prepare(
+          `SELECT p.url FROM pages p
+           JOIN versions v ON p.version_id = v.id
+           JOIN libraries l ON v.library_id = l.id
+           WHERE l.name = ? AND COALESCE(v.name, '') = ?
+             AND (p.url IN (${placeholders}) OR p.content_url IN (${placeholders}))
+           ORDER BY p.url IN (${placeholders}) DESC, p.id ASC`,
+        )
+        .all(
+          normalizeLibraryName(library),
+          normalizeVersionLabel(version),
+          ...candidates,
+          ...candidates,
+          ...candidates,
+        ) as Array<{ url: string }>;
+      return rows.map((row) => row.url);
+    } catch (error) {
+      throw new ConnectionError("Failed to find pages by URL", error);
+    }
+  }
+
+  /**
+   * Finds pages whose URL, ignoring trailing slashes, ends with one of the suffixes.
+   *
+   * @param library Library name.
+   * @param version Version label.
+   * @param suffixes URL endings, matched literally.
+   * @param limit Maximum number of URLs to return.
+   * @returns Matching page URLs, shortest first.
+   */
+  async findPageUrlsBySuffix(
+    library: string,
+    version: string,
+    suffixes: string[],
+    limit: number,
+  ): Promise<string[]> {
+    if (suffixes.length === 0) return [];
+    try {
+      const conditions = suffixes
+        .map(() => "rtrim(p.url, '/') LIKE '%' || ? ESCAPE '\\'")
+        .join(" OR ");
+      const rows = this.db
+        .prepare(
+          `SELECT p.url FROM pages p
+           JOIN versions v ON p.version_id = v.id
+           JOIN libraries l ON v.library_id = l.id
+           WHERE l.name = ? AND COALESCE(v.name, '') = ? AND (${conditions})
+           ORDER BY LENGTH(p.url) ASC, p.id ASC
+           LIMIT ?`,
+        )
+        .all(
+          normalizeLibraryName(library),
+          normalizeVersionLabel(version),
+          ...suffixes.map((suffix) => this.escapeLikePattern(suffix)),
+          limit,
+        ) as Array<{ url: string }>;
+      return rows.map((row) => row.url);
+    } catch (error) {
+      throw new ConnectionError("Failed to find pages by URL suffix", error);
+    }
+  }
+
+  /**
+   * Lists the pages of a library version, ordered by crawl depth and then URL.
+   *
+   * @param library Library name.
+   * @param version Version label.
+   * @param options `contains` keeps only URLs containing the text; `limit` and `offset` paginate.
+   * @returns The requested pages and the total number of matching pages.
+   */
+  async listPages(
+    library: string,
+    version: string,
+    options: { contains?: string; limit?: number; offset?: number },
+  ): Promise<{ total: number; pages: PageListItem[] }> {
+    try {
+      const filter = options.contains ? "AND p.url LIKE '%' || ? || '%' ESCAPE '\\'" : "";
+      const params: unknown[] = [
+        normalizeLibraryName(library),
+        normalizeVersionLabel(version),
+        ...(options.contains ? [this.escapeLikePattern(options.contains)] : []),
+      ];
+      const from = `FROM pages p
+        JOIN versions v ON p.version_id = v.id
+        JOIN libraries l ON v.library_id = l.id
+        WHERE l.name = ? AND COALESCE(v.name, '') = ? ${filter}`;
+
+      const { total } = this.db
+        .prepare(`SELECT COUNT(*) AS total ${from}`)
+        .get(...params) as { total: number };
+      const pages = this.db
+        .prepare(
+          `SELECT p.url, p.title, p.depth ${from}
+           ORDER BY p.depth ASC NULLS LAST, p.url ASC
+           LIMIT ? OFFSET ?`,
+        )
+        .all(...params, options.limit ?? -1, options.offset ?? 0) as PageListItem[];
+      return { total, pages };
+    } catch (error) {
+      throw new ConnectionError("Failed to list pages", error);
     }
   }
 

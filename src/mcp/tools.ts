@@ -13,6 +13,8 @@ import {
   GetJobInfoTool,
   ListJobsTool,
   ListLibrariesTool,
+  ListPagesTool,
+  ReadPageTool,
   RefreshVersionTool,
   RemoveTool,
   ScrapeTool,
@@ -25,6 +27,8 @@ import type { AppConfig } from "../utils/config";
  */
 export interface McpServerTools {
   listLibraries: ListLibrariesTool;
+  listPages: ListPagesTool;
+  readPage: ReadPageTool;
   findVersion: FindVersionTool;
   scrape: ScrapeTool;
   refresh: RefreshVersionTool;
@@ -51,6 +55,8 @@ export async function initializeTools(
 ): Promise<McpServerTools> {
   const tools: McpServerTools = {
     listLibraries: new ListLibrariesTool(docService),
+    listPages: new ListPagesTool(docService),
+    readPage: new ReadPageTool(docService),
     findVersion: new FindVersionTool(docService),
     scrape: new ScrapeTool(pipeline, config.scraper),
     refresh: new RefreshVersionTool(pipeline),
