@@ -1,5 +1,6 @@
 /**
- * Tests for the MCP server factory: read-only mode, server identity (name, version), and the instructions sent to clients during initialization.
+ * Tests for the MCP server factory: read-only mode, server identity (name, title,
+ * version), and the instructions sent to clients during initialization.
  */
 
 import fs from "node:fs";
@@ -213,6 +214,21 @@ describe("MCP Server identity", () => {
 
     expect(client.getServerVersion()).toEqual({
       name: "acme-docs",
+      version: __APP_VERSION__,
+    });
+  });
+
+  it("reports the configured server title alongside the name", async () => {
+    const config = {
+      ...mockConfig,
+      server: { name: "acme-docs", title: "Acme Internal Docs" },
+    } as unknown as AppConfig;
+
+    const client = await connectClient(createMcpServerInstance(mockTools, config));
+
+    expect(client.getServerVersion()).toEqual({
+      name: "acme-docs",
+      title: "Acme Internal Docs",
       version: __APP_VERSION__,
     });
   });

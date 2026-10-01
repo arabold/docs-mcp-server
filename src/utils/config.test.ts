@@ -51,6 +51,7 @@ describe("Configuration Loading", () => {
     delete process.env.DOCS_MCP_AUTH_ENABLED;
     delete process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN;
     delete process.env.DOCS_MCP_SERVER_NAME;
+    delete process.env.DOCS_MCP_SERVER_TITLE;
     delete process.env.DOCS_MCP_SERVER_INSTRUCTIONS;
     delete process.env.DOCS_MCP_SERVER_INSTRUCTIONS_FILE;
   });
@@ -183,6 +184,27 @@ describe("Configuration Loading", () => {
       const config = loadConfig({ serverName: "cli-name" }, { configPath });
 
       expect(config.server.name).toBe("cli-name");
+    });
+
+    it("applies server.title precedence from CLI over env and config file", () => {
+      const configPath = path.join(tmpDir, "server-title.yaml");
+      fs.writeFileSync(configPath, "server:\n  title: File Title\n");
+      process.env.DOCS_MCP_SERVER_TITLE = "Env Title";
+
+      const config = loadConfig({ serverTitle: "CLI Title" }, { configPath });
+
+      expect(config.server.title).toBe("CLI Title");
+    });
+
+    it("leaves server.title unset by default and treats an empty env var as absent", () => {
+      process.env.DOCS_MCP_SERVER_TITLE = " ";
+
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "empty-title.yaml") },
+      );
+
+      expect(config.server.title).toBeUndefined();
     });
 
     it("applies server.instructions precedence from CLI over env and config file", () => {

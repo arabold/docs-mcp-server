@@ -111,9 +111,11 @@ export function createMcpServerInstance(
   instructions?: string,
 ): McpServer {
   const readOnly = config.app.readOnly;
+  const { name, title } = config.server;
   const server = new McpServer(
     {
-      name: config.server.name,
+      name,
+      ...(title !== undefined ? { title } : {}),
       version: __APP_VERSION__,
     },
     {

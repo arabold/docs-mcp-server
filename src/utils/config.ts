@@ -90,6 +90,7 @@ export const DEFAULT_CONFIG = {
   },
   server: {
     name: "docs-mcp-server",
+    title: undefined as string | undefined,
     instructions: undefined as string | undefined,
     instructionsFile: undefined as string | undefined,
     protocol: "auto",
@@ -204,6 +205,7 @@ export const AppConfigSchema = z.object({
         blankToUndefined,
         z.string().default(DEFAULT_CONFIG.server.name),
       ),
+      title: z.preprocess(blankToUndefined, z.string().optional()),
       instructions: z.preprocess(blankToUndefined, z.string().optional()),
       instructionsFile: z.preprocess(blankToUndefined, z.string().optional()),
       protocol: z.string().default(DEFAULT_CONFIG.server.protocol),
@@ -487,6 +489,7 @@ const configMappings: ConfigMapping[] = [
     cli: "publicOrigin",
   },
   { path: ["server", "name"], env: ["DOCS_MCP_SERVER_NAME"], cli: "serverName" },
+  { path: ["server", "title"], env: ["DOCS_MCP_SERVER_TITLE"], cli: "serverTitle" },
   {
     path: ["server", "instructions"],
     env: ["DOCS_MCP_SERVER_INSTRUCTIONS"],

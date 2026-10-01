@@ -116,7 +116,7 @@ Common settings have dedicated CLI flags:
 docs-mcp-server --port 8080 --host 0.0.0.0
 docs-mcp-server --host 0.0.0.0 --public-origin https://docs.example.com
 docs-mcp-server --store-path /data/docs --read-only
-docs-mcp-server --server-name acme-docs --server-instructions-file /etc/acme/instructions.md
+docs-mcp-server --server-name acme-docs --server-title "Acme Docs" --server-instructions-file /etc/acme/instructions.md
 ```
 
 ## CLI Configuration Commands
@@ -167,6 +167,7 @@ Settings for the API and MCP servers.
 | Option | Default | Description |
 |:-------|:--------|:------------|
 | `name` | `docs-mcp-server` | Server name reported to MCP clients during initialization. Set this to tell instances apart when running more than one. |
+| `title` | - | Human-readable server title reported to MCP clients alongside `name`. Clients that support it display the title; others fall back to `name`. |
 | `instructions` | - | Instructions text sent to MCP clients during initialization. Clients inject it into the model's context, so use it to describe what this server indexes and how to use it. Mutually exclusive with `instructionsFile`. |
 | `instructionsFile` | - | Path to a file whose contents are used as `instructions`. Use an absolute path: relative paths resolve against the working directory, which is often unpredictable when a desktop client launches the server over stdio. Read once at startup; a missing or unreadable file fails startup. Setting both `instructions` and `instructionsFile` also fails startup. |
 | `protocol` | `auto` | Server protocol (`stdio`, `http`, or `auto`). |

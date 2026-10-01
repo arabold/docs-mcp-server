@@ -58,6 +58,11 @@ export function createDefaultAction(cli: Argv) {
             description: "Server name reported to MCP clients (default: docs-mcp-server)",
             alias: "serverName",
           })
+          .option("server-title", {
+            type: "string",
+            description: "Human-readable server title shown by MCP clients",
+            alias: "serverTitle",
+          })
           .option("server-instructions", {
             type: "string",
             description: "Instructions text sent to MCP clients during initialization",

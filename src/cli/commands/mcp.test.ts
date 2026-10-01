@@ -168,7 +168,7 @@ describe("mcp command", () => {
 
     try {
       await parser.parse(
-        `mcp --protocol stdio --server-name acme-docs --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
+        `mcp --protocol stdio --server-name acme-docs --server-title "Acme Docs" --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
       );
     } catch (e: any) {
       if (e.message !== "Simulated Stop") throw e;
@@ -178,6 +178,7 @@ describe("mcp command", () => {
     expect(configModule.loadConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         serverName: "acme-docs",
+        serverTitle: "Acme Docs",
         serverInstructions: "Use acme docs",
         serverInstructionsFile: "/tmp/acme.md",
       }),

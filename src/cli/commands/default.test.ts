@@ -164,7 +164,7 @@ describe("default command", () => {
 
     try {
       await parser.parse(
-        `server --protocol stdio --server-name acme-docs --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
+        `server --protocol stdio --server-name acme-docs --server-title "Acme Docs" --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
       );
     } catch (e: any) {
       if (e.message !== "Simulated Stop") throw e;
@@ -174,6 +174,7 @@ describe("default command", () => {
     expect(configModule.loadConfig).toHaveBeenCalledWith(
       expect.objectContaining({
         serverName: "acme-docs",
+        serverTitle: "Acme Docs",
         serverInstructions: "Use acme docs",
         serverInstructionsFile: "/tmp/acme.md",
       }),

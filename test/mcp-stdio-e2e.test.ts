@@ -99,7 +99,7 @@ describe("MCP stdio server E2E", () => {
     expect(toolNames).toContain("list_libraries");
   }, 30000);
 
-  it("should report the configured server name and instructions on initialize", async () => {
+  it("should report the configured server name, title and instructions on initialize", async () => {
     const projectRoot = path.resolve(import.meta.dirname, "..");
 
     const testEnv = { ...process.env };
@@ -116,6 +116,7 @@ describe("MCP stdio server E2E", () => {
         DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-stdio"),
         DOCS_MCP_TELEMETRY: "false",
         DOCS_MCP_SERVER_NAME: "acme-docs",
+        DOCS_MCP_SERVER_TITLE: "Acme Docs",
         DOCS_MCP_SERVER_INSTRUCTIONS: "Search acme docs before answering.",
       },
     });
@@ -125,6 +126,7 @@ describe("MCP stdio server E2E", () => {
     await client.connect(transport);
 
     expect(client.getServerVersion()?.name).toBe("acme-docs");
+    expect(client.getServerVersion()?.title).toBe("Acme Docs");
     expect(client.getServerVersion()?.version).not.toBe("0.1.0");
     expect(client.getInstructions()).toBe("Search acme docs before answering.");
   }, 30000);
