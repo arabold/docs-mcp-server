@@ -2,8 +2,12 @@
  * Tests for MCP service functionality including SSE heartbeat.
  */
 
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import Fastify from "fastify";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMcpServerInstance, resolveServerInstructions } from "../mcp/mcpServer";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { type AppConfig, loadConfig } from "../utils/config";
@@ -25,12 +29,16 @@ vi.mock("../mcp/tools", () => ({
   }),
 }));
 
-vi.mock("../mcp/mcpServer", () => ({
-  createMcpServerInstance: vi.fn().mockReturnValue({
-    connect: vi.fn().mockResolvedValue(undefined),
-    close: vi.fn().mockResolvedValue(undefined),
-  }),
-}));
+vi.mock("../mcp/mcpServer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../mcp/mcpServer")>();
+  return {
+    createMcpServerInstance: vi.fn().mockReturnValue({
+      connect: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    }),
+    resolveServerInstructions: vi.fn(actual.resolveServerInstructions),
+  };
+});
 
 vi.mock("../telemetry", () => ({
   telemetry: {
@@ -155,6 +163,68 @@ describe("MCP Service", () => {
       expect(routes).toContain("cp (POST");
 
       await cleanupMcpService(mcpServer);
+    });
+  });
+
+  describe("Server instructions", () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-service-instructions-"));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it("reads the instructions file once at startup, not per request", async () => {
+      // Fastify's inject() schedules work on real timers.
+      vi.useRealTimers();
+      const instructionsFile = path.join(tmpDir, "instructions.md");
+      fs.writeFileSync(instructionsFile, "Search acme docs before answering.");
+      const config = {
+        ...appConfig,
+        server: { ...appConfig.server, instructionsFile },
+      } as AppConfig;
+
+      const mcpServer = await registerMcpService(
+        server,
+        mockDocService,
+        mockPipeline,
+        config,
+      );
+      fs.rmSync(instructionsFile);
+
+      // The per-request server only needs to be created; failing its connect ends the
+      // request immediately instead of waiting on a transport the mock never wires up.
+      vi.mocked(createMcpServerInstance).mockReturnValueOnce({
+        connect: vi.fn().mockRejectedValue(new Error("stop")),
+        close: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ReturnType<typeof createMcpServerInstance>);
+      await server.inject({ method: "POST", url: "/mcp", payload: {} });
+
+      expect(resolveServerInstructions).toHaveBeenCalledTimes(1);
+      const createCalls = vi.mocked(createMcpServerInstance).mock.calls;
+      expect(createCalls).toHaveLength(2);
+      for (const call of createCalls) {
+        expect(call[2]).toBe("Search acme docs before answering.");
+      }
+
+      await cleanupMcpService(mcpServer);
+    });
+
+    it("fails to register when the instructions cannot be resolved", async () => {
+      const config = {
+        ...appConfig,
+        server: {
+          ...appConfig.server,
+          instructionsFile: path.join(tmpDir, "missing.md"),
+        },
+      } as AppConfig;
+
+      await expect(
+        registerMcpService(server, mockDocService, mockPipeline, config),
+      ).rejects.toThrow(/instructions file/i);
     });
   });
 });
