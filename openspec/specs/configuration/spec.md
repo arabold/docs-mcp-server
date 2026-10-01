@@ -414,3 +414,46 @@ The configuration system SHALL expose an optional `server.publicOrigin` setting 
 #### Scenario: Trailing slash is normalized
 - **WHEN** `server.publicOrigin` is configured as `https://docs.example.com/`
 - **THEN** the loaded configuration or URL-generation path MUST use `https://docs.example.com` as the canonical origin
+
+### Requirement: Server Identity Configuration
+The configuration system SHALL expose `server.name`, `server.title`, `server.instructions`, and `server.instructionsFile` settings that define how the MCP server identifies itself and what instructions it sends to clients during initialization.
+
+#### Scenario: Default server name
+- **WHEN** no server name is configured
+- **THEN** the loaded configuration MUST set `server.name` to `docs-mcp-server`
+- **AND** the MCP `initialize` result MUST report `serverInfo.name` as `docs-mcp-server` and `serverInfo.version` as the package version
+
+#### Scenario: Server name precedence
+- **WHEN** `server.name` is set in the configuration file, the environment variable `DOCS_MCP_SERVER_NAME`, and the CLI flag `--server-name`
+- **THEN** the CLI value MUST take precedence over the environment value, which MUST take precedence over the configuration file value
+
+#### Scenario: Server title is optional
+- **WHEN** no server title is configured
+- **THEN** the loaded configuration MUST leave `server.title` unset
+- **AND** the MCP `initialize` result MUST omit `serverInfo.title`
+
+#### Scenario: Server title from any source
+- **WHEN** `server.title` is set via the configuration file, the environment variable `DOCS_MCP_SERVER_TITLE`, or the CLI flag `--server-title`
+- **THEN** the MCP `initialize` result MUST report it as `serverInfo.title` alongside `serverInfo.name`
+- **AND** the usual CLI > environment > configuration file precedence MUST apply
+
+#### Scenario: Inline instructions
+- **WHEN** `server.instructions` is set via the configuration file, `DOCS_MCP_SERVER_INSTRUCTIONS`, or `--server-instructions`
+- **THEN** the MCP `initialize` result MUST include that text as `instructions`
+
+#### Scenario: Instructions file read once at startup
+- **WHEN** `server.instructionsFile` is set via the configuration file, `DOCS_MCP_SERVER_INSTRUCTIONS_FILE`, or `--server-instructions-file`
+- **THEN** the server MUST read the file once at startup and send its contents as `instructions` to every client session
+- **AND** later changes to or removal of the file MUST NOT affect running sessions or new sessions
+
+#### Scenario: Both instructions settings set
+- **WHEN** both `server.instructions` and `server.instructionsFile` are set, from any combination of sources
+- **THEN** server startup MUST fail with a clear error naming both settings
+
+#### Scenario: Unreadable instructions file
+- **WHEN** `server.instructionsFile` points to a file that cannot be read
+- **THEN** server startup MUST fail with a clear error naming the file
+
+#### Scenario: Blank values are treated as absent
+- **WHEN** any of these settings is provided as an empty or whitespace-only string
+- **THEN** the loaded configuration MUST treat it as unset so defaults apply
