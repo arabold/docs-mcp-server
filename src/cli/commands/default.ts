@@ -66,7 +66,7 @@ export function createDefaultAction(cli: Argv) {
           .option("server-instructions-file", {
             type: "string",
             description:
-              "Path to a file whose contents are sent to MCP clients as instructions (ignored when --server-instructions is set)",
+              "Path to a file whose contents are sent to MCP clients as instructions (mutually exclusive with server.instructions; setting both fails startup)",
             alias: "serverInstructionsFile",
           })
           .option("embedding-model", {

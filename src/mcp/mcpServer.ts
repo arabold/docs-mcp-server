@@ -68,16 +68,21 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
 
 /**
  * Resolves the instructions text advertised to MCP clients during initialization.
- * An inline `server.instructions` value takes precedence over `server.instructionsFile`.
+ * `server.instructions` and `server.instructionsFile` are mutually exclusive.
  * @param config The application configuration.
  * @returns The instructions text, or `undefined` when none are configured.
- * @throws {Error} If the configured instructions file cannot be read.
+ * @throws {Error} If both settings are set, or the configured instructions file cannot be read.
  */
 export function resolveServerInstructions(config: AppConfig): string | undefined {
-  if (config.server.instructions !== undefined) {
-    return config.server.instructions;
+  const { instructions, instructionsFile: filePath } = config.server;
+  if (instructions !== undefined && filePath !== undefined) {
+    throw new Error(
+      "Both server.instructions and server.instructionsFile are set; configure only one of them.",
+    );
   }
-  const filePath = config.server.instructionsFile;
+  if (instructions !== undefined) {
+    return instructions;
+  }
   if (filePath === undefined) {
     return undefined;
   }

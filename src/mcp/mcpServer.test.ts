@@ -258,7 +258,7 @@ describe("MCP Server identity", () => {
       expect(client.getInstructions()).toBe("# Acme docs\n\nAlways search first.\n");
     });
 
-    it("prefers inline instructions over the file", async () => {
+    it("fails when both inline instructions and an instructions file are set", () => {
       const instructionsFile = path.join(tmpDir, "instructions.md");
       fs.writeFileSync(instructionsFile, "from file");
       const config = {
@@ -266,9 +266,9 @@ describe("MCP Server identity", () => {
         server: { name: "acme-docs", instructions: "inline", instructionsFile },
       } as unknown as AppConfig;
 
-      const client = await connectClient(createMcpServerInstance(mockTools, config));
-
-      expect(client.getInstructions()).toBe("inline");
+      expect(() => createMcpServerInstance(mockTools, config)).toThrow(
+        /server\.instructions.*server\.instructionsFile/,
+      );
     });
 
     it("fails at startup when the instructions file cannot be read", () => {
