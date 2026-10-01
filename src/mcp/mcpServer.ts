@@ -68,6 +68,8 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
 
 /**
  * Resolves the instructions text advertised to MCP clients during initialization.
+ * Call this once at startup and pass the result to `createMcpServerInstance()`, so the
+ * instructions file is read a single time rather than for every client session.
  * `server.instructions` and `server.instructionsFile` are mutually exclusive.
  * @param config The application configuration.
  * @returns The instructions text, or `undefined` when none are configured.
@@ -100,11 +102,13 @@ export function resolveServerInstructions(config: AppConfig): string | undefined
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
+ * @param instructions Instructions text sent to clients during initialization.
  * @returns A configured McpServer instance.
  */
 export function createMcpServerInstance(
   tools: McpServerTools,
   config: AppConfig,
+  instructions?: string,
 ): McpServer {
   const readOnly = config.app.readOnly;
   const server = new McpServer(
@@ -117,7 +121,7 @@ export function createMcpServerInstance(
         tools: {},
         resources: {},
       },
-      instructions: resolveServerInstructions(config),
+      instructions,
     },
   );
 

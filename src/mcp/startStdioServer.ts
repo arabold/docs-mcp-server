@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
-import { createMcpServerInstance } from "./mcpServer";
+import { createMcpServerInstance, resolveServerInstructions } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
 /**
@@ -16,7 +16,11 @@ export async function startStdioServer(
   config: AppConfig,
 ): Promise<McpServer> {
   // Create a server instance using the factory and shared tools
-  const server = createMcpServerInstance(tools, config);
+  const server = createMcpServerInstance(
+    tools,
+    config,
+    resolveServerInstructions(config),
+  );
 
   // Start server with Stdio transport
   const transport = new StdioServerTransport();
