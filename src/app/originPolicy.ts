@@ -51,7 +51,7 @@ export function createOriginPolicy(options: BrowserPolicyOptions): OriginPolicy 
   );
   const exactOrigins = new Set(options.allowedOrigins);
   if (options.publicOrigin !== undefined) {
-    exactOrigins.add(new URL(options.publicOrigin).origin);
+    exactOrigins.add(options.publicOrigin);
   }
 
   return {
@@ -87,9 +87,12 @@ export interface HostPolicy {
   isAllowed(host: string | undefined): boolean;
 }
 
-/** `host[:port]` or `[ipv6][:port]`, the only shapes a browser sends. */
+/**
+ * `host[:port]` or `[ipv6][:port]`, the only shapes a browser sends. Captures
+ * the host (with brackets for IPv6) and the port.
+ */
 const HOST_HEADER =
-  /^(?:[a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])(?::\d{1,5})?$/i;
+  /^([a-z0-9_-]+(?:\.[a-z0-9_-]+)*\.?|\[[0-9a-f:.]+\])(?::(\d{1,5}))?$/i;
 
 /**
  * Build the host policy. A host is accepted when it is an IP address literal,
@@ -112,26 +115,19 @@ export function createHostPolicy(options: BrowserPolicyOptions): HostPolicy {
 
   return {
     isAllowed(host) {
-      if (host === undefined || host === "") {
+      if (!host) {
         return true;
       }
-      if (!HOST_HEADER.test(host)) {
+      const match = HOST_HEADER.exec(host);
+      if (!match || Number(match[2] ?? 0) > 65535) {
         return false;
       }
-      let hostname: string;
-      try {
-        // Still throws for values the pattern lets through, such as a port
-        // above 65535 or a malformed IPv6 literal.
-        hostname = new URL(`http://${host}`).hostname.toLowerCase();
-      } catch {
-        return false;
+      const hostname = match[1].toLowerCase();
+      if (hostname.startsWith("[")) {
+        return isIP(hostname.slice(1, -1)) === 6;
       }
-      return (
-        isIP(stripIpv6Brackets(hostname)) !== 0 ||
-        hostname === "localhost" ||
-        !hostname.includes(".") ||
-        knownHosts.has(hostname)
-      );
+      // `localhost` is a single-label name, so the dot check accepts it.
+      return isIP(hostname) === 4 || !hostname.includes(".") || knownHosts.has(hostname);
     },
   };
 }
@@ -145,7 +141,7 @@ const HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
  * @param requestedHeaders - The raw header value.
  * @returns The comma-separated valid names, or `undefined` when none remain.
  */
-export function sanitizeRequestedHeaders(
+function sanitizeRequestedHeaders(
   requestedHeaders: string | undefined,
 ): string | undefined {
   const names = (requestedHeaders ?? "")

@@ -668,13 +668,15 @@ export class AppServer {
       );
     }
 
-    const mcpEndpointUrl = this.mcpEndpointUrl;
     const verifier = await JwtAccessTokenVerifier.create({
       issuerUrl,
-      audience: this.appConfig.auth.audience?.trim() || mcpEndpointUrl,
+      audience: this.appConfig.auth.audience?.trim() || this.mcpEndpointUrl,
     });
 
-    const document = buildProtectedResourceMetadata({ mcpEndpointUrl, issuerUrl });
+    const document = buildProtectedResourceMetadata({
+      mcpEndpointUrl: this.mcpEndpointUrl,
+      issuerUrl,
+    });
     for (const metadataPath of protectedResourceMetadataPaths(
       this.location.basePath,
       MCP_ENDPOINT_PATH,
@@ -705,7 +707,7 @@ export class AppServer {
         MCP_ENDPOINT_PATH,
       ),
     };
-    logger.debug(`Protected resource metadata served for ${mcpEndpointUrl}`);
+    logger.debug(`Protected resource metadata served for ${this.mcpEndpointUrl}`);
   }
 
   /**

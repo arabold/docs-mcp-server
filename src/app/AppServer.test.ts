@@ -808,7 +808,7 @@ describe("AppServer Behavior Tests", () => {
       );
     });
 
-    it("should not warn for wildcard bind when auth is disabled", async () => {
+    it("logs no warnings on a wildcard bind without authentication", async () => {
       const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => undefined);
       const config: AppServerConfig = {
         enableWebInterface: false,

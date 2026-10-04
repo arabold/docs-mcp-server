@@ -121,7 +121,7 @@ function decodeUriVariable(value: string | string[]): string {
  * @param config The application configuration.
  * @returns The input schema for each tool, keyed by the tool's camel-cased name.
  */
-export function createToolInputSchemas(config: AppConfig) {
+function createToolInputSchemas(config: AppConfig) {
   return {
     scrapeDocs: z.object({
       url: z.string().url().describe("Documentation root URL to scrape."),
@@ -290,7 +290,7 @@ export function createToolInputSchemas(config: AppConfig) {
 }
 
 /** Input schemas for every tool, as built by {@link createToolInputSchemas}. */
-export type ToolInputSchemas = ReturnType<typeof createToolInputSchemas>;
+type ToolInputSchemas = ReturnType<typeof createToolInputSchemas>;
 
 /**
  * Build a factory for MCP server instances that share one set of tool input
@@ -316,14 +316,14 @@ export function createMcpServerFactory(
  * @param config The application configuration.
  * @param instructions Instructions text sent to clients during initialization, as
  *   returned by `resolveServerInstructions()`.
- * @param schemas Prebuilt tool input schemas; built from `config` when omitted.
+ * @param schemas The tool input schemas, shared by every instance.
  * @returns A configured McpServer instance.
  */
-export function createMcpServerInstance(
+function createMcpServerInstance(
   tools: McpServerTools,
   config: AppConfig,
   instructions: string,
-  schemas: ToolInputSchemas = createToolInputSchemas(config),
+  schemas: ToolInputSchemas,
 ): McpServer {
   const readOnly = config.app.readOnly;
   const { name, title } = config.server;

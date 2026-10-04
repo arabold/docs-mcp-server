@@ -11,11 +11,12 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
-import { createMcpServerInstance, resolveServerInstructions } from "../src/mcp/mcpServer";
+import { createMcpServerFactory } from "../src/mcp/mcpServer";
 import type { McpServerTools } from "../src/mcp/tools";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { pipelineRouter } from "../src/pipeline/trpc/router";
@@ -141,19 +142,13 @@ describe("Library identity end-to-end", () => {
       ).resolves.toHaveProperty("jobId");
 
       const tools = { listLibraries: new ListLibrariesTool(docService) } as McpServerTools;
-      const server = createMcpServerInstance(
-        tools,
-        appConfig,
-        resolveServerInstructions(appConfig),
-      );
-      const template = (server as any)._registeredResourceTemplates.versions;
-      const uri = "docs://libraries/react/versions";
-      const resource = await template.readCallback(
-        new URL(uri),
-        template.resourceTemplate.uriTemplate.match(uri),
-        {},
-      );
-      expect(resource.contents.map((c: { text: string }) => c.text)).toEqual(["19.0.0"]);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "library-identity-e2e", version: "1.0.0" });
+      await createMcpServerFactory(tools, appConfig)().connect(serverTransport);
+      await client.connect(clientTransport);
+      const resource = await client.readResource({ uri: "docs://libraries/react/versions" });
+      await client.close();
+      expect(resource.contents.map((c) => ("text" in c ? c.text : ""))).toEqual(["19.0.0"]);
 
       await new RemoveTool(docService, pipeline).execute({ library: " React ", version: "19.0.0" });
       expect(await listed()).toEqual([]);

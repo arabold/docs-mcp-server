@@ -13,7 +13,7 @@ import { VersionAlreadyExistsError } from "../store/errors";
 import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { buildDefaultInstructions } from "./defaultInstructions";
-import { createMcpServerInstance, resolveServerInstructions } from "./mcpServer";
+import { createMcpServerFactory, resolveServerInstructions } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
 vi.mock("../telemetry", async (importOriginal) => ({
@@ -90,9 +90,9 @@ const mockTools: McpServerTools = {
   } as any,
 };
 
-/** Creates a server the way the entry points do, with instructions resolved from the config. */
+/** Creates a server the way the entry points do: through the factory, with instructions resolved from the config. */
 function createServer(config: AppConfig): McpServer {
-  return createMcpServerInstance(mockTools, config, resolveServerInstructions(config));
+  return createMcpServerFactory(mockTools, config)();
 }
 
 describe("MCP Server Read-Only Mode", () => {
@@ -418,11 +418,9 @@ describe("MCP versions resource", () => {
 
   async function readVersions(uri: string) {
     vi.mocked(mockTools.listLibraries.execute).mockResolvedValue(listedLibraries as any);
-    const server = createServer(mockConfig);
-    const template = (server as any)._registeredResourceTemplates.versions;
-    const variables = template.resourceTemplate.uriTemplate.match(uri);
-    const result = await template.readCallback(new URL(uri), variables, {});
-    return result.contents.map((c: { text: string }) => c.text);
+    const client = await connectClient(createServer(mockConfig));
+    const result = await client.readResource({ uri });
+    return result.contents.map((content) => ("text" in content ? content.text : ""));
   }
 
   it("matches a library name case-insensitively", async () => {
@@ -442,9 +440,7 @@ describe("MCP versions resource", () => {
  * advertised JSON Schema rather than the server's internal registry.
  */
 async function listToolsOverTheWire(config: AppConfig) {
-  const handler = createMcpHandler(() => createServer(config), {
-    legacy: "reject",
-  });
+  const handler = createMcpHandler(createMcpServerFactory(mockTools, config));
   const response = await handler.fetch(
     new Request("http://127.0.0.1/mcp", {
       method: "POST",
@@ -584,13 +580,15 @@ describe("MCP Server identity", () => {
   });
 
   it("sends the given instructions to the client", async () => {
-    const client = await connectClient(
-      createMcpServerInstance(
-        mockTools,
-        mockConfig,
-        "Search acme docs before answering.",
-      ),
-    );
+    const config = {
+      ...mockConfig,
+      server: {
+        name: "docs-mcp-server",
+        instructions: "Search acme docs before answering.",
+      },
+    } as unknown as AppConfig;
+
+    const client = await connectClient(createServer(config));
 
     expect(client.getInstructions()).toBe("Search acme docs before answering.");
   });
