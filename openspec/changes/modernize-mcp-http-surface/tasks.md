@@ -198,6 +198,13 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
 - [x] 10.4 Cap the legacy SSE transport at `LEGACY_SSE_MAX_SESSIONS` (100) open streams, answering 503 with `Retry-After` beyond it. Verify with the cap test in `mcpService.test.ts`.
 - [x] 10.5 Update the specs, design, proposal and the docs that describe allowed origins and hosts (`authentication.md`, `configuration.md`, `reverse-proxy.md`, `deployment-modes.md`). Verify `openspec validate modernize-mcp-http-surface --strict` passes.
 
-## 11. Archive follow-up
+## 11. PR review follow-ups
 
-- [ ] 11.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.
+- [x] 11.1 Treat a `Host` value that `new URL()` rejects (a port above 65535, a malformed IPv6 literal) as refused instead of throwing in the request hook and the upgrade handler. Verify `originPolicy.test.ts` refuses `attacker.example:99999`, `localhost:99999` and `[::::]`.
+- [x] 11.2 Reject a `server.publicUrl` path with an empty segment (`//`), which would make `<base href>` scheme-relative, and a first segment containing a dot, which would shadow root files such as `favicon.ico`. Verify `serverOrigin.test.ts` rejects `https://example.com//docs` and `https://example.com/favicon.ico`.
+- [x] 11.3 Match `/docs` and `/docs/…` only in the Traefik example of `docs/infrastructure/reverse-proxy.md`, so `/docs-old` stays with its own router.
+- [x] 11.4 Build the web UI in a Vitest global setup (`test/global-setup.ts`) when `public/index.html` is missing, so the E2E suites that load the shell pass in CI and fresh checkouts. Verify `test/mcp-http-e2e.test.ts` and `test/base-path-e2e.test.ts` pass in a checkout without build output.
+
+## 12. Archive follow-up
+
+- [ ] 12.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.
