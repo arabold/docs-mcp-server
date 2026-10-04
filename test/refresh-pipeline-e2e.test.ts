@@ -476,6 +476,11 @@ describe("Refresh Pipeline E2E Tests", () => {
       // without a timeout ever occurring. Shortened here so the stall is
       // bounded well inside the test's own budget.
       appConfig.scraper.fetcher.timeoutMs = 500;
+      // A timeout is retryable, and the defaults (3 retries, 1s base backoff)
+      // turn one stalled page into ~9s of waiting. One retry with a short
+      // backoff still exercises timeout-then-retry, in about a second.
+      appConfig.scraper.fetcher.maxRetries = 1;
+      appConfig.scraper.fetcher.baseDelayMs = 10;
 
       // Setup: Mock initial site where one page times out
       nock(TEST_BASE_URL)
@@ -501,15 +506,19 @@ describe("Refresh Pipeline E2E Tests", () => {
 
       // Persisted: the fetcher retries, and every attempt must stall the same
       // way rather than falling through to an unmatched request.
+      let timeoutPageRequests = 0;
       nock(TEST_BASE_URL)
         .persist()
         .get("/timeout-page")
         .delay(5000) // Longer than the fetcher's timeout, so the read aborts
-        .reply(
-          200,
-          "<html><body><h1>Never</h1><p>Should never reach this</p></body></html>",
-          { "Content-Type": "text/html" },
-        );
+        .reply(() => {
+          timeoutPageRequests++;
+          return [
+            200,
+            "<html><body><h1>Never</h1><p>Should never reach this</p></body></html>",
+            { "Content-Type": "text/html" },
+          ];
+        });
 
       // Execute scrape - should complete despite timeout
       const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
@@ -522,6 +531,10 @@ describe("Refresh Pipeline E2E Tests", () => {
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(jobId);
+
+      // Both attempts reached the stalled page: the first timed out and was
+      // retried, so the page was dropped by the timeout and not by some gate.
+      expect(timeoutPageRequests).toBe(2);
 
       // Verify that the working pages were indexed despite the timeout
       const versionId = await docService.ensureVersion({
