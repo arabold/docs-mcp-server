@@ -88,6 +88,8 @@ export default defineConfig({
     ],
     // Exclude live e2e tests by default (they can be run manually)
     exclude: ["test/**/*-live-e2e.test.ts"],
+    // Builds the web UI once when it is missing; the E2E suites load its shell.
+    globalSetup: ["test/global-setup.ts"],
     // Use the e2e setup which includes both logger mock and mock server
     setupFiles: ["test/setup-env.ts", "test/setup-e2e.ts"],
     // Suppress stdout/stderr from passing tests. Failed tests still show
