@@ -2760,6 +2760,30 @@ describe("DocumentStore - compaction", () => {
     expect(second.vacuumed).toBe(false);
   });
 
+  it("returns the store to its empty size after all pages are deleted", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(join(tempDir, "documents.db"), cfg);
+    await store.initialize();
+    const emptyBytes = (await store.compact({ force: true })).afterBytes;
+
+    // Varied vocabulary gives the full-text index real weight; every page is
+    // its own transaction and so its own index segment, as during a scrape.
+    for (let i = 0; i < 20; i++) {
+      const words = Array.from({ length: 3000 }, (_, j) => `term${i}w${j}`).join(" ");
+      await store.addDocuments(
+        "compactlib",
+        "1.0.0",
+        1,
+        createScrapeResult(`Page ${i}`, `https://example.com/page-${i}`, words),
+      );
+    }
+    await store.deletePages("compactlib", "1.0.0");
+
+    const result = await store.compact({ force: false });
+    expect(result.afterBytes - emptyBytes).toBeLessThan(64 * 1024);
+  });
+
   it("does not vacuum when vacuum is false", async () => {
     const cfg = loadConfig();
     cfg.app.embeddingModel = "";
