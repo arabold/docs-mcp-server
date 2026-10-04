@@ -316,10 +316,169 @@ ${r.content}\n`,
     },
   );
 
+  // Read page tool
+  server.tool(
+    "read_page",
+    "Read the full content of an indexed documentation page, for example a URL returned by `search_docs` or `list_pages`. " +
+      "Long pages are returned in parts; the response says how to continue.",
+    {
+      library: z.string().trim().describe("Library name."),
+      pathOrUrl: z
+        .string()
+        .trim()
+        .min(1)
+        .describe(
+          "Page URL, or a path matching the end of one page URL (e.g. 'https://react.dev/reference/react' or '/reference/react').",
+        ),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      startChunk: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Chunk to start from, as given by a previous response (default 0)."),
+      maxChars: z
+        .number()
+        .positive()
+        .optional()
+        .default(30000)
+        .describe(
+          "Maximum characters to return (default 30000). Only whole chunks are returned, so a single longer chunk is returned on its own.",
+        ),
+    },
+    {
+      title: "Read Documentation Page",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
+    async ({ library, pathOrUrl, version, startChunk, maxChars }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "read_page",
+        context: "mcp_server",
+        library,
+        version,
+      });
+
+      try {
+        const result = await tools.readPage.execute({
+          library,
+          pathOrUrl,
+          version,
+          startChunk,
+          maxChars,
+        });
+
+        if (result.startChunk >= result.totalChunks && result.totalChunks > 0) {
+          return createResponse(
+            `startChunk ${result.startChunk} is past the end of ${result.url}, which has ${result.totalChunks} chunks.`,
+          );
+        }
+
+        const end = result.nextChunk ?? result.totalChunks;
+        const notice =
+          result.nextChunk !== null
+            ? `\n\n> Showing chunks ${result.startChunk + 1}-${end} of ${result.totalChunks}. ` +
+              `To continue, call read_page again with startChunk: ${result.nextChunk}.`
+            : "";
+
+        return createResponse(`> Source: ${result.url}\n\n${result.content}${notice}`);
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
+  // List pages tool
+  server.tool(
+    "list_pages",
+    "List the indexed pages of a library version, with an optional URL filter and pagination.",
+    {
+      library: z.string().trim().describe("Library name."),
+      version: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Library version (exact or X-Range, optional)."),
+      contains: z
+        .string()
+        .trim()
+        .optional()
+        .describe("Only list pages whose URL contains this text (e.g. '/components')."),
+      limit: z
+        .number()
+        .int()
+        .positive()
+        .max(200)
+        .optional()
+        .default(50)
+        .describe("Maximum pages to return (default 50, max 200)."),
+      offset: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .default(0)
+        .describe("Number of pages to skip (default 0)."),
+    },
+    {
+      title: "List Library Pages",
+      readOnlyHint: true,
+      destructiveHint: false,
+    },
+    async ({ library, version, contains, limit, offset }) => {
+      telemetry.track(TelemetryEvent.TOOL_USED, {
+        tool: "list_pages",
+        context: "mcp_server",
+        library,
+        version,
+        limit,
+        offset,
+      });
+
+      try {
+        const result = await tools.listPages.execute({
+          library,
+          version,
+          contains,
+          limit,
+          offset,
+        });
+
+        if (result.pages.length === 0) {
+          return createResponse(
+            `No pages found for '${library}'${result.version ? `@${result.version}` : ""}${contains ? ` with URLs containing '${contains}'` : ""}.`,
+          );
+        }
+
+        const lines = result.pages.map((p) => {
+          const safeTitle = (p.title || p.url)
+            .replace(/\[/g, "\\[")
+            .replace(/\]/g, "\\]");
+          return `- [${safeTitle}](<${p.url}>)${p.depth !== null ? ` (depth: ${p.depth})` : ""}`;
+        });
+
+        let responseText = `Indexed pages for ${result.library}${result.version ? `@${result.version}` : ""} (${result.total} total pages, showing ${result.offset + 1}-${result.offset + result.pages.length}):\n\n${lines.join("\n")}`;
+
+        if (result.hasMore) {
+          responseText += `\n\nUse offset: ${result.offset + result.pages.length} to see the next batch of pages.`;
+        }
+
+        return createResponse(responseText);
+      } catch (error) {
+        return createError(error);
+      }
+    },
+  );
+
   // List libraries tool
   server.tool(
     "list_libraries",
-    "List all indexed libraries.",
+    "List all indexed libraries and their versions. Use this to find the correct library name.",
     {
       // no params
     },

@@ -499,3 +499,60 @@ export interface CompactResult {
   /** Bytes reclaimed (`beforeBytes - afterBytes`, floored at 0). */
   reclaimedBytes: number;
 }
+
+/**
+ * Options for reading a stored page.
+ */
+export interface PageContentOptions {
+  /** Index of the first chunk to return (default 0). */
+  startChunk?: number;
+  /** Maximum characters to return. Whole chunks only; a single longer chunk is returned on its own. */
+  maxChars?: number;
+}
+
+/**
+ * A window of consecutive chunks of a stored page, assembled for its content type.
+ */
+export interface PageContentResult {
+  url: string;
+  title: string | null;
+  contentType: string | null;
+  content: string;
+  /** Index of the first chunk in `content`. */
+  startChunk: number;
+  totalChunks: number;
+  /** `startChunk` for the next call, or null when `content` reaches the end of the page. */
+  nextChunk: number | null;
+}
+
+/**
+ * Options for listing pages in a library version.
+ */
+export interface ListPagesOptions {
+  /** Keeps only pages whose URL contains this text. */
+  contains?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * Item in the list of pages.
+ */
+export interface PageListItem {
+  url: string;
+  title: string | null;
+  depth: number | null;
+}
+
+/**
+ * Result of listing pages for a library version.
+ */
+export interface ListPagesResult {
+  library: string;
+  version: string;
+  total: number;
+  pages: PageListItem[];
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}

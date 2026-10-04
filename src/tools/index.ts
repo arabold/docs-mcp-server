@@ -6,6 +6,8 @@ export * from "./FindVersionTool";
 export * from "./GetJobInfoTool";
 export * from "./ListJobsTool";
 export * from "./ListLibrariesTool";
+export * from "./ListPagesTool";
+export * from "./ReadPageTool";
 export * from "./RefreshVersionTool";
 export * from "./RemoveTool";
 export * from "./ScrapeTool";
