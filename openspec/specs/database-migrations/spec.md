@@ -26,12 +26,18 @@ The system SHALL execute database migrations with rollback-capable SQLite journa
 
 ### Requirement: Production SQLite settings after migrations
 
-The system SHALL configure production SQLite settings after migration execution completes, including WAL mode, bounded WAL checkpointing, busy timeout, foreign key enforcement, and `synchronous = NORMAL`.
+The system SHALL configure production SQLite settings after migration execution completes, including WAL mode, bounded WAL checkpointing, a 64 MB `journal_size_limit`, busy timeout, foreign key enforcement, and `synchronous = NORMAL`.
 
 #### Scenario: Post-migration settings are applied
 
 - **WHEN** migrations complete successfully or the schema is already up to date
 - **THEN** the database connection MUST be configured for WAL mode, bounded autocheckpointing, busy timeout, foreign keys, and normal synchronous durability
+
+#### Scenario: WAL file shrinks after a large write
+
+- **WHEN** a large write grows the WAL file beyond 64 MB
+- **AND** a later checkpoint resets the WAL
+- **THEN** the WAL file MUST be truncated to at most 64 MB instead of keeping its peak size
 
 ### Requirement: Visible migration progress
 

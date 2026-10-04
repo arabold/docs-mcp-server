@@ -48,7 +48,6 @@ export interface DbChunk {
   content: string;
   metadata: DbChunkMetadata; // Chunk-specific metadata (level, path, etc.)
   sort_order: number;
-  embedding: Buffer | null; // Binary blob for embeddings
   created_at: string;
   score: number | null; // Added during search queries
 }

@@ -174,6 +174,10 @@ Sequential SQL migrations in `db/migrations/`:
 12. `011-add-vector-triggers.sql` - FTS and vector table trigger maintenance
 13. `012-add-source-content-type.sql` - Source content type tracking on pages
 14. `013-create-metadata-table.sql` - Key-value metadata table for embedding model tracking
+15. `014-rebuild-vector-partition-keys.sql` - Partition the vector table by library and version
+16. `015-add-progress-pages-indexed.sql` - Indexed page count in version progress
+17. `016-add-content-url-to-pages.sql` - Retrieval location when it differs from the page URL
+18. `017-store-embeddings-as-blobs.sql` - Float32 blob embeddings and a full-text update trigger limited to indexed columns
 
 **Code Reference:** All migration files in `db/migrations/` directory
 
@@ -239,12 +243,12 @@ Handles document lifecycle operations with normalized schema access.
 
 ### Vector Storage
 
-Embeddings stored as BLOB in documents table:
+Each embedding is stored as a float32 blob in `documents.embedding`, 4 bytes per dimension:
 
 - 1536-dimensional vectors by default (configurable via `embeddings.vectorDimension`)
-- Provider-agnostic binary serialization
-- NULL handling for documents without embeddings
-- Direct storage eliminates need for separate vector table
+- Triggers on `documents` copy the blob into the `documents_vec` sqlite-vec table, which serves KNN search
+- When `documents_vec` is rebuilt, vectors missing from it are backfilled from `documents.embedding`
+- NULL for documents without embeddings
 
 **Code Reference:** `src/store/types.ts` line 4 (EMBEDDINGS_VECTOR_DIMENSION constant)
 
