@@ -118,7 +118,14 @@ export function createHostPolicy(options: BrowserPolicyOptions): HostPolicy {
       if (!HOST_HEADER.test(host)) {
         return false;
       }
-      const hostname = new URL(`http://${host}`).hostname.toLowerCase();
+      let hostname: string;
+      try {
+        // Still throws for values the pattern lets through, such as a port
+        // above 65535 or a malformed IPv6 literal.
+        hostname = new URL(`http://${host}`).hostname.toLowerCase();
+      } catch {
+        return false;
+      }
       return (
         isIP(stripIpv6Brackets(hostname)) !== 0 ||
         hostname === "localhost" ||

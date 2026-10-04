@@ -106,6 +106,9 @@ describe("createHostPolicy", () => {
     "evil.example@127.0.0.1",
     "127.0.0.1/evil",
     "a b",
+    "attacker.example:99999",
+    "localhost:99999",
+    "[::::]",
   ])("refuses %s", (host) => {
     expect(policy.isAllowed(host)).toBe(false);
   });

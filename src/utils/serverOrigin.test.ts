@@ -71,6 +71,8 @@ describe("server origin helpers", () => {
     "https://example.com/docs#top",
     "https://user:pass@example.com/docs",
     "not a url",
+    "https://example.com//docs",
+    "https://example.com/docs//api",
   ])("rejects invalid public URL %s", (value) => {
     expect(() => normalizePublicUrl(value)).toThrow(/server\.publicUrl/);
   });
@@ -81,9 +83,14 @@ describe("server origin helpers", () => {
     "https://example.com/assets",
     "https://example.com/.well-known",
     "https://example.com/MCP",
-  ])("rejects public URL %s whose first segment collides with a route", (value) => {
-    expect(() => normalizePublicUrl(value)).toThrow(/serves its own route/);
-  });
+    "https://example.com/favicon.ico",
+    "https://example.com/manifest.json/docs",
+  ])(
+    "rejects public URL %s whose first segment collides with a route or file",
+    (value) => {
+      expect(() => normalizePublicUrl(value)).toThrow(/serves its own route or file/);
+    },
+  );
 
   it("accepts a first segment that merely starts like a route name", () => {
     expect(normalizePublicUrl("https://example.com/mcp-docs")).toBe(
