@@ -166,22 +166,15 @@ describe("mcp command", () => {
   it("checks the auth settings for the stdio transport it serves", async () => {
     const parser = yargs().scriptName("test");
     createMcpCommand(parser);
-
-    const { loadConfig } = await import("../../utils/config");
     vi.mocked(loadConfig).mockReturnValueOnce({
       app: { embeddingModel: "mock-model", storePath: "/mock/store" },
       server: { ports: { mcp: 6280 } },
       auth: { enabled: true, issuerUrl: "", audience: "" },
-    } as unknown as ReturnType<typeof loadConfig>);
-
-    const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
+    } as unknown as AppConfig);
+    vi.mocked(services.registerGlobalServices).mockImplementationOnce(() => {
       throw new Error("Simulated Stop");
     });
-    const utils = await import("../utils");
-    // @ts-expect-error
-    utils.resolveProtocol.mockReturnValueOnce("stdio");
+    vi.mocked(utils.resolveProtocol).mockReturnValueOnce("stdio");
 
     try {
       await parser.parse(`mcp --protocol stdio`);

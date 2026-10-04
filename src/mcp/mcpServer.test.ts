@@ -4,7 +4,7 @@
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../utils/config";
-import { createMcpServerInstance } from "./mcpServer";
+import { createMcpServerFactory } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
 // Mock config
@@ -54,12 +54,12 @@ const mockTools: McpServerTools = {
 
 describe("MCP Server Read-Only Mode", () => {
   it("should create server instance in normal mode", () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createMcpServerFactory(mockTools, mockConfig)();
     expect(server).toBeInstanceOf(McpServer);
   });
 
   it("should create server instance in read-only mode", () => {
-    const server = createMcpServerInstance(mockTools, mockReadOnlyConfig);
+    const server = createMcpServerFactory(mockTools, mockReadOnlyConfig)();
     expect(server).toBeInstanceOf(McpServer);
   });
 
@@ -67,7 +67,7 @@ describe("MCP Server Read-Only Mode", () => {
     // This test verifies that the server can be created successfully
     // without advertising prompts capability, which was the root cause
     // of the issue with some MCP clients failing to connect
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createMcpServerFactory(mockTools, mockConfig)();
     expect(server).toBeInstanceOf(McpServer);
 
     // Verify the server has the expected name and can be instantiated
@@ -76,7 +76,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should register scrape_docs with preserveHashes support and propagate it", async () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createMcpServerFactory(mockTools, mockConfig)();
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
 
     expect(scrapeTool).toBeDefined();
@@ -105,7 +105,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should normalize includePatterns/excludePatterns to string arrays", async () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createMcpServerFactory(mockTools, mockConfig)();
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
 
     // Single pattern passed as a string stays whole, commas preserved
@@ -147,7 +147,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should split comma-separated pattern strings without breaking regex constructs", () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createMcpServerFactory(mockTools, mockConfig)();
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
     const parse = (includePatterns: string) =>
       scrapeTool.inputSchema.parse({
@@ -188,9 +188,7 @@ describe("MCP Server Read-Only Mode", () => {
  * advertised JSON Schema rather than the server's internal registry.
  */
 async function listToolsOverTheWire(config: AppConfig) {
-  const handler = createMcpHandler(() => createMcpServerInstance(mockTools, config), {
-    legacy: "reject",
-  });
+  const handler = createMcpHandler(createMcpServerFactory(mockTools, config));
   const response = await handler.fetch(
     new Request("http://127.0.0.1/mcp", {
       method: "POST",

@@ -95,10 +95,10 @@ describe("Configuration Loading", () => {
 
       expect(config.app.telemetryEnabled).toBe(false);
 
-      // Check it didn't write back defaults (like preferredChunkSize)
+      // Check it didn't write back defaults (like heartbeatMs)
       const contentAfter = fs.readFileSync(configPath, "utf8");
       // It should NOT contain default fields that weren't there
-      expect(contentAfter).not.toContain("preferredChunkSize");
+      expect(contentAfter).not.toContain("heartbeatMs");
 
       // Ensure file wasn't touched
       const statAfter = fs.statSync(configPath);
@@ -119,7 +119,7 @@ describe("Configuration Loading", () => {
       // `loadConfig` merges defaults.
 
       const contentAfter = fs.readFileSync(configPath, "utf8");
-      expect(contentAfter).not.toContain("preferredChunkSize");
+      expect(contentAfter).not.toContain("heartbeatMs");
     });
 
     it("should priority: CLI > Env > Config File", () => {

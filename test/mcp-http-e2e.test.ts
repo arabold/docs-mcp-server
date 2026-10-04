@@ -10,7 +10,6 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import http from "node:http";
 import path from "node:path";
 import {
   Client,
@@ -20,7 +19,13 @@ import {
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type ClientOptions, WebSocket as WsClient } from "ws";
-import { getCliCommand, getFreePort, tryNodeWebSocket } from "./test-helpers";
+import {
+  getCliCommand,
+  getFreePort,
+  requestWithHost,
+  stopChildProcess,
+  tryNodeWebSocket,
+} from "./test-helpers";
 
 /** Spawns the server and resolves with its advertised base URL once it is ready. */
 async function startServer(port: number): Promise<{ process: ChildProcess; url: string }> {
@@ -69,23 +74,6 @@ async function startServer(port: number): Promise<{ process: ChildProcess; url: 
   return { process: child, url };
 }
 
-async function stopServer(child: ChildProcess | undefined): Promise<void> {
-  if (!child || child.exitCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve();
-    }, 3000);
-    child.on("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    child.kill("SIGTERM");
-  });
-}
-
 async function connectClient(baseUrl: string): Promise<Client> {
   const client = new Client(
     { name: "e2e-client", version: "1.0.0" },
@@ -110,21 +98,6 @@ async function tryWebSocketWith(url: string, options: ClientOptions): Promise<"o
   });
 }
 
-/**
- * Sends a request with an explicit `Host` and no `Origin`, the way a page on a
- * DNS-rebound domain fetches its own origin, and returns the status code.
- */
-async function requestWithHost(url: string, host: string, method = "GET"): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const request = http.request(url, { method, headers: { host } }, (response) => {
-      response.resume();
-      resolve(response.statusCode ?? 0);
-    });
-    request.on("error", reject);
-    request.end();
-  });
-}
-
 describe("MCP HTTP server E2E", () => {
   let server: { process: ChildProcess; url: string } | undefined;
   let baseUrl = "";
@@ -135,13 +108,41 @@ describe("MCP HTTP server E2E", () => {
   }, 60000);
 
   afterAll(async () => {
-    await stopServer(server?.process);
+    await stopChildProcess(server?.process);
   });
 
-  it("serves a 2026-07-28 client: discovery, tools and a tool call", async () => {
-    const client = await connectClient(baseUrl);
+  it.each([
+    {
+      name: "a 2026-07-28 client on /mcp",
+      era: "modern",
+      connect: (client: Client) =>
+        client.connect(new StreamableHTTPClientTransport(new URL("/mcp", baseUrl))),
+      pinned: true,
+    },
+    {
+      // Without version negotiation options, the client opens with the
+      // initialize handshake of an earlier protocol revision.
+      name: "a handshake-era client on /mcp",
+      era: "legacy",
+      connect: (client: Client) =>
+        client.connect(new StreamableHTTPClientTransport(new URL("/mcp", baseUrl))),
+      pinned: false,
+    },
+    {
+      name: "a handshake-era client over the deprecated SSE transport",
+      era: "legacy",
+      connect: (client: Client) =>
+        client.connect(new SSEClientTransport(new URL("/sse", baseUrl))),
+      pinned: false,
+    },
+  ])("serves $name: tools and a tool call", async ({ era, connect, pinned }) => {
+    const client = new Client(
+      { name: "e2e-client", version: "1.0.0" },
+      pinned ? { versionNegotiation: { mode: { pin: "2026-07-28" } } } : undefined,
+    );
+    await connect(client);
     try {
-      expect(client.getProtocolEra()).toBe("modern");
+      expect(client.getProtocolEra()).toBe(era);
 
       const tools = await client.listTools();
       const toolNames = tools.tools.map((tool) => tool.name);
@@ -174,52 +175,12 @@ describe("MCP HTTP server E2E", () => {
     }
   }, 30000);
 
-  it("serves a handshake-era client on the same endpoint", async () => {
-    // Without version negotiation options, the client opens with the
-    // initialize handshake of an earlier protocol revision.
-    const client = new Client({ name: "e2e-legacy-client", version: "1.0.0" });
-    await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", baseUrl)));
-    try {
-      expect(client.getProtocolEra()).toBe("legacy");
-
-      const tools = await client.listTools();
-      expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");
-
-      const search = await client.callTool({
-        name: "search_docs",
-        arguments: { library: "no-such-library", query: "anything" },
-      });
-      expect(search.content).toBeDefined();
-    } finally {
-      await client.close();
-    }
-  }, 30000);
-
   it("answers GET on the MCP endpoint with 405 and Allow: POST", async () => {
     const response = await fetch(new URL("/mcp", baseUrl));
 
     expect(response.status).toBe(405);
     expect(response.headers.get("allow")).toBe("POST");
   });
-
-  it("serves a handshake-era client over the deprecated SSE transport", async () => {
-    const client = new Client({ name: "e2e-legacy-sse", version: "1.0.0" });
-    await client.connect(new SSEClientTransport(new URL("/sse", baseUrl)));
-    try {
-      expect(client.getProtocolEra()).toBe("legacy");
-
-      const tools = await client.listTools();
-      expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");
-
-      const search = await client.callTool({
-        name: "search_docs",
-        arguments: { library: "no-such-library", query: "anything" },
-      });
-      expect(search.content).toBeDefined();
-    } finally {
-      await client.close();
-    }
-  }, 30000);
 
   it.each([
     ["GET", "/mcp/anything"],
@@ -301,7 +262,7 @@ describe("MCP HTTP server E2E", () => {
   ])("refuses %s %s for a foreign host name without an Origin header", async (method, path) => {
     const port = new URL(baseUrl).port;
 
-    const status = await requestWithHost(
+    const { status } = await requestWithHost(
       new URL(path, baseUrl).href,
       `attacker.rebind.example:${port}`,
       method,
@@ -313,9 +274,12 @@ describe("MCP HTTP server E2E", () => {
   it("serves requests addressed to localhost by name", async () => {
     const port = new URL(baseUrl).port;
 
-    expect(await requestWithHost(new URL("/api/ping", baseUrl).href, `localhost:${port}`)).toBe(
-      200,
+    const { status } = await requestWithHost(
+      new URL("/api/ping", baseUrl).href,
+      `localhost:${port}`,
     );
+
+    expect(status).toBe(200);
   });
 
   it("refuses the WebSocket for a foreign host name", async () => {

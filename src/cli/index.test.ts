@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Argv } from "yargs";
+import { Parser } from "yargs/helpers";
 import { DocumentManagementService } from "../store";
 import { getConfigMappedCliKeys } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
@@ -423,10 +424,6 @@ describe("CLI options mapped to settings", () => {
     return recorder;
   }
 
-  function camelCase(name: string): string {
-    return name.replace(/-([a-z])/g, (_match, letter: string) => letter.toUpperCase());
-  }
-
   it("declares no built-in value on an option that maps onto a setting", () => {
     const declarations: Declaration[] = [];
     registerGlobalOptions(createRecorder("(global)", declarations));
@@ -437,8 +434,9 @@ describe("CLI options mapped to settings", () => {
 
     const offenders = declarations
       .filter(({ name, options }) => {
+        // The same conversion yargs applies to argv keys.
         const keys = [name, ...[options.alias ?? []].flat()].map((key) =>
-          camelCase(String(key)),
+          Parser.camelCase(String(key)),
         );
         return keys.some((key) => mapped.has(key)) && options.default !== undefined;
       })

@@ -80,9 +80,7 @@ function normalizedStringSchema<T>(normalize: (value: string | undefined) => T) 
     });
 }
 
-const publicOriginSchema = normalizedStringSchema((value) =>
-  normalizePublicOrigin(value),
-);
+const publicOriginSchema = normalizedStringSchema(normalizePublicOrigin);
 const publicUrlSchema = normalizedStringSchema(normalizePublicUrl);
 
 /**

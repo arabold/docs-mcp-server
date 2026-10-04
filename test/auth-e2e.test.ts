@@ -10,13 +10,17 @@
  * `DOCS_MCP_AUTH_ISSUER_URL` is set.
  */
 
-import http from "node:http";
 import { config as loadDotenv } from "dotenv";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { JwtAccessTokenVerifier } from "../src/auth/JwtAccessTokenVerifier";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
 import { startInProcessServer } from "./in-process-server";
-import { getFreePort, type LocalIssuer, startLocalIssuer } from "./test-helpers";
+import {
+  getFreePort,
+  type LocalIssuer,
+  requestWithHost,
+  startLocalIssuer,
+} from "./test-helpers";
 
 loadDotenv();
 
@@ -103,21 +107,10 @@ describe("Authentication End-to-End", () => {
     it("never takes the metadata from the Host header", async () => {
       // An IP literal passes the host check, so this reaches the metadata route
       // with a Host that differs from the public URL.
-      const body = await new Promise<string>((resolve, reject) => {
-        const request = http.request(
-          `${origin}/docs/.well-known/oauth-protected-resource/mcp`,
-          { headers: { host: "10.9.8.7:6280" } },
-          (response) => {
-            let data = "";
-            response.on("data", (chunk) => {
-              data += chunk;
-            });
-            response.on("end", () => resolve(data));
-          },
-        );
-        request.on("error", reject);
-        request.end();
-      });
+      const { body } = await requestWithHost(
+        `${origin}/docs/.well-known/oauth-protected-resource/mcp`,
+        "10.9.8.7:6280",
+      );
 
       expect(JSON.parse(body).resource).toBe(audience);
       expect(body).not.toContain("10.9.8.7");

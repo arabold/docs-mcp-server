@@ -72,7 +72,7 @@ export function normalizePublicUrl(value: string | undefined): string | undefine
   }
   const { parsed, trimmed } = configured;
 
-  if (parsed.search || parsed.hash || trimmed.includes("?") || trimmed.includes("#")) {
+  if (trimmed.includes("?") || trimmed.includes("#")) {
     throw new Error("server.publicUrl must not include a query string or fragment.");
   }
 

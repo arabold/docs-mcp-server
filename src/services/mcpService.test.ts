@@ -143,11 +143,9 @@ async function startServer(options: { withAuth?: boolean } = {}) {
   return server;
 }
 
+/** Listen on a free loopback port and return the base URL. */
 async function listen(app: FastifyInstance): Promise<string> {
-  await app.listen({ port: 0, host: "127.0.0.1" });
-  const address = app.server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  return `http://127.0.0.1:${port}`;
+  return await app.listen({ port: 0, host: "127.0.0.1" });
 }
 
 /** Opens `/docs/sse` and returns the stream plus the message URL from its `endpoint` event. */
@@ -231,13 +229,10 @@ describe("MCP endpoint protocol", () => {
   );
 
   it("marks event-stream responses as unbuffered for proxies", async () => {
-    const app = await startServer();
-    await app.listen({ port: 0, host: "127.0.0.1" });
-    const address = app.server.address();
-    const port = typeof address === "object" && address ? address.port : 0;
+    const baseUrl = await listen(await startServer());
     const abort = new AbortController();
 
-    const response = await fetch(`http://127.0.0.1:${port}/mcp`, {
+    const response = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
       signal: abort.signal,
       headers: {

@@ -1,3 +1,4 @@
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import http, { createServer, type IncomingMessage, type Server } from "node:http";
 import net, { type AddressInfo } from "node:net";
@@ -114,11 +115,7 @@ export async function startPrefixProxy(upstreamPort: number, basePath: string) {
     if (pathname === hostRootMetadata) {
       return url;
     }
-    if (
-      pathname !== basePath &&
-      !url.startsWith(`${basePath}/`) &&
-      !url.startsWith(`${basePath}?`)
-    ) {
+    if (pathname !== basePath && !url.startsWith(`${basePath}/`)) {
       return undefined;
     }
     if (mode === "forward") {
@@ -203,5 +200,56 @@ export async function tryNodeWebSocket(url: string): Promise<"open" | "refused">
       resolve("open");
     });
     socket.addEventListener("error", () => resolve("refused"));
+  });
+}
+
+/**
+ * Send a request with an explicit `Host` header and no `Origin`, the way a
+ * page on a DNS-rebound domain fetches its own origin.
+ * @param url - The URL to request.
+ * @param host - The `Host` header to send.
+ * @param method - The HTTP method (default `GET`).
+ * @returns The status code and the response body.
+ */
+export async function requestWithHost(
+  url: string,
+  host: string,
+  method = "GET",
+): Promise<{ status: number; body: string }> {
+  return await new Promise((resolve, reject) => {
+    const request = http.request(url, { method, headers: { host } }, (response) => {
+      let body = "";
+      response.on("data", (chunk) => {
+        body += chunk;
+      });
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+/**
+ * Stop a spawned process: SIGTERM, then SIGKILL if it hasn't exited in time.
+ * @param child - The process, if it was started.
+ * @param timeoutMs - How long to wait for a clean exit (default 5 s).
+ */
+export async function stopChildProcess(
+  child: ChildProcess | undefined,
+  timeoutMs = 5000,
+): Promise<void> {
+  if (!child || child.exitCode !== null) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve();
+    }, timeoutMs);
+    child.on("exit", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+    child.kill("SIGTERM");
   });
 }

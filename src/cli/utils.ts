@@ -243,7 +243,7 @@ export function checkAuthForProtocol(
     return;
   }
   validateAuthConfig(auth);
-  warnHttpUsage(auth, port);
+  warnHttpUsage(port);
 }
 
 /**
@@ -251,11 +251,7 @@ export function checkAuthForProtocol(
  * is required depends on what the process serves, so the server checks that
  * at startup.
  */
-export function validateAuthConfig(authConfig: AuthConfig): void {
-  if (!authConfig.enabled) {
-    return;
-  }
-
+function validateAuthConfig(authConfig: AuthConfig): void {
   const errors: string[] = [];
 
   if (authConfig.issuerUrl) {
@@ -309,11 +305,7 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
 /**
  * Warns about HTTP usage in production when auth is enabled.
  */
-export function warnHttpUsage(authConfig: AuthConfig | undefined, port: number): void {
-  if (!authConfig?.enabled) {
-    return;
-  }
-
+function warnHttpUsage(port: number): void {
   // Check if we're likely running in production (not localhost)
   const isLocalhost =
     process.env.NODE_ENV !== "production" ||

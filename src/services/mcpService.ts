@@ -18,7 +18,7 @@
  * transport (`GET /sse`, `POST /messages`) for handshake-era clients.
  */
 
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import {
   type AuthInfo,
@@ -31,6 +31,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   type OriginPolicy,
+  type OriginVerdict,
   setCorsPreflightHeaders,
   setCorsResponseHeaders,
 } from "../app/originPolicy";
@@ -67,33 +68,37 @@ export interface McpServiceDeps {
 /** Legacy SSE streams open at once; more connections get 503. */
 export const LEGACY_SSE_MAX_SESSIONS = 100;
 
-const ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"];
-
 function jsonRpcError(message: string) {
   return { jsonrpc: "2.0", error: { code: -32000, message }, id: null };
 }
 
+/** End a hijacked response with a JSON-RPC 500, or just end it once headers went out. */
+function endWithServerError(res: ServerResponse): void {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  res.writeHead(500, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(jsonRpcError("Internal server error.")));
+}
+
 /**
  * Answer 403 for a denied origin. For an allowed one, set the CORS headers.
- * @returns `"denied"` when the reply was sent, otherwise the allowed origin
- *   (`undefined` for a request without an `Origin` header).
+ * @returns The verdict; the reply has been sent when it is `"denied"`.
  */
 function applyOriginPolicy(
   originPolicy: OriginPolicy,
   request: FastifyRequest,
   reply: FastifyReply,
-): "denied" | string | undefined {
+): OriginVerdict {
   const origin = request.headers.origin;
   const verdict = originPolicy.check(origin);
   if (verdict === "denied") {
     reply.code(403).send(jsonRpcError("Forbidden: origin not allowed."));
-    return "denied";
-  }
-  if (verdict === "allowed" && origin !== undefined) {
+  } else if (verdict === "allowed" && origin !== undefined) {
     setCorsResponseHeaders(reply.raw, origin);
-    return origin;
   }
-  return undefined;
+  return verdict;
 }
 
 /** An `onRequest` hook that applies only the origin policy. */
@@ -110,18 +115,20 @@ function createOriginCheck(originPolicy: OriginPolicy) {
  */
 function createPreflightChecks(originPolicy: OriginPolicy) {
   return async (request: FastifyRequest, reply: FastifyReply) => {
-    const allowedOrigin = applyOriginPolicy(originPolicy, request, reply);
-    if (allowedOrigin === "denied") {
+    const verdict = applyOriginPolicy(originPolicy, request, reply);
+    if (verdict === "denied") {
       return reply;
     }
 
+    const origin = request.headers.origin;
     if (
       request.method === "OPTIONS" &&
-      allowedOrigin !== undefined &&
+      verdict === "allowed" &&
+      origin !== undefined &&
       request.headers["access-control-request-method"] !== undefined
     ) {
       setCorsPreflightHeaders(reply.raw, {
-        origin: allowedOrigin,
+        origin,
         methods: "POST",
         requestedHeaders: request.headers["access-control-request-headers"],
       });
@@ -157,11 +164,10 @@ export async function registerMcpService(
     { onerror },
   );
 
-  server.route({
-    method: ALL_METHODS,
-    url: MCP_ENDPOINT_PATH,
-    onRequest: createPreflightChecks(deps.originPolicy),
-    handler: async (request, reply) => {
+  server.all(
+    MCP_ENDPOINT_PATH,
+    { onRequest: createPreflightChecks(deps.originPolicy) },
+    async (request, reply) => {
       let authInfo: AuthInfo | undefined;
       if (auth) {
         const authorization = request.headers.authorization;
@@ -172,17 +178,10 @@ export async function registerMcpService(
             .send({ error_description: "A bearer token is required." });
         }
         try {
-          authInfo = await verifyBearerToken(authorization, {
-            verifier: auth.verifier,
-            resourceMetadataUrl: auth.resourceMetadataUrl,
-          });
+          authInfo = await verifyBearerToken(authorization, auth);
         } catch (error) {
           logger.debug(`MCP request rejected by token verification: ${error}`);
-          return reply.send(
-            bearerAuthChallengeResponse(error, {
-              resourceMetadataUrl: auth.resourceMetadataUrl,
-            }),
-          );
+          return reply.send(bearerAuthChallengeResponse(error, auth));
         }
       }
 
@@ -194,7 +193,7 @@ export async function registerMcpService(
       // The adapter answers 500 itself and reports the failure to `onerror`.
       await handleMcpRequest(raw, reply.raw, request.body);
     },
-  });
+  );
 
   if (!auth) {
     registerLegacySseTransport(server, deps, createServer);
@@ -268,10 +267,7 @@ function registerLegacySseTransport(
         logger.debug(`Legacy SSE session opened: ${transport.sessionId} (${request.ip})`);
       } catch (error) {
         logger.error(`❌ Error opening legacy SSE stream: ${error}`);
-        if (!res.headersSent) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-        }
-        res.end();
+        endWithServerError(res);
       }
     },
   );
@@ -291,10 +287,7 @@ function registerLegacySseTransport(
         await transport.handlePostMessage(request.raw, reply.raw, request.body);
       } catch (error) {
         logger.error(`❌ Error in legacy SSE message endpoint: ${error}`);
-        if (!reply.raw.headersSent) {
-          reply.raw.writeHead(500, { "Content-Type": "application/json" });
-          reply.raw.end(JSON.stringify(jsonRpcError("Internal server error.")));
-        }
+        endWithServerError(reply.raw);
       }
     },
   });

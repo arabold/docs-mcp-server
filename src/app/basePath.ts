@@ -5,6 +5,7 @@
  */
 
 import { RESERVED_ROOT_SEGMENTS } from "../utils/serverOrigin";
+import { escapeHtml } from "../utils/string";
 
 /**
  * Remove the base path from a request URL, so a single set of root-mounted
@@ -31,14 +32,6 @@ export function stripBasePath(url: string, basePath: string): string {
   return url;
 }
 
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-}
-
 /**
  * Insert `<base href="{basePath}/">` as the first child of `<head>`. The web UI
  * is built with relative asset URLs, so the base element makes them resolve
@@ -49,7 +42,7 @@ function escapeHtmlAttribute(value: string): string {
  * @returns The shell with the base element.
  */
 export function injectBaseHref(html: string, basePath: string): string {
-  const baseElement = `<base href="${escapeHtmlAttribute(basePath)}/">`;
+  const baseElement = `<base href="${escapeHtml(basePath)}/">`;
   const headTag = /<head(\s[^>]*)?>/i;
   if (headTag.test(html)) {
     return html.replace(headTag, (match) => `${match}${baseElement}`);

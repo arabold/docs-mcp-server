@@ -48,6 +48,7 @@ import {
   getFreePort,
   listenOnFreePort,
   startPrefixProxy,
+  stopChildProcess,
 } from "./test-helpers";
 
 const BASE_PATH = "/docs";
@@ -146,23 +147,6 @@ async function startDocsServer(options: {
   }
   child.kill("SIGKILL");
   throw new Error(`Server did not start within 60 seconds:\n${output}`);
-}
-
-async function stopDocsServer(child: ChildProcess | undefined): Promise<void> {
-  if (!child || child.exitCode !== null) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve();
-    }, 5000);
-    child.on("exit", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    child.kill("SIGTERM");
-  });
 }
 
 /** Wait for the browser to come back to the redirect URI with the authorization response. */
@@ -474,7 +458,7 @@ async function main(): Promise<void> {
     );
     completed = true;
   } finally {
-    await stopDocsServer(server?.child);
+    await stopChildProcess(server?.child);
     await proxy.close();
     if (options.verbose || !completed || results.some((result) => !result.ok)) {
       console.log(`\n--- server output ---\n${server?.output() ?? ""}`);
