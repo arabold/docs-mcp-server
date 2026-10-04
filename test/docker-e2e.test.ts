@@ -1,5 +1,5 @@
 /**
- * Docker image integration tests.
+ * OCI container image integration tests.
  *
  * Exercises the actual production container end-to-end:
  *   1. Container starts and runs as a non-root user (security hardening).
@@ -9,7 +9,7 @@
  *   5. The web server serves the built admin UI (SPA shell, hashed assets,
  *      client-route fallback) and the tRPC API over HTTP.
  *
- * Skipped automatically when Docker is not available on the host.
+ * Skipped automatically when the selected container engine is unavailable.
  *
  * The image build is slow (~3-5 minutes on a clean machine). To skip it,
  * pre-build and set `DOCKER_IMAGE_TAG=<tag>` in the environment — the suite
@@ -17,6 +17,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -24,8 +25,9 @@ import Database from "better-sqlite3";
 import { ZipArchive } from "archiver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const DOCKER_AVAILABLE = (() => {
-  const r = spawnSync("docker", ["version", "--format", "{{.Server.Version}}"], {
+const CONTAINER_ENGINE = process.env.CONTAINER_ENGINE ?? "docker";
+const CONTAINER_ENGINE_AVAILABLE = (() => {
+  const r = spawnSync(CONTAINER_ENGINE, ["version"], {
     stdio: "ignore",
   });
   return r.status === 0;
@@ -35,11 +37,48 @@ const PREBUILT_TAG = process.env.DOCKER_IMAGE_TAG;
 const IMAGE_TAG = PREBUILT_TAG ?? "docs-mcp-server:e2e-test";
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
 const DOCKER_BUILD_TIMEOUT_MS = 1_200_000;
+// Rootless Podman can only map ids from the invoking user's subordinate-id
+// range. UID 12345 still exercises the OpenShift arbitrary-UID contract while
+// remaining portable; Docker keeps the representative OpenShift-range value.
+const ARBITRARY_UID = process.env.CONTAINER_ARBITRARY_UID ??
+  (CONTAINER_ENGINE === "podman" ? "12345" : "1000710000");
+const ARBITRARY_GID = process.env.CONTAINER_ARBITRARY_GID ?? ARBITRARY_UID;
+const REPLACEMENT_UID = CONTAINER_ENGINE === "podman" ? "12346" : "1000710001";
+const REPLACEMENT_GID = REPLACEMENT_UID;
 
 interface DockerResult {
   status: number | null;
   stdout: string;
   stderr: string;
+}
+
+interface HttpResult {
+  status: number;
+  contentType: string;
+  body: string;
+}
+
+async function containerFetch(containerId: string, hostUrl: string, requestPath: string): Promise<HttpResult> {
+  if (CONTAINER_ENGINE !== "podman") {
+    const response = await fetch(`${hostUrl}${requestPath}`);
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type") ?? "",
+      body: await response.text(),
+    };
+  }
+
+  // On Windows, rootless Podman's gvproxy port can be reachable by curl while
+  // Node's host-side TCP connection is rejected. Probe from inside the running
+  // container so this remains a test of the image rather than gvproxy.
+  const script = [
+    `const response = await fetch(${JSON.stringify(`http://127.0.0.1:6280${requestPath}`)});`,
+    "const body = await response.text();",
+    'console.log(JSON.stringify({ status: response.status, contentType: response.headers.get("content-type") ?? "", body }));',
+  ].join("");
+  const result = await docker(["exec", containerId, "node", "--input-type=module", "-e", script]);
+  if (result.status !== 0) throw new Error(result.stderr);
+  return JSON.parse(result.stdout) as HttpResult;
 }
 
 // Runs `docker` asynchronously rather than via spawnSync. These commands can
@@ -49,7 +88,7 @@ interface DockerResult {
 // timeout as a false-positive unhandled error.
 function docker(args: string[], opts: { timeout?: number } = {}): Promise<DockerResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, { timeout: opts.timeout });
+    const child = spawn(CONTAINER_ENGINE, args, { timeout: opts.timeout });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {
@@ -69,7 +108,7 @@ function docker(args: string[], opts: { timeout?: number } = {}): Promise<Docker
 // (for the live-scrolling `docker build` output) instead of capturing it.
 function dockerBuild(args: string[], opts: { cwd?: string; timeout?: number } = {}): Promise<number | null> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, {
+    const child = spawn(CONTAINER_ENGINE, args, {
       cwd: opts.cwd,
       timeout: opts.timeout,
       stdio: "inherit",
@@ -107,7 +146,7 @@ function listIndexedUrls(dbPath: string): string[] {
   }
 }
 
-describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
+describe.skipIf(!CONTAINER_ENGINE_AVAILABLE)(`${CONTAINER_ENGINE} image`, () => {
   beforeAll(async () => {
     if (PREBUILT_TAG) return;
     // Pass the tag as an argv element rather than building a shell string, so
@@ -125,7 +164,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
   afterAll(() => {
     if (PREBUILT_TAG) return;
     // Best-effort cleanup; ignore failures (image may already be gone).
-    spawnSync("docker", ["image", "rm", "-f", IMAGE_TAG], { stdio: "ignore" });
+    spawnSync(CONTAINER_ENGINE, ["image", "rm", "-f", IMAGE_TAG], { stdio: "ignore" });
   });
 
   it("runs the entrypoint as a non-root user", async () => {
@@ -133,7 +172,155 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(r.status, `id -u failed: ${r.stderr}`).toBe(0);
     const uid = r.stdout.trim();
     expect(uid).not.toBe("0");
-    expect(uid).toBe("1000"); // the `node` user shipped by the base image
+    expect(uid).toBe("10001"); // dedicated docs-mcp user
+  });
+
+  it.each([
+    { name: "default user", userArgs: [], uid: "10001", gid: "10001" },
+    {
+      name: "explicit runtime user",
+      userArgs: ["--user", "10001:10001"],
+      uid: "10001",
+      gid: "10001",
+    },
+    {
+      name: "arbitrary uid and gid",
+      userArgs: ["--user", `${ARBITRARY_UID}:${ARBITRARY_GID}`],
+      uid: ARBITRARY_UID,
+      gid: ARBITRARY_GID,
+    },
+  ])("provides writable runtime paths for $name", async ({ userArgs, uid, gid }) => {
+    const r = await docker([
+      "run",
+      "--rm",
+      ...userArgs,
+      "--entrypoint",
+      "sh",
+      IMAGE_TAG,
+      "-c",
+      [
+        `test "$(id -u)" = "${uid}"`,
+        `test "$(id -g)" = "${gid}"`,
+        'test "$PWD" = "/app"',
+        'test "$HOME" = "/app/.runtime"',
+        'test -w "$HOME"',
+        "test -w /data",
+        "test -w /config",
+        "test ! -w /app/dist",
+        "test ! -w /app/public",
+        "test ! -w /app/db",
+        "test ! -w /app/node_modules",
+        "test ! -w /usr/bin",
+        "test ! -w /etc/passwd",
+        "test -r /app/dist/index.js",
+        "test -x /app",
+        "for dir in /app/.runtime /app/.runtime/cache /nonexistent /data /config /tmp; do touch \"$dir/permission-check\" || exit 1; done",
+        'mkdir -p "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" && touch "$XDG_CACHE_HOME/runtime-cache" "$NPM_CONFIG_CACHE/npm-cache"',
+        "touch /data/arbitrary-uid-data",
+        "touch /config/arbitrary-uid-config",
+        `test "$(stat -c %g /data/arbitrary-uid-data)" = "${gid}"`,
+        `test "$(stat -c %g /config/arbitrary-uid-config)" = "${gid}"`,
+      ].join(" && "),
+    ]);
+    expect(r.status, `stdout=${r.stdout}\nstderr=${r.stderr}`).toBe(0);
+  });
+
+  it("fails clearly when a mounted store denies the arbitrary uid", async () => {
+    const volumeName = `docs-mcp-denied-${randomUUID()}`;
+    try {
+      const created = await docker(["volume", "create", volumeName]);
+      expect(created.status, created.stderr).toBe(0);
+      const prepared = await docker([
+        "run",
+        "--rm",
+        "--user",
+        "0:0",
+        "--mount",
+        `type=volume,src=${volumeName},dst=/data`,
+        "--entrypoint",
+        "sh",
+        IMAGE_TAG,
+        "-c",
+        "touch /data/initialized && chmod 0700 /data",
+      ]);
+      expect(prepared.status, prepared.stderr).toBe(0);
+
+      const r = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${ARBITRARY_UID}:${ARBITRARY_GID}`,
+        "-v",
+        `${volumeName}:/data`,
+        "--entrypoint",
+        "node",
+        IMAGE_TAG,
+        "-e",
+        'require("node:fs").writeFileSync("/data/denied", "content")',
+      ]);
+      expect(r.status).not.toBe(0);
+      expect(r.stdout + r.stderr).toMatch(/EACCES|permission denied/i);
+    } finally {
+      await docker(["volume", "rm", "-f", volumeName]);
+    }
+  });
+
+  it("reopens a persisted SQLite store after both uid and gid change", async () => {
+    const volumeName = `docs-mcp-identity-change-${randomUUID()}`;
+    try {
+      const created = await docker(["volume", "create", volumeName]);
+      expect(created.status, created.stderr).toBe(0);
+
+      const initialized = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${ARBITRARY_UID}:${ARBITRARY_GID}`,
+        "-v",
+        `${volumeName}:/data`,
+        "--entrypoint",
+        "node",
+        IMAGE_TAG,
+        "-e",
+        [
+          'const fs = require("node:fs");',
+          'const Database = require("better-sqlite3");',
+          'new Database("/data/documents.db").close();',
+          'console.log((fs.statSync("/data/documents.db").mode & 0o777).toString(8));',
+        ].join(""),
+      ]);
+      expect(initialized.status, initialized.stderr).toBe(0);
+      expect(initialized.stdout.trim()).toBe("644");
+
+      const migrated = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${REPLACEMENT_UID}:${REPLACEMENT_GID}`,
+        "-v",
+        `${volumeName}:/data`,
+        IMAGE_TAG,
+        "--version",
+      ]);
+      expect(migrated.status, migrated.stderr).toBe(0);
+
+      const reopened = await docker([
+        "run",
+        "--rm",
+        "--user",
+        `${REPLACEMENT_UID}:${REPLACEMENT_GID}`,
+        "-v",
+        `${volumeName}:/data`,
+        "--entrypoint",
+        "node",
+        IMAGE_TAG,
+        "-e",
+        'const Database = require("better-sqlite3"); const db = new Database("/data/documents.db"); db.exec("CREATE TABLE identity_test (id INTEGER)"); db.close();',
+      ]);
+      expect(reopened.status, reopened.stderr).toBe(0);
+    } finally {
+      await docker(["volume", "rm", "-f", volumeName]);
+    }
   });
 
   it("ships Chromium where the Playwright runtime expects it", async () => {
@@ -152,13 +339,19 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
 
   it("scrapes a live web page through the Playwright pipeline", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-web-"));
-    // Make sure the host-side dir is writable by uid 1000 (the container user).
+    // Make sure the host-side dir is writable by the container user.
     fs.chmodSync(dataDir, 0o777);
     try {
       const r = await docker(
         [
           "run",
           "--rm",
+          "--user",
+          `${ARBITRARY_UID}:${ARBITRARY_GID}`,
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs",
+          "/tmp:rw,nosuid,nodev,mode=1777",
           "-v",
           `${dataDir}:/data`,
           "-e",
@@ -197,6 +390,12 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
         [
           "run",
           "--rm",
+          "--user",
+          `${ARBITRARY_UID}:${ARBITRARY_GID}`,
+          "--cap-drop=ALL",
+          "--security-opt=no-new-privileges",
+          "--tmpfs",
+          "/tmp:rw,nosuid,nodev,mode=1777",
           "-v",
           `${dataDir}:/data`,
           "-v",
@@ -241,7 +440,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     const docsDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-docs-"));
     fs.chmodSync(dataDir, 0o777);
     // The container reads the docs mount, so it needs to be traversable by
-    // the unprivileged runtime user (uid 1000); the writable /data mount
+    // the unprivileged runtime user; the writable /data mount
     // above is the only place the app actually writes.
     fs.chmodSync(docsDir, 0o755);
     try {
@@ -307,7 +506,13 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     }
   }, 240_000);
 
-  it("serves the web UI over HTTP (SPA shell, hashed asset, deep-link fallback, and API)", async () => {
+  it.each([
+    { name: "default user", userArgs: [] },
+    {
+      name: "arbitrary uid and gid",
+      userArgs: ["--user", `${ARBITRARY_UID}:${ARBITRARY_GID}`],
+    },
+  ])("serves the web UI with a read-only root filesystem as $name", async ({ userArgs }) => {
     // Run the web server detached and let Docker pick a free host port (-P), so
     // the test never clashes with a port already bound on the CI host. The
     // image sets DOCS_MCP_STORE_PATH=/data (writable), so no mount is needed —
@@ -316,11 +521,20 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       "run",
       "-d",
       "--rm",
+      ...userArgs,
+      "--read-only",
+      "--cap-drop=ALL",
+      "--security-opt=no-new-privileges",
+      "--tmpfs",
+      "/tmp:rw,nosuid,nodev,mode=1777",
+      "--tmpfs",
+      "/app/.runtime:rw,nosuid,nodev,mode=1777",
       "-P",
       "-e",
       "DOCS_MCP_TELEMETRY=false",
       IMAGE_TAG,
-      "web",
+      "--protocol",
+      "http",
       "--host",
       "0.0.0.0",
       "--port",
@@ -338,7 +552,7 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       // Poll until the server is listening (container boot + Fastify listen).
       let ready = false;
       for (let i = 0; i < 60 && !ready; i++) {
-        const status = await fetch(`${base}/`)
+        const status = await containerFetch(containerId, base, "/")
           .then((r) => r.status)
           .catch(() => 0);
         if (status === 200) ready = true;
@@ -347,29 +561,29 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       expect(ready, "web server did not become ready within 60s").toBe(true);
 
       // 1. The SPA shell is served at the root.
-      const root = await fetch(`${base}/`);
+      const root = await containerFetch(containerId, base, "/");
       expect(root.status).toBe(200);
-      expect(root.headers.get("content-type")).toMatch(/text\/html/);
-      const html = await root.text();
+      expect(root.contentType).toMatch(/text\/html/);
+      const html = root.body;
       expect(html, "root should return the SPA shell").toContain('<div id="root">');
 
       // 2. The hashed JS bundle referenced by the shell is served.
       const assetPath = html.match(/\/assets\/index-[\w-]+\.js/)?.[0];
       expect(assetPath, "index.html should reference a hashed JS asset").toBeTruthy();
-      const asset = await fetch(`${base}${assetPath}`);
+      const asset = await containerFetch(containerId, base, assetPath ?? "");
       expect(asset.status).toBe(200);
-      expect(asset.headers.get("content-type")).toMatch(/javascript/);
+      expect(asset.contentType).toMatch(/javascript/);
 
       // 3. A client-side route falls back to the SPA shell (not a 404).
-      const deep = await fetch(`${base}/libraries`);
+      const deep = await containerFetch(containerId, base, "/libraries");
       expect(deep.status).toBe(200);
-      expect(await deep.text()).toContain('<div id="root">');
+      expect(deep.body).toContain('<div id="root">');
 
       // 4. The tRPC API is mounted under /api and returns real system health.
-      const api = await fetch(`${base}/api/getSystemHealth`);
+      const api = await containerFetch(containerId, base, "/api/getSystemHealth");
       expect(api.status).toBe(200);
-      expect(api.headers.get("content-type")).toMatch(/application\/json/);
-      const body = (await api.json()) as {
+      expect(api.contentType).toMatch(/application\/json/);
+      const body = JSON.parse(api.body) as {
         result?: { data?: { json?: { worker?: { mode?: string } } } };
       };
       expect(body.result?.data?.json?.worker?.mode).toBe("embedded");
