@@ -1086,4 +1086,95 @@ describe("Database Migrations", () => {
       expect(bestExactScore).toBeLessThanOrEqual(bestPartialScore);
     }
   });
+
+  describe("embedding storage", () => {
+    const vector = new Array(1536).fill(0).map((_, index) => (index === 2 ? 1 : 0));
+
+    /** Inserts one document on a fresh library, version and page. */
+    function insertDocument(content: string, embedding: string | null = null) {
+      db.prepare("INSERT INTO libraries (name) VALUES (?)").run("blob-lib");
+      const { id: libraryId } = db
+        .prepare("SELECT id FROM libraries WHERE name = ?")
+        .get("blob-lib") as { id: number };
+      db.prepare("INSERT INTO versions (library_id, name) VALUES (?, ?)").run(
+        libraryId,
+        "1.0.0",
+      );
+      const { id: versionId } = db
+        .prepare("SELECT id FROM versions WHERE library_id = ?")
+        .get(libraryId) as { id: number };
+      const pageId = db
+        .prepare("INSERT INTO pages (version_id, url, title) VALUES (?, ?, ?)")
+        .run(versionId, "https://example.com/blob", "Blob").lastInsertRowid;
+      const docId = db
+        .prepare(
+          "INSERT INTO documents (page_id, content, metadata, sort_order, embedding) VALUES (?, ?, ?, ?, ?)",
+        )
+        .run(
+          pageId,
+          content,
+          JSON.stringify({ path: "/blob" }),
+          0,
+          embedding,
+        ).lastInsertRowid;
+      return { libraryId, versionId, docId: Number(docId) };
+    }
+
+    it("should convert JSON embeddings to float32 blobs and keep them searchable", async () => {
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+      // Rows written before migration 018 hold JSON text
+      const { libraryId, versionId, docId } = insertDocument(
+        "Stored as JSON",
+        JSON.stringify(vector),
+      );
+      db.prepare("DELETE FROM _schema_migrations WHERE id = ?").run(
+        "018-store-embeddings-as-blobs.sql",
+      );
+
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+      const { embedding } = db
+        .prepare("SELECT embedding FROM documents WHERE id = ?")
+        .get(docId) as { embedding: Buffer };
+      expect(Buffer.isBuffer(embedding)).toBe(true);
+      expect(Array.from(new Float32Array(Uint8Array.from(embedding).buffer))).toEqual(
+        vector,
+      );
+
+      const nearest = db
+        .prepare(`
+          SELECT rowid, distance
+          FROM documents_vec
+          WHERE library_id = ? AND version_id = ? AND embedding MATCH ? AND k = 1
+        `)
+        .get(libraryId, versionId, JSON.stringify(vector)) as
+        | { rowid: number; distance: number }
+        | undefined;
+      expect(nearest?.rowid).toBe(docId);
+      expect(nearest?.distance).toBeCloseTo(0, 6);
+    });
+
+    it("should reindex full text when document content changes", async () => {
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+      const { docId } = insertDocument("original wording");
+
+      db.prepare("UPDATE documents SET content = ? WHERE id = ?").run(
+        "revised wording",
+        docId,
+      );
+
+      const matches = (term: string) =>
+        db
+          .prepare("SELECT rowid FROM documents_fts WHERE documents_fts MATCH ?")
+          .all(term);
+      expect(matches("revised")).toEqual([{ rowid: docId }]);
+      expect(matches("original")).toEqual([]);
+    });
+  });
+
+  it("should cap the WAL file size kept after checkpoints", async () => {
+    await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+    expect(db.pragma("journal_size_limit", { simple: true })).toBe(64 * 1024 * 1024);
+  });
 });
