@@ -57,8 +57,9 @@ export const RESERVED_ROOT_SEGMENTS: readonly string[] = [
  * @param value - The configured `server.publicUrl` value.
  * @returns The canonical URL (e.g. `https://example.com/docs`), or `undefined` when absent.
  * @throws Error naming `server.publicUrl` when the value has credentials, a query
- *   string, a fragment, a non-HTTP(S) protocol, or a first path segment that
- *   collides with a route the server serves at its root.
+ *   string, a fragment, a non-HTTP(S) protocol, an empty path segment (`//`),
+ *   or a first path segment that collides with a route or file the server
+ *   serves at its root.
  */
 export function normalizePublicUrl(value: string | undefined): string | undefined {
   const configured = parseConfiguredUrl(
@@ -76,10 +77,23 @@ export function normalizePublicUrl(value: string | undefined): string | undefine
   }
 
   const path = parsed.pathname.replace(/\/+$/, "");
-  const firstSegment = path.split("/")[1]?.toLowerCase();
-  if (firstSegment && RESERVED_ROOT_SEGMENTS.includes(firstSegment)) {
+  // A path starting with "//" would become a scheme-relative URL in the web
+  // UI's <base href>, pointing the browser at another host.
+  if (path.includes("//")) {
     throw new Error(
-      `server.publicUrl path must not start with "/${firstSegment}": the server serves its own route there, so requests could not be told apart. Choose a different path, such as "/docs".`,
+      `server.publicUrl path must not contain an empty segment ("//"): "${path}".`,
+    );
+  }
+
+  // Root files such as favicon.ico or manifest.json are the only dotted
+  // first segments the server serves; a base path must not shadow them.
+  const firstSegment = path.split("/")[1]?.toLowerCase();
+  if (
+    firstSegment &&
+    (RESERVED_ROOT_SEGMENTS.includes(firstSegment) || firstSegment.includes("."))
+  ) {
+    throw new Error(
+      `server.publicUrl path must not start with "/${firstSegment}": the server serves its own route or file there, so requests could not be told apart. Choose a different path, such as "/docs".`,
     );
   }
 

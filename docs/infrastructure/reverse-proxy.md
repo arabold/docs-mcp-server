@@ -69,7 +69,7 @@ File provider (dynamic configuration):
 http:
   routers:
     docs:
-      rule: "Host(`example.com`) && PathPrefix(`/docs`)"
+      rule: "Host(`example.com`) && (Path(`/docs`) || PathPrefix(`/docs/`))"
       middlewares: [docs-strip]
       service: docs
     docs-metadata: # only needed with authentication

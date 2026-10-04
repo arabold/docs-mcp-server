@@ -9,7 +9,8 @@ The configuration system SHALL reject, with a clear validation error, a value th
 
 - carries credentials, a query string, or a fragment;
 - uses a protocol other than `http` or `https`;
-- has a path whose first segment names a route the server itself serves at its root, such as `mcp`, `api` or `assets`.
+- has a path with an empty segment (`//`);
+- has a path whose first segment names a route or file the server itself serves at its root, such as `mcp`, `api`, `assets` or `favicon.ico`.
 
 A trailing slash SHALL be ignored.
 
@@ -41,6 +42,14 @@ A trailing slash SHALL be ignored.
 #### Scenario: Path collides with a server route
 - **WHEN** `server.publicUrl` is configured as `https://example.com/mcp`
 - **THEN** configuration loading MUST reject the value with an error explaining that the path's first segment collides with a route the server serves
+
+#### Scenario: Path collides with a root file
+- **WHEN** `server.publicUrl` is configured as `https://example.com/favicon.ico`
+- **THEN** configuration loading MUST reject the value with an error explaining that the path's first segment collides with a file the server serves
+
+#### Scenario: Path with an empty segment
+- **WHEN** `server.publicUrl` is configured as `https://example.com//docs`
+- **THEN** configuration loading MUST reject the value, because the web UI would resolve `//docs/` as another host
 
 ### Requirement: Allowed Browser Origins Configuration
 The configuration system SHALL expose an optional `server.allowedOrigins` setting: a list of browser origins, beyond loopback and the public URL's origin, that may call the MCP endpoint. The hosts of these origins are also accepted in the `Host` header. It SHALL default to an empty list. It SHALL be settable from the configuration file and from the environment variable `DOCS_MCP_SERVER_ALLOWED_ORIGINS` as a JSON array. Each entry SHALL be an origin (`scheme://host` with an optional port and no path). Configuration loading SHALL reject any other value with a clear validation error. A trailing slash on an entry SHALL be ignored.
