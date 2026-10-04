@@ -1122,13 +1122,13 @@ describe("Database Migrations", () => {
 
     it("should convert JSON embeddings to float32 blobs and keep them searchable", async () => {
       await expect(applyMigrations(db)).resolves.toBeUndefined();
-      // Rows written before migration 017 hold JSON text
+      // Rows written before migration 018 hold JSON text
       const { libraryId, versionId, docId } = insertDocument(
         "Stored as JSON",
         JSON.stringify(vector),
       );
       db.prepare("DELETE FROM _schema_migrations WHERE id = ?").run(
-        "017-store-embeddings-as-blobs.sql",
+        "018-store-embeddings-as-blobs.sql",
       );
 
       await expect(applyMigrations(db)).resolves.toBeUndefined();

@@ -177,7 +177,7 @@ Sequential SQL migrations in `db/migrations/`:
 15. `014-rebuild-vector-partition-keys.sql` - Partition the vector table by library and version
 16. `015-add-progress-pages-indexed.sql` - Indexed page count in version progress
 17. `016-add-content-url-to-pages.sql` - Retrieval location when it differs from the page URL
-18. `017-store-embeddings-as-blobs.sql` - Float32 blob embeddings and a full-text update trigger limited to indexed columns
+18. `018-store-embeddings-as-blobs.sql` - Float32 blob embeddings and a full-text update trigger limited to indexed columns
 
 **Code Reference:** All migration files in `db/migrations/` directory
 
