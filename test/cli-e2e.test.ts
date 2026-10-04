@@ -1,7 +1,12 @@
 import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { getCliCommand } from "./test-helpers";
+import { EventBusService } from "../src/events";
+import { DocumentManagementService } from "../src/store/DocumentManagementService";
+import { loadConfig } from "../src/utils/config";
+import { getCliCommand, writeTestConfig } from "./test-helpers";
 
 describe("CLI E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
@@ -63,4 +68,39 @@ describe("CLI E2E", () => {
     expect(stderr).toMatch(/Unknown argument/i);
     expect(stderr).toContain("unknown-flag");
   });
+
+  it("refuses to scrape an existing version unless --replace is given", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-replace-"));
+    const configPath = writeTestConfig(storePath);
+    const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
+    const scrapeArgs = [
+      "scrape",
+      "React",
+      fixtureUrl,
+      "--store-path",
+      storePath,
+      "--config",
+      configPath,
+    ];
+
+    try {
+      // Seed the existing version in-process rather than with a third CLI run.
+      const config = loadConfig({}, { configPath });
+      config.app.storePath = storePath;
+      const docService = new DocumentManagementService(new EventBusService(), config);
+      await docService.initialize();
+      await docService.ensureVersion({ library: "React", version: "" });
+      await docService.shutdown();
+
+      const rejected = await runCli(scrapeArgs);
+      expect(rejected.code).not.toBe(0);
+      expect(`${rejected.stdout}${rejected.stderr}`).toContain("--replace");
+
+      const replaced = await runCli([...scrapeArgs, "--replace"]);
+      expect(replaced.code).toBe(0);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+    // Two CLI processes; generous for CI runners, which are several times slower
+  }, 60000);
 });

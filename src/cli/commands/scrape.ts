@@ -127,9 +127,17 @@ export function createScrapeCommand(cli: Argv) {
           description: "Clear existing documents before scraping",
           default: true,
         })
+        .option("replace", {
+          type: "boolean",
+          description:
+            "Rebuild the library version if it already exists (without it, an existing version is left untouched and the command fails)",
+          default: false,
+        })
         .usage(
           "$0 scrape <library> <url> [options]\n\n" +
             "Scrape and index documentation from a URL or local folder.\n\n" +
+            "Scraping a library version that already exists fails unless --replace is given;\n" +
+            "use `refresh` to update it in place, or --no-clean to add to it.\n\n" +
             "To scrape local files or folders, use a file:// URL.\n" +
             "Examples:\n" +
             "  scrape mylib https://react.dev/reference/react\n" +
@@ -240,6 +248,7 @@ export function createScrapeCommand(cli: Argv) {
           url,
           library,
           version: argv.version as string | undefined,
+          replace: argv.replace as boolean,
           options: {
             maxPages,
             maxDepth,

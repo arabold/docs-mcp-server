@@ -180,17 +180,92 @@ export function normalizeVersionLabel(version?: string | null): string {
 }
 
 /**
- * Normalizes a library name for storage and lookup.
+ * Computes a library's lookup key.
  *
- * The counterpart to {@link normalizeVersionLabel}: trim and lowercase, so a
- * library is one row however its name was typed.
+ * The counterpart to {@link normalizeVersionLabel}: trim and lowercase (the
+ * Unicode default lowercase mapping, without full case folding), so a library
+ * is one row however its name was typed. The key is what `libraries.name`
+ * stores and every lookup compares; the name as entered lives on as the display
+ * name ({@link normalizeLibraryDisplayName}).
  *
  * @param library Library name as supplied by a caller.
- * @returns The normalized name.
+ * @returns The lookup key.
  */
 export function normalizeLibraryName(library: string): string {
   return library.trim().toLowerCase();
 }
+
+/**
+ * Whether two library names refer to the same library.
+ *
+ * The one comparison every caller-facing lookup uses, so the identity rule
+ * lives in a single place.
+ *
+ * @param a A library name in any casing or padding.
+ * @param b Another library name.
+ */
+export function libraryNamesMatch(a: string, b: string): boolean {
+  return normalizeLibraryName(a) === normalizeLibraryName(b);
+}
+
+/**
+ * Computes a library's display name: the name as entered, trimmed only.
+ *
+ * Case, inner spacing, punctuation and non-ASCII characters are preserved, so
+ * `Next.js Docs` is stored and shown exactly that way.
+ *
+ * @param library Library name as supplied by a caller.
+ * @returns The display name to store for a new library.
+ */
+export function normalizeLibraryDisplayName(library: string): string {
+  return library.trim();
+}
+
+/** Longest name accepted for a new library, counted in Unicode code points. */
+export const MAX_LIBRARY_NAME_LENGTH = 100;
+
+/** Unicode general category Cc: C0/C1 controls such as tab, newline and ESC. */
+const CONTROL_CHARACTER = /\p{Cc}/u;
+
+/**
+ * Explains why a name is unacceptable for a new library.
+ *
+ * Only creation is validated; existing libraries stay reachable under their
+ * stored names. Format characters (Cf) are allowed because emoji sequences rely
+ * on the zero-width joiner. Pure, so the web client can show the same message.
+ *
+ * @param displayName Name submitted for a new library; trimmed before checking.
+ * @returns The broken rule as a short phrase, or `null` when the name is valid.
+ */
+export function describeLibraryNameProblem(displayName: string): string | null {
+  const name = normalizeLibraryDisplayName(displayName);
+  if (name.length === 0) {
+    return "is empty";
+  }
+  if (CONTROL_CHARACTER.test(name)) {
+    return "contains a control character";
+  }
+  if ([...name].length > MAX_LIBRARY_NAME_LENGTH) {
+    return `is longer than ${MAX_LIBRARY_NAME_LENGTH} characters`;
+  }
+  return null;
+}
+
+/**
+ * What indexing does when its target library or version already exists.
+ *
+ * - `reject-library`: fail if the library exists at all (the web UI's "Add library").
+ * - `reject-version`: fail if that version exists; create the library if needed (the default).
+ * - `replace`: rebuild an existing version, or create it (`--replace`, `replace: true`, re-index, retry, refresh).
+ */
+export const EXISTING_TARGET_POLICIES = [
+  "reject-library",
+  "reject-version",
+  "replace",
+] as const;
+
+/** One of {@link EXISTING_TARGET_POLICIES}. */
+export type ExistingTargetPolicy = (typeof EXISTING_TARGET_POLICIES)[number];
 
 /** Normalize a VersionRef (lowercase, trim; empty string for unversioned). */
 export function normalizeVersionRef(ref: VersionRef): VersionRef {

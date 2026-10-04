@@ -50,6 +50,10 @@ describe("Version resolution end-to-end", () => {
      * Drives a version label through one real entry point and returns the label
      * that reaches the store layer, so a regression in any entry point's own
      * normalizer shows up as a different label rather than passing silently.
+     *
+     * Each scrape requests replacement: some cases send variants of one label
+     * through several entry points on purpose, and without it every submission
+     * after the first would be rejected as an existing version.
      */
     const labelFromEntryPoint = async (
       entryPoint: "scrapeTool" | "refreshTool" | "trpc" | "pipeline",
@@ -65,6 +69,7 @@ describe("Version resolution end-to-end", () => {
               version,
               url: "https://example.com/docs",
               waitForCompletion: false,
+              replace: true,
             })) as { jobId: string }
           ).jobId;
           break;
@@ -95,15 +100,18 @@ describe("Version resolution end-to-end", () => {
               library,
               version,
               options: { url: "https://example.com/docs", library } as never,
+              onExisting: "replace",
             })
           ).jobId;
           break;
         }
         case "pipeline":
-          jobId = await pipeline.enqueueScrapeJob(library, version, {
-            url: "https://example.com/docs",
+          jobId = await pipeline.enqueueScrapeJob(
             library,
-          } as never);
+            version,
+            { url: "https://example.com/docs", library } as never,
+            { onExisting: "replace" },
+          );
           break;
       }
       return (await pipeline.getJob(jobId))?.version ?? null;

@@ -187,25 +187,26 @@ describe("DocumentManagementService", () => {
       mockStore.resolveVersionId.mockResolvedValue(10);
       const id = await docService.ensureVersion({ library: "React", version: "18.2.0" });
       expect(id).toBe(10);
-      // ensure normalize to lowercase
-      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("react", "18.2.0");
+      // The name reaches the store as submitted, so a new library keeps its casing
+      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("React", "18.2.0");
     });
 
     it("handles unversioned refs (empty version string)", async () => {
       mockStore.resolveVersionId.mockResolvedValue(20);
       const id = await docService.ensureVersion({ library: "Lodash", version: "" });
       expect(id).toBe(20);
-      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("lodash", "");
+      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("Lodash", "");
     });
 
-    it("trims whitespace and normalizes version", async () => {
+    it("passes the library and version through for the store to normalize", async () => {
       mockStore.resolveVersionId.mockResolvedValue(30);
       const id = await docService.ensureVersion({
         library: "  Express  ",
         version: "  ",
       });
       expect(id).toBe(30);
-      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("express", "");
+      // The store normalizes both halves; this layer passes them through
+      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("  Express  ", "  ");
     });
 
     it("reuses single unversioned version across multiple ensureVersion calls (regression)", async () => {
@@ -479,6 +480,12 @@ describe("DocumentManagementService", () => {
         // the shared default here rather than leaking one test's library list
         // into the next.
         mockStore.queryLibraryVersions.mockResolvedValue(new Map());
+        // A library with stored labels exists; errors name it as stored.
+        mockStore.getLibrary.mockResolvedValue({
+          id: 1,
+          name: library,
+          displayName: library,
+        });
       });
 
       // --- Literal Label Resolution -------------------------------------------
@@ -1106,14 +1113,22 @@ describe("DocumentManagementService", () => {
       ];
 
       it("should resolve successfully if versioned documents exist", async () => {
-        mockStore.getLibrary.mockResolvedValue({ id: 1, name: library.toLowerCase() });
+        mockStore.getLibrary.mockResolvedValue({
+          id: 1,
+          name: library.toLowerCase(),
+          displayName: library,
+        });
 
         await expect(docService.validateLibraryExists(library)).resolves.toBeUndefined();
         expect(mockStore.getLibrary).toHaveBeenCalledWith(library);
       });
 
       it("should resolve successfully if only unversioned documents exist", async () => {
-        mockStore.getLibrary.mockResolvedValue({ id: 1, name: library.toLowerCase() });
+        mockStore.getLibrary.mockResolvedValue({
+          id: 1,
+          name: library.toLowerCase(),
+          displayName: library,
+        });
 
         await expect(docService.validateLibraryExists(library)).resolves.toBeUndefined();
         expect(mockStore.getLibrary).toHaveBeenCalledWith(library);
@@ -1179,6 +1194,7 @@ describe("DocumentManagementService", () => {
         mockStore.getLibrary.mockResolvedValue({
           id: 1,
           name: libraryUpper.toLowerCase(),
+          displayName: libraryUpper,
         });
 
         await expect(
@@ -1271,8 +1287,8 @@ describe("DocumentManagementService", () => {
 
         const result = await docService.ensureLibraryAndVersion(library, version);
 
-        // Should normalize library name to lowercase and version
-        expect(mockStore.resolveVersionId).toHaveBeenCalledWith("newlib", "2.0.0");
+        // The store computes the lookup key and keeps the display name
+        expect(mockStore.resolveVersionId).toHaveBeenCalledWith("NewLib", "2.0.0");
         expect(result).toBe(expectedVersionId);
       });
 
