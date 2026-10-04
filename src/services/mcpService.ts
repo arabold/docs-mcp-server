@@ -9,7 +9,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ProxyAuthManager } from "../auth";
 import { createAuthMiddleware } from "../auth/middleware";
-import { createMcpServerInstance } from "../mcp/mcpServer";
+import { createMcpServerInstance, resolveServerInstructions } from "../mcp/mcpServer";
 import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
@@ -36,8 +36,9 @@ export async function registerMcpService(
   authManager?: ProxyAuthManager,
 ): Promise<McpServer> {
   // Initialize MCP server and tools
+  const instructions = resolveServerInstructions(config);
   const mcpTools = await initializeTools(docService, pipeline, config);
-  const mcpServer = createMcpServerInstance(mcpTools, config);
+  const mcpServer = createMcpServerInstance(mcpTools, config, instructions);
 
   // Setup auth middleware if auth manager is provided
   const authMiddleware = authManager ? createAuthMiddleware(authManager) : null;
@@ -62,7 +63,7 @@ export async function registerMcpService(
         const transport = new SSEServerTransport("/messages", reply.raw);
         sseTransports[transport.sessionId] = transport;
 
-        const sessionServer = createMcpServerInstance(mcpTools, config);
+        const sessionServer = createMcpServerInstance(mcpTools, config, instructions);
         sseServers[transport.sessionId] = sessionServer;
 
         // Log client connection (simple connection tracking without sessions)
@@ -158,7 +159,7 @@ export async function registerMcpService(
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         // In stateless mode, create a new instance of server and transport for each request
-        const requestServer = createMcpServerInstance(mcpTools, config);
+        const requestServer = createMcpServerInstance(mcpTools, config, instructions);
         const requestTransport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
         });
