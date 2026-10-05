@@ -1,19 +1,20 @@
 // Integration test for database migrations using a real SQLite database
 
+import type { Database as DatabaseType } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { logger } from "../utils/logger";
 import { applyMigrations, parseMigrationSteps } from "./applyMigrations";
+import { openSqliteDatabase } from "./sqlite";
 
 describe("Database Migrations", () => {
   let db: DatabaseType;
 
   beforeEach(() => {
-    db = new Database(":memory:");
+    db = openSqliteDatabase(":memory:");
     sqliteVec.load(db);
   });
 
@@ -475,7 +476,7 @@ describe("Database Migrations", () => {
   it("should preserve the old vector table if partition migration fails", async () => {
     const tempDir = mkdtempSync(path.join(tmpdir(), "docs-mcp-migration-"));
     const dbPath = path.join(tempDir, "migration.sqlite");
-    const migrationDb = new Database(dbPath);
+    const migrationDb = openSqliteDatabase(dbPath);
     sqliteVec.load(migrationDb);
 
     try {
@@ -560,7 +561,7 @@ describe("Database Migrations", () => {
       const migrationMarker = migrationDb
         .prepare("SELECT id FROM _schema_migrations WHERE id = ?")
         .get("014-rebuild-vector-partition-keys.sql");
-      expect(migrationMarker).toBeUndefined();
+      expect(migrationMarker).toBeNull();
 
       const ddl = migrationDb
         .prepare(
@@ -577,7 +578,7 @@ describe("Database Migrations", () => {
       const stagingTable = migrationDb
         .prepare("SELECT name FROM sqlite_master WHERE name = ?")
         .get("_documents_vec_partition_migration");
-      expect(stagingTable).toBeUndefined();
+      expect(stagingTable).toBeNull();
 
       migrationDb
         .prepare("UPDATE documents SET embedding = NULL WHERE content = ?")

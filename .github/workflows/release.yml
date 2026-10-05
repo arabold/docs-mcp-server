@@ -30,15 +30,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: "22.x" # Match engines requirement in package.json
-          registry-url: "https://registry.npmjs.org" # Specify npm registry
-          cache: "npm"
+          node-version: "22.x" # Required by npm publish and semantic-release tooling.
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Determine release mode
         id: release-mode
@@ -69,7 +73,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Run build
-        run: npm run build
+        run: bun run build
         env:
           POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
           # Use manual input version when provided, otherwise semantic-release dry-run version.
@@ -89,7 +93,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           version='${{ steps.release-mode.outputs.release_version }}'
-          npm version "$version" --no-git-tag-version
+          npm version "$version" --no-git-tag-version --package-lock=false
           npm publish --access public
 
       - name: Commit manual version bump
@@ -97,7 +101,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
+          git add package.json
           git commit -m "chore(release): ${{ steps.release-mode.outputs.release_version }} [skip ci]"
           git push origin "HEAD:${GITHUB_REF_NAME}"
 

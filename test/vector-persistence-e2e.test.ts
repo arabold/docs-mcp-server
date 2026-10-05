@@ -9,11 +9,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
-import { config } from "dotenv";
-import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { createLocalDocumentManagement } from "../src/store";
+import { openSqliteDatabase } from "../src/store/sqlite";
 import { PipelineFactory } from "../src/pipeline/PipelineFactory";
 import {
   EmbeddingConfig,
@@ -21,8 +20,6 @@ import {
 } from "../src/store/embeddings/EmbeddingConfig";
 import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
-
-config();
 
 describe("Vector persistence", () => {
   let tempDir: string;
@@ -114,7 +111,7 @@ describe("Vector persistence", () => {
       expect(exists).toBe(true);
 
       const dbPath = path.join(tempDir, "documents.db");
-      const db = new Database(dbPath);
+      const db = openSqliteDatabase(dbPath);
       sqliteVec.load(db);
 
       const { chunkCount } = db

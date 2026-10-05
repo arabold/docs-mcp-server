@@ -1,11 +1,8 @@
 /**
  * CLI shim for the preflight check.
  *
- * Lives in its own file because vite-node sets `process.argv[1]` to its own
- * binary path rather than the script path, so the conventional
- * `if (import.meta.url === ...)` main-guard can't reliably distinguish
- * "imported" from "executed directly." Splitting CLI from library sidesteps
- * the detection problem entirely.
+ * Keeping CLI effects in a dedicated entry point lets the preflight module be
+ * imported by the benchmark orchestrator without running the CLI.
  */
 import { runPreflightCli } from "../preflight";
 

@@ -1,6 +1,6 @@
+import type { Database } from "bun:sqlite";
 import { statSync } from "node:fs";
 import type { Embeddings } from "@langchain/core/embeddings";
-import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
 import { type AppConfig, isVectorDimensionExplicit } from "../utils/config";
@@ -22,6 +22,7 @@ import {
   EmbeddingModelChangedError,
   StoreError,
 } from "./errors";
+import { getPragmaNumber, openSqliteDatabase, setPragma } from "./sqlite";
 import type {
   ActivityHistory,
   CompactResult,
@@ -118,7 +119,7 @@ export class DocumentStore {
   private readonly config: AppConfig;
   private readonly dbPath: string;
 
-  private readonly db: DatabaseType;
+  private readonly db: Database;
   private embeddings: Embeddings | null = null;
   private dbDimension: number;
   private readonly searchWeightVec: number;
@@ -166,6 +167,7 @@ export class DocumentStore {
     >;
     getPageId: Database.Statement<[number, string]>;
     deleteDocuments: Database.Statement<[string, string]>;
+    countDocuments: Database.Statement<[string, string], { count: number }>;
     deleteDocumentsByPageId: Database.Statement<[number]>;
     deletePage: Database.Statement<[number]>;
     deletePages: Database.Statement<[string, string]>;
@@ -273,7 +275,7 @@ export class DocumentStore {
     this.embeddingInitTimeoutMs = this.config.embeddings.initTimeoutMs;
 
     // Only establish database connection in constructor
-    this.db = new Database(dbPath);
+    this.db = openSqliteDatabase(dbPath);
 
     // Store embedding config for later initialization
     this.embeddingConfig = this.resolveEmbeddingConfig(appConfig.app.embeddingModel);
@@ -352,6 +354,15 @@ export class DocumentStore {
       ),
       deleteDocuments: this.db.prepare<[string, string]>(
         `DELETE FROM documents 
+         WHERE page_id IN (
+           SELECT p.id FROM pages p
+           JOIN versions v ON p.version_id = v.id
+           JOIN libraries l ON v.library_id = l.id
+           WHERE l.name = ? AND COALESCE(v.name, '') = COALESCE(?, '')
+         )`,
+      ),
+      countDocuments: this.db.prepare<[string, string], { count: number }>(
+        `SELECT COUNT(*) AS count FROM documents
          WHERE page_id IN (
            SELECT p.id FROM pages p
            JOIN versions v ON p.version_id = v.id
@@ -1112,12 +1123,12 @@ export class DocumentStore {
    * compacted database in process memory.
    */
   private vacuumWithFileTempStore(): void {
-    const prevTempStore = Number(this.db.pragma("temp_store", { simple: true }) ?? 0);
-    this.db.pragma("temp_store = FILE");
+    const prevTempStore = getPragmaNumber(this.db, "temp_store");
+    setPragma(this.db, "temp_store = FILE");
     try {
       this.db.exec("VACUUM");
     } finally {
-      this.db.pragma(`temp_store = ${prevTempStore}`);
+      setPragma(this.db, `temp_store = ${prevTempStore}`);
     }
   }
 
@@ -1151,20 +1162,19 @@ export class DocumentStore {
       const beforeBytes = this.getOnDiskSizeBytes();
 
       // PASSIVE never waits; TRUNCATE is reserved for the exclusive compact path.
-      this.db.pragma(
+      setPragma(
+        this.db,
         allowVacuum ? "wal_checkpoint(TRUNCATE)" : "wal_checkpoint(PASSIVE)",
       );
 
-      const freelistCount = Number(
-        this.db.pragma("freelist_count", { simple: true }) ?? 0,
-      );
+      const freelistCount = getPragmaNumber(this.db, "freelist_count");
       const shouldVacuum = allowVacuum && (force || freelistCount > 0);
 
       if (shouldVacuum) {
         this.vacuumWithFileTempStore();
-        this.db.pragma("journal_mode = WAL");
-        this.db.pragma("wal_autocheckpoint = 1000");
-        this.db.pragma("wal_checkpoint(TRUNCATE)");
+        setPragma(this.db, "journal_mode = WAL");
+        setPragma(this.db, "wal_autocheckpoint = 1000");
+        setPragma(this.db, "wal_checkpoint(TRUNCATE)");
       }
 
       const afterBytes = this.getOnDiskSizeBytes();
@@ -1572,7 +1582,7 @@ export class DocumentStore {
         normalizeLibraryName(library),
         normalizedVersion,
       );
-      return result !== undefined;
+      return result !== null;
     } catch (error) {
       throw new ConnectionError("Failed to check document existence", error);
     }
@@ -2137,16 +2147,19 @@ export class DocumentStore {
     try {
       const normalizedVersion = normalizeVersionLabel(version);
 
-      // First delete documents
-      const result = this.statements.deleteDocuments.run(
-        normalizeLibraryName(library),
-        normalizedVersion,
-      );
+      const normalizedLibrary = normalizeLibraryName(library);
+      const transaction = this.db.transaction(() => {
+        const count =
+          this.statements.countDocuments.get(normalizedLibrary, normalizedVersion)
+            ?.count ?? 0;
 
-      // Then delete the pages (after documents are gone, due to foreign key constraints)
-      this.statements.deletePages.run(normalizeLibraryName(library), normalizedVersion);
+        this.statements.deleteDocuments.run(normalizedLibrary, normalizedVersion);
+        this.statements.deletePages.run(normalizedLibrary, normalizedVersion);
 
-      return result.changes;
+        return count;
+      });
+
+      return transaction();
     } catch (error) {
       throw new ConnectionError("Failed to delete documents", error);
     }
@@ -2265,7 +2278,7 @@ export class DocumentStore {
 
   /**
    * Parses the metadata field from a JSON string to an object.
-   * This is necessary because better-sqlite3's json() function returns a string, not an object.
+   * This is necessary because SQLite's json() function returns a string, not an object.
    */
   private parseMetadata<M extends {}, T extends { metadata: M }>(row: T): T {
     if (row.metadata && typeof row.metadata === "string") {
@@ -2900,7 +2913,7 @@ export class DocumentStore {
          ) ch ON ch.d = calendar.day
          ORDER BY calendar.day`,
       );
-      const rows = stmt.all({ days: windowDays }) as Array<{
+      const rows = stmt.all({ "@days": windowDays }) as Array<{
         date: string;
         pages: number;
         chunks: number;

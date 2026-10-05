@@ -94,7 +94,7 @@ Authentication settings live in `appConfig.auth` and follow the unified preceden
 
 ```bash
 # Configure Docs MCP Server to validate tokens from your OAuth2/OIDC provider
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://auth.your-domain.com"
   --auth-audience "https://mcp.your-domain.com"
@@ -139,7 +139,7 @@ To enable OAuth2 authentication, configure the Docs MCP Server to connect to you
 
 ```bash
 # Configure Docs MCP Server to validate tokens from your OAuth2 provider
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://your-provider.example.com"
   --auth-audience "https://mcp.your-domain.com"
@@ -154,7 +154,7 @@ npx docs-mcp-server
 **Auth0**:
 
 ```bash
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://your-tenant.auth0.com"
   --auth-audience "https://mcp.your-domain.com"
@@ -163,7 +163,7 @@ npx docs-mcp-server
 **Clerk**:
 
 ```bash
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://your-app.clerk.accounts.dev"
   --auth-audience "https://mcp.your-domain.com"
@@ -172,7 +172,7 @@ npx docs-mcp-server
 **Keycloak**:
 
 ```bash
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://keycloak.your-domain.com/auth/realms/your-realm"
   --auth-audience "https://mcp.your-domain.com"
@@ -181,7 +181,7 @@ npx docs-mcp-server
 **Azure AD**:
 
 ```bash
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://login.microsoftonline.com/your-tenant-id/v2.0"
   --auth-audience "https://mcp.your-domain.com"
@@ -278,14 +278,14 @@ All tools are available to authenticated users:
 
 ```bash
 # Start server without authentication
-npx docs-mcp-server --port 6280
+bunx @arabold/docs-mcp-server@latest --port 6280
 ```
 
 ### Production with Auth
 
 ```bash
 # Configure Docs MCP Server to validate tokens from your OAuth2 provider
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest
   --port 6280
   --auth-enabled
   --auth-issuer-url "https://keycloak.your-domain.com/realms/api"
@@ -334,7 +334,7 @@ The Docs MCP Server validates tokens issued by these providers but does not repl
 **Auth0**:
 
 ```bash
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://your-tenant.auth0.com"
   --auth-audience "https://mcp.your-domain.com"
@@ -343,7 +343,7 @@ npx docs-mcp-server
 **Clerk**:
 
 ```bash
-npx docs-mcp-server
+bunx @arabold/docs-mcp-server@latest \
   --auth-enabled
   --auth-issuer-url "https://your-app.clerk.accounts.dev"
   --auth-audience "https://mcp.your-domain.com"
@@ -408,7 +408,7 @@ When deployed behind an API gateway with authentication:
 Enable debug logging to troubleshoot authentication issues:
 
 ```bash
-DEBUG=mcp:auth npx docs-mcp-server --auth-enabled --auth-issuer-url "..."
+DEBUG=mcp:auth bunx @arabold/docs-mcp-server@latest --auth-enabled --auth-issuer-url "..."
 ```
 
 ## Security Considerations

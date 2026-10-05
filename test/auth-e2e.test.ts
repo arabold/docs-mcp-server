@@ -6,7 +6,6 @@
  */
 
 import { beforeAll, afterAll, describe, expect, it } from "vitest";
-import { config } from "dotenv";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -17,9 +16,6 @@ import { createAppServerConfig } from "../src/cli/utils";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
 import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
-
-// Load environment variables from .env file
-config();
 
 describe("Authentication End-to-End Tests", () => {
   let appServer: any;
@@ -322,7 +318,7 @@ To test authentication with a valid token, follow these steps:
    DOCS_MCP_AUTH_AUDIENCE=${process.env.DOCS_MCP_AUTH_AUDIENCE}
 
 2. Start the server with authentication enabled:
-   npm run dev -- --auth-enabled --auth-issuer-url "${process.env.DOCS_MCP_AUTH_ISSUER_URL}" --auth-audience "${process.env.DOCS_MCP_AUTH_AUDIENCE}"
+   bun run dev -- --auth-enabled --auth-issuer-url "${process.env.DOCS_MCP_AUTH_ISSUER_URL}" --auth-audience "${process.env.DOCS_MCP_AUTH_AUDIENCE}"
 
 3. Obtain a valid JWT token from the Clerk authentication system:
    - Visit: ${process.env.DOCS_MCP_AUTH_ISSUER_URL}

@@ -24,11 +24,11 @@ Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP tr
 
 ### Technology Stack
 
-- Node.js 22.x, TypeScript, Vite build system
+- Bun 1.4.2+, TypeScript, Vite build system
 - Vitest for testing
 - HTMX, AlpineJS, TailwindCSS for web interface
 - LangChain.js for embeddings, Playwright for scraping
-- SQLite with schema migrations
+- SQLite through Bun's built-in `bun:sqlite` driver, with schema migrations
 
 ## Configuration System
 

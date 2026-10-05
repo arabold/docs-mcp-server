@@ -4,7 +4,7 @@
 #
 # Invoke via:
 #   DOCS_EVAL_DATASET=tests/search-eval/dataset.smoke.yaml \
-#     npm run evaluate:search:baseline
+#     bun run evaluate:search:baseline
 
 status: draft
 notes: |

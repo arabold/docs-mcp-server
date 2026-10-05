@@ -62,26 +62,26 @@ don't balloon the index — the dataset's qrels only reference English pages.
 
 ```bash
 # React (react.dev has /es/, /zh-hans/, /ja/, etc.)
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev \
+bunx @arabold/docs-mcp-server@latest scrape react https://react.dev \
   --exclude-pattern '/^https:\/\/react\.dev\/[a-z]{2}(-[a-z]+)?\//' \
   --max-pages 300
 
 # Python stdlib (docs.python.org has /zh-cn/, /ja/, /fr/, /es/, /ko/, etc.)
-npx @arabold/docs-mcp-server@latest scrape python https://docs.python.org/3/ \
+bunx @arabold/docs-mcp-server@latest scrape python https://docs.python.org/3/ \
   --exclude-pattern '/^https:\/\/docs\.python\.org\/3\/[a-z]{2}(-[a-z]+)?\//' \
   --max-pages 500
 
 # FastAPI (heavy i18n — /es/, /zh/, /zh-hant/, /em/, ~15 languages)
-npx @arabold/docs-mcp-server@latest scrape fastapi https://fastapi.tiangolo.com/ \
+bunx @arabold/docs-mcp-server@latest scrape fastapi https://fastapi.tiangolo.com/ \
   --exclude-pattern '/^https:\/\/fastapi\.tiangolo\.com\/[a-z]{2}(-[a-z]+)?\//' \
   --max-pages 200
 
 # Vite (English-only, but cap pages to be safe)
-npx @arabold/docs-mcp-server@latest scrape vite https://vitejs.dev/guide/ \
+bunx @arabold/docs-mcp-server@latest scrape vite https://vitejs.dev/guide/ \
   --max-pages 200
 
 # TailwindCSS
-npx @arabold/docs-mcp-server@latest scrape tailwindcss https://tailwindcss.com/docs \
+bunx @arabold/docs-mcp-server@latest scrape tailwindcss https://tailwindcss.com/docs \
   --max-pages 300
 ```
 
@@ -98,23 +98,23 @@ within these caps. You can drop or raise it if you want maximal coverage.
 > **Subset run.** If you only want a quick sanity check, point `DOCS_EVAL_DATASET`
 > at a custom dataset file that uses fewer libraries — the schema is identical.
 
-### 3. Node 22
+### 3. Bun 1.4.2 or newer
 
-The store uses `better-sqlite3` with a pinned native binary. Always run the
-benchmark on Node 22 even if the rest of your toolchain is newer.
+Run the benchmark with Bun. On macOS, install Homebrew SQLite (`brew install
+sqlite`) because the system SQLite does not support loading `sqlite-vec`.
 
 ## Running
 
 ```bash
 # Measurement run: compute metrics, compare against baseline.json, exit non-zero on regression.
-npm run evaluate:search
+bun run evaluate:search
 
 # Baseline-refresh: same run, but write the result to baseline.json and exit zero.
 # Use this after intentional improvements, or for the very first run.
-npm run evaluate:search:baseline
+bun run evaluate:search:baseline
 
 # Preflight only: confirm all required libraries are indexed.
-npm run evaluate:search:preflight
+bun run evaluate:search:preflight
 ```
 
 Both modes produce, under `tests/search-eval/results/` (gitignored):
@@ -136,22 +136,22 @@ against the default dataset / judge / embedding model). Your first run should be
 
 ```bash
 # 1. Confirm libraries are indexed.
-npm run evaluate:search:preflight
+bun run evaluate:search:preflight
 
 # 2. Smoke-test the pipeline with 5 queries (~1 minute) — sanity check the
 #    provider, assertions, judge, aggregator, and comparator. This writes to
 #    `dataset.smoke.baseline.json`, NOT to the main baseline, so you can run it
 #    safely without disturbing the checked-in reference numbers.
 DOCS_EVAL_DATASET=tests/search-eval/dataset.smoke.yaml \
-  npm run evaluate:search:baseline
+  bun run evaluate:search:baseline
 
 # 3. Measure against the checked-in baseline. Exits non-zero on regression.
-npm run evaluate:search
+bun run evaluate:search
 ```
 
 ### When to refresh the baseline
 
-`npm run evaluate:search:baseline` overwrites `tests/search-eval/baseline.json`.
+`bun run evaluate:search:baseline` overwrites `tests/search-eval/baseline.json`.
 Refresh it when:
 
 - you've intentionally changed something that should shift retrieval (new
@@ -175,17 +175,17 @@ plus a small exec-provider script.
 
 ```bash
 # Record a baseline for the local provider (default — same as the canonical
-# `npm run evaluate:search:baseline`).
-npm run evaluate:search:baseline
+# `bun run evaluate:search:baseline`).
+bun run evaluate:search:baseline
 
 # Record a baseline against Context7. Writes to a separate file so the
 # canonical local baseline is untouched.
 DOCS_EVAL_PROVIDER=context7 DOCS_EVAL_NO_CACHE=1 \
-  npm run evaluate:search:baseline
+  bun run evaluate:search:baseline
 # → tests/search-eval/baseline.context7.json
 
 # Side-by-side report (IR / per-intent / LLM-judged / structural).
-npx vite-node tests/search-eval/cli/compare-providers.ts \
+bun tests/search-eval/cli/compare-providers.ts \
   tests/search-eval/baseline.json \
   tests/search-eval/baseline.context7.json
 ```
@@ -210,8 +210,8 @@ always use the dedicated CLI above — it prints both sides and a coarse
 
 ### Performance note
 
-Each query cold-starts a fresh `vite-node` process and re-initialises the
-docService (which writes through `better-sqlite3` for schema migrations).
+Each query cold-starts a fresh Bun process and re-initialises the
+docService (which writes through `bun:sqlite` for schema migrations).
 Running multiple provider processes in parallel deadlocks on the SQLite write
 lock, so the default concurrency is **1**. Expect roughly 10–15 seconds per
 query — the full 60-query baseline takes 10–15 minutes.
@@ -220,7 +220,7 @@ You can raise concurrency once we move to a long-running provider that
 initialises the store once per run:
 
 ```bash
-DOCS_EVAL_CONCURRENCY=4 npm run evaluate:search:baseline   # don't do this yet
+DOCS_EVAL_CONCURRENCY=4 bun run evaluate:search:baseline   # don't do this yet
 ```
 
 ## Reading the output
@@ -265,10 +265,10 @@ something different.
 
 | What | How |
 |---|---|
-| Use a different judge | `DOCS_EVAL_JUDGE=anthropic:claude-sonnet-4-6 npm run evaluate:search` |
-| Enable cross-judge sampling | `DOCS_EVAL_CROSS_JUDGE=google:gemini-3.1-flash-lite DOCS_EVAL_CROSS_JUDGE_N=10 npm run evaluate:search` |
-| Run a subset dataset | `DOCS_EVAL_DATASET=path/to/your.yaml npm run evaluate:search` |
-| Bust promptfoo's cache after a re-index | `DOCS_EVAL_NO_CACHE=1 npm run evaluate:search:baseline` |
+| Use a different judge | `DOCS_EVAL_JUDGE=anthropic:claude-sonnet-4-6 bun run evaluate:search` |
+| Enable cross-judge sampling | `DOCS_EVAL_CROSS_JUDGE=google:gemini-3.1-flash-lite DOCS_EVAL_CROSS_JUDGE_N=10 bun run evaluate:search` |
+| Run a subset dataset | `DOCS_EVAL_DATASET=path/to/your.yaml bun run evaluate:search` |
+| Bust promptfoo's cache after a re-index | `DOCS_EVAL_NO_CACHE=1 bun run evaluate:search:baseline` |
 | Add a query | Append an entry to `tests/search-eval/dataset.yaml`, then refresh the baseline |
 | Add a library | Append entries, scrape the library, also update `.github/workflows/eval.yml` |
 
@@ -306,19 +306,19 @@ To run a head-to-head benchmark:
 ```bash
 # 1. Lock in the baseline with the current Cheerio sanitiser.
 DOCS_MCP_SCRAPER_HTML_EXTRACTOR=cheerio \
-  npx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi  # if previously indexed
+  bunx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi  # if previously indexed
 # …re-scrape all five libraries (see Prerequisites above)…
 DOCS_MCP_SCRAPER_HTML_EXTRACTOR=cheerio \
   DOCS_EVAL_DATASET=tests/search-eval/dataset.yaml \
-  npm run evaluate:search:baseline
+  bun run evaluate:search:baseline
 
 # 2. Re-index with Defuddle.
 DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle \
-  npx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi
+  bunx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi
 # …re-scrape all five libraries with the same commands…
 DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle \
   DOCS_EVAL_NO_CACHE=1 \
-  npm run evaluate:search
+  bun run evaluate:search
 ```
 
 The measurement run diffs the Defuddle results against the Cheerio baseline and
@@ -398,7 +398,7 @@ After any change that materially affects retrieval (chunker, embedding model,
 ranking, scraper), refresh the local baseline and add or revise a column:
 
 ```bash
-DOCS_EVAL_NO_CACHE=1 npm run evaluate:search:baseline
+DOCS_EVAL_NO_CACHE=1 bun run evaluate:search:baseline
 ```
 
 Then update the relevant column above with the new headline + structural + LLM

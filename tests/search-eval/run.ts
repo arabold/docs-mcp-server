@@ -132,7 +132,7 @@ function baselinePathFor(datasetPath: string, provider: string): string {
 async function main() {
   const mode = parseMode(process.argv.slice(2));
   if (!mode.measure && !mode.baseline) {
-    console.error("Usage: vite-node tests/search-eval/run.ts (--measure | --baseline)");
+    console.error("Usage: bun tests/search-eval/run.ts (--measure | --baseline)");
     process.exit(2);
   }
   if (mode.measure && mode.baseline) {
@@ -176,26 +176,18 @@ async function main() {
 
   // 5. Run promptfoo.
   //
-  // We pin the Node binary explicitly via DOCS_EVAL_NODE because when promptfoo
-  // spawns the bash exec-provider, the child shell re-initialises PATH from
-  // /etc/profile and ~/.bashrc — which on machines using nvm typically points
-  // at a different Node version than the one running this orchestrator. That
-  // caused a 100%-error baseline run with better-sqlite3 ABI mismatches. The
-  // exec-provider shim consumes these vars and invokes Node directly.
-  const viteNodeCli = resolve("node_modules/vite-node/dist/cli.mjs");
   const env = {
     ...process.env,
     DOCS_EVAL_JUDGE_RESOLVED: judge.id,
-    DOCS_EVAL_NODE: process.execPath,
-    DOCS_EVAL_VITE_NODE: viteNodeCli,
+    DOCS_EVAL_BUN: process.execPath,
     // Selected exec-provider for this run. promptfoo.yaml templates these
     // via {{env.…}} so we can switch providers without parallel configs.
     DOCS_EVAL_PROMPTFOO_PROVIDER: providerSpec.promptfooId,
     DOCS_EVAL_PROMPTFOO_LABEL: providerSpec.label,
   };
-  // Default concurrency 1: each provider invocation cold-starts vite-node AND
-  // re-initialises docService (which runs a schema-migration write through
-  // better-sqlite3). Running 4 of those in parallel deadlocks on the write lock.
+  // Default concurrency 1: each provider invocation cold-starts Bun and
+  // re-initialises docService (which runs a schema-migration write). Running
+  // 4 of those in parallel deadlocks on the SQLite write lock.
   // Override with DOCS_EVAL_CONCURRENCY once we move to a long-running provider.
   const concurrency = process.env.DOCS_EVAL_CONCURRENCY ?? "1";
   // Promptfoo caches by (provider id, prompt, vars). When the underlying store
@@ -207,9 +199,9 @@ async function main() {
     `▶  Running promptfoo (n=${dataset.entries.length} queries, concurrency=${concurrency}${cacheFlag.length ? ", no-cache" : ""})`,
   );
   const child = spawnSync(
-    "npx",
+    process.execPath,
     [
-      "-y",
+      "x",
       "promptfoo@0.121.11",
       "eval",
       "-c",
@@ -233,15 +225,12 @@ async function main() {
     process.exit(child.status ?? 1);
   }
 
-  // 6. Cross-judge sampling (optional, no-op if env unset). Same Node-pinning
-  // applies — invoke vite-node CLI through the pinned Node binary rather than
-  // through `npx`, which would round-trip PATH and risk picking up the wrong
-  // Node version.
+  // 6. Cross-judge sampling (optional, no-op if env unset).
   if (process.env.DOCS_EVAL_CROSS_JUDGE) {
     console.log(`▶  Cross-judge sampling (judge=${process.env.DOCS_EVAL_CROSS_JUDGE})`);
     const cj = spawnSync(
       process.execPath,
-      [viteNodeCli, resolve("tests/search-eval/cli/cross-judge.ts")],
+      [resolve("tests/search-eval/cli/cross-judge.ts")],
       { stdio: "inherit", env },
     );
     if (cj.status !== 0) {

@@ -1,9 +1,14 @@
+# Share Bun's executable with the build stage and use the official latest
+# runtime image for the final image.
+FROM oven/bun:latest AS bun
+
 # Base stage with build dependencies
 FROM node:22-trixie-slim AS base
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
-# Install build dependencies for native modules (better-sqlite3, tree-sitter, etc.)
+# Install build dependencies for native modules (tree-sitter, etc.)
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
   python3 \
@@ -14,32 +19,27 @@ RUN apt-get update \
 # Build stage
 FROM base AS builder
 
+# tree-sitter's node-gyp-build fallback uses Node's global npm-bundled node-gyp.
+ENV NODE_PATH=/usr/local/lib/node_modules/npm/node_modules
+
 # Accept build argument for PostHog API key
 ARG POSTHOG_API_KEY
 ENV POSTHOG_API_KEY=$POSTHOG_API_KEY
 
-# Copy package files
-COPY package*.json ./
+# Copy Bun package files
+COPY package.json bun.lock ./
 
 # Install all dependencies (including dev dependencies for building)
-RUN npm ci
-
-# Drop the musl-linked native builds. npm selects platform packages by `os`
-# and `cpu`; it only filters on `libc` when the lockfile records that field,
-# which npm 10 does not write. Both the glibc and musl variants therefore get
-# installed, and on this Debian base the musl ones can never load. Pruning
-# them keeps ~190 MB of dead binaries (over half of it `@xberg-io/xberg`)
-# out of the runtime image.
-RUN find node_modules -maxdepth 3 -type d -name '*-linux-*-musl' -prune -exec rm -rf {} +
+RUN bun install --frozen-lockfile
 
 # Copy source code
 COPY . .
 
 # Build application
-RUN npm run build
+RUN bun run build
 
 # Production stage
-FROM base AS production
+FROM oven/bun:latest AS production
 
 # Set environment variables for Playwright
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -51,8 +51,8 @@ RUN apt-get update \
   chromium \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy package files and database
-COPY package*.json .
+# Copy Bun package files and database
+COPY package.json bun.lock .
 COPY db db
 
 # Copy built files from builder
@@ -64,12 +64,12 @@ COPY --from=builder /app/dist ./dist
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
 
-# Create the writable runtime directories and hand ownership to the
-# unprivileged `node` user that ships with the base image (uid 1000).
+# Create the writable runtime directories and hand ownership to Bun's
+# unprivileged `bun` user (uid 1000).
 # `/app` is intentionally left root-owned so the runtime user cannot
 # tamper with code or `node_modules` if it is ever compromised.
 RUN mkdir -p /data /config \
-  && chown node:node /data /config
+  && chown bun:bun /data /config
 
 # Define volumes
 VOLUME /data
@@ -84,7 +84,7 @@ ENV HOST=0.0.0.0
 # this ownership automatically; if you bind-mount a host directory onto
 # /data or /config instead, it must be writable by uid 1000 — e.g.
 # `chown 1000:1000 ./data` or `docker run --user "$(id -u):$(id -g)"`.
-USER node
+USER bun
 
 # Set the command to run the application
-ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]
+ENTRYPOINT ["bun", "dist/index.js"]

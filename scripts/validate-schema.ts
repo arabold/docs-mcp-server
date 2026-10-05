@@ -1,4 +1,4 @@
-#!/usr/bin/env vite-node
+#!/usr/bin/env bun
 
 /**
  * Database Schema Comparison Tool
@@ -13,9 +13,10 @@
  */
 
 import path from "node:path";
-import Database, { type Database as DatabaseType } from "better-sqlite3";
+import type { Database as DatabaseType } from "bun:sqlite";
 import * as sqliteVec from "sqlite-vec";
 import { applyMigrations } from "../src/store/applyMigrations";
+import { openSqliteDatabase } from "../src/store/sqlite";
 import { resolveStorePath } from "../src/utils/paths";
 
 // Schema structures
@@ -304,7 +305,7 @@ async function main() {
 
   // Create expected schema from migrations
   console.log("📝 Creating expected schema from migrations...");
-  const expectedDb = new Database(":memory:");
+  const expectedDb = openSqliteDatabase(":memory:");
   sqliteVec.load(expectedDb);
   
   try {
@@ -314,7 +315,7 @@ async function main() {
 
     // Get actual schema from target database
     console.log("📂 Reading actual schema from target database...");
-    const actualDb = new Database(targetDbPath, { readonly: true });
+    const actualDb = openSqliteDatabase(targetDbPath, { readonly: true });
     sqliteVec.load(actualDb);
     
     try {

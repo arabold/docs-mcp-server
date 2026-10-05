@@ -54,7 +54,7 @@ export function scrapeCommandFor(library: string): string {
   // Mirrors the user-facing CLI. The exact source URL must be chosen by the
   // operator — the dataset cannot encode it because libraries may have moved
   // doc URLs between versions.
-  return `npx docs-mcp-server scrape ${library} <docs-url>`;
+  return `bunx @arabold/docs-mcp-server@latest scrape ${library} <docs-url>`;
 }
 
 /** CLI entry point used by tests/search-eval/cli/preflight.ts. */

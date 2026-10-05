@@ -40,28 +40,28 @@ See **[Supported Formats](docs/concepts/supported-formats.md)** for the complete
 
 For agents and scripts, the CLI is usually the simplest way to use Grounded Docs.
 
-**1. Index documentation** (requires Node.js 22+):
+**1. Index documentation** (requires Bun 1.4.2+):
 
 ```bash
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
+bunx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 ```
 
 For hash-routed SPA docs sites, enable hash preservation explicitly:
 
 ```bash
-npx @arabold/docs-mcp-server@latest scrape my-spa https://docs.example.com/#/guide --preserve-hashes
+bunx @arabold/docs-mcp-server@latest scrape my-spa https://docs.example.com/#/guide --preserve-hashes
 ```
 
 **2. Query the index:**
 
 ```bash
-npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
+bunx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
 ```
 
 **3. Fetch a single page as Markdown:**
 
 ```bash
-npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+bunx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
 ```
 
 ### Output Behavior
@@ -83,7 +83,7 @@ If you want a long-running MCP endpoint for Claude, Cline, Copilot, Gemini CLI, 
 **1. Start the server:**
 
 ```bash
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 **2. Open the Web UI** at **[http://localhost:6280](http://localhost:6280)** to add documentation.
@@ -127,7 +127,7 @@ Using an embedding model is **optional** but dramatically improves search qualit
 **Example: Enable OpenAI Embeddings**
 
 ```bash
-OPENAI_API_KEY="sk-proj-..." npx @arabold/docs-mcp-server@latest
+OPENAI_API_KEY="sk-proj-..." bunx @arabold/docs-mcp-server@latest
 ```
 
 See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ollama**, **Gemini**, **Azure**, and others.
@@ -137,7 +137,7 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 ## 📚 Documentation
 
 ### Getting Started
--   **[Installation](docs/setup/installation.md)**: Detailed setup guides for Docker, Node.js (npx), and Embedded mode.
+-   **[Installation](docs/setup/installation.md)**: Detailed setup guides for Bun, Docker, and Embedded mode.
 -   **[Connecting Clients](docs/guides/mcp-clients.md)**: How to connect Claude, VS Code (Cline/Roo), and other MCP clients.
 -   **[Basic Usage](docs/guides/basic-usage.md)**: Using the Web UI, CLI, and scraping local files.
 -   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.

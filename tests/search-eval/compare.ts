@@ -271,7 +271,7 @@ export function renderSummary(summary: RunSummary, cmp: CompareResult): string {
   lines.push("");
 
   if (!cmp.hasBaseline) {
-    lines.push("⚠  No baseline found. Run `npm run evaluate:search:baseline` to record one.");
+    lines.push("⚠  No baseline found. Run `bun run evaluate:search:baseline` to record one.");
   } else if (cmp.incompatibilities.length > 0) {
     lines.push("⚠  Baseline config differs from current run — skipping regression check:");
     for (const m of cmp.incompatibilities) lines.push(`   ${m}`);

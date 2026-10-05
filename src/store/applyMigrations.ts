@@ -1,9 +1,10 @@
+import type { Database } from "bun:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import type { Database } from "better-sqlite3";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import { StoreError } from "./errors";
+import { setPragma } from "./sqlite";
 
 // Construct the absolute path to the migrations directory using the project root
 const MIGRATIONS_DIR = path.join(getProjectRoot(), "db", "migrations");
@@ -170,7 +171,7 @@ function prepareMigrationSql(db: Database, filename: string, sql: string): strin
  * Migrations are expected to be .sql files with sequential prefixes (e.g., 001-, 002-).
  * It tracks applied migrations in the _schema_migrations table.
  *
- * @param db The better-sqlite3 database instance.
+ * @param db The Bun SQLite database instance.
  * @param options Optional runtime configuration.
  * @throws {StoreError} If any migration fails.
  */
@@ -185,10 +186,10 @@ export async function applyMigrations(
   const retryDelayMs = options?.retryDelayMs ?? 300;
   // Keep journaling enabled so schema migrations can roll back if any DDL step fails.
   try {
-    db.pragma("synchronous = NORMAL");
-    db.pragma("mmap_size = 268435456"); // 256MB memory mapping
-    db.pragma("cache_size = -64000"); // 64MB cache (default is ~2MB)
-    db.pragma("temp_store = MEMORY"); // Store temporary data in memory
+    setPragma(db, "synchronous = NORMAL");
+    setPragma(db, "mmap_size = 268435456"); // 256MB memory mapping
+    setPragma(db, "cache_size = -64000"); // 64MB cache (default is ~2MB)
+    setPragma(db, "temp_store = MEMORY"); // Store temporary data in memory
     logger.debug("Applied safe migration pragmas");
   } catch (_error) {
     logger.warn("⚠️  Could not apply all migration pragmas");
@@ -298,19 +299,19 @@ export async function applyMigrations(
   // Configure production-ready settings after migrations
   try {
     // Enable WAL mode for better concurrency (allows readers while writing)
-    db.pragma("journal_mode = WAL");
+    setPragma(db, "journal_mode = WAL");
 
     // Configure WAL autocheckpoint to prevent unbounded growth
-    db.pragma("wal_autocheckpoint = 1000"); // Checkpoint every 1000 pages (~4MB)
+    setPragma(db, "wal_autocheckpoint = 1000"); // Checkpoint every 1000 pages (~4MB)
 
     // Set busy timeout for better handling of concurrent access
-    db.pragma("busy_timeout = 30000"); // 30 seconds
+    setPragma(db, "busy_timeout = 30000"); // 30 seconds
 
     // Enable foreign key constraints for data integrity
-    db.pragma("foreign_keys = ON");
+    setPragma(db, "foreign_keys = ON");
 
     // Set synchronous to NORMAL for good balance of safety and performance
-    db.pragma("synchronous = NORMAL");
+    setPragma(db, "synchronous = NORMAL");
 
     logger.debug(
       "Applied production database configuration (WAL mode, autocheckpoint, foreign keys, busy timeout)",

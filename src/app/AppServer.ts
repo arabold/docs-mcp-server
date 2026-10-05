@@ -27,6 +27,7 @@ import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../telemetry";
 import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
 import { printBanner } from "../utils/banner";
+import { getAppVersion } from "../utils/buildInfo";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
@@ -111,7 +112,7 @@ export class AppServer {
         // Set global application context that will be included in all events
         if (telemetry.isEnabled()) {
           telemetry.setGlobalContext({
-            appVersion: __APP_VERSION__,
+            appVersion: getAppVersion(),
             appPlatform: process.platform,
             appNodeVersion: process.version,
             appServicesEnabled: this.getActiveServicesList(),

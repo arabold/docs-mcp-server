@@ -53,7 +53,7 @@ Here are complete configuration examples for different embedding providers.
 ```bash
 OPENAI_API_KEY="sk-proj-your-openai-api-key" \
 DOCS_MCP_EMBEDDING_MODEL="text-embedding-3-small" \
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 #### Ollama (Local)
@@ -64,7 +64,7 @@ Run local models compatible with the OpenAI API format.
 OPENAI_API_KEY="ollama" \
 OPENAI_API_BASE="http://localhost:11434/v1" \
 DOCS_MCP_EMBEDDING_MODEL="nomic-embed-text:latest" \
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 #### LM Studio (Local)
@@ -75,7 +75,7 @@ Connect to LM Studio's local inference server.
 OPENAI_API_KEY="lmstudio" \
 OPENAI_API_BASE="http://localhost:1234/v1" \
 DOCS_MCP_EMBEDDING_MODEL="text-embedding-qwen3-embedding-4b" \
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 #### Google Gemini
@@ -85,7 +85,7 @@ Use Google's Gemini API directly.
 ```bash
 GOOGLE_API_KEY="your-google-api-key" \
 DOCS_MCP_EMBEDDING_MODEL="gemini:embedding-001" \
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 #### Google Vertex AI
@@ -95,7 +95,7 @@ For enterprise GCP deployments.
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-service-account.json" \
 DOCS_MCP_EMBEDDING_MODEL="vertex:text-embedding-004" \
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 #### AWS Bedrock
@@ -107,7 +107,7 @@ AWS_ACCESS_KEY_ID="your-aws-access-key-id" \
 AWS_SECRET_ACCESS_KEY="your-aws-secret-access-key" \
 AWS_REGION="us-east-1" \
 DOCS_MCP_EMBEDDING_MODEL="aws:amazon.titan-embed-text-v1" \
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 #### Azure OpenAI
@@ -120,7 +120,7 @@ AZURE_OPENAI_API_INSTANCE_NAME="your-instance-name" \
 AZURE_OPENAI_API_DEPLOYMENT_NAME="your-deployment-name" \
 AZURE_OPENAI_API_VERSION="2024-02-01" \
 DOCS_MCP_EMBEDDING_MODEL="microsoft:text-embedding-ada-002" \
-npx @arabold/docs-mcp-server@latest
+bunx @arabold/docs-mcp-server@latest
 ```
 
 ## Changing the Embedding Model
