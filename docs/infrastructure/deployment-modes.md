@@ -137,6 +137,8 @@ services:
     command: ["worker", "--port", "8080"]
 ```
 
+The worker URL may include a path when a reverse proxy serves the worker under one, such as `https://example.com/docs/api`. The coordinator's API calls and its event WebSocket both use that URL.
+
 ## Scaling
 
 ### Coordinators Scale Horizontally

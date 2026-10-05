@@ -64,3 +64,14 @@ When the public URL has a path, the web UI SHALL load its assets, call the API, 
 - **WHEN** the public URL is `https://example.com/docs`
 - **AND** a user selects Jobs in the web UI
 - **THEN** the browser's address SHALL become `https://example.com/docs/jobs`
+
+### Requirement: The worker link works under a path
+
+A coordinator (`web` or `mcp` with a worker URL) SHALL reach the worker's HTTP API and its event WebSocket at the configured worker URL, path included. The WebSocket URL SHALL be the worker URL with `http`/`https` replaced by `ws`/`wss`, so a reverse proxy that serves the worker under a path reaches both.
+
+#### Scenario: Worker served under a path
+
+- **WHEN** a coordinator's worker URL is `https://example.com/docs/api`
+- **THEN** its API calls SHALL go to `https://example.com/docs/api`
+- **AND** its event WebSocket SHALL connect to `wss://example.com/docs/api`
+- **AND** events the worker emits SHALL reach the coordinator

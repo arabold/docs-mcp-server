@@ -13,6 +13,8 @@ import { createServer } from "node:http";
 import { Client, SSEClientTransport } from "@modelcontextprotocol/client";
 import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { EventBusService, EventType } from "../src/events";
+import { RemoteEventProxy } from "../src/events/RemoteEventProxy";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
 import { startInProcessServer } from "./in-process-server";
 import {
@@ -80,6 +82,28 @@ describe("Serving under a base path behind a reverse proxy", () => {
       expect(api.status).toBe(200);
       expect(await tryNodeWebSocket(`${publicUrl.replace(/^http/, "ws")}/api`)).toBe("open");
     });
+
+    it("forwards the worker's events to a coordinator that links to it under the path", async () => {
+      const localBus = new EventBusService();
+      const received = new Promise<void>((resolve) => {
+        localBus.on(EventType.LIBRARY_CHANGE, () => resolve());
+      });
+      const link = new RemoteEventProxy(`${publicUrl}/api`, localBus);
+      await link.connect();
+      try {
+        // The subscription is established asynchronously, so emit until it arrives.
+        const emitter = setInterval(() => {
+          docsServer?.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+        }, 100);
+        try {
+          await received;
+        } finally {
+          clearInterval(emitter);
+        }
+      } finally {
+        link.disconnect();
+      }
+    }, 15000);
 
     it("serves MCP under the path", async () => {
       const token = await issuer.mint({ aud: `${publicUrl}/mcp` });
