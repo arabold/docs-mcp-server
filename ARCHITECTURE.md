@@ -214,7 +214,7 @@ The PipelineFactory chooses implementation based on configuration:
 
 Naming clarifies the mode: PipelineManager runs an in-process worker; PipelineClient connects to an out-of-process worker via tRPC.
 
-- `serverUrl` specified: PipelineClient for external worker communication
+- `serverUrl` specified: PipelineClient for external worker communication. Its tRPC HTTP calls and its event WebSocket use the same worker URL, path included, so a worker behind a path-prefixed reverse proxy works.
 - `recoverJobs: true`: PipelineManager with job recovery from database
 - `recoverJobs: false`: PipelineManager without recovery (CLI commands)
 

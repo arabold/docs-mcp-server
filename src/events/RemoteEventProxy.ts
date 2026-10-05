@@ -15,6 +15,7 @@ import {
 } from "@trpc/client";
 import superjson from "superjson";
 import { logger } from "../utils/logger";
+import { toWebSocketUrl } from "../utils/url";
 import type { EventBusService } from "./EventBusService";
 import type { EventType } from "./types";
 
@@ -44,11 +45,9 @@ export class RemoteEventProxy {
     logger.debug(`Connecting to remote worker at ${this.remoteWorkerUrl}`);
 
     try {
-      // Extract base URL without the /api path for WebSocket connection
-      // The tRPC WebSocket adapter handles the /api routing internally
-      const url = new URL(this.remoteWorkerUrl);
-      const baseUrl = `${url.protocol}//${url.host}`;
-      const wsUrl = baseUrl.replace(/^http/, "ws");
+      // The WebSocket uses the same URL as HTTP, so it reaches a worker that
+      // a reverse proxy serves under a path.
+      const wsUrl = toWebSocketUrl(this.remoteWorkerUrl);
 
       // Create WebSocket client for subscriptions
       this.wsClient = createWSClient({

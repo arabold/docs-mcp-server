@@ -205,6 +205,8 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
 - [x] 11.3 Match `/docs` and `/docs/…` only in the Traefik example of `docs/infrastructure/reverse-proxy.md`, so `/docs-old` stays with its own router.
 - [x] 11.4 Build the web UI in a Vitest global setup (`test/global-setup.ts`) when `public/index.html` is missing, so the E2E suites that load the shell pass in CI and fresh checkouts. Verify `test/mcp-http-e2e.test.ts` and `test/base-path-e2e.test.ts` pass in a checkout without build output.
 
+- [x] 11.5 Keep the worker URL's path on the worker link's WebSocket: `PipelineClient` and `RemoteEventProxy` derive it with `toWebSocketUrl` (`src/utils/url.ts`) instead of the bare origin. Verify `test/base-path-e2e.test.ts` forwards a worker event through the prefix proxy in both modes (it fails with the origin-only URL), and `PipelineClient.test.ts` and `url.test.ts` cover the URL.
+
 ## 12. Archive follow-up
 
 - [ ] 12.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.

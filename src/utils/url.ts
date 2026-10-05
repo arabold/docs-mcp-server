@@ -162,3 +162,18 @@ export function stripMarkdownExtension(url: string): string {
   parsed.pathname = stripped;
   return parsed.toString();
 }
+
+/**
+ * The WebSocket URL for an HTTP(S) endpoint: the same URL, path and query
+ * included, with `http:`/`https:` replaced by `ws:`/`wss:`. Keeping the path
+ * lets the connection pass a reverse proxy that serves the endpoint under a
+ * prefix, such as `https://example.com/docs/api`.
+ *
+ * @param httpUrl An absolute `http:` or `https:` URL
+ * @returns The matching `ws:` or `wss:` URL
+ */
+export function toWebSocketUrl(httpUrl: string): string {
+  const url = new URL(httpUrl);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
