@@ -22,6 +22,7 @@ import { PageOutcome, ScrapeMode, type ScraperOptions } from "../src/scraper/typ
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import type { StoreSearchResult } from "../src/store/types";
 import { type AppConfig, loadConfig } from "../src/utils/config";
+import { mockOriginsWithNock } from "./nock-helpers";
 
 const TEST_BASE_URL = "http://empty-docs.example.com";
 const TEST_LIBRARY = "empty-lib";
@@ -36,8 +37,8 @@ function populatedPage(): string {
  * Answers the llms.txt probe with a 404, the way a site without one does.
  *
  * `WebScraperStrategy` probes a couple of llms.txt candidates before crawling.
- * Left unmocked they escape to the real network, where the unresolvable test
- * host costs three retries with backoff per candidate — about 14 seconds a job.
+ * Left unmocked, each one fails inside nock (see `mockOriginsWithNock`) and the
+ * fetcher retries it with backoff — about 7 seconds per candidate.
  * A persistent 404 is both faster and closer to what a real site answers.
  */
 function mockLlmsTxtMisses(): void {
@@ -87,6 +88,7 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     });
 
     nock.cleanAll();
+    mockOriginsWithNock(TEST_BASE_URL);
     mockLlmsTxtMisses();
   });
 

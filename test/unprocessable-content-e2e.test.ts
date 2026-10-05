@@ -21,6 +21,7 @@ import { PipelineJobStatus } from "../src/pipeline/types";
 import { PageOutcome, type ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { type AppConfig, loadConfig } from "../src/utils/config";
+import { mockOriginsWithNock } from "./nock-helpers";
 
 const TEST_BASE_URL = "http://assets-docs.example.com";
 const TEST_LIBRARY = "assets-lib";
@@ -35,8 +36,8 @@ function hubPage(links: string[]): string {
  * Answers the llms.txt probe with a 404, the way a site without one does.
  *
  * `WebScraperStrategy` probes a couple of llms.txt candidates before crawling.
- * Left unmocked they escape to the real network, where the unresolvable test
- * host costs three retries with backoff per candidate — about 14 seconds a job.
+ * Left unmocked, each one fails inside nock (see `mockOriginsWithNock`) and the
+ * fetcher retries it with backoff — about 7 seconds per candidate.
  * A persistent 404 is both faster and closer to what a real site answers.
  */
 function mockLlmsTxtMisses(): void {
@@ -82,6 +83,7 @@ describe("Unprocessable content gates E2E", () => {
     });
 
     nock.cleanAll();
+    mockOriginsWithNock(TEST_BASE_URL);
     requestedPaths = [];
     nock.emitter.removeAllListeners("no match");
     nock.emitter.on("no match", (req: { path?: string }) => {
