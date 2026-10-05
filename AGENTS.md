@@ -141,4 +141,5 @@ Notes:
 - The "live" and "docker" suites are excluded from `npm test` / `npm run test:e2e` because they need external network or a Docker daemon. CI runs `docker-e2e.test.ts` in a dedicated `docker-test` job.
 - The live suite is excluded in `vite.config.ts` so a bare `vitest` (and watch mode) never hits real sites. `--exclude` only *adds* globs and `mergeConfig` concatenates them, so nothing on the CLI can undo that — `npm run test:live` therefore points at `vite.config.live.ts`, which replaces the exclude list and drops the MSW mock-server setup that would otherwise intercept the real requests.
 - Suites that "skip gracefully" check for their required env at startup and short-circuit when it's missing — safe to leave in the default run.
+- Suites that mock HTTP with nock call `mockOriginsWithNock(...)` from `test/nock-helpers.ts` in `beforeEach`. nock and the global MSW server share one interceptor, and the helper keeps unmocked requests off the network and MSW out of nock's way.
 - Fixtures (sample PDF, docx, xlsx, archive, etc.) live in `test/fixtures/`. Reuse them rather than generating new files on the fly.

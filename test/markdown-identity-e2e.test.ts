@@ -20,6 +20,7 @@ import { PipelineJobStatus } from "../src/pipeline/types";
 import { ScrapeMode, type ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { type AppConfig, loadConfig } from "../src/utils/config";
+import { mockOriginsWithNock } from "./nock-helpers";
 
 const TEST_BASE_URL = "http://md-docs.example.com";
 const TEST_LIBRARY = "md-lib";
@@ -47,6 +48,7 @@ describe("Markdown variant identity E2E", () => {
     await pipelineManager.start();
 
     nock.cleanAll();
+    mockOriginsWithNock(TEST_BASE_URL);
   });
 
   afterEach(async () => {
