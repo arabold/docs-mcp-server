@@ -6,10 +6,29 @@
  */
 
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import { Client } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getCliCommand } from "./test-helpers";
+
+/** A transport that spawns the CLI over stdio with a test store and no telemetry. */
+function createStdioTransport(): StdioClientTransport {
+  const projectRoot = path.resolve(import.meta.dirname, "..");
+  // Without VITEST_WORKER_ID the child process logs as it does in production.
+  const env = { ...process.env };
+  delete env.VITEST_WORKER_ID;
+  const { cmd, args } = getCliCommand();
+  return new StdioClientTransport({
+    command: cmd,
+    args,
+    cwd: projectRoot,
+    env: {
+      ...env,
+      DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-stdio"),
+      DOCS_MCP_TELEMETRY: "false",
+    },
+  });
+}
 
 describe("MCP stdio server E2E", () => {
   let client: Client | null = null;
@@ -45,27 +64,7 @@ describe("MCP stdio server E2E", () => {
   });
 
   it("should start, respond to initialize, and list tools", async () => {
-    // Using vite-node to run TypeScript directly
-    const projectRoot = path.resolve(import.meta.dirname, "..");
-    const entryPoint = path.join(projectRoot, "src", "index.ts");
-
-    // Build environment without VITEST_WORKER_ID to ensure proper logging behavior
-    const testEnv = { ...process.env };
-    delete testEnv.VITEST_WORKER_ID;
-
-    const { cmd, args } = getCliCommand();
-
-    // Create stdio transport which spawns its own process
-    transport = new StdioClientTransport({
-      command: cmd,
-      args: args,
-      cwd: projectRoot,
-      env: {
-        ...testEnv,
-        DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-stdio"),
-        DOCS_MCP_TELEMETRY: "false",
-      },
-    });
+    transport = createStdioTransport();
 
     // Create MCP client
     client = new Client(
@@ -97,29 +96,28 @@ describe("MCP stdio server E2E", () => {
     const toolNames = toolsResult.tools.map((t) => t.name);
     expect(toolNames).toContain("search_docs");
     expect(toolNames).toContain("list_libraries");
+
+    // A client left at defaults opens with the handshake of an earlier
+    // revision, which stdio keeps serving.
+    expect(client.getProtocolEra()).toBe("legacy");
   }, 30000);
 
+  it("serves a client on protocol revision 2026-07-28", async () => {
+    transport = createStdioTransport();
+    client = new Client(
+      { name: "modern-client", version: "1.0.0" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+
+    await client.connect(transport);
+
+    expect(client.getProtocolEra()).toBe("modern");
+    const toolsResult = await client.listTools();
+    expect(toolsResult.tools.map((t) => t.name)).toContain("search_docs");
+  }, 60000);
+
   it("should handle shutdown gracefully", async () => {
-    const projectRoot = path.resolve(import.meta.dirname, "..");
-    const entryPoint = path.join(projectRoot, "src", "index.ts");
-
-    // Create stdio transport which spawns its own process
-    // Build environment without VITEST_WORKER_ID
-    const testEnv = { ...process.env };
-    delete testEnv.VITEST_WORKER_ID;
-
-    const { cmd, args } = getCliCommand();
-
-    transport = new StdioClientTransport({
-      command: cmd,
-      args: args,
-      cwd: projectRoot,
-      env: {
-        ...testEnv,
-        DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-stdio"),
-        DOCS_MCP_TELEMETRY: "false",
-      },
-    });
+    transport = createStdioTransport();
 
     client = new Client(
       {

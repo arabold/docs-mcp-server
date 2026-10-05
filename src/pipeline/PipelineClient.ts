@@ -17,6 +17,7 @@ import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
 import { normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
+import { toWebSocketUrl } from "../utils/url";
 import type { IPipeline } from "./trpc/interfaces";
 import type { PipelineRouter } from "./trpc/router";
 import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "./types";
@@ -35,11 +36,9 @@ export class PipelineClient implements IPipeline {
     this.baseUrl = serverUrl.replace(/\/$/, "");
     this.eventBus = eventBus;
 
-    // Extract base URL without the /api path for WebSocket connection
-    // The tRPC WebSocket adapter handles the /api routing internally
-    const url = new URL(this.baseUrl);
-    const baseWsUrl = `${url.protocol}//${url.host}`;
-    this.wsUrl = baseWsUrl.replace(/^http/, "ws");
+    // The WebSocket uses the same URL as HTTP, so it reaches a worker that a
+    // reverse proxy serves under a path.
+    this.wsUrl = toWebSocketUrl(this.baseUrl);
 
     // Create WebSocket client for subscriptions
     this.wsClient = createWSClient({

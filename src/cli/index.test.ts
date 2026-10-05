@@ -4,9 +4,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Argv } from "yargs";
+import { Parser } from "yargs/helpers";
 import { DocumentManagementService } from "../store";
+import { getConfigMappedCliKeys } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
-import { createCli } from "./index";
+import { COMMAND_FACTORIES, createCli, registerGlobalOptions } from "./index";
 import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
 
 // Mocks for execution tests will be defined below in dedicated describe block
@@ -373,5 +376,82 @@ describe("CLI Validation Logic", () => {
         "--resume flag is incompatible with --server-url. External workers handle their own job recovery.",
       );
     });
+  });
+});
+
+describe("CLI options mapped to settings", () => {
+  interface Declaration {
+    command: string;
+    name: string;
+    options: Record<string, unknown>;
+  }
+
+  /**
+   * A yargs stand-in that records option and positional declarations, runs
+   * command builders against itself, and returns itself for every other call.
+   */
+  function createRecorder(command: string, declarations: Declaration[]): Argv {
+    const record = (name: string, options: Record<string, unknown> = {}) => {
+      declarations.push({ command, name, options });
+    };
+    const recorder: Argv = new Proxy({} as Argv, {
+      get(_target, property) {
+        if (property === "then") {
+          return undefined;
+        }
+        return (...args: unknown[]) => {
+          if (property === "option" || property === "positional") {
+            record(args[0] as string, args[1] as Record<string, unknown>);
+          } else if (property === "options") {
+            for (const [name, options] of Object.entries(args[0] as object)) {
+              record(name, options);
+            }
+          } else if (property === "command") {
+            const [names, , builder] = args;
+            const commandName = [names].flat()[0] as string;
+            if (typeof builder === "function") {
+              builder(createRecorder(commandName, declarations));
+            } else if (builder && typeof builder === "object") {
+              for (const [name, options] of Object.entries(builder)) {
+                declarations.push({ command: commandName, name, options });
+              }
+            }
+          }
+          return recorder;
+        };
+      },
+    });
+    return recorder;
+  }
+
+  it("declares no built-in value on an option that maps onto a setting", () => {
+    const declarations: Declaration[] = [];
+    registerGlobalOptions(createRecorder("(global)", declarations));
+    for (const registerCommand of COMMAND_FACTORIES) {
+      registerCommand(createRecorder("(root)", declarations));
+    }
+    const mapped = getConfigMappedCliKeys();
+
+    const offenders = declarations
+      .filter(({ name, options }) => {
+        // The same conversion yargs applies to argv keys.
+        const keys = [name, ...[options.alias ?? []].flat()].map((key) =>
+          Parser.camelCase(String(key)),
+        );
+        return keys.some((key) => mapped.has(key)) && options.default !== undefined;
+      })
+      .map(({ command, name }) => `${command} --${name}`);
+
+    expect(offenders).toEqual([]);
+  });
+
+  it.each(
+    COMMAND_FACTORIES.map((registerCommand) => [registerCommand.name, registerCommand]),
+  )("records the declarations of %s", (_name, registerCommand) => {
+    const declarations: Declaration[] = [];
+
+    registerCommand(createRecorder("(root)", declarations));
+
+    expect(declarations.length).toBeGreaterThan(0);
   });
 });

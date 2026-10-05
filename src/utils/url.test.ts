@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractPrimaryDomain, normalizeUrl, stripMarkdownExtension } from "./url";
+import {
+  extractPrimaryDomain,
+  normalizeUrl,
+  stripMarkdownExtension,
+  toWebSocketUrl,
+} from "./url";
 
 describe("URL normalization", () => {
   describe("default behavior", () => {
@@ -318,5 +323,15 @@ describe("stripMarkdownExtension", () => {
 
   it("returns an unparseable URL unchanged", () => {
     expect(stripMarkdownExtension("not a url")).toBe("not a url");
+  });
+});
+
+describe("toWebSocketUrl", () => {
+  it.each([
+    ["http://localhost:8080/api", "ws://localhost:8080/api"],
+    ["https://example.com/docs/api", "wss://example.com/docs/api"],
+    ["http://worker:8080", "ws://worker:8080/"],
+  ])("maps %s to %s, keeping the path", (httpUrl, wsUrl) => {
+    expect(toWebSocketUrl(httpUrl)).toBe(wsUrl);
   });
 });

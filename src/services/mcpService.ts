@@ -1,267 +1,300 @@
 /**
- * MCP service that registers MCP protocol routes for AI tool integration.
- * Provides modular server composition for MCP endpoints.
+ * MCP service: registers the Streamable HTTP MCP endpoint on the application's
+ * Fastify instance. It serves protocol revision 2026-07-28, and serves clients
+ * on earlier, handshake-based revisions statelessly: each request is answered
+ * by a fresh server instance, without a session, as the endpoint always has.
+ *
+ * Every request passes the same checks in a fixed order, and the first that
+ * fails answers:
+ *
+ * 1. `Origin` (403), required by the transport spec to stop DNS rebinding;
+ * 2. a CORS preflight, answered here and never authenticated, because
+ *    browsers send no credentials with it;
+ * 3. the HTTP method (405 with `Allow: POST`);
+ * 4. authentication, when enabled (401 with a discovery challenge);
+ * 5. MCP processing, by the SDK's per-request handler.
+ *
+ * While authentication is off, it also serves the deprecated HTTP+SSE
+ * transport (`GET /sse`, `POST /messages`) for handshake-era clients.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import {
+  type AuthInfo,
+  bearerAuthChallengeResponse,
+  createMcpHandler,
+  type OAuthTokenVerifier,
+  verifyBearerToken,
+} from "@modelcontextprotocol/server";
+import { SSEServerTransport } from "@modelcontextprotocol/server-legacy/sse";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import type { ProxyAuthManager } from "../auth";
-import { createAuthMiddleware } from "../auth/middleware";
-import { createMcpServerInstance } from "../mcp/mcpServer";
+import {
+  type OriginPolicy,
+  type OriginVerdict,
+  setCorsPreflightHeaders,
+  setCorsResponseHeaders,
+} from "../app/originPolicy";
+import { missingTokenChallenge } from "../auth/protectedResourceMetadata";
+import { createMcpServerFactory } from "../mcp/mcpServer";
 import { initializeTools } from "../mcp/tools";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import type { PublicLocation } from "../utils/serverOrigin";
 
-/**
- * Register MCP protocol routes on a Fastify server instance.
- * This includes SSE endpoints for persistent connections and HTTP endpoints for stateless requests.
- *
- * @param server The Fastify server instance
- * @param docService The document management service
- * @param pipeline The pipeline instance
- * @param config The resolved configuration from the entrypoint
- * @param authManager Optional authentication manager
- * @returns The McpServer instance for cleanup
- */
-export async function registerMcpService(
-  server: FastifyInstance,
-  docService: IDocumentManagement,
-  pipeline: IPipeline,
-  config: AppConfig,
-  authManager?: ProxyAuthManager,
-): Promise<McpServer> {
-  // Initialize MCP server and tools
-  const mcpTools = await initializeTools(docService, pipeline, config);
-  const mcpServer = createMcpServerInstance(mcpTools, config);
+/** Path of the MCP endpoint, relative to the public URL. */
+export const MCP_ENDPOINT_PATH = "/mcp";
 
-  // Setup auth middleware if auth manager is provided
-  const authMiddleware = authManager ? createAuthMiddleware(authManager) : null;
+/** Authentication for the MCP endpoint. */
+export interface McpEndpointAuth {
+  /** Verifies bearer tokens; throws `OAuthError` for any rejection. */
+  verifier: OAuthTokenVerifier;
+  /** Metadata URL advertised in every challenge. */
+  resourceMetadataUrl: string;
+}
 
-  // Track SSE transports for cleanup
-  const sseTransports: Record<string, SSEServerTransport> = {};
+/** Everything the MCP endpoint needs from the application. */
+export interface McpServiceDeps {
+  docService: IDocumentManagement;
+  pipeline: IPipeline;
+  config: AppConfig;
+  originPolicy: OriginPolicy;
+  /** Where clients reach the server; the SSE message URL carries its base path. */
+  location: PublicLocation;
+}
 
-  // Track SSE server instances for cleanup
-  const sseServers: Record<string, McpServer> = {};
+/** Legacy SSE streams open at once; more connections get 503. */
+export const LEGACY_SSE_MAX_SESSIONS = 100;
 
-  // Track heartbeat intervals for cleanup
-  const heartbeatIntervals: Record<string, NodeJS.Timeout> = {};
+function jsonRpcError(message: string) {
+  return { jsonrpc: "2.0", error: { code: -32000, message }, id: null };
+}
 
-  // SSE endpoint for MCP connections
-  server.route({
-    method: "GET",
-    url: "/sse",
-    preHandler: authMiddleware ? [authMiddleware] : undefined,
-    handler: async (_request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        // Handle SSE connection using raw response
-        const transport = new SSEServerTransport("/messages", reply.raw);
-        sseTransports[transport.sessionId] = transport;
-
-        const sessionServer = createMcpServerInstance(mcpTools, config);
-        sseServers[transport.sessionId] = sessionServer;
-
-        // Log client connection (simple connection tracking without sessions)
-        if (telemetry.isEnabled()) {
-          logger.info(`🔗 MCP client connected: ${transport.sessionId}`);
-        }
-
-        // Start heartbeat to keep connection alive and prevent client timeouts
-        // SSE comments (lines starting with ':') are ignored by clients but keep the connection active
-        const heartbeatInterval = setInterval(() => {
-          try {
-            reply.raw.write(": heartbeat\n\n");
-          } catch {
-            // Connection likely closed, cleanup will happen in close handler
-            clearInterval(heartbeatInterval);
-            delete heartbeatIntervals[transport.sessionId];
-          }
-        }, config.server.heartbeatMs);
-        heartbeatIntervals[transport.sessionId] = heartbeatInterval;
-
-        // Cleanup function to handle both close and error scenarios
-        const cleanupConnection = () => {
-          const interval = heartbeatIntervals[transport.sessionId];
-          if (interval) {
-            clearInterval(interval);
-            delete heartbeatIntervals[transport.sessionId];
-          }
-
-          const serverToClose = sseServers[transport.sessionId];
-          if (serverToClose) {
-            delete sseServers[transport.sessionId];
-            void serverToClose.close().catch((error) => {
-              logger.error(`❌ Failed to close SSE server instance: ${error}`);
-            });
-          }
-
-          delete sseTransports[transport.sessionId];
-          transport.close();
-
-          // Log client disconnection
-          if (telemetry.isEnabled()) {
-            logger.info(`🔗 MCP client disconnected: ${transport.sessionId}`);
-          }
-        };
-
-        reply.raw.on("close", cleanupConnection);
-
-        // Handle stream errors (e.g., client disconnects abruptly)
-        reply.raw.on("error", (error) => {
-          logger.debug(`SSE connection error: ${error}`);
-          cleanupConnection();
-        });
-
-        await sessionServer.connect(transport);
-      } catch (error) {
-        logger.error(`❌ Error in SSE endpoint: ${error}`);
-        reply.code(500).send({
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    },
-  });
-
-  // SSE message handling endpoint
-  server.route({
-    method: "POST",
-    url: "/messages",
-    handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        const url = new URL(request.url, `http://${request.headers.host}`);
-        const sessionId = url.searchParams.get("sessionId");
-        const transport = sessionId ? sseTransports[sessionId] : undefined;
-
-        if (transport) {
-          await transport.handlePostMessage(request.raw, reply.raw, request.body);
-        } else {
-          reply.code(400).send({ error: "No transport found for sessionId" });
-        }
-      } catch (error) {
-        logger.error(`❌ Error in messages endpoint: ${error}`);
-        reply.code(500).send({
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    },
-  });
-
-  // Streamable HTTP endpoint for stateless MCP requests
-  server.route({
-    method: "POST",
-    url: "/mcp",
-    preHandler: authMiddleware ? [authMiddleware] : undefined,
-    handler: async (request: FastifyRequest, reply: FastifyReply) => {
-      try {
-        // In stateless mode, create a new instance of server and transport for each request
-        const requestServer = createMcpServerInstance(mcpTools, config);
-        const requestTransport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-        });
-
-        const cleanupRequest = () => {
-          logger.debug("Streamable HTTP request closed");
-          requestTransport.close();
-          requestServer.close(); // Close the per-request server instance
-        };
-
-        reply.raw.on("close", cleanupRequest);
-        reply.raw.on("error", (error) => {
-          logger.debug(`Streamable HTTP connection error: ${error}`);
-          cleanupRequest();
-        });
-
-        await requestServer.connect(requestTransport);
-        await requestTransport.handleRequest(request.raw, reply.raw, request.body);
-      } catch (error) {
-        logger.error(`❌ Error in MCP endpoint: ${error}`);
-        reply.code(500).send({
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    },
-  });
-
-  server.route({
-    method: "GET",
-    url: "/mcp",
-    preHandler: authMiddleware ? [authMiddleware] : undefined,
-    handler: async (_request: FastifyRequest, reply: FastifyReply) => {
-      reply.code(405).header("Allow", "POST").send();
-    },
-  });
-
-  // Store reference to SSE transports on the server instance for cleanup
-  (
-    mcpServer as unknown as {
-      _sseTransports: Record<string, SSEServerTransport>;
-      _sseServers: Record<string, McpServer>;
-      _heartbeatIntervals: Record<string, NodeJS.Timeout>;
-    }
-  )._sseTransports = sseTransports;
-  (
-    mcpServer as unknown as {
-      _sseServers: Record<string, McpServer>;
-    }
-  )._sseServers = sseServers;
-  (
-    mcpServer as unknown as {
-      _heartbeatIntervals: Record<string, NodeJS.Timeout>;
-    }
-  )._heartbeatIntervals = heartbeatIntervals;
-
-  return mcpServer;
+/** End a hijacked response with a JSON-RPC 500, or just end it once headers went out. */
+function endWithServerError(res: ServerResponse): void {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+  res.writeHead(500, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(jsonRpcError("Internal server error.")));
 }
 
 /**
- * Clean up MCP service resources including SSE transports.
+ * Answer 403 for a denied origin. For an allowed one, set the CORS headers.
+ * @returns The verdict; the reply has been sent when it is `"denied"`.
  */
-export async function cleanupMcpService(mcpServer: McpServer): Promise<void> {
-  try {
-    // Clear all heartbeat intervals
-    const heartbeatIntervals = (
-      mcpServer as unknown as {
-        _heartbeatIntervals: Record<string, NodeJS.Timeout>;
-      }
-    )._heartbeatIntervals;
-    if (heartbeatIntervals) {
-      for (const interval of Object.values(heartbeatIntervals)) {
-        clearInterval(interval);
-      }
-    }
-
-    // Close all SSE transports
-    const sseTransports = (
-      mcpServer as unknown as {
-        _sseTransports: Record<string, SSEServerTransport>;
-      }
-    )._sseTransports;
-    if (sseTransports) {
-      for (const transport of Object.values(sseTransports)) {
-        await transport.close();
-      }
-    }
-
-    const sseServers = (
-      mcpServer as unknown as {
-        _sseServers: Record<string, McpServer>;
-      }
-    )._sseServers;
-    if (sseServers) {
-      for (const server of Object.values(sseServers)) {
-        await server.close();
-      }
-    }
-
-    // Close MCP server
-    await mcpServer.close();
-    logger.debug("MCP service cleaned up");
-  } catch (error) {
-    logger.error(`❌ Failed to cleanup MCP service: ${error}`);
-    throw error;
+function applyOriginPolicy(
+  originPolicy: OriginPolicy,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): OriginVerdict {
+  const origin = request.headers.origin;
+  const verdict = originPolicy.check(origin);
+  if (verdict === "denied") {
+    reply.code(403).send(jsonRpcError("Forbidden: origin not allowed."));
+  } else if (verdict === "allowed" && origin !== undefined) {
+    setCorsResponseHeaders(reply.raw, origin);
   }
+  return verdict;
+}
+
+/** An `onRequest` hook that applies only the origin policy. */
+function createOriginCheck(originPolicy: OriginPolicy) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    applyOriginPolicy(originPolicy, request, reply);
+  };
+}
+
+/**
+ * Checks that run before the body is parsed: origin, preflight, method.
+ * Answering from `onRequest` keeps the order independent of Fastify's body
+ * parsing, which would otherwise reject some requests first.
+ */
+function createPreflightChecks(originPolicy: OriginPolicy) {
+  return async (request: FastifyRequest, reply: FastifyReply) => {
+    const verdict = applyOriginPolicy(originPolicy, request, reply);
+    if (verdict === "denied") {
+      return reply;
+    }
+
+    const origin = request.headers.origin;
+    if (
+      request.method === "OPTIONS" &&
+      verdict === "allowed" &&
+      origin !== undefined &&
+      request.headers["access-control-request-method"] !== undefined
+    ) {
+      setCorsPreflightHeaders(reply.raw, {
+        origin,
+        methods: "POST",
+        requestedHeaders: request.headers["access-control-request-headers"],
+      });
+      return reply.code(204).send();
+    }
+
+    if (request.method !== "POST") {
+      return reply
+        .code(405)
+        .header("Allow", "POST")
+        .send(jsonRpcError("Method not allowed."));
+    }
+  };
+}
+
+/**
+ * Register the MCP endpoint on a Fastify server.
+ *
+ * @param server - The Fastify instance.
+ * @param deps - Services and policy the endpoint needs.
+ * @param auth - Authentication for the endpoint; omit to serve it without authentication.
+ */
+export async function registerMcpService(
+  server: FastifyInstance,
+  deps: McpServiceDeps,
+  auth?: McpEndpointAuth,
+): Promise<void> {
+  const tools = await initializeTools(deps.docService, deps.pipeline, deps.config);
+  const createServer = createMcpServerFactory(tools, deps.config);
+  const onerror = (error: Error) => logger.error(`❌ Error in MCP endpoint: ${error}`);
+  const handleMcpRequest = toNodeHandler(
+    createMcpHandler(createServer, { legacy: "stateless", onerror }),
+    { onerror },
+  );
+
+  server.all(
+    MCP_ENDPOINT_PATH,
+    { onRequest: createPreflightChecks(deps.originPolicy) },
+    async (request, reply) => {
+      let authInfo: AuthInfo | undefined;
+      if (auth) {
+        const authorization = request.headers.authorization;
+        if (!authorization || !/^Bearer\s+\S/i.test(authorization)) {
+          return reply
+            .code(401)
+            .header("WWW-Authenticate", missingTokenChallenge(auth.resourceMetadataUrl))
+            .send({ error_description: "A bearer token is required." });
+        }
+        try {
+          authInfo = await verifyBearerToken(authorization, auth);
+        } catch (error) {
+          logger.debug(`MCP request rejected by token verification: ${error}`);
+          return reply.send(bearerAuthChallengeResponse(error, auth));
+        }
+      }
+
+      reply.hijack();
+      const raw = request.raw as IncomingMessage & { auth?: AuthInfo };
+      if (authInfo) {
+        raw.auth = authInfo;
+      }
+      // The adapter answers 500 itself and reports the failure to `onerror`.
+      await handleMcpRequest(raw, reply.raw, request.body);
+    },
+  );
+
+  if (!auth) {
+    registerLegacySseTransport(server, deps, createServer);
+  }
+}
+
+/**
+ * Register the deprecated HTTP+SSE transport: `GET /sse` opens an event stream
+ * whose `endpoint` event names `<basePath>/messages?sessionId=…`, and clients
+ * POST their messages there. Each stream gets its own MCP server instance.
+ * Only registered while authentication is off: the transport has no way to
+ * carry the challenge flow, and `/messages` would bypass it.
+ */
+function registerLegacySseTransport(
+  server: FastifyInstance,
+  deps: McpServiceDeps,
+  createServer: ReturnType<typeof createMcpServerFactory>,
+): void {
+  const sessions = new Map<string, SSEServerTransport>();
+  const messagesPath = `${deps.location.basePath}/messages`;
+  let warned = false;
+  let capWarned = false;
+
+  server.get(
+    "/sse",
+    { onRequest: createOriginCheck(deps.originPolicy) },
+    async (request, reply) => {
+      // Each stream holds an MCP server instance until the client leaves, so
+      // cap them rather than let one client exhaust the process.
+      if (sessions.size >= LEGACY_SSE_MAX_SESSIONS) {
+        if (!capWarned) {
+          capWarned = true;
+          logger.warn(
+            `⚠️  Refusing legacy SSE connections: ${LEGACY_SSE_MAX_SESSIONS} streams are already open.`,
+          );
+        }
+        return reply
+          .code(503)
+          .header("Retry-After", "30")
+          .send(jsonRpcError("Too many open SSE streams."));
+      }
+      if (!warned) {
+        warned = true;
+        logger.warn(
+          `⚠️  A client connected over the deprecated HTTP+SSE transport (/sse). It will be removed in a future major release; connect clients to ${deps.location.url}${MCP_ENDPOINT_PATH} instead.`,
+        );
+      }
+
+      reply.hijack();
+      const res = reply.raw;
+      res.setHeader("X-Accel-Buffering", "no");
+      const transport = new SSEServerTransport(messagesPath, res);
+      const mcpServer = createServer();
+      sessions.set(transport.sessionId, transport);
+
+      const keepAlive = setInterval(() => {
+        if (!res.writableEnded) {
+          res.write(": keepalive\n\n");
+        }
+      }, deps.config.server.heartbeatMs);
+      res.on("close", () => {
+        clearInterval(keepAlive);
+        sessions.delete(transport.sessionId);
+        mcpServer.close().catch((error) => {
+          logger.debug(`Closing legacy SSE session failed: ${error}`);
+        });
+      });
+
+      try {
+        await mcpServer.connect(transport);
+        logger.debug(`Legacy SSE session opened: ${transport.sessionId} (${request.ip})`);
+      } catch (error) {
+        logger.error(`❌ Error opening legacy SSE stream: ${error}`);
+        endWithServerError(res);
+      }
+    },
+  );
+
+  server.route({
+    method: ["POST", "OPTIONS"],
+    url: "/messages",
+    onRequest: createPreflightChecks(deps.originPolicy),
+    handler: async (request, reply) => {
+      const { sessionId } = request.query as { sessionId?: string };
+      const transport = sessionId ? sessions.get(sessionId) : undefined;
+      if (!transport) {
+        return reply.code(404).send(jsonRpcError("Unknown session."));
+      }
+      reply.hijack();
+      try {
+        await transport.handlePostMessage(request.raw, reply.raw, request.body);
+      } catch (error) {
+        logger.error(`❌ Error in legacy SSE message endpoint: ${error}`);
+        endWithServerError(reply.raw);
+      }
+    },
+  });
+
+  // Open streams never finish on their own, so end them before Fastify waits
+  // for in-flight requests on shutdown.
+  server.addHook("preClose", async () => {
+    await Promise.all([...sessions.values()].map((transport) => transport.close()));
+  });
 }

@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import type { AppServer } from "../app";
 import type { IPipeline } from "../pipeline";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
@@ -6,14 +6,14 @@ import type { TelemetryService } from "../telemetry";
 
 // Module-level variables for active services
 let activeAppServer: AppServer | null = null;
-let activeMcpStdioServer: McpServer | null = null;
+let activeMcpStdioServer: StdioServerHandle | null = null;
 let activeDocService: IDocumentManagement | null = null;
 let activePipelineManager: IPipeline | null = null;
 let activeTelemetryService: TelemetryService | null = null;
 
 export interface GlobalServices {
   appServer?: AppServer;
-  mcpStdioServer?: McpServer;
+  mcpStdioServer?: StdioServerHandle;
   docService?: IDocumentManagement;
   pipeline?: IPipeline;
   telemetryService?: TelemetryService;
@@ -38,11 +38,11 @@ export function setActiveAppServer(server: AppServer | null): void {
   activeAppServer = server;
 }
 
-export function getActiveMcpStdioServer(): McpServer | null {
+export function getActiveMcpStdioServer(): StdioServerHandle | null {
   return activeMcpStdioServer;
 }
 
-export function setActiveMcpStdioServer(server: McpServer | null): void {
+export function setActiveMcpStdioServer(server: StdioServerHandle | null): void {
   activeMcpStdioServer = server;
 }
 

@@ -1,448 +1,142 @@
-# OAuth2 Authentication
+# Authentication
 
 ## Overview
 
-The Docs MCP Server supports optional OAuth2 authentication for HTTP endpoints, providing enterprise-grade security while maintaining a frictionless local development experience. Authentication is disabled by default and uses a binary authentication model for maximum compatibility with OAuth2 providers.
+The Docs MCP Server can require an OAuth 2.0 access token on its MCP endpoint. Authentication is off by default, so local use stays frictionless.
 
-**Important**: The Docs MCP Server is an **OAuth2 protected resource**, not an OAuth2 authorization server. It relies on external OAuth2 providers (such as Auth0, Clerk, Keycloak, or Azure AD) for authentication and authorization. The server validates JWT tokens issued by these providers but does not issue tokens itself.
+When enabled, the server is an OAuth 2.0 **resource server**. It does not issue tokens, register clients, or host sign-in pages. An external identity provider (Clerk, Auth0, Keycloak, Microsoft Entra ID, and others) does all of that. MCP clients discover the provider from the server, sign the user in there, and send the token they receive with every request. The server accepts a token only when it is a JWT that the configured provider issued for this server.
 
-## Security Scope
+This follows the [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (protocol revision 2026-07-28).
 
-OAuth2 authentication **only protects MCP endpoints** (`/mcp`, `/sse`). The tRPC API endpoints (`/api`) used for internal pipeline communication are **not protected** by OAuth2 authentication.
+## What Authentication Protects
 
-**Important Security Notice**: When deploying workers in distributed environments, ensure that tRPC API endpoints are secured at the network level (e.g., within a private VPC, Kubernetes cluster network, or through Docker Compose internal networking). These endpoints should never be exposed to the public internet without additional security measures.
+| Surface | Protected by authentication | How to protect it |
+|---|---|---|
+| MCP endpoint (`/mcp`) over HTTP | **Yes** | Bearer token, as described here |
+| Deprecated SSE transport (`/sse`, `/messages`) | Not served | Only available while authentication is off |
+| MCP over stdio | No | The host that launches the process is the trust boundary. Enabling auth logs a warning. |
+| Web UI | No | A reverse proxy with its own sign-in (OAuth2-Proxy, Authelia, Traefik forward-auth, Cloudflare Access), or a private network |
+| HTTP API (`/api`) and its WebSocket | No | Same as the web UI. On a loopback bind the server also rejects requests from foreign browser origins. |
+| Worker link (`--server-url`) | No | A private network between coordinator and worker |
 
-**Deployment Security**:
+At startup the server states this boundary, naming the protected MCP endpoint. When authentication is enabled on a command that serves no MCP endpoint over HTTP (`web`, `worker`), it warns that authentication protects nothing in that process.
 
-- **MCP endpoints** - Protected by OAuth2 when `--auth-enabled` is used
-- **tRPC API endpoints** - Must be secured through network-level controls
-- **Web interface** - Can be protected by OAuth2 when enabled on the default command
+For putting the web UI and API behind a reverse proxy, see [Reverse Proxy Deployment](./reverse-proxy.md).
 
-## Architecture
-
-The authentication system uses a **binary authentication model** with OAuth2 proxy support, providing secure access control while maintaining compatibility with any RFC 6749 compliant OAuth2 provider.
-
-**Architecture Overview**: The Docs MCP Server acts as an OAuth2 **protected resource** that validates JWT access tokens issued by external OAuth2 providers. It implements an OAuth2 proxy to enable Dynamic Client Registration (DCR) for MCP clients like VS Code, while using standard OAuth identity scopes for maximum provider compatibility.
-
-### Binary Authentication Model
-
-The system implements a simplified binary access control model:
-
-- **Authenticated Users** - Full access to all MCP tools and endpoints
-- **Unauthenticated Users** - No access (401 responses)
-
-This approach eliminates complex scope management while maintaining security, ensuring broad compatibility with OAuth2 providers that may not support custom scopes for DCR workflows.
-
-### OAuth2 Proxy with DCR Support
-
-The server includes a built-in OAuth2 proxy that enables seamless integration with MCP clients:
-
-- **Dynamic Client Registration (DCR)** - RFC 7591 compliant automatic client registration
-- **Resource Parameter Support** - RFC 8707 compliant multi-transport resource identification
-- **Multi-Transport Detection** - Automatic resource URL detection for SSE and HTTP transports
-- **Standard OAuth Flows** - Authorization Code and refresh token support
-- **Smart Discovery** - Uses OAuth2 authorization server discovery (RFC 8414) for comprehensive endpoint detection including DCR and JWKS
-
-### Authentication Flow
+## How Clients Authenticate
 
 ```mermaid
 sequenceDiagram
     participant Client as MCP Client
     participant Server as docs-mcp-server
-    participant Provider as OAuth2/OIDC Provider
+    participant Provider as Identity Provider
 
-    Note over Client,Provider: OAuth2 Authentication with DCR Support
-
-    Client->>Server: 1. Discover OAuth endpoints
-    Server-->>Client: 2. OAuth metadata + DCR endpoint
-
-    Client->>Server: 3. Register client (DCR)
-    Server->>Provider: 4. Proxy DCR request
-    Provider-->>Server: 5. Client credentials
-    Server-->>Client: 6. Client credentials
-
-    Client->>Server: 7. OAuth authorization request
-    Server->>Provider: 8. Proxy authorization
-    Provider-->>Server: 9. Authorization code
-    Server-->>Client: 10. Authorization code
-
-    Client->>Server: 11. Token exchange
-    Server->>Provider: 12. Proxy token request
-    Provider-->>Server: 13. JWT access token
-    Server-->>Client: 14. JWT access token
-
-    Client->>Server: 15. MCP request with Bearer token
-    Server->>Server: 16. Validate JWT + authenticate user
-
-    alt Authenticated user
-        Server-->>Client: 17. Allow all MCP operations
-    else Unauthenticated user
-        Server-->>Client: 17. Return 401 unauthorized
-    end
+    Client->>Server: MCP request without a token
+    Server-->>Client: 401 + WWW-Authenticate: Bearer resource_metadata="…"
+    Client->>Server: GET protected resource metadata
+    Server-->>Client: resource = <public URL>/mcp, authorization_servers = [issuer]
+    Client->>Provider: Discover, register, sign the user in (PKCE)
+    Provider-->>Client: Access token with aud = <public URL>/mcp
+    Client->>Server: MCP request with Authorization: Bearer <token>
+    Server-->>Client: MCP response
 ```
+
+1. **Challenge.** A request without a valid token gets `401` with `WWW-Authenticate: Bearer resource_metadata="<public URL>/.well-known/oauth-protected-resource/mcp"`. When the request carried a token that was rejected, the challenge also carries `error="invalid_token"`.
+2. **Metadata.** The protected resource metadata (RFC 9728) names the MCP endpoint's public URL as `resource` and the configured issuer as the only authorization server. It is served at the URL in the challenge and at the RFC 9728 well-known location, and it is readable from any origin.
+3. **Sign-in.** The client talks to the provider directly. It asks for a token for the `resource` it just learned, per RFC 8707.
+4. **Requests.** The client sends `Authorization: Bearer <token>` on every request.
 
 ## Configuration
 
-Authentication settings live in `appConfig.auth` and follow the unified precedence: defaults → `docs-mcp.config.yaml` (or `DOCS_MCP_CONFIG`) → legacy envs → generic env `DOCS_MCP_<KEY>` → CLI flags for the current run.
+| Setting | CLI | Environment | Required | Description |
+|---|---|---|---|---|
+| `auth.enabled` | `--auth-enabled` | `DOCS_MCP_AUTH_ENABLED` | – | Turns authentication on for the MCP endpoint. |
+| `auth.issuerUrl` | `--auth-issuer-url` | `DOCS_MCP_AUTH_ISSUER_URL` | yes | The provider's issuer identifier. It must match the `issuer` the provider publishes exactly, including any trailing slash. |
+| `server.publicUrl` | `--public-url` | `DOCS_MCP_SERVER_PUBLIC_URL` | yes | The URL clients use to reach the server, e.g. `https://docs.example.com` or `https://example.com/docs`. |
+| `auth.audience` | `--auth-audience` | `DOCS_MCP_AUTH_AUDIENCE` | no | The audience tokens must carry. It defaults to `<public URL>/mcp`. |
 
-**Setup Steps**:
-
-1. **Set up your OAuth2 provider** (Auth0, Clerk, Keycloak, etc.) with standard OAuth identity scopes
-2. **Configure the Docs MCP Server** to validate tokens from that provider using the settings below
-
-### CLI Arguments
-
-```bash
-# Configure Docs MCP Server to validate tokens from your OAuth2/OIDC provider
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://auth.your-domain.com"
-  --auth-audience "https://mcp.your-domain.com"
-  --public-origin "https://mcp.your-domain.com"
-```
-
-### Environment Variables
+The advertised `resource` and the expected audience both derive from `server.publicUrl`. The server never guesses them from its bind address or from the request's `Host` header. That is why a public URL is required, and startup fails with an error naming the missing setting.
 
 ```bash
-# Configure Docs MCP Server via environment variables
-export DOCS_MCP_AUTH_ENABLED=true
-export DOCS_MCP_AUTH_ISSUER_URL="https://auth.your-domain.com"
-export DOCS_MCP_AUTH_AUDIENCE="https://mcp.your-domain.com"
+npx @arabold/docs-mcp-server@latest \
+  --auth-enabled \
+  --auth-issuer-url "https://your-app.clerk.accounts.dev" \
+  --public-url "https://docs.example.com"
 ```
 
-You can also set the same values in `docs-mcp.config.yaml` under `auth.enabled`, `auth.issuerUrl`, and `auth.audience`.
+Tokens must then carry `aud` = `https://docs.example.com/mcp`.
 
-For remote or reverse-proxy deployments, set `server.publicOrigin` (or pass `--public-origin`) to the externally reachable origin clients use. `--host` only controls the local bind interface; OAuth metadata and resource URLs use the public origin when configured.
+At startup the server discovers the provider's metadata in the order MCP clients use:
 
-### Configuration Options
+1. RFC 8414 with path insertion;
+2. OpenID Connect Discovery with path insertion;
+3. OpenID Connect Discovery with the path appended.
 
-| Option      | CLI Flag            | Environment Variable       | Description                                             |
-| ----------- | ------------------- | -------------------------- | ------------------------------------------------------- |
-| Enable Auth | `--auth-enabled`    | `DOCS_MCP_AUTH_ENABLED`    | Enable OAuth2 token validation                          |
-| Issuer URL  | `--auth-issuer-url` | `DOCS_MCP_AUTH_ISSUER_URL` | OAuth2 discovery endpoint of your external provider     |
-| Audience    | `--auth-audience`   | `DOCS_MCP_AUTH_AUDIENCE`   | JWT audience claim (identifies this protected resource) |
-| Public Origin | `--public-origin` | `DOCS_MCP_SERVER_PUBLIC_ORIGIN` | Externally reachable server origin advertised in OAuth metadata |
+Startup fails when no document answers, when the published `issuer` differs from `auth.issuerUrl`, or when the metadata has no `jwks_uri`.
 
-## OAuth2 Setup
+## Identity Provider Requirements
 
-The Docs MCP Server supports OAuth2 authentication for securing MCP endpoints. Token validation is handled through standard JWT validation using the provider's public keys (JWKS).
+Whatever provider you use, it needs to:
 
-**Note**: You must configure an external OAuth2 provider (such as Clerk, Auth0, Keycloak, or Azure AD) before enabling authentication. The Docs MCP Server validates JWT tokens but does not issue them.
+- **Issue JWT access tokens** signed with keys published in its `jwks_uri`. The server rejects opaque tokens.
+- **Put this server in `aud`.** Ideally the provider sets `aud` from the RFC 8707 `resource` parameter the client sends, which is `<public URL>/mcp`. A provider that issues a fixed audience works too: set `auth.audience` to that value. The override must name an API or resource identifier, never a client ID, or the provider's ID tokens would be accepted as access tokens.
+- **Let MCP clients register themselves**, through Client ID Metadata Documents (preferred in MCP 2026-07-28) or Dynamic Client Registration (RFC 7591).
+- **Support PKCE with S256.**
 
-### How It Works
+### Clerk
 
-OAuth2 authentication uses the DCR flow shown above, where the server acts as an OAuth2 proxy to enable seamless MCP client integration. For clients that already have tokens, they can skip the registration and authorization steps and directly make authenticated MCP requests.
+Enable these OAuth application settings on the Clerk instance:
 
-### Server Configuration
+| Setting | Value | Why |
+|---|---|---|
+| JWT access tokens (`oauth_jwt_access_tokens`) | on | Clerk issues opaque tokens otherwise |
+| `aud` claim (`aud_claim_enabled`) | on | Clerk sets `aud` to the requested `resource` |
+| PKCE required (`pkce_required`) | on | MCP clients always use PKCE |
+| Dynamic client registration | on | Lets MCP clients register themselves |
+| Client ID Metadata Documents (`client_id_metadata_documents_advertised`) | recommended | The registration method MCP 2026-07-28 prefers |
 
-To enable OAuth2 authentication, configure the Docs MCP Server to connect to your OAuth2 provider:
+With the [Clerk CLI](https://clerk.com/docs/cli):
 
 ```bash
-# Configure Docs MCP Server to validate tokens from your OAuth2 provider
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://your-provider.example.com"
-  --auth-audience "https://mcp.your-domain.com"
+clerk api /instance/oauth_application_settings --app <app_id> --instance dev \
+  -X PATCH -d '{"oauth_jwt_access_tokens":true,"aud_claim_enabled":true,"pkce_required":true}'
 ```
 
-### OAuth2 Provider Setup
+Then run the server with `--auth-issuer-url https://<your-app>.clerk.accounts.dev` and your public URL. You don't need `auth.audience`.
 
-**Prerequisite**: You must first set up an OAuth2/OIDC provider separately. The following examples show how to configure popular providers to work with the Docs MCP Server.
+## Token Validation
 
-#### Example Provider Configurations
+The server accepts a request only when its bearer token:
 
-**Auth0**:
+- is a JWT signed with a key the configured issuer publishes,
+- has `iss` equal to the configured issuer,
+- has an `aud` that contains the expected audience,
+- and has not expired.
 
-```bash
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://your-tenant.auth0.com"
-  --auth-audience "https://mcp.your-domain.com"
-```
+There is no other path to access. A token issued for another application on the same provider is rejected, and so is any opaque token. If the provider's keys can't be retrieved, the request fails with `500` rather than `401`, so clients don't restart sign-in because of a provider outage.
 
-**Clerk**:
-
-```bash
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://your-app.clerk.accounts.dev"
-  --auth-audience "https://mcp.your-domain.com"
-```
-
-**Keycloak**:
-
-```bash
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://keycloak.your-domain.com/auth/realms/your-realm"
-  --auth-audience "https://mcp.your-domain.com"
-```
-
-**Azure AD**:
-
-```bash
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://login.microsoftonline.com/your-tenant-id/v2.0"
-  --auth-audience "https://mcp.your-domain.com"
-```
-
-For providers that use JWT tokens, ensure your JWT template/claims include the resource ID as the audience claim.
-
-### OAuth2 Endpoints
-
-The server exposes OAuth2 proxy endpoints for Dynamic Client Registration and standard OAuth flows:
-
-- **`/.well-known/oauth-authorization-server`** - OAuth2 discovery metadata
-- **`/oauth/register`** - Dynamic Client Registration (DCR) endpoint
-- **`/oauth/authorize`** - Authorization endpoint (proxied to provider)
-- **`/oauth/token`** - Token endpoint (proxied to provider)
-- **`/oauth/revoke`** - Token revocation (proxied to provider)
-
-### Protected Resource Metadata
-
-The server exposes RFC 9728 compliant metadata at `/.well-known/oauth-protected-resource`:
-
-```json
-{
-  "resource": "https://mcp.your-domain.com",
-  "authorization_servers": ["https://your-provider.example.com"],
-  "scopes_supported": ["openid", "profile", "email"],
-  "resource_name": "Documentation MCP Server",
-  "resource_documentation": "https://github.com/arabold/docs-mcp-server#readme",
-  "bearer_methods_supported": ["header"]
-}
-```
-
-### MCP Client Integration
-
-MCP clients can authenticate using standard OAuth2 flows with DCR support:
-
-1. **Discovery**: Fetch `/.well-known/oauth-authorization-server` for OAuth2 metadata
-2. **Registration**: Use DCR endpoint to automatically register client credentials
-3. **Authentication**: Obtain JWT token using OAuth2 Authorization Code flow
-4. **API Access**: Include `Authorization: Bearer <token>` header in MCP requests
-
-**Dynamic Client Registration**: The Docs MCP Server supports RFC 7591 compliant DCR, enabling MCP clients like VS Code to automatically register and obtain authorization without manual client configuration. The DCR workflow is proxied to your OAuth2 provider with resource parameter support for multi-transport scenarios.
-
-## Binary Access Control
-
-All authenticated users receive full access to all MCP tools and endpoints. The system does not implement granular permissions or role-based access control.
-
-### Available MCP Tools
-
-All tools are available to authenticated users:
-
-#### Documentation Operations
-
-- `list_libraries` - List indexed documentation libraries
-- `search_docs` - Search within documentation
-- `fetch_url` - Retrieve content from URLs
-- `find_version` - Find library version information
-
-#### Content Management
-
-- `scrape_docs` - Index new documentation content
-- `remove_docs` - Remove indexed documentation
-
-#### Job Management
-
-- `get_job_info` - View job status and details
-- `list_jobs` - List processing jobs
-- `cancel_job` - Cancel running jobs
-- `clear_completed_jobs` - Clean up completed jobs
-
-## Security Features
-
-### JWT Validation
-
-- **Signature Verification**: Cryptographic validation using provider's public keys from JWKS endpoint
-- **Claim Validation**: Issuer, audience, and expiration time verification
-- **Binary Authentication**: Simple authenticated/unauthenticated access control
-
-### Error Handling
-
-- **401 Unauthorized**: Missing, invalid, or expired authentication token
-- **WWW-Authenticate Header**: RFC 6750 compliant challenge responses
-- **Detailed Error Messages**: Clear feedback for authentication failures
-
-### Fail-Safe Design
-
-- **Disabled by Default**: No authentication required for local development
-- **Graceful Degradation**: Invalid configuration logs errors but doesn't crash
-- **Provider Independence**: Works with any RFC 6749 compliant OAuth2 provider
-
-## Usage Examples
-
-### Development (No Auth)
-
-```bash
-# Start server without authentication
-npx docs-mcp-server --port 6280
-```
-
-### Production with Auth
-
-```bash
-# Configure Docs MCP Server to validate tokens from your OAuth2 provider
-npx docs-mcp-server
-  --port 6280
-  --auth-enabled
-  --auth-issuer-url "https://keycloak.your-domain.com/realms/api"
-  --auth-audience "https://docs-mcp.your-domain.com"
-```
-
-### Client Authentication
-
-```javascript
-// Obtain token from your OAuth2 provider
-const token = await getAccessToken();
-
-// Use token in requests
-const response = await fetch("http://localhost:6280/mcp", {
-  method: "POST",
-  headers: {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    jsonrpc: "2.0",
-    method: "search_docs",
-    params: { library: "react", query: "hooks" },
-    id: 1,
-  }),
-});
-```
-
-## Integration Patterns
-
-### OAuth2 Providers
-
-The Docs MCP Server works with any RFC 6749 compliant OAuth2 provider as an external authentication service. You must set up one of these providers separately:
-
-- **Auth0**: Use tenant domain as provider URL
-- **Keycloak**: Use realm-specific issuer URL
-- **Azure AD**: Use tenant-specific v2.0 endpoint
-- **Google**: Use Google's OAuth2 endpoints
-- **Clerk**: Use your Clerk domain for provider URL
-- **Custom**: Any provider supporting JWT access tokens
-
-The Docs MCP Server validates tokens issued by these providers but does not replace them.
-
-#### Provider Configuration Examples
-
-**Auth0**:
-
-```bash
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://your-tenant.auth0.com"
-  --auth-audience "https://mcp.your-domain.com"
-```
-
-**Clerk**:
-
-```bash
-npx docs-mcp-server
-  --auth-enabled
-  --auth-issuer-url "https://your-app.clerk.accounts.dev"
-  --auth-audience "https://mcp.your-domain.com"
-```
-
-**Provider-Specific JWT Configuration:**
-Configure your provider's JWT template/claims to include the resource ID as the audience claim. For example, with Clerk:
-
-```json
-{
-  "aud": "https://mcp.your-domain.com",
-  "sub": "{{user.id}}",
-  "email": "{{user.primaryEmailAddress.emailAddress}}",
-  "name": "{{user.fullName}}"
-}
-```
-
-**Resource ID Requirements:**
-
-- Must be a valid URI (URL or URN)
-- **URL examples**: `https://mcp.your-domain.com`, `http://localhost:6280` (dev only)
-- **URN examples**: `urn:docs-mcp-server:api`, `urn:company:service`
-- Used as the JWT audience claim for validation
-- Should be unique and not conflict with your actual server URL
-
-### API Gateway Integration
-
-When deployed behind an API gateway with authentication:
-
-1. Configure the gateway to validate tokens
-2. Forward validated requests with user context
-3. Optionally disable server-side auth validation for trusted gateways
-4. Ensure proper request forwarding for OAuth2 proxy endpoints
+Access is binary: any valid token for this server grants every MCP tool.
 
 ## Troubleshooting
 
-### Common Issues
+**Startup fails with "no public URL is configured".** Set `server.publicUrl` (or `--public-url`) to the URL clients use.
 
-**401 Unauthorized**
+**Startup fails because `auth.issuerUrl` "does not match the issuer the authorization server publishes".** Copy the `issuer` value from the provider's metadata exactly. A trailing slash counts.
 
-- Check token is included in Authorization header
-- Verify token hasn't expired
-- Confirm provider URL and resource ID configuration
-- Ensure resource ID matches the JWT audience claim
+**Clients get `401` with `error="invalid_token"`.** Decode the token (for example at [jwt.io](https://jwt.io)) and compare:
+- `aud` should equal `<public URL>/mcp`, or `auth.audience` if you set one;
+- `iss` should equal `auth.issuerUrl`;
+- `exp` should be in the future.
 
-**DCR Registration Failures**
+With Clerk, a missing `aud` or an opaque token means the settings above aren't enabled.
 
-- Verify OAuth2 provider supports Dynamic Client Registration
-- Check provider DCR endpoint is accessible
-- Ensure provider allows the requested redirect URIs
-- Review provider logs for DCR-specific errors
+**A client can't find the provider.** Check that the `resource_metadata` URL from the challenge is reachable from the client. Behind a reverse proxy it must pass through: see [Reverse Proxy Deployment](./reverse-proxy.md).
 
-**500 Internal Server Error**
-
-- Check provider discovery endpoint is accessible
-- Verify provider URL configuration
-- Review server logs for detailed error messages
-- Ensure provider JWKS endpoint is reachable
-
-### Debug Logging
-
-Enable debug logging to troubleshoot authentication issues:
-
-```bash
-DEBUG=mcp:auth npx docs-mcp-server --auth-enabled --auth-issuer-url "..."
-```
+**Debug logging.** Run with `--verbose` to see token verification failures.
 
 ## Security Considerations
 
-### Token Security
-
-- Use HTTPS in production environments
-- Implement proper token storage in clients
-- Consider token refresh strategies for long-running operations
-- Monitor token expiration and handle renewal
-
-### Network Security
-
-- Deploy behind TLS termination
-- Consider API rate limiting
-- Implement proper CORS policies for web clients
-- Use secure OAuth2 flows (Authorization Code with PKCE)
-
-### Outbound Access Controls
-
-Authentication controls who can use MCP and HTTP endpoints. It does not, by itself, restrict where scraper-driven fetches can connect after a request is authenticated.
-
-The scraper now applies outbound access controls by default:
-
-- Private, loopback, link-local, and other special-use network targets are blocked unless explicitly allowlisted or `scraper.security.network.allowPrivateNetworks` is enabled.
-- Local `file://` access is constrained by `scraper.security.fileAccess` and defaults to `$DOCUMENTS` only.
-- Hidden files and symlinks are blocked by default.
-- `allowInvalidTls` only changes certificate validation after the target has already passed the network policy. It does not bypass host or CIDR restrictions.
-
-For deployment hardening guidance, see [Infrastructure Security](./security.md).
-
-### Access Control
-
-- All authenticated users receive full access to all endpoints
-- Consider additional authorization layers if granular permissions are required
-- Monitor user activity and implement audit logging
-- Regularly review OAuth2 provider user access and permissions
+- Serve the MCP endpoint over HTTPS in production, typically through TLS termination at a reverse proxy.
+- The MCP endpoint rejects browser requests from origins other than loopback, the public URL's origin, and `server.allowedOrigins`. List hosted browser-based MCP clients there.
+- Every request whose `Host` header names an unknown host is refused with `403`, which stops DNS rebinding. The server answers to IP addresses, `localhost`, single-label names such as Docker service names, the public URL's host, and the hosts of `server.allowedOrigins`.
+- Authentication controls who may call MCP tools. It does not restrict where scraping may connect: outbound requests follow `scraper.security`. See [Infrastructure Security](./security.md).

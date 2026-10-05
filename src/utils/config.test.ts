@@ -8,6 +8,7 @@ import {
   camelToUpperSnake,
   collectLeafPaths,
   defaults,
+  getConfigMappedCliKeys,
   getConfigValue,
   isValidConfigPath,
   isVectorDimensionExplicit,
@@ -50,6 +51,8 @@ describe("Configuration Loading", () => {
     delete process.env.DOCS_MCP_STORE_PATH;
     delete process.env.DOCS_MCP_AUTH_ENABLED;
     delete process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN;
+    delete process.env.DOCS_MCP_SERVER_PUBLIC_URL;
+    delete process.env.DOCS_MCP_SERVER_ALLOWED_ORIGINS;
   });
 
   afterEach(() => {
@@ -179,6 +182,104 @@ describe("Configuration Loading", () => {
         ),
       ).toThrow("server.publicOrigin");
     });
+
+    it("loads server.publicUrl with its path from the config file", () => {
+      const configPath = path.join(tmpDir, "public-url.yaml");
+      fs.writeFileSync(configPath, "server:\n  publicUrl: https://example.com/docs/\n");
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.server.publicUrl).toBe("https://example.com/docs");
+    });
+
+    it("loads server.publicUrl from DOCS_MCP_SERVER_PUBLIC_URL", () => {
+      process.env.DOCS_MCP_SERVER_PUBLIC_URL = "https://example.com/docs";
+
+      const config = loadConfig({}, { configPath: path.join(tmpDir, "env-url.yaml") });
+
+      expect(config.server.publicUrl).toBe("https://example.com/docs");
+    });
+
+    it("loads server.publicUrl from the CLI over env", () => {
+      process.env.DOCS_MCP_SERVER_PUBLIC_URL = "https://env.example.com/docs";
+
+      const config = loadConfig(
+        { publicUrl: "https://cli.example.com/tools" },
+        { configPath: path.join(tmpDir, "cli-url.yaml") },
+      );
+
+      expect(config.server.publicUrl).toBe("https://cli.example.com/tools");
+    });
+
+    it.each([
+      "https://example.com/docs?x=1",
+      "ftp://example.com/docs",
+      "https://example.com/mcp",
+    ])(
+      "rejects invalid server.publicUrl %s instead of resetting to defaults",
+      (publicUrl) => {
+        expect(() =>
+          loadConfig(
+            { publicUrl },
+            { configPath: path.join(tmpDir, "invalid-url.yaml") },
+          ),
+        ).toThrow("server.publicUrl");
+      },
+    );
+
+    it("keeps both publicUrl and publicOrigin when both are set", () => {
+      const configPath = path.join(tmpDir, "both.yaml");
+      fs.writeFileSync(configPath, "server:\n  publicOrigin: https://old.example.com\n");
+
+      const config = loadConfig(
+        { publicUrl: "https://example.com/docs" },
+        { configPath },
+      );
+
+      expect(config.server.publicUrl).toBe("https://example.com/docs");
+      expect(config.server.publicOrigin).toBe("https://old.example.com");
+    });
+
+    it("defaults server.allowedOrigins to an empty list", () => {
+      const config = loadConfig({}, { configPath: path.join(tmpDir, "no-origins.yaml") });
+
+      expect(config.server.allowedOrigins).toEqual([]);
+    });
+
+    it("loads server.allowedOrigins from a JSON array env var", () => {
+      process.env.DOCS_MCP_SERVER_ALLOWED_ORIGINS =
+        '["https://inspector.example.com/", "http://localhost:3000"]';
+
+      const config = loadConfig(
+        {},
+        { configPath: path.join(tmpDir, "env-origins.yaml") },
+      );
+
+      expect(config.server.allowedOrigins).toEqual([
+        "https://inspector.example.com",
+        "http://localhost:3000",
+      ]);
+    });
+
+    it("rejects an allowed origin with a path", () => {
+      const configPath = path.join(tmpDir, "bad-origins.yaml");
+      fs.writeFileSync(
+        configPath,
+        "server:\n  allowedOrigins:\n    - https://inspector.example.com/app\n",
+      );
+
+      expect(() => loadConfig({}, { configPath })).toThrow("server.allowedOrigins");
+    });
+
+    it("loads server.heartbeatMs from a config file", () => {
+      const configPath = path.join(tmpDir, "heartbeat.yaml");
+      fs.writeFileSync(configPath, "server:\n  heartbeatMs: 15000\n  host: file-host\n");
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.server.host).toBe("file-host");
+      expect(config.server.heartbeatMs).toBe(15000);
+    });
   });
 
   describe("Unit Logic & Edge Cases", () => {
@@ -281,6 +382,16 @@ describe("Environment Variable Helpers", () => {
 });
 
 describe("Config CLI Helpers", () => {
+  describe("getConfigMappedCliKeys", () => {
+    it("lists the CLI options that map onto settings", () => {
+      const keys = getConfigMappedCliKeys();
+
+      expect(keys).toContain("authEnabled");
+      expect(keys).toContain("readOnly");
+      expect(keys).toContain("protocol");
+    });
+  });
+
   describe("isValidConfigPath", () => {
     it("returns true for valid paths", () => {
       expect(isValidConfigPath("scraper.maxPages")).toBe(true);

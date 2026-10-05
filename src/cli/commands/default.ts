@@ -12,47 +12,42 @@ import { EmbeddingModelChangedError } from "../../store/errors";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
+import { withAuthOptions, withPublicUrlOptions } from "../options";
 import { applyGlobalCliOutputMode } from "../output";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
+  checkAuthForProtocol,
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
   handleEmbeddingModelChange,
-  parseAuthConfig,
   resolveProtocol,
-  validateAuthConfig,
-  warnHttpUsage,
 } from "../utils";
 
 export function createDefaultAction(cli: Argv) {
   cli.command(
     ["$0", "server"],
     "Starts the Docs MCP server (Unified Mode)",
-    (yargs) => {
-      return (
-        yargs
-          .option("protocol", {
-            type: "string",
-            description: "Protocol for MCP server",
-            choices: ["auto", "stdio", "http"],
-            default: "auto",
-          })
-          .option("port", {
-            type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
-            description: "Port for the server",
-          })
-          .option("host", {
-            type: "string",
-            description: "Host to bind the server to",
-          })
-          .option("public-origin", {
-            type: "string",
-            description:
-              "Public origin advertised to clients (e.g., https://docs.example.com)",
-            alias: "publicOrigin",
-          })
+    (yargs) =>
+      withAuthOptions(
+        withPublicUrlOptions(
+          yargs
+            .option("protocol", {
+              type: "string",
+              description: "Protocol for MCP server",
+              choices: ["auto", "stdio", "http"],
+              defaultDescription: "auto",
+            })
+            .option("port", {
+              type: "string", // Keep as string to match old behavior/validation, or number? Using string allows environment variable mapping via loadConfig if strict number parsing isn't desired immediately. Actually validation logic expects string often. But Yargs can parse number.
+              description: "Port for the server",
+            })
+            .option("host", {
+              type: "string",
+              description: "Host to bind the server to",
+            }),
+        )
           .option("embedding-model", {
             type: "string",
             description:
@@ -68,40 +63,31 @@ export function createDefaultAction(cli: Argv) {
             type: "boolean",
             description:
               "Run in read-only mode (only expose read tools, disable write/job tools)",
-            default: false,
+            defaultDescription: "false",
             alias: "readOnly",
-          })
-          // Auth options
-          .option("auth-enabled", {
-            type: "boolean",
-            description: "Enable OAuth2/OIDC authentication for MCP endpoints",
-            default: false,
-            alias: "authEnabled",
-          })
-          .option("auth-issuer-url", {
-            type: "string",
-            description: "Issuer/discovery URL for OAuth2/OIDC provider",
-            alias: "authIssuerUrl",
-          })
-          .option("auth-audience", {
-            type: "string",
-            description: "JWT audience claim (identifies this protected resource)",
-            alias: "authAudience",
-          })
-      );
-    },
+          }),
+      ),
     async (argv) => {
+      // Options the user did not pass are absent from argv, so the protocol,
+      // read-only mode and auth come from env, config file or defaults here.
+      // The logger writes to stderr, so loading before the stdio log level is
+      // set cannot corrupt the protocol stream on stdout.
+      const appConfig = loadConfig(argv, {
+        configPath: argv.config as string,
+        searchDir: argv.storePath as string,
+      });
+
       await telemetry.track(TelemetryEvent.CLI_COMMAND, {
         command: "default",
-        protocol: argv.protocol,
+        protocol: appConfig.server.protocol,
         port: argv.port,
         host: argv.host,
         resume: argv.resume,
-        readOnly: argv.readOnly,
-        authEnabled: !!argv.authEnabled,
+        readOnly: appConfig.app.readOnly,
+        authEnabled: appConfig.auth.enabled,
       });
 
-      const resolvedProtocol = resolveProtocol(argv.protocol as string);
+      const resolvedProtocol = resolveProtocol(appConfig.server.protocol);
       if (resolvedProtocol === "stdio") {
         setLogLevel(LogLevel.ERROR);
       } else {
@@ -113,36 +99,11 @@ export function createDefaultAction(cli: Argv) {
 
       logger.debug("No subcommand specified, starting unified server by default...");
 
-      // Validate inputs if provided, otherwise validation happens after config load?
-      // Old logic validated options.port etc. but yargs parsing might be loose?
-      // Since we don't have defaults in Yargs, argv.port might be undefined.
-      // logic below uses loadConfig which fills defaults.
-      // So validation should happen AFTER loadConfig on the RESULTING config?
-      // OR we validate argv if present?
-      // The old logic validated valid integers.
-      // We will rely on Zod schema validation inside loadConfig.
-
-      const appConfig = loadConfig(argv, {
-        configPath: argv.config as string,
-        searchDir: argv.storePath as string,
-      });
-
-      // Propagate resolved store path? loadConfig logic handled it?
-      // loadConfig takes argv, so it mapped `storePath` to `app.storePath`.
-      // But `argv.storePath` was resolved by middleware in index.ts?
-      // Yes. So appConfig has resolved path.
-
-      // Parse and validate auth config
-      const authConfig = parseAuthConfig({
-        authEnabled: appConfig.auth.enabled,
-        authIssuerUrl: appConfig.auth.issuerUrl,
-        authAudience: appConfig.auth.audience,
-      });
-
-      if (authConfig) {
-        validateAuthConfig(authConfig);
-        warnHttpUsage(authConfig, appConfig.server.ports.default);
-      }
+      checkAuthForProtocol(
+        appConfig.auth,
+        resolvedProtocol,
+        appConfig.server.ports.default,
+      );
 
       ensurePlaywrightBrowsersInstalled();
 

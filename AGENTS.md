@@ -118,8 +118,9 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 |---|---|---|---|
 | `cli-e2e.test.ts` | CLI smoke: help, version, unknown-arg handling | none | yes |
 | `mcp-stdio-e2e.test.ts` | MCP server over stdio: spawn, protocol handshake, basic tools | none | yes |
-| `mcp-http-e2e.test.ts` | MCP server over HTTP/SSE (legacy `/sse` endpoint included) | none | yes |
-| `auth-e2e.test.ts` | OAuth2/OIDC end-to-end against a real provider | `.env` with auth config; skips otherwise | yes (skips if no env) |
+| `mcp-http-e2e.test.ts` | MCP over Streamable HTTP (protocol 2026-07-28): client connect, tools/resources, handshake-era client on the same endpoint, deprecated `/sse` transport with auth off, 405/404 surface, API/WebSocket origin checks | none | yes |
+| `auth-e2e.test.ts` | Resource-server auth against a local issuer: challenge, protected resource metadata, token acceptance/rejection, `/sse` not served; optional live-provider discovery | none (live block needs `DOCS_MCP_AUTH_ISSUER_URL`) | yes |
+| `base-path-e2e.test.ts` | Serving under `/docs` behind a strip-prefix and a forward-prefix proxy: shell, assets, API, WebSocket, MCP, metadata, the deprecated `/sse` endpoint event without auth; Playwright drives the web UI and a cross-origin client | Chromium (Playwright) | yes |
 | `telemetry-e2e.test.ts` | `DOCS_MCP_TELEMETRY` env var controls PostHog init | none (parses debug logs) | yes |
 | `html-pipeline-basic-e2e.test.ts` | HTML scrape pipeline against stable endpoints (httpbin.org) | network | yes |
 | `html-pipeline-nonhtml-e2e.test.ts` | Non-HTML content (text/plain) bypasses Playwright cleanly | none | yes |
@@ -141,4 +142,6 @@ Notes:
 - The "live" and "docker" suites are excluded from `npm test` / `npm run test:e2e` because they need external network or a Docker daemon. CI runs `docker-e2e.test.ts` in a dedicated `docker-test` job.
 - The live suite is excluded in `vite.config.ts` so a bare `vitest` (and watch mode) never hits real sites. `--exclude` only *adds* globs and `mergeConfig` concatenates them, so nothing on the CLI can undo that — `npm run test:live` therefore points at `vite.config.live.ts`, which replaces the exclude list and drops the MSW mock-server setup that would otherwise intercept the real requests.
 - Suites that "skip gracefully" check for their required env at startup and short-circuit when it's missing — safe to leave in the default run.
+- `test/clerk-auth-live.ts` is a manual, interactive check of MCP authentication against a real Clerk development instance: `npm run test:auth:clerk -- --app <app_id>`. It needs the Clerk CLI (logged in) and one browser sign-in, reads the issuer and checks the OAuth settings through `clerk api` (`--fix-settings` turns missing ones on), serves the built CLI under `/docs` behind a prefix-stripping proxy, and deletes the OAuth client it registers (`--keep-client` keeps it). Run it after changes to the auth or discovery surface.
+- `test/global-setup.ts` builds the web UI (`npm run build:web`) when `public/index.html` is missing or older than `src/web/client/**` and `vite.config.web.ts`, because several E2E suites load the UI shell.
 - Fixtures (sample PDF, docx, xlsx, archive, etc.) live in `test/fixtures/`. Reuse them rather than generating new files on the fly.

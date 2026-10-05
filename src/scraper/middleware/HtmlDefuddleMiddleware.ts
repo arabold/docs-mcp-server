@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import { Defuddle } from "defuddle/node";
 import { parseHTML } from "linkedom";
 import { logger } from "../../utils/logger";
+import { escapeHtml } from "../../utils/string";
 import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 
 /**
@@ -259,12 +260,4 @@ function detectLanguageFromClass(className: string | null | undefined): string {
   // Skip generic non-language tokens that show up under `highlight-` prefix.
   if (lang === "text" || lang === "highlighted" || lang === "wrap") return "";
   return lang;
-}
-
-function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
