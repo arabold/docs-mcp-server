@@ -1,0 +1,4 @@
+dataPersistence:
+  enabled: false
+configPersistence:
+  enabled: false

@@ -59,17 +59,32 @@ COPY db db
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/dist ./dist
+COPY --chmod=755 docker-entrypoint.sh /usr/local/bin/docs-mcp-entrypoint
 
 # Set data directory for the container
 ENV DOCS_MCP_STORE_PATH=/data
 ENV XDG_CONFIG_HOME=/config
+ENV XDG_DATA_HOME=/data
+ENV HOME=/app/.runtime
+ENV XDG_CACHE_HOME=/app/.runtime/cache
+ENV NPM_CONFIG_CACHE=/app/.runtime/cache/npm
+ENV TMPDIR=/tmp
 
-# Create the writable runtime directories and hand ownership to the
-# unprivileged `node` user that ships with the base image (uid 1000).
-# `/app` is intentionally left root-owned so the runtime user cannot
-# tamper with code or `node_modules` if it is ever compromised.
-RUN mkdir -p /data /config \
-  && chown node:node /data /config
+# Use a dedicated runtime account for ordinary container engines. OpenShift may
+# replace its uid and gid with arbitrary values, so only the dedicated runtime
+# paths are writable by any non-root identity. Application code remains
+# root-owned and non-writable.
+RUN groupadd --system --gid 10001 docs-mcp \
+  && useradd --system --uid 10001 --gid 10001 --home-dir /app/.runtime \
+    --no-create-home --shell /usr/sbin/nologin docs-mcp \
+  && mkdir -p /data /config /app/.runtime/cache/npm /nonexistent \
+  && chown -R docs-mcp:docs-mcp /data /config /app/.runtime /nonexistent \
+  && chmod -R g=u /data /config /app/.runtime /nonexistent \
+  && chmod -R g+w /data /config /app/.runtime /nonexistent \
+  && chmod -R g+rX /data /config /app/.runtime /nonexistent \
+  && chmod -R a+rwX /data /config /app/.runtime /nonexistent \
+  && chmod -R a+rX /app/dist /app/public /app/db /app/node_modules \
+  && chmod 1777 /tmp
 
 # Define volumes
 VOLUME /data
@@ -80,11 +95,27 @@ EXPOSE 6280
 ENV PORT=6280
 ENV HOST=0.0.0.0
 
-# Drop privileges before running the app. Named Docker volumes inherit
-# this ownership automatically; if you bind-mount a host directory onto
-# /data or /config instead, it must be writable by uid 1000 — e.g.
-# `chown 1000:1000 ./data` or `docker run --user "$(id -u):$(id -g)"`.
-USER node
+# Use a numeric non-root default so Kubernetes can verify `runAsNonRoot`.
+# OpenShift and other runtimes may override it with an arbitrary uid. Mounted
+# volumes must grant that uid or one of its supplemental groups write access.
+USER 10001:10001
+
+# Keep execution in the application directory while HOME and all cache writes
+# resolve to the dedicated runtime directory.
+WORKDIR /app
+
+# Fail the build if the default identity cannot write its runtime paths or can
+# modify shipped application code.
+RUN test "$(id -u)" = 10001 \
+  && test "$(id -g)" = 10001 \
+  && for dir in /app/.runtime /app/.runtime/cache /app/.runtime/cache/npm \
+      /data /config /nonexistent /tmp; do \
+    touch "$dir/.permission-check" && rm "$dir/.permission-check" || exit 1; \
+  done \
+  && test ! -w /app/dist \
+  && test ! -w /app/public \
+  && test ! -w /app/db \
+  && test ! -w /app/node_modules
 
 # Set the command to run the application
-ENTRYPOINT ["node", "--enable-source-maps", "dist/index.js"]
+ENTRYPOINT ["/usr/local/bin/docs-mcp-entrypoint"]

@@ -1,0 +1,4 @@
+route:
+  enabled: true
+  tls:
+    enabled: true

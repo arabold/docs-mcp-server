@@ -138,6 +138,7 @@ See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ol
 
 ### Getting Started
 -   **[Installation](docs/setup/installation.md)**: Detailed setup guides for Docker, Node.js (npx), and Embedded mode.
+-   **[Helm deployment](deployment/helm/docs-mcp-server/README.md)**: Deploy the unified image on Kubernetes or OpenShift.
 -   **[Connecting Clients](docs/guides/mcp-clients.md)**: How to connect Claude, VS Code (Cline/Roo), and other MCP clients.
 -   **[Basic Usage](docs/guides/basic-usage.md)**: Using the Web UI, CLI, and scraping local files.
 -   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.

@@ -33,9 +33,61 @@ docker run --rm \
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
-**Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). The named volumes in the example above (`docs-mcp-data`, `docs-mcp-config`) inherit this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make sure it is writable by uid 1000 — either `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
+**Non-root runtime (this branch's image):** The container uses a dedicated runtime account at uid 10001 with primary gid 10001 by default. Its narrowly scoped runtime paths are writable by arbitrary non-root UID/GID combinations, while application code under `/app` remains read-only. The dedicated home/cache path is `/app/.runtime`; data, configuration, and temporary files use `/data`, `/config`, and `/tmp`. Empty named volumes inherit image permissions, while bind mounts replace them. Prepare bind-mounted directories for the runtime identity or a group granted to the container. On OpenShift, the storage driver and SCC-assigned groups must make mounted volumes writable. Existing volumes retain their old ownership and may need a one-time permissions adjustment.
 
 **Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
+
+### Option 3: Kubernetes or OpenShift with Helm
+
+The starter chart deploys one unified Docs MCP Server image with persistent
+volumes for `/data` and `/config`:
+
+Build and publish this branch's image first, following the
+[chart README](../../deployment/helm/docs-mcp-server/README.md#install).
+The chart defaults to `ghcr.io/brtydse100/docs-mcp-server-nonroot:3.2.0`.
+
+```bash
+helm upgrade --install docs-mcp ./deployment/helm/docs-mcp-server \
+  --namespace docs-mcp --create-namespace
+```
+
+The chart does not set `runAsUser`, `runAsGroup`, or `fsGroup`. Kubernetes uses
+the image's default `10001:10001` identity, while an OpenShift Security Context
+Constraint can assign the namespace's permitted UID and groups without a separate
+chart mode. The root filesystem is read-only; the chart mounts writable storage
+at `/data`, `/config`, `/tmp`, and `/app/.runtime`.
+
+For an existing NFS PV, the server-side ownership remains authoritative. If
+the export is group-writable, supply its numeric GID without pinning the
+OpenShift-assigned UID:
+
+```yaml
+podSecurityContext:
+  supplementalGroups:
+    - 1000000 # replace with the NFS export directory's GID
+```
+
+After recreating the pod, `id` must include that group. NFS exports that remain
+unwritable require server-side owner, group, mode, export, or SELinux changes;
+image-layer permissions and a different mount path cannot change an NFS
+export. See the [chart's NFS guidance](../../deployment/helm/docs-mcp-server/README.md#nfs-persistent-volumes).
+
+Enable an OpenShift Route with a values file:
+
+```yaml
+route:
+  enabled: true
+  host: docs-mcp.apps.example.com
+  tls:
+    enabled: true
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+```
+
+The chart also accepts `extraResources`, a list of administrator-supplied
+Kubernetes objects whose strings may reference the Helm release context. See
+the [chart README](../../deployment/helm/docs-mcp-server/README.md) for storage,
+Route, local-document mount, and extension examples.
 
 ### Configure Your Client
 
