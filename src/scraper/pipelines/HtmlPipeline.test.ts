@@ -1,248 +1,99 @@
-// Copyright (c) 2025
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
-import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
-import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
 import { HtmlMetadataExtractorMiddleware } from "../middleware/HtmlMetadataExtractorMiddleware";
-import { HtmlSanitizerMiddleware } from "../middleware/HtmlSanitizerMiddleware";
-import { HtmlToMarkdownMiddleware } from "../middleware/HtmlToMarkdownMiddleware";
+import { HtmlPlaywrightMiddleware } from "../middleware/HtmlPlaywrightMiddleware";
 import { ScrapeMode, type ScraperOptions } from "../types";
 import { HtmlPipeline } from "./HtmlPipeline";
 
-describe("HtmlPipeline", () => {
-  const appConfig = loadConfig();
-  beforeEach(() => {
-    // Set up spies without mock implementations to use real middleware
-    vi.spyOn(HtmlCheerioParserMiddleware.prototype, "process");
-    vi.spyOn(HtmlMetadataExtractorMiddleware.prototype, "process");
-    vi.spyOn(HtmlLinkExtractorMiddleware.prototype, "process");
-    vi.spyOn(HtmlSanitizerMiddleware.prototype, "process");
-    vi.spyOn(HtmlToMarkdownMiddleware.prototype, "process");
-  });
+const appConfig = loadConfig();
 
+function options(scrapeMode: ScrapeMode | undefined = ScrapeMode.Fetch): ScraperOptions {
+  return { url: "https://example.com/", library: "example", version: "", scrapeMode };
+}
+
+function html(content: string | Buffer, charset?: string): RawContent {
+  return {
+    content,
+    mimeType: "text/html",
+    charset,
+    source: "https://example.com/page",
+    status: FetchStatus.SUCCESS,
+  };
+}
+
+describe("HtmlPipeline", () => {
   afterEach(() => {
-    // Vitest 4 reuses an existing spy instead of resetting it when the same
-    // prototype method is re-spied, so call counts would otherwise leak
-    // across tests in this file.
     vi.restoreAllMocks();
   });
 
-  it("canProcess returns true for text/html", () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    expect(pipeline.canProcess("text/html")).toBe(true);
-    expect(pipeline.canProcess("application/xhtml+xml")).toBe(true);
+  it.each([
+    ["text/html", true],
+    ["application/xhtml+xml", true],
+    ["text/markdown", false],
+    ["", false],
+  ])("canProcess(%j) is %s", (mimeType, expected) => {
+    expect(new HtmlPipeline(appConfig).canProcess(mimeType)).toBe(expected);
   });
 
-  it("canProcess returns false for non-html", () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    expect(pipeline.canProcess("text/markdown")).toBe(false);
-    expect(pipeline.canProcess("")).toBe(false);
+  describe("decoding", () => {
+    it.each([
+      ["UTF-8", Buffer.from("<p>naïve café</p>", "utf-8"), "utf-8", "naïve café"],
+      [
+        "ISO-8859-1",
+        Buffer.from("<p>naïve café</p>", "latin1"),
+        "iso-8859-1",
+        "naïve café",
+      ],
+      [
+        "no charset as UTF-8",
+        Buffer.from("<p>Привет, мир</p>", "utf-8"),
+        undefined,
+        "Привет, мир",
+      ],
+      [
+        "Japanese UTF-8",
+        Buffer.from("<p>こんにちは世界</p>", "utf-8"),
+        "utf-8",
+        "こんにちは世界",
+      ],
+      [
+        "a UTF-16LE BOM",
+        Buffer.from([0xff, 0xfe, 0x61, 0x00, 0x62, 0x00, 0x63, 0x00]),
+        "utf-16le",
+        "abc",
+      ],
+      ["a UTF-8 BOM", Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x62, 0x63]), "utf-8", "abc"],
+      ["a string as is", "<p>naïve café</p>", "iso-8859-1", "naïve café"],
+    ])("decodes %s", async (_label, content, charset, expected) => {
+      const result = await new HtmlPipeline(appConfig).process(
+        html(content, charset),
+        options(),
+      );
+
+      expect(result.textContent).toContain(expected);
+    });
+
+    it("prefers a meta charset over the HTTP header charset", async () => {
+      const page = `<!DOCTYPE html><html><head><meta charset="iso-8859-1"><title>T</title></head>
+        <body><p>Special characters: café, résumé, naïve</p></body></html>`;
+
+      const result = await new HtmlPipeline(appConfig).process(
+        html(Buffer.from(page, "latin1"), "utf-8"),
+        options(),
+      );
+
+      expect(result.textContent).toContain("café, résumé, naïve");
+      expect(result.textContent).not.toContain("cafÃ©");
+    });
   });
 
-  it("process decodes Buffer content with UTF-8 charset", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    const raw: RawContent = {
-      content: Buffer.from("<html><body>abc</body></html>", "utf-8"),
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    // Check that we got some markdown content (exact format depends on the actual middleware)
-    expect(result.textContent).toBeTruthy();
-    expect(result.textContent).toContain("abc");
-  });
-
-  it("process decodes Buffer content with ISO-8859-1 charset", async () => {
-    // Create a spy to capture the content before it's processed
-    let capturedContent = "";
-    const originalProcess = HtmlCheerioParserMiddleware.prototype.process;
-    vi.spyOn(HtmlCheerioParserMiddleware.prototype, "process").mockImplementationOnce(
-      async function (this: HtmlCheerioParserMiddleware, ctx, next) {
-        capturedContent = ctx.content;
-        // Call the original implementation after capturing
-        return originalProcess.call(this, ctx, next);
-      },
-    );
-
-    const pipeline = new HtmlPipeline(appConfig);
-    // Create a buffer with ISO-8859-1 encoding (Latin-1)
-    // This contains characters that would be encoded differently in UTF-8
-    const raw: RawContent = {
-      content: Buffer.from("<html><body>Café</body></html>", "latin1"),
-      mimeType: "text/html",
-      charset: "iso-8859-1", // Explicitly set charset to ISO-8859-1
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-
-    // Verify the content was properly decoded
-    expect(capturedContent).toBe("<html><body>Café</body></html>");
-
-    // Check that we got some markdown content (exact format depends on the actual middleware)
-    expect(result.textContent).toBeTruthy();
-    expect(result.textContent).toContain("Café");
-  });
-
-  it("process defaults to UTF-8 when charset is not specified", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    const raw: RawContent = {
-      content: Buffer.from("<html><body>abc</body></html>", "utf-8"),
-      mimeType: "text/html",
-      // No charset specified
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    // Check that we got some markdown content (exact format depends on the actual middleware)
-    expect(result.textContent).toBeTruthy();
-    expect(result.textContent).toContain("abc");
-  });
-
-  it("process uses string content directly", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    const raw: RawContent = {
-      content: "<html><body>abc</body></html>",
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    // Check that we got some markdown content (exact format depends on the actual middleware)
-    expect(result.textContent).toBeTruthy();
-    expect(result.textContent).toContain("abc");
-  });
-
-  it("process decodes Buffer content with UTF-16LE BOM", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    // UTF-16LE BOM: 0xFF 0xFE, then 'abc' as UTF-16LE
-    const buf = Buffer.from([0xff, 0xfe, 0x61, 0x00, 0x62, 0x00, 0x63, 0x00]);
-    const raw: RawContent = {
-      content: buf,
-      mimeType: "text/html",
-      charset: "utf-16le",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("abc");
-  });
-
-  it("process decodes Buffer content with UTF-8 BOM", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    // UTF-8 BOM: 0xEF 0xBB 0xBF, then 'abc'
-    const buf = Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x62, 0x63]);
-    const raw: RawContent = {
-      content: buf,
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("abc");
-  });
-
-  it("process decodes Buffer content with Japanese UTF-8 text", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    const japanese = "<html><body>こんにちは世界</body></html>"; // "Hello, world" in Japanese
-    const raw: RawContent = {
-      content: Buffer.from(japanese, "utf-8"),
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("こんにちは世界");
-  });
-
-  it("process decodes Buffer content with Russian UTF-8 text", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    const russian = "<html><body>Привет, мир</body></html>"; // "Hello, world" in Russian
-    const raw: RawContent = {
-      content: Buffer.from(russian, "utf-8"),
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("Привет, мир");
-  });
-
-  it("process calls middleware in order and aggregates results", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    const html = `
-      <html>
-        <head>
-          <title>Test Title</title>
-        </head>
-        <body>
-          <p>This is a <a href="https://test.link/">test link</a>.</p>
-        </body>
-      </html>
-    `;
-    const raw: RawContent = {
-      content: html,
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-
-    // Verify all middleware was called
-    expect(HtmlCheerioParserMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlMetadataExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlLinkExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlSanitizerMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlToMarkdownMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-
-    // Verify the result contains expected data from the actual middleware
-    expect(result.title).toBe("Test Title");
-    expect(result.links).toContain("https://test.link/");
-    expect(result.textContent).toBeTruthy();
-    expect(result.textContent).toEqual("This is a [test link](https://test.link/).");
-  });
-
-  it("process collects errors from middleware", async () => {
-    // Override with error-generating implementation just for this test
-    vi.spyOn(HtmlMetadataExtractorMiddleware.prototype, "process").mockImplementationOnce(
-      async (ctx, next) => {
-        ctx.errors.push(new Error("fail"));
-        await next();
-      },
-    );
-
-    const pipeline = new HtmlPipeline(appConfig);
-    const raw: RawContent = {
-      content: "<html><body>abc</body></html>",
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.errors?.some((e) => e.message === "fail")).toBe(true);
-  });
-
-  it("should correctly process HTML through the full standard middleware stack (E2E with spies)", async () => {
-    // Reset call counts for all spies
-    vi.clearAllMocks();
-
-    const pipeline = new HtmlPipeline(appConfig);
-
-    // Sample HTML with elements for each middleware to process
-    const html = `
+  it("returns the title, the links and sanitized Markdown of the page", async () => {
+    const page = `
       <html>
         <head>
           <title>Test Page</title>
-          <meta name="description" content="A test page for E2E testing">
+          <meta name="description" content="A test page">
         </head>
         <body>
           <h1>Hello World</h1>
@@ -253,43 +104,21 @@ describe("HtmlPipeline", () => {
       </html>
     `;
 
-    const raw: RawContent = {
-      content: html,
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test.example.com",
-      status: FetchStatus.SUCCESS,
-    };
+    const result = await new HtmlPipeline(appConfig).process(
+      html(page, "utf-8"),
+      options(),
+    );
 
-    const result = await pipeline.process(raw, {
-      url: "http://example.com",
-      library: "example",
-      version: "",
-      scrapeMode: ScrapeMode.Fetch,
-    });
-
-    // Verify all middleware was called
-    expect(HtmlCheerioParserMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlMetadataExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlLinkExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlSanitizerMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-    expect(HtmlToMarkdownMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-
-    // Verify the result contains expected data
-    // The exact values will depend on the actual middleware implementations
     expect(result.title).toBe("Test Page");
     expect(result.links).toContain("https://example.com/test/link");
-
-    // Verify contentType was updated to markdown after HTML conversion
     expect(result.contentType).toBe("text/markdown");
-
-    // Verify the content was sanitized (no script tags) and converted to markdown
+    expect(result.textContent).toContain("# Hello World");
+    expect(result.textContent).toContain(
+      "This is a [test link](https://example.com/test/link).",
+    );
     expect(result.textContent).not.toContain("alert");
-    expect(result.textContent).toContain("Hello World");
-    expect(result.textContent).toContain("test link");
-
-    // Verify no errors occurred
-    expect(result.errors).toHaveLength(0);
+    expect(result.errors).toEqual([]);
+    expect(result.chunks?.length).toBeGreaterThan(0);
   });
 
   it("discovers links inside removed chrome and keeps that chrome out of the content", async () => {
@@ -298,8 +127,7 @@ describe("HtmlPipeline", () => {
     // landmark, which the extractor removes, and outside <main>, which
     // region scoping discards — so reordering the extractor ahead of link
     // extraction would silently shrink every crawl frontier.
-    const pipeline = new HtmlPipeline(appConfig);
-    const html = `
+    const page = `
       <html>
         <head><title>Routing</title></head>
         <body>
@@ -315,20 +143,10 @@ describe("HtmlPipeline", () => {
       </html>
     `;
 
-    const raw: RawContent = {
-      content: html,
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test.example.com",
-      status: FetchStatus.SUCCESS,
-    };
-
-    const result = await pipeline.process(raw, {
-      url: "http://example.com",
-      library: "example",
-      version: "",
-      scrapeMode: ScrapeMode.Fetch,
-    });
+    const result = await new HtmlPipeline(appConfig).process(
+      html(page, "utf-8"),
+      options(),
+    );
 
     // The crawler is still offered both sibling URLs...
     expect(result.links).toContain("https://example.com/guide/install");
@@ -340,41 +158,50 @@ describe("HtmlPipeline", () => {
     expect(result.textContent).toContain("Routes are declared");
   });
 
-  it("should convert contentType from text/html to text/markdown", async () => {
-    const pipeline = new HtmlPipeline(appConfig);
-    const html = `
-      <html>
-        <head><title>Mimetype Test</title></head>
-        <body>
-          <h1>Testing Content Type</h1>
-          <p>This HTML should be converted to markdown.</p>
-        </body>
-      </html>
-    `;
+  it("collects errors that middleware reports", async () => {
+    vi.spyOn(HtmlMetadataExtractorMiddleware.prototype, "process").mockImplementationOnce(
+      async (ctx, next) => {
+        ctx.errors.push(new Error("fail"));
+        await next();
+      },
+    );
 
-    const raw: RawContent = {
-      content: html,
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test.example.com",
-      status: FetchStatus.SUCCESS,
-    };
+    const result = await new HtmlPipeline(appConfig).process(
+      html("<html><body>abc</body></html>", "utf-8"),
+      options(),
+    );
 
-    const result = await pipeline.process(raw, {
-      url: "http://example.com",
-      library: "example",
-      version: "",
-      scrapeMode: ScrapeMode.Fetch,
-    });
-
-    // Verify contentType was transformed from HTML to Markdown
-    expect(result.contentType).toBe("text/markdown");
-    expect(result.contentType).not.toBe("text/html");
-
-    // Verify content is in markdown format
-    expect(result.textContent).toContain("# Testing Content Type");
-    expect(result.textContent).toContain("This HTML should be converted to markdown");
+    expect(result.errors?.map((e) => e.message)).toContain("fail");
   });
+
+  // The pipeline treats a missing scrapeMode as "no browser", while
+  // HtmlPlaywrightMiddleware on its own treats it as Auto. The pipeline decides
+  // first, so a missing scrapeMode never renders.
+  it.each([
+    [ScrapeMode.Playwright, true],
+    [ScrapeMode.Auto, true],
+    [ScrapeMode.Fetch, false],
+    [undefined, false],
+  ])(
+    "with scrapeMode %s uses the browser-rendered page: %s",
+    async (scrapeMode, rendered) => {
+      vi.spyOn(HtmlPlaywrightMiddleware.prototype, "process").mockImplementation(
+        async (ctx, next) => {
+          ctx.content = "<html><body><p>Rendered by the browser</p></body></html>";
+          await next();
+        },
+      );
+
+      const result = await new HtmlPipeline(appConfig).process(
+        html("<html><body><p>Served by the server</p></body></html>", "utf-8"),
+        options(scrapeMode),
+      );
+
+      expect(result.textContent).toContain(
+        rendered ? "Rendered by the browser" : "Served by the server",
+      );
+    },
+  );
 
   it("processes HTML via Defuddle when htmlExtractor is set to defuddle", async () => {
     // Verifies the lazy-loading path: HtmlPipeline only imports the Defuddle
@@ -389,7 +216,7 @@ describe("HtmlPipeline", () => {
     // Article body needs enough word count for Defuddle to score the main
     // element above the boilerplate.
     const lorem = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(40);
-    const html = `
+    const page = `
       <html><head><title>Defuddle pipeline test</title></head>
       <body>
         <nav class="site-nav">Top nav links</nav>
@@ -400,20 +227,7 @@ describe("HtmlPipeline", () => {
         <footer class="site-footer">Footer copyright</footer>
       </body></html>`;
 
-    const raw: RawContent = {
-      content: html,
-      mimeType: "text/html",
-      charset: "utf-8",
-      source: "http://test.example.com",
-      status: FetchStatus.SUCCESS,
-    };
-
-    const result = await pipeline.process(raw, {
-      url: "http://test.example.com",
-      library: "example",
-      version: "",
-      scrapeMode: ScrapeMode.Fetch,
-    });
+    const result = await pipeline.process(html(page, "utf-8"), options());
 
     expect(result.contentType).toBe("text/markdown");
     expect(result.textContent).toContain("Lorem ipsum");
@@ -423,40 +237,29 @@ describe("HtmlPipeline", () => {
     expect(result.errors).toHaveLength(0);
   });
 
-  describe("cleanup", () => {
-    it("should call closeBrowser on Playwright middleware when close() is called", async () => {
-      const pipeline = new HtmlPipeline(appConfig);
+  describe("close", () => {
+    it("closes the browser", async () => {
+      const closeBrowser = vi.spyOn(HtmlPlaywrightMiddleware.prototype, "closeBrowser");
 
-      // Spy on the closeBrowser method
-      const closeBrowserSpy = vi.spyOn(
-        (pipeline as any).playwrightMiddleware,
-        "closeBrowser",
-      );
+      await new HtmlPipeline(appConfig).close();
+
+      expect(closeBrowser).toHaveBeenCalledOnce();
+    });
+
+    it("can be called repeatedly", async () => {
+      const pipeline = new HtmlPipeline(appConfig);
 
       await pipeline.close();
-
-      expect(closeBrowserSpy).toHaveBeenCalledOnce();
+      await pipeline.close();
+      await expect(pipeline.close()).resolves.toBeUndefined();
     });
 
-    it("should be idempotent - multiple close() calls should not error", async () => {
-      const pipeline = new HtmlPipeline(appConfig);
-
-      // Multiple calls should not throw
-      await expect(pipeline.close()).resolves.not.toThrow();
-      await expect(pipeline.close()).resolves.not.toThrow();
-      await expect(pipeline.close()).resolves.not.toThrow();
-    });
-
-    it("should not throw even if closeBrowser encounters an error", async () => {
-      const pipeline = new HtmlPipeline(appConfig);
-
-      // Mock closeBrowser to throw an error
-      vi.spyOn((pipeline as any).playwrightMiddleware, "closeBrowser").mockRejectedValue(
+    it("resolves even when closing the browser fails", async () => {
+      vi.spyOn(HtmlPlaywrightMiddleware.prototype, "closeBrowser").mockRejectedValue(
         new Error("Browser cleanup failed"),
       );
 
-      // close() should handle the error gracefully and not throw
-      await expect(pipeline.close()).resolves.not.toThrow();
+      await expect(new HtmlPipeline(appConfig).close()).resolves.toBeUndefined();
     });
   });
 });
