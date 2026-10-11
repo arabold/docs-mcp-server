@@ -14,10 +14,18 @@ import { BrowserFetcher } from "./BrowserFetcher";
 import { FetchStatus } from "./types";
 
 /**
- * Builds a mocked Playwright page/context/browser tree. `pageOverrides` lets a
- * test replace individual page methods (e.g. a rejecting `goto`).
+ * Builds a mocked Playwright page/context/browser tree and makes it the browser
+ * every launch returns. `pageOverrides` lets a test replace individual page
+ * methods (e.g. a rejecting `goto`).
  */
 function mockBrowser(pageOverrides: Record<string, unknown> = {}) {
+  const mocks = buildBrowser(pageOverrides);
+  vi.mocked(chromium.launch).mockResolvedValue(mocks.browser as never);
+  return mocks;
+}
+
+/** Builds a mocked Playwright page/context/browser tree without launching it. */
+function buildBrowser(pageOverrides: Record<string, unknown> = {}) {
   const page = {
     setViewportSize: vi.fn().mockResolvedValue(undefined),
     setExtraHTTPHeaders: vi.fn().mockResolvedValue(undefined),
@@ -44,14 +52,26 @@ function mockBrowser(pageOverrides: Record<string, unknown> = {}) {
   const browser = {
     newContext: vi.fn().mockResolvedValue(context),
     close: vi.fn().mockResolvedValue(undefined),
+    isConnected: vi.fn().mockReturnValue(true),
   };
-  vi.mocked(chromium.launch).mockResolvedValue(browser as never);
   return { page, context, browser };
+}
+
+/** Builds a mocked browser whose Chromium exits as soon as a page is opened. */
+function crashingBrowser() {
+  const { browser } = buildBrowser();
+  browser.newContext.mockImplementation(async () => {
+    browser.isConnected.mockReturnValue(false);
+    throw new Error(
+      "browser.newContext: Target page, context or browser has been closed",
+    );
+  });
+  return browser;
 }
 
 describe("BrowserFetcher", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("uses broad invalid TLS override for the browser context", async () => {
@@ -409,5 +429,88 @@ describe("BrowserFetcher", () => {
 
     expect(result.status).toBe(FetchStatus.SUCCESS);
     expect(result.etag).toBe("real-etag");
+  });
+
+  describe("browser lifecycle", () => {
+    it("launches a new browser for later pages once Chromium has exited", async () => {
+      const first = mockBrowser();
+      const fetcher = new BrowserFetcher(loadConfig().scraper);
+
+      await fetcher.fetch("https://example.com/a");
+      first.browser.isConnected.mockReturnValue(false);
+      const second = mockBrowser();
+      await fetcher.fetch("https://example.com/b");
+
+      expect(chromium.launch).toHaveBeenCalledTimes(2);
+      expect(second.browser.newContext).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries a page once on a new browser when Chromium exits during the fetch", async () => {
+      const { browser } = mockBrowser();
+      vi.mocked(chromium.launch).mockResolvedValueOnce(crashingBrowser() as never);
+      const fetcher = new BrowserFetcher(loadConfig().scraper);
+
+      const result = await fetcher.fetch("https://example.com");
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(browser.newContext).toHaveBeenCalledTimes(1);
+    });
+
+    it("gives up after one retry when the new browser exits too", async () => {
+      vi.mocked(chromium.launch).mockImplementation(
+        async () => crashingBrowser() as never,
+      );
+      const fetcher = new BrowserFetcher(loadConfig().scraper);
+
+      await expect(fetcher.fetch("https://example.com")).rejects.toThrow(ScraperError);
+      expect(chromium.launch).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retry a failure while the browser is still connected", async () => {
+      const { browser } = mockBrowser();
+      browser.newContext.mockRejectedValue(new Error("context failed"));
+      const fetcher = new BrowserFetcher(loadConfig().scraper);
+
+      await expect(fetcher.fetch("https://example.com")).rejects.toThrow(ScraperError);
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+      expect(browser.newContext).toHaveBeenCalledTimes(1);
+    });
+
+    it("shares one browser launch between concurrent fetches", async () => {
+      mockBrowser();
+      // Skip the DNS lookup in the access check, so all three fetches ask for a
+      // browser at the same time instead of one after another.
+      const config = loadConfig().scraper;
+      config.security.network.allowPrivateNetworks = true;
+      const fetcher = new BrowserFetcher(config);
+
+      await Promise.all([
+        fetcher.fetch("https://example.com/a"),
+        fetcher.fetch("https://example.com/b"),
+        fetcher.fetch("https://example.com/c"),
+      ]);
+
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes a browser whose launch was still in flight", async () => {
+      const { browser } = buildBrowser();
+      let finishLaunch: (value: unknown) => void = () => undefined;
+      vi.mocked(chromium.launch).mockReturnValue(
+        new Promise((resolve) => {
+          finishLaunch = resolve;
+        }) as never,
+      );
+      const fetcher = new BrowserFetcher(loadConfig().scraper);
+
+      const pendingFetch = fetcher.fetch("https://example.com").catch(() => undefined);
+      await vi.waitFor(() => expect(chromium.launch).toHaveBeenCalled());
+      const closing = fetcher.close();
+      finishLaunch(browser);
+      await closing;
+      await pendingFetch;
+
+      expect(browser.close).toHaveBeenCalled();
+    });
   });
 });

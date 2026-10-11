@@ -67,6 +67,7 @@ interface BrowserWithProcessHandle extends Browser {
  */
 export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   private browser: Browser | null = null;
+  private browserLaunch: Promise<Browser> | null = null;
   private readonly config: AppConfig["scraper"];
   private readonly accessPolicy: ScraperAccessPolicy;
 
@@ -115,19 +116,32 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   }
 
   /**
-   * Initializes the Playwright browser instance.
-   * Consider making this more robust (e.g., lazy initialization, singleton).
+   * Returns a connected browser, launching one on first use and again after
+   * Chromium has exited. Concurrent callers share a single launch.
    */
   private async ensureBrowser(): Promise<Browser> {
-    if (!this.browser?.isConnected()) {
-      logger.debug("Launching new Playwright browser instance (Chromium)");
-      this.browser = await BrowserFetcher.launchBrowser();
-      this.browser.on("disconnected", () => {
-        logger.debug("Playwright browser instance disconnected.");
-        this.browser = null;
-      });
+    if (this.browser?.isConnected()) {
+      return this.browser;
     }
-    return this.browser;
+
+    // Concurrent pages share one launch instead of each starting a Chromium.
+    this.browserLaunch ??= this.launchBrowser().finally(() => {
+      this.browserLaunch = null;
+    });
+    return this.browserLaunch;
+  }
+
+  private async launchBrowser(): Promise<Browser> {
+    logger.debug("Launching new Playwright browser instance (Chromium)");
+    const browser = await BrowserFetcher.launchBrowser();
+    browser.on("disconnected", () => {
+      logger.debug("Playwright browser instance disconnected.");
+      if (this.browser === browser) {
+        this.browser = null;
+      }
+    });
+    this.browser = browser;
+    return browser;
   }
 
   private getPageTimeoutMs(): number {

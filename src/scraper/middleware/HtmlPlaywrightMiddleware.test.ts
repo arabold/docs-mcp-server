@@ -323,6 +323,25 @@ describe("HtmlPlaywrightMiddleware", () => {
       }
     });
 
+    it("should share one browser launch between concurrent pages", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const browserSpy = createMockBrowser(createMockPlaywrightPage(initialHtml));
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await Promise.all(
+        ["a", "b", "c"].map((name) =>
+          playwrightMiddleware.process(
+            createPipelineTestContext(initialHtml, `https://example.com/${name}`),
+            vi.fn(),
+          ),
+        ),
+      );
+
+      expect(launchSpy).toHaveBeenCalledTimes(1);
+
+      launchSpy.mockRestore();
+    });
+
     it("should skip processing when scrapeMode is not playwright/auto", async () => {
       const initialHtml = "<html><body><p>Test</p></body></html>";
       const context = createPipelineTestContext(initialHtml, "https://example.com/test", {
