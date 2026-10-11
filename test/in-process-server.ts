@@ -47,7 +47,7 @@ export async function startInProcessServer(
   appConfig.auth.audience = "";
 
   const eventBus = new EventBusService();
-  const backend = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
+  const backend = await openBackend({ appConfig, eventBus, jobs: { interruptedJobs: "fail" } });
   const appServer = await startAppServer(
     backend,
     createAppServerConfig({

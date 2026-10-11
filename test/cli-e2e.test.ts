@@ -7,6 +7,7 @@ import { EventBusService } from "../src/events";
 import { ScrapeMode } from "../src/scraper/types";
 import { createApiClient } from "../src/services/apiClient";
 import { openBackend } from "../src/services/backend";
+import { VersionStatus } from "../src/store/types";
 import { loadConfig } from "../src/utils/config";
 import {
   createTcpProxy,
@@ -124,6 +125,39 @@ describe("CLI E2E", () => {
     }
     // Two CLI processes; generous for CI runners, which are several times slower
   }, 60000);
+
+  it("leaves the jobs of another process alone when it scrapes and refreshes locally", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-leave-"));
+    const configPath = writeTestConfig(storePath);
+    const statusOfBusy = () =>
+      withStore(storePath, async (store) => {
+        const busy = (await store.listLibraries()).find((lib) => lib.library === "Busy");
+        return busy?.versions[0]?.status;
+      });
+    const local = ["--store-path", storePath, "--config", configPath];
+
+    try {
+      // Another process (a server) is scraping Busy 1.0 in this store
+      await withStore(storePath, async (store) => {
+        const versionId = await store.ensureVersion({ library: "Busy", version: "1.0" });
+        await store.updateVersionStatus(versionId, VersionStatus.RUNNING);
+      });
+
+      const scraped = await runCli(
+        ["scrape", "Mine", fixtureUrl, ...local, "--scrape-mode", "fetch"],
+        40_000,
+      );
+      expect(scraped.code, scraped.stderr).toBe(0);
+      expect(await statusOfBusy()).toBe(VersionStatus.RUNNING);
+
+      const refreshed = await runCli(["refresh", "Mine", ...local], 40_000);
+      expect(refreshed.code, refreshed.stderr).toBe(0);
+      expect(await statusOfBusy()).toBe(VersionStatus.RUNNING);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+    // Two CLI processes; generous for CI runners, which are several times slower
+  }, 60_000);
 
   it("fails with the URL to check when no worker answers", async () => {
     const deadUrl = `http://127.0.0.1:${await getFreePort()}/api`;
@@ -299,7 +333,7 @@ describe("CLI E2E", () => {
           appConfig,
           eventBus: new EventBusService(),
           serverUrl: "serverUrl" in target ? target.serverUrl : undefined,
-          jobs: { recoverJobs: false },
+          jobs: { interruptedJobs: "fail" },
         });
         try {
           const jobId = await backend.pipeline.enqueueScrapeJob(library, version, {

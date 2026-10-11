@@ -77,7 +77,7 @@ describe("Vector search E2E", () => {
     appConfig.scraper.security.fileAccess.allowedRoots = [docsDir];
 
     const eventBus = new EventBusService();
-    const opened = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
+    const opened = await openBackend({ appConfig, eventBus, jobs: { interruptedJobs: "fail" } });
     backend = opened;
 
     await new ScrapeTool(opened.pipeline, appConfig.scraper).execute({

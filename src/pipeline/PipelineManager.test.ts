@@ -26,7 +26,7 @@ import { VersionStatus } from "../store/types";
 import { type AppConfig, loadConfig } from "../utils/config";
 import { PipelineStateError } from "./errors";
 import { PipelineManager } from "./PipelineManager";
-import { type PipelineJob, PipelineJobStatus } from "./types";
+import { type InterruptedJobs, type PipelineJob, PipelineJobStatus } from "./types";
 
 const SOURCE_URL = "https://example.com/docs";
 
@@ -61,10 +61,12 @@ describe("PipelineManager", () => {
   let scrape: MockInstance<ScraperService["scrape"]>;
   let statusEvents: PipelineJob[];
 
-  function createManager(options: { recoverJobs?: boolean; concurrency?: number } = {}) {
+  function createManager(
+    options: { interruptedJobs?: InterruptedJobs; concurrency?: number } = {},
+  ) {
     appConfig.scraper.maxConcurrency = options.concurrency ?? 1;
     return new PipelineManager(store, eventBus, {
-      recoverJobs: options.recoverJobs ?? false,
+      interruptedJobs: options.interruptedJobs ?? "fail",
       appConfig,
     });
   }
@@ -559,8 +561,8 @@ describe("PipelineManager", () => {
     });
 
     // start() reads every QUEUED/RUNNING version as interrupted, including those
-    // of jobs still queued in memory: with recoverJobs it re-enqueues them,
-    // cancelling the original job; without, it marks their version failed.
+    // of jobs still queued in memory: set to recover, it re-enqueues them,
+    // cancelling the original job; set to fail, it marks their version failed.
     it.todo("keeps jobs enqueued before start() out of interrupted-job recovery");
 
     it("can be stopped when it is not running", async () => {
@@ -861,9 +863,9 @@ describe("PipelineManager", () => {
       return { runningId, queuedId };
     }
 
-    it("re-enqueues them when recovery is enabled", async () => {
+    it("re-enqueues them when set to recover them", async () => {
       await seedInterrupted();
-      manager = createManager({ recoverJobs: true });
+      manager = createManager({ interruptedJobs: "recover" });
       holdScrapes();
 
       await manager.start();
@@ -882,7 +884,7 @@ describe("PipelineManager", () => {
       const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING, {
         options: null,
       });
-      manager = createManager({ recoverJobs: true });
+      manager = createManager({ interruptedJobs: "recover" });
 
       await manager.start();
 
@@ -893,9 +895,9 @@ describe("PipelineManager", () => {
       expect(await manager.getJobs()).toEqual([]);
     });
 
-    it("marks them failed without enqueueing when recovery is disabled", async () => {
+    it("marks them failed without enqueueing when set to fail them", async () => {
       const { runningId, queuedId } = await seedInterrupted();
-      manager = createManager({ recoverJobs: false });
+      manager = createManager({ interruptedJobs: "fail" });
 
       await manager.start();
 
@@ -905,6 +907,21 @@ describe("PipelineManager", () => {
           error_message: "Job interrupted",
         });
       }
+      expect(await manager.getJobs()).toEqual([]);
+    });
+
+    it("leaves them as they are when set to leave them", async () => {
+      const { runningId, queuedId } = await seedInterrupted();
+      manager = createManager({ interruptedJobs: "leave" });
+
+      await manager.start();
+
+      expect(await store.getVersionById(runningId)).toMatchObject({
+        status: VersionStatus.RUNNING,
+      });
+      expect(await store.getVersionById(queuedId)).toMatchObject({
+        status: VersionStatus.QUEUED,
+      });
       expect(await manager.getJobs()).toEqual([]);
     });
   });

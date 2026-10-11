@@ -79,7 +79,9 @@ export function createWorkerCommand(cli: Argv) {
         const backend = await openBackend({
           appConfig,
           eventBus,
-          jobs: { recoverJobs: (argv.resume as boolean) ?? true },
+          jobs: {
+            interruptedJobs: ((argv.resume as boolean) ?? true) ? "recover" : "fail",
+          },
         });
         // Registered first, so shutdown closes it even when a server fails to start
         registerGlobalServices({ backend });

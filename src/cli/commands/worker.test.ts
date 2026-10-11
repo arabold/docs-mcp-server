@@ -98,7 +98,7 @@ describe("worker command", () => {
     const config = callArgs[1]; // 2nd arg is config
     // Jobs run in the worker's own process, recovering interrupted ones by default
     expect(openBackend).toHaveBeenCalledWith(
-      expect.objectContaining({ jobs: { recoverJobs: true } }),
+      expect.objectContaining({ jobs: { interruptedJobs: "recover" } }),
     );
     expect(config.enableApiServer).toBe(true);
     expect(config.enableWebInterface).toBe(false);

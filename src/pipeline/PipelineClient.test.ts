@@ -330,7 +330,7 @@ describe("PipelineClient against a worker", () => {
       appConfig,
       eventBus: new EventBusService(),
       serverUrl: worker.apiUrl,
-      jobs: { recoverJobs: false },
+      jobs: { interruptedJobs: "fail" },
     });
   });
 
