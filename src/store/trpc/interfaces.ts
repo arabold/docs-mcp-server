@@ -11,8 +11,12 @@ import type {
   EmbeddingConfigInfo,
   FindVersionResult,
   LibrarySummary,
+  ListPagesOptions,
+  ListPagesResult,
   ListVersionChunksOptions,
   ListVersionChunksResult,
+  PageContentOptions,
+  PageContentResult,
   StoredScraperOptions,
   StoreSearchResult,
   VersionChunkStats,
@@ -30,6 +34,11 @@ export interface IDocumentManagement {
   listLibraries(): Promise<LibrarySummary[]>;
   validateLibraryExists(library: string): Promise<void>;
   findBestVersion(library: string, targetVersion?: string): Promise<FindVersionResult>;
+  listPages(
+    library: string,
+    version: string | null | undefined,
+    options?: ListPagesOptions,
+  ): Promise<ListPagesResult>;
 
   // Search & mutation used by tools/UI
   searchStore(
@@ -38,6 +47,12 @@ export interface IDocumentManagement {
     query: string,
     limit?: number,
   ): Promise<StoreSearchResult[]>;
+  getPageContent(
+    library: string,
+    version: string | null | undefined,
+    pathOrUrl: string,
+    options?: PageContentOptions,
+  ): Promise<PageContentResult>;
   removeAllDocuments(library: string, version?: string | null): Promise<void>;
   removeVersion(library: string, version?: string | null): Promise<void>;
   /**

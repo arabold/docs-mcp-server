@@ -1,7 +1,12 @@
 import path from "node:path";
 import { createFsFromVolume, vol } from "memfs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { LibraryNotFoundInStoreError, VersionNotFoundInStoreError } from "./errors";
+import {
+  AmbiguousPageInStoreError,
+  LibraryNotFoundInStoreError,
+  PageNotFoundInStoreError,
+  VersionNotFoundInStoreError,
+} from "./errors";
 
 vi.mock("node:fs", () => ({
   default: createFsFromVolume(vol),
@@ -63,6 +68,11 @@ const mockStore = {
   // Library management methods
   getLibrary: vi.fn(),
   deleteLibrary: vi.fn(),
+  // Page reading methods
+  findPageUrls: vi.fn(),
+  findPageUrlsBySuffix: vi.fn(),
+  listPages: vi.fn(),
+  findChunksByUrl: vi.fn(),
   // Chunk explorer methods
   listVersionChunks: vi.fn(),
   getVersionStats: vi.fn(),
@@ -1454,6 +1464,210 @@ describe("DocumentManagementService", () => {
         expect(byVer["1.0.0"].progress).toBeUndefined();
         expect(byVer["1.1.0"].progress).toEqual({ pages: 2, maxPages: 10 });
         expect(byVer["1.2.0"].progress).toEqual({ pages: 0, maxPages: 10 });
+      });
+    });
+
+    describe("page reading", () => {
+      const library = "pages-lib";
+      let pages: Array<{ url: string; contentType: string; chunks: string[] }>;
+
+      beforeEach(() => {
+        pages = [];
+        mockStore.getLibrary.mockResolvedValue({ id: 1, name: library });
+        mockStore.checkDocumentExists.mockResolvedValue(false);
+        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
+        // A fake that honors the store's lookup contracts over the `pages` list above.
+        mockStore.findPageUrls.mockImplementation(
+          async (_lib: string, _ver: string, candidates: string[]) =>
+            pages.filter((p) => candidates.includes(p.url)).map((p) => p.url),
+        );
+        mockStore.findPageUrlsBySuffix.mockImplementation(
+          async (_lib: string, _ver: string, suffixes: string[], limit: number) =>
+            pages
+              .filter((p) => suffixes.some((s) => p.url.replace(/\/+$/, "").endsWith(s)))
+              .map((p) => p.url)
+              .slice(0, limit),
+        );
+        mockStore.listPages.mockImplementation(
+          async (
+            _lib: string,
+            _ver: string,
+            options: { contains?: string; limit?: number; offset?: number },
+          ) => {
+            const offset = options.offset ?? 0;
+            const matching = pages.filter(
+              (p) => !options.contains || p.url.includes(options.contains),
+            );
+            return {
+              total: matching.length,
+              pages: matching
+                .slice(offset, options.limit ? offset + options.limit : undefined)
+                .map((p) => ({ url: p.url, title: null, depth: 1 })),
+            };
+          },
+        );
+        mockStore.findChunksByUrl.mockImplementation(
+          async (_lib: string, _ver: string, url: string) => {
+            const page = pages.find((p) => p.url === url);
+            return (page?.chunks ?? []).map((content, i) => ({
+              id: `${i}`,
+              url,
+              title: "Page Title",
+              content,
+              content_type: page?.contentType,
+              sort_order: i,
+              metadata: {},
+            }));
+          },
+        );
+      });
+
+      const addPage = (
+        url: string,
+        chunks = ["content"],
+        contentType = "text/markdown",
+      ) => pages.push({ url, contentType, chunks });
+
+      it("reads a page stored with a percent-encoded URL when given that exact URL", async () => {
+        addPage("https://x.dev/docs/My%20Page");
+
+        const result = await docService.getPageContent(
+          library,
+          "1.0.0",
+          "https://x.dev/docs/My%20Page",
+        );
+
+        expect(result.url).toBe("https://x.dev/docs/My%20Page");
+      });
+
+      it("reads a percent-encoded page from a path with a literal space", async () => {
+        addPage("https://x.dev/docs/My%20Page");
+
+        const result = await docService.getPageContent(library, "1.0.0", "/docs/My Page");
+
+        expect(result.url).toBe("https://x.dev/docs/My%20Page");
+      });
+
+      it("reads a page from a URL with a trailing slash", async () => {
+        addPage("https://x.dev/docs/guide");
+
+        const result = await docService.getPageContent(
+          library,
+          "1.0.0",
+          "https://x.dev/docs/guide/",
+        );
+
+        expect(result.url).toBe("https://x.dev/docs/guide");
+      });
+
+      it("rejects a path that matches several pages and lists every match", async () => {
+        addPage("https://x.dev/v1/api");
+        addPage("https://x.dev/v2/api");
+
+        const read = docService.getPageContent(library, "1.0.0", "/api");
+
+        await expect(read).rejects.toThrow(AmbiguousPageInStoreError);
+        await expect(read).rejects.toThrow(
+          /https:\/\/x\.dev\/v1\/api.*https:\/\/x\.dev\/v2\/api/,
+        );
+      });
+
+      it("resolves a hash-only route to its hash-routed page", async () => {
+        addPage("https://x.dev/app#/guide");
+
+        const result = await docService.getPageContent(library, "1.0.0", "#/guide");
+
+        expect(result.url).toBe("https://x.dev/app#/guide");
+      });
+
+      it("prefers the hash-routed page over the page without the fragment", async () => {
+        addPage("https://x.dev/app");
+        addPage("https://x.dev/app#/guide");
+
+        const result = await docService.getPageContent(library, "1.0.0", "/app#/guide");
+
+        expect(result.url).toBe("https://x.dev/app#/guide");
+      });
+
+      it("falls back to the page without its anchor", async () => {
+        addPage("https://x.dev/docs/page");
+
+        const result = await docService.getPageContent(
+          library,
+          "1.0.0",
+          "https://x.dev/docs/page#install",
+        );
+
+        expect(result.url).toBe("https://x.dev/docs/page");
+      });
+
+      it("suggests pages containing the last path segment when nothing matches", async () => {
+        addPage("https://x.dev/docs/hooks/useState");
+
+        const read = docService.getPageContent(library, "1.0.0", "/reference/useState");
+
+        await expect(read).rejects.toThrow(PageNotFoundInStoreError);
+        await expect(read).rejects.toThrow("https://x.dev/docs/hooks/useState");
+      });
+
+      it("joins source code chunks without separators", async () => {
+        addPage(
+          "https://x.dev/src/a.ts",
+          ["function a() {\n", "  return 1;\n", "}\n"],
+          "text/x-typescript",
+        );
+
+        const result = await docService.getPageContent(library, "1.0.0", "/src/a.ts");
+
+        expect(result.content).toBe("function a() {\n  return 1;\n}\n");
+      });
+
+      it("returns whole chunks up to maxChars and the chunk to continue from", async () => {
+        addPage("https://x.dev/long", ["a".repeat(10), "b".repeat(10), "c".repeat(10)]);
+
+        const result = await docService.getPageContent(library, "1.0.0", "/long", {
+          maxChars: 25,
+        });
+
+        expect(result.content).toBe(`${"a".repeat(10)}\n\n${"b".repeat(10)}`);
+        expect(result.nextChunk).toBe(2);
+        expect(result.totalChunks).toBe(3);
+      });
+
+      it("continues from startChunk to the end of the page", async () => {
+        addPage("https://x.dev/long", ["a".repeat(10), "b".repeat(10), "c".repeat(10)]);
+
+        const result = await docService.getPageContent(library, "1.0.0", "/long", {
+          startChunk: 2,
+          maxChars: 25,
+        });
+
+        expect(result.content).toBe("c".repeat(10));
+        expect(result.nextChunk).toBeNull();
+      });
+
+      it("returns a single chunk longer than maxChars rather than nothing", async () => {
+        addPage("https://x.dev/long", ["a".repeat(50), "b"]);
+
+        const result = await docService.getPageContent(library, "1.0.0", "/long", {
+          maxChars: 10,
+        });
+
+        expect(result.content).toBe("a".repeat(50));
+        expect(result.nextChunk).toBe(1);
+      });
+
+      it("lists pages of the resolved version and reports that more follow", async () => {
+        addPage("https://x.dev/a");
+        addPage("https://x.dev/b");
+        addPage("https://x.dev/c");
+
+        const result = await docService.listPages(library, undefined, { limit: 2 });
+
+        expect(result.version).toBe("1.0.0");
+        expect(result.total).toBe(3);
+        expect(result.pages).toHaveLength(2);
+        expect(result.hasMore).toBe(true);
       });
     });
 
