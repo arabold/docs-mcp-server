@@ -76,11 +76,12 @@ describe("WebScraperStrategy", () => {
 
   it("should carry internal archive roots to discovered temp archive members", async () => {
     const testStrategy = strategy as unknown as {
-      processBatch(
-        batch: QueueItem[],
+      processQueueItem(
+        item: QueueItem,
         baseUrl: URL,
         options: ScraperOptions,
         progressCallback: ProgressCallback<ScraperProgressEvent>,
+        crawl: { abortError: null },
         signal?: AbortSignal,
       ): Promise<QueueItem[]>;
       processItem(
@@ -101,11 +102,12 @@ describe("WebScraperStrategy", () => {
       status: FetchStatus.SUCCESS,
     });
 
-    const nextItems = await testStrategy.processBatch(
-      [{ url: "https://example.com/archive.zip", depth: 0 }],
+    const nextItems = await testStrategy.processQueueItem(
+      { url: "https://example.com/archive.zip", depth: 0 },
       new URL("https://example.com/archive.zip"),
       { ...options, url: "https://example.com/archive.zip" },
       vi.fn(),
+      { abortError: null },
     );
 
     expect(nextItems).toEqual([
@@ -121,11 +123,12 @@ describe("WebScraperStrategy", () => {
 
   it("should reject file:// links that escape the archive's internal roots", async () => {
     const testStrategy = strategy as unknown as {
-      processBatch(
-        batch: QueueItem[],
+      processQueueItem(
+        item: QueueItem,
         baseUrl: URL,
         options: ScraperOptions,
         progressCallback: ProgressCallback<ScraperProgressEvent>,
+        crawl: { abortError: null },
         signal?: AbortSignal,
       ): Promise<QueueItem[]>;
       processItem(
@@ -148,11 +151,12 @@ describe("WebScraperStrategy", () => {
       status: FetchStatus.SUCCESS,
     });
 
-    const nextItems = await testStrategy.processBatch(
-      [{ url: "https://example.com/archive.zip", depth: 0 }],
+    const nextItems = await testStrategy.processQueueItem(
+      { url: "https://example.com/archive.zip", depth: 0 },
       new URL("https://example.com/archive.zip"),
       { ...options, url: "https://example.com/archive.zip", scope: "subpages" },
       vi.fn(),
+      { abortError: null },
     );
 
     expect(nextItems).toEqual([

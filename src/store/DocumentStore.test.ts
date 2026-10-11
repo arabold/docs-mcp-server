@@ -142,6 +142,51 @@ describe("DocumentStore - With Embeddings", () => {
   });
 
   describe("Document Storage and Retrieval", () => {
+    it("stores each embedding as a float32 blob identical to its indexed vector", async () => {
+      const originalApiKey = process.env.OPENAI_API_KEY;
+      try {
+        process.env.OPENAI_API_KEY = "test-key-for-blob-storage";
+        await store.shutdown();
+        const cfg = loadConfig();
+        cfg.app.embeddingModel = "openai:text-embedding-3-small";
+        store = new DocumentStore(":memory:", cfg);
+        await store.initialize();
+
+        await store.addDocuments(
+          "bloblib",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Blob Storage",
+            "https://example.com/blob-storage",
+            "Embeddings are stored in their binary form",
+          ),
+        );
+
+        // @ts-expect-error Accessing private property for testing
+        const db = store.db;
+        const rows = db
+          .prepare(`
+            SELECT typeof(d.embedding) AS type, length(d.embedding) AS bytes,
+                   (SELECT dv.embedding FROM documents_vec dv WHERE dv.rowid = d.id)
+                     = d.embedding AS matchesIndex
+            FROM documents d
+          `)
+          .all() as Array<{ type: string; bytes: number; matchesIndex: number }>;
+
+        expect(rows.length).toBeGreaterThan(0);
+        for (const row of rows) {
+          expect(row).toEqual({ type: "blob", bytes: 1536 * 4, matchesIndex: 1 });
+        }
+      } finally {
+        if (originalApiKey === undefined) {
+          delete process.env.OPENAI_API_KEY;
+        } else {
+          process.env.OPENAI_API_KEY = originalApiKey;
+        }
+      }
+    });
+
     it("should store and retrieve documents with proper metadata", async () => {
       // Add two pages separately
       await store.addDocuments(
@@ -2758,6 +2803,30 @@ describe("DocumentStore - compaction", () => {
 
     const second = await store.compact({ force: false });
     expect(second.vacuumed).toBe(false);
+  });
+
+  it("returns the store to its empty size after all pages are deleted", async () => {
+    const cfg = loadConfig();
+    cfg.app.embeddingModel = "";
+    store = new DocumentStore(join(tempDir, "documents.db"), cfg);
+    await store.initialize();
+    const emptyBytes = (await store.compact({ force: true })).afterBytes;
+
+    // Varied vocabulary gives the full-text index real weight; every page is
+    // its own transaction and so its own index segment, as during a scrape.
+    for (let i = 0; i < 20; i++) {
+      const words = Array.from({ length: 3000 }, (_, j) => `term${i}w${j}`).join(" ");
+      await store.addDocuments(
+        "compactlib",
+        "1.0.0",
+        1,
+        createScrapeResult(`Page ${i}`, `https://example.com/page-${i}`, words),
+      );
+    }
+    await store.deletePages("compactlib", "1.0.0");
+
+    const result = await store.compact({ force: false });
+    expect(result.afterBytes - emptyBytes).toBeLessThan(64 * 1024);
   });
 
   it("does not vacuum when vacuum is false", async () => {
