@@ -81,6 +81,9 @@ export function createWorkerCommand(cli: Argv) {
           eventBus,
           jobs: { recoverJobs: (argv.resume as boolean) ?? true },
         });
+        // Registered before any transport starts, so a remote backend turns job
+        // telemetry off before the worker's first relayed event
+        registerGlobalServices({ backend });
 
         // Configure worker-only server
         const config = createAppServerConfig({
@@ -96,7 +99,7 @@ export function createWorkerCommand(cli: Argv) {
 
         const appServer = await startAppServer(backend, config, appConfig);
 
-        registerGlobalServices({ appServer, backend });
+        registerGlobalServices({ appServer });
 
         await new Promise(() => {}); // Keep running forever
       } catch (error) {

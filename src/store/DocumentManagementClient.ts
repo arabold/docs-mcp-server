@@ -28,6 +28,13 @@ import type {
 } from "./types";
 
 /**
+ * How long the health report waits for the worker's embedding config before the
+ * last known value stands in; a worker that drops traffic would otherwise hold
+ * the report open.
+ */
+const EMBEDDING_CONFIG_TIMEOUT_MS = 3000;
+
+/**
  * Implements {@link IDocumentManagement} by delegating every operation to a
  * remote worker.
  */
@@ -149,17 +156,23 @@ export class DocumentManagementClient implements IDocumentManagement {
    * The worker's embedding config, fetched over the wire because that is where
    * embeddings live; the local `getActiveEmbeddingConfig` (null) would misreport
    * "FTS only". The config is fixed for the worker's lifetime, so while the
-   * worker does not answer, the last value it reported stands in.
+   * worker does not answer in time, the last value it reported stands in.
    *
-   * @throws Error when the worker does not answer and never has.
+   * @throws Error when the worker does not answer in time and never has.
    */
   async getEmbeddingConfigInfo(): Promise<EmbeddingConfigInfo | null> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EMBEDDING_CONFIG_TIMEOUT_MS);
     try {
-      this.lastEmbeddingConfig = await this.client.getEmbeddingConfig.query();
+      this.lastEmbeddingConfig = await this.client.getEmbeddingConfig.query(undefined, {
+        signal: controller.signal,
+      });
     } catch (error) {
       if (this.lastEmbeddingConfig === undefined) {
         throw error;
       }
+    } finally {
+      clearTimeout(timer);
     }
     return this.lastEmbeddingConfig;
   }

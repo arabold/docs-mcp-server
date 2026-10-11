@@ -85,10 +85,11 @@ describe("worker command", () => {
     createWorkerCommand(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     try {
       await parser.parse(`worker --port 8080`);

@@ -118,6 +118,9 @@ export function createMcpCommand(cli: Argv) {
           jobs: { recoverJobs: false }, // MCP command doesn't support job recovery
           onEmbeddingModelChange: handleEmbeddingModelChange,
         });
+        // Registered before any transport starts, so a remote backend turns job
+        // telemetry off before the worker's first relayed event
+        registerGlobalServices({ backend });
 
         if (resolvedProtocol === "stdio") {
           logger.debug(`Auto-detected stdio protocol (no TTY)`);
@@ -128,7 +131,7 @@ export function createMcpCommand(cli: Argv) {
           );
           const mcpServer = await startStdioServer(mcpTools, appConfig);
 
-          registerGlobalServices({ mcpStdioServer: mcpServer, backend });
+          registerGlobalServices({ mcpStdioServer: mcpServer });
 
           await new Promise(() => {});
         } else {
@@ -147,7 +150,7 @@ export function createMcpCommand(cli: Argv) {
 
           const appServer = await startAppServer(backend, config, appConfig);
 
-          registerGlobalServices({ appServer, backend });
+          registerGlobalServices({ appServer });
 
           await new Promise(() => {});
         }

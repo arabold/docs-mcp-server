@@ -102,10 +102,11 @@ describe("default command", () => {
     createDefaultAction(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     // Mock resolveProtocol
     const utils = await import("../utils");
@@ -132,10 +133,11 @@ describe("default command", () => {
     createDefaultAction(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     // Mock resolveProtocol
     const utils = await import("../utils");
@@ -156,10 +158,11 @@ describe("default command", () => {
     createDefaultAction(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     try {
       await parser.parse(
@@ -235,9 +238,11 @@ describe("server command configuration precedence", () => {
     writeFileSync(configPath, configYaml);
     const parser = yargs().scriptName("test");
     createDefaultAction(parser);
-    vi.mocked(services.registerGlobalServices).mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
     try {
       await parser.parse(`${args} --config ${configPath}`);
     } catch (error) {

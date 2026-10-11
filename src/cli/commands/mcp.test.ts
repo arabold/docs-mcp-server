@@ -102,10 +102,11 @@ describe("mcp command", () => {
     createMcpCommand(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     // Mock resolveProtocol
     const utils = await import("../utils");
@@ -130,10 +131,11 @@ describe("mcp command", () => {
     createMcpCommand(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     // Mock resolveProtocol
     const utils = await import("../utils");
@@ -155,10 +157,11 @@ describe("mcp command", () => {
     createMcpCommand(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     try {
       await parser.parse(
@@ -188,9 +191,11 @@ describe("mcp command", () => {
       server: { ports: { mcp: 6280 } },
       auth: { enabled: true, issuerUrl: "", audience: "" },
     } as unknown as AppConfig);
-    vi.mocked(services.registerGlobalServices).mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
     vi.mocked(utils.resolveProtocol).mockReturnValueOnce("stdio");
 
     try {
@@ -261,9 +266,11 @@ describe("mcp command configuration precedence", () => {
     writeFileSync(configPath, configYaml);
     const parser = yargs().scriptName("test");
     createMcpCommand(parser);
-    vi.mocked(services.registerGlobalServices).mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
     try {
       await parser.parse(`${args} --config ${configPath}`);
     } catch (error) {

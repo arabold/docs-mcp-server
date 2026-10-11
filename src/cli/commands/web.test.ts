@@ -95,10 +95,11 @@ describe("web command", () => {
     // One way is to throw an error inside registerGlobalServices which is called right before waiting.
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop"); // Break the execution flow
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop"); // Break the execution flow
+      });
 
     try {
       await parser.parse(`web --port 3000`);
