@@ -88,15 +88,13 @@ function EmbeddingsRow({ embeddings }: { embeddings: SystemHealth["embeddings"] 
   );
 }
 
-/** Renders the MCP endpoints row — only rendered by the caller when MCP is enabled. */
-function McpRow({ endpoints }: { endpoints: string[] }) {
+/** Renders the MCP endpoint row — only rendered by the caller when MCP is enabled. */
+function McpRow({ url }: { url: string }) {
   return (
     <div className="health__row">
       <Icon name="i-globe" size="sm" style={{ color: "var(--text-faint)" }} />
-      <span className="name">
-        {endpoints.length > 1 ? "MCP endpoints" : "MCP endpoint"}
-      </span>
-      <span className="meta">{endpoints.join(" · ")}</span>
+      <span className="name">MCP endpoint</span>
+      <span className="meta">{url}</span>
     </div>
   );
 }
@@ -151,7 +149,7 @@ function SystemHealthCard() {
         <div className="health">
           <WorkerRow worker={data.worker} />
           <EmbeddingsRow embeddings={data.embeddings} />
-          {data.mcp.enabled ? <McpRow endpoints={data.mcp.endpoints} /> : null}
+          {data.mcp.enabled ? <McpRow url={data.mcp.url} /> : null}
           <AuthRow auth={data.auth} />
           <ReadOnlyRow readOnly={data.readOnly} />
         </div>

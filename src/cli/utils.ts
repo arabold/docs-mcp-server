@@ -219,42 +219,42 @@ export function parseHeaders(headerOptions: string[]): Record<string, string> {
 }
 
 /**
- * Parses auth configuration from CLI options.
- * Environment variables are handled by createOptionWithEnv in command definitions.
- * Precedence: CLI flags > env vars (handled by commander) > defaults
+ * Check the auth settings for the transport a command serves. Authentication
+ * applies to MCP over HTTP only. Over stdio the host launching the process is
+ * the trust boundary, so auth settings are ignored with a warning on stderr,
+ * which never carries protocol data.
+ * @param auth - The loaded auth settings.
+ * @param protocol - The resolved transport.
+ * @param port - The HTTP port, for the plain-HTTP warning.
+ * @throws Error when an auth setting over HTTP is malformed.
  */
-export function parseAuthConfig(options: {
-  authEnabled?: boolean;
-  authIssuerUrl?: string;
-  authAudience?: string;
-}): AuthConfig | undefined {
-  // Check if auth is enabled via CLI flag (environment variables handled by commander/yargs)
-  if (!options.authEnabled) {
-    return undefined;
+export function checkAuthForProtocol(
+  auth: AuthConfig,
+  protocol: "stdio" | "http",
+  port: number,
+): void {
+  if (!auth.enabled) {
+    return;
   }
-
-  return {
-    enabled: true,
-    issuerUrl: options.authIssuerUrl,
-    audience: options.authAudience,
-    scopes: ["openid", "profile"], // Default scopes for OAuth2/OIDC
-  };
+  if (protocol === "stdio") {
+    console.error(
+      "⚠️  Authentication does not apply to MCP over stdio; auth settings are ignored.",
+    );
+    return;
+  }
+  validateAuthConfig(auth);
+  warnHttpUsage(port);
 }
 
 /**
- * Validates auth configuration when auth is enabled.
+ * Validates the format of auth settings that are present. Whether a setting
+ * is required depends on what the process serves, so the server checks that
+ * at startup.
  */
-export function validateAuthConfig(authConfig: AuthConfig): void {
-  if (!authConfig.enabled) {
-    return;
-  }
-
+function validateAuthConfig(authConfig: AuthConfig): void {
   const errors: string[] = [];
 
-  // Issuer URL is required when auth is enabled
-  if (!authConfig.issuerUrl) {
-    errors.push("--auth-issuer-url is required when auth is enabled");
-  } else {
+  if (authConfig.issuerUrl) {
     try {
       const url = new URL(authConfig.issuerUrl);
       if (url.protocol !== "https:") {
@@ -265,10 +265,8 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
     }
   }
 
-  // Audience is required when auth is enabled
-  if (!authConfig.audience) {
-    errors.push("--auth-audience is required when auth is enabled");
-  } else {
+  // Audience is optional: it defaults to the MCP endpoint's public URL.
+  if (authConfig.audience) {
     // Audience can be any valid URI (URL or URN)
     // Examples: https://api.example.com, urn:docs-mcp-server:api, urn:company:service
     try {
@@ -299,9 +297,6 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
     }
   }
 
-  // Scopes are not validated in binary authentication mode
-  // They're handled internally by the OAuth proxy
-
   if (errors.length > 0) {
     throw new Error(`Auth configuration validation failed:\n${errors.join("\n")}`);
   }
@@ -310,11 +305,7 @@ export function validateAuthConfig(authConfig: AuthConfig): void {
 /**
  * Warns about HTTP usage in production when auth is enabled.
  */
-export function warnHttpUsage(authConfig: AuthConfig | undefined, port: number): void {
-  if (!authConfig?.enabled) {
-    return;
-  }
-
+function warnHttpUsage(port: number): void {
   // Check if we're likely running in production (not localhost)
   const isLocalhost =
     process.env.NODE_ENV !== "production" ||

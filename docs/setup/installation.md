@@ -160,7 +160,7 @@ For production deployments or when you need to scale processing, use Docker Comp
 ### Service Architecture
 
 -   **Worker** (port 8080): Handles documentation processing jobs.
--   **MCP Server** (port 6280): Provides `/sse` endpoint for AI tools.
+-   **MCP Server** (port 6280): Provides the `/mcp` endpoint for AI tools.
 -   **Web Interface** (port 6281): Browser-based management interface.
 
 See [Deployment Modes](../infrastructure/deployment-modes.md) for more architectural details.

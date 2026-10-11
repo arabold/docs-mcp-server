@@ -1,3 +1,4 @@
+import { createWSClient } from "@trpc/client";
 import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events/EventBusService";
@@ -47,6 +48,14 @@ describe("PipelineClient", () => {
     mockClient.clearCompletedJobs.mutate.mockResolvedValue({ count: 5 });
     eventBus = new EventBusService();
     client = new PipelineClient(serverUrl, eventBus);
+  });
+
+  it("opens the WebSocket at the worker URL, path included", () => {
+    new PipelineClient("https://example.com/docs/api", eventBus);
+
+    expect(createWSClient).toHaveBeenLastCalledWith({
+      url: "wss://example.com/docs/api",
+    });
   });
 
   describe("start", () => {

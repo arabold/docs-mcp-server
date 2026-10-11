@@ -1,0 +1,95 @@
+/**
+ * Helpers for serving the application under the path of its public URL, e.g.
+ * `https://example.com/docs`, behind proxies that either forward or strip that
+ * prefix.
+ */
+
+import { RESERVED_ROOT_SEGMENTS } from "../utils/serverOrigin";
+import { escapeHtml } from "../utils/string";
+
+/**
+ * Remove the base path from a request URL, so a single set of root-mounted
+ * routes serves both proxy styles. The match is segment-aware: `/docs` and
+ * `/docs/…` are stripped, `/docs-old` is not.
+ * @param url - The request URL (path plus optional query).
+ * @param basePath - `""` or a path without a trailing slash, e.g. `/docs`.
+ * @returns The URL relative to the base path, always starting with `/`.
+ */
+export function stripBasePath(url: string, basePath: string): string {
+  if (!basePath || !url.startsWith(basePath)) {
+    return url;
+  }
+  const rest = url.slice(basePath.length);
+  if (rest === "") {
+    return "/";
+  }
+  if (rest.startsWith("/")) {
+    return rest;
+  }
+  if (rest.startsWith("?")) {
+    return `/${rest}`;
+  }
+  return url;
+}
+
+/**
+ * Insert `<base href="{basePath}/">` as the first child of `<head>`. The web UI
+ * is built with relative asset URLs, so the base element makes them resolve
+ * under the base path, including on deep links, and at the root when there is
+ * no base path.
+ * @param html - The SPA shell.
+ * @param basePath - `""` or a path without a trailing slash.
+ * @returns The shell with the base element.
+ */
+export function injectBaseHref(html: string, basePath: string): string {
+  const baseElement = `<base href="${escapeHtml(basePath)}/">`;
+  const headTag = /<head(\s[^>]*)?>/i;
+  if (headTag.test(html)) {
+    return html.replace(headTag, (match) => `${match}${baseElement}`);
+  }
+  return `${baseElement}${html}`;
+}
+
+/**
+ * Whether a path is `prefix` itself or lies below it: `/api` and `/api/x`
+ * match `/api`, `/apix` does not.
+ * @param pathname - A request path without query string.
+ * @param prefix - A path without a trailing slash.
+ * @returns `true` when the path is under the prefix.
+ */
+export function isUnderPath(pathname: string, prefix: string): boolean {
+  return pathname === prefix || pathname.startsWith(`${prefix}/`);
+}
+
+/** Paths that never fall back to the web UI; see {@link RESERVED_ROOT_SEGMENTS}. */
+const NON_SPA_PREFIXES = RESERVED_ROOT_SEGMENTS.map((segment) => `/${segment}`);
+
+/**
+ * Whether an unmatched request should get the web UI shell, so client-side
+ * routes and deep links load. Everything else gets a JSON 404.
+ * @param method - The HTTP method.
+ * @param url - The request URL, after the base path has been stripped.
+ * @returns `true` for GET/HEAD requests outside the API, MCP, metadata and asset paths.
+ */
+export function servesSpaShell(method: string, url: string): boolean {
+  if (method !== "GET" && method !== "HEAD") {
+    return false;
+  }
+  const pathname = url.split("?")[0];
+  return !NON_SPA_PREFIXES.some((prefix) => isUnderPath(pathname, prefix));
+}
+
+/**
+ * Whether a WebSocket upgrade targets the API's live-update socket: `/api`,
+ * where the web UI and coordinators connect, or the root, where coordinators
+ * of earlier releases connect. The MCP endpoint and every other path are
+ * refused, so a proxy that signs in the web UI and `/api` but leaves `/mcp` to
+ * bearer tokens also covers the socket.
+ * @param url - The upgrade request's URL, with or without the base path.
+ * @param basePath - `""` or a path without a trailing slash.
+ * @returns `true` when the upgrade may reach the API's socket.
+ */
+export function isApiSocketPath(url: string, basePath: string): boolean {
+  const pathname = stripBasePath(url, basePath).split("?")[0];
+  return pathname === "/" || isUnderPath(pathname, "/api");
+}

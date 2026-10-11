@@ -9,6 +9,7 @@ import { createLocalDocumentManagement } from "../../store";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { withPublicUrlOptions } from "../options";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
@@ -24,21 +25,17 @@ export function createWorkerCommand(cli: Argv) {
     "worker",
     "Start a background worker for processing scraping jobs",
     (yargs) => {
-      return yargs
-        .option("port", {
-          type: "string",
-          description: "Port for worker API",
-        })
-        .option("host", {
-          type: "string",
-          description: "Host to bind the worker API to",
-        })
-        .option("public-origin", {
-          type: "string",
-          description:
-            "Public origin advertised to clients (e.g., https://docs.example.com)",
-          alias: "publicOrigin",
-        })
+      return withPublicUrlOptions(
+        yargs
+          .option("port", {
+            type: "string",
+            description: "Port for worker API",
+          })
+          .option("host", {
+            type: "string",
+            description: "Host to bind the worker API to",
+          }),
+      )
         .option("embedding-model", {
           type: "string",
           description:

@@ -6,15 +6,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VersionAlreadyExistsError } from "../store/errors";
 import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { buildDefaultInstructions } from "./defaultInstructions";
-import { createMcpServerInstance, resolveServerInstructions } from "./mcpServer";
+import { createMcpServerFactory, resolveServerInstructions } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
 vi.mock("../telemetry", async (importOriginal) => ({
@@ -91,9 +90,9 @@ const mockTools: McpServerTools = {
   } as any,
 };
 
-/** Creates a server the way the entry points do, with instructions resolved from the config. */
+/** Creates a server the way the entry points do: through the factory, with instructions resolved from the config. */
 function createServer(config: AppConfig): McpServer {
-  return createMcpServerInstance(mockTools, config, resolveServerInstructions(config));
+  return createMcpServerFactory(mockTools, config)();
 }
 
 describe("MCP Server Read-Only Mode", () => {
@@ -419,11 +418,9 @@ describe("MCP versions resource", () => {
 
   async function readVersions(uri: string) {
     vi.mocked(mockTools.listLibraries.execute).mockResolvedValue(listedLibraries as any);
-    const server = createServer(mockConfig);
-    const template = (server as any)._registeredResourceTemplates.versions;
-    const variables = template.resourceTemplate.uriTemplate.match(uri);
-    const result = await template.readCallback(new URL(uri), variables, {});
-    return result.contents.map((c: { text: string }) => c.text);
+    const client = await connectClient(createServer(mockConfig));
+    const result = await client.readResource({ uri });
+    return result.contents.map((content) => ("text" in content ? content.text : ""));
   }
 
   it("matches a library name case-insensitively", async () => {
@@ -434,6 +431,109 @@ describe("MCP versions resource", () => {
     expect(await readVersions("docs://libraries/%40tanstack%2Fquery/versions")).toEqual([
       "5.0.0",
     ]);
+  });
+});
+
+/**
+ * Lists tools the way a 2026-07-28 client sees them: a real `tools/list`
+ * request through the SDK's HTTP handler, so the assertions cover the
+ * advertised JSON Schema rather than the server's internal registry.
+ */
+async function listToolsOverTheWire(config: AppConfig) {
+  const handler = createMcpHandler(createMcpServerFactory(mockTools, config));
+  const response = await handler.fetch(
+    new Request("http://127.0.0.1/mcp", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/list",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+        params: {
+          _meta: {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+          },
+        },
+      }),
+    }),
+  );
+  expect(response.status).toBe(200);
+  const body = (await response.json()) as {
+    result: {
+      tools: Array<{
+        name: string;
+        description?: string;
+        inputSchema: Record<string, any>;
+      }>;
+    };
+  };
+  return body.result.tools;
+}
+
+describe("MCP tool advertisement over protocol 2026-07-28", () => {
+  it("advertises every tool in normal mode", async () => {
+    const tools = await listToolsOverTheWire(mockConfig);
+
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "cancel_job",
+      "fetch_url",
+      "find_version",
+      "get_job_info",
+      "list_jobs",
+      "list_libraries",
+      "list_pages",
+      "read_page",
+      "refresh_version",
+      "remove_docs",
+      "scrape_docs",
+      "search_docs",
+    ]);
+  });
+
+  it("advertises only read tools in read-only mode", async () => {
+    const tools = await listToolsOverTheWire(mockReadOnlyConfig);
+
+    expect(tools.map((tool) => tool.name).sort()).toEqual([
+      "fetch_url",
+      "find_version",
+      "list_libraries",
+      "list_pages",
+      "read_page",
+      "search_docs",
+    ]);
+  });
+
+  it("advertises pattern arguments as a string or an array of strings", async () => {
+    const tools = await listToolsOverTheWire(mockConfig);
+    const scrape = tools.find((tool) => tool.name === "scrape_docs");
+    const includePatterns = scrape?.inputSchema.properties.includePatterns;
+
+    expect(includePatterns.anyOf).toEqual([
+      { type: "string" },
+      { type: "array", items: { type: "string" } },
+    ]);
+  });
+
+  it("keeps argument descriptions in the advertised schema", async () => {
+    const tools = await listToolsOverTheWire(mockConfig);
+    const scrape = tools.find((tool) => tool.name === "scrape_docs");
+    const search = tools.find((tool) => tool.name === "search_docs");
+
+    expect(scrape?.inputSchema.properties.url.description).toBe(
+      "Documentation root URL to scrape.",
+    );
+    expect(scrape?.inputSchema.properties.includePatterns.description).toMatch(
+      /^Patterns for including URLs during scraping/,
+    );
+    for (const [name, property] of Object.entries(search?.inputSchema.properties ?? {})) {
+      expect((property as { description?: string }).description, name).toBeTruthy();
+    }
   });
 });
 
@@ -480,13 +580,15 @@ describe("MCP Server identity", () => {
   });
 
   it("sends the given instructions to the client", async () => {
-    const client = await connectClient(
-      createMcpServerInstance(
-        mockTools,
-        mockConfig,
-        "Search acme docs before answering.",
-      ),
-    );
+    const config = {
+      ...mockConfig,
+      server: {
+        name: "docs-mcp-server",
+        instructions: "Search acme docs before answering.",
+      },
+    } as unknown as AppConfig;
+
+    const client = await connectClient(createServer(config));
 
     expect(client.getInstructions()).toBe("Search acme docs before answering.");
   });

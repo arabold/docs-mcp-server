@@ -1,26 +1,16 @@
 /**
- * OAuth2/OIDC authentication types and interfaces for MCP Authorization spec compliance.
- * Simplified to use binary authentication (authenticated vs not authenticated).
+ * OAuth 2.0 resource-server configuration for the MCP endpoint.
  */
 
-/** OAuth2/OIDC authentication configuration */
+/** Authentication settings as given on the command line or in configuration. */
 export interface AuthConfig {
-  /** Enable OAuth2/OIDC authentication */
+  /** Enable bearer-token authentication on the MCP endpoint. */
   enabled: boolean;
-  /** Issuer/discovery URL for the OAuth2/OIDC provider */
+  /** The identity provider's issuer identifier. */
   issuerUrl?: string;
-  /** JWT audience claim (identifies this protected resource) */
+  /**
+   * Expected token audience. Optional: defaults to the public URL of the MCP
+   * endpoint, which is what clients request tokens for.
+   */
   audience?: string;
-  /** Standard OAuth2 scopes (e.g., "openid", "profile", "email") */
-  scopes: string[];
-}
-
-/** Authentication context for requests */
-export interface AuthContext {
-  /** Whether the request is authenticated */
-  authenticated: boolean;
-  /** Effective scopes for the authenticated user (always "*" for authenticated users) */
-  scopes: Set<"*">;
-  /** Subject identifier from the token */
-  subject?: string;
 }
