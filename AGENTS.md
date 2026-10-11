@@ -136,8 +136,7 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 | `library-identity-e2e.test.ts` | Library identity against a real SQLite store: display names, case-insensitive reach, opaque names, overwrite rules (reject/replace/append/refresh), "Add library" conflicts, padded legacy names after the upgrade | none | yes |
 | `archive-integration.test.ts` | `LocalFileStrategy` archive (zip) traversal and extraction | fixture archive | yes |
 | `local-file-pdf-e2e.test.ts` | PDF in a `file://` directory is indexed alongside `.txt`/`.md` (regression for issue #394) | Xberg native deps | yes |
-| `vector-persistence-e2e.test.ts` | Embeddings land in `documents_vec` virtual table | MSW-mocked OpenAI | yes |
-| `vector-search-e2e.test.ts` | Full pipeline: scrape → split → embed → index → search | MSW-mocked OpenAI | yes |
+| `vector-search-e2e.test.ts` | Full pipeline: scrape → split → embed → index → search. One vector per chunk in `documents_vec`, phrase and keyword-free queries, `exactMatch`, unknown-library suggestions | MSW-mocked OpenAI (deterministic trigram vectors) | yes |
 | `github-private-repo-e2e.test.ts` | Auth flow for private GitHub repo scraping | `GITHUB_TOKEN`; skips otherwise | yes (skips if no token) |
 | `docker-e2e.test.ts` | Production image: non-root user, Chromium present, Playwright scrape, Xberg PDF, bind-mounted docs folder recursively indexed via `file:///` | Docker daemon; `DOCKER_IMAGE_TAG` to reuse a prebuilt image | **no** — `npm run test:docker` |
 
