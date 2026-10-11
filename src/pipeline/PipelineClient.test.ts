@@ -119,6 +119,18 @@ describe("PipelineClient", () => {
       });
     });
 
+    it("should keep other worker codes in the generic enqueue error", async () => {
+      const workerError = Object.assign(new Error("Unauthorized"), {
+        data: { code: "UNAUTHORIZED" },
+      });
+      mockClient.enqueueScrapeJob.mutate.mockRejectedValueOnce(workerError);
+
+      const failure = client.enqueueScrapeJob("react", null, {} as any);
+
+      await expect(failure).rejects.not.toBeInstanceOf(TRPCError);
+      await expect(failure).rejects.toThrow("Failed to enqueue job: Unauthorized");
+    });
+
     it("should relay a refresh NOT_FOUND from the worker", async () => {
       const workerError = Object.assign(new Error("Library Reakt not found in store."), {
         data: { code: "NOT_FOUND" },

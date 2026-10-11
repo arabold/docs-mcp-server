@@ -112,7 +112,7 @@ See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo
 `scrape_docs` also accepts `preserveHashes: true` for documentation sites that use hash-based client-side routing.
 Use it only for hash-routed SPAs; normal sites typically use hash fragments for in-page anchors.
 
-`scrape_docs` rejects a library version that is already indexed; pass `replace: true` to rebuild it, or use `refresh_version` to update it in place.
+`scrape_docs` rejects a library version that already exists (including one still queued or that failed); pass `replace: true` to rebuild it, or use `refresh_version` to update it in place.
 
 <details>
 <summary>Alternative: Run with Docker</summary>

@@ -19,7 +19,7 @@ import {
 } from "../../store/errors";
 import { EXISTING_TARGET_POLICIES } from "../../store/types";
 import { PipelineJobStatus } from "../types";
-import type { IPipeline } from "./interfaces";
+import type { IPipeline, RelayedEnqueueErrorCode } from "./interfaces";
 
 // Context carries the pipeline instance
 export interface PipelineTrpcContext {
@@ -55,27 +55,39 @@ const enqueueScrapeInput = z.object({
 });
 
 /**
- * Maps the enqueue errors a caller can act on to tRPC codes (409, 400, 404 over
- * HTTP), keeping their messages. Anything else, including a `TRPCError` relayed
- * from a remote worker, passes through unchanged.
+ * The tRPC code for an enqueue error a caller can act on (409, 400, 404 over
+ * HTTP), or `null` for any other failure. Typed against the codes
+ * `PipelineClient` relays, so the two lists cannot drift apart.
  */
-function toEnqueueError(error: unknown): unknown {
+function enqueueErrorCode(error: unknown): RelayedEnqueueErrorCode | null {
   if (
     error instanceof LibraryAlreadyExistsError ||
     error instanceof VersionAlreadyExistsError
   ) {
-    return new TRPCError({ code: "CONFLICT", message: error.message, cause: error });
+    return "CONFLICT";
   }
   if (error instanceof InvalidLibraryNameError) {
-    return new TRPCError({ code: "BAD_REQUEST", message: error.message, cause: error });
+    return "BAD_REQUEST";
   }
   if (
     error instanceof LibraryNotFoundInStoreError ||
     error instanceof VersionNotFoundInStoreError
   ) {
-    return new TRPCError({ code: "NOT_FOUND", message: error.message, cause: error });
+    return "NOT_FOUND";
   }
-  return error;
+  return null;
+}
+
+/**
+ * Maps an enqueue error a caller can act on to its tRPC code, keeping the
+ * message. Anything else, including a `TRPCError` relayed from a remote worker,
+ * passes through unchanged.
+ */
+function toEnqueueError(error: unknown): unknown {
+  const code = enqueueErrorCode(error);
+  return code && error instanceof Error
+    ? new TRPCError({ code, message: error.message, cause: error })
+    : error;
 }
 
 const enqueueRefreshInput = z.object({

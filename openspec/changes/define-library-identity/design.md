@@ -155,8 +155,10 @@ A failure at any point rolls back the whole operation, so a versionless library 
 behind.
 
 The migration also re-keys padded legacy names (see Context): `name` becomes the name with surrounding
-whitespace removed, unless that trimmed key already exists. The display name is filled from the trimmed
-value. "Whitespace" is exactly the set `String.prototype.trim()` removes, spelled out as code points in
+whitespace removed, unless that trimmed key already exists. Each row's display name is then filled from
+its `name`, which is already trimmed for every row except a padded key that collided. That row keeps
+its padded name as its display name, so the listing, which groups by display name, never merges its
+versions into the library it collides with. "Whitespace" is exactly the set `String.prototype.trim()` removes, spelled out as code points in
 a temp table the migration's `trim()` calls share (tab, LF, VT, FF, CR, space, NBSP, U+1680,
 U+2000–U+200A, U+2028, U+2029, U+202F, U+205F, U+3000, BOM). A narrower SQL set would leave keys that
 the lookup key's trim still reaches past, so they would stay unreachable.
@@ -509,9 +511,9 @@ constraint (D3). Mark the steps as two `@migration-step` blocks.
 5. `DROP TABLE libraries`. This also drops `idx_libraries_lower_name`.
 6. `CREATE TABLE libraries (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
    display_name TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`.
-7. Re-insert every row with its original `id` and `created_at`. Set `display_name` to the name trimmed
-   of the same whitespace set. After step 2 that equals `name` for every row except a padded key that
-   collided.
+7. Re-insert every row with its original `id` and `created_at`, and with `display_name = name`. After
+   step 2 every name is trimmed, except a padded key that collided, which keeps its padded name as its
+   display name (D3).
 8. If a sequence value was captured in step 4, write it back to `sqlite_sequence`, inserting the row if
    necessary. The rebuild otherwise resets the value to `MAX(id)`, and AUTOINCREMENT would then reuse
    the ids of deleted libraries.
@@ -568,8 +570,9 @@ tasks 1.4).
   inserting (see Context), so no stored key differs from its JS key by case.
 - [A padded legacy key collides with its trimmed form] → This happens only if the same library was
   indexed once with padding and once without, before trimming was introduced. 017 then leaves both rows
-  as they are, and the padded one stays unreachable by name, as it is today. The spec's rule that no two
-  libraries compare equal is otherwise upheld for all upgraded data.
+  as they are. The padded one keeps its padded name as its display name, so it is listed separately, and
+  it stays unreachable by name, as it is today. The spec's rule that no two libraries compare equal is
+  otherwise upheld for all upgraded data.
 - [Legacy empty-named library] → It is kept, per the spec, and it is listed. No entry point accepts an
   empty name, so it cannot be searched or removed by name, as today. Cleaning it up is out of scope.
 - [A failed first scrape blocks "Add library" for that name] → This is intended: the library is listed

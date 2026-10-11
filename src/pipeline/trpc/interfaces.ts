@@ -16,6 +16,21 @@ export interface PipelineOptions {
 }
 
 /**
+ * The tRPC codes the pipeline router gives enqueue errors a caller can act on:
+ * an existing target (409), an invalid library name (400) and an unknown
+ * refresh target (404). `PipelineClient` relays exactly these from a remote
+ * worker; any other failure keeps its generic wrapping.
+ */
+export const RELAYED_ENQUEUE_ERROR_CODES = [
+  "CONFLICT",
+  "BAD_REQUEST",
+  "NOT_FOUND",
+] as const;
+
+/** One of {@link RELAYED_ENQUEUE_ERROR_CODES}. */
+export type RelayedEnqueueErrorCode = (typeof RELAYED_ENQUEUE_ERROR_CODES)[number];
+
+/**
  * Per-request options for enqueueing a scrape job. Deliberately separate from
  * `ScraperOptions`, which is persisted and replayed: an intent stored there would
  * leak into re-index forms and recovery.

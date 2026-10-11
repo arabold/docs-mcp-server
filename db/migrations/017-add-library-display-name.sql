@@ -48,9 +48,11 @@ CREATE TABLE libraries (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Re-keyed names are already trimmed. A padded name that collided keeps its name as its display name, so
+-- it stays a separate entry in listings rather than sharing a display name with the library it collides
+-- with.
 INSERT INTO libraries (id, name, display_name, created_at)
-SELECT id, name, trim(name, (SELECT chars FROM _libraries_017_whitespace)), created_at
-FROM _libraries_017_rows;
+SELECT id, name, name, created_at FROM _libraries_017_rows;
 
 -- Dropping the table reset its AUTOINCREMENT counter to MAX(id); restore it so the ids of deleted
 -- libraries are never reused.

@@ -1368,7 +1368,7 @@ describe("Database Migrations", () => {
 
       expect(libraryRows().map((row) => [row.name, row.display_name])).toEqual([
         ["react", "react"],
-        [" vue ", "vue"],
+        [" vue ", " vue "],
         ["vue", "vue"],
         ["svelte", "svelte"],
       ]);

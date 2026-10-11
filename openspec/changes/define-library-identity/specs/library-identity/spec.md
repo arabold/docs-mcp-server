@@ -76,7 +76,9 @@ suggestions.
 
 A library indexed before this capability existed SHALL have a display name as soon as the system is
 upgraded. The display name SHALL equal the name under which that library was listed before the
-upgrade, with surrounding whitespace removed, and the library SHALL be reachable by that name.
+upgrade, with surrounding whitespace removed, and the library SHALL be reachable by that name. The one
+exception is a padded name whose trimmed form another library already has. That library keeps its name
+unchanged, as its display name too, so the two are never listed as one.
 
 #### Scenario: Casing and punctuation are preserved
 - **WHEN** a library is created as `Next.js Docs`

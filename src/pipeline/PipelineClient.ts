@@ -18,7 +18,12 @@ import { EventType } from "../events/types";
 import type { ScraperOptions } from "../scraper/types";
 import { normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
-import type { EnqueueScrapeOptions, IPipeline } from "./trpc/interfaces";
+import {
+  type EnqueueScrapeOptions,
+  type IPipeline,
+  RELAYED_ENQUEUE_ERROR_CODES,
+  type RelayedEnqueueErrorCode,
+} from "./trpc/interfaces";
 import type { PipelineRouter } from "./trpc/router";
 import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "./types";
 
@@ -33,11 +38,11 @@ import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from ".
  */
 function relayEnqueueError(error: unknown): TRPCError | null {
   const code = (error as { data?: { code?: unknown } } | null)?.data?.code;
-  if (typeof code !== "string" || code === "INTERNAL_SERVER_ERROR") {
+  if (!RELAYED_ENQUEUE_ERROR_CODES.includes(code as RelayedEnqueueErrorCode)) {
     return null;
   }
   return new TRPCError({
-    code: code as TRPCError["code"],
+    code: code as RelayedEnqueueErrorCode,
     message: error instanceof Error ? error.message : String(error),
     cause: error,
   });

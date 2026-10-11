@@ -46,7 +46,7 @@ task 8.4 checks that none were missed. Use Node 22 (`nvm use 22`) for every comm
 - [x] 1.7 Verify the padded-key repair. Seed ` react ` (padded, alone), and both ` vue ` and `vue`, before
       017. Assert that:
       - ` react ` is re-keyed to `react` with the display name `react`;
-      - the colliding ` vue ` row keeps its key;
+      - the colliding ` vue ` row keeps its key, and its padded name as its display name;
       - `vue` is unchanged;
       - the migration succeeds.
 
