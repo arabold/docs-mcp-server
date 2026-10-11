@@ -10,8 +10,7 @@ import { join } from "node:path";
 import { startAppServer } from "../src/app";
 import { createAppServerConfig } from "../src/cli/utils";
 import { EventBusService } from "../src/events";
-import { PipelineFactory } from "../src/pipeline/PipelineFactory";
-import { createLocalDocumentManagement } from "../src/store";
+import { openBackend } from "../src/services/backend";
 import { loadConfig } from "../src/utils/config";
 
 /**
@@ -43,19 +42,13 @@ export async function startInProcessServer(options: {
   appConfig.auth.audience = "";
 
   const eventBus = new EventBusService();
-  const docService = await createLocalDocumentManagement(eventBus, appConfig);
-  const pipeline = await PipelineFactory.createPipeline(docService as never, eventBus, {
-    appConfig,
-  });
+  const backend = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
   const appServer = await startAppServer(
-    docService,
-    pipeline,
-    eventBus,
+    backend,
     createAppServerConfig({
       enableWebInterface: options.enableWebInterface ?? true,
       enableMcpServer: true,
       enableApiServer: true,
-      enableWorker: true,
       port: options.port,
       showLogo: false,
       startupContext: { cliCommand: "test", mcpProtocol: "http" },
@@ -67,8 +60,7 @@ export async function startInProcessServer(options: {
     eventBus,
     async stop() {
       await appServer.stop();
-      await pipeline.stop();
-      await docService.shutdown();
+      await backend.close();
       rmSync(tempDir, { recursive: true, force: true });
     },
   };

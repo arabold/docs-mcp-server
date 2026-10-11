@@ -2,26 +2,25 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { openBackend } from "../../services/backend";
 import { ScrapeTool } from "../../tools";
 import { createScrapeCommand } from "./scrape";
 
-const pipelineMock = {
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-};
+const pipelineMock = {};
+const closeBackend = vi.fn(async () => {});
 
-vi.mock("../../store", () => ({
-  createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async () => ({
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: { on: vi.fn(() => () => {}) },
+    close: closeBackend,
+  })),
 }));
 vi.mock("../../tools", () => ({
   ScrapeTool: vi.fn().mockImplementation(function () {
     return { execute: vi.fn(async () => ({ jobId: "job-123" })) };
   }),
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
 }));
 vi.mock("../../events", () => ({
   EventBusService: vi.fn().mockImplementation(function () {
@@ -87,9 +86,11 @@ describe("scrape command", () => {
       "mock-embedding-model",
     ]);
 
-    expect(ScrapeTool).toHaveBeenCalledTimes(1);
-    expect(pipelineMock.start).toHaveBeenCalledTimes(1);
-    expect(pipelineMock.stop).toHaveBeenCalledTimes(1);
+    expect(openBackend).toHaveBeenCalledWith(
+      expect.objectContaining({ jobs: { recoverJobs: false } }),
+    );
+    expect(ScrapeTool).toHaveBeenCalledWith(pipelineMock, expect.anything());
+    expect(closeBackend).toHaveBeenCalledTimes(1);
   });
 
   it("passes preserveHashes through to ScrapeTool", async () => {

@@ -2,26 +2,25 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { openBackend } from "../../services/backend";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
 import { createRefreshCommand } from "./refresh";
 
-const pipelineMock = {
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-};
+const pipelineMock = {};
+const closeBackend = vi.fn(async () => {});
 
-vi.mock("../../store", () => ({
-  createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async () => ({
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: { on: vi.fn(() => () => {}) },
+    close: closeBackend,
+  })),
 }));
 vi.mock("../../tools/RefreshVersionTool", () => ({
   RefreshVersionTool: vi.fn().mockImplementation(function () {
     return { execute: vi.fn(async () => ({ pagesRefreshed: 5 })) };
   }),
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
 }));
 vi.mock("../../events", () => ({
   EventBusService: vi.fn().mockImplementation(function () {
@@ -76,9 +75,11 @@ describe("refresh command", () => {
 
     await parser.parse(`refresh react --version 18.0.0 --embedding-model mock-model`);
 
-    expect(RefreshVersionTool).toHaveBeenCalledTimes(1);
-    expect(pipelineMock.start).toHaveBeenCalledTimes(1);
-    expect(pipelineMock.stop).toHaveBeenCalledTimes(1);
+    expect(openBackend).toHaveBeenCalledWith(
+      expect.objectContaining({ jobs: { recoverJobs: false } }),
+    );
+    expect(RefreshVersionTool).toHaveBeenCalledWith(pipelineMock);
+    expect(closeBackend).toHaveBeenCalledTimes(1);
   });
 
   it("passes preserveHashes override to RefreshVersionTool", async () => {

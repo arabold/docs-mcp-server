@@ -1,11 +1,13 @@
-import { createWSClient } from "@trpc/client";
 import { TRPCError } from "@trpc/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events/EventBusService";
+import type { RemoteEventProxy } from "../events/RemoteEventProxy";
 import { EventType } from "../events/types";
-import { PipelineClient } from "./PipelineClient";
+import type { ApiClient } from "../services/apiClient";
+import { logger } from "../utils/logger";
+import { EVENTS_CONNECT_TIMEOUT_MS, PipelineClient } from "./PipelineClient";
 
-// Mock tRPC client factory
+// The worker's API client, as PipelineClient calls it
 const mockClient: any = {
   ping: { query: vi.fn() },
   enqueueScrapeJob: { mutate: vi.fn() },
@@ -16,26 +18,15 @@ const mockClient: any = {
   clearCompletedJobs: { mutate: vi.fn() },
 };
 
-// Mock WebSocket client
-const mockWsClient = {
-  close: vi.fn(),
+// The relay that brings the worker's events to the local bus
+const mockRelay = {
+  connect: vi.fn(),
+  isActive: vi.fn(),
 };
-
-vi.mock("@trpc/client", () => {
-  return {
-    createTRPCProxyClient: () => mockClient,
-    httpBatchLink: vi.fn(),
-    createWSClient: vi.fn(() => mockWsClient),
-    wsLink: vi.fn(),
-    splitLink: vi.fn(),
-  } as any;
-});
 
 describe("PipelineClient", () => {
   let client: PipelineClient;
   let eventBus: EventBusService;
-  const serverUrl = "http://localhost:8080";
-
   beforeEach(() => {
     vi.resetAllMocks();
     // Reset default mock behaviors
@@ -46,29 +37,45 @@ describe("PipelineClient", () => {
     mockClient.getJobs.query.mockResolvedValue({ jobs: [] });
     mockClient.cancelJob.mutate.mockResolvedValue({ success: true });
     mockClient.clearCompletedJobs.mutate.mockResolvedValue({ count: 5 });
+    mockRelay.connect.mockResolvedValue(true);
+    mockRelay.isActive.mockReturnValue(false);
     eventBus = new EventBusService();
-    client = new PipelineClient(serverUrl, eventBus);
+    client = new PipelineClient(
+      mockClient as ApiClient,
+      eventBus,
+      mockRelay as unknown as RemoteEventProxy,
+    );
   });
 
-  it("opens the WebSocket at the worker URL, path included", () => {
-    new PipelineClient("https://example.com/docs/api", eventBus);
+  describe("waiting for the worker's events before submitting", () => {
+    it("submits the first job only once the event stream is live", async () => {
+      let goLive: (live: boolean) => void = () => {};
+      mockRelay.connect.mockReturnValueOnce(new Promise((resolve) => (goLive = resolve)));
 
-    expect(createWSClient).toHaveBeenLastCalledWith({
-      url: "wss://example.com/docs/api",
+      const enqueued = client.enqueueScrapeJob("react", null, {} as any);
+      await Promise.resolve();
+      expect(mockClient.enqueueScrapeJob.mutate).not.toHaveBeenCalled();
+
+      goLive(true);
+      await enqueued;
+      expect(mockRelay.connect).toHaveBeenCalledWith(EVENTS_CONNECT_TIMEOUT_MS);
+      expect(mockClient.enqueueScrapeJob.mutate).toHaveBeenCalledTimes(1);
     });
-  });
 
-  describe("start", () => {
-    it("should succeed when external worker is healthy", async () => {
-      await expect(client.start()).resolves.toBeUndefined();
-      expect(mockClient.ping.query).toHaveBeenCalled();
-    });
+    it("warns once and submits anyway when the stream is not live in time", async () => {
+      mockRelay.connect.mockResolvedValue(false);
+      const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
-    it("should fail when external worker is unreachable", async () => {
-      mockClient.ping.query.mockRejectedValueOnce(new Error("Connection refused"));
-      await expect(client.start()).rejects.toThrow(
-        "Failed to connect to external worker",
+      await client.enqueueScrapeJob("react", null, {} as any);
+      await client.enqueueRefreshJob("react", null);
+
+      expect(mockRelay.connect).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain(
+        "Live job updates from the worker are unavailable",
       );
+      expect(mockClient.enqueueRefreshJob.mutate).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
     });
   });
 
@@ -239,16 +246,39 @@ describe("PipelineClient", () => {
       await expect(waitPromise).resolves.toBeUndefined();
     });
 
-    it("should give up after five failed lookups in a row", async () => {
+    it("should give up once lookups have failed for 30 seconds", async () => {
       vi.useFakeTimers();
       mockClient.getJob.query.mockRejectedValue(new Error("Connection refused"));
+      let outcome: unknown;
+      client.waitForJobCompletion("job-123").catch((error) => (outcome = error));
 
-      const waitPromise = client.waitForJobCompletion("job-123");
-      const outcome = expect(waitPromise).rejects.toThrow("Connection refused");
-      await vi.advanceTimersByTimeAsync(4000);
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1000);
 
-      await outcome;
-      expect(mockClient.getJob.query).toHaveBeenCalledTimes(5);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain("Connection refused");
+    });
+
+    it("should look up every second while the worker's events do not arrive", async () => {
+      vi.useFakeTimers();
+      void client.waitForJobCompletion("job-123");
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(4);
+    });
+
+    it("should look up only every 10 seconds while the worker's events arrive", async () => {
+      vi.useFakeTimers();
+      mockRelay.isActive.mockReturnValue(true);
+      void client.waitForJobCompletion("job-123");
+
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(2);
     });
 
     it("should stop asking the worker once an event settles the wait", async () => {

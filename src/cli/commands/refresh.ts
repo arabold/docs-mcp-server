@@ -3,16 +3,14 @@
  */
 
 import type { Argv } from "yargs";
-import { EventType } from "../../events";
-import { PipelineFactory, PipelineJobStatus, type PipelineOptions } from "../../pipeline";
-import type { IPipeline } from "../../pipeline/trpc/interfaces";
-import { createDocumentManagement, type DocumentManagementService } from "../../store";
-import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { followJobLogs } from "../JobOutputFollower";
 import { renderTextOutput } from "../output";
+import { registerGlobalServices } from "../services";
 import { type CliContext, getEventBus } from "../utils";
 
 export function createRefreshCommand(cli: Argv) {
@@ -79,60 +77,27 @@ export function createRefreshCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService: IDocumentManagement = await createDocumentManagement({
+      const backend = await openBackend({
         serverUrl,
         eventBus,
-        appConfig: appConfig,
+        appConfig,
+        jobs: { recoverJobs: false },
       });
-      let pipeline: IPipeline | null = null;
 
       // Display initial status
       logger.info("⏳ Initializing refresh job...");
 
-      // Subscribe to event bus for progress updates (only for local pipelines)
-      let unsubscribeProgress: (() => void) | null = null;
-      let unsubscribeStatus: (() => void) | null = null;
+      registerGlobalServices({ backend });
 
-      if (!serverUrl) {
-        unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
-          const { job, progress } = event;
-          logger.info(
-            `📄 Refreshing ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
-          );
-        });
-
-        unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
-          if (event.status === PipelineJobStatus.RUNNING) {
-            logger.info(
-              `🚀 Refreshing ${event.library}${event.version ? ` v${event.version}` : ""}...`,
-            );
-          }
-        });
-      }
+      // Report this command's own job; a shared worker also runs other clients' jobs
+      const follower = followJobLogs(backend.eventBus, "Refreshing");
 
       try {
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: false,
-          serverUrl,
-          appConfig: appConfig,
-        };
-
-        pipeline = serverUrl
-          ? await PipelineFactory.createPipeline(undefined, eventBus, {
-              serverUrl,
-              ...pipelineOptions,
-            })
-          : await PipelineFactory.createPipeline(
-              docService as DocumentManagementService,
-              eventBus,
-              pipelineOptions,
-            );
-
-        await pipeline.start();
-        const refreshTool = new RefreshVersionTool(pipeline);
+        const refreshTool = new RefreshVersionTool(backend.pipeline);
 
         // Call the tool directly - tracking is now handled inside the tool
         const result = await refreshTool.execute({
+          onJobEnqueued: (jobId) => follower.follow(jobId),
           library,
           version,
           preserveHashes: argv.preserveHashes as boolean | undefined,
@@ -150,12 +115,9 @@ export function createRefreshCommand(cli: Argv) {
         );
         throw error;
       } finally {
-        // Clean up event listeners
-        if (unsubscribeProgress) unsubscribeProgress();
-        if (unsubscribeStatus) unsubscribeStatus();
+        follower.dispose();
 
-        if (pipeline) await pipeline.stop();
-        await docService.shutdown();
+        await backend.close();
       }
     },
   );

@@ -26,8 +26,10 @@ const t = initTRPC.context<DataTrpcContext>().create({
 });
 
 // Common schemas
-const nonEmpty = z.string().trim().min(1);
-const optionalVersion = z
+/** A required name, trimmed. */
+export const nonEmpty = z.string().trim().min(1);
+/** An optional version label, trimmed; empty means unversioned. */
+export const optionalVersion = z
   .string()
   .optional()
   .nullable()

@@ -92,7 +92,6 @@ import { loadConfig } from "../utils/config";
 import { getProjectRoot } from "../utils/paths";
 // Import the mocked constructor AFTER vi.mock
 import { DocumentManagementService } from "./DocumentManagementService";
-import { createDocumentManagement, createLocalDocumentManagement } from "./index";
 
 // Mock DocumentRetrieverService (keep existing structure)
 const mockRetriever = vi.hoisted(() => ({
@@ -103,18 +102,6 @@ vi.mock("./DocumentRetrieverService", () => ({
   DocumentRetrieverService: vi.fn().mockImplementation(function () {
     return mockRetriever;
   }),
-}));
-
-// Mock DocumentManagementClient for factory tests
-const mockClientInitialize = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const MockDocumentManagementClient = vi.hoisted(() =>
-  vi.fn().mockImplementation(function (_url: string) {
-    return { initialize: mockClientInitialize };
-  }),
-);
-
-vi.mock("./DocumentManagementClient", () => ({
-  DocumentManagementClient: MockDocumentManagementClient,
 }));
 
 // --- END MOCKS ---
@@ -290,55 +277,6 @@ describe("DocumentManagementService", () => {
     });
   });
 
-  // --- Factory function behavior tests ---
-  describe("DocumentManagement factory functions", () => {
-    beforeEach(() => {
-      vi.clearAllMocks();
-    });
-
-    it("createDocumentManagement() returns initialized local service by default", async () => {
-      const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
-
-      const eventBus = new EventBusService();
-      const dm = await createDocumentManagement({
-        eventBus,
-        appConfig,
-      });
-
-      expect(initSpy).toHaveBeenCalledTimes(1);
-      expect(dm).toBeInstanceOf(DocumentManagementService);
-      // Should not construct remote client when no serverUrl is provided
-      expect(MockDocumentManagementClient).not.toHaveBeenCalled();
-    });
-
-    it("createDocumentManagement({serverUrl}) returns initialized remote client", async () => {
-      const url = "http://localhost:8080";
-
-      const eventBus = new EventBusService();
-      const dm = await createDocumentManagement({
-        serverUrl: url,
-        eventBus,
-        appConfig,
-      });
-
-      expect(MockDocumentManagementClient).toHaveBeenCalledWith(url);
-      expect(mockClientInitialize).toHaveBeenCalledTimes(1);
-      // Not a local service instance
-      expect(dm).not.toBeInstanceOf(DocumentManagementService);
-    });
-
-    it("createLocalDocumentManagement() returns initialized local service", async () => {
-      const initSpy = vi.spyOn(DocumentManagementService.prototype, "initialize");
-
-      const eventBus = new EventBusService();
-      const dm = await createLocalDocumentManagement(eventBus, appConfig);
-
-      expect(initSpy).toHaveBeenCalledTimes(1);
-      expect(dm).toBeInstanceOf(DocumentManagementService);
-      // Should never touch remote client in local helper
-      expect(MockDocumentManagementClient).not.toHaveBeenCalled();
-    });
-  });
   // --- END: Constructor Path Logic Tests ---
 
   // --- Existing Tests (Rely on global docService and mocks) ---

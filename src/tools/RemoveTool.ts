@@ -19,14 +19,21 @@ export interface RemoveToolArgs {
  * This class provides the core logic, intended to be called by the McpServer.
  */
 export class RemoveTool {
+  /**
+   * @param documentManagementService Where the version is removed.
+   * @param pipeline The pipeline whose jobs for the version are cancelled first.
+   *   Without one nothing is cancelled here: a CLI process runs no jobs, and a
+   *   remote store cancels the worker's own job when it removes the version.
+   */
   constructor(
     private readonly documentManagementService: IDocumentManagement,
-    private readonly pipeline: IPipeline,
+    private readonly pipeline: IPipeline | undefined,
   ) {}
 
   /**
    * Executes the tool to remove the specified library version completely.
-   * Aborts any QUEUED/RUNNING job for the same library+version before deleting.
+   * Aborts any QUEUED/RUNNING job for the same library+version before deleting,
+   * when there is a pipeline to see it.
    * Removes all documents, the version record, and the library if no other versions exist.
    */
   async execute(args: RemoveToolArgs): Promise<{ message: string }> {
@@ -47,7 +54,8 @@ export class RemoveTool {
       await this.documentManagementService.validateLibraryExists(library);
 
       // Abort any QUEUED or RUNNING job for this library+version
-      const allJobs = await this.pipeline.getJobs();
+      const pipeline = this.pipeline;
+      const allJobs = pipeline ? await pipeline.getJobs() : [];
       const normalizedLibrary = normalizeLibraryName(library);
       const normalizedVersion = normalizeVersionLabel(version);
       const jobs = allJobs.filter(
@@ -62,9 +70,9 @@ export class RemoveTool {
         logger.info(
           `🚫 Aborting job for ${library}@${version ?? ""} before deletion: ${job.id}`,
         );
-        await this.pipeline.cancelJob(job.id);
+        await pipeline?.cancelJob(job.id);
         // Wait for job to finish cancelling if running
-        await this.pipeline.waitForJobCompletion(job.id);
+        await pipeline?.waitForJobCompletion(job.id);
       }
 
       // Core logic: Call the document management service to remove the version completely

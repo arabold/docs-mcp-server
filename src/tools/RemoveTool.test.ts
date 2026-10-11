@@ -126,6 +126,19 @@ describe("RemoveTool", () => {
     expect(mockDocService.removeVersion).toHaveBeenCalledWith("angular", undefined);
   });
 
+  it("should remove the version without cancelling anything when there is no pipeline", async () => {
+    mockDocService.validateLibraryExists.mockResolvedValue(undefined);
+    mockDocService.removeVersion.mockResolvedValue(undefined);
+
+    const result = await new RemoveTool(mockDocService, undefined).execute({
+      library: "react",
+      version: "18.2.0",
+    });
+
+    expect(mockDocService.removeVersion).toHaveBeenCalledWith("react", "18.2.0");
+    expect(result.message).toBe("Successfully removed react@18.2.0.");
+  });
+
   it("should abort and wait for QUEUED job for same library+version before deletion", async () => {
     // Mock pipeline with QUEUED job
     const mockLocalPipeline = {

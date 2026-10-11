@@ -29,23 +29,16 @@ vi.mock("../../mcp/tools", () => ({
   initializeTools: vi.fn(async () => []),
 }));
 
-vi.mock("../../store", () => ({
-  DocumentManagementService: vi.fn().mockImplementation(function () {
-    return {
-      initialize: vi.fn().mockResolvedValue(undefined),
-      shutdown: vi.fn(),
-    };
-  }),
-}));
-vi.mock("../../store/errors", () => ({
-  EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {
-    name = "EmbeddingModelChangedError";
-  },
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async (options: { serverUrl?: string }) => ({
+    mode: options.serverUrl ? "remote" : "local",
+    workerUrl: options.serverUrl,
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: {},
+    isWorkerConnected: undefined,
+    close: vi.fn(),
+  })),
 }));
 vi.mock("../../events", () => ({
   getEventBus: vi.fn(() => ({
@@ -66,6 +59,7 @@ vi.mock("../utils", () => ({
   checkAuthForProtocol: vi.fn(),
   createAppServerConfig: vi.fn((config) => config),
   ensurePlaywrightBrowsersInstalled: vi.fn(),
+  handleEmbeddingModelChange: vi.fn(),
   CliContext: {},
   setupLogging: vi.fn(),
   setLogLevel: vi.fn(),
@@ -126,7 +120,7 @@ describe("default command", () => {
 
     expect(appModule.startAppServer).toHaveBeenCalled();
     const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[3];
+    const config = callArgs[1];
     expect(config.enableMcpServer).toBe(true);
     expect(config.enableWebInterface).toBe(true);
     expect(config.enableApiServer).toBe(true);
@@ -255,7 +249,7 @@ describe("server command configuration precedence", () => {
 
   function httpAppConfig(): AppConfig {
     expect(appModule.startAppServer).toHaveBeenCalledTimes(1);
-    return vi.mocked(appModule.startAppServer).mock.calls[0][4];
+    return vi.mocked(appModule.startAppServer).mock.calls[0][2];
   }
 
   function stdioAppConfig(): AppConfig {

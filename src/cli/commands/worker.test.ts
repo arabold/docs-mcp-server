@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import * as appModule from "../../app";
+import { openBackend } from "../../services/backend";
 import { createWorkerCommand } from "./worker";
 
 const pipelineMock = {
@@ -15,13 +16,16 @@ vi.mock("../../app", () => ({
   startAppServer: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
 
-vi.mock("../../store", () => ({
-  createLocalDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async (options: { serverUrl?: string }) => ({
+    mode: options.serverUrl ? "remote" : "local",
+    workerUrl: options.serverUrl,
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: {},
+    isWorkerConnected: undefined,
+    close: vi.fn(),
+  })),
 }));
 vi.mock("../../events", () => ({
   getEventBus: vi.fn(() => ({
@@ -94,8 +98,11 @@ describe("worker command", () => {
 
     expect(appModule.startAppServer).toHaveBeenCalled();
     const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[3]; // 4th arg is config
-    expect(config.enableWorker).toBe(true);
+    const config = callArgs[1]; // 2nd arg is config
+    // Jobs run in the worker's own process, recovering interrupted ones by default
+    expect(openBackend).toHaveBeenCalledWith(
+      expect.objectContaining({ jobs: { recoverJobs: true } }),
+    );
     expect(config.enableApiServer).toBe(true);
     expect(config.enableWebInterface).toBe(false);
     expect(config.port).toBe(8080);

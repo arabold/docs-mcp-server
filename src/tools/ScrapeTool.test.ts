@@ -57,6 +57,17 @@ describe("ScrapeTool", () => {
     url: "http://example.com/docs",
   });
 
+  it("should report the job id before waiting for the job", async () => {
+    const onJobEnqueued = vi.fn(() => {
+      expect(mockManagerInstance.waitForJobCompletion).not.toHaveBeenCalled();
+    });
+
+    await scrapeTool.execute({ ...getBaseOptions("1.0.0"), onJobEnqueued });
+
+    expect(onJobEnqueued).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledTimes(1);
+  });
+
   // --- Version Handling Tests ---
 
   it.each([

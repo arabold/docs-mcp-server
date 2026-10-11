@@ -21,9 +21,7 @@ import {
   protectedResourceMetadataPaths,
   protectedResourceMetadataUrl,
 } from "../auth/protectedResourceMetadata";
-import type { EventBusService } from "../events";
-import { RemoteEventProxy } from "../events/RemoteEventProxy";
-import type { IPipeline } from "../pipeline/trpc/interfaces";
+import type { JobsBackend } from "../services/backend";
 import {
   MCP_ENDPOINT_PATH,
   type McpEndpointAuth,
@@ -31,8 +29,6 @@ import {
 } from "../services/mcpService";
 import { buildSystemInfo, type SystemInfo } from "../services/systemInfo";
 import { applyTrpcWebSocketHandler, registerTrpcService } from "../services/trpcService";
-import { registerWorkerService, stopWorkerService } from "../services/workerService";
-import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { TelemetryEvent, telemetry } from "../telemetry";
 import { shouldEnableTelemetry } from "../telemetry/TelemetryConfig";
 import { printBanner } from "../utils/banner";
@@ -82,17 +78,20 @@ export class AppServer {
   private serverConfig: AppServerConfig;
   private readonly appConfig: AppConfig;
   private readonly systemInfo: SystemInfo;
-  private remoteEventProxy: RemoteEventProxy | null = null;
   private wss: WebSocketServer | null = null;
   /** Where clients reach this server; every advertised URL derives from it. */
   private readonly location: PublicLocation;
   /** Public URL of the MCP endpoint: the resource identifier and default token audience. */
   private readonly mcpEndpointUrl: string;
 
+  /**
+   * @param backend The services to serve. Whoever opened them closes them;
+   *   the server neither starts nor stops the pipeline.
+   * @param serverConfig Which services to run and the port to bind.
+   * @param appConfig The application configuration.
+   */
   constructor(
-    private docService: IDocumentManagement,
-    private pipeline: IPipeline,
-    private eventBus: EventBusService,
+    private readonly backend: JobsBackend,
     serverConfig: AppServerConfig,
     appConfig: AppConfig,
   ) {
@@ -110,7 +109,12 @@ export class AppServer {
     this.originPolicy = createOriginPolicy(browserPolicy);
     this.hostPolicy = createHostPolicy(browserPolicy);
     this.shieldsApi = isLoopbackBindHost(appConfig.server.host);
-    this.systemInfo = buildSystemInfo(serverConfig, appConfig, this.mcpEndpointUrl);
+    this.systemInfo = buildSystemInfo(
+      serverConfig,
+      appConfig,
+      this.mcpEndpointUrl,
+      backend.workerUrl,
+    );
     const basePath = this.location.basePath;
     this.server = Fastify({
       logger: false, // Use our own logger
@@ -118,6 +122,11 @@ export class AppServer {
       // path and proxies that strip it.
       rewriteUrl: (request) => stripBasePath(request.url ?? "/", basePath),
     });
+  }
+
+  /** Whether jobs run in this process rather than on a remote worker. */
+  private get runsJobs(): boolean {
+    return this.backend.mode === "local";
   }
 
   /**
@@ -164,48 +173,11 @@ export class AppServer {
   }
 
   /**
-   * Builds a cheap, synchronous connectivity check for the remote worker.
-   * Returns `undefined` when the worker is embedded (the field is only
-   * meaningful — and only ever populated — in remote worker mode).
-   */
-  private buildIsWorkerConnected(): (() => boolean) | undefined {
-    if (!this.serverConfig.externalWorkerUrl) {
-      return undefined;
-    }
-    return () => this.remoteEventProxy?.isActive() ?? false;
-  }
-
-  /**
-   * Validate the server configuration for invalid service combinations.
-   */
-  private validateConfig(): void {
-    // Web interface needs either worker or external worker URL
-    if (this.serverConfig.enableWebInterface) {
-      if (!this.serverConfig.enableWorker && !this.serverConfig.externalWorkerUrl) {
-        throw new Error(
-          "Web interface requires either embedded worker (enableWorker: true) or external worker (externalWorkerUrl)",
-        );
-      }
-    }
-
-    // MCP server needs pipeline access (worker or external)
-    if (this.serverConfig.enableMcpServer) {
-      if (!this.serverConfig.enableWorker && !this.serverConfig.externalWorkerUrl) {
-        throw new Error(
-          "MCP server requires either embedded worker (enableWorker: true) or external worker (externalWorkerUrl)",
-        );
-      }
-    }
-  }
-
-  /**
    * Start the application server with the configured services.
    */
   async start(): Promise<FastifyInstance> {
-    this.validateConfig();
-
     // Get embedding configuration from the document service (source of truth)
-    const embeddingConfig = this.docService.getActiveEmbeddingConfig();
+    const embeddingConfig = this.backend.docService.getActiveEmbeddingConfig();
 
     // Initialize telemetry if enabled
     if (this.appConfig.app.telemetryEnabled && shouldEnableTelemetry()) {
@@ -231,7 +203,7 @@ export class AppServer {
           telemetry.track(TelemetryEvent.APP_STARTED, {
             services: this.getActiveServicesList(),
             port: this.serverConfig.port,
-            externalWorker: Boolean(this.serverConfig.externalWorkerUrl),
+            externalWorker: Boolean(this.backend.workerUrl),
             // Include startup context when available
             ...(this.serverConfig.startupContext?.cliCommand && {
               cliCommand: this.serverConfig.startupContext.cliCommand,
@@ -262,12 +234,6 @@ export class AppServer {
         this.setupWebSocketServer();
       }
 
-      // Connect to remote worker after server is fully started
-      if (this.remoteEventProxy) {
-        // Don't await - let it connect in the background
-        this.remoteEventProxy.connect();
-      }
-
       this.logStartupInfo(this.location.url);
       return this.server;
     } catch (error) {
@@ -282,16 +248,6 @@ export class AppServer {
    */
   async stop(): Promise<void> {
     try {
-      // Disconnect remote event proxy if connected
-      if (this.remoteEventProxy) {
-        this.remoteEventProxy.disconnect();
-      }
-
-      // Stop worker service if enabled
-      if (this.serverConfig.enableWorker) {
-        await stopWorkerService(this.pipeline);
-      }
-
       // Close WebSocket server if it exists
       if (this.wss) {
         // Forcibly close all active client connections before closing the server
@@ -417,7 +373,7 @@ export class AppServer {
     if (this.serverConfig.enableMcpServer) services.push("mcp");
     if (this.serverConfig.enableWebInterface) services.push("web");
     if (this.serverConfig.enableApiServer) services.push("api");
-    if (this.serverConfig.enableWorker) services.push("worker");
+    if (this.runsJobs) services.push("worker");
     return services;
   }
 
@@ -439,9 +395,6 @@ export class AppServer {
       }
     });
 
-    // Setup remote event proxy if using an external worker
-    this.setupRemoteEventProxy();
-
     // Authentication covers the MCP endpoint only; set it up before the
     // endpoint registers so every request goes through the same checks.
     await this.setupAuthentication();
@@ -455,10 +408,6 @@ export class AppServer {
       await this.enableTrpcApi();
     }
 
-    if (this.serverConfig.enableWorker) {
-      await this.enableWorker();
-    }
-
     // Enable the web interface (must be last): the React SPA is served as a
     // static asset with a catch-all fallback for client-side routing, so
     // "enabling" it just means registering the static file handler after
@@ -469,31 +418,14 @@ export class AppServer {
   }
 
   /**
-   * Initialize remote event proxy if using an external worker.
-   * The proxy is created here but connection is deferred until after server starts.
-   */
-  private setupRemoteEventProxy(): void {
-    // If using an external worker, create remote event proxy (connection happens later)
-    if (this.serverConfig.externalWorkerUrl) {
-      this.remoteEventProxy = new RemoteEventProxy(
-        this.serverConfig.externalWorkerUrl,
-        this.eventBus,
-      );
-      logger.debug(
-        "Remote event proxy created for external worker (connection deferred)",
-      );
-    }
-  }
-
-  /**
    * Enable MCP server service.
    */
   private async enableMcpServer(): Promise<void> {
     await registerMcpService(
       this.server,
       {
-        docService: this.docService,
-        pipeline: this.pipeline,
+        docService: this.backend.docService,
+        pipeline: this.backend.pipeline,
         config: this.appConfig,
         originPolicy: this.originPolicy,
         location: this.location,
@@ -509,11 +441,11 @@ export class AppServer {
   private async enableTrpcApi(): Promise<void> {
     await registerTrpcService(
       this.server,
-      this.pipeline,
-      this.docService,
-      this.eventBus,
+      this.backend.pipeline,
+      this.backend.docService,
+      this.backend.eventBus,
       this.systemInfo,
-      this.buildIsWorkerConnected(),
+      this.backend.isWorkerConnected,
     );
     logger.debug("API server (tRPC) enabled");
   }
@@ -557,22 +489,14 @@ export class AppServer {
     // Apply tRPC WebSocket handler to enable subscriptions
     applyTrpcWebSocketHandler(
       this.wss,
-      this.pipeline,
-      this.docService,
-      this.eventBus,
+      this.backend.pipeline,
+      this.backend.docService,
+      this.backend.eventBus,
       this.systemInfo,
-      this.buildIsWorkerConnected(),
+      this.backend.isWorkerConnected,
     );
 
     logger.debug("WebSocket server initialized for tRPC subscriptions");
-  }
-
-  /**
-   * Enable worker service.
-   */
-  private async enableWorker(): Promise<void> {
-    await registerWorkerService(this.pipeline);
-    logger.debug("Worker service enabled");
   }
 
   /**
@@ -728,17 +652,17 @@ export class AppServer {
 
     // Determine the service mode
     const isWorkerOnly =
-      this.serverConfig.enableWorker &&
+      this.runsJobs &&
       !this.serverConfig.enableWebInterface &&
       !this.serverConfig.enableMcpServer;
     const isWebOnly =
       this.serverConfig.enableWebInterface &&
-      !this.serverConfig.enableWorker &&
+      !this.runsJobs &&
       !this.serverConfig.enableMcpServer;
     const isMcpOnly =
       this.serverConfig.enableMcpServer &&
       !this.serverConfig.enableWebInterface &&
-      !this.serverConfig.enableWorker;
+      !this.runsJobs;
 
     // Determine the main service name
     if (isWorkerOnly) {
@@ -776,13 +700,13 @@ export class AppServer {
     }
 
     // Worker: only show external worker URL (internal is implied)
-    if (!this.serverConfig.enableWorker && this.serverConfig.externalWorkerUrl) {
-      enabledServices.push(`Worker: ${this.serverConfig.externalWorkerUrl}`);
+    if (this.backend.workerUrl) {
+      enabledServices.push(`Worker: ${this.backend.workerUrl}`);
     }
 
     // Embeddings: only show if worker is enabled
-    if (this.serverConfig.enableWorker) {
-      const embeddingConfig = this.docService.getActiveEmbeddingConfig();
+    if (this.runsJobs) {
+      const embeddingConfig = this.backend.docService.getActiveEmbeddingConfig();
       if (embeddingConfig) {
         enabledServices.push(
           `Embeddings: ${embeddingConfig.provider}:${embeddingConfig.model}`,

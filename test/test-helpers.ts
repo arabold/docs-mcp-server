@@ -6,7 +6,10 @@ import path from "node:path";
 import type { Database } from "better-sqlite3";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { type Browser, chromium } from "playwright";
+import { expect, vi } from "vitest";
 import { type ClientOptions, WebSocket } from "ws";
+import { ScrapeMode, type ScraperOptions } from "../src/scraper/types";
+import type { ApiClient } from "../src/services/apiClient";
 
 /**
  * Returns the command and arguments to run the CLI.
@@ -84,6 +87,115 @@ export async function startCliServer(
 }
 
 /**
+ * Starts a worker (`docs-mcp-server worker`) on a free loopback port.
+ *
+ * @param storePath The worker's store directory.
+ * @param configPath The config file to start it with.
+ * @returns The process and the worker's API URL; stop it with `stopChildProcess`.
+ */
+export async function startWorker(
+  storePath: string,
+  configPath: string,
+): Promise<{ process: ChildProcess; url: string }> {
+  return startCliServer(
+    [
+      "worker",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(await getFreePort()),
+      "--store-path",
+      storePath,
+      "--config",
+      configPath,
+    ],
+    { LOG_LEVEL: "info" },
+  );
+}
+
+/**
+ * A TCP proxy to a loopback port. `cut()` drops every connection and stops
+ * accepting until `listen()` runs again. With `blockUpgrades`, it answers
+ * WebSocket upgrades with 403, like a reverse proxy without WebSocket support.
+ *
+ * @param targetPort The loopback port to forward to.
+ * @param options.blockUpgrades Refuse WebSocket upgrades, pass everything else.
+ */
+export function createTcpProxy(
+  targetPort: number,
+  options: { blockUpgrades?: boolean } = {},
+) {
+  const sockets = new Set<net.Socket>();
+  let server: net.Server | undefined;
+
+  const forward = (client: net.Socket, first: Buffer | string) => {
+    if (options.blockUpgrades && /^upgrade:\s*websocket/im.test(first.toString())) {
+      client.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      return;
+    }
+    const upstream = net.connect(targetPort, "127.0.0.1");
+    for (const socket of [client, upstream]) {
+      sockets.add(socket);
+      socket.on("error", () => socket.destroy());
+      socket.on("close", () => {
+        sockets.delete(socket);
+        client.destroy();
+        upstream.destroy();
+      });
+    }
+    upstream.write(first);
+    client.pipe(upstream).pipe(client);
+  };
+
+  return {
+    /** Starts accepting on `port` (a free one when omitted); returns the port. */
+    async listen(port = 0): Promise<number> {
+      server = net.createServer((client) => client.once("data", (first) => forward(client, first)));
+      if (port === 0) return listenOnFreePort(server);
+      await new Promise<void>((resolve) => server?.listen(port, "127.0.0.1", resolve));
+      return port;
+    },
+    /** Drops every connection and stops accepting new ones. */
+    async cut(): Promise<void> {
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+      await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
+    },
+  };
+}
+
+/**
+ * Submits a scrape of a slow site (see {@link startSlowSite}) to a worker and
+ * waits until the job runs, so a test can act on a job that is in progress.
+ *
+ * @param api The worker's API client.
+ * @param siteUrl The slow site's URL.
+ * @param library The library to scrape it as.
+ * @param version The version, or `null` for unversioned.
+ * @returns The running job's id.
+ */
+export async function startRunningSlowJob(
+  api: ApiClient,
+  siteUrl: string,
+  library: string,
+  version: string | null,
+): Promise<string> {
+  const options = {
+    url: siteUrl,
+    library,
+    version: version ?? "",
+    scrapeMode: ScrapeMode.Fetch,
+    maxConcurrency: 1,
+  } as ScraperOptions;
+  const { jobId } = await api.enqueueScrapeJob.mutate({ library, version, options });
+  await vi.waitFor(
+    async () => expect((await api.getJob.query({ id: jobId }))?.status).toBe("running"),
+    { timeout: 30_000, interval: 200 },
+  );
+  return jobId;
+}
+
+/**
  * Writes an explicit config for a spawned CLI or server, so a test does not
  * depend on the machine's own configuration: FTS-only (no embedding calls), no
  * telemetry, and unrestricted `file://` access to fixtures, including hidden
@@ -91,9 +203,13 @@ export async function startCliServer(
  * worktree).
  *
  * @param dir Directory to write `config.yaml` into.
+ * @param options.allowPrivateNetworks Let scrapes reach local test servers.
  * @returns The config file's path.
  */
-export function writeTestConfig(dir: string): string {
+export function writeTestConfig(
+  dir: string,
+  options: { allowPrivateNetworks?: boolean } = {},
+): string {
   const configPath = path.join(dir, "config.yaml");
   fs.writeFileSync(
     configPath,
@@ -106,10 +222,43 @@ export function writeTestConfig(dir: string): string {
       "    fileAccess:",
       "      mode: unrestricted",
       "      includeHidden: true",
+      ...(options.allowPrivateNetworks
+        ? ["    network:", "      allowPrivateNetworks: true"]
+        : []),
       "",
     ].join("\n"),
   );
   return configPath;
+}
+
+/**
+ * Serves a chain of pages, each linking to the next and answering only after
+ * `delayMs`, so a scrape of it keeps running until it is cancelled.
+ *
+ * @param delayMs How long each page takes to answer.
+ * @returns The site's URL and a function that stops it.
+ */
+export async function startSlowSite(
+  delayMs = 500,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((request, response) => {
+    const page = Number(request.url?.match(/\/p(\d+)/)?.[1] ?? 0);
+    setTimeout(() => {
+      response.writeHead(200, { "content-type": "text/html" });
+      response.end(
+        `<html><body><h1>Page ${page}</h1><p>Slow page ${page}.</p><a href="/p${page + 1}">next</a></body></html>`,
+      );
+    }, delayMs);
+  });
+  const port = await listenOnFreePort(server);
+  return {
+    url: `http://127.0.0.1:${port}/`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
 }
 
 /**
@@ -158,7 +307,7 @@ export function chromiumPids(): number[] {
 }
 
 /** Listen on a random loopback port and return it. */
-export async function listenOnFreePort(server: Server): Promise<number> {
+export async function listenOnFreePort(server: net.Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   return (server.address() as AddressInfo).port;
 }

@@ -37,6 +37,12 @@ always imported here as a **type-only** import (`import type { AppRouter } from
 "../../../services/appRouter"`), so no server code or its dependencies (e.g.
 better-sqlite3) is ever bundled into the browser build.
 
+Code the browser shares with the server comes from modules that stay free of server
+dependencies: the type modules (`src/{events,pipeline,store,scraper}/types`) and
+`src/services/apiClient.ts`, whose `createApiLinks()` builds the client links in
+`main.tsx` exactly as Node processes build theirs for a remote worker. A Biome rule
+limits `apiClient.ts` to `@trpc/client`, `superjson` and the `AppRouter` type.
+
 ## Adding a page + route
 
 1. Create `src/web/client/pages/MyPage.tsx`. The project's `tsconfig.json` sets the

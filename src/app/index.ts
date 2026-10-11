@@ -10,31 +10,26 @@
 export { AppServer } from "./AppServer";
 export type { AppServerConfig } from "./AppServerConfig";
 
-import type { EventBusService } from "../events";
-import type { IPipeline } from "../pipeline/trpc/interfaces";
-import type { IDocumentManagement } from "../store/trpc/interfaces";
+import type { JobsBackend } from "../services/backend";
 import type { AppConfig } from "../utils/config";
 import { AppServer } from "./AppServer";
 import type { AppServerConfig } from "./AppServerConfig";
 
 /**
- * Start an AppServer with the given configuration.
+ * Starts an AppServer that serves `backend` with the given configuration.
  * Convenience function for CLI integration.
+ *
+ * @param backend The services to serve; the caller closes them after stopping the server.
+ * @param serverConfig Which services to run and the port to bind.
+ * @param appConfig The application configuration.
+ * @returns The started server.
  */
 export async function startAppServer(
-  docService: IDocumentManagement,
-  pipeline: IPipeline,
-  eventBus: EventBusService,
+  backend: JobsBackend,
   serverConfig: AppServerConfig,
   appConfig: AppConfig,
 ): Promise<AppServer> {
-  const appServer = new AppServer(
-    docService,
-    pipeline,
-    eventBus,
-    serverConfig,
-    appConfig,
-  );
+  const appServer = new AppServer(backend, serverConfig, appConfig);
   await appServer.start();
   return appServer;
 }

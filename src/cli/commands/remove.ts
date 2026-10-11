@@ -1,19 +1,19 @@
 /**
- * Remove command - Removes documents for a specific library and version.
+ * Remove command - Removes a library version, and the library with its last version.
  */
 
 import type { Argv } from "yargs";
-import { createDocumentManagement } from "../../store";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
+import { RemoveTool } from "../../tools/RemoveTool";
 import { loadConfig } from "../../utils/config";
-import { logger } from "../../utils/logger";
 import { renderTextOutput } from "../output";
 import { type CliContext, getEventBus } from "../utils";
 
 export function createRemoveCommand(cli: Argv) {
   cli.command(
     "remove <library>",
-    "Delete a library's documentation from the index",
+    "Remove a library version from the index, and the library with its last version",
     (yargs) => {
       return yargs
         .version(false)
@@ -24,7 +24,8 @@ export function createRemoveCommand(cli: Argv) {
         })
         .option("version", {
           type: "string",
-          description: "Version to remove (optional, removes latest if omitted)",
+          description:
+            "Version to remove; omit it to remove the unversioned documentation",
           alias: "v",
         })
         .option("server-url", {
@@ -53,26 +54,18 @@ export function createRemoveCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      // Remove command doesn't need embeddings - explicitly disable for local execution
-      const docService = await createDocumentManagement({
-        serverUrl,
-        eventBus,
-        appConfig: appConfig,
-      });
+      // The same removal as remove_docs. Against a worker, the worker cancels
+      // its job for the version first; locally this process runs no jobs.
+      const backend = await openBackend({ serverUrl, eventBus, appConfig });
       try {
-        // Call the document service directly - we could convert this to use RemoveTool if needed
-        await docService.removeAllDocuments(library, version);
-
-        renderTextOutput(
-          `Successfully removed ${library}${version ? `@${version}` : ""}.`,
-        );
-      } catch (error) {
-        logger.error(
-          `❌ Failed to remove ${library}${version ? `@${version}` : ""}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        throw error;
+        // RemoveTool logs its own failure, prefixed once
+        const { message } = await new RemoveTool(
+          backend.docService,
+          backend.pipeline,
+        ).execute({ library, version });
+        renderTextOutput(message);
       } finally {
-        await docService.shutdown();
+        await backend.close();
       }
     },
   );

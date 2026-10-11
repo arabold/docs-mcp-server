@@ -2,20 +2,29 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
+import { createApiClient } from "../src/services/apiClient";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { loadConfig } from "../src/utils/config";
 import {
+  createTcpProxy,
   getCliCommand,
-  getFreePort,
-  startCliServer,
+  startRunningSlowJob,
+  startSlowSite,
+  startWorker,
   stopChildProcess,
   writeTestConfig,
 } from "./test-helpers";
 
 describe("CLI E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
+  const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
+
+  /** The status and progress lines a scrape printed. */
+  function progressLines(output: string): string[] {
+    return output.split("\n").filter((line) => /[🚀📄] Scraping /u.test(line));
+  }
 
   /** Run the CLI; with `timeoutMs`, kill it after that long and report exit code 1. */
   async function runCli(
@@ -84,7 +93,6 @@ describe("CLI E2E", () => {
   it("refuses to scrape an existing version unless --replace is given", async () => {
     const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-replace-"));
     const configPath = writeTestConfig(storePath);
-    const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
     const scrapeArgs = [
       "scrape",
       "React",
@@ -116,42 +124,113 @@ describe("CLI E2E", () => {
     // Two CLI processes; generous for CI runners, which are several times slower
   }, 60000);
 
-  it("returns from scrape --server-url once the worker finishes the job", async () => {
-    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-worker-"));
-    const configPath = writeTestConfig(storePath);
-    const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
+  describe("against a worker", () => {
+    let storePath: string;
+    let configPath: string;
     let worker: ChildProcess | undefined;
+    let workerUrl: string;
 
-    try {
-      const started = await startCliServer(
-        [
-          "worker",
-          "--host",
-          "127.0.0.1",
-          "--port",
-          String(await getFreePort()),
-          "--store-path",
-          storePath,
-          "--config",
-          configPath,
-        ],
-        { LOG_LEVEL: "info" },
-      );
+    beforeAll(async () => {
+      storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-worker-"));
+      configPath = writeTestConfig(storePath, { allowPrivateNetworks: true });
+      const started = await startWorker(storePath, configPath);
       worker = started.process;
+      workerUrl = started.url;
+    }, 60_000);
 
-      // The cap turns a client that never returns into a failed assertion
-      // instead of a test timeout that leaves the CLI process behind.
-      const result = await runCli(
-        ["scrape", "React", fixtureUrl, "--server-url", started.url, "--config", configPath],
-        40000,
-      );
-
-      expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("Successfully scraped 1 pages");
-    } finally {
+    afterAll(async () => {
       await stopChildProcess(worker);
       rmSync(storePath, { recursive: true, force: true });
+    });
+
+    /** Scrapes the fixture as `library` through `serverUrl`, showing diagnostics. */
+    function scrapeRemotely(library: string, serverUrl = workerUrl) {
+      // --verbose: without a terminal the CLI shows errors only. The cap turns
+      // a client that never returns into a failed assertion instead of a test
+      // timeout that leaves the CLI process behind.
+      return runCli(
+        [
+          "scrape",
+          library,
+          fixtureUrl,
+          "--server-url",
+          serverUrl,
+          "--config",
+          configPath,
+          "--verbose",
+        ],
+        40_000,
+      );
     }
-    // Worker startup plus one CLI process; generous for CI runners
-  }, 90000);
+
+    it("returns from scrape --server-url once the worker finishes the job", async () => {
+      const result = await scrapeRemotely("React");
+
+      const output = `${result.stdout}${result.stderr}`;
+      expect(result.code, output).toBe(0);
+      expect(result.stdout).toContain("Successfully scraped 1 pages");
+      expect(progressLines(output)).toEqual([
+        expect.stringContaining("🚀 Scraping React..."),
+        expect.stringContaining("📄 Scraping React: 1/1 pages"),
+      ]);
+    }, 60_000);
+
+    it("removes a version a worker is scraping, cancelling the job first", async () => {
+      const site = await startSlowSite();
+      const { api, close } = createApiClient(workerUrl, { subscriptions: false });
+      try {
+        const jobId = await startRunningSlowJob(api, site.url, "slow", "1.0");
+
+        const result = await runCli(
+          ["remove", "slow", "--version", "1.0", "--server-url", workerUrl, "--config", configPath],
+          40_000,
+        );
+
+        expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
+        expect((await api.getJob.query({ id: jobId }))?.status).toBe("cancelled");
+        const libraries = await api.listLibraries.query();
+        expect(libraries.map((l) => l.library)).not.toContain("slow");
+      } finally {
+        close();
+        await site.close();
+      }
+    }, 60_000);
+
+    it("finishes a remote scrape when the worker's live updates are blocked", async () => {
+      const proxy = createTcpProxy(Number(new URL(workerUrl).port), { blockUpgrades: true });
+      try {
+        const port = await proxy.listen();
+
+        const result = await scrapeRemotely("Blocked", `http://127.0.0.1:${port}/api`);
+
+        const output = `${result.stdout}${result.stderr}`;
+        expect(result.code, output).toBe(0);
+        expect(result.stdout).toContain("Successfully scraped 1 pages");
+        expect(output.split("Live job updates from the worker are unavailable")).toHaveLength(2);
+        expect(progressLines(output)).toEqual([]);
+      } finally {
+        await proxy.cut();
+      }
+    }, 60_000);
+
+    it("shows only its own job while the worker runs another client's", async () => {
+      const site = await startSlowSite();
+      const { api, close } = createApiClient(workerUrl, { subscriptions: false });
+      try {
+        const jobId = await startRunningSlowJob(api, site.url, "Other", null);
+
+        const result = await scrapeRemotely("Mine");
+
+        const output = `${result.stdout}${result.stderr}`;
+        expect(result.code, output).toBe(0);
+        const lines = progressLines(output);
+        expect(lines.length).toBeGreaterThan(0);
+        expect(lines.every((line) => line.includes("Scraping Mine"))).toBe(true);
+        await api.cancelJob.mutate({ id: jobId });
+      } finally {
+        close();
+        await site.close();
+      }
+    }, 60_000);
+  });
 });

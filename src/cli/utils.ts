@@ -171,14 +171,16 @@ export function validateHost(hostString: string): string {
  *
  * AppConfig is the source of truth for host/auth/telemetry/read-only settings.
  * AppServerConfig only selects which services to run and which port to bind to.
+ * Whether the server runs jobs itself or uses a worker follows from the backend.
+ *
+ * @param options Which services to run, the port, and startup details.
+ * @returns The server configuration.
  */
 export function createAppServerConfig(options: {
   enableWebInterface?: boolean;
   enableMcpServer?: boolean;
   enableApiServer?: boolean;
-  enableWorker?: boolean;
   port: number;
-  externalWorkerUrl?: string;
   showLogo?: boolean;
   startupContext?: {
     cliCommand?: string;
@@ -190,9 +192,7 @@ export function createAppServerConfig(options: {
     enableWebInterface: options.enableWebInterface ?? false,
     enableMcpServer: options.enableMcpServer ?? true,
     enableApiServer: options.enableApiServer ?? false,
-    enableWorker: options.enableWorker ?? true,
     port: options.port,
-    externalWorkerUrl: options.externalWorkerUrl,
     showLogo: options.showLogo ?? true,
     startupContext: options.startupContext,
   };

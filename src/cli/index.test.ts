@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Argv } from "yargs";
 import { Parser } from "yargs/helpers";
-import { DocumentManagementService } from "../store";
+import { openBackend } from "../services/backend";
 import { getConfigMappedCliKeys } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
 import { COMMAND_FACTORIES, createCli, registerGlobalOptions } from "./index";
@@ -41,6 +41,7 @@ vi.mock("../telemetry", async () => {
     shouldEnableTelemetry: vi.fn().mockReturnValue(false),
     TelemetryService: vi.fn().mockImplementation(function () {
       return {
+        setJobTracking: vi.fn(),
         shutdown: vi.fn(),
       };
     }),
@@ -61,17 +62,6 @@ vi.mock("../telemetry", async () => {
     },
   };
 });
-
-// --- Additional mocks for createPipelineWithCallbacks behavior tests ---
-vi.mock("../pipeline/PipelineFactory", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn().mockResolvedValue({
-      setCallbacks: vi.fn(),
-      shutdown: vi.fn(),
-      start: vi.fn(),
-    }),
-  },
-}));
 
 // --- Mocks & state for handler wiring regression (formerly commandHandlers.test.ts) ---
 let capturedCreateArgs: any[] = [];
@@ -131,10 +121,6 @@ vi.mock("../store", async () => {
   const actual = await vi.importActual<any>("../store");
   return {
     ...actual,
-    createDocumentManagement: vi.fn(async (opts: any) => {
-      capturedCreateArgs.push(opts);
-      return { shutdown: vi.fn() } as any;
-    }),
     DocumentManagementService: vi.fn().mockImplementation(function () {
       return {
         initialize: vi.fn().mockResolvedValue(undefined),
@@ -143,6 +129,12 @@ vi.mock("../store", async () => {
     }),
   };
 });
+vi.mock("../services/backend", () => ({
+  openBackend: vi.fn(async (opts: any) => {
+    capturedCreateArgs.push(opts);
+    return { docService: {}, close: vi.fn() } as any;
+  }),
+}));
 vi.mock("../store/errors", () => ({
   EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {
     name = "EmbeddingModelChangedError";
@@ -165,14 +157,12 @@ vi.mock("../mcp/startStdioServer", () => ({
 
 describe("Global option propagation", () => {
   let mockResolveStorePath: any;
-  let mockDocumentManagementService: any;
 
   beforeEach(async () => {
     vi.clearAllMocks();
 
     // Get references to the mocked functions
     mockResolveStorePath = vi.mocked(resolveStorePath);
-    mockDocumentManagementService = vi.mocked(DocumentManagementService);
   });
 
   it("should pass --store-path through preAction hook to default command", async () => {
@@ -199,13 +189,13 @@ describe("Global option propagation", () => {
     // Verify that resolveStorePath was called with the CLI option
     expect(mockResolveStorePath).toHaveBeenCalledWith(customStorePath);
 
-    // Verify that DocumentManagementService was constructed with the resolved path
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
+    // Verify that the backend opens with the resolved path
+    expect(openBackend).toHaveBeenCalledWith(
       expect.objectContaining({
-        emitter: expect.any(Object),
-      }), // EventBusService instance
-      expect.objectContaining({
-        app: expect.objectContaining({ storePath: resolvedStorePath }),
+        eventBus: expect.objectContaining({ emitter: expect.any(Object) }),
+        appConfig: expect.objectContaining({
+          app: expect.objectContaining({ storePath: resolvedStorePath }),
+        }),
       }),
     );
 
@@ -235,13 +225,13 @@ describe("Global option propagation", () => {
     // Verify that resolveStorePath was called with the env var value
     expect(mockResolveStorePath).toHaveBeenCalledWith(envStorePath);
 
-    // Verify that DocumentManagementService was constructed with the resolved path
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
+    // Verify that the backend opens with the resolved path
+    expect(openBackend).toHaveBeenCalledWith(
       expect.objectContaining({
-        emitter: expect.any(Object),
-      }), // EventBusService instance
-      expect.objectContaining({
-        app: expect.objectContaining({ storePath: resolvedStorePath }),
+        eventBus: expect.objectContaining({ emitter: expect.any(Object) }),
+        appConfig: expect.objectContaining({
+          app: expect.objectContaining({ storePath: resolvedStorePath }),
+        }),
       }),
     );
 
@@ -266,12 +256,14 @@ describe("Global option propagation", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(openBackend).toHaveBeenCalledWith(
       expect.objectContaining({
-        app: expect.objectContaining({
-          storePath: resolvedStorePath,
-          embeddingModel,
+        eventBus: expect.objectContaining({ emitter: expect.any(Object) }),
+        appConfig: expect.objectContaining({
+          app: expect.objectContaining({
+            storePath: resolvedStorePath,
+            embeddingModel,
+          }),
         }),
       }),
     );
@@ -290,12 +282,14 @@ describe("Global option propagation", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
 
-    expect(mockDocumentManagementService).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(openBackend).toHaveBeenCalledWith(
       expect.objectContaining({
-        app: expect.objectContaining({
-          storePath: resolvedStorePath,
-          embeddingModel: envModel,
+        eventBus: expect.objectContaining({ emitter: expect.any(Object) }),
+        appConfig: expect.objectContaining({
+          app: expect.objectContaining({
+            storePath: resolvedStorePath,
+            embeddingModel: envModel,
+          }),
         }),
       }),
     );

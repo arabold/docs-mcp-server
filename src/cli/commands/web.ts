@@ -4,9 +4,7 @@
 
 import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { createDocumentManagement, type DocumentManagementService } from "../../store";
-import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
@@ -71,53 +69,28 @@ export function createWebCommand(cli: Argv) {
       try {
         const eventBus = getEventBus(argv as CliContext);
 
-        const docService: IDocumentManagement = await createDocumentManagement({
-          serverUrl,
+        const backend = await openBackend({
+          appConfig,
           eventBus,
-          appConfig: appConfig,
-        });
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: false, // Web command doesn't support job recovery
           serverUrl,
-          appConfig: appConfig,
-        };
-        const pipeline = serverUrl
-          ? await PipelineFactory.createPipeline(undefined, eventBus, {
-              serverUrl,
-              ...pipelineOptions,
-            })
-          : await PipelineFactory.createPipeline(
-              docService as DocumentManagementService,
-              eventBus,
-              pipelineOptions,
-            );
+          jobs: { recoverJobs: false }, // Web command doesn't support job recovery
+        });
 
         // Configure web-only server
         const config = createAppServerConfig({
           enableWebInterface: true,
           enableMcpServer: false,
           enableApiServer: true,
-          enableWorker: !serverUrl,
           port: appConfig.server.ports.web,
-          externalWorkerUrl: serverUrl,
           showLogo: argv.logo as boolean,
           startupContext: {
             cliCommand: "web",
           },
         });
 
-        const appServer = await startAppServer(
-          docService,
-          pipeline,
-          eventBus,
-          config,
-          appConfig,
-        );
+        const appServer = await startAppServer(backend, config, appConfig);
 
-        registerGlobalServices({
-          appServer,
-          docService,
-        });
+        registerGlobalServices({ appServer, backend });
 
         await new Promise(() => {}); // Keep running forever
       } catch (error) {

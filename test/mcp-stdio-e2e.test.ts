@@ -13,7 +13,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
-import { createLocalDocumentManagement } from "../src/store";
+import { DocumentManagementService } from "../src/store";
 import { loadConfig } from "../src/utils/config";
 import { getCliCommand, writeTestConfig } from "./test-helpers";
 
@@ -185,7 +185,8 @@ describe("MCP stdio server E2E", () => {
     const appConfig = loadConfig();
     appConfig.app.storePath = storeDir;
     appConfig.app.embeddingModel = "";
-    const docService = await createLocalDocumentManagement(new EventBusService(), appConfig);
+    const docService = new DocumentManagementService(new EventBusService(), appConfig);
+    await docService.initialize();
     await docService.addScrapeResult("pages-lib", "1.0.0", 1, {
       url: "https://example.com/docs/guide",
       title: "Guide",

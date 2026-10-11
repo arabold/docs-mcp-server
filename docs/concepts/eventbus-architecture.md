@@ -18,8 +18,8 @@ This architecture achieves two primary goals:
 | `PipelineManager`  | `src/pipeline/`            | Manages the lifecycle of scraping and indexing jobs. It is the primary **producer** of job-related events, emitting directly to the `EventBusService`. |
 | `EventBusService`  | `src/events/`              | The central pub/sub bus that receives all events and distributes them to registered listeners.                                                         |
 | **SSE Route**      | `src/web/routes/events.ts` | A **consumer** that listens to the event bus and forwards events to connected web UI clients over SSE.                                                 |
-| `RemoteEventProxy` | `src/events/`              | Subscribes to events from an external worker via tRPC and re-emits them on the local event bus.                                                        |
-| **CLI Commands**   | `src/cli/commands/`        | CLI commands subscribe to events from the event bus to display progress indicators (using `ora` spinner).                                              |
+| `RemoteEventProxy` | `src/events/`              | Subscribes to a remote worker's events through the backend's API client and re-emits them on the local event bus. Every remote backend with a pipeline has one. |
+| **CLI Commands**   | `src/cli/commands/`        | `scrape` and `refresh` show status and progress for the job they submitted, local or remote, through `JobOutputFollower` (`src/cli/`).                 |
 
 ## Local Event Flow
 
@@ -49,26 +49,24 @@ sequenceDiagram
 
 ## External Worker Event Flow
 
-When using an external worker, the `RemoteEventProxy` ensures events are seamlessly integrated into the local system.
+When a process uses an external worker (a web or MCP server, or a CLI command given `--server-url`), the `RemoteEventProxy` of its backend brings the worker's events onto the local bus.
 
 ```mermaid
 sequenceDiagram
     participant WorkerProcess as "External Worker"
-    participant AppServer
     participant RemoteEventProxy
     participant EventBusService
-    participant SSERoute as "SSE Route"
+    participant Consumers as "Web UI, MCP Server or CLI"
 
-    WorkerProcess->>AppServer: Emits event over tRPC
-    AppServer->>RemoteEventProxy: Receives tRPC event
+    WorkerProcess->>RemoteEventProxy: Sends event over the tRPC subscription
     RemoteEventProxy->>EventBusService: Emits event locally
-    EventBusService->>SSERoute: Notifies listener of event
+    EventBusService->>Consumers: Notifies listeners of event
 ```
 
 1.  An event occurs in the external worker process.
-2.  The event is sent to the `AppServer` via a tRPC subscription.
-3.  The `RemoteEventProxy` on the `AppServer` receives the event.
-4.  The proxy re-emits the event on the local `EventBusService`, at which point it follows the same flow as a local event.
+2.  The worker sends it over the `events.subscribe` subscription that the coordinator's `RemoteEventProxy` holds on the backend's API client.
+3.  The proxy re-emits the event on the local `EventBusService`, at which point it follows the same flow as a local event.
+4.  A dropped connection is reconnected by the WebSocket client. Events sent while it is down are lost, so when the stream is live again the proxy emits `JOB_LIST_CHANGE` and `LIBRARY_CHANGE` locally, and views refetch.
 
 ## Key Event Types
 

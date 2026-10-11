@@ -15,6 +15,7 @@ import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService, EventType } from "../src/events";
 import { RemoteEventProxy } from "../src/events/RemoteEventProxy";
+import { createApiClient } from "../src/services/apiClient";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
 import { startInProcessServer } from "./in-process-server";
 import {
@@ -98,20 +99,15 @@ describe("Serving under a base path behind a reverse proxy", () => {
       const received = new Promise<void>((resolve) => {
         localBus.on(EventType.LIBRARY_CHANGE, () => resolve());
       });
-      const link = new RemoteEventProxy(`${publicUrl}/api`, localBus);
-      await link.connect();
+      const { api, close } = createApiClient(`${publicUrl}/api`, { subscriptions: true });
+      const link = new RemoteEventProxy(api, localBus);
       try {
-        // The subscription is established asynchronously, so emit until it arrives.
-        const emitter = setInterval(() => {
-          docsServer?.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
-        }, 100);
-        try {
-          await received;
-        } finally {
-          clearInterval(emitter);
-        }
+        expect(await link.connect(10_000)).toBe(true);
+        docsServer?.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+        await received;
       } finally {
         link.disconnect();
+        close();
       }
     }, 15000);
 

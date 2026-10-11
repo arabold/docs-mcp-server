@@ -62,6 +62,8 @@ export interface ScrapeToolOptions {
   };
   /** If false, returns jobId immediately without waiting. Defaults to true. */
   waitForCompletion?: boolean;
+  /** Called with the job's id once it is enqueued, before any waiting. */
+  onJobEnqueued?: (jobId: string) => void;
   /**
    * Rebuild the version when it already exists. Without it, scraping an
    * existing library version is rejected rather than clearing it.
@@ -98,6 +100,7 @@ export class ScrapeTool {
       options: scraperOptions,
       waitForCompletion = true,
       replace = false,
+      onJobEnqueued,
     } = options;
 
     // Store initialization and manager start should happen externally
@@ -145,6 +148,7 @@ export class ScrapeTool {
       },
       enqueue,
     );
+    onJobEnqueued?.(jobId);
 
     // Conditionally wait for completion
     if (waitForCompletion) {
