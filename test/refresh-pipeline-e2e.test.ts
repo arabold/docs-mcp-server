@@ -1,933 +1,265 @@
 /**
- * End-to-end tests for the refresh pipeline functionality.
+ * End-to-end tests for refreshing an indexed website, and for how a crawl
+ * handles pages it cannot read.
  *
- * These tests validate that the refresh feature correctly handles:
- * - Page deletions (404 responses)
- * - Page updates (200 responses with new content)
- * - Unchanged pages (304 responses)
- * - Graceful error handling for broken links during normal scraping
+ * A refresh replays the stored pages as conditional requests: `304` keeps a
+ * page, `404` deletes it, `200` replaces it, and links on a changed page are
+ * crawled as usual. These tests run whole jobs against a mock site and assert on
+ * the requests the site received and on what the store holds afterwards.
  *
- * Uses nock to mock HTTP responses and an in-memory database for testing.
+ * Refreshing a local directory is covered by `local-file-refresh-e2e.test.ts`.
  */
 
-import nock from "nock";
-import { vol } from "memfs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PipelineManager } from "../src/pipeline/PipelineManager";
-import { ScraperService } from "../src/scraper/ScraperService";
-import { ScrapeMode, type ScraperOptions } from "../src/scraper/types";
-import { DocumentManagementService } from "../src/store/DocumentManagementService";
-import { EventBusService } from "../src/events";
-import type { StoreSearchResult } from "../src/store/types";
-import { ScraperRegistry } from "../src/scraper";
-import { loadConfig, type AppConfig } from "../src/utils/config";
-import { mockOriginsWithNock } from "./nock-helpers";
+import { beforeEach, describe, expect, it } from "vitest";
+import { PipelineJobStatus } from "../src/pipeline/types";
+import { PageOutcome, ScrapeMode } from "../src/scraper/types";
+import { hubPage, leafPage, mockSite } from "./mock-site";
+import { usePipelineHarness } from "./pipeline-harness";
 
-// Mock file system for file-based tests
-vi.mock("node:fs/promises", () => ({ default: vol.promises }));
+describe("Refresh pipeline E2E", () => {
+  const site = mockSite("http://test-docs.example.com");
+  const h = usePipelineHarness({
+    library: "test-lib",
+    version: "1.0.0",
+    defaults: { url: site.url("/"), maxDepth: 2 },
+  });
 
-describe("Refresh Pipeline E2E Tests", () => {
-  let docService: DocumentManagementService;
-  let scraperService: ScraperService;
-  let pipelineManager: PipelineManager;
-  let appConfig: AppConfig;
+  describe("refresh outcomes", () => {
+    it("keeps every page when each conditional request is answered 304", async () => {
+      site
+        .page("/", hubPage(["/page1"]), { etag: '"home-v1"' })
+        .page("/page1", leafPage("Page 1", "Stable content"), { etag: '"page1-v1"' });
+      await h.scrape();
 
-  const TEST_BASE_URL = "http://test-docs.example.com";
-  const TEST_LIBRARY = "test-lib";
-  const TEST_VERSION = "1.0.0";
+      const refresh = await h.refresh();
 
-  beforeEach(async () => {
-    appConfig = loadConfig();
-    appConfig.app.storePath = ":memory:";
-    appConfig.app.embeddingModel = ""; // disable embeddings for refresh e2e
-    // Tests mock the network with nock and the filesystem with memfs at
-    // virtual paths like /test-docs. Loosen scraper security so the test
-    // doesn't have to thread those paths through the policy machinery.
-    appConfig.scraper.security.fileAccess.mode = "unrestricted";
-    appConfig.scraper.security.fileAccess.includeHidden = true;
-    appConfig.scraper.security.fileAccess.followSymlinks = true;
-    appConfig.scraper.security.network.allowPrivateNetworks = true;
-    // Initialize in-memory store and services
-    // DocumentManagementService creates its own DocumentStore internally
-    const eventBus = new EventBusService();
-    docService = new DocumentManagementService(eventBus, appConfig);
-    await docService.initialize();
-    const registry = new ScraperRegistry(appConfig);
-    scraperService = new ScraperService(registry);
-    appConfig.scraper.maxConcurrency = 3;
-    // An unmocked request fails inside nock; retrying it would only add backoff.
-    appConfig.scraper.fetcher.maxRetries = 0;
-    pipelineManager = new PipelineManager(docService, eventBus, {
-      recoverJobs: false,
-      appConfig: appConfig,
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      // Each page was asked for with the validator stored for it, and the 304
+      // left it as it was.
+      expect(site.requestsTo("/").at(-1)?.ifNoneMatch).toBe('"home-v1"');
+      expect(site.requestsTo("/page1").at(-1)?.ifNoneMatch).toBe('"page1-v1"');
+      expect(h.outcomeOf(site.url("/"))).toBe(PageOutcome.Unchanged);
+      expect(h.outcomeOf(site.url("/page1"))).toBe(PageOutcome.Unchanged);
+      expect(await h.storedUrls()).toEqual([site.url("/"), site.url("/page1")]);
+      expect(await h.contentOf(site.url("/page1"))).toContain("Stable content");
     });
-    await pipelineManager.start();
 
-    // Clear any previous nock mocks
-    nock.cleanAll();
-    mockOriginsWithNock(TEST_BASE_URL);
+    it("deletes a page that answers 404 on refresh", async () => {
+      site
+        .page("/", hubPage(["/page1", "/page2"]), { etag: '"home-v1"' })
+        .page("/page1", leafPage("Page 1", "Content of page 1"), { etag: '"page1-v1"' })
+        .page("/page2", leafPage("Page 2", "Content of page 2"), { etag: '"page2-v1"' });
+      await h.scrape();
 
-    // Answer the llms.txt probe the way a site without one does. The scraper
-    // probes for llms.txt before crawling; left unmocked those requests fail
-    // inside nock.
-    nock(TEST_BASE_URL).persist().get(/llms\.txt$/).reply(404);
+      site.notFound("/page2");
+      const refresh = await h.refresh();
+
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(h.outcomeOf(site.url("/page2"))).toBe(PageOutcome.Absent);
+      expect(await h.storedUrls()).toEqual([site.url("/"), site.url("/page1")]);
+      const results = await h.search("Content of page");
+      expect(results.map((r) => r.url)).not.toContain(site.url("/page2"));
+      expect(await h.contentOf(site.url("/page1"))).toContain("Content of page 1");
+    });
+
+    it("replaces the content of a page that changed", async () => {
+      site
+        .page("/", hubPage(["/page1"]), { etag: '"home-v1"' })
+        .page("/page1", leafPage("Page 1", "Original content version 1"), {
+          etag: '"page1-v1"',
+        });
+      await h.scrape();
+
+      site.page("/page1", leafPage("Page 1", "Updated content version 2"), {
+        etag: '"page1-v2"',
+      });
+      const refresh = await h.refresh();
+
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      // The request went to the page's own URL with the validator it issued;
+      // the page had moved on, so it answered with content rather than 304.
+      expect(site.requestsTo("/page1").at(-1)?.ifNoneMatch).toBe('"page1-v1"');
+      expect(h.outcomeOf(site.url("/page1"))).toBe(PageOutcome.Stored);
+
+      const content = await h.contentOf(site.url("/page1"));
+      expect(content).toContain("Updated content version 2");
+      expect(content).not.toContain("Original content version 1");
+      expect((await h.storedPage(site.url("/page1")))?.etag).toBe('"page1-v2"');
+      const stale = await h.search("original content");
+      expect(stale.some((r) => r.content.includes("Original content"))).toBe(false);
+    });
+
+    it("indexes pages first linked from a page that changed", async () => {
+      site
+        .page("/", hubPage(["/page1"]), { etag: '"home-v1"' })
+        .page("/page1", leafPage("Page 1", "Original page"), { etag: '"page1-v1"' });
+      await h.scrape();
+
+      site
+        .page("/", hubPage(["/page1", "/page2"]), { etag: '"home-v2"' })
+        .page("/page2", leafPage("Page 2", "Newly added page"));
+      const refresh = await h.refresh();
+
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await h.storedUrls()).toEqual([
+        site.url("/"),
+        site.url("/page1"),
+        site.url("/page2"),
+      ]);
+      expect(await h.contentOf(site.url("/page2"))).toContain("Newly added page");
+    });
+
+    it("reuses the options the version was scraped with", async () => {
+      site
+        .page("/", hubPage(["/docs/guide"]), { etag: '"home-v1"' })
+        .page("/docs/guide", leafPage("Guide"), { etag: '"guide-v1"' });
+      await h.scrape({
+        headers: { "X-Docs-Token": "token-1" },
+        includePatterns: ["/docs/**"],
+        excludePatterns: ["/docs/internal/**"],
+      });
+      const scrapeRequestCount = site.requests.length;
+
+      // The home page changes to link one page each pattern admits or rejects.
+      const links = ["/docs/guide", "/docs/new", "/docs/internal/secret", "/blog"];
+      site
+        .page("/", hubPage(links), { etag: '"home-v2"' })
+        .page("/docs/new", leafPage("New"));
+      const refresh = await h.refresh();
+
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      const refreshRequests = site.requests.slice(scrapeRequestCount);
+      expect(refreshRequests.map((r) => r.headers.get("x-docs-token"))).toEqual(
+        refreshRequests.map(() => "token-1"),
+      );
+      expect(site.wasRequested("/docs/internal/secret")).toBe(false);
+      expect(site.wasRequested("/blog")).toBe(false);
+      expect(await h.storedUrls()).toEqual([
+        site.url("/"),
+        site.url("/docs/guide"),
+        site.url("/docs/new"),
+      ]);
+      // Fetch mode carried over: a refresh that lost it would render in a browser.
+      expect(refresh.scraperOptions?.scrapeMode).toBe(ScrapeMode.Fetch);
+    });
   });
 
-  afterEach(async () => {
-    // Cleanup
-    await pipelineManager.stop();
-    await docService.shutdown();
-    nock.cleanAll();
-    vol.reset();
-  });
+  describe("crawl errors", () => {
+    it("skips a broken link and completes the crawl", async () => {
+      site
+        .page("/", hubPage(["/valid-page", "/broken-link"]))
+        .page("/valid-page", leafPage("Valid Page", "This page exists"))
+        .notFound("/broken-link");
 
-  describe("Refresh Scenarios", () => {
-    it("should delete documents when a page returns 404 during refresh", async () => {
-      // Setup: Mock initial two-page site
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(200, "<html><body><h1>Home</h1><a href='/page1'>Page 1</a><a href='/page2'>Page 2</a></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"home-v1"',
-        })
-        .get("/page1")
-        .reply(200, "<html><body><h1>Page 1</h1><p>Content of page 1</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page1-v1"',
-        })
-        .get("/page2")
-        .reply(200, "<html><body><h1>Page 2</h1><p>Content of page 2</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page2-v1"',
-        });
+      const job = await h.scrape();
 
-      // Initial scrape
-      const initialJobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        // Plain fetch: these tests are about refresh outcomes, and a headless
-        // browser adds only latency and rendering variance.
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(h.outcomeOf(site.url("/broken-link"))).toBe(PageOutcome.Absent);
+      expect(await h.storedUrls()).toEqual([site.url("/"), site.url("/valid-page")]);
+    });
 
-      // Wait for job to complete
-      await pipelineManager.waitForJobCompletion(initialJobId);
+    it("fails the job when the requested root is not found", async () => {
+      site.notFound("/");
 
-      // Verify all pages were indexed
-      const initialSearch = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "page", 10);
-      expect(initialSearch.length).toBeGreaterThan(0);
+      const job = await h.scrape();
 
-      // Get page IDs for verification
-      const pages = await docService.getPagesByVersionId(
-        await docService.ensureVersion({ library: TEST_LIBRARY, version: TEST_VERSION }),
-      );
-      expect(pages.length).toBe(3); // home, page1, page2
+      expect(job.status).toBe(PipelineJobStatus.FAILED);
+      expect(job.errorMessage).toContain(`Root page not found: ${site.url("/")}`);
+      expect(await h.storedUrls()).toEqual([]);
+    });
 
-      const page2 = pages.find((p) => p.url === `${TEST_BASE_URL}/page2`);
-      expect(page2).toBeDefined();
+    it("drops a page that stalls past the fetch timeout and crawls the rest", async () => {
+      // The stall only ends when the fetcher gives up, so the timeout has to be
+      // real. A short one keeps the wait well inside the test's budget, and one
+      // retry with a short backoff still exercises timeout-then-retry.
+      h.config.scraper.fetcher.timeoutMs = 500;
+      h.config.scraper.fetcher.maxRetries = 1;
+      h.config.scraper.fetcher.baseDelayMs = 10;
+      site
+        .page("/", hubPage(["/page1", "/page2", "/timeout-page"]))
+        .page("/page1", leafPage("Page 1", "Working page"))
+        .page("/page2", leafPage("Page 2", "Also working"))
+        .stall("/timeout-page");
 
-      // Setup: Mock refresh with page2 deleted (404)
-      // Enable nock logging to see what requests are made
-      nock(TEST_BASE_URL)
-        .get("/")
-        .matchHeader("if-none-match", '"home-v1"')
-        .reply(304, undefined, { ETag: '"home-v1"' }) // Unchanged
-        .get("/page1")
-        .matchHeader("if-none-match", '"page1-v1"')
-        .reply(304, undefined, { ETag: '"page1-v1"' }) // Unchanged
-        .get("/page2")
-        .matchHeader("if-none-match", '"page2-v1"')
-        .reply(404); // Deleted!
+      const job = await h.scrape({ ignoreErrors: true });
 
-      // Execute refresh
-      const refreshJobId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
-      await pipelineManager.waitForJobCompletion(refreshJobId);
-
-      // Verify page2 documents were deleted by checking if we can still find page2 content
-      // Use a unique phrase that only appears in page2 to avoid false positives from keyword matching
-      const page2Search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "Content of page", 10);
-      const hasPage2Content = page2Search.some((r: StoreSearchResult) => 
-        r.url === `${TEST_BASE_URL}/page2`
-      );
-      expect(hasPage2Content).toBe(false);
-
-      // Verify page1 documents still exist
-      const page1Search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "Content of page 1", 10);
-      expect(page1Search.length).toBeGreaterThan(0);
-    }, 30000);
-
-    it("should update documents when a page has changed content during refresh", async () => {
-      const originalContent = "Original content version 1";
-      const updatedContent = "Updated content version 2";
-
-      // Setup: Mock initial site
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(
-          200,
-          `<html><body><h1>Home</h1><a href='/page1'>Page 1</a></body></html>`,
-          {
-            "Content-Type": "text/html",
-            ETag: '"home-v1"',
-          },
-        )
-        .get("/page1")
-        .reply(
-          200,
-          `<html><body><h1>Page 1</h1><p>${originalContent}</p></body></html>`,
-          {
-            "Content-Type": "text/html",
-            ETag: '"page1-v1"',
-          },
-        );
-
-      // Initial scrape
-      const initialJobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      await pipelineManager.waitForJobCompletion(initialJobId);
-
-      // Verify original content is indexed
-      const initialSearch = await docService.searchStore(
-        TEST_LIBRARY,
-        TEST_VERSION,
-        "original content",
-        10,
-      );
-      expect(initialSearch.length).toBeGreaterThan(0);
-      expect(initialSearch[0].content).toContain(originalContent);
-
-      // Setup: Mock refresh with updated page1 content
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(304, undefined, { ETag: '"home-v1"' }) // Unchanged
-        .get("/page1")
-        .reply(
-          200,
-          `<html><body><h1>Page 1</h1><p>${updatedContent}</p></body></html>`,
-          {
-            "Content-Type": "text/html",
-            ETag: '"page1-v2"', // New ETag indicates change
-          },
-        );
-
-      // Execute refresh
-      const refreshJobId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
-      await pipelineManager.waitForJobCompletion(refreshJobId);
-
-      // Verify updated content is now indexed
-      const updatedSearch = await docService.searchStore(
-        TEST_LIBRARY,
-        TEST_VERSION,
-        "updated content",
-        10,
-      );
-      expect(updatedSearch.length).toBeGreaterThan(0);
-      expect(updatedSearch[0].content).toContain(updatedContent);
-
-      // Verify old content is no longer indexed
-      const oldSearch = await docService.searchStore(
-        TEST_LIBRARY,
-        TEST_VERSION,
-        "original content",
-        10,
-      );
-      const hasOldContent = oldSearch.some((r: StoreSearchResult) => r.content.includes(originalContent));
-      expect(hasOldContent).toBe(false);
-    }, 30000);
-
-    it("should skip processing when pages return 304 Not Modified", async () => {
-      // Setup: Mock initial site
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(200, "<html><body><h1>Home</h1><a href='/page1'>Page 1</a></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"home-v1"',
-        })
-        .get("/page1")
-        .reply(200, "<html><body><h1>Page 1</h1><p>Stable content</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page1-v1"',
-        });
-
-      // Initial scrape
-      const initialJobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      await pipelineManager.waitForJobCompletion(initialJobId);
-
-      // Get initial document count
-      const versionId = await docService.ensureVersion({
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-      });
-      const initialPages = await docService.getPagesByVersionId(versionId);
-      const initialPageCount = initialPages.length;
-
-      // Setup: Mock refresh with all 304 responses
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(304, undefined, { ETag: '"home-v1"' })
-        .get("/page1")
-        .reply(304, undefined, { ETag: '"page1-v1"' });
-
-      // Execute refresh
-      const refreshJobId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
-      await pipelineManager.waitForJobCompletion(refreshJobId);
-
-      // Verify page count hasn't changed
-      const finalPages = await docService.getPagesByVersionId(versionId);
-      expect(finalPages.length).toBe(initialPageCount);
-
-      // Verify content is still accessible
-      const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "stable", 10);
-      expect(search.length).toBeGreaterThan(0);
-    }, 30000);
-
-    it("should discover and index new pages during refresh", async () => {
-      // Setup: Mock initial site with 2 pages
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(200, "<html><body><h1>Home</h1><a href='/page1'>Page 1</a></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"home-v1"',
-        })
-        .get("/page1")
-        .reply(200, "<html><body><h1>Page 1</h1><p>Original page</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page1-v1"',
-        });
-
-      // Initial scrape
-      const initialJobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      await pipelineManager.waitForJobCompletion(initialJobId);
-
-      // Verify initial page count
-      const versionId = await docService.ensureVersion({
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-      });
-      const initialPages = await docService.getPagesByVersionId(versionId);
-      expect(initialPages.length).toBe(2); // home, page1
-
-      // Setup: Mock refresh where home page now links to a new page2
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(
-          200,
-          "<html><body><h1>Home</h1><a href='/page1'>Page 1</a><a href='/page2'>Page 2</a></body></html>",
-          {
-            "Content-Type": "text/html",
-            ETag: '"home-v2"', // Changed ETag
-          },
-        )
-        .get("/page1")
-        .reply(304, undefined, { ETag: '"page1-v1"' }) // Unchanged
-        .get("/page2")
-        .reply(200, "<html><body><h1>Page 2</h1><p>Newly added page</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page2-v1"',
-        });
-
-      // Execute refresh
-      const refreshJobId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
-      await pipelineManager.waitForJobCompletion(refreshJobId);
-
-      // Verify new page was discovered and indexed
-      const finalPages = await docService.getPagesByVersionId(versionId);
-      expect(finalPages.length).toBe(3); // home, page1, page2
-
-      const page2 = finalPages.find((p) => p.url === `${TEST_BASE_URL}/page2`);
-      expect(page2).toBeDefined();
-
-      // Verify new page content is searchable
-      const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "newly added", 10);
-      expect(search.length).toBeGreaterThan(0);
-    }, 30000);
-  });
-
-  describe("Standard Scrape Error Handling", () => {
-    it("should gracefully handle 404 errors for broken links during normal scraping", async () => {
-      // Setup: Mock site with a broken link
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(
-          200,
-          "<html><body><h1>Home</h1><a href='/valid-page'>Valid</a><a href='/broken-link'>Broken</a></body></html>",
-          {
-            "Content-Type": "text/html",
-            ETag: '"home-v1"',
-          },
-        )
-        .get("/valid-page")
-        .reply(200, "<html><body><h1>Valid Page</h1><p>This page exists</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"valid-v1"',
-        })
-        .get("/broken-link")
-        .reply(404); // Broken link!
-
-      // Execute scrape
-      const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      // Should complete successfully despite the 404
-      await pipelineManager.waitForJobCompletion(jobId);
-
-      const job = await pipelineManager.getJob(jobId);
-      expect(job?.status).toBe("completed");
-
-      // Verify valid pages were indexed
-      const versionId = await docService.ensureVersion({
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-      });
-      const pages = await docService.getPagesByVersionId(versionId);
-
-      // Should have home and valid-page, but NOT broken-link
-      expect(pages.length).toBe(2);
-      const urls = pages.map((p) => p.url);
-      expect(urls).toContain(`${TEST_BASE_URL}/`);
-      expect(urls).toContain(`${TEST_BASE_URL}/valid-page`);
-      expect(urls).not.toContain(`${TEST_BASE_URL}/broken-link`);
-
-      // Verify valid page content is searchable
-      const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "exists", 10);
-      expect(search.length).toBeGreaterThan(0);
-    }, 30000);
-
-    it("should continue scraping after encountering multiple 404 errors", async () => {
-      // Setup: Mock site with multiple broken links interspersed with valid ones
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(
-          200,
-          "<html><body><h1>Home</h1><a href='/page1'>P1</a><a href='/404-1'>404</a><a href='/page2'>P2</a><a href='/404-2'>404</a></body></html>",
-          {
-            "Content-Type": "text/html",
-            ETag: '"home-v1"',
-          },
-        )
-        .get("/page1")
-        .reply(200, "<html><body><h1>Page 1</h1></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page1-v1"',
-        })
-        .get("/404-1")
-        .reply(404)
-        .get("/page2")
-        .reply(200, "<html><body><h1>Page 2</h1></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page2-v1"',
-        })
-        .get("/404-2")
-        .reply(404);
-
-      // Execute scrape
-      const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      await pipelineManager.waitForJobCompletion(jobId);
-
-      // Verify all valid pages were indexed despite multiple 404s
-      const versionId = await docService.ensureVersion({
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-      });
-      const pages = await docService.getPagesByVersionId(versionId);
-
-      expect(pages.length).toBe(3); // home, page1, page2
-      const urls = pages.map((p) => p.url);
-      expect(urls).toContain(`${TEST_BASE_URL}/`);
-      expect(urls).toContain(`${TEST_BASE_URL}/page1`);
-      expect(urls).toContain(`${TEST_BASE_URL}/page2`);
-    }, 30000);
-  });
-
-  describe("Resiliency", () => {
-    it("should handle network timeouts gracefully and continue processing other pages", async () => {
-      // The timeout has to be real: nothing used to set one, axios has no
-      // default, and the stalling response carried no Content-Type — so the
-      // page was dropped by the content-type gate and this test passed
-      // without a timeout ever occurring. Shortened here so the stall is
-      // bounded well inside the test's own budget.
-      appConfig.scraper.fetcher.timeoutMs = 500;
-      // A timeout is retryable, and the defaults (3 retries, 1s base backoff)
-      // turn one stalled page into ~9s of waiting. One retry with a short
-      // backoff still exercises timeout-then-retry, in about a second.
-      appConfig.scraper.fetcher.maxRetries = 1;
-      appConfig.scraper.fetcher.baseDelayMs = 10;
-
-      // Setup: Mock initial site where one page times out
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(
-          200,
-          "<html><body><h1>Home</h1><a href='/page1'>Page 1</a><a href='/page2'>Page 2</a><a href='/timeout-page'>Timeout</a></body></html>",
-          {
-            "Content-Type": "text/html",
-            ETag: '"home-v1"',
-          },
-        )
-        .get("/page1")
-        .reply(200, "<html><body><h1>Page 1</h1><p>Working page</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page1-v1"',
-        })
-        .get("/page2")
-        .reply(200, "<html><body><h1>Page 2</h1><p>Also working</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page2-v1"',
-        });
-
-      // Persisted: the fetcher retries, and every attempt must stall the same
-      // way rather than falling through to an unmatched request.
-      let timeoutPageRequests = 0;
-      nock(TEST_BASE_URL)
-        .persist()
-        .get("/timeout-page")
-        .delay(5000) // Longer than the fetcher's timeout, so the read aborts
-        .reply(() => {
-          timeoutPageRequests++;
-          return [
-            200,
-            "<html><body><h1>Never</h1><p>Should never reach this</p></body></html>",
-            { "Content-Type": "text/html" },
-          ];
-        });
-
-      // Execute scrape - should complete despite timeout
-      const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        ignoreErrors: true,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      await pipelineManager.waitForJobCompletion(jobId);
-
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
       // Both attempts reached the stalled page: the first timed out and was
       // retried, so the page was dropped by the timeout and not by some gate.
-      expect(timeoutPageRequests).toBe(2);
-
-      // Verify that the working pages were indexed despite the timeout
-      const versionId = await docService.ensureVersion({
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-      });
-      const pages = await docService.getPagesByVersionId(versionId);
-
-      // The stalled page is not indexed, and the pages around it still are —
-      // the crawl carried on rather than parking on the dead URL.
-      const urls = pages.map((p) => p.url).sort();
-      expect(urls).toEqual([
-        `${TEST_BASE_URL}/`,
-        `${TEST_BASE_URL}/page1`,
-        `${TEST_BASE_URL}/page2`,
+      expect(site.requestsTo("/timeout-page")).toHaveLength(2);
+      expect(h.outcomeOf(site.url("/timeout-page"))).toBe(PageOutcome.Failed);
+      expect(await h.storedUrls()).toEqual([
+        site.url("/"),
+        site.url("/page1"),
+        site.url("/page2"),
       ]);
-
-      // Verify working page content is searchable
-      const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "working page", 10);
-      expect(search.length).toBeGreaterThan(0);
-    }, 15000); // Reduced timeout from 60s to 15s
-
-    it("should follow redirects and use the final URL for indexing", async () => {
-      // Setup: Mock site with redirect
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(
-          200,
-          "<html><body><h1>Home</h1><a href='/old-url'>Old Link</a></body></html>",
-          {
-            "Content-Type": "text/html",
-            ETag: '"home-v1"',
-          },
-        )
-        .get("/old-url")
-        .reply(301, undefined, {
-          Location: `${TEST_BASE_URL}/new-url`,
-        })
-        .get("/new-url")
-        .reply(200, "<html><body><h1>New Page</h1><p>Redirected content</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"new-v1"',
-        });
-
-      // Execute scrape
-      const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      await pipelineManager.waitForJobCompletion(jobId);
-
-      // Verify pages were indexed
-      const versionId = await docService.ensureVersion({
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-      });
-      const pages = await docService.getPagesByVersionId(versionId);
-
-      // Should have indexed with the final (redirected) URL
-      const urls = pages.map((p) => p.url);
-      expect(urls).toContain(`${TEST_BASE_URL}/`);
-      expect(urls).toContain(`${TEST_BASE_URL}/new-url`);
-
-      // Verify content from redirected page is searchable
-      const search = await docService.searchStore(
-        TEST_LIBRARY,
-        TEST_VERSION,
-        "redirected content",
-        10,
-      );
-      expect(search.length).toBeGreaterThan(0);
-    }, 30000);
-
-    it("should handle redirect chains during refresh and update canonical URLs", async () => {
-      // Setup: Initial scrape with direct URL
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(200, "<html><body><h1>Home</h1><a href='/page1'>Page</a></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"home-v1"',
-        })
-        .get("/page1")
-        .reply(200, "<html><body><h1>Page 1</h1><p>Original location</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page1-v1"',
-        });
-
-      const initialJobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-        url: `${TEST_BASE_URL}/`,
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-        maxPages: 10,
-        maxDepth: 2,
-        scrapeMode: ScrapeMode.Fetch,
-      } satisfies ScraperOptions);
-
-      await pipelineManager.waitForJobCompletion(initialJobId);
-
-      // Setup: Refresh where page1 now redirects to a new location
-      nock(TEST_BASE_URL)
-        .get("/")
-        .reply(304, undefined, { ETag: '"home-v1"' })
-        .get("/page1")
-        .reply(301, undefined, {
-          Location: `${TEST_BASE_URL}/page1-new`,
-        })
-        .get("/page1-new")
-        .reply(200, "<html><body><h1>Page 1 New</h1><p>New location</p></body></html>", {
-          "Content-Type": "text/html",
-          ETag: '"page1-new-v1"',
-        });
-
-      // Execute refresh
-      const refreshJobId = await pipelineManager.enqueueRefreshJob(TEST_LIBRARY, TEST_VERSION);
-      await pipelineManager.waitForJobCompletion(refreshJobId);
-
-      // Verify the canonical URL was updated
-      const versionId = await docService.ensureVersion({
-        library: TEST_LIBRARY,
-        version: TEST_VERSION,
-      });
-      const pages = await docService.getPagesByVersionId(versionId);
-      const urls = pages.map((p) => p.url);
-
-      // Should now have the new URL
-      expect(urls).toContain(`${TEST_BASE_URL}/page1-new`);
-      // And not the old one. The test named "update canonical URLs" but only
-      // checked the new row existed, so a half-done move — new row written,
-      // old row left behind with stale content, searchable forever — passed.
-      expect(urls).not.toContain(`${TEST_BASE_URL}/page1`);
-
-      // Verify content from new location is searchable, and the old content is gone
-      const search = await docService.searchStore(TEST_LIBRARY, TEST_VERSION, "new location", 10);
-      expect(search.length).toBeGreaterThan(0);
-      const stale = await docService.searchStore(
-        TEST_LIBRARY,
-        TEST_VERSION,
-        "Original location",
-        10,
-      );
-      expect(stale.some((r) => r.content?.includes("Original location"))).toBe(false);
-    }, 30000);
+    });
   });
 
-  describe("File-Based Refresh Scenarios", () => {
-    const TEST_FILE_BASE = "/test-docs";
-    const TEST_FILE_LIBRARY = "file-lib";
-    const TEST_FILE_VERSION = "1.0.0";
+  describe("redirects", () => {
+    it("indexes a redirected link under its final URL only", async () => {
+      site
+        .page("/", hubPage(["/old-url"]))
+        .redirect("/old-url", "/new-url")
+        .page("/new-url", leafPage("New Page", "Redirected content"));
 
-    beforeEach(() => {
-      vol.reset();
+      const job = await h.scrape();
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await h.storedUrls()).toEqual([site.url("/"), site.url("/new-url")]);
+      expect(await h.contentOf(site.url("/new-url"))).toContain("Redirected content");
     });
 
-    it("should detect new files, modified files, and deleted files during refresh", async () => {
-      // Setup: Create initial file structure
-      vol.fromJSON({
-        [`${TEST_FILE_BASE}/index.md`]: "# Home\nWelcome to the docs",
-        [`${TEST_FILE_BASE}/guide.md`]: "# Guide\nOriginal guide content",
-        [`${TEST_FILE_BASE}/api.md`]: "# API\nAPI documentation",
-      });
+    it("moves a page to the end of a redirect chain on refresh", async () => {
+      site
+        .page("/", hubPage(["/page1"]), { etag: '"home-v1"' })
+        .page("/page1", leafPage("Page 1", "Original location"), { etag: '"page1-v1"' });
+      await h.scrape();
 
-      // Initial scrape - point to the directory to discover all files
-      const initialJobId = await pipelineManager.enqueueScrapeJob(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-        {
-          url: `file://${TEST_FILE_BASE}`,
-          library: TEST_FILE_LIBRARY,
-          version: TEST_FILE_VERSION,
-          maxPages: 10,
-          maxDepth: 2,
-          scrapeMode: ScrapeMode.Fetch,
-        } satisfies ScraperOptions,
-      );
+      site
+        .redirect("/page1", "/page1-moved", 301)
+        .redirect("/page1-moved", "/page1-new", 302)
+        .page("/page1-new", leafPage("Page 1 New", "New location"));
+      const refresh = await h.refresh();
 
-      await pipelineManager.waitForJobCompletion(initialJobId);
-
-      // Verify initial files were indexed
-      const versionId = await docService.ensureVersion({
-        library: TEST_FILE_LIBRARY,
-        version: TEST_FILE_VERSION,
-      });
-      const initialPages = await docService.getPagesByVersionId(versionId);
-      expect(initialPages.length).toBe(3); // index.md, guide.md, api.md
-
-      // Modify file structure:
-      // 1. Delete api.md
-      // 2. Modify guide.md
-      // 3. Add new tutorial.md
-      vol.reset();
-      vol.fromJSON({
-        [`${TEST_FILE_BASE}/index.md`]: "# Home\nWelcome to the docs",
-        [`${TEST_FILE_BASE}/guide.md`]: "# Guide\nUpdated guide content with new information",
-        [`${TEST_FILE_BASE}/tutorial.md`]: "# Tutorial\nStep-by-step tutorial",
-      });
-
-      // Wait a bit to ensure file modification times change
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      // Execute refresh
-      const refreshJobId = await pipelineManager.enqueueRefreshJob(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-      );
-      await pipelineManager.waitForJobCompletion(refreshJobId);
-
-      // Verify final state
-      const finalPages = await docService.getPagesByVersionId(versionId);
-      const finalUrls = finalPages.map((p) => p.url);
-
-      // Should have index, guide, tutorial (but not api)
-      expect(finalPages.length).toBe(3);
-      expect(finalUrls).toContain(`file://${TEST_FILE_BASE}/index.md`);
-      expect(finalUrls).toContain(`file://${TEST_FILE_BASE}/guide.md`);
-      expect(finalUrls).toContain(`file://${TEST_FILE_BASE}/tutorial.md`);
-      expect(finalUrls).not.toContain(`file://${TEST_FILE_BASE}/api.md`);
-
-      // Verify modified content is searchable
-      const modifiedSearch = await docService.searchStore(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-        "updated guide content",
-        10,
-      );
-      expect(modifiedSearch.length).toBeGreaterThan(0);
-
-      // Verify new file content is searchable
-      const newSearch = await docService.searchStore(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-        "step-by-step tutorial",
-        10,
-      );
-      expect(newSearch.length).toBeGreaterThan(0);
-
-      // Verify deleted file content is no longer searchable
-      const deletedSearch = await docService.searchStore(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-        "API documentation",
-        10,
-      );
-      const hasDeletedContent = deletedSearch.some(
-        (r: StoreSearchResult) => r.url === `file://${TEST_FILE_BASE}/api.md`,
-      );
-      expect(hasDeletedContent).toBe(false);
-    }, 30000);
-
-    it("should handle unchanged files efficiently during file-based refresh", async () => {
-      // Setup: Create file structure
-      vol.fromJSON({
-        [`${TEST_FILE_BASE}/doc1.md`]: "# Document 1\nStable content",
-        [`${TEST_FILE_BASE}/doc2.md`]: "# Document 2\nStable content",
-      });
-
-      // Initial scrape - point to the directory to discover all files
-      const initialJobId = await pipelineManager.enqueueScrapeJob(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-        {
-          url: `file://${TEST_FILE_BASE}`,
-          library: TEST_FILE_LIBRARY,
-          version: TEST_FILE_VERSION,
-          maxPages: 10,
-          maxDepth: 2,
-          scrapeMode: ScrapeMode.Fetch,
-        } satisfies ScraperOptions,
-      );
-
-      await pipelineManager.waitForJobCompletion(initialJobId);
-
-      const versionId = await docService.ensureVersion({
-        library: TEST_FILE_LIBRARY,
-        version: TEST_FILE_VERSION,
-      });
-      const initialPages = await docService.getPagesByVersionId(versionId);
-      const initialPageCount = initialPages.length;
-
-      // Execute refresh without modifying files
-      const refreshJobId = await pipelineManager.enqueueRefreshJob(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-      );
-      await pipelineManager.waitForJobCompletion(refreshJobId);
-
-      // Verify page count hasn't changed
-      const finalPages = await docService.getPagesByVersionId(versionId);
-      expect(finalPages.length).toBe(initialPageCount);
-
-      // Verify content is still searchable
-      const search = await docService.searchStore(
-        TEST_FILE_LIBRARY,
-        TEST_FILE_VERSION,
-        "stable content",
-        10,
-      );
-      expect(search.length).toBeGreaterThan(0);
-    }, 30000);
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      // The page now lives at the end of the chain, and nowhere else: a
+      // half-done move would leave the old row behind, stale and searchable.
+      expect(await h.storedUrls()).toEqual([site.url("/"), site.url("/page1-new")]);
+      expect(await h.contentOf(site.url("/page1-new"))).toContain("New location");
+      const stale = await h.search("Original location");
+      expect(stale.some((r) => r.content.includes("Original location"))).toBe(false);
+    });
   });
 
-  describe("Network access policy (allowlist mode)", () => {
-    const ALLOWED_HOST = "docs.allowed.example";
-    const BLOCKED_HOST = "evil.blocked.example";
-    const ALLOWED_BASE = `http://${ALLOWED_HOST}`;
-    const BLOCKED_BASE = `http://${BLOCKED_HOST}`;
+  describe("network access policy (allowlist mode)", () => {
+    const allowed = mockSite("http://docs.allowed.example");
+    const blocked = mockSite("http://evil.blocked.example");
 
     beforeEach(() => {
-      // Stop the open-mode pipeline that the outer beforeEach started so we
-      // can swap in an allowlist-mode config for this group of tests.
-      // (PipelineManager is recreated by the inner setup below.)
-      appConfig.scraper.security.network.mode = "allowlist";
-      appConfig.scraper.security.network.allowedHosts = [ALLOWED_HOST];
-      appConfig.scraper.security.network.allowedCidrs = [];
-      appConfig.scraper.security.network.allowPrivateNetworks = false;
-      mockOriginsWithNock(ALLOWED_BASE, BLOCKED_BASE);
+      const { network } = h.config.scraper.security;
+      network.mode = "allowlist";
+      network.allowedHosts = ["docs.allowed.example"];
+      network.allowedCidrs = [];
+      network.allowPrivateNetworks = false;
     });
 
-    it("scrapes allowlisted hosts and rejects non-allowlisted hosts end-to-end", async () => {
-      // Same llms.txt probe shortcut as the outer beforeEach, for this group's
-      // own host. The blocked host deliberately gets no such mock: its only
-      // interceptor is the one below, which must stay unconsumed.
-      nock(ALLOWED_BASE).persist().get(/llms\.txt$/).reply(404);
-      nock(ALLOWED_BASE)
-        .get("/")
-        .reply(200, "<html><body><h1>Allowed</h1></body></html>", {
-          "Content-Type": "text/html",
-        });
+    it("indexes a host on the allowlist", async () => {
+      allowed.page("/", leafPage("Allowed"));
 
-      const allowedJobId = await pipelineManager.enqueueScrapeJob(
-        "allow-lib",
-        "1.0.0",
-        {
-          url: `${ALLOWED_BASE}/`,
-          library: "allow-lib",
-          version: "1.0.0",
-          maxPages: 1,
-          maxDepth: 0,
-          scrapeMode: ScrapeMode.Fetch,
-        } satisfies ScraperOptions,
-      );
-      await pipelineManager.waitForJobCompletion(allowedJobId);
+      const job = await h.scrape({ url: allowed.url("/"), maxDepth: 0 });
 
-      const allowedPages = await docService.getPagesByVersionId(
-        await docService.ensureVersion({ library: "allow-lib", version: "1.0.0" }),
-      );
-      expect(allowedPages.length).toBe(1);
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await h.storedUrls()).toEqual([allowed.url("/")]);
+    });
 
-      // The blocked host must never receive a request — set up an
-      // interceptor that would be consumed if the request leaked through.
-      const blockedInterceptor = nock(BLOCKED_BASE).get("/").reply(200, "should-not-fire");
+    it("fails a job for a host off the allowlist without contacting it", async () => {
+      const job = await h.scrape({ url: blocked.url("/"), maxDepth: 0 });
 
-      const blockedJobId = await pipelineManager.enqueueScrapeJob(
-        "block-lib",
-        "1.0.0",
-        {
-          url: `${BLOCKED_BASE}/`,
-          library: "block-lib",
-          version: "1.0.0",
-          maxPages: 1,
-          maxDepth: 0,
-          scrapeMode: ScrapeMode.Fetch,
-        } satisfies ScraperOptions,
-      );
-      // The job is expected to fail with an AccessPolicyError; surface it as
-      // a job failure rather than letting it bubble out of the test.
-      await pipelineManager.waitForJobCompletion(blockedJobId).catch(() => {});
-
-      // No pages indexed for the blocked host.
-      const blockedPages = await docService.getPagesByVersionId(
-        await docService.ensureVersion({ library: "block-lib", version: "1.0.0" }),
-      );
-      expect(blockedPages.length).toBe(0);
-
-      // The blocked interceptor must not have been consumed.
-      expect(blockedInterceptor.isDone()).toBe(false);
-      nock.cleanAll();
-    }, 30000);
+      expect(job.status).toBe(PipelineJobStatus.FAILED);
+      expect(job.errorMessage).toContain("Security policy blocked network access");
+      expect(blocked.requests).toEqual([]);
+      expect(await h.storedUrls()).toEqual([]);
+    });
   });
 });
