@@ -303,10 +303,11 @@ export class BrowserFetcher implements ContentFetcher {
    * @param source - The non-navigable resource URL to fetch.
    * @param options - The original fetch options (headers, redirect policy).
    * @param timeout - Navigation/request timeout in milliseconds.
-   * @param headers - The composed fingerprint/Accept headers the page sends,
-   * including the Sec-Fetch-* ones Chromium sets for the page itself, so the
-   * request-API call presents the same client identity as the browser that
-   * (potentially) just solved a challenge.
+   * @param headers - The composed fingerprint and caller headers, including
+   * any Sec-Fetch-* values among them. The page itself leaves those to
+   * Chromium; the request-API call sends them as composed, so it presents the
+   * same client identity as the browser that (potentially) just solved a
+   * challenge.
    * @returns The fetched raw content.
    */
   private async fetchViaRequest(
