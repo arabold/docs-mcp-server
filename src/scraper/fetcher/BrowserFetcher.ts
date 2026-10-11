@@ -10,6 +10,7 @@ import {
   DEFAULT_BROWSER_USER_AGENT,
   getHeader,
   withMarkdownPreferredAccept,
+  withoutSecFetchHeaders,
 } from "./headers";
 import {
   type ContentFetcher,
@@ -138,13 +139,17 @@ export class BrowserFetcher implements ContentFetcher {
 
       // Compose the browser-like fingerprint headers used both for the page's
       // own navigation and (if needed) the non-navigable request-API fallback,
-      // so the two look like the same client to anti-bot checks.
-      const requestHeaders = withMarkdownPreferredAccept(
-        {
-          ...fingerprintHeaders,
-          ...options?.headers,
-        },
-        options?.headers,
+      // so the two look like the same client to anti-bot checks. Chromium sets
+      // the Sec-Fetch-* headers itself; overriding them would make it fail the
+      // page's scripts, styles and other sub-resources.
+      const requestHeaders = withoutSecFetchHeaders(
+        withMarkdownPreferredAccept(
+          {
+            ...fingerprintHeaders,
+            ...options?.headers,
+          },
+          options?.headers,
+        ),
       );
       await page.setExtraHTTPHeaders(requestHeaders);
 
