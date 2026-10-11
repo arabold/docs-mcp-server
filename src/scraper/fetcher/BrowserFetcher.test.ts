@@ -313,6 +313,15 @@ describe("BrowserFetcher", () => {
   });
 
   it("sends the same fingerprint/Accept headers to the request-API fallback as the page navigation", async () => {
+    // The page leaves Sec-Fetch-* to Chromium; the request API is Playwright's
+    // own client, so it sends them to look like the same browser.
+    const generateHeaders = vi
+      .spyOn(FingerprintGenerator.prototype, "generateHeaders")
+      .mockReturnValue({
+        "user-agent": "Fingerprint/1.0",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+      });
     const goto = vi
       .fn()
       .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
@@ -330,10 +339,37 @@ describe("BrowserFetcher", () => {
       headers: { "X-Test": "1" },
     });
 
+    generateHeaders.mockRestore();
     const [pageHeaders] = page.setExtraHTTPHeaders.mock.calls[0];
     const [, requestOptions] = requestGet.mock.calls[0];
-    expect(requestOptions.headers).toEqual(pageHeaders);
+    expect(requestOptions.headers).toEqual({
+      ...pageHeaders,
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "document",
+    });
     expect(requestOptions.headers).toEqual(expect.objectContaining({ "X-Test": "1" }));
+  });
+
+  it("fetches a file the browser downloads through the request API", async () => {
+    // With requests routed, Playwright reports a download as "Download is
+    // starting" rather than a network error.
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: Download is starting"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({ "content-type": "application/x-yaml" }),
+      body: vi.fn().mockResolvedValue(Buffer.from("key: value")),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const result = await fetcher.fetch("https://example.com/openapi.yaml");
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.content.toString()).toBe("key: value");
   });
 
   it("rejects a blocked page instead of returning the block page as content", async () => {

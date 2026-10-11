@@ -156,19 +156,18 @@ export class BrowserFetcher implements ContentFetcher {
 
       // Compose the browser-like fingerprint headers used both for the page's
       // own navigation and (if needed) the non-navigable request-API fallback,
-      // so the two look like the same client to anti-bot checks. Chromium sets
-      // the Sec-Fetch-* headers itself; overriding them would make it fail the
-      // page's scripts, styles and other sub-resources.
-      const requestHeaders = withoutSecFetchHeaders(
-        withMarkdownPreferredAccept(
-          {
-            ...fingerprintHeaders,
-            ...options?.headers,
-          },
-          options?.headers,
-        ),
+      // so the two look like the same client to anti-bot checks.
+      const requestHeaders = withMarkdownPreferredAccept(
+        {
+          ...fingerprintHeaders,
+          ...options?.headers,
+        },
+        options?.headers,
       );
-      await page.setExtraHTTPHeaders(requestHeaders);
+      // Chromium sets the Sec-Fetch-* headers itself; overriding them would make
+      // it fail the page's scripts, styles and other sub-resources. The request
+      // API is Playwright's own client, so it keeps them.
+      await page.setExtraHTTPHeaders(withoutSecFetchHeaders(requestHeaders));
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
@@ -193,12 +192,13 @@ export class BrowserFetcher implements ContentFetcher {
         response = await page.goto(source, { waitUntil: "load", timeout });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // Non-navigable resources (Markdown, JSON, plain text, ...) make the
+        // Non-navigable resources (Markdown, JSON, binary files, ...) make the
         // browser begin a download, so page.goto rejects with
-        // ERR_INVALID_ARGUMENT / ERR_ABORTED. Fetch those through the context's
-        // request API instead (see fetchViaRequest): it shares cookies — so any
+        // ERR_INVALID_ARGUMENT / ERR_ABORTED, or with "Download is starting"
+        // while requests are routed. Fetch those through the context's request
+        // API instead (see fetchViaRequest): it shares cookies — so any
         // anti-bot clearance carries over — but does not try to render them.
-        if (/ERR_INVALID_ARGUMENT|ERR_ABORTED/i.test(message)) {
+        if (/ERR_INVALID_ARGUMENT|ERR_ABORTED|Download is starting/i.test(message)) {
           return await this.fetchViaRequest(
             page,
             source,
@@ -303,9 +303,10 @@ export class BrowserFetcher implements ContentFetcher {
    * @param source - The non-navigable resource URL to fetch.
    * @param options - The original fetch options (headers, redirect policy).
    * @param timeout - Navigation/request timeout in milliseconds.
-   * @param headers - The same composed fingerprint/Accept headers set on the
-   * page via `setExtraHTTPHeaders`, so the request-API call presents the same
-   * client identity as the browser that (potentially) just solved a challenge.
+   * @param headers - The composed fingerprint/Accept headers the page sends,
+   * including the Sec-Fetch-* ones Chromium sets for the page itself, so the
+   * request-API call presents the same client identity as the browser that
+   * (potentially) just solved a challenge.
    * @returns The fetched raw content.
    */
   private async fetchViaRequest(

@@ -3,7 +3,8 @@
  *
  * The browser fetcher exists to get past pages that a plain HTTP request
  * cannot, such as JavaScript challenges, so the page it loads must be able to
- * run its scripts.
+ * run its scripts. Files the browser would download instead of showing are
+ * fetched through the request API.
  */
 
 import { createServer, type Server } from "node:http";
@@ -25,6 +26,11 @@ describe("BrowserFetcher in a real browser", () => {
       if (path === "/app.js") {
         res.writeHead(200, { "content-type": "text/javascript" });
         res.end("document.body.dataset.ran = 'yes';");
+        return;
+      }
+      if (path === "/openapi.yaml") {
+        res.writeHead(200, { "content-type": "application/x-yaml" });
+        res.end("openapi: 3.1.0\n");
         return;
       }
       res.writeHead(200, { "content-type": "text/html" });
@@ -58,6 +64,22 @@ describe("BrowserFetcher in a real browser", () => {
       expect(result.status).toBe(FetchStatus.SUCCESS);
       expect(requests).toContain("/app.js");
       expect(result.content.toString()).toContain('data-ran="yes"');
+    } finally {
+      await fetcher.close();
+    }
+  });
+
+  it("fetches a file the browser would download through the request API", async () => {
+    const config = loadConfig().scraper;
+    config.security.network.allowPrivateNetworks = true;
+    const fetcher = new BrowserFetcher(config);
+
+    try {
+      const result = await fetcher.fetch(`${baseUrl}/openapi.yaml`);
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.mimeType).toBe("application/x-yaml");
+      expect(result.content.toString()).toBe("openapi: 3.1.0\n");
     } finally {
       await fetcher.close();
     }
