@@ -260,7 +260,6 @@ describe("HtmlPlaywrightMiddleware", () => {
         close: vi.fn().mockResolvedValue(undefined),
       } as unknown as MockedObject<Browser>;
       const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
-      const closeBrowserSpy = vi.spyOn(playwrightMiddleware, "closeBrowser");
 
       await playwrightMiddleware.process(context, next);
 
@@ -269,12 +268,8 @@ describe("HtmlPlaywrightMiddleware", () => {
       expect(pageSpy.close).toHaveBeenCalled();
       expect(contextSpy.close).toHaveBeenCalled();
       expect(browserSpy.close).toHaveBeenCalled();
-      expect(closeBrowserSpy).toHaveBeenCalledWith(
-        "reset after Playwright render failure for https://example.com/test",
-      );
       expect(next).toHaveBeenCalled();
 
-      closeBrowserSpy.mockRestore();
       launchSpy.mockRestore();
     });
 
@@ -301,7 +296,6 @@ describe("HtmlPlaywrightMiddleware", () => {
           close: vi.fn().mockResolvedValue(undefined),
         } as unknown as MockedObject<Browser>;
         const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
-        const closeBrowserSpy = vi.spyOn(playwrightMiddleware, "closeBrowser");
 
         const processPromise = playwrightMiddleware.process(context, next);
         await vi.advanceTimersByTimeAsync(5000);
@@ -311,12 +305,8 @@ describe("HtmlPlaywrightMiddleware", () => {
         expect(pageSpy.close).toHaveBeenCalled();
         expect(contextSpy.close).toHaveBeenCalled();
         expect(browserSpy.close).toHaveBeenCalled();
-        expect(closeBrowserSpy).toHaveBeenCalledWith(
-          "reset after Playwright cleanup failure for https://example.com/test",
-        );
         expect(next).toHaveBeenCalled();
 
-        closeBrowserSpy.mockRestore();
         launchSpy.mockRestore();
       } finally {
         vi.useRealTimers();
@@ -338,6 +328,67 @@ describe("HtmlPlaywrightMiddleware", () => {
       );
 
       expect(launchSpy).toHaveBeenCalledTimes(1);
+
+      launchSpy.mockRestore();
+    });
+
+    it("should reset only the browser the failed page used", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const firstPage = createMockPlaywrightPage(initialHtml);
+      const firstBrowser = createMockBrowser(firstPage);
+      const secondBrowser = createMockBrowser(createMockPlaywrightPage(initialHtml));
+      const launchSpy = vi
+        .spyOn(chromium, "launch")
+        .mockResolvedValue(secondBrowser)
+        .mockResolvedValueOnce(firstBrowser);
+      // While the first page renders, its browser disconnects and another page
+      // launches a replacement. Then the first page's render fails.
+      firstPage.waitForSelector = vi.fn().mockImplementation(async () => {
+        vi.mocked(firstBrowser.isConnected).mockReturnValue(false);
+        await playwrightMiddleware.process(
+          createPipelineTestContext(initialHtml, "https://example.com/other"),
+          vi.fn(),
+        );
+        throw new Error("Timeout 5000ms exceeded");
+      });
+
+      await playwrightMiddleware.process(
+        createPipelineTestContext(initialHtml, "https://example.com/test"),
+        vi.fn(),
+      );
+      await playwrightMiddleware.process(
+        createPipelineTestContext(initialHtml, "https://example.com/next"),
+        vi.fn(),
+      );
+
+      expect(firstBrowser.close).toHaveBeenCalled();
+      expect(secondBrowser.close).not.toHaveBeenCalled();
+      expect(launchSpy).toHaveBeenCalledTimes(2);
+
+      launchSpy.mockRestore();
+    });
+
+    it("should close a browser whose launch was still in flight at shutdown", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const browserSpy = createMockBrowser(createMockPlaywrightPage(initialHtml));
+      let finishLaunch: (browser: Browser) => void = () => undefined;
+      const launchSpy = vi.spyOn(chromium, "launch").mockReturnValue(
+        new Promise<Browser>((resolve) => {
+          finishLaunch = resolve;
+        }),
+      );
+
+      const processing = playwrightMiddleware.process(
+        createPipelineTestContext(initialHtml, "https://example.com/test"),
+        vi.fn(),
+      );
+      await vi.waitFor(() => expect(launchSpy).toHaveBeenCalled());
+      const closing = playwrightMiddleware.closeBrowser();
+      finishLaunch(browserSpy);
+      await closing;
+      await processing;
+
+      expect(browserSpy.close).toHaveBeenCalled();
 
       launchSpy.mockRestore();
     });
