@@ -67,6 +67,7 @@ interface BrowserWithProcessHandle extends Browser {
  */
 export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   private browser: Browser | null = null;
+  private browserLaunch: Promise<Browser> | null = null;
   private readonly config: AppConfig["scraper"];
   private readonly accessPolicy: ScraperAccessPolicy;
 
@@ -115,19 +116,32 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   }
 
   /**
-   * Initializes the Playwright browser instance.
-   * Consider making this more robust (e.g., lazy initialization, singleton).
+   * Returns a connected browser, launching one on first use and again after
+   * Chromium has exited. Concurrent callers share a single launch.
    */
   private async ensureBrowser(): Promise<Browser> {
-    if (!this.browser?.isConnected()) {
-      logger.debug("Launching new Playwright browser instance (Chromium)");
-      this.browser = await BrowserFetcher.launchBrowser();
-      this.browser.on("disconnected", () => {
-        logger.debug("Playwright browser instance disconnected.");
-        this.browser = null;
-      });
+    if (this.browser?.isConnected()) {
+      return this.browser;
     }
-    return this.browser;
+
+    // Concurrent pages share one launch instead of each starting a Chromium.
+    this.browserLaunch ??= this.launchBrowser().finally(() => {
+      this.browserLaunch = null;
+    });
+    return this.browserLaunch;
+  }
+
+  private async launchBrowser(): Promise<Browser> {
+    logger.debug("Launching new Playwright browser instance (Chromium)");
+    const browser = await BrowserFetcher.launchBrowser();
+    browser.on("disconnected", () => {
+      logger.debug("Playwright browser instance disconnected.");
+      if (this.browser === browser) {
+        this.browser = null;
+      }
+    });
+    this.browser = browser;
+    return browser;
   }
 
   private getPageTimeoutMs(): number {
@@ -186,28 +200,40 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   }
 
   /**
-   * Closes the Playwright browser instance if it exists.
-   * Should be called during application shutdown.
-   * Attempts to close even if the browser is disconnected to ensure proper cleanup of zombie processes.
+   * Closes the Playwright browser, including one whose launch is still in
+   * flight. Should be called during application shutdown.
    */
-  async closeBrowser(reason = "shutdown"): Promise<void> {
+  async closeBrowser(): Promise<void> {
+    await this.browserLaunch?.catch(() => undefined);
     if (this.browser) {
-      const browser = this.browser;
-      try {
-        logger.debug(`Closing Playwright browser instance (${reason})...`);
-        // Always attempt to close, even if disconnected, to reap zombie processes
-        await this.withTimeout(
-          browser.close(),
-          this.getPageTimeoutMs(),
-          "Playwright browser close",
-        );
-      } catch (error) {
-        logger.warn(`⚠️  Error closing Playwright browser (${reason}): ${error}`);
-        this.killBrowserProcess(browser, reason);
-      } finally {
-        // Always set to null to allow fresh browser on next request
-        this.browser = null;
-      }
+      await this.retireBrowser(this.browser, "shutdown");
+    }
+  }
+
+  /**
+   * Closes the given browser, killing its process if it does not close in
+   * time. Attempts to close even if the browser is disconnected, to reap
+   * zombie processes. The current browser is cleared only when it is the one
+   * closed, so a replacement another page launched meanwhile stays in use.
+   *
+   * @param browser - The browser to close.
+   * @param reason - Why it is closed, for the logs.
+   */
+  private async retireBrowser(browser: Browser, reason: string): Promise<void> {
+    if (this.browser === browser) {
+      this.browser = null;
+    }
+
+    try {
+      logger.debug(`Closing Playwright browser instance (${reason})...`);
+      await this.withTimeout(
+        browser.close(),
+        this.getPageTimeoutMs(),
+        "Playwright browser close",
+      );
+    } catch (error) {
+      logger.warn(`⚠️  Error closing Playwright browser (${reason}): ${error}`);
+      this.killBrowserProcess(browser, reason);
     }
   }
 
@@ -1101,6 +1127,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     let page: Page | null = null;
     let browserContext: BrowserContext | null = null;
     let renderedHtml: string | null = null;
+    let browser: Browser | null = null;
     let shouldResetBrowser = false;
     let renderFailed = false;
 
@@ -1111,7 +1138,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     const customHeaders: Record<string, string> = context.options?.headers ?? {};
 
     try {
-      const browser = await this.ensureBrowser();
+      browser = await this.ensureBrowser();
 
       // Always create a browser context (with or without credentials)
       browserContext = await browser.newContext({
@@ -1221,13 +1248,15 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       if (cleanupFailed) {
         shouldResetBrowser = true;
       }
-      if (shouldResetBrowser) {
+      // Reset the browser this page used; another page may already have
+      // replaced it.
+      if (shouldResetBrowser && browser) {
         const resetReason = renderFailed
           ? cleanupFailed
             ? `reset after Playwright render and cleanup failure for ${context.source}`
             : `reset after Playwright render failure for ${context.source}`
           : `reset after Playwright cleanup failure for ${context.source}`;
-        await this.closeBrowser(resetReason);
+        await this.retireBrowser(browser, resetReason);
       }
     }
 

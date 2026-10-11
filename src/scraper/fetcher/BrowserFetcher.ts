@@ -31,6 +31,7 @@ const MAX_REQUEST_REDIRECTS = 20;
  */
 export class BrowserFetcher implements ContentFetcher {
   private browser: Browser | null = null;
+  private browserLaunch: Promise<Browser> | null = null;
   private fingerprintGenerator: FingerprintGenerator;
   private readonly defaultTimeoutMs: number;
   private readonly accessPolicy: ScraperAccessPolicy;
@@ -55,14 +56,64 @@ export class BrowserFetcher implements ContentFetcher {
   }
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
+    try {
+      await this.accessPolicy.assertNetworkUrlAllowed(source);
+
+      const browser = await this.ensureBrowserReady();
+      try {
+        return await this.fetchWithBrowser(browser, source, options);
+      } catch (error) {
+        if (browser.isConnected() || options?.signal?.aborted) {
+          throw error;
+        }
+        // Chromium exited under this page (e.g. under memory pressure), so the
+        // page never got a fair attempt. Relaunch and give it one more.
+        logger.warn(`⚠️  Browser closed while fetching ${source}, retrying once`);
+        return await this.fetchWithBrowser(
+          await this.ensureBrowserReady(),
+          source,
+          options,
+        );
+      }
+    } catch (error) {
+      if (options?.signal?.aborted) {
+        throw new ScraperError("Browser fetch cancelled", false);
+      }
+
+      // Preserve already-typed ScraperErrors (and their isRetryable flag) thrown
+      // by fetchWithBrowser or fetchViaRequest, rather than re-wrapping them
+      // into a new, always-non-retryable error.
+      if (error instanceof ScraperError) {
+        throw error;
+      }
+
+      logger.error(`❌ Browser fetch failed for ${source}: ${error}`);
+      throw new ScraperError(
+        `Browser fetch failed for ${source}: ${error instanceof Error ? error.message : String(error)}`,
+        false,
+        error instanceof Error ? error : undefined,
+      );
+    }
+  }
+
+  /**
+   * Loads `source` in a fresh context of the given browser.
+   *
+   * @param browser - The browser to open the page in.
+   * @param source - The URL to fetch.
+   * @param options - Headers, timeout and redirect policy for the fetch.
+   * @returns The fetched raw content.
+   */
+  private async fetchWithBrowser(
+    browser: Browser,
+    source: string,
+    options?: FetchOptions,
+  ): Promise<RawContent> {
     let page: Page | null = null;
     let browserContext: { newPage(): Promise<Page>; close(): Promise<void> } | null =
       null;
 
     try {
-      await this.accessPolicy.assertNetworkUrlAllowed(source);
-
-      const browser = await this.ensureBrowserReady();
       const fingerprintHeaders = this.fingerprintGenerator.generateHeaders();
       browserContext = await browser.newContext({
         userAgent:
@@ -211,24 +262,6 @@ export class BrowserFetcher implements ContentFetcher {
         etag,
         status: FetchStatus.SUCCESS,
       } satisfies RawContent;
-    } catch (error) {
-      if (options?.signal?.aborted) {
-        throw new ScraperError("Browser fetch cancelled", false);
-      }
-
-      // Preserve already-typed ScraperErrors (and their isRetryable flag) thrown
-      // earlier in this method or in fetchViaRequest, rather than re-wrapping
-      // them into a new, always-non-retryable error.
-      if (error instanceof ScraperError) {
-        throw error;
-      }
-
-      logger.error(`❌ Browser fetch failed for ${source}: ${error}`);
-      throw new ScraperError(
-        `Browser fetch failed for ${source}: ${error instanceof Error ? error.message : String(error)}`,
-        false,
-        error instanceof Error ? error : undefined,
-      );
     } finally {
       await page?.unroute("**/*").catch(() => undefined);
       await page?.close().catch(() => undefined);
@@ -422,12 +455,33 @@ export class BrowserFetcher implements ContentFetcher {
     });
   }
 
+  /**
+   * Returns a connected browser, launching one on first use and again after
+   * Chromium has exited. Concurrent callers share a single launch.
+   */
   private async ensureBrowserReady(): Promise<Browser> {
-    if (!this.browser) {
-      logger.debug("Launching browser...");
-      this.browser = await BrowserFetcher.launchBrowser();
+    if (this.browser?.isConnected()) {
+      return this.browser;
     }
 
+    this.browserLaunch ??= this.relaunchBrowser().finally(() => {
+      this.browserLaunch = null;
+    });
+    return this.browserLaunch;
+  }
+
+  private async relaunchBrowser(): Promise<Browser> {
+    const staleBrowser = this.browser;
+    this.browser = null;
+    if (staleBrowser) {
+      logger.warn("⚠️  Browser disconnected, launching a new one");
+      // Reap the dead process without holding up the relaunch.
+      void staleBrowser.close().catch(() => undefined);
+    } else {
+      logger.debug("Launching browser...");
+    }
+
+    this.browser = await BrowserFetcher.launchBrowser();
     return this.browser;
   }
 
@@ -436,7 +490,8 @@ export class BrowserFetcher implements ContentFetcher {
    * Always attempts cleanup even if browser is disconnected to reap zombie processes.
    */
   async close(): Promise<void> {
-    // Close page first
+    // Let a launch in flight finish so its browser is closed too.
+    await this.browserLaunch?.catch(() => undefined);
     if (this.browser) {
       try {
         await this.browser.close();
