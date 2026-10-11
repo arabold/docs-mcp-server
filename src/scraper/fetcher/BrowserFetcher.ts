@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { type Browser, chromium, type Page } from "playwright";
+import { type Browser, chromium, type LaunchOptions, type Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
 import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
@@ -442,8 +442,17 @@ export class BrowserFetcher implements ContentFetcher {
     return systemPath;
   }
 
+  /**
+   * Launches a headless Chromium for scraping.
+   *
+   * Without an explicit executable, Playwright launches its headless shell.
+   * Installs made with `playwright install --no-shell` leave the shell out and
+   * have only the full build, so a missing shell falls back to that.
+   *
+   * @returns The launched browser; the caller closes it.
+   */
   public static async launchBrowser(): Promise<Browser> {
-    return chromium.launch({
+    const options: LaunchOptions = {
       headless: true,
       executablePath: BrowserFetcher.resolveChromiumExecutablePath(),
       args: [
@@ -452,7 +461,19 @@ export class BrowserFetcher implements ContentFetcher {
         "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
       ],
-    });
+    };
+
+    try {
+      return await chromium.launch(options);
+    } catch (error) {
+      const missingExecutable =
+        error instanceof Error && error.message.includes("Executable doesn't exist");
+      if (options.executablePath || !missingExecutable) {
+        throw error;
+      }
+      logger.debug("Playwright's headless shell is not installed; using the full build");
+      return chromium.launch({ ...options, channel: "chromium" });
+    }
   }
 
   /**
