@@ -77,16 +77,17 @@ describe("Vector search E2E", () => {
     appConfig.scraper.security.fileAccess.allowedRoots = [docsDir];
 
     const eventBus = new EventBusService();
-    backend = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
+    const opened = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
+    backend = opened;
 
-    await new ScrapeTool(backend.pipeline, appConfig.scraper).execute({
+    await new ScrapeTool(opened.pipeline, appConfig.scraper).execute({
       library: LIBRARY,
       version: VERSION,
       url: docsUrl,
       waitForCompletion: true,
     });
 
-    searchTool = new SearchTool(backend.docService);
+    searchTool = new SearchTool(opened.docService);
   });
 
   afterAll(async () => {

@@ -242,57 +242,77 @@ describe("PipelineManager", () => {
   });
 
   describe("removeVersion", () => {
-    const options = { url: "http://a.com", library: "React", version: "19.0.0" };
-
     /** A promise with its resolve function, to hold a store call open. */
-    function deferred<T>() {
-      let resolve: (value: T) => void = () => {};
-      const promise = new Promise<T>((r) => (resolve = r));
+    function deferred() {
+      let resolve: () => void = () => {};
+      const promise = new Promise<void>((r) => {
+        resolve = r;
+      });
       return { promise, resolve };
     }
 
-    beforeEach(() => {
-      mockStore.removeVersion = vi.fn().mockResolvedValue(undefined);
-    });
+    it("cancels the version's running job and removes the version once it has ended", async () => {
+      holdScrapes();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
 
-    it("cancels the version's job and removes the version once the job has ended", async () => {
-      const jobId = await manager.enqueueScrapeJob("React", "19.0.0", options);
+      await manager.removeVersion("react", "19.0");
 
-      await manager.removeVersion("react", "19.0.0");
-
-      expect((await manager.getJob(jobId))?.status).toBe(PipelineJobStatus.CANCELLED);
-      expect(mockStore.removeVersion).toHaveBeenCalledWith("react", "19.0.0");
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
     });
 
     it("waits for an enqueue in progress, then cancels the job it registered", async () => {
-      const claim = deferred<{ versionId: number; library: string }>();
-      (mockStore.claimVersion as Mock).mockReturnValueOnce(claim.promise);
+      const gate = deferred();
+      const claim = store.claimVersion.bind(store);
+      vi.spyOn(store, "claimVersion").mockImplementationOnce(async (...args) => {
+        await gate.promise;
+        return claim(...args);
+      });
 
-      const enqueued = manager.enqueueScrapeJob("React", "19.0.0", options);
-      const removed = manager.removeVersion("React", "19.0.0");
-      claim.resolve({ versionId: 1, library: "React" });
+      const enqueued = manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      const removed = manager.removeVersion("React", "19.0");
+      gate.resolve();
       const jobId = await enqueued;
       await removed;
 
-      expect((await manager.getJob(jobId))?.status).toBe(PipelineJobStatus.CANCELLED);
-      expect(mockStore.removeVersion).toHaveBeenCalledTimes(1);
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
     });
 
     it("holds an enqueue of the same version until the removal is done", async () => {
-      const removal = deferred<void>();
-      (mockStore.removeVersion as Mock).mockReturnValueOnce(removal.promise);
+      await seedVersion("React", "19.0", VersionStatus.COMPLETED);
+      const gate = deferred();
+      const remove = store.removeVersion.bind(store);
+      vi.spyOn(store, "removeVersion").mockImplementationOnce(async (...args) => {
+        await gate.promise;
+        return remove(...args);
+      });
+      const claim = vi.spyOn(store, "claimVersion");
 
-      const removed = manager.removeVersion("React", "19.0.0");
-      const enqueued = manager.enqueueScrapeJob("React", "19.0.0", options);
-      await Promise.resolve();
-      expect(mockStore.claimVersion).not.toHaveBeenCalled();
+      const removed = manager.removeVersion("React", "19.0");
+      const enqueued = manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(claim).not.toHaveBeenCalled();
 
-      removal.resolve();
+      gate.resolve();
       await removed;
+      // The version is gone, so the default reject-version claim succeeds
       const jobId = await enqueued;
-
-      expect(mockStore.claimVersion).toHaveBeenCalledTimes(1);
-      expect((await manager.getJob(jobId))?.status).toBe(PipelineJobStatus.QUEUED);
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.QUEUED);
     });
   });
 
