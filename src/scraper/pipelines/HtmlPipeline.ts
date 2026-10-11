@@ -3,6 +3,7 @@ import { SemanticMarkdownSplitter } from "../../splitter/SemanticMarkdownSplitte
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
+import type { ManagedBrowser } from "../fetcher/ManagedBrowser";
 import type { ContentFetcher, RawContent } from "../fetcher/types";
 import { HtmlCheerioParserMiddleware } from "../middleware/HtmlCheerioParserMiddleware";
 import { HtmlLinkExtractorMiddleware } from "../middleware/HtmlLinkExtractorMiddleware";
@@ -27,14 +28,22 @@ export class HtmlPipeline extends BasePipeline {
   private readonly standardMiddleware: ContentProcessorMiddleware[];
   private readonly greedySplitter: GreedySplitter;
 
-  constructor(config: AppConfig) {
+  /**
+   * @param config - Application configuration.
+   * @param managedBrowser - The browser to render with; pass one to share it
+   * with the browser fetcher.
+   */
+  constructor(config: AppConfig, managedBrowser?: ManagedBrowser) {
     super();
 
     const preferredChunkSize = config.splitter.preferredChunkSize;
     const maxChunkSize = config.splitter.maxChunkSize;
     const minChunkSize = config.splitter.minChunkSize;
 
-    this.playwrightMiddleware = new HtmlPlaywrightMiddleware(config.scraper);
+    this.playwrightMiddleware = new HtmlPlaywrightMiddleware(
+      config.scraper,
+      managedBrowser,
+    );
     // Pick the extractor. When the default (`cheerio`) is selected we never
     // touch the Defuddle module — its `defuddle` + `linkedom` dependencies
     // (~2.4 MB combined) stay off the import graph entirely. The Defuddle

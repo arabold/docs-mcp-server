@@ -10,7 +10,8 @@ import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import { type AppConfig, defaults } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
-import { BrowserFetcher } from "../fetcher";
+import { withTimeout } from "../../utils/timeout";
+import { ManagedBrowser } from "../fetcher";
 import {
   DEFAULT_BROWSER_USER_AGENT,
   getHeader,
@@ -44,16 +45,6 @@ interface CachedResource {
   contentType: string;
 }
 
-interface BrowserProcessHandle {
-  killed: boolean;
-  pid?: number;
-  kill(signal?: NodeJS.Signals | number): boolean;
-}
-
-interface BrowserWithProcessHandle extends Browser {
-  process(): BrowserProcessHandle | null;
-}
-
 /**
  * Middleware to process HTML content using Playwright for rendering dynamic content,
  * *if* the scrapeMode option requires it ('playwright' or 'auto').
@@ -66,8 +57,7 @@ interface BrowserWithProcessHandle extends Browser {
  * Additionally, all custom headers from context.options?.headers are forwarded to Playwright requests.
  */
 export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
-  private browser: Browser | null = null;
-  private browserLaunch: Promise<Browser> | null = null;
+  private readonly managedBrowser: ManagedBrowser;
   private readonly config: AppConfig["scraper"];
   private readonly accessPolicy: ScraperAccessPolicy;
 
@@ -76,8 +66,14 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     defaults.scraper.fetcher.maxCacheItems,
   );
 
-  constructor(config: AppConfig["scraper"]) {
+  /**
+   * @param config - Scraper settings (timeouts, network policy).
+   * @param managedBrowser - The browser to render with; pass one to share it
+   * with the browser fetcher.
+   */
+  constructor(config: AppConfig["scraper"], managedBrowser = new ManagedBrowser(config)) {
     this.config = config;
+    this.managedBrowser = managedBrowser;
     this.accessPolicy = new ScraperAccessPolicy(config.security);
   }
 
@@ -115,35 +111,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return true;
   }
 
-  /**
-   * Returns a connected browser, launching one on first use and again after
-   * Chromium has exited. Concurrent callers share a single launch.
-   */
-  private async ensureBrowser(): Promise<Browser> {
-    if (this.browser?.isConnected()) {
-      return this.browser;
-    }
-
-    // Concurrent pages share one launch instead of each starting a Chromium.
-    this.browserLaunch ??= this.launchBrowser().finally(() => {
-      this.browserLaunch = null;
-    });
-    return this.browserLaunch;
-  }
-
-  private async launchBrowser(): Promise<Browser> {
-    logger.debug("Launching new Playwright browser instance (Chromium)");
-    const browser = await BrowserFetcher.launchBrowser();
-    browser.on("disconnected", () => {
-      logger.debug("Playwright browser instance disconnected.");
-      if (this.browser === browser) {
-        this.browser = null;
-      }
-    });
-    this.browser = browser;
-    return browser;
-  }
-
   private getPageTimeoutMs(): number {
     return this.config.pageTimeoutMs ?? defaults.scraper.pageTimeoutMs;
   }
@@ -152,137 +119,62 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     return this.config.browserTimeoutMs ?? defaults.scraper.browserTimeoutMs;
   }
 
-  private async withTimeout<T>(
-    operation: Promise<T>,
-    timeoutMs: number,
-    description: string,
-  ): Promise<T> {
-    let timeout: NodeJS.Timeout | undefined;
-    try {
-      return await Promise.race([
-        operation,
-        new Promise<T>((_resolve, reject) => {
-          timeout = setTimeout(() => {
-            reject(new Error(`${description} timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
-  }
-
-  private getBrowserProcess(browser: Browser): BrowserProcessHandle | null {
-    if (!("process" in browser) || typeof browser.process !== "function") {
-      return null;
-    }
-
-    return (browser as BrowserWithProcessHandle).process();
-  }
-
-  private killBrowserProcess(browser: Browser, reason: string): void {
-    const browserProcess = this.getBrowserProcess(browser);
-    if (!browserProcess || browserProcess.killed) {
-      return;
-    }
-
-    const pid = browserProcess.pid ? ` pid=${browserProcess.pid}` : "";
-    logger.warn(`⚠️  Force killing Playwright browser process${pid}: ${reason}`);
-    try {
-      if (!browserProcess.kill("SIGKILL")) {
-        logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}`);
-      }
-    } catch (error) {
-      logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}: ${error}`);
-    }
-  }
-
   /**
-   * Closes the Playwright browser, including one whose launch is still in
-   * flight. Should be called during application shutdown.
+   * Closes the browser this middleware renders with.
+   * Should be called during application shutdown.
    */
   async closeBrowser(): Promise<void> {
-    await this.browserLaunch?.catch(() => undefined);
-    if (this.browser) {
-      await this.retireBrowser(this.browser, "shutdown");
-    }
+    await this.managedBrowser.close();
   }
 
   /**
-   * Closes the given browser, killing its process if it does not close in
-   * time. Attempts to close even if the browser is disconnected, to reap
-   * zombie processes. The current browser is cleared only when it is the one
-   * closed, so a replacement another page launched meanwhile stays in use.
+   * Removes the page's routes and closes the page and its context, each within
+   * the page timeout.
    *
-   * @param browser - The browser to close.
-   * @param reason - Why it is closed, for the logs.
+   * @returns Whether the page and context closed. A route that fails to clear
+   * is only logged: it says nothing about whether Chromium still responds.
    */
-  private async retireBrowser(browser: Browser, reason: string): Promise<void> {
-    if (this.browser === browser) {
-      this.browser = null;
-    }
-
-    try {
-      logger.debug(`Closing Playwright browser instance (${reason})...`);
-      await this.withTimeout(
-        browser.close(),
-        this.getPageTimeoutMs(),
-        "Playwright browser close",
-      );
-    } catch (error) {
-      logger.warn(`⚠️  Error closing Playwright browser (${reason}): ${error}`);
-      this.killBrowserProcess(browser, reason);
-    }
-  }
-
   private async cleanupPageAndContext(
     page: Page | null,
     browserContext: BrowserContext | null,
     source: string,
   ): Promise<boolean> {
-    let cleanupSucceeded = true;
+    let closed = true;
     const timeoutMs = this.getPageTimeoutMs();
 
     if (page) {
       try {
-        await this.withTimeout(
+        await withTimeout(
           page.unroute("**/*"),
           timeoutMs,
           `Playwright route cleanup for ${source}`,
         );
       } catch (error) {
-        cleanupSucceeded = false;
         logger.warn(`⚠️  Playwright route cleanup failed for ${source}: ${error}`);
       }
 
       try {
-        await this.withTimeout(
-          page.close(),
-          timeoutMs,
-          `Playwright page close for ${source}`,
-        );
+        await withTimeout(page.close(), timeoutMs, `Playwright page close for ${source}`);
       } catch (error) {
-        cleanupSucceeded = false;
+        closed = false;
         logger.warn(`⚠️  Playwright page cleanup failed for ${source}: ${error}`);
       }
     }
 
     if (browserContext) {
       try {
-        await this.withTimeout(
+        await withTimeout(
           browserContext.close(),
           timeoutMs,
           `Playwright browser context close for ${source}`,
         );
       } catch (error) {
-        cleanupSucceeded = false;
+        closed = false;
         logger.warn(`⚠️  Playwright context cleanup failed for ${source}: ${error}`);
       }
     }
 
-    return cleanupSucceeded;
+    return closed;
   }
 
   /**
@@ -1128,8 +1020,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     let browserContext: BrowserContext | null = null;
     let renderedHtml: string | null = null;
     let browser: Browser | null = null;
-    let shouldResetBrowser = false;
-    let renderFailed = false;
 
     // Extract credentials and origin using helper
     const { credentials, origin } = extractCredentialsAndOrigin(context.source);
@@ -1138,7 +1028,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     const customHeaders: Record<string, string> = context.options?.headers ?? {};
 
     try {
-      browser = await this.ensureBrowser();
+      browser = await this.managedBrowser.get();
 
       // Always create a browser context (with or without credentials)
       browserContext = await browser.newContext({
@@ -1230,8 +1120,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
         `Playwright: Successfully rendered content for ${context.source} using ${method}`,
       );
     } catch (error) {
-      renderFailed = true;
-      shouldResetBrowser = true;
       logger.error(`❌ Playwright failed to render ${context.source}: ${error}`);
       context.errors.push(
         error instanceof Error
@@ -1239,24 +1127,19 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           : new Error(`Playwright rendering failed: ${String(error)}`),
       );
     } finally {
-      const cleanupSucceeded = await this.cleanupPageAndContext(
+      const closed = await this.cleanupPageAndContext(
         page,
         browserContext,
         context.source,
       );
-      const cleanupFailed = !cleanupSucceeded;
-      if (cleanupFailed) {
-        shouldResetBrowser = true;
-      }
-      // Reset the browser this page used; another page may already have
-      // replaced it.
-      if (shouldResetBrowser && browser) {
-        const resetReason = renderFailed
-          ? cleanupFailed
-            ? `reset after Playwright render and cleanup failure for ${context.source}`
-            : `reset after Playwright render failure for ${context.source}`
-          : `reset after Playwright cleanup failure for ${context.source}`;
-        await this.retireBrowser(browser, resetReason);
+      // A page or context that will not close may have left Chromium stuck,
+      // so replace it. A failed render alone does not: its context closed
+      // cleanly, and other pages may be using the same browser.
+      if (!closed && browser) {
+        await this.managedBrowser.retire(
+          browser,
+          `reset after Playwright cleanup failure for ${context.source}`,
+        );
       }
     }
 

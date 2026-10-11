@@ -1,5 +1,4 @@
-import fs from "node:fs";
-import { type Browser, chromium, type LaunchOptions, type Page } from "playwright";
+import type { Browser, Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
 import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
@@ -12,6 +11,7 @@ import {
   withMarkdownPreferredAccept,
   withoutSecFetchHeaders,
 } from "./headers";
+import { ManagedBrowser } from "./ManagedBrowser";
 import {
   type ContentFetcher,
   type FetchOptions,
@@ -31,13 +31,21 @@ const MAX_REQUEST_REDIRECTS = 20;
  * This fetcher can handle JavaScript-heavy pages and bypass anti-scraping measures.
  */
 export class BrowserFetcher implements ContentFetcher {
-  private browser: Browser | null = null;
-  private browserLaunch: Promise<Browser> | null = null;
+  private readonly managedBrowser: ManagedBrowser;
   private fingerprintGenerator: FingerprintGenerator;
   private readonly defaultTimeoutMs: number;
   private readonly accessPolicy: ScraperAccessPolicy;
 
-  constructor(scraperConfig: AppConfig["scraper"]) {
+  /**
+   * @param scraperConfig - Scraper settings (timeouts, network policy).
+   * @param managedBrowser - The browser to fetch with; pass one to share it
+   * with other users, such as the HTML renderer.
+   */
+  constructor(
+    scraperConfig: AppConfig["scraper"],
+    managedBrowser = new ManagedBrowser(scraperConfig),
+  ) {
+    this.managedBrowser = managedBrowser;
     this.defaultTimeoutMs = scraperConfig.browserTimeoutMs;
     this.fingerprintGenerator = new FingerprintGenerator();
     this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
@@ -60,7 +68,7 @@ export class BrowserFetcher implements ContentFetcher {
     try {
       await this.accessPolicy.assertNetworkUrlAllowed(source);
 
-      const browser = await this.ensureBrowserReady();
+      const browser = await this.managedBrowser.get();
       try {
         return await this.fetchWithBrowser(browser, source, options);
       } catch (error) {
@@ -71,7 +79,7 @@ export class BrowserFetcher implements ContentFetcher {
         // page never got a fair attempt. Relaunch and give it one more.
         logger.warn(`⚠️  Browser closed while fetching ${source}, retrying once`);
         return await this.fetchWithBrowser(
-          await this.ensureBrowserReady(),
+          await this.managedBrowser.get(),
           source,
           options,
         );
@@ -410,124 +418,9 @@ export class BrowserFetcher implements ContentFetcher {
   }
 
   /**
-   * Resolves the Chromium binary to launch.
-   *
-   * Playwright's own managed build is pinned to the installed Playwright
-   * version and is always preferred. A distro Chromium is only a fallback for
-   * environments that skipped the browser download, since an arbitrary system
-   * build can drift from the protocol Playwright expects.
-   *
-   * @returns An explicit executable path, or undefined to let Playwright choose.
-   */
-  private static resolveChromiumExecutablePath(): string | undefined {
-    const configuredPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-    if (configuredPath) {
-      return configuredPath;
-    }
-
-    try {
-      if (fs.existsSync(chromium.executablePath())) {
-        return undefined;
-      }
-    } catch {
-      // executablePath() throws when no managed build is registered at all.
-    }
-
-    const systemPath = [
-      "/usr/lib/chromium/chromium",
-      "/usr/bin/chromium",
-      "/usr/bin/chromium-browser",
-    ].find((candidate) => fs.existsSync(candidate));
-
-    if (systemPath) {
-      logger.debug(
-        `Playwright's managed Chromium is unavailable; using system Chromium at ${systemPath}`,
-      );
-    }
-    return systemPath;
-  }
-
-  /**
-   * Launches a headless Chromium for scraping.
-   *
-   * Without an explicit executable, Playwright launches its headless shell.
-   * Installs made with `playwright install --no-shell` leave the shell out and
-   * have only the full build, so a missing shell falls back to that.
-   *
-   * @returns The launched browser; the caller closes it.
-   */
-  public static async launchBrowser(): Promise<Browser> {
-    const options: LaunchOptions = {
-      headless: true,
-      executablePath: BrowserFetcher.resolveChromiumExecutablePath(),
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-blink-features=AutomationControlled",
-      ],
-    };
-
-    try {
-      return await chromium.launch(options);
-    } catch (error) {
-      const missingExecutable =
-        error instanceof Error && error.message.includes("Executable doesn't exist");
-      if (options.executablePath || !missingExecutable) {
-        throw error;
-      }
-      logger.debug("Playwright's headless shell is not installed; using the full build");
-      return chromium.launch({ ...options, channel: "chromium" });
-    }
-  }
-
-  /**
-   * Returns a connected browser, launching one on first use and again after
-   * Chromium has exited. Concurrent callers share a single launch.
-   */
-  private async ensureBrowserReady(): Promise<Browser> {
-    if (this.browser?.isConnected()) {
-      return this.browser;
-    }
-
-    this.browserLaunch ??= this.relaunchBrowser().finally(() => {
-      this.browserLaunch = null;
-    });
-    return this.browserLaunch;
-  }
-
-  private async relaunchBrowser(): Promise<Browser> {
-    const staleBrowser = this.browser;
-    this.browser = null;
-    if (staleBrowser) {
-      logger.warn("⚠️  Browser disconnected, launching a new one");
-      // Reap the dead process without holding up the relaunch.
-      void staleBrowser.close().catch(() => undefined);
-    } else {
-      logger.debug("Launching browser...");
-    }
-
-    this.browser = await BrowserFetcher.launchBrowser();
-    return this.browser;
-  }
-
-  /**
-   * Close the browser and clean up resources.
-   * Always attempts cleanup even if browser is disconnected to reap zombie processes.
+   * Closes the browser this fetcher uses.
    */
   async close(): Promise<void> {
-    // Let a launch in flight finish so its browser is closed too.
-    await this.browserLaunch?.catch(() => undefined);
-    if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch (error) {
-        logger.warn(`⚠️  Error closing browser: ${error}`);
-      } finally {
-        this.browser = null;
-      }
-    }
-
-    logger.debug("Browser closed successfully");
+    await this.managedBrowser.close();
   }
 }

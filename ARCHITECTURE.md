@@ -268,6 +268,14 @@ For web sources, `WebScraperStrategy` performs an ingestion-time `llms.txt` prob
 
 HTTP and browser-backed web fetches default to `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller provides an explicit `Accept` header. Markdown MIME responses route directly to `MarkdownPipeline`; HTML continues through `HtmlPipeline`, and generic `text/plain` remains on the text fallback except for accepted llms.txt `.md` variants.
 
+#### Browser lifecycle
+
+A web scrape runs one headless Chromium. `WebScraperStrategy` creates a `ManagedBrowser` ([src/scraper/fetcher/ManagedBrowser.ts](src/scraper/fetcher/ManagedBrowser.ts)) and hands it to both users of a browser: `BrowserFetcher`, which `AutoDetectFetcher` falls back to when a plain HTTP request meets a challenge or an anti-bot block, and `HtmlPlaywrightMiddleware`, which renders HTML in `playwright` and `auto` scrape modes. Each page gets its own browser context, so pages share the process but not cookies or storage.
+
+`ManagedBrowser` launches Chromium on first use and launches a new one after the old one exits, for example when the operating system kills it under memory pressure. Callers that need a browser at the same time share one launch. `BrowserFetcher` retries a page once on the new browser when Chromium dies while loading it. `HtmlPlaywrightMiddleware` replaces the browser only when a page or context fails to close in time, since a stuck cleanup can leave Chromium unresponsive; a failed render alone keeps the browser, which other pages may be using. Closing the browser is bounded by `scraper.pageTimeoutMs` and falls back to killing the process.
+
+Playwright's headless shell is the default binary. Installs made with `playwright install --no-shell` have only the full Chromium build, and the launch falls back to it. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` overrides both, and a system Chromium is used when Playwright has no managed build.
+
 #### Sub-resource blocklist
 
 During Playwright-driven page rendering, `HtmlPlaywrightMiddleware` aborts requests to a small, hand-curated list of third-party hosts that pages commonly load but that never carry documentation content: analytics SDKs, session-replay agents, chat widgets, captcha runtimes, and social-embed runtime JS. The list lives in [src/scraper/middleware/subresourceBlocklist.ts](src/scraper/middleware/subresourceBlocklist.ts) and matches on hostname suffix (with a label boundary) plus an optional path prefix. Two categories are deliberately excluded: **advertising networks**, to avoid triggering anti-adblock detection on monetized sites, and **generic CDNs** (unpkg, jsDelivr, cdnjs), because pages legitimately fetch content-bearing libraries from them. The top-level navigation and any iframe document navigations are always exempt — the check short-circuits on Playwright's `resourceType === "document"`. The feature is governed by a single config flag, `scraper.skipKnownTrackers`, which defaults to `true`.

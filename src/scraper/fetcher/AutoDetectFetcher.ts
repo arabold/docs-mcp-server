@@ -10,6 +10,7 @@ import { logger } from "../../utils/logger";
 import { BrowserFetcher } from "./BrowserFetcher";
 import { FileFetcher } from "./FileFetcher";
 import { HttpFetcher } from "./HttpFetcher";
+import type { ManagedBrowser } from "./ManagedBrowser";
 import type { ContentFetcher, FetchOptions, RawContent } from "./types";
 
 /** Statuses anti-bot layers return that a real browser can often get past. */
@@ -27,9 +28,14 @@ export class AutoDetectFetcher implements ContentFetcher {
   private readonly browserFetcher: BrowserFetcher;
   private readonly fileFetcher: FileFetcher;
 
-  constructor(scraperConfig: AppConfig["scraper"]) {
+  /**
+   * @param scraperConfig - Scraper settings shared by all fetchers.
+   * @param managedBrowser - The browser for the browser fallback; pass one to
+   * share it with the HTML renderer.
+   */
+  constructor(scraperConfig: AppConfig["scraper"], managedBrowser?: ManagedBrowser) {
     this.httpFetcher = new HttpFetcher(scraperConfig);
-    this.browserFetcher = new BrowserFetcher(scraperConfig);
+    this.browserFetcher = new BrowserFetcher(scraperConfig, managedBrowser);
     this.fileFetcher = new FileFetcher(scraperConfig);
   }
 
