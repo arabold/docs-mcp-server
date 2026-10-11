@@ -26,4 +26,4 @@
 ## 5. Native Multi-Architecture CI
 
 - [x] 5.1 Extend the Docker CI job with native amd64 and arm64 runners, explicit platforms, isolated caches, and fail-fast disabled; verify the parsed workflow and aligned documentation describe both architectures.
-- [ ] 5.2 Commit and push the CI change in this PR and verify both native jobs build and pass the Docker E2E suite on GitHub; update the PR description with the observed results.
+- [x] 5.2 Commit and push the CI change in this PR and verify both native jobs build and pass the Docker E2E suite on GitHub; update the PR description with the observed results.
