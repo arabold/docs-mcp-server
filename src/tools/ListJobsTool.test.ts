@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
-import type { ScraperProgressEvent } from "../scraper/types";
+import { PageOutcome } from "../scraper/types";
 import { VersionStatus } from "../store/types";
 import { ListJobsTool } from "./ListJobsTool";
 
@@ -45,10 +45,14 @@ describe("ListJobsTool", () => {
       progress: {
         pagesScraped: 5,
         totalPages: 100,
+        totalDiscovered: 120,
+        pagesIndexed: 4,
         currentUrl: "url2/page5",
         depth: 1,
         maxDepth: 3,
-      } as ScraperProgressEvent,
+        outcome: PageOutcome.Stored,
+        result: null,
+      },
       error: null,
       finishedAt: null,
       // Database fields
@@ -77,10 +81,14 @@ describe("ListJobsTool", () => {
       progress: {
         pagesScraped: 10,
         totalPages: 10,
+        totalDiscovered: 10,
+        pagesIndexed: 10,
         currentUrl: "url3/page10",
         depth: 2,
         maxDepth: 2,
-      } as ScraperProgressEvent,
+        outcome: PageOutcome.Stored,
+        result: null,
+      },
       error: null,
       // Database fields
       versionId: 3,
@@ -159,6 +167,47 @@ describe("ListJobsTool", () => {
     expect(result.jobs.map((job) => job.id)).toEqual(runningJobs.map((job) => job.id));
     expect(mockManagerInstance.getJobs).toHaveBeenCalledWith(PipelineJobStatus.RUNNING);
   });
+
+  it("reports the live progress counters once a job knows its total, and no progress before", async () => {
+    const result = await listJobsTool.execute({});
+
+    const progressById = Object.fromEntries(
+      result.jobs.map((job) => [job.id, job.progress]),
+    );
+    expect(progressById["job-1"]).toBeUndefined();
+    expect(progressById["job-2"]).toEqual({
+      pages: 5,
+      pagesIndexed: 4,
+      totalPages: 100,
+      totalDiscovered: 120,
+    });
+  });
+
+  it("falls back to the stored counters for a job without live progress", async () => {
+    // A job read back from the store, after a restart, has its counters but no
+    // live progress event, so nothing reports discoveries beyond the total.
+    (mockManagerInstance.getJobs as Mock).mockResolvedValue([
+      {
+        ...mockJobs[1],
+        progress: null,
+        progressPages: 3,
+        progressPagesIndexed: 2,
+        progressMaxPages: 50,
+      },
+    ]);
+
+    const result = await listJobsTool.execute({});
+
+    expect(result.jobs[0]?.progress).toEqual({
+      pages: 3,
+      pagesIndexed: 2,
+      totalPages: 50,
+      totalDiscovered: 50,
+    });
+  });
+
+  // ListJobsTool.ts reads it with `||`, so a live count of 0 falls back to the total.
+  it.todo("reports a live totalDiscovered of 0 rather than the stored total");
 
   it("should return an empty list if manager returns an empty list", async () => {
     (mockManagerInstance.getJobs as Mock).mockResolvedValue([]); // Manager returns empty
