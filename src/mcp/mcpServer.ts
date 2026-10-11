@@ -7,6 +7,7 @@ import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
+import { buildDefaultInstructions } from "./defaultInstructions";
 import type { McpServerTools } from "./tools";
 import { createError, createResponse } from "./utils";
 
@@ -70,12 +71,13 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
  * Resolves the instructions text advertised to MCP clients during initialization.
  * Call this once at startup and pass the result to `createMcpServerInstance()`, so the
  * instructions file is read a single time rather than for every client session.
- * `server.instructions` and `server.instructionsFile` are mutually exclusive.
+ * `server.instructions` and `server.instructionsFile` are mutually exclusive. When
+ * neither is set, the built-in instructions for the current mode are used.
  * @param config The application configuration.
- * @returns The instructions text, or `undefined` when none are configured.
+ * @returns The configured instructions text, or the built-in instructions.
  * @throws {Error} If both settings are set, or the configured instructions file cannot be read.
  */
-export function resolveServerInstructions(config: AppConfig): string | undefined {
+export function resolveServerInstructions(config: AppConfig): string {
   const { instructions, instructionsFile: filePath } = config.server;
   if (instructions !== undefined && filePath !== undefined) {
     throw new Error(
@@ -86,7 +88,7 @@ export function resolveServerInstructions(config: AppConfig): string | undefined
     return instructions;
   }
   if (filePath === undefined) {
-    return undefined;
+    return buildDefaultInstructions(config.app.readOnly);
   }
   try {
     return fs.readFileSync(filePath, "utf8");
@@ -102,13 +104,14 @@ export function resolveServerInstructions(config: AppConfig): string | undefined
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
- * @param instructions Instructions text sent to clients during initialization.
+ * @param instructions Instructions text sent to clients during initialization, as
+ *   returned by `resolveServerInstructions()`.
  * @returns A configured McpServer instance.
  */
 export function createMcpServerInstance(
   tools: McpServerTools,
   config: AppConfig,
-  instructions?: string,
+  instructions: string,
 ): McpServer {
   const readOnly = config.app.readOnly;
   const { name, title } = config.server;

@@ -319,6 +319,8 @@ Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP tr
 
 Available MCP tools mirror CLI functionality: document scraping, search, library management, and job control. Tools maintain identical interfaces across CLI and MCP access methods.
 
+During initialization the server sends instructions that clients add to the model's context. Tool descriptions explain one tool each; the instructions explain how the tools work together. Configured instructions (`server.instructions` or `server.instructionsFile`) replace the built-in text entirely. The built-in text depends on read-only mode and names only the tools registered in that mode.
+
 ### Configuration and Deployment
 
 Configuration uses environment variables with sensible defaults. Database location auto-detects project-local storage or system application directory.

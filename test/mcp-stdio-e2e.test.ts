@@ -12,6 +12,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
+import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
 import { createLocalDocumentManagement } from "../src/store";
 import { loadConfig } from "../src/utils/config";
 import { getCliCommand } from "./test-helpers";
@@ -55,7 +56,7 @@ describe("MCP stdio server E2E", () => {
     }
   });
 
-  it("should start, respond to initialize, and list tools", async () => {
+  it("should start, respond to initialize with the built-in instructions, and list tools", async () => {
     // Using vite-node to run TypeScript directly
     const projectRoot = path.resolve(import.meta.dirname, "..");
     const entryPoint = path.join(projectRoot, "src", "index.ts");
@@ -91,6 +92,9 @@ describe("MCP stdio server E2E", () => {
 
     // Connect client to server via transport
     await client.connect(transport);
+
+    // No instructions are configured, so the built-in instructions are sent
+    expect(client.getInstructions()).toBe(buildDefaultInstructions(false));
 
     // List available tools - this is a basic operation that should work
     const toolsResult = await client.listTools();
