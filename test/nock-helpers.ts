@@ -15,6 +15,7 @@
 
 import { http, passthrough } from "msw";
 import nock from "nock";
+import { onTestFinished } from "vitest";
 import { server } from "./mock-server";
 
 /** The only hosts nock may still connect to: loopback, with or without a port. */
@@ -28,12 +29,16 @@ const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
  * handler for each origin, so it defers to nock whichever listener runs first,
  * and stops warning about requests nock already answered.
  *
- * Call it from `beforeEach`: `setup-e2e.ts` resets MSW handlers after every test.
+ * Call it from `beforeEach`. Both changes last for one test: nock allows net
+ * connect again when the test finishes, and `setup-e2e.ts` resets MSW handlers.
  *
  * @param origins Origins the suite mocks with nock, e.g. `http://docs.example.com`.
  */
 export function mockOriginsWithNock(...origins: string[]): void {
   nock.disableNetConnect();
   nock.enableNetConnect(LOOPBACK_HOST);
+  onTestFinished(() => {
+    nock.enableNetConnect();
+  });
   server.use(...origins.map((origin) => http.all(`${origin}/*`, () => passthrough())));
 }
