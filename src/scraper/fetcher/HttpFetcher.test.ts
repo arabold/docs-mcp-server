@@ -1,19 +1,101 @@
+import https from "node:https";
 import { Readable } from "node:stream";
+import axios from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CancellationError } from "../../pipeline/errors";
-import { DEFAULT_CONFIG } from "../../utils/config";
-import { RedirectError, ScraperError, TlsCertificateError } from "../../utils/errors";
+import { type AppConfig, DEFAULT_CONFIG } from "../../utils/config";
+import {
+  AccessPolicyError,
+  ChallengeError,
+  HttpStatusError,
+  RedirectError,
+  ScraperError,
+  TlsCertificateError,
+} from "../../utils/errors";
+import { HttpFetcher } from "./HttpFetcher";
+import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
+import { FetchStatus } from "./types";
 
 vi.mock("axios");
 
-import axios from "axios";
-
 const mockedAxios = vi.mocked(axios, true);
 
-import { HttpFetcher } from "./HttpFetcher";
-import { FetchStatus } from "./types";
+const PAGE_URL = "https://example.com/page";
 
-const createFetcher = () => new HttpFetcher(DEFAULT_CONFIG.scraper);
+/**
+ * Builds a scraper config whose access policy lists the test host, so the
+ * policy accepts it without a DNS lookup and the suite runs offline. IP
+ * literals are still checked against the special-use ranges.
+ */
+function scraperConfig(
+  network: Partial<AppConfig["scraper"]["security"]["network"]> = {},
+): AppConfig["scraper"] {
+  return {
+    ...DEFAULT_CONFIG.scraper,
+    security: {
+      ...DEFAULT_CONFIG.scraper.security,
+      network: {
+        ...DEFAULT_CONFIG.scraper.security.network,
+        allowedHosts: ["example.com"],
+        ...network,
+      },
+    },
+  };
+}
+
+const fetcher = new HttpFetcher(scraperConfig());
+
+/** A resolved 2xx response carrying a streamed body. */
+function ok(
+  body: string | Buffer | Readable = "ok",
+  headers: Record<string, string> = { "content-type": "text/plain" },
+) {
+  return {
+    status: 200,
+    headers,
+    data: body instanceof Readable ? body : Readable.from([Buffer.from(body)]),
+  };
+}
+
+/** A resolved 3xx response, which axios returns because validateStatus accepts it. */
+function redirect(location: string | undefined, status = 301) {
+  return {
+    status,
+    headers: location === undefined ? {} : { location },
+    data: Readable.from(["redirect body"]),
+  };
+}
+
+/** The rejection axios produces for a 4xx/5xx response. */
+function httpError(status: number, headers: Record<string, string> = {}, body = "") {
+  return Object.assign(new Error(`Request failed with status code ${status}`), {
+    isAxiosError: true,
+    response: { status, headers, data: Readable.from([body]) },
+  });
+}
+
+/** The rejection axios produces for a transport failure with no response. */
+function networkError(code: string) {
+  return Object.assign(new Error(`connect ${code}`), { isAxiosError: true, code });
+}
+
+/** A Readable that records whether any of its body was read. */
+function trackedStream(body: string) {
+  let read = false;
+  const stream = new Readable({
+    read() {
+      read = true;
+      this.push(body);
+      this.push(null);
+    },
+  });
+  return { stream, wasRead: () => read };
+}
+
+/** The request config passed to the nth axios call. */
+function requestConfig(call = 0) {
+  return mockedAxios.get.mock.calls[call]?.[1];
+}
 
 describe("HttpFetcher", () => {
   beforeEach(() => {
@@ -21,912 +103,516 @@ describe("HttpFetcher", () => {
   });
 
   describe("canFetch", () => {
-    it("should return true for HTTP URLs", () => {
-      const fetcher = createFetcher();
-      expect(fetcher.canFetch("http://example.com")).toBe(true);
-      expect(fetcher.canFetch("https://example.com")).toBe(true);
-    });
-
-    it("should return false for non-HTTP URLs", () => {
-      const fetcher = createFetcher();
-      expect(fetcher.canFetch("ftp://example.com")).toBe(false);
-      expect(fetcher.canFetch("file:///path/to/file")).toBe(false);
-      expect(fetcher.canFetch("mailto:test@example.com")).toBe(false);
-      expect(fetcher.canFetch("relative/path")).toBe(false);
+    it.each([
+      ["http://example.com", true],
+      ["https://example.com", true],
+      ["ftp://example.com", false],
+      ["file:///path/to/file", false],
+      ["mailto:test@example.com", false],
+      ["relative/path", false],
+    ])("%s -> %s", (source, expected) => {
+      expect(fetcher.canFetch(source)).toBe(expected);
     });
   });
 
-  describe("data type handling", () => {
-    it("should read a single-chunk stream body", async () => {
-      const fetcher = createFetcher();
-      const textContent = "Hello World";
-      mockedAxios.get.mockResolvedValue({
-        data: Readable.from(Buffer.from(textContent, "utf-8")),
-        headers: { "content-type": "text/plain" },
-      });
+  describe("successful responses", () => {
+    it.each([
+      [
+        "a single-chunk body",
+        () => Readable.from([Buffer.from("Hello World")]),
+        "Hello World",
+      ],
+      [
+        "a multi-chunk body",
+        () => Readable.from([Buffer.from('{"a":'), Buffer.from("1}")]),
+        '{"a":1}',
+      ],
+      [
+        "a lazily produced body",
+        () => trackedStream("<html>hello</html>").stream,
+        "<html>hello</html>",
+      ],
+    ])("reads %s in full", async (_label, body, expected) => {
+      mockedAxios.get.mockResolvedValue(ok(body()));
 
-      const result = await fetcher.fetch("https://example.com");
-      expect(result.content).toEqual(Buffer.from(textContent, "utf-8"));
+      const result = await fetcher.fetch(PAGE_URL);
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.content.toString()).toBe(expected);
+      expect(result.source).toBe(PAGE_URL);
     });
 
-    it("should concatenate a multi-chunk stream body", async () => {
-      const fetcher = createFetcher();
-      const mockResponse = {
-        data: Readable.from([Buffer.from('{"a":'), Buffer.from("1}")]),
-        headers: { "content-type": "application/json" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
+    it("returns binary bodies byte for byte", async () => {
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+      mockedAxios.get.mockResolvedValue(ok(png, { "content-type": "image/png" }));
 
-      const result = await fetcher.fetch("https://example.com");
-      expect(result.content.toString()).toBe('{"a":1}');
-      expect(result.mimeType).toBe("application/json");
-    });
-  });
+      const result = await fetcher.fetch(PAGE_URL);
 
-  describe("cancellation", () => {
-    it("should throw CancellationError when signal is aborted", async () => {
-      const fetcher = createFetcher();
-      const abortController = new AbortController();
-      abortController.abort();
-
-      mockedAxios.get.mockRejectedValue({ code: "ERR_CANCELED" });
-
-      await expect(
-        fetcher.fetch("https://example.com", { signal: abortController.signal }),
-      ).rejects.toBeInstanceOf(CancellationError);
+      expect(result.content).toEqual(png);
+      expect(result.mimeType).toBe("image/png");
     });
 
-    it("should throw CancellationError when axios returns ERR_CANCELED", async () => {
-      const fetcher = createFetcher();
-      mockedAxios.get.mockRejectedValue({ code: "ERR_CANCELED" });
+    it.each([
+      ["text/html; charset=utf-8", undefined, "text/html", "utf-8", undefined],
+      [
+        "text/plain; charset=iso-8859-1",
+        undefined,
+        "text/plain",
+        "iso-8859-1",
+        undefined,
+      ],
+      ["text/plain", undefined, "text/plain", undefined, undefined],
+      ["text/plain; charset=utf-8", "gzip", "text/plain", "utf-8", "gzip"],
+      [undefined, undefined, "application/octet-stream", undefined, undefined],
+    ])(
+      "reads Content-Type %s and Content-Encoding %s as %s, charset %s, encoding %s",
+      async (contentType, contentEncoding, mimeType, charset, encoding) => {
+        const headers: Record<string, string> = {};
+        if (contentType) headers["content-type"] = contentType;
+        if (contentEncoding) headers["content-encoding"] = contentEncoding;
+        mockedAxios.get.mockResolvedValue(ok("abc", headers));
 
-      await expect(fetcher.fetch("https://example.com")).rejects.toBeInstanceOf(
-        CancellationError,
-      );
-    });
-  });
+        const result = await fetcher.fetch(PAGE_URL);
 
-  describe("error handling edge cases", () => {
-    it("should handle network errors without response object", async () => {
-      const fetcher = createFetcher();
-      const networkError = new Error("Network Error");
-      mockedAxios.get.mockRejectedValue(networkError);
-
-      await expect(
-        fetcher.fetch("https://example.com", { maxRetries: 0 }),
-      ).rejects.toThrow(ScraperError);
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-    });
-
-    it("should handle redirects without location header when followRedirects is false", async () => {
-      const fetcher = createFetcher();
-      mockedAxios.get.mockRejectedValue({
-        response: {
-          status: 301,
-          headers: {}, // No location header
-        },
-      });
-
-      // Should not throw RedirectError without location, should retry or throw ScraperError
-      await expect(
-        fetcher.fetch("https://example.com", { followRedirects: false, maxRetries: 0 }),
-      ).rejects.toThrow(ScraperError);
-    });
-  });
-
-  describe("configuration defaults", () => {
-    it("should use default max retries when not specified", async () => {
-      const fetcher = createFetcher();
-      // Mock failure for all attempts - use a retryable error
-      mockedAxios.get.mockRejectedValue({ response: { status: 500 } });
-
-      await expect(
-        fetcher.fetch("https://example.com", {
-          retryDelay: 1, // Minimal delay for fast test
-          maxRetries: undefined, // Explicitly test default
-        }),
-      ).rejects.toThrow(ScraperError);
-
-      // Should call initial attempt + 3 retries (default SCRAPER_FETCHER_MAX_RETRIES = 3)
-      expect(mockedAxios.get).toHaveBeenCalledTimes(4);
-    });
-
-    it("should respect custom maxRetries option", async () => {
-      const fetcher = createFetcher();
-      mockedAxios.get.mockRejectedValue({ response: { status: 500 } });
-
-      await expect(
-        fetcher.fetch("https://example.com", {
-          maxRetries: 2,
-          retryDelay: 1,
-        }),
-      ).rejects.toThrow(ScraperError);
-
-      // Should call initial attempt + 2 custom retries
-      expect(mockedAxios.get).toHaveBeenCalledTimes(3);
-    });
-
-    it("should pass timeout option to axios", async () => {
-      const fetcher = createFetcher();
-      const mockResponse = {
-        data: Readable.from(Buffer.from("test", "utf-8")),
-        headers: { "content-type": "text/plain" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
-
-      await fetcher.fetch("https://example.com", { timeout: 5000 });
-
-      expect(mockedAxios.get).toHaveBeenCalledWith(
-        "https://example.com",
-        expect.objectContaining({
-          timeout: 5000,
-        }),
-      );
-    });
-  });
-
-  it("should fetch content successfully", async () => {
-    const fetcher = createFetcher();
-    const htmlContent = "<html><body><h1>Hello</h1></body></html>";
-    const mockResponse = {
-      data: Readable.from(Buffer.from(htmlContent, "utf-8")), // HttpFetcher expects buffer from axios
-      headers: { "content-type": "text/html; charset=utf-8" },
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-
-    const result = await fetcher.fetch("https://example.com");
-    expect(result.content).toEqual(Buffer.from(htmlContent, "utf-8"));
-    expect(result.mimeType).toBe("text/html");
-    expect(result.charset).toBe("utf-8");
-    expect(result.source).toBe("https://example.com");
-  });
-
-  it("should extract charset from content-type header", async () => {
-    const fetcher = createFetcher();
-    const textContent = "abc";
-    const mockResponse = {
-      data: Readable.from(Buffer.from(textContent, "utf-8")),
-      headers: { "content-type": "text/plain; charset=iso-8859-1" },
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-
-    const result = await fetcher.fetch("https://example.com/file.txt");
-    expect(result.mimeType).toBe("text/plain");
-    expect(result.charset).toBe("iso-8859-1");
-  });
-
-  it("should set charset undefined if not present in content-type", async () => {
-    const fetcher = createFetcher();
-    const textContent = "abc";
-    const mockResponse = {
-      data: Readable.from(Buffer.from(textContent, "utf-8")),
-      headers: { "content-type": "text/plain" },
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-
-    const result = await fetcher.fetch("https://example.com/file.txt");
-    expect(result.mimeType).toBe("text/plain");
-    expect(result.charset).toBeUndefined();
-  });
-
-  it("should extract encoding from content-encoding header", async () => {
-    const fetcher = createFetcher();
-    const textContent = "abc";
-    const mockResponse = {
-      data: Readable.from(Buffer.from(textContent, "utf-8")),
-      headers: {
-        "content-type": "text/plain; charset=utf-8",
-        "content-encoding": "gzip",
+        expect(result.mimeType).toBe(mimeType);
+        expect(result.charset).toBe(charset);
+        expect(result.encoding).toBe(encoding);
       },
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-
-    const result = await fetcher.fetch("https://example.com/file.txt");
-    expect(result.encoding).toBe("gzip");
-    expect(result.mimeType).toBe("text/plain");
-    expect(result.charset).toBe("utf-8");
-  });
-
-  it("should default mimeType to application/octet-stream if content-type header is missing", async () => {
-    const fetcher = createFetcher();
-    const mockResponse = {
-      data: Readable.from(Buffer.from([1, 2, 3])),
-      headers: {},
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-
-    const result = await fetcher.fetch("https://example.com/file.bin");
-    expect(result.mimeType).toBe("application/octet-stream");
-    expect(result.charset).toBeUndefined();
-  });
-
-  it("should handle different content types", async () => {
-    const fetcher = createFetcher();
-    const mockResponse = {
-      data: Readable.from(Buffer.from([0x89, 0x50, 0x4e, 0x47])),
-      headers: { "content-type": "image/png" },
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-
-    const result = await fetcher.fetch("https://example.com/image.png");
-    expect(result.content).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-    expect(result.mimeType).toBe("image/png");
-  });
-
-  describe("retry logic", () => {
-    it("should retry on retryable status codes [408, 429, 500, 502, 503, 504, 525]", async () => {
-      const fetcher = createFetcher();
-      const retryableStatuses = [408, 429, 500, 502, 503, 504, 525];
-
-      for (const status of retryableStatuses) {
-        mockedAxios.get.mockReset();
-        mockedAxios.get.mockRejectedValueOnce({ response: { status } });
-        mockedAxios.get.mockResolvedValueOnce({
-          data: Readable.from(Buffer.from("success", "utf-8")),
-          headers: { "content-type": "text/plain" },
-        });
-
-        const result = await fetcher.fetch("https://example.com", {
-          maxRetries: 1,
-          retryDelay: 1,
-        });
-
-        expect(result.content).toEqual(Buffer.from("success", "utf-8"));
-        expect(mockedAxios.get).toHaveBeenCalledTimes(2); // Initial + 1 retry
-      }
-    });
-
-    it("should not retry on non-retryable status codes [400, 401, 403, 404, 405, 410]", async () => {
-      const fetcher = createFetcher();
-      const nonRetryableStatuses = [400, 401, 403, 405, 410];
-
-      for (const status of nonRetryableStatuses) {
-        mockedAxios.get.mockReset();
-        mockedAxios.get.mockRejectedValue({ response: { status } });
-
-        await expect(
-          fetcher.fetch("https://example.com", {
-            maxRetries: 2,
-            retryDelay: 1,
-          }),
-        ).rejects.toThrow(ScraperError);
-
-        expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries
-      }
-
-      // 404 has special handling - returns result instead of throwing
-      mockedAxios.get.mockReset();
-      mockedAxios.get.mockRejectedValue({ response: { status: 404 } });
-
-      const result = await fetcher.fetch("https://example.com", {
-        maxRetries: 2,
-        retryDelay: 1,
-      });
-
-      expect(result.status).toBe("not_found");
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries for 404
-    });
-
-    it("should not retry on TLS certificate validation errors", async () => {
-      const fetcher = createFetcher();
-      const tlsError = Object.assign(
-        new Error("unable to verify the first certificate"),
-        {
-          code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-        },
-      );
-      mockedAxios.get.mockRejectedValue(tlsError);
-
-      await expect(
-        fetcher.fetch("https://example.com", {
-          maxRetries: 2,
-          retryDelay: 1,
-        }),
-      ).rejects.toBeInstanceOf(TlsCertificateError);
-
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("should generate fingerprint headers", async () => {
-    const fetcher = createFetcher();
-    const mockResponse = {
-      data: Readable.from(
-        Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-      ),
-      headers: { "content-type": "text/html" },
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-
-    await fetcher.fetch("https://example.com");
-
-    // Test behavior: verify that axios is called with required properties.
-    // Redirects are handled manually so every target can pass the access
-    // policy before connect, so axios is always invoked with maxRedirects: 0.
-    expect(mockedAxios.get).toHaveBeenCalledWith(
-      "https://example.com",
-      expect.objectContaining({
-        responseType: "stream",
-        headers: expect.objectContaining({
-          "user-agent": expect.any(String),
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.8",
-          "accept-language": expect.any(String),
-          // Verify that our custom Accept-Encoding header is set (excluding zstd)
-          "Accept-Encoding": "gzip, deflate, br",
-        }),
-        // Defaulted from config: axios has none of its own, so leaving it
-        // undefined let a stalled server hold the worker indefinitely.
-        timeout: DEFAULT_CONFIG.scraper.fetcher.timeoutMs,
-        maxRedirects: 0,
-        signal: undefined,
-        decompress: true,
-      }),
     );
-  });
 
-  it("should respect custom headers", async () => {
-    const fetcher = createFetcher();
-    const mockResponse = {
-      data: Readable.from(
-        Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-      ),
-      headers: { "content-type": "text/html" },
-    };
-    mockedAxios.get.mockResolvedValue(mockResponse);
-    const headers = { "X-Custom-Header": "value" };
+    it.each([
+      ["ETag", { etag: '"v1"' }, '"v1"', undefined],
+      ["no caching headers", {}, undefined, undefined],
+      [
+        "Last-Modified",
+        { "last-modified": "Wed, 21 Oct 2015 07:28:00 GMT" },
+        undefined,
+        "2015-10-21T07:28:00.000Z",
+      ],
+    ])(
+      "reports %s as etag and lastModified",
+      async (_label, cacheHeaders, etag, lastModified) => {
+        mockedAxios.get.mockResolvedValue(
+          ok("content", { "content-type": "text/plain", ...cacheHeaders }),
+        );
 
-    await fetcher.fetch("https://example.com", { headers });
+        const result = await fetcher.fetch(PAGE_URL);
 
-    // Test behavior: verify custom headers are included
-    expect(mockedAxios.get).toHaveBeenCalledWith(
-      "https://example.com",
-      expect.objectContaining({
-        responseType: "stream",
-        headers: expect.objectContaining(headers),
-        // Defaulted from config: axios has none of its own, so leaving it
-        // undefined let a stalled server hold the worker indefinitely.
-        timeout: DEFAULT_CONFIG.scraper.fetcher.timeoutMs,
-        maxRedirects: 0,
-        signal: undefined,
-        decompress: true,
-      }),
+        expect(result.etag).toBe(etag);
+        expect(result.lastModified).toBe(lastModified);
+      },
     );
-  });
 
-  it("should preserve caller-supplied Accept headers", async () => {
-    const fetcher = createFetcher();
-    mockedAxios.get.mockResolvedValue({
-      data: Readable.from(Buffer.from("ok", "utf-8")),
-      headers: { "content-type": "text/plain" },
-    });
-
-    await fetcher.fetch("https://example.com", {
-      headers: { accept: "application/json" },
-    });
-
-    expect(mockedAxios.get).toHaveBeenCalledWith(
-      "https://example.com",
-      expect.objectContaining({
-        headers: expect.objectContaining({ accept: "application/json" }),
-      }),
-    );
-    expect(mockedAxios.get).toHaveBeenCalledWith(
-      "https://example.com",
-      expect.objectContaining({
-        headers: expect.not.objectContaining({
-          Accept: "text/markdown, text/html;q=0.9, */*;q=0.8",
-        }),
-      }),
-    );
-  });
-
-  describe("redirect handling", () => {
-    it("should follow redirects by default", async () => {
-      const fetcher = createFetcher();
-      const mockResponse = {
-        data: Readable.from(
-          Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-        ),
-        headers: { "content-type": "text/html" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
-
-      const result = await fetcher.fetch("https://example.com");
-
-      // Test behavior: verify result is correct and redirects are allowed
-      expect(result.content).toEqual(
-        Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-      );
-      // Redirects are followed manually so axios is always invoked with
-      // maxRedirects: 0; the follow-by-default behavior is exercised inside
-      // HttpFetcher's own loop.
-      expect(mockedAxios.get).toHaveBeenCalledWith(
-        "https://example.com",
-        expect.objectContaining({
-          maxRedirects: 0,
-        }),
-      );
-    });
-
-    it("should follow redirects when followRedirects is true", async () => {
-      const fetcher = createFetcher();
-      const mockResponse = {
-        data: Readable.from(
-          Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-        ),
-        headers: { "content-type": "text/html" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
-
-      const result = await fetcher.fetch("https://example.com", {
-        followRedirects: true,
-      });
-
-      // Test behavior: verify result is correct and redirects are allowed
-      expect(result.content).toEqual(
-        Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-      );
-      expect(mockedAxios.get).toHaveBeenCalledWith(
-        "https://example.com",
-        expect.objectContaining({
-          maxRedirects: 0,
-        }),
-      );
-    });
-
-    it("should not follow redirects when followRedirects is false", async () => {
-      const fetcher = createFetcher();
-      const mockResponse = {
-        data: Readable.from(
-          Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-        ),
-        headers: { "content-type": "text/html" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
-
-      const result = await fetcher.fetch("https://example.com", {
-        followRedirects: false,
-      });
-
-      // Test behavior: verify result is correct and redirects are disabled
-      expect(result.content).toEqual(
-        Buffer.from("<html><body><h1>Hello</h1></body></html>", "utf-8"),
-      );
-      expect(mockedAxios.get).toHaveBeenCalledWith(
-        "https://example.com",
-        expect.objectContaining({
-          maxRedirects: 0, // Should not allow redirects
-        }),
-      );
-    });
-
-    it("should throw RedirectError when a redirect is encountered and followRedirects is false", async () => {
-      const fetcher = createFetcher();
-      const redirectError = {
-        response: {
-          status: 301,
-          headers: {
-            location: "https://new-example.com",
-          },
-        },
-      };
-      mockedAxios.get.mockRejectedValue(redirectError);
-
-      await expect(
-        fetcher.fetch("https://example.com", { followRedirects: false }),
-      ).rejects.toBeInstanceOf(RedirectError);
-
-      await expect(
-        fetcher.fetch("https://example.com", { followRedirects: false }),
-      ).rejects.toMatchObject({
-        originalUrl: "https://example.com",
-        redirectUrl: "https://new-example.com",
-        statusCode: 301,
-      });
-    });
-
-    it("should expose final redirect URL as source (canonical trailing slash + query)", async () => {
-      const fetcher = createFetcher();
-      const original = "https://learn.microsoft.com/en-us/azure/bot-service";
-      const finalUrl = `${original}/?view=azure-bot-service-4.0`;
-
-      // Simulate axios response object after redirects (follow-redirects style)
+    it("reports the URL the response was served from as the source", async () => {
+      const finalUrl = "https://example.com/docs/?view=4.0";
       mockedAxios.get.mockResolvedValue({
-        data: Readable.from(Buffer.from("<html><body>OK</body></html>", "utf-8")),
-        headers: { "content-type": "text/html" },
+        ...ok("<html>OK</html>", { "content-type": "text/html" }),
         request: { res: { responseUrl: finalUrl } },
-        config: { url: finalUrl },
       });
 
-      const result = await fetcher.fetch(original);
+      const result = await fetcher.fetch("https://example.com/docs");
 
-      // Expected to FAIL before implementation change (currently returns original)
       expect(result.source).toBe(finalUrl);
     });
   });
 
-  describe("Conditional request headers", () => {
-    beforeEach(() => {
-      mockedAxios.get.mockReset();
-    });
+  describe("request", () => {
+    it("sends a streamed request with browser headers, a Markdown-preferred Accept and the default timeout", async () => {
+      mockedAxios.get.mockResolvedValue(ok());
 
-    it("should send If-None-Match header when etag is provided", async () => {
-      const fetcher = createFetcher();
-      const mockResponse = {
-        data: Readable.from(Buffer.from("content", "utf-8")),
-        headers: { "content-type": "text/plain" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
-
-      await fetcher.fetch("https://example.com", { etag: '"abc123"' });
+      await fetcher.fetch(PAGE_URL);
 
       expect(mockedAxios.get).toHaveBeenCalledWith(
-        "https://example.com",
+        PAGE_URL,
         expect.objectContaining({
+          responseType: "stream",
           headers: expect.objectContaining({
-            "If-None-Match": '"abc123"',
+            "user-agent": expect.any(String),
+            "accept-language": expect.any(String),
+            Accept: MARKDOWN_PREFERRED_ACCEPT,
+            // zstd is left out because axios does not decompress it.
+            "Accept-Encoding": "gzip, deflate, br",
           }),
+          // axios has no timeout of its own, so a stalled server would hold the
+          // worker indefinitely without this default.
+          timeout: DEFAULT_CONFIG.scraper.fetcher.timeoutMs,
+          // Redirects are followed by HttpFetcher so each hop passes the access policy.
+          maxRedirects: 0,
+          decompress: true,
         }),
       );
     });
 
-    it("should NOT send If-None-Match header when etag is not provided", async () => {
-      const fetcher = createFetcher();
-      const mockResponse = {
-        data: Readable.from(Buffer.from("content", "utf-8")),
-        headers: { "content-type": "text/plain" },
-      };
-      mockedAxios.get.mockResolvedValue(mockResponse);
+    it("uses the caller's timeout and signal", async () => {
+      mockedAxios.get.mockResolvedValue(ok());
+      const controller = new AbortController();
 
-      await fetcher.fetch("https://example.com");
+      await fetcher.fetch(PAGE_URL, { timeout: 5000, signal: controller.signal });
 
-      expect(mockedAxios.get).toHaveBeenCalledWith(
-        "https://example.com",
-        expect.objectContaining({
-          headers: expect.not.objectContaining({
-            "If-None-Match": expect.anything(),
-          }),
-        }),
-      );
+      expect(requestConfig()).toMatchObject({ timeout: 5000, signal: controller.signal });
     });
+
+    it("sends caller headers and keeps a caller Accept header", async () => {
+      mockedAxios.get.mockResolvedValue(ok());
+
+      await fetcher.fetch(PAGE_URL, {
+        headers: { "X-Custom-Header": "value", accept: "application/json" },
+      });
+
+      const headers = requestConfig()?.headers;
+      expect(headers).toMatchObject({
+        "X-Custom-Header": "value",
+        accept: "application/json",
+      });
+      expect(headers).not.toHaveProperty("Accept");
+    });
+
+    it.each([
+      ['"abc123"', '"abc123"'],
+      [undefined, undefined],
+    ])("sends If-None-Match %s for etag %s", async (etag, expected) => {
+      mockedAxios.get.mockResolvedValue(ok());
+
+      await fetcher.fetch(PAGE_URL, { etag });
+
+      expect(requestConfig()?.headers?.["If-None-Match"]).toBe(expected);
+    });
+
+    it.each([
+      { allowInvalidTls: true, url: "https://example.com/", skipsVerification: true },
+      { allowInvalidTls: true, url: "http://example.com/", skipsVerification: false },
+      { allowInvalidTls: false, url: "https://example.com/", skipsVerification: false },
+    ])(
+      "allowInvalidTls=$allowInvalidTls on $url skips certificate verification: $skipsVerification",
+      async ({ allowInvalidTls, url, skipsVerification }) => {
+        mockedAxios.get.mockResolvedValue(ok());
+
+        await new HttpFetcher(scraperConfig({ allowInvalidTls })).fetch(url);
+
+        const agent = requestConfig()?.httpsAgent;
+        if (skipsVerification) {
+          expect(agent).toBeInstanceOf(https.Agent);
+          expect(agent.options.rejectUnauthorized).toBe(false);
+        } else {
+          expect(agent).toBeUndefined();
+        }
+      },
+    );
   });
 
-  describe("304 Not Modified response handling", () => {
-    beforeEach(() => {
-      mockedAxios.get.mockReset();
-    });
-
-    it("should handle 304 responses with status='not_modified', empty content, and no retry", async () => {
-      const fetcher = createFetcher();
-      const etag = '"cached-etag-123"';
-
-      // 304 is treated as successful by validateStatus, so axios resolves (not rejects)
+  describe("304 Not Modified", () => {
+    it("returns NOT_MODIFIED without retrying, gating or reading the body", async () => {
+      const body = Readable.from(["unused"]);
       mockedAxios.get.mockResolvedValue({
         status: 304,
-        data: Readable.from(Buffer.from("")), // 304 typically has no body
-        headers: { etag },
-        config: {},
-        statusText: "Not Modified",
+        headers: { etag: '"v1"' },
+        data: body,
       });
+      const acceptsMimeType = vi.fn().mockReturnValue(false);
 
-      const result = await fetcher.fetch("https://example.com", { etag });
+      const result = await fetcher.fetch(PAGE_URL, { etag: '"v1"', acceptsMimeType });
 
-      expect(result.status).toBe("not_modified");
-      expect(result.etag).toBeUndefined(); // 304 response doesn't extract etag from headers
+      expect(result.status).toBe(FetchStatus.NOT_MODIFIED);
+      // The 304's own headers are not read, so the caller keeps its stored etag.
+      expect(result.etag).toBeUndefined();
       expect(result.content).toEqual(Buffer.from(""));
-      expect(mockedAxios.get).toHaveBeenCalledTimes(1); // No retries for 304
+      expect(acceptsMimeType).not.toHaveBeenCalled();
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      // An unread body pins its socket, so it is torn down.
+      expect(body.destroyed).toBe(true);
     });
   });
 
-  describe("ETag extraction from responses", () => {
-    beforeEach(() => {
-      mockedAxios.get.mockReset();
+  describe("redirects", () => {
+    it("follows a relative Location and destroys the body of the redirect hop", async () => {
+      const hop = redirect("/final", 302);
+      mockedAxios.get
+        .mockResolvedValueOnce(hop)
+        .mockResolvedValueOnce(ok("<html>done</html>", { "content-type": "text/html" }));
+
+      const result = await fetcher.fetch("https://example.com/start");
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.source).toBe("https://example.com/final");
+      expect(result.content.toString()).toBe("<html>done</html>");
+      expect(mockedAxios.get).toHaveBeenNthCalledWith(
+        2,
+        "https://example.com/final",
+        expect.anything(),
+      );
+      expect(hop.data.destroyed).toBe(true);
     });
 
-    it("should extract etag from response headers (or undefined if missing)", async () => {
-      const fetcher = createFetcher();
-      const etag = '"response-etag-456"';
+    it("rejects with RedirectError instead of following when followRedirects is false", async () => {
+      mockedAxios.get.mockResolvedValue(redirect("https://new.example.com/", 308));
 
-      // Test with etag present
+      const error = await fetcher
+        .fetch(PAGE_URL, { followRedirects: false })
+        .catch((e) => e);
+
+      expect(error).toBeInstanceOf(RedirectError);
+      expect(error).toMatchObject({
+        originalUrl: PAGE_URL,
+        redirectUrl: "https://new.example.com/",
+        statusCode: 308,
+      });
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a redirect without a Location header and does not retry", async () => {
+      mockedAxios.get.mockResolvedValue(redirect(undefined));
+
+      await expect(fetcher.fetch(PAGE_URL, { retryDelay: 1 })).rejects.toThrow(
+        /did not include a location header/,
+      );
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects after five hops and does not retry", async () => {
+      mockedAxios.get.mockImplementation(async () => redirect("/again"));
+
+      await expect(fetcher.fetch(PAGE_URL, { retryDelay: 1 })).rejects.toThrow(
+        /Too many redirects/,
+      );
+      // The original request plus five followed hops.
+      expect(mockedAxios.get).toHaveBeenCalledTimes(6);
+    });
+
+    it("blocks a hop to an address the access policy denies before requesting it", async () => {
+      mockedAxios.get.mockResolvedValue(
+        redirect("http://169.254.169.254/latest/meta-data"),
+      );
+
+      await expect(fetcher.fetch(PAGE_URL)).rejects.toBeInstanceOf(AccessPolicyError);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a response whose final URL the access policy denies", async () => {
       mockedAxios.get.mockResolvedValue({
-        data: Readable.from(Buffer.from("content", "utf-8")),
-        headers: { "content-type": "text/plain", etag },
+        ...ok(),
+        request: { res: { responseUrl: "http://127.0.0.1/admin" } },
       });
 
-      const resultWithEtag = await fetcher.fetch("https://example.com");
-      expect(resultWithEtag.etag).toBe(etag);
-
-      mockedAxios.get.mockReset();
-
-      // Test with etag missing
-      mockedAxios.get.mockResolvedValue({
-        data: Readable.from(Buffer.from("content", "utf-8")),
-        headers: { "content-type": "text/plain" },
-      });
-
-      const resultWithoutEtag = await fetcher.fetch("https://example.com");
-      expect(resultWithoutEtag.etag).toBeUndefined();
+      await expect(fetcher.fetch(PAGE_URL)).rejects.toBeInstanceOf(AccessPolicyError);
     });
   });
-});
 
-describe("HttpFetcher fetch-time unprocessable-content gate", () => {
-  /** A Readable that records whether it was destroyed before being drained. */
-  const streamOf = (body: string) => {
-    let delivered = false;
-    const stream = new Readable({
-      read() {
-        delivered = true;
-        this.push(body);
-        this.push(null);
+  describe("unprocessable-content gate", () => {
+    it("abandons an unprocessable response without reading or retrying it", async () => {
+      const { stream, wasRead } = trackedStream("PNGDATA".repeat(1000));
+      mockedAxios.get.mockResolvedValue(ok(stream, { "content-type": "image/png" }));
+
+      const result = await fetcher.fetch(PAGE_URL, {
+        acceptsMimeType: (mimeType) => mimeType !== "image/png",
+      });
+
+      expect(result).toMatchObject({
+        status: FetchStatus.SKIPPED,
+        mimeType: "image/png",
+      });
+      expect(result.content.toString()).toBe("");
+      expect(wasRead()).toBe(false);
+      expect(stream.destroyed).toBe(true);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("gates a missing Content-Type as application/octet-stream", async () => {
+      mockedAxios.get.mockResolvedValue(ok("body", {}));
+
+      const result = await fetcher.fetch(PAGE_URL, {
+        acceptsMimeType: (mimeType) => mimeType !== "application/octet-stream",
+      });
+
+      expect(result).toMatchObject({
+        status: FetchStatus.SKIPPED,
+        mimeType: "application/octet-stream",
+      });
+    });
+
+    it("reads every response when no predicate is supplied", async () => {
+      mockedAxios.get.mockResolvedValue(ok("PNGDATA", { "content-type": "image/png" }));
+
+      const result = await fetcher.fetch(PAGE_URL);
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.content.toString()).toBe("PNGDATA");
+    });
+
+    it("gates the final hop of a redirect chain", async () => {
+      const { stream, wasRead } = trackedStream("PNGDATA");
+      mockedAxios.get
+        .mockResolvedValueOnce(redirect("https://example.com/final.png"))
+        .mockResolvedValueOnce(ok(stream, { "content-type": "image/png" }));
+
+      const result = await fetcher.fetch("https://example.com/start", {
+        acceptsMimeType: (mimeType) => mimeType !== "image/png",
+      });
+
+      expect(result).toMatchObject({
+        status: FetchStatus.SKIPPED,
+        source: "https://example.com/final.png",
+      });
+      expect(wasRead()).toBe(false);
+    });
+  });
+
+  describe("errors and retries", () => {
+    it("returns NOT_FOUND for a 404 without retrying or consulting the gate", async () => {
+      mockedAxios.get.mockRejectedValue(httpError(404));
+      const acceptsMimeType = vi.fn().mockReturnValue(false);
+
+      const result = await fetcher.fetch(PAGE_URL, { retryDelay: 1, acceptsMimeType });
+
+      expect(result).toMatchObject({ status: FetchStatus.NOT_FOUND, source: PAGE_URL });
+      expect(acceptsMimeType).not.toHaveBeenCalled();
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([408, 429, 500, 502, 503, 504, 525])("retries status %i", async (status) => {
+      mockedAxios.get
+        .mockRejectedValueOnce(httpError(status))
+        .mockResolvedValueOnce(ok("success"));
+
+      const result = await fetcher.fetch(PAGE_URL, { maxRetries: 1, retryDelay: 1 });
+
+      expect(result.content.toString()).toBe("success");
+      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([400, 401, 403, 405, 410])(
+      "fails status %i with HttpStatusError without retrying",
+      async (status) => {
+        mockedAxios.get.mockRejectedValue(httpError(status));
+
+        const error = await fetcher
+          .fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 })
+          .catch((e) => e);
+
+        expect(error).toBeInstanceOf(HttpStatusError);
+        expect(error.statusCode).toBe(status);
+        expect(mockedAxios.get).toHaveBeenCalledTimes(1);
       },
-    });
-    return { stream, wasDrained: () => delivered };
-  };
-
-  const respond = (mimeType: string, body: string, status = 200) => {
-    const { stream, wasDrained } = streamOf(body);
-    mockedAxios.get.mockResolvedValue({
-      status,
-      headers: { "content-type": mimeType },
-      data: stream,
-      request: { res: { responseUrl: "https://example.com/resource" } },
-    });
-    return { stream, wasDrained };
-  };
-
-  beforeEach(() => {
-    mockedAxios.get.mockReset();
-  });
-
-  it("reads a processable response in full from a real stream", async () => {
-    respond("text/html", "<html><body>hello</body></html>");
-
-    const result = await createFetcher().fetch("https://example.com/resource", {
-      acceptsMimeType: (m) => m === "text/html",
-    });
-
-    expect(result.status).toBe(FetchStatus.SUCCESS);
-    expect(result.content.toString()).toBe("<html><body>hello</body></html>");
-    expect(result.mimeType).toBe("text/html");
-  });
-
-  it("abandons an unprocessable response without draining the body", async () => {
-    const { stream, wasDrained } = respond("image/png", "PNGDATA".repeat(1000));
-
-    const result = await createFetcher().fetch("https://example.com/resource", {
-      acceptsMimeType: (m) => m !== "image/png",
-    });
-
-    expect(result.status).toBe(FetchStatus.SKIPPED);
-    expect(result.content.toString()).toBe("");
-    expect(result.mimeType).toBe("image/png");
-    expect(wasDrained()).toBe(false);
-    expect(stream.destroyed).toBe(true);
-  });
-
-  it("treats a missing Content-Type as unprocessable", async () => {
-    const { stream } = streamOf("body");
-    mockedAxios.get.mockResolvedValue({
-      status: 200,
-      headers: {},
-      data: stream,
-      request: { res: { responseUrl: "https://example.com/resource" } },
-    });
-
-    const result = await createFetcher().fetch("https://example.com/resource", {
-      // parseContentType resolves an absent header to application/octet-stream,
-      // which no pipeline claims — the same outcome as today, reached sooner.
-      acceptsMimeType: (m) => m !== "application/octet-stream",
-    });
-
-    expect(result.status).toBe(FetchStatus.SKIPPED);
-    expect(result.mimeType).toBe("application/octet-stream");
-  });
-
-  it("does no gating when no predicate is supplied", async () => {
-    respond("image/png", "PNGDATA");
-
-    const result = await createFetcher().fetch("https://example.com/resource");
-
-    expect(result.status).toBe(FetchStatus.SUCCESS);
-    expect(result.content.toString()).toBe("PNGDATA");
-  });
-
-  it("does not consult the gate for 304 Not Modified", async () => {
-    mockedAxios.get.mockResolvedValue({
-      status: 304,
-      headers: {},
-      data: null,
-      request: { res: { responseUrl: "https://example.com/resource" } },
-    });
-    const predicate = vi.fn().mockReturnValue(false);
-
-    const result = await createFetcher().fetch("https://example.com/resource", {
-      etag: '"abc"',
-      acceptsMimeType: predicate,
-    });
-
-    expect(result.status).toBe(FetchStatus.NOT_MODIFIED);
-    expect(predicate).not.toHaveBeenCalled();
-  });
-
-  it("does not consult the gate for 404 Not Found", async () => {
-    mockedAxios.get.mockRejectedValue(
-      Object.assign(new Error("Not Found"), {
-        isAxiosError: true,
-        response: { status: 404, headers: {}, data: null },
-      }),
     );
-    const predicate = vi.fn().mockReturnValue(false);
 
-    const result = await createFetcher().fetch("https://example.com/resource", {
-      acceptsMimeType: predicate,
+    it("retries a network error that has no status", async () => {
+      mockedAxios.get
+        .mockRejectedValueOnce(networkError("ECONNRESET"))
+        .mockResolvedValueOnce(ok("success"));
+
+      const result = await fetcher.fetch(PAGE_URL, { maxRetries: 1, retryDelay: 1 });
+
+      expect(result.content.toString()).toBe("success");
+      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
     });
 
-    expect(result.status).toBe(FetchStatus.NOT_FOUND);
-    expect(predicate).not.toHaveBeenCalled();
+    it.each(["ENOTFOUND", "ECONNREFUSED"])(
+      "fails %s with ScraperError without retrying",
+      async (code) => {
+        mockedAxios.get.mockRejectedValue(networkError(code));
+
+        const error = await fetcher
+          .fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 })
+          .catch((e) => e);
+
+        expect(error).toBeInstanceOf(ScraperError);
+        expect(error).not.toBeInstanceOf(HttpStatusError);
+        expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it.each([
+      ["the configured default", undefined, DEFAULT_CONFIG.scraper.fetcher.maxRetries],
+      ["an explicit maxRetries", 2, 2],
+    ])(
+      "gives up after %s number of retries",
+      async (_label, maxRetries, expectedRetries) => {
+        mockedAxios.get.mockRejectedValue(httpError(500));
+
+        const error = await fetcher
+          .fetch(PAGE_URL, { maxRetries, retryDelay: 1 })
+          .catch((e) => e);
+
+        expect(error).toBeInstanceOf(HttpStatusError);
+        expect(error.statusCode).toBe(500);
+        expect(mockedAxios.get).toHaveBeenCalledTimes(expectedRetries + 1);
+      },
+    );
+
+    it("fails a TLS certificate error with TlsCertificateError without retrying", async () => {
+      mockedAxios.get.mockRejectedValue(networkError("UNABLE_TO_VERIFY_LEAF_SIGNATURE"));
+
+      await expect(
+        fetcher.fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 }),
+      ).rejects.toBeInstanceOf(TlsCertificateError);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
   });
 
-  it("gates on the final hop of a redirect chain", async () => {
-    const { stream, wasDrained } = streamOf("PNGDATA");
-    mockedAxios.get
-      .mockResolvedValueOnce({
-        status: 301,
-        headers: { location: "https://example.com/final.png" },
-        data: null,
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        headers: { "content-type": "image/png" },
-        data: stream,
-        request: { res: { responseUrl: "https://example.com/final.png" } },
+  describe("Cloudflare challenge detection", () => {
+    it.each([
+      ["a cf-mitigated header", { "cf-mitigated": "challenge" }, ""],
+      ["a cloudflare server header", { server: "cloudflare" }, ""],
+      [
+        "the Enable JavaScript marker",
+        {},
+        "<p>Enable JavaScript and cookies to continue</p>",
+      ],
+      // The body is a stream and has to be drained before these markers can match.
+      ["the Just a moment marker", {}, "<html><body>Just a moment...</body></html>"],
+      ["the cf_chl_opt marker", {}, "<script>window._cf_chl_opt={};</script>"],
+    ])(
+      "fails a 403 with %s as a ChallengeError without retrying",
+      async (_label, headers, body) => {
+        mockedAxios.get.mockRejectedValue(httpError(403, headers, body));
+
+        await expect(
+          fetcher.fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 }),
+        ).rejects.toBeInstanceOf(ChallengeError);
+        expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("fails an ordinary 403 as an HttpStatusError", async () => {
+      mockedAxios.get.mockRejectedValue(
+        httpError(403, { server: "nginx" }, "<html><body>Access denied</body></html>"),
+      );
+
+      const error = await fetcher.fetch(PAGE_URL).catch((e) => e);
+
+      expect(error).toBeInstanceOf(HttpStatusError);
+      expect(error).not.toBeInstanceOf(ChallengeError);
+      expect(error.statusCode).toBe(403);
+    });
+  });
+
+  describe("cancellation", () => {
+    it("fails with CancellationError when axios cancels the request", async () => {
+      mockedAxios.get.mockRejectedValue(networkError("ERR_CANCELED"));
+
+      await expect(fetcher.fetch(PAGE_URL, { retryDelay: 1 })).rejects.toBeInstanceOf(
+        CancellationError,
+      );
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails with CancellationError and destroys the body when the signal aborts during the read", async () => {
+      const controller = new AbortController();
+      let started = false;
+      const body = new Readable({
+        read() {
+          if (started) return;
+          started = true;
+          this.push("partial");
+          controller.abort();
+        },
       });
+      mockedAxios.get.mockResolvedValue(ok(body, { "content-type": "text/html" }));
 
-    const result = await createFetcher().fetch("https://example.com/start", {
-      acceptsMimeType: (m) => m !== "image/png",
+      await expect(
+        fetcher.fetch(PAGE_URL, { signal: controller.signal, retryDelay: 1 }),
+      ).rejects.toBeInstanceOf(CancellationError);
+      expect(body.destroyed).toBe(true);
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
     });
-
-    expect(result.status).toBe(FetchStatus.SKIPPED);
-    expect(result.source).toBe("https://example.com/final.png");
-    expect(wasDrained()).toBe(false);
-    expect(mockedAxios.get).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not retry a skipped response", async () => {
-    respond("image/png", "PNGDATA");
-
-    const result = await createFetcher().fetch("https://example.com/resource", {
-      acceptsMimeType: () => false,
-    });
-
-    expect(result.status).toBe(FetchStatus.SKIPPED);
-    expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("HttpFetcher Cloudflare challenge detection", () => {
-  beforeEach(() => {
-    mockedAxios.get.mockReset();
-  });
-
-  it("detects a challenge from the response body when headers are absent", async () => {
-    // Regression guard for the streaming conversion: under responseType "stream"
-    // the error body is a Readable, so it must be drained before the body-text
-    // markers can match. Without this the three content checks silently no-op and
-    // only header-based detection survives.
-    mockedAxios.get.mockRejectedValue(
-      Object.assign(new Error("Forbidden"), {
-        isAxiosError: true,
-        response: {
-          status: 403,
-          headers: {},
-          data: Readable.from("<html><body>Just a moment...</body></html>"),
-        },
-      }),
-    );
-
-    await expect(createFetcher().fetch("https://example.com")).rejects.toThrow(
-      /challenge/i,
-    );
-  });
-
-  it("detects a challenge from the cf_chl_opt marker", async () => {
-    mockedAxios.get.mockRejectedValue(
-      Object.assign(new Error("Forbidden"), {
-        isAxiosError: true,
-        response: {
-          status: 403,
-          headers: {},
-          data: Readable.from("<script>window._cf_chl_opt={};</script>"),
-        },
-      }),
-    );
-
-    await expect(createFetcher().fetch("https://example.com")).rejects.toThrow(
-      /challenge/i,
-    );
-  });
-
-  it("does not treat an ordinary 403 as a challenge", async () => {
-    mockedAxios.get.mockRejectedValue(
-      Object.assign(new Error("Forbidden"), {
-        isAxiosError: true,
-        response: {
-          status: 403,
-          headers: { server: "nginx" },
-          data: Readable.from("<html><body>Access denied</body></html>"),
-        },
-      }),
-    );
-
-    await expect(createFetcher().fetch("https://example.com")).rejects.toThrow(
-      /Failed to fetch/,
-    );
-  });
-});
-
-describe("HttpFetcher response stream cleanup", () => {
-  // A body that is never read pins its socket, because Node will not return a
-  // partially-consumed response to the keep-alive pool. Only the success path
-  // consumes the stream, so every other exit must tear it down.
-  beforeEach(() => {
-    mockedAxios.get.mockReset();
-  });
-
-  it("destroys the body of a 304 response", async () => {
-    const body = Readable.from("unused");
-    mockedAxios.get.mockResolvedValue({
-      status: 304,
-      headers: {},
-      data: body,
-      request: { res: { responseUrl: "https://example.com" } },
-    });
-
-    const result = await createFetcher().fetch("https://example.com", {
-      etag: '"abc"',
-    });
-
-    expect(result.status).toBe(FetchStatus.NOT_MODIFIED);
-    expect(body.destroyed).toBe(true);
-  });
-
-  it("destroys the body of each redirect hop", async () => {
-    const hop = Readable.from("redirect body");
-    const final = Readable.from("<html>done</html>");
-    mockedAxios.get
-      .mockResolvedValueOnce({
-        status: 301,
-        headers: { location: "https://example.com/final" },
-        data: hop,
-      })
-      .mockResolvedValueOnce({
-        status: 200,
-        headers: { "content-type": "text/html" },
-        data: final,
-        request: { res: { responseUrl: "https://example.com/final" } },
-      });
-
-    const result = await createFetcher().fetch("https://example.com/start");
-
-    expect(result.status).toBe(FetchStatus.SUCCESS);
-    expect(hop.destroyed).toBe(true);
-  });
-
-  it("destroys the body when the content-type gate rejects it", async () => {
-    const body = Readable.from("PNGDATA");
-    mockedAxios.get.mockResolvedValue({
-      status: 200,
-      headers: { "content-type": "image/png" },
-      data: body,
-      request: { res: { responseUrl: "https://example.com/x" } },
-    });
-
-    const result = await createFetcher().fetch("https://example.com/x", {
-      acceptsMimeType: () => false,
-    });
-
-    expect(result.status).toBe(FetchStatus.SKIPPED);
-    expect(body.destroyed).toBe(true);
   });
 });
