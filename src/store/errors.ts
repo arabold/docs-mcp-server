@@ -41,10 +41,11 @@ export function escapeControlCharacters(text: string): string {
 
 /**
  * Labels a library version as `name@version` for logs and messages, with
- * control characters escaped and unversioned documentation shown as `latest`.
+ * control characters escaped in both and unversioned documentation shown as
+ * `latest`.
  */
 export function formatVersionLabel(library: string, version: string): string {
-  return `${escapeControlCharacters(library)}@${version || "latest"}`;
+  return `${escapeControlCharacters(library)}@${escapeControlCharacters(version) || "latest"}`;
 }
 
 /**

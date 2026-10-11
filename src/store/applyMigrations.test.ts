@@ -1373,5 +1373,18 @@ describe("Database Migrations", () => {
         ["svelte", "svelte"],
       ]);
     });
+
+    it("re-keys only the oldest of several padded names that share a free trimmed key", async () => {
+      await prepareLegacyLibraries();
+      seedLibrary(" react ", ["1.0.0"]);
+      seedLibrary("react ", ["2.0.0"]);
+
+      await expect(applyMigrations(db)).resolves.toBeUndefined();
+
+      expect(libraryRows().map((row) => [row.name, row.display_name])).toEqual([
+        ["react", "react"],
+        ["react ", "react "],
+      ]);
+    });
   });
 });

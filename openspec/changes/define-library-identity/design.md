@@ -155,7 +155,8 @@ A failure at any point rolls back the whole operation, so a versionless library 
 behind.
 
 The migration also re-keys padded legacy names (see Context): `name` becomes the name with surrounding
-whitespace removed, unless that trimmed key already exists. Each row's display name is then filled from
+whitespace removed, unless that trimmed key already exists. When several padded names trim to the same
+free key, only the oldest (lowest `id`) takes it, and the others count as collided. Each row's display name is then filled from
 its `name`, which is already trimmed for every row except a padded key that collided. That row keeps
 its padded name as its display name, so the listing, which groups by display name, never merges its
 versions into the library it collides with. "Whitespace" is exactly the set `String.prototype.trim()` removes, spelled out as code points in
@@ -503,8 +504,9 @@ constraint (D3). Mark the steps as two `@migration-step` blocks.
 1. `DELETE FROM libraries WHERE id NOT IN (SELECT library_id FROM versions)`. This removes the
    versionless leftovers. Nothing references them, so no foreign key is affected.
 2. Re-key padded legacy names: set `name` to its value trimmed of the `String.prototype.trim()` whitespace
-   set (D3), where that changes the name, unless the trimmed key already exists. Foreign keys reference
-   `id`, so none is affected.
+   set (D3), where that changes the name, unless the trimmed key already exists. Of several padded names
+   that trim to the same free key, only the lowest `id` is re-keyed. Foreign keys reference `id`, so none
+   is affected.
 3. `PRAGMA defer_foreign_keys = ON`.
 4. Copy `id`, `name` and `created_at` into a temp table, and capture the current `sqlite_sequence` value
    for `libraries`.
@@ -570,7 +572,8 @@ tasks 1.4).
   inserting (see Context), so no stored key differs from its JS key by case.
 - [A padded legacy key collides with its trimmed form] → This happens only if the same library was
   indexed once with padding and once without, before trimming was introduced. 017 then leaves both rows
-  as they are. The padded one keeps its padded name as its display name, so it is listed separately, and
+  as they are. If it was indexed only under different paddings, the oldest padded row is re-keyed and
+  the rest collide with it. The padded one keeps its padded name as its display name, so it is listed separately, and
   it stays unreachable by name, as it is today. The spec's rule that no two libraries compare equal is
   otherwise upheld for all upgraded data.
 - [Legacy empty-named library] → It is kept, per the spec, and it is listed. No entry point accepts an

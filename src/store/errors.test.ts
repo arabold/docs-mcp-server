@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AmbiguousPageInStoreError,
+  formatVersionLabel,
   InvalidLibraryNameError,
   LibraryAlreadyExistsError,
   LibraryNotFoundInStoreError,
@@ -68,5 +69,10 @@ describe("library identity errors", () => {
   ])("%s escapes every control character in names", (_label, error) => {
     expect(error.message).toContain(ESCAPED);
     expect(error.message).not.toMatch(/\p{Cc}/u);
+  });
+
+  it("escapes both the library and the version in a version label", () => {
+    expect(formatVersionLabel(NAME, NAME)).toBe(`${ESCAPED}@${ESCAPED}`);
+    expect(formatVersionLabel("React", "")).toBe("React@latest");
   });
 });

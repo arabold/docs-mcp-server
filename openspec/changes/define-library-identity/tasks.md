@@ -10,7 +10,7 @@ task 8.4 checks that none were missed. Use Node 22 (`nvm use 22`) for every comm
 - [x] 1.1 Add `db/migrations/017-add-library-display-name.sql` in two `@migration-step` blocks, following
       the step order in design.md:
       - prune versionless libraries;
-      - re-key padded names unless the trimmed key exists;
+      - re-key padded names unless the trimmed key exists (the oldest wins among padded names sharing a free key);
       - defer foreign keys;
       - back up the rows and `sqlite_sequence`;
       - drop the table;
@@ -49,6 +49,7 @@ task 8.4 checks that none were missed. Use Node 22 (`nvm use 22`) for every comm
       - the colliding ` vue ` row keeps its key, and its padded name as its display name;
       - `vue` is unchanged;
       - the migration succeeds.
+      Seed ` react ` and `react ` with no `react`, and assert that only the older row is re-keyed.
 
 ## 2. Naming helpers and errors
 

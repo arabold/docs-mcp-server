@@ -19,17 +19,22 @@ CREATE TEMP TABLE _libraries_017_whitespace AS SELECT char(
 ) AS chars;
 
 -- Older releases stored names untrimmed, so a padded key such as ' react ' is unreachable by the trimmed
--- lookup key. Re-key it unless another row already trims to the same key; such a collision is left as it
--- is. The count is over trimmed names, which re-keying does not change, so the result does not depend on
--- the order in which rows are updated.
+-- lookup key. Re-key it unless another row already has the trimmed key. When several padded rows trim to
+-- the same free key, only the oldest (lowest id) takes it and the others are left as they are. Per key,
+-- only that oldest row changes, and neither condition depends on it, so the result does not depend on the
+-- order in which rows are updated.
 UPDATE libraries
 SET name = trim(name, (SELECT chars FROM _libraries_017_whitespace))
 WHERE name <> trim(name, (SELECT chars FROM _libraries_017_whitespace))
-  AND (
-    SELECT COUNT(*) FROM libraries AS other
+  AND NOT EXISTS (
+    SELECT 1 FROM libraries AS other
+    WHERE other.name = trim(libraries.name, (SELECT chars FROM _libraries_017_whitespace))
+  )
+  AND id = (
+    SELECT MIN(other.id) FROM libraries AS other
     WHERE trim(other.name, (SELECT chars FROM _libraries_017_whitespace))
       = trim(libraries.name, (SELECT chars FROM _libraries_017_whitespace))
-  ) = 1;
+  );
 
 PRAGMA defer_foreign_keys = ON;
 
