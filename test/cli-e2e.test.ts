@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -6,18 +6,30 @@ import { describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { loadConfig } from "../src/utils/config";
-import { getCliCommand, writeTestConfig } from "./test-helpers";
+import {
+  getCliCommand,
+  getFreePort,
+  startCliServer,
+  stopChildProcess,
+  writeTestConfig,
+} from "./test-helpers";
 
 describe("CLI E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
 
-  async function runCli(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+  /** Run the CLI; with `timeoutMs`, kill it after that long and report exit code 1. */
+  async function runCli(
+    args: string[],
+    timeoutMs?: number,
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       const { cmd, args: cliArgs } = getCliCommand();
       const proc = spawn(cmd, [...cliArgs, ...args], {
         cwd: projectRoot,
         stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, VITEST_WORKER_ID: undefined },
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
       });
 
       let stdout = "";
@@ -103,4 +115,43 @@ describe("CLI E2E", () => {
     }
     // Two CLI processes; generous for CI runners, which are several times slower
   }, 60000);
+
+  it("returns from scrape --server-url once the worker finishes the job", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-worker-"));
+    const configPath = writeTestConfig(storePath);
+    const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
+    let worker: ChildProcess | undefined;
+
+    try {
+      const started = await startCliServer(
+        [
+          "worker",
+          "--host",
+          "127.0.0.1",
+          "--port",
+          String(await getFreePort()),
+          "--store-path",
+          storePath,
+          "--config",
+          configPath,
+        ],
+        { LOG_LEVEL: "info" },
+      );
+      worker = started.process;
+
+      // The cap turns a client that never returns into a failed assertion
+      // instead of a test timeout that leaves the CLI process behind.
+      const result = await runCli(
+        ["scrape", "React", fixtureUrl, "--server-url", started.url, "--config", configPath],
+        40000,
+      );
+
+      expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("Successfully scraped 1 pages");
+    } finally {
+      await stopChildProcess(worker);
+      rmSync(storePath, { recursive: true, force: true });
+    }
+    // Worker startup plus one CLI process; generous for CI runners
+  }, 90000);
 });

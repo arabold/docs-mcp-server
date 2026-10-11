@@ -9,7 +9,7 @@
  * off, and how the unauthenticated API is shielded from foreign web pages.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import path from "node:path";
 import {
   Client,
@@ -18,59 +18,22 @@ import {
 } from "@modelcontextprotocol/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  getCliCommand,
   getFreePort,
   launchChromium,
   requestWithHost,
+  startCliServer,
   stopChildProcess,
   tryWebSocket,
 } from "./test-helpers";
 
 /** Spawns the server and resolves with its advertised base URL once it is ready. */
-async function startServer(port: number): Promise<{ process: ChildProcess; url: string }> {
+function startServer(port: number): Promise<{ process: ChildProcess; url: string }> {
   const projectRoot = path.resolve(import.meta.dirname, "..");
-  const testEnv = { ...process.env };
-  delete testEnv.VITEST_WORKER_ID;
-  const { cmd, args } = getCliCommand();
-
-  const child = spawn(cmd, [...args, "--protocol", "http", "--port", String(port)], {
-    cwd: projectRoot,
-    stdio: ["pipe", "pipe", "pipe"],
-    env: {
-      ...testEnv,
-      DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-http"),
-      DOCS_MCP_TELEMETRY: "false",
-      LOG_LEVEL: "info",
-    },
+  return startCliServer(["--protocol", "http", "--port", String(port)], {
+    DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-http"),
+    DOCS_MCP_TELEMETRY: "false",
+    LOG_LEVEL: "info",
   });
-
-  const url = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Server startup timed out")), 30000);
-    let output = "";
-    const handleOutput = (data: Buffer) => {
-      const text = data.toString();
-      output += text;
-      const match = text.match(/available at (http:\/\/[^\s]+)/);
-      if (match) {
-        clearTimeout(timeout);
-        resolve(match[1]);
-      }
-    };
-    child.stdout?.on("data", handleOutput);
-    child.stderr?.on("data", handleOutput);
-    child.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(new Error(`Server process error: ${err.message}`));
-    });
-    child.on("exit", (code) => {
-      if (code !== 0 && code !== null) {
-        clearTimeout(timeout);
-        reject(new Error(`Server exited with code ${code}. Output: ${output}`));
-      }
-    });
-  });
-
-  return { process: child, url };
 }
 
 async function connectClient(baseUrl: string): Promise<Client> {

@@ -26,7 +26,17 @@ import {
   type RelayedEnqueueErrorCode,
 } from "./trpc/interfaces";
 import type { PipelineRouter } from "./trpc/router";
-import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "./types";
+import {
+  type PipelineJob,
+  PipelineJobStatus,
+  type PipelineManagerCallbacks,
+} from "./types";
+
+/** How often `waitForJobCompletion` asks the worker for the job's state. */
+const JOB_POLL_INTERVAL_MS = 1000;
+
+/** Consecutive failed job lookups after which `waitForJobCompletion` gives up. */
+const MAX_FAILED_JOB_POLLS = 5;
 
 /**
  * Re-raises a worker's enqueue error as a `TRPCError` with the same code and
@@ -189,34 +199,96 @@ export class PipelineClient implements IPipeline {
     }
   }
 
+  /**
+   * Waits until the worker reports the job as completed, failed, or cancelled.
+   * Like `PipelineManager.waitForJobCompletion`, it resolves for completed and
+   * cancelled jobs and rejects for failed ones.
+   *
+   * Status events on the local bus settle the wait as soon as a
+   * `RemoteEventProxy` relays them, but only the server sets one up. The wait
+   * therefore also asks the worker for the job right away and then every
+   * second, which serves the CLI and covers a job that finished before the
+   * listener was attached.
+   *
+   * @param jobId The job to wait for.
+   * @throws Error if the job failed, the worker does not know it, or the worker
+   * stays unreachable for several lookups in a row.
+   */
   async waitForJobCompletion(jobId: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      // Listen for job status changes on the event bus
-      // RemoteEventProxy bridges remote worker events to this local bus
-      const unsubscribe = this.eventBus.on(
-        EventType.JOB_STATUS_CHANGE,
-        (job: PipelineJob) => {
-          // Filter for the specific job we're waiting for
-          if (job.id !== jobId) {
+      let settled = false;
+      let pollTimer: ReturnType<typeof setTimeout> | undefined;
+      let failedPolls = 0;
+
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        unsubscribe();
+        clearTimeout(pollTimer);
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+
+      const settleIfDone = (
+        job: Pick<PipelineJob, "status" | "error" | "errorMessage">,
+      ) => {
+        switch (job.status) {
+          case PipelineJobStatus.COMPLETED:
+          case PipelineJobStatus.CANCELLED:
+            finish();
+            break;
+          case PipelineJobStatus.FAILED:
+            // The worker emits the FAILED status before it sets `error`, so a
+            // relayed event carries the text only in `errorMessage`
+            finish(
+              new Error(job.error?.message || job.errorMessage || `Job ${jobId} failed`),
+            );
+            break;
+        }
+      };
+
+      const unsubscribe = this.eventBus.on(EventType.JOB_STATUS_CHANGE, (job) => {
+        if (job.id === jobId) {
+          settleIfDone(job);
+        }
+      });
+
+      const poll = async () => {
+        try {
+          const job = await this.getJob(jobId);
+          failedPolls = 0;
+          if (!job) {
+            // Clearing finished jobs or restarting the worker drops the record
+            finish(
+              new Error(
+                `Job not found: ${jobId}. The worker no longer knows it; it may have been cleared or the worker restarted.`,
+              ),
+            );
             return;
           }
-
-          // Check if job reached a terminal state
-          if (
-            job.status === "completed" ||
-            job.status === "failed" ||
-            job.status === "cancelled"
-          ) {
-            unsubscribe();
-
-            if (job.status === "failed" && job.error) {
-              reject(new Error(job.error.message));
-            } else {
-              resolve();
-            }
+          settleIfDone(job);
+        } catch (error) {
+          // getJob only throws Error instances
+          failedPolls++;
+          if (failedPolls >= MAX_FAILED_JOB_POLLS) {
+            finish(error as Error);
+            return;
           }
-        },
-      );
+          logger.debug(
+            `Job lookup ${failedPolls}/${MAX_FAILED_JOB_POLLS} for ${jobId} failed: ${error}`,
+          );
+        }
+        if (!settled) {
+          pollTimer = setTimeout(poll, JOB_POLL_INTERVAL_MS);
+        }
+      };
+
+      void poll();
     });
   }
 

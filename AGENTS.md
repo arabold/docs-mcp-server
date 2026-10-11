@@ -116,7 +116,7 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 
 | Suite | Covers | Requirements | In default `npm test`? |
 |---|---|---|---|
-| `cli-e2e.test.ts` | CLI smoke: help, version, unknown-arg handling; `scrape` refuses an existing version without `--replace` (FTS-only, `file://` fixture) | none | yes |
+| `cli-e2e.test.ts` | CLI smoke: help, version, unknown-arg handling; `scrape` refuses an existing version without `--replace`; `scrape --server-url` returns once a spawned worker finishes the job (FTS-only, `file://` fixture) | none | yes |
 | `mcp-stdio-e2e.test.ts` | MCP server over stdio: spawn, protocol handshake, basic tools; `scrape_docs` rejects an existing version and names `replace: true` | none | yes |
 | `mcp-http-e2e.test.ts` | MCP over Streamable HTTP (protocol 2026-07-28): client connect, tools/resources, handshake-era client on the same endpoint, deprecated `/sse` transport with auth off, 405/404 surface, API/WebSocket origin checks | none | yes |
 | `auth-e2e.test.ts` | Resource-server auth against a local issuer: challenge, protected resource metadata, token acceptance/rejection, `/sse` not served; optional live-provider discovery | none (live block needs `DOCS_MCP_AUTH_ISSUER_URL`) | yes |
