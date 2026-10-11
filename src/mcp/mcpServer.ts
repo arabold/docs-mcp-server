@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v3";
 import { PipelineJobStatus } from "../pipeline/types";
@@ -66,26 +67,63 @@ const patternsSchema = z.union([z.string(), z.array(z.string())]).transform((val
 });
 
 /**
+ * Resolves the instructions text advertised to MCP clients during initialization.
+ * Call this once at startup and pass the result to `createMcpServerInstance()`, so the
+ * instructions file is read a single time rather than for every client session.
+ * `server.instructions` and `server.instructionsFile` are mutually exclusive.
+ * @param config The application configuration.
+ * @returns The instructions text, or `undefined` when none are configured.
+ * @throws {Error} If both settings are set, or the configured instructions file cannot be read.
+ */
+export function resolveServerInstructions(config: AppConfig): string | undefined {
+  const { instructions, instructionsFile: filePath } = config.server;
+  if (instructions !== undefined && filePath !== undefined) {
+    throw new Error(
+      "Both server.instructions and server.instructionsFile are set; configure only one of them.",
+    );
+  }
+  if (instructions !== undefined) {
+    return instructions;
+  }
+  if (filePath === undefined) {
+    return undefined;
+  }
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to read MCP server instructions file "${filePath}": ${reason}`,
+    );
+  }
+}
+
+/**
  * Creates and configures an instance of the MCP server with registered tools and resources.
  * @param tools The shared tool instances to use for server operations.
  * @param config The application configuration.
+ * @param instructions Instructions text sent to clients during initialization.
  * @returns A configured McpServer instance.
  */
 export function createMcpServerInstance(
   tools: McpServerTools,
   config: AppConfig,
+  instructions?: string,
 ): McpServer {
   const readOnly = config.app.readOnly;
+  const { name, title } = config.server;
   const server = new McpServer(
     {
-      name: "docs-mcp-server",
-      version: "0.1.0",
+      name,
+      ...(title !== undefined ? { title } : {}),
+      version: __APP_VERSION__,
     },
     {
       capabilities: {
         tools: {},
         resources: {},
       },
+      instructions,
     },
   );
 
