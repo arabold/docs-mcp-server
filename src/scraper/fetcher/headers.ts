@@ -61,3 +61,24 @@ export function withMarkdownPreferredAccept(
     Accept: MARKDOWN_PREFERRED_ACCEPT,
   };
 }
+
+/**
+ * Returns headers without the `Sec-Fetch-*` family.
+ *
+ * A browser sets these itself, with values that fit each request: a script
+ * gets `Sec-Fetch-Dest: script`, not the `document` of the page that loads it.
+ * While Playwright intercepts requests, Chromium fails every sub-resource
+ * request that carries an overridden one with `net::ERR_INVALID_ARGUMENT`.
+ *
+ * @param headers Request headers, such as a generated fingerprint.
+ * @returns The headers minus any `Sec-Fetch-*` entry, in any letter case.
+ */
+export function withoutSecFetchHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(
+      ([header]) => !header.toLowerCase().startsWith("sec-fetch-"),
+    ),
+  );
+}

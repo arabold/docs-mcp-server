@@ -125,6 +125,7 @@ Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src
 | `html-pipeline-basic-e2e.test.ts` | HTML scrape pipeline against stable endpoints (httpbin.org) | network | yes |
 | `html-pipeline-nonhtml-e2e.test.ts` | Non-HTML content (text/plain) bypasses Playwright cleanly | none | yes |
 | `html-pipeline-live-e2e.test.ts` | HTML pipeline against real documentation sites (anti-scrape, JS-heavy) | network; slow & flaky | **no** — `npm run test:live` (uses `vite.config.live.ts`) |
+| `browser-fetcher-e2e.test.ts` | `BrowserFetcher` against a real Chromium: a page's external scripts load and run even when the request headers name `Sec-Fetch-*` values | Playwright Chromium | yes |
 | `browser-restart-e2e.test.ts` | `BrowserFetcher` against a real Chromium killed with SIGKILL: later pages get a new browser, the page it died loading is retried, concurrent pages share one launch | Playwright Chromium; skips on Windows | yes |
 | `refresh-pipeline-e2e.test.ts` | Refresh handling: 200/304/404, broken links, etag flow | none (mock server) | yes |
 | `scrape-progress-e2e.test.ts` | Progress counter semantics: the `pagesScraped`/`totalPages` invariant, `maxPages` bounding indexed pages, counters persisted to the job record and read back through `GetJobInfoTool` | none (mock server) | yes |

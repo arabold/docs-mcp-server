@@ -12,6 +12,7 @@ vi.mock("playwright", () => ({
 
 import { chromium } from "playwright";
 import { BrowserFetcher } from "./BrowserFetcher";
+import { FingerprintGenerator } from "./FingerprintGenerator";
 import { FetchStatus } from "./types";
 
 /**
@@ -110,6 +111,35 @@ describe("BrowserFetcher", () => {
     expect(page.setExtraHTTPHeaders).toHaveBeenCalledWith(
       expect.not.objectContaining({ Accept: MARKDOWN_PREFERRED_ACCEPT }),
     );
+  });
+
+  it("keeps Sec-Fetch headers off the page so Chromium sets its own", async () => {
+    // Overridden Sec-Fetch-* headers make Chromium fail the page's scripts and
+    // other sub-resources while requests are intercepted.
+    const generateHeaders = vi
+      .spyOn(FingerprintGenerator.prototype, "generateHeaders")
+      .mockReturnValue({
+        "user-agent": "Fingerprint/1.0",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-dest": "document",
+      });
+    try {
+      const { page } = mockBrowser();
+      const fetcher = new BrowserFetcher(loadConfig().scraper);
+      await fetcher.fetch("https://example.com", {
+        headers: { "Sec-Fetch-Site": "none", "X-Test": "1" },
+      });
+
+      const [headers] = vi.mocked(page.setExtraHTTPHeaders).mock.calls[0];
+      expect(Object.keys(headers).map((name) => name.toLowerCase())).not.toEqual(
+        expect.arrayContaining([expect.stringMatching(/^sec-fetch-/)]),
+      );
+      expect(headers).toEqual(
+        expect.objectContaining({ "user-agent": "Fingerprint/1.0", "X-Test": "1" }),
+      );
+    } finally {
+      generateHeaders.mockRestore();
+    }
   });
 
   it("returns raw response body for Markdown responses instead of rendered HTML", async () => {
