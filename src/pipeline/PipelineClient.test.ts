@@ -1,6 +1,6 @@
 import { createWSClient } from "@trpc/client";
 import { TRPCError } from "@trpc/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
 import { PipelineClient } from "./PipelineClient";
@@ -154,6 +154,104 @@ describe("PipelineClient", () => {
   });
 
   describe("waitForJobCompletion", () => {
+    const runningJob = { id: "job-123", status: "running", error: null };
+
+    beforeEach(() => {
+      mockClient.getJob.query.mockResolvedValue(runningJob);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("should resolve from the worker's job state when no event arrives", async () => {
+      vi.useFakeTimers();
+      mockClient.getJob.query
+        .mockResolvedValueOnce(runningJob)
+        .mockResolvedValueOnce({ ...runningJob, status: "completed" });
+
+      const waitPromise = client.waitForJobCompletion("job-123");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    });
+
+    it("should resolve right away for a job that finished before the wait", async () => {
+      mockClient.getJob.query.mockResolvedValue({ ...runningJob, status: "cancelled" });
+
+      await expect(client.waitForJobCompletion("job-123")).resolves.toBeUndefined();
+    });
+
+    it("should reject with the job's error when the worker reports it failed", async () => {
+      mockClient.getJob.query.mockResolvedValue({
+        ...runningJob,
+        status: "failed",
+        error: { message: "Outside the allowed roots" },
+      });
+
+      await expect(client.waitForJobCompletion("job-123")).rejects.toThrow(
+        "Outside the allowed roots",
+      );
+    });
+
+    it("should reject for a failed job that carries no error message", async () => {
+      const waitPromise = client.waitForJobCompletion("job-123");
+
+      eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+        ...runningJob,
+        status: "failed",
+      } as any);
+
+      await expect(waitPromise).rejects.toThrow("Job job-123 failed");
+    });
+
+    it("should reject when the worker does not know the job", async () => {
+      mockClient.getJob.query.mockResolvedValue(undefined);
+
+      await expect(client.waitForJobCompletion("job-123")).rejects.toThrow(
+        "Job not found: job-123",
+      );
+    });
+
+    it("should keep waiting through a failed lookup", async () => {
+      vi.useFakeTimers();
+      mockClient.getJob.query
+        .mockRejectedValueOnce(new Error("socket hang up"))
+        .mockResolvedValueOnce({ ...runningJob, status: "completed" });
+
+      const waitPromise = client.waitForJobCompletion("job-123");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      await expect(waitPromise).resolves.toBeUndefined();
+    });
+
+    it("should give up after five failed lookups in a row", async () => {
+      vi.useFakeTimers();
+      mockClient.getJob.query.mockRejectedValue(new Error("Connection refused"));
+
+      const waitPromise = client.waitForJobCompletion("job-123");
+      const outcome = expect(waitPromise).rejects.toThrow("Connection refused");
+      await vi.advanceTimersByTimeAsync(4000);
+
+      await outcome;
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(5);
+    });
+
+    it("should stop asking the worker once an event settles the wait", async () => {
+      vi.useFakeTimers();
+      const waitPromise = client.waitForJobCompletion("job-123");
+      await vi.advanceTimersByTimeAsync(0);
+
+      eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+        ...runningJob,
+        status: "completed",
+      } as any);
+      await expect(waitPromise).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(1);
+    });
+
     it("should resolve when job completes successfully via event bus", async () => {
       const jobId = "job-123";
 

@@ -240,7 +240,7 @@ The pipeline system manages asynchronous job processing with persistent state an
 
 **PipelineWorker**: Executes individual jobs, orchestrating content fetching, processing, and storage. Reports progress through callbacks to the manager, which are converted to events.
 
-**PipelineClient**: tRPC client that provides identical interface to PipelineManager for external worker communication. Uses event-driven `waitForJobCompletion` via `EventBus` subscription instead of polling.
+**PipelineClient**: tRPC client that provides identical interface to PipelineManager for external worker communication. `waitForJobCompletion` settles on the first terminal status it sees: a `JOB_STATUS_CHANGE` event relayed by `RemoteEventProxy`, or the worker's `getJob` state, which it checks right away and then every second. The CLI has no proxy and relies on the lookup.
 
 **RemoteEventProxy**: Bridges events from external workers to the local `EventBus`. Subscribes to the worker's tRPC event stream (WebSocket) and re-emits events locally, making distributed execution transparent to consumers.
 
