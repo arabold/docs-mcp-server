@@ -1,553 +1,318 @@
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScraperService } from "../scraper";
-import type { ScrapeResult, ScraperProgressEvent } from "../scraper/types";
-import { PageOutcome } from "../scraper/types";
+import {
+  PageOutcome,
+  type ScrapeResult,
+  type ScraperProgressEvent,
+} from "../scraper/types";
 import type { DocumentManagementService } from "../store/DocumentManagementService";
+import { CancellationError } from "./errors";
 import { PipelineWorker } from "./PipelineWorker";
-import type { InternalPipelineJob, PipelineManagerCallbacks } from "./types";
-import { PipelineJobStatus } from "./types";
+import { type InternalPipelineJob, PipelineJobStatus } from "./types";
 
-// Mock dependencies
-vi.mock("../store/DocumentManagementService");
-vi.mock("../scraper/ScraperService");
+const LIBRARY = "test-lib";
+const VERSION = "1.0.0";
+
+const scrapeResult: ScrapeResult = {
+  textContent: "content",
+  url: "https://example.com/page",
+  title: "Page",
+  sourceContentType: "text/html",
+  contentType: "text/html",
+  chunks: [],
+  links: [],
+  errors: [],
+};
+
+const emptyPage: NonNullable<ScraperProgressEvent["emptyPage"]> = {
+  url: "https://example.com/page",
+  title: "Empty page",
+  sourceContentType: "text/html",
+  contentType: "text/markdown",
+  etag: '"v1"',
+  lastModified: null,
+  pipelineFailed: false,
+};
+
+/** A progress event for one processed page; fields not given are neutral. */
+function progress(
+  overrides: Partial<ScraperProgressEvent> & Pick<ScraperProgressEvent, "outcome">,
+): ScraperProgressEvent {
+  return {
+    pagesScraped: 1,
+    totalPages: 1,
+    totalDiscovered: 1,
+    pagesIndexed: 0,
+    currentUrl: "https://example.com/page",
+    depth: 1,
+    maxDepth: 1,
+    result: null,
+    ...overrides,
+  };
+}
 
 describe("PipelineWorker", () => {
-  let mockStore: Partial<DocumentManagementService>;
-  let mockScraperService: Partial<ScraperService>;
-  let mockCallbacks: PipelineManagerCallbacks;
-  let worker: PipelineWorker;
-  let mockJob: InternalPipelineJob;
-  let abortController: AbortController;
+  const store = {
+    removeAllDocuments: vi.fn(),
+    addScrapeResult: vi.fn(),
+    addEmptyPage: vi.fn(),
+    deletePage: vi.fn(),
+  };
+  const scraper = { scrape: vi.fn() };
+  const callbacks = { onJobProgress: vi.fn(), onJobError: vi.fn() };
+  const worker = new PipelineWorker(
+    store as unknown as DocumentManagementService,
+    scraper as unknown as ScraperService,
+  );
+  let job: InternalPipelineJob;
+
+  /** Makes the scraper report the given events, in order, then finish. */
+  function scrapeReports(...events: ScraperProgressEvent[]) {
+    scraper.scrape.mockImplementation(
+      async (_options, onProgress: (event: ScraperProgressEvent) => Promise<void>) => {
+        for (const event of events) {
+          await onProgress(event);
+        }
+      },
+    );
+  }
+
+  /** Every write the worker made to the store after the initial clear. */
+  function storeWrites() {
+    return [
+      ...store.addScrapeResult.mock.calls.map((args) => ["addScrapeResult", ...args]),
+      ...store.addEmptyPage.mock.calls.map((args) => ["addEmptyPage", ...args]),
+      ...store.deletePage.mock.calls.map((args) => ["deletePage", ...args]),
+    ];
+  }
 
   beforeEach(() => {
     vi.resetAllMocks();
-
-    mockStore = {
-      addScrapeResult: vi.fn().mockResolvedValue(undefined),
-      removeAllDocuments: vi.fn().mockResolvedValue(undefined),
-      deletePage: vi.fn().mockResolvedValue(undefined),
-    };
-
-    mockScraperService = {
-      // Mock scrape to allow simulation of progress callbacks
-      scrape: vi.fn().mockImplementation(async (_options, _progressCallback, _signal) => {
-        // Default: simulate immediate completion with no documents
-        return Promise.resolve();
-      }),
-    };
-
-    mockCallbacks = {
-      onJobProgress: vi.fn().mockResolvedValue(undefined),
-      onJobError: vi.fn().mockResolvedValue(undefined),
-      onJobStatusChange: vi.fn().mockResolvedValue(undefined), // Not used by worker directly, but part of type
-    };
-
-    worker = new PipelineWorker(
-      mockStore as DocumentManagementService,
-      mockScraperService as ScraperService,
-    );
-
-    // Create a default mock job for tests
-    abortController = new AbortController();
-    mockJob = {
+    scraper.scrape.mockResolvedValue(undefined);
+    job = {
       id: "test-job-id",
-      library: "test-lib",
-      version: "1.0.0",
+      library: LIBRARY,
+      version: VERSION,
       versionId: 1,
-      status: PipelineJobStatus.RUNNING, // Assume worker receives a running job
+      status: PipelineJobStatus.RUNNING,
       progress: null,
       error: null,
       createdAt: new Date(),
       startedAt: new Date(),
       finishedAt: null,
-      abortController: abortController,
-      completionPromise: Promise.resolve(), // Mock promise parts if needed, but worker doesn't use them directly
+      abortController: new AbortController(),
+      completionPromise: Promise.resolve(),
       resolveCompletion: vi.fn(),
       rejectCompletion: vi.fn(),
-      sourceUrl: "http://example.com",
+      sourceUrl: "https://example.com",
       scraperOptions: {
-        url: "http://example.com",
-        library: "test-lib",
-        version: "1.0.0",
+        url: "https://example.com",
+        library: LIBRARY,
+        version: VERSION,
         maxPages: 10,
         maxDepth: 1,
       },
     };
   });
 
-  it("should execute job successfully, calling scrape, addScrapeResult, and onJobProgress", async () => {
-    const mockProcessed1: ScrapeResult = {
-      textContent: "doc1",
-      url: "url1",
-      title: "Doc 1",
-      sourceContentType: "text/html",
-      contentType: "text/html",
-      chunks: [],
-      links: [],
-      errors: [],
-    };
-    const mockProcessed2: ScrapeResult = {
-      textContent: "doc2",
-      url: "url2",
-      title: "Doc 2",
-      sourceContentType: "text/html",
-      contentType: "text/html",
-      chunks: [],
-      links: [],
-      errors: [],
-    };
+  it("scrapes with the job's options and abort signal", async () => {
+    await worker.executeJob(job, callbacks);
 
-    // Configure mock scrape to yield progress
-    (mockScraperService.scrape as Mock).mockImplementation(
-      async (_options, progressCallback, _signal) => {
-        const progress1: ScraperProgressEvent = {
-          pagesScraped: 1,
-          totalPages: 2,
-          currentUrl: "url1",
-          depth: 1,
-          maxDepth: 1,
-          result: mockProcessed1,
-          totalDiscovered: 0,
-          pagesIndexed: 0,
-          outcome: PageOutcome.Stored,
-        };
-        await progressCallback(progress1);
-
-        const progress2: ScraperProgressEvent = {
-          pagesScraped: 2,
-          totalPages: 2,
-          currentUrl: "url2",
-          depth: 1,
-          maxDepth: 1,
-          result: mockProcessed2,
-          totalDiscovered: 0,
-          pagesIndexed: 0,
-          outcome: PageOutcome.Stored,
-        };
-        await progressCallback(progress2);
-      },
+    expect(scraper.scrape).toHaveBeenCalledWith(
+      job.scraperOptions,
+      expect.any(Function),
+      job.abortController.signal,
     );
-
-    await worker.executeJob(mockJob, mockCallbacks);
-
-    // Verify documents were cleared before scraping started
-    expect(mockStore.removeAllDocuments).toHaveBeenCalledOnce();
-    expect(mockStore.removeAllDocuments).toHaveBeenCalledWith(
-      mockJob.library,
-      mockJob.version,
-    );
-
-    // Verify scrape was called with the complete scraper options
-    expect(mockScraperService.scrape).toHaveBeenCalledOnce();
-    expect(mockScraperService.scrape).toHaveBeenCalledWith(
-      mockJob.scraperOptions, // Now passes the complete options directly
-      expect.any(Function), // The progress callback
-      abortController.signal,
-    );
-
-    // Verify addScrapeResult was called for each document
-    expect(mockStore.addScrapeResult).toHaveBeenCalledTimes(2);
-    expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
-      mockJob.library,
-      mockJob.version,
-      1,
-      mockProcessed1,
-      undefined,
-    );
-    expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
-      mockJob.library,
-      mockJob.version,
-      1,
-      mockProcessed2,
-      undefined,
-    );
-
-    // Verify onJobProgress was called
-    expect(mockCallbacks.onJobProgress).toHaveBeenCalledTimes(2);
-    expect(mockCallbacks.onJobProgress).toHaveBeenCalledWith(
-      mockJob,
-      expect.objectContaining({ result: mockProcessed1 }),
-    );
-    expect(mockCallbacks.onJobProgress).toHaveBeenCalledWith(
-      mockJob,
-      expect.objectContaining({ result: mockProcessed2 }),
-    );
-
-    // Verify job progress object was NOT updated directly by worker
-    // The worker should only call callbacks - the manager handles progress updates
-    expect(mockJob.progress).toBeNull(); // Should remain null since worker doesn't update it directly
-
-    // Verify no errors were reported
-    expect(mockCallbacks.onJobError).not.toHaveBeenCalled();
   });
 
-  it("should re-throw error if scraperService.scrape fails", async () => {
-    const scraperError = new Error("Scraper failed");
-    (mockScraperService.scrape as Mock).mockRejectedValue(scraperError);
+  describe("clearing the version before scraping", () => {
+    it("removes the stored documents first by default", async () => {
+      await worker.executeJob(job, callbacks);
 
-    await expect(worker.executeJob(mockJob, mockCallbacks)).rejects.toThrow(scraperError);
+      expect(store.removeAllDocuments).toHaveBeenCalledWith(LIBRARY, VERSION);
+      expect(store.removeAllDocuments.mock.invocationCallOrder[0]).toBeLessThan(
+        scraper.scrape.mock.invocationCallOrder[0],
+      );
+    });
 
-    // Verify dependencies were called appropriately
-    expect(mockScraperService.scrape).toHaveBeenCalledOnce();
-    expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
-    expect(mockCallbacks.onJobProgress).not.toHaveBeenCalled();
-    expect(mockCallbacks.onJobError).not.toHaveBeenCalled();
+    it.each([
+      ["a refresh", { isRefresh: true }],
+      ["clean: false", { clean: false }],
+    ])("keeps the stored documents for %s", async (_label, options) => {
+      job.scraperOptions = { ...job.scraperOptions, ...options };
+
+      await worker.executeJob(job, callbacks);
+
+      expect(store.removeAllDocuments).not.toHaveBeenCalled();
+    });
   });
 
-  it("should call onJobError and continue if store.addScrapeResult fails", async () => {
-    const mockProcessed: ScrapeResult = {
-      textContent: "doc1",
-      url: "url1",
-      title: "Doc 1",
-      sourceContentType: "text/html",
-      contentType: "text/html",
-      chunks: [],
-      links: [],
-      errors: [],
-    };
+  it("reports every progress event to the manager", async () => {
+    const events = [
+      progress({ outcome: PageOutcome.Stored, result: scrapeResult }),
+      progress({ outcome: PageOutcome.Unchanged, pageId: 7 }),
+    ];
+    scrapeReports(...events);
+
+    await worker.executeJob(job, callbacks);
+
+    expect(callbacks.onJobProgress.mock.calls).toEqual(
+      events.map((event) => [job, event]),
+    );
+  });
+
+  describe("page outcomes", () => {
+    it.each([
+      [
+        "Stored, new page",
+        progress({ outcome: PageOutcome.Stored, result: scrapeResult }),
+        [["addScrapeResult", LIBRARY, VERSION, 1, scrapeResult, undefined]],
+      ],
+      // The old row is retired inside the store's write transaction, so the
+      // precedence check can still compare it against the new content.
+      [
+        "Stored, refreshed page",
+        progress({ outcome: PageOutcome.Stored, result: scrapeResult, pageId: 123 }),
+        [["addScrapeResult", LIBRARY, VERSION, 1, scrapeResult, 123]],
+      ],
+      ["Stored, no result", progress({ outcome: PageOutcome.Stored }), []],
+      [
+        "Empty, page",
+        progress({ outcome: PageOutcome.Empty, emptyPage, pageId: 123 }),
+        [
+          [
+            "addEmptyPage",
+            LIBRARY,
+            VERSION,
+            1,
+            {
+              url: emptyPage.url,
+              contentUrl: undefined,
+              title: emptyPage.title,
+              sourceContentType: emptyPage.sourceContentType,
+              contentType: emptyPage.contentType,
+              etag: emptyPage.etag,
+              lastModified: emptyPage.lastModified,
+              isAdditionalRepresentation: undefined,
+            },
+            123,
+          ],
+        ],
+      ],
+      // A failed extraction says nothing about the page, so stored content stays.
+      [
+        "Empty, pipeline failed",
+        progress({
+          outcome: PageOutcome.Empty,
+          emptyPage: { ...emptyPage, pipelineFailed: true },
+          pageId: 123,
+        }),
+        [],
+      ],
+      ["Empty, container", progress({ outcome: PageOutcome.Empty }), []],
+      [
+        "Absent, stored page",
+        progress({ outcome: PageOutcome.Absent, deleted: true, pageId: 123 }),
+        [["deletePage", 123]],
+      ],
+      // A broken link found mid-crawl has nothing stored to remove.
+      [
+        "Absent, never stored",
+        progress({ outcome: PageOutcome.Absent, deleted: true }),
+        [],
+      ],
+      ["Unchanged", progress({ outcome: PageOutcome.Unchanged, pageId: 123 }), []],
+      ["Skipped", progress({ outcome: PageOutcome.Skipped }), []],
+      ["Failed", progress({ outcome: PageOutcome.Failed, pageId: 123 }), []],
+    ])("%s", async (_label, event, expectedWrites) => {
+      scrapeReports(event);
+
+      await worker.executeJob(job, callbacks);
+
+      expect(storeWrites()).toEqual(expectedWrites);
+      expect(callbacks.onJobError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("store failures", () => {
     const storeError = new Error("Database error");
 
-    // Simulate scrape yielding one document
-    (mockScraperService.scrape as Mock).mockImplementation(
-      async (_options, progressCallback, _signal) => {
-        const progress: ScraperProgressEvent = {
-          pagesScraped: 1,
-          totalPages: 1,
-          currentUrl: "url1",
-          depth: 1,
-          maxDepth: 1,
-          result: mockProcessed,
-          totalDiscovered: 0,
-          pagesIndexed: 0,
-          outcome: PageOutcome.Stored,
-        };
-        await progressCallback(progress);
+    it.each([
+      [
+        "storing content",
+        "addScrapeResult",
+        progress({ outcome: PageOutcome.Stored, result: scrapeResult }),
+        [scrapeResult],
+      ],
+      [
+        "recording an empty page",
+        "addEmptyPage",
+        progress({ outcome: PageOutcome.Empty, emptyPage }),
+        [],
+      ],
+    ] as const)(
+      "reports a failure %s and continues the job",
+      async (_label, method, event, page) => {
+        store[method].mockRejectedValue(storeError);
+        scrapeReports(event, event);
+
+        await expect(worker.executeJob(job, callbacks)).resolves.toBeUndefined();
+
+        expect(store[method]).toHaveBeenCalledTimes(2);
+        expect(callbacks.onJobError).toHaveBeenCalledWith(job, storeError, ...page);
       },
     );
 
-    // Simulate addScrapeResult failing
-    (mockStore.addScrapeResult as Mock).mockRejectedValue(storeError);
+    // Leaving the documents of a deleted page behind would corrupt the index.
+    it("reports a failure deleting a page and fails the job", async () => {
+      store.deletePage.mockRejectedValue(storeError);
+      scrapeReports(
+        progress({ outcome: PageOutcome.Absent, deleted: true, pageId: 123 }),
+      );
 
-    // Execute the job - should complete despite the error
-    await expect(worker.executeJob(mockJob, mockCallbacks)).resolves.toBeUndefined();
+      await expect(worker.executeJob(job, callbacks)).rejects.toBe(storeError);
 
-    // Verify scrape was called
-    expect(mockScraperService.scrape).toHaveBeenCalledOnce();
-    // Verify addScrapeResult was called
-    expect(mockStore.addScrapeResult).toHaveBeenCalledOnce();
-    // Verify onJobProgress was called
-    expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
-    // Verify onJobError was called with the page that failed
-    expect(mockCallbacks.onJobError).toHaveBeenCalledOnce();
-    expect(mockCallbacks.onJobError).toHaveBeenCalledWith(
-      mockJob,
-      storeError,
-      mockProcessed,
-    );
+      expect(callbacks.onJobError).toHaveBeenCalledWith(job, storeError);
+    });
   });
 
-  it("should throw CancellationError if cancelled during scrape progress", async () => {
-    const mockProcessed: ScrapeResult = {
-      textContent: "doc1",
-      url: "url1",
-      title: "Doc 1",
-      sourceContentType: "text/html",
-      contentType: "text/html",
-      chunks: [],
-      links: [],
-      errors: [],
-    };
+  it("rethrows a scraper failure without reporting it as a page error", async () => {
+    const scraperError = new Error("Scraper failed");
+    scraper.scrape.mockRejectedValue(scraperError);
 
-    // Simulate scrape checking signal and throwing
-    (mockScraperService.scrape as Mock).mockImplementation(
-      async (_options, progressCallback, _signal) => {
-        const progress: ScraperProgressEvent = {
-          pagesScraped: 1,
-          totalPages: 2,
-          currentUrl: "url1",
-          depth: 1,
-          maxDepth: 1,
-          result: mockProcessed,
-          totalDiscovered: 0,
-          pagesIndexed: 0,
-          outcome: PageOutcome.Stored,
-        };
-        // Simulate cancellation happening *before* progress is processed by worker
-        abortController.abort();
-        // The worker's callback wrapper will check signal and throw
-        await progressCallback(progress);
-        // This part should not be reached
-        throw new Error("Should have been cancelled");
-      },
-    );
+    await expect(worker.executeJob(job, callbacks)).rejects.toBe(scraperError);
 
-    // Call executeJob once and check the specific error message
-    await expect(worker.executeJob(mockJob, mockCallbacks)).rejects.toThrow(
-      "Job cancelled during scraping progress",
-    );
-    // Also verify it's an instance of CancellationError if needed, though message check is often sufficient
-    // await expect(worker.executeJob(mockJob, mockCallbacks)).rejects.toBeInstanceOf(CancellationError);
-
-    // Verify scrape was called
-    expect(mockScraperService.scrape).toHaveBeenCalledOnce();
-    // Verify addScrapeResult was NOT called
-    expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
-    // Verify onJobProgress was NOT called because cancellation check happens first
-    expect(mockCallbacks.onJobProgress).not.toHaveBeenCalled();
-    // Verify onJobError was NOT called
-    expect(mockCallbacks.onJobError).not.toHaveBeenCalled();
+    expect(callbacks.onJobError).not.toHaveBeenCalled();
   });
 
-  it("should throw CancellationError if cancelled after scrape completes", async () => {
-    // Simulate scrape completing successfully
-    (mockScraperService.scrape as Mock).mockImplementation(
-      async (_options, _progressCallback, _signal) => {
-        // No progress needed for this test
-        return Promise.resolve();
-      },
-    );
-
-    // Abort *after* scrape would have finished but before worker checks again
-    abortController.abort();
-
-    // Call executeJob once and check the specific error message
-    await expect(worker.executeJob(mockJob, mockCallbacks)).rejects.toThrow(
-      "Job cancelled",
-    );
-    // Also verify it's an instance of CancellationError if needed
-    // await expect(worker.executeJob(mockJob, mockCallbacks)).rejects.toBeInstanceOf(CancellationError);
-
-    // Verify scrape was called (now only once)
-    expect(mockScraperService.scrape).toHaveBeenCalledOnce();
-    // Verify other callbacks not called
-    expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
-    expect(mockCallbacks.onJobProgress).not.toHaveBeenCalled();
-    expect(mockCallbacks.onJobError).not.toHaveBeenCalled();
-  });
-
-  it("should fail the job if document deletion fails during refresh", async () => {
-    const deletionError = new Error("Database deletion failed");
-
-    // Simulate scrape yielding a deletion event (404 page)
-    (mockScraperService.scrape as Mock).mockImplementation(
-      async (_options, progressCallback, _signal) => {
-        const progress: ScraperProgressEvent = {
-          pagesScraped: 1,
-          totalPages: 1,
-          currentUrl: "url1",
-          depth: 1,
-          maxDepth: 1,
-          deleted: true, // This is a deletion event
-          result: null,
-          pageId: 123, // Page ID to delete
-          totalDiscovered: 0,
-          pagesIndexed: 0,
-          outcome: PageOutcome.Absent,
-        };
-        await progressCallback(progress);
-      },
-    );
-
-    // Simulate deletePage failing
-    (mockStore.deletePage as Mock).mockRejectedValue(deletionError);
-
-    // Execute the job - should fail due to deletion error
-    await expect(worker.executeJob(mockJob, mockCallbacks)).rejects.toThrow(
-      "Database deletion failed",
-    );
-
-    // Verify scrape was called
-    expect(mockScraperService.scrape).toHaveBeenCalledOnce();
-    // Verify deletion was attempted
-    expect(mockStore.deletePage).toHaveBeenCalledWith(123);
-    // Verify onJobProgress was called
-    expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
-    // Verify onJobError was called with the deletion error
-    expect(mockCallbacks.onJobError).toHaveBeenCalledOnce();
-    expect(mockCallbacks.onJobError).toHaveBeenCalledWith(mockJob, deletionError);
-    // Verify addScrapeResult was NOT called (deletion failed before that)
-    expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
-  });
-
-  describe("Database operations based on fetch status", () => {
-    it("should perform NO database writes for a 304 Not Modified status", async () => {
-      // Simulate scrape yielding a 304 Not Modified event
-      (mockScraperService.scrape as Mock).mockImplementation(
-        async (_options, progressCallback, _signal) => {
-          const progress: ScraperProgressEvent = {
-            pagesScraped: 1,
-            totalPages: 1,
-            currentUrl: "url1",
-            depth: 1,
-            maxDepth: 1,
-            result: null, // No result for 304
-            pageId: 123, // Page ID from refresh queue
-            totalDiscovered: 0,
-            pagesIndexed: 0,
-            outcome: PageOutcome.Unchanged,
-          };
-          await progressCallback(progress);
+  describe("cancellation", () => {
+    it("stops at the next progress event without storing or reporting it", async () => {
+      scraper.scrape.mockImplementation(
+        async (_options, onProgress: (event: ScraperProgressEvent) => Promise<void>) => {
+          job.abortController.abort();
+          await onProgress(
+            progress({ outcome: PageOutcome.Stored, result: scrapeResult }),
+          );
         },
       );
 
-      await worker.executeJob(mockJob, mockCallbacks);
+      const error = await worker.executeJob(job, callbacks).catch((e) => e);
 
-      // Verify NO database operations were performed
-      expect(mockStore.deletePage).not.toHaveBeenCalled();
-      expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
-
-      // Verify progress was still reported
-      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
-      expect(mockCallbacks.onJobProgress).toHaveBeenCalledWith(
-        mockJob,
-        expect.objectContaining({
-          result: null,
-          pageId: 123,
-        }),
-      );
+      expect(error).toBeInstanceOf(CancellationError);
+      expect(error.message).toBe("Job cancelled during scraping progress");
+      expect(storeWrites()).toEqual([]);
+      expect(callbacks.onJobProgress).not.toHaveBeenCalled();
     });
 
-    it("should hand the refreshed page's id to the store for a 200 OK status on an existing page", async () => {
-      const mockResult: ScrapeResult = {
-        textContent: "updated content",
-        url: "url1",
-        title: "Updated Doc",
-        sourceContentType: "text/html",
-        contentType: "text/html",
-        chunks: [],
-        links: [],
-        errors: [],
-      };
+    it("fails a job whose signal aborted by the time the scrape returns", async () => {
+      scraper.scrape.mockImplementation(async () => {
+        job.abortController.abort();
+      });
 
-      // Simulate scrape yielding a 200 OK event with pageId (existing page)
-      (mockScraperService.scrape as Mock).mockImplementation(
-        async (_options, progressCallback, _signal) => {
-          const progress: ScraperProgressEvent = {
-            pagesScraped: 1,
-            totalPages: 1,
-            currentUrl: "url1",
-            depth: 1,
-            maxDepth: 1,
-            result: mockResult,
-            pageId: 123, // Existing page ID
-            totalDiscovered: 0,
-            pagesIndexed: 0,
-            outcome: PageOutcome.Stored,
-          };
-          await progressCallback(progress);
-        },
-      );
+      const error = await worker.executeJob(job, callbacks).catch((e) => e);
 
-      await worker.executeJob(mockJob, mockCallbacks);
-
-      // The old row is retired inside the store's write transaction, not here.
-      // Deleting it first hid it from the precedence check, so a refresh that
-      // re-fetched both representations of one page kept whichever finished
-      // last instead of the better one.
-      expect(mockStore.deletePage).not.toHaveBeenCalled();
-
-      expect(mockStore.addScrapeResult).toHaveBeenCalledOnce();
-      expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
-        mockJob.library,
-        mockJob.version,
-        1,
-        mockResult,
-        123,
-      );
-
-      // Verify progress was reported
-      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
-    });
-
-    it("should INSERT new documents for a 200 OK status on a new page", async () => {
-      const mockResult: ScrapeResult = {
-        textContent: "new content",
-        url: "url2",
-        title: "New Doc",
-        sourceContentType: "text/html",
-        contentType: "text/html",
-        chunks: [],
-        links: [],
-        errors: [],
-      };
-
-      // Simulate scrape yielding a 200 OK event without pageId (new page)
-      (mockScraperService.scrape as Mock).mockImplementation(
-        async (_options, progressCallback, _signal) => {
-          const progress: ScraperProgressEvent = {
-            pagesScraped: 1,
-            totalPages: 1,
-            currentUrl: "url2",
-            depth: 1,
-            maxDepth: 1,
-            result: mockResult,
-            pageId: undefined, // No pageId = new page
-            totalDiscovered: 0,
-            pagesIndexed: 0,
-            outcome: PageOutcome.Stored,
-          };
-          await progressCallback(progress);
-        },
-      );
-
-      await worker.executeJob(mockJob, mockCallbacks);
-
-      // Verify NO deletion was performed (new page)
-      expect(mockStore.deletePage).not.toHaveBeenCalled();
-
-      // Verify INSERT (addScrapeResult) was called, with no page to retire
-      expect(mockStore.addScrapeResult).toHaveBeenCalledOnce();
-      expect(mockStore.addScrapeResult).toHaveBeenCalledWith(
-        mockJob.library,
-        mockJob.version,
-        1,
-        mockResult,
-        undefined,
-      );
-
-      // Verify progress was reported
-      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
-    });
-
-    it("should call deletePage for a 404 Not Found status", async () => {
-      // Simulate scrape yielding a 404 Not Found event
-      (mockScraperService.scrape as Mock).mockImplementation(
-        async (_options, progressCallback, _signal) => {
-          const progress: ScraperProgressEvent = {
-            pagesScraped: 1,
-            totalPages: 1,
-            currentUrl: "url1",
-            depth: 1,
-            maxDepth: 1,
-            result: null,
-            deleted: true, // 404 - page was deleted
-            pageId: 123,
-            totalDiscovered: 0,
-            pagesIndexed: 0,
-            outcome: PageOutcome.Absent,
-          };
-          await progressCallback(progress);
-        },
-      );
-
-      await worker.executeJob(mockJob, mockCallbacks);
-
-      // Verify deletion was called
-      expect(mockStore.deletePage).toHaveBeenCalledOnce();
-      expect(mockStore.deletePage).toHaveBeenCalledWith(123);
-
-      // Verify NO insert was performed
-      expect(mockStore.addScrapeResult).not.toHaveBeenCalled();
-
-      // Verify progress was reported
-      expect(mockCallbacks.onJobProgress).toHaveBeenCalledOnce();
-      expect(mockCallbacks.onJobProgress).toHaveBeenCalledWith(
-        mockJob,
-        expect.objectContaining({
-          deleted: true,
-          pageId: 123,
-        }),
-      );
+      expect(error).toBeInstanceOf(CancellationError);
+      expect(error.message).toBe("Job cancelled");
     });
   });
 });

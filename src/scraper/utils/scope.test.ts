@@ -145,6 +145,15 @@ describe("isInScope - subpages", () => {
     );
   });
 
+  it("descendant path on another host is not in scope", () => {
+    expect(
+      isInScope(baseDir, new URL("https://api.example.com/api/intro"), "subpages"),
+    ).toBe(false);
+    expect(isInScope(baseDir, new URL("https://other.com/api/intro"), "subpages")).toBe(
+      false,
+    );
+  });
+
   it("file base acts like its parent directory (preserves index.html behavior)", () => {
     expect(
       isInScope(baseFile, new URL("https://example.com/api/child/page"), "subpages"),

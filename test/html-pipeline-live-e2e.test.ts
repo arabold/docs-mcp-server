@@ -12,7 +12,7 @@
  * - These tests require internet access and are slower due to network requests
  * - All tests use Playwright mode for full JavaScript support
  * - Timeouts are set to 60 seconds to accommodate complex sites
- * - For fast, reliable tests suitable for CI/CD, see html-pipeline-basic-e2e.test.ts
+ * - For fast, reliable tests suitable for CI/CD, see fetch-url-tool-e2e.test.ts
  */
 
 import { beforeAll, describe, expect, it } from "vitest";

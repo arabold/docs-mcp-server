@@ -1,231 +1,184 @@
 /**
- * End-to-end vector search tests that verify the complete pipeline:
- * scraping -> splitting -> embedding -> indexing -> searching
- * 
- * This test uses the actual services (not mocks) with an in-memory database
- * to validate that vector search works correctly from end to end.
+ * End-to-end tests for vector search: scrape -> split -> embed -> index -> search.
+ *
+ * Runs the real pipeline and store against a temporary SQLite database. The
+ * OpenAI embeddings endpoint is answered by `test/mock-server.ts`, which embeds
+ * text as hashed character trigrams: deterministic, and close for texts that
+ * share words or parts of words.
+ *
+ * `beforeAll` indexes a few small Markdown pages once. Every test only reads.
  */
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import path from "path";
-import { mkdtempSync, rmSync } from "fs";
-import { tmpdir } from "os";
-import { config } from "dotenv";
-import { PipelineFactory } from "../src/pipeline/PipelineFactory";
-import { createLocalDocumentManagement } from "../src/store";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import Database from "better-sqlite3";
+import * as sqliteVec from "sqlite-vec";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { EventBusService } from "../src/events";
+import { PipelineManager } from "../src/pipeline/PipelineManager";
 import {
-  EmbeddingConfig,
-  type EmbeddingModelConfig,
-} from "../src/store/embeddings/EmbeddingConfig";
+  createLocalDocumentManagement,
+  type DocumentManagementService,
+  LibraryNotFoundInStoreError,
+} from "../src/store";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
-import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
 
-// Load environment variables from .env file
-config();
+const LIBRARY = "search-fixtures";
+const VERSION = "1.0.0";
 
-describe("Vector Search End-to-End Tests", () => {
-  let docService: any;
-  let scrapeTool: ScrapeTool;
-  let searchTool: SearchTool;
-  let pipeline: any;
+/** The pages the suite indexes, one topic each. */
+const PAGES: Record<string, string> = {
+  "authentication.md": [
+    "# Authentication",
+    "",
+    "Every request must carry an API token in the Authorization header. Tokens",
+    "are created on the account settings page and can be revoked at any time.",
+    "Requests without a valid token are rejected with status 401.",
+  ].join("\n"),
+  "caching.md": [
+    "# Caching",
+    "",
+    "Responses are cached for five minutes. Send Cache-Control: no-cache to",
+    "bypass the cache, or call the purge endpoint to invalidate every cached",
+    "entry at once.",
+  ].join("\n"),
+  "deployment.md": [
+    "# Deployment",
+    "",
+    "Build the container image from the provided Dockerfile and run it behind a",
+    "reverse proxy. Set the PORT environment variable to change the port the",
+    "server listens on.",
+  ].join("\n"),
+};
+
+describe("Vector search E2E", () => {
   let tempDir: string;
-  const appConfig = loadConfig();
-  let prevOpenAiApiKey: string | undefined;
-  let prevOpenAiApiBase: string | undefined;
+  /** `file://` URL of the directory the pages are written to. */
+  let docsUrl: string;
+  let docService: DocumentManagementService;
+  let pipeline: PipelineManager;
+  let searchTool: SearchTool;
 
   beforeAll(async () => {
-    // Ensure vector search initializes in tests without requiring real credentials.
-    // The OpenAI embeddings endpoint is mocked by test/mock-server.ts.
-    prevOpenAiApiKey = process.env.OPENAI_API_KEY;
-    prevOpenAiApiBase = process.env.OPENAI_API_BASE;
-    process.env.OPENAI_API_KEY = "test-key";
-    delete process.env.OPENAI_API_BASE;
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
+    vi.stubEnv("OPENAI_API_BASE", undefined);
 
-    // Create temporary directory for test database
-    tempDir = mkdtempSync(path.join(tmpdir(), "vector-search-e2e-test-"));
+    // realpath, because the file access policy refuses symlinked paths and the
+    // macOS temp dir sits behind one (/var -> /private/var).
+    tempDir = mkdtempSync(path.join(realpathSync(tmpdir()), "vector-search-e2e-"));
+    const docsDir = path.join(tempDir, "docs");
+    mkdirSync(docsDir);
+    for (const [name, content] of Object.entries(PAGES)) {
+      writeFileSync(path.join(docsDir, name), content);
+    }
+    docsUrl = `file://${docsDir}`;
 
-    // Create explicit embedding configuration
-    const embeddingConfig: EmbeddingModelConfig = EmbeddingConfig.parseEmbeddingConfig(
-      "openai:text-embedding-3-small",
-    );
-
+    const appConfig = loadConfig();
     appConfig.app.storePath = tempDir;
-    appConfig.app.embeddingModel = embeddingConfig.modelSpec;
-    appConfig.embeddings.vectorDimension = 1536;
-    appConfig.scraper.security.fileAccess.mode = "allowedRoots";
-    appConfig.scraper.security.fileAccess.allowedRoots = [process.cwd()];
+    appConfig.app.embeddingModel = "openai:text-embedding-3-small";
+    appConfig.scraper.security.fileAccess.allowedRoots = [docsDir];
 
-    // Initialize DocumentManagementService with temporary directory and embedding config
     const eventBus = new EventBusService();
     docService = await createLocalDocumentManagement(eventBus, appConfig);
-
-    // Create pipeline for ScrapeTool
-    pipeline = await PipelineFactory.createPipeline(docService, eventBus, {
-      appConfig: appConfig,
+    pipeline = new PipelineManager(docService, eventBus, {
+      recoverJobs: false,
+      appConfig,
     });
     await pipeline.start();
 
-    // Initialize tools
-    scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
-    searchTool = new SearchTool(docService);
-  }, 30000);
-
-  afterAll(async () => {
-    try {
-      if (pipeline) {
-        await pipeline.stop();
-      }
-      if (docService) {
-        await docService.shutdown();
-      }
-      if (tempDir) {
-        rmSync(tempDir, { recursive: true, force: true });
-      }
-    } finally {
-      if (prevOpenAiApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = prevOpenAiApiKey;
-      }
-
-      if (prevOpenAiApiBase === undefined) {
-        delete process.env.OPENAI_API_BASE;
-      } else {
-        process.env.OPENAI_API_BASE = prevOpenAiApiBase;
-      }
-    }
-  });
-
-  it("should scrape local README.md and make it searchable", async () => {
-    // Get the path to the README.md file
-    const readmePath = path.resolve(process.cwd(), "README.md");
-    const fileUrl = `file://${readmePath}`;
-
-    // Step 1: Scrape the README.md file
-    console.log("📄 Scraping README.md file...");
-    const scrapeResult = await scrapeTool.execute({
-      library: "test-library",
-      version: "1.0.0",
-      url: fileUrl,
+    await new ScrapeTool(pipeline, appConfig.scraper).execute({
+      library: LIBRARY,
+      version: VERSION,
+      url: docsUrl,
       waitForCompletion: true,
     });
 
-    // Verify scraping completed successfully
-    expect(scrapeResult).toHaveProperty("pagesScraped");
-    expect((scrapeResult as any).pagesScraped).toBeGreaterThan(0);
+    searchTool = new SearchTool(docService);
+  });
 
-    // Step 2: Verify documents were added to the store
-    const exists = await docService.exists("test-library", "1.0.0");
-    expect(exists).toBe(true);
+  afterAll(async () => {
+    await pipeline?.stop();
+    await docService?.shutdown();
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+    vi.unstubAllEnvs();
+  });
 
-    // Step 3: Search for a specific string from the README
-    console.log("🔍 Searching for specific content...");
-    const searchQuery = "Fetches documentation directly from official sources";
-    const searchResult = await searchTool.execute({
-      library: "test-library",
-      version: "1.0.0",
-      query: searchQuery,
-      limit: 5,
+  it("stores one vector for every embedded chunk", () => {
+    const db = new Database(path.join(tempDir, "documents.db"), { readonly: true });
+    try {
+      sqliteVec.load(db);
+      const { chunkCount } = db
+        .prepare(
+          "SELECT COUNT(*) AS chunkCount FROM documents WHERE embedding IS NOT NULL",
+        )
+        .get() as { chunkCount: number };
+      const { vectorCount } = db
+        .prepare("SELECT COUNT(*) AS vectorCount FROM documents_vec")
+        .get() as { vectorCount: number };
+
+      expect(chunkCount).toBeGreaterThan(0);
+      expect(vectorCount).toBe(chunkCount);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("returns the page that contains a phrase from its text", async () => {
+    const { results } = await searchTool.execute({
+      library: LIBRARY,
+      version: VERSION,
+      query: "revoked at any time",
     });
 
-    // Verify search results
-    expect(searchResult.results).toBeDefined();
-    expect(Array.isArray(searchResult.results)).toBe(true);
-    expect(searchResult.results.length).toBeGreaterThan(0);
+    expect(results[0]?.url).toBe(`${docsUrl}/authentication.md`);
+    expect(results[0]?.content).toContain("revoked at any time");
+  });
 
-    // Verify that at least one result contains the expected content
-    const hasExpectedContent = searchResult.results.some((result) =>
-      result.content.toLowerCase().includes("fetches documentation directly"),
-    );
-    expect(hasExpectedContent).toBe(true);
-
-    console.log(`✅ Found ${searchResult.results.length} search results`);
-    const firstScore = searchResult.results[0].score;
-    console.log(`📊 First result score: ${firstScore !== null ? firstScore : 'N/A'}`);
-
-    // Step 4: Test with a broader search to verify improved vector search
-    console.log("🔍 Testing broader search capabilities...");
-    const broadSearchResult = await searchTool.execute({
-      library: "test-library",
-      version: "1.0.0",
-      query: "documentation MCP server",
-      limit: 10,
+  it("finds pages for a query that matches no keyword", async () => {
+    // Every word is misspelled, so full-text search matches nothing and only
+    // the vector side of the hybrid search can return a page.
+    const { results } = await searchTool.execute({
+      library: LIBRARY,
+      version: VERSION,
+      query: "autentication tokn",
     });
 
-    expect(broadSearchResult.results.length).toBeGreaterThan(0);
+    expect(results).not.toEqual([]);
+  });
 
-    // With the vector search multiplier, we should find more diverse results
-    broadSearchResult.results.forEach((result) => {
-      const score = result.score !== null ? result.score.toFixed(4) : "N/A";
-    });
-  }, 60000);
+  // Blocked: rows full-text search did not match still get an FTS rank (by row order).
+  it.todo("ranks the closest page first for a query that matches no keyword");
 
-  it("should handle version-specific searches", async () => {
-    // Search with exact version match
-    const searchResult = await searchTool.execute({
-      library: "test-library",
-      version: "1.0.0",
-      query: "MCP server",
+  it("searches an indexed version when exactMatch is set", async () => {
+    const { results } = await searchTool.execute({
+      library: LIBRARY,
+      version: VERSION,
+      query: "reverse proxy",
       exactMatch: true,
-      limit: 3,
     });
 
-    expect(searchResult.results).toBeDefined();
-    expect(searchResult.results.length).toBeGreaterThan(0);
+    expect(results[0]?.url).toBe(`${docsUrl}/deployment.md`);
+  });
 
-    // Verify results contain MCP-related content
-    const hasMcpContent = searchResult.results.some((result) =>
-      result.content.toLowerCase().includes("mcp"),
-    );
-    expect(hasMcpContent).toBe(true);
-  }, 30000);
-
-  it("should find semantic similarities beyond exact text matches", async () => {
-    // Search for a concept that should match semantically
-    const searchResult = await searchTool.execute({
-      library: "test-library",
-      version: "1.0.0",
-      query: "artificial intelligence documentation helper",
-      limit: 5,
-    });
-
-    expect(searchResult.results).toBeDefined();
-    expect(searchResult.results.length).toBeGreaterThan(0);
-
-    // Log results for manual inspection of semantic matching
-    searchResult.results.forEach((result, index) => {
-      const score = result.score !== null ? result.score.toFixed(3) : "N/A";
-      console.log(
-        `  ${index + 1}. Score: ${score} - ${result.content.substring(0, 100)}...`,
-      );
-    });
-  }, 30000);
-
-  it("should handle non-existent library searches gracefully", async () => {
-    await expect(
-      searchTool.execute({
-        library: "non-existent-library",
-        version: "1.0.0",
-        query: "test query",
-      }),
-    ).rejects.toThrow(
-      "Library non-existent-library not found in store. Did you mean: test-library?",
-    );
-  }, 10000);
-
-  it("should handle non-existent version searches gracefully", async () => {
-    // Search for a non-existent version should return empty results
-    const searchResult = await searchTool.execute({
-      library: "test-library",
+  it("returns no results for an exact version that is not indexed", async () => {
+    const { results } = await searchTool.execute({
+      library: LIBRARY,
       version: "999.999.999",
-      query: "test query",
+      query: "reverse proxy",
       exactMatch: true,
     });
 
-    expect(searchResult.results).toBeDefined();
-    expect(Array.isArray(searchResult.results)).toBe(true);
-    expect(searchResult.results.length).toBe(0);
-  }, 10000);
+    expect(results).toEqual([]);
+  });
+
+  it("suggests the closest library name when the library is unknown", async () => {
+    await expect(
+      searchTool.execute({ library: "search-fixture", query: "reverse proxy" }),
+    ).rejects.toThrow(new LibraryNotFoundInStoreError("search-fixture", [LIBRARY]));
+  });
 });

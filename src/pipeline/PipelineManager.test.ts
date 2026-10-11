@@ -1,1399 +1,820 @@
-import { PageOutcome } from "../scraper/types";
-
-// Patch: Move UUID mock to top-level before imports
-vi.mock("uuid", () => {
-  let uuidCall = 0;
-  const uuidSequence = [
-    "mock-uuid-1",
-    "mock-uuid-2",
-    "mock-uuid-3",
-    "mock-uuid-4",
-    "mock-uuid-5",
-    "mock-uuid-6",
-  ];
-  return {
-    v4: () => uuidSequence[uuidCall++ % uuidSequence.length],
-  };
-});
-
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import { EventBusService } from "../events/EventBusService";
-import type { ScraperProgressEvent } from "../scraper/types";
-import type { DocumentManagementService } from "../store/DocumentManagementService";
-import { LibraryNotFoundInStoreError, VersionAlreadyExistsError } from "../store/errors";
-import { ListJobsTool } from "../tools/ListJobsTool";
+import { EventType } from "../events/types";
+import { ScraperService } from "../scraper";
+import {
+  PageOutcome,
+  ScrapeMode,
+  type ScraperOptions,
+  type ScraperProgressEvent,
+} from "../scraper/types";
+import { DocumentManagementService } from "../store/DocumentManagementService";
+import {
+  LibraryAlreadyExistsError,
+  LibraryNotFoundInStoreError,
+  VersionAlreadyExistsError,
+} from "../store/errors";
+import { VersionStatus } from "../store/types";
 import { type AppConfig, loadConfig } from "../utils/config";
+import { PipelineStateError } from "./errors";
 import { PipelineManager } from "./PipelineManager";
-import { PipelineWorker } from "./PipelineWorker";
-import type { InternalPipelineJob, PipelineJob, PipelineManagerCallbacks } from "./types";
-import { PipelineJobStatus } from "./types";
+import { type PipelineJob, PipelineJobStatus } from "./types";
 
-/** A `requireVersion` implementation that finds the version and echoes the submitted name. */
-const foundVersion =
-  (versionId: number) =>
-  async ({ library }: { library: string }) => ({ versionId, library });
+const SOURCE_URL = "https://example.com/docs";
 
-/** A `claimVersion` mock whose claims succeed and echo the submitted name as the display name. */
-const echoClaim = () =>
-  vi.fn().mockImplementation(async (library: string) => ({ versionId: 1, library }));
+function scrapeOptions(
+  library: string,
+  version = "1.0",
+  overrides: Partial<ScraperOptions> = {},
+): ScraperOptions {
+  return { url: SOURCE_URL, library, version, ...overrides };
+}
 
-// Mock dependencies
-vi.mock("../store/DocumentManagementService");
-vi.mock("../scraper/ScraperService");
-vi.mock("./PipelineWorker");
-vi.mock("../events/EventBusService");
-
-describe("PipelineManager", () => {
-  let mockStore: Partial<DocumentManagementService>;
-  let mockWorkerInstance: { executeJob: Mock };
-  let manager: PipelineManager;
-  let mockCallbacks: PipelineManagerCallbacks;
-  let appConfig: AppConfig;
-
-  // Helper to create a minimal test job with required fields
-  const createTestJob = (overrides: Partial<PipelineJob> = {}): PipelineJob => ({
-    id: "test-job-id",
-    library: "test-lib",
-    version: "1.0.0",
-    versionId: 123,
-    status: PipelineJobStatus.RUNNING,
-    createdAt: new Date(),
-    startedAt: null,
-    finishedAt: null,
-    progress: null,
-    error: null,
-    sourceUrl: "https://example.com",
-    scraperOptions: null,
-    ...overrides,
-  });
-
-  // Helper to create an internal job for testing internal methods
-  const createInternalTestJob = (
-    overrides: Partial<InternalPipelineJob> = {},
-  ): InternalPipelineJob => ({
-    id: "test-job-id",
-    library: "test-lib",
-    version: "1.0.0",
-    versionId: 123,
-    status: PipelineJobStatus.RUNNING,
-    createdAt: new Date(),
-    startedAt: null,
-    finishedAt: null,
-    progress: null,
-    error: null,
-    sourceUrl: "https://example.com",
-    scraperOptions: {
-      url: "https://example.com",
-      library: "test-lib",
-      version: "1.0.0",
-    },
-    abortController: new AbortController(),
-    completionPromise: Promise.resolve(),
-    resolveCompletion: () => {},
-    rejectCompletion: () => {},
-    ...overrides,
-  });
-
-  // Helper to create progress data
-  const createTestProgress = (
-    pagesScraped: number,
-    totalPages: number,
-  ): ScraperProgressEvent => ({
+function progress(pagesScraped: number, totalPages: number): ScraperProgressEvent {
+  return {
     pagesScraped,
     totalPages,
-    currentUrl: `https://example.com/page-${pagesScraped}`,
+    totalDiscovered: totalPages,
+    pagesIndexed: pagesScraped - 1,
+    currentUrl: `${SOURCE_URL}/page-${pagesScraped}`,
     depth: 1,
     maxDepth: 3,
-    totalDiscovered: 0,
-    pagesIndexed: 0,
-    outcome: PageOutcome.Stored,
-    result: {
-      url: `https://example.com/page-${pagesScraped}`,
-      title: `Page ${pagesScraped}`,
-      sourceContentType: "text/html",
-      contentType: "text/html",
-      textContent: "",
-      links: [],
-      errors: [],
-      chunks: [],
-    },
-  });
+    outcome: PageOutcome.Unchanged,
+    result: null,
+  };
+}
 
-  beforeEach(() => {
-    vi.resetAllMocks();
-    vi.useFakeTimers(); // Use fake timers for controlling async queue processing
+describe("PipelineManager", () => {
+  let appConfig: AppConfig;
+  let eventBus: EventBusService;
+  let store: DocumentManagementService;
+  let manager: PipelineManager;
+  /** The scrape every job runs; each test decides what it does. */
+  let scrape: MockInstance<ScraperService["scrape"]>;
+  let statusEvents: PipelineJob[];
 
-    mockStore = {
-      // Database status tracking methods
-      claimVersion: echoClaim(),
-      updateVersionStatus: vi.fn().mockResolvedValue(undefined),
-      updateVersionProgress: vi.fn().mockResolvedValue(undefined), // For progress tests
-      getVersionsByStatus: vi.fn().mockResolvedValue([]),
-      // Refresh job methods (lookup-only)
-      requireVersion: vi.fn().mockImplementation(foundVersion(1)),
-      getPagesByVersionId: vi.fn().mockResolvedValue([]),
-      getScraperOptions: vi.fn().mockResolvedValue(null),
-      getVersionById: vi.fn().mockResolvedValue({
-        id: 1,
-        library_id: 1,
-        name: "1.0.0",
-        status: "completed",
-        created_at: "2025-01-01T00:00:00.000Z",
-        updated_at: "2025-01-01T00:01:00.000Z",
-      }),
-      getLibraryById: vi.fn().mockResolvedValue({
-        id: 1,
-        name: "test-lib",
-      }),
-    };
-
-    // Mock the worker's executeJob method
-    mockWorkerInstance = {
-      executeJob: vi.fn().mockResolvedValue(undefined), // Default success
-    };
-    // Mock the constructor of PipelineWorker to return our mock instance
-    (PipelineWorker as Mock).mockImplementation(function () {
-      return mockWorkerInstance;
+  function createManager(options: { recoverJobs?: boolean; concurrency?: number } = {}) {
+    appConfig.scraper.maxConcurrency = options.concurrency ?? 1;
+    return new PipelineManager(store, eventBus, {
+      recoverJobs: options.recoverJobs ?? false,
+      appConfig,
     });
+  }
 
-    mockCallbacks = {
-      onJobStatusChange: vi.fn().mockResolvedValue(undefined),
-      onJobProgress: vi.fn().mockResolvedValue(undefined),
-      onJobError: vi.fn().mockResolvedValue(undefined),
-    };
+  /**
+   * Makes every scrape wait until it is released or its job is cancelled, the
+   * way a real crawl stops at the next page once its signal aborts.
+   */
+  function holdScrapes(): () => void {
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    scrape.mockImplementation(async (_options, _onProgress, signal) => {
+      if (signal?.aborted) return;
+      await new Promise<void>((resolve) => {
+        void released.then(resolve);
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    return release;
+  }
 
-    // Create mock EventBusService
-    const mockEventBus = new EventBusService();
+  /**
+   * Resolves once the manager has announced the status. The announcement comes
+   * after the store write, so the transition is complete by then.
+   */
+  function reachStatus(jobId: string, status: PipelineJobStatus): Promise<void> {
+    const reached = (job: PipelineJob) => job.id === jobId && job.status === status;
+    if (statusEvents.some(reached)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const off = eventBus.on(EventType.JOB_STATUS_CHANGE, (job) => {
+        if (reached(job)) {
+          off();
+          resolve();
+        }
+      });
+    });
+  }
 
+  async function statusOf(jobId: string) {
+    return (await manager.getJob(jobId))?.status;
+  }
+
+  /** Seeds a version as an earlier run would have left it. */
+  async function seedVersion(
+    library: string,
+    version: string,
+    status: VersionStatus,
+    seed: {
+      options?: Partial<ScraperOptions> | null;
+      pages?: Array<{
+        url: string;
+        depth: number;
+        etag: string | null;
+        contentUrl?: string;
+      }>;
+    } = {},
+  ): Promise<number> {
+    const versionId = await store.ensureVersion({ library, version });
+    for (const page of seed.pages ?? []) {
+      await store.addEmptyPage(library, version, page.depth, {
+        url: page.url,
+        contentUrl: page.contentUrl,
+        title: page.url,
+        sourceContentType: "text/html",
+        contentType: "text/html",
+        etag: page.etag,
+        lastModified: null,
+      });
+    }
+    if (seed.options !== null) {
+      await store.storeScraperOptions(versionId, {
+        ...scrapeOptions(library, version),
+        ...seed.options,
+      });
+    }
+    await store.updateVersionStatus(versionId, status);
+    return versionId;
+  }
+
+  beforeEach(async () => {
     appConfig = loadConfig();
-    appConfig.scraper.maxConcurrency = 1;
+    appConfig.app.storePath = ":memory:";
+    appConfig.app.embeddingModel = "";
+    eventBus = new EventBusService();
+    store = new DocumentManagementService(eventBus, appConfig);
+    await store.initialize();
 
-    // Default concurrency of 1 for simpler testing unless overridden
-    manager = new PipelineManager(mockStore as DocumentManagementService, mockEventBus, {
-      appConfig: appConfig,
-    });
-    manager.setCallbacks(mockCallbacks);
-  });
-
-  afterEach(() => {
-    vi.useRealTimers(); // Restore real timers
-  });
-
-  // --- Enqueueing Tests ---
-  it("should enqueue a job with QUEUED status and return a job ID", async () => {
-    const options = { url: "http://a.com", library: "libA", version: "1.0" };
-    const jobId = await manager.enqueueScrapeJob("libA", "1.0", options);
-    const job = await manager.getJob(jobId);
-    expect(job?.status).toBe(PipelineJobStatus.QUEUED);
-    expect(job?.library).toBe("libA");
-    expect(job?.sourceUrl).toBe("http://a.com");
-  });
-
-  it("should normalize version labels so entry points share one bucket", async () => {
-    // " LATEST " and "latest" are the same version; a replacing enqueue of the
-    // second must abort the first as a duplicate rather than queue a parallel job.
-    const options = { url: "http://a.com", library: "libN", version: "latest" };
-    const jobId1 = await manager.enqueueScrapeJob("libN", " LATEST ", options);
-    const jobId2 = await manager.enqueueScrapeJob("libN", "latest", options, {
-      onExisting: "replace",
+    scrape = vi.spyOn(ScraperService.prototype, "scrape").mockResolvedValue(undefined);
+    statusEvents = [];
+    eventBus.on(EventType.JOB_STATUS_CHANGE, (job) => {
+      statusEvents.push(job);
     });
 
-    expect(jobId1).not.toBe(jobId2);
-    const job1 = await manager.getJob(jobId1);
-    const job2 = await manager.getJob(jobId2);
-    expect(job1?.version).toBe("latest");
-    expect(job2?.version).toBe("latest");
-    expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
+    manager = createManager();
   });
 
-  it("should normalize library names so entry points share one bucket", async () => {
-    // The store buckets by folded library name, so "LibN" and "libn" index into
-    // one version. Comparing them exactly here let both jobs run in parallel
-    // against that bucket, where the second one's clean-before-scrape deleted
-    // pages the first had already written — and both reported success.
-    const options = { url: "http://a.com", library: "LibN", version: "1.0" };
-    const jobId1 = await manager.enqueueScrapeJob("LibN", "1.0", options);
-    const jobId2 = await manager.enqueueScrapeJob(
-      " libn ",
-      "1.0",
-      { ...options, library: " libn " },
-      { onExisting: "replace" },
+  afterEach(async () => {
+    await manager.stop();
+    // Settle whatever a test left queued or held, so no job writes to the store
+    // after it closes.
+    const jobs = await manager.getJobs();
+    for (const job of jobs) {
+      await manager.cancelJob(job.id);
+    }
+    await Promise.all(
+      jobs.map((job) => manager.waitForJobCompletion(job.id).catch(() => {})),
+    );
+    await store.shutdown();
+    vi.restoreAllMocks();
+  });
+
+  describe("enqueueScrapeJob", () => {
+    it("queues the job and records it in the store", async () => {
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+
+      const job = await manager.getJob(jobId);
+      expect(job).toMatchObject({
+        status: PipelineJobStatus.QUEUED,
+        library: "libA",
+        version: "1.0",
+        sourceUrl: SOURCE_URL,
+        versionStatus: VersionStatus.QUEUED,
+      });
+      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
+      expect((await store.getVersionById(versionId))?.status).toBe(VersionStatus.QUEUED);
+      expect((await store.getScraperOptions(versionId))?.sourceUrl).toBe(SOURCE_URL);
+    });
+
+    it.each([null, undefined, ""])(
+      "treats version %j as unversioned",
+      async (version) => {
+        const jobId = await manager.enqueueScrapeJob(
+          "libA",
+          version,
+          scrapeOptions("libA", ""),
+        );
+
+        expect((await manager.getJob(jobId))?.version).toBeNull();
+        const versionId = await store.ensureVersion({ library: "libA", version: "" });
+        expect((await store.getVersionById(versionId))?.status).toBe(
+          VersionStatus.QUEUED,
+        );
+      },
     );
 
-    expect(jobId1).not.toBe(jobId2);
-    const job1 = await manager.getJob(jobId1);
-    expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
+    it.each([
+      ["defaults scrapeMode to auto", {}, ScrapeMode.Auto],
+      // Hash routes only exist in a rendered page.
+      [
+        "upgrades fetch to playwright when hashes are preserved",
+        { scrapeMode: ScrapeMode.Fetch, preserveHashes: true },
+        ScrapeMode.Playwright,
+      ],
+    ])("%s", async (_label, overrides, expectedMode) => {
+      const jobId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA", "1.0", overrides),
+      );
+
+      expect((await manager.getJob(jobId))?.scraperOptions?.scrapeMode).toBe(
+        expectedMode,
+      );
+    });
+
+    it("queues the job even when the store cannot record its status", async () => {
+      vi.spyOn(store, "updateVersionStatus").mockRejectedValue(new Error("DB error"));
+
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.QUEUED);
+    });
   });
 
   describe("overwrite protection", () => {
-    const options = { url: "http://a.com", library: "React", version: "19.0.0" };
-
-    it("claims the target with the default reject-version policy", async () => {
-      await manager.enqueueScrapeJob("React", "19.0.0", options);
-
-      expect(mockStore.claimVersion).toHaveBeenCalledWith(
-        "React",
-        "19.0.0",
-        "reject-version",
-      );
-    });
-
-    it("creates no job and cancels nothing when the claim rejects", async () => {
-      const jobId1 = await manager.enqueueScrapeJob("React", "19.0.0", options);
-      (mockStore.claimVersion as Mock).mockRejectedValueOnce(
-        new VersionAlreadyExistsError("React", "19.0.0"),
-      );
+    it.each([
+      ["queued by an earlier enqueue", false],
+      ["stored by an earlier run", true],
+    ])("rejects a version %s and leaves its job alone", async (_label, stored) => {
+      if (stored) await seedVersion("React", "19.0.0", VersionStatus.COMPLETED);
+      const firstId = stored
+        ? undefined
+        : await manager.enqueueScrapeJob("React", "19.0.0", scrapeOptions("React"));
 
       await expect(
-        manager.enqueueScrapeJob("react", "19.0.0", options),
+        manager.enqueueScrapeJob("react", "19.0.0", scrapeOptions("react")),
       ).rejects.toBeInstanceOf(VersionAlreadyExistsError);
 
       const jobs = await manager.getJobs();
-      expect(jobs).toHaveLength(1);
-      expect((await manager.getJob(jobId1))?.status).toBe(PipelineJobStatus.QUEUED);
+      expect(jobs.map((job) => job.id)).toEqual(firstId ? [firstId] : []);
+      if (firstId) expect(await statusOf(firstId)).toBe(PipelineJobStatus.QUEUED);
     });
 
-    it("lets a replacing enqueue supersede the in-flight job", async () => {
-      const jobId1 = await manager.enqueueScrapeJob("React", "19.0.0", options);
-      const jobId2 = await manager.enqueueScrapeJob("React", "19.0.0", options, {
-        onExisting: "replace",
-      });
+    it("appends into an existing version, since appending clears nothing", async () => {
+      await seedVersion("React", "19.0.0", VersionStatus.COMPLETED);
 
-      expect(mockStore.claimVersion).toHaveBeenLastCalledWith(
+      const jobId = await manager.enqueueScrapeJob(
         "React",
         "19.0.0",
-        "replace",
+        scrapeOptions("React", "19.0.0", { clean: false }),
       );
-      expect((await manager.getJob(jobId1))?.status).toBe(PipelineJobStatus.CANCELLED);
-      expect((await manager.getJob(jobId2))?.status).toBe(PipelineJobStatus.QUEUED);
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.QUEUED);
     });
 
-    it("treats an append as not overwriting", async () => {
-      await manager.enqueueScrapeJob("React", "19.0.0", { ...options, clean: false });
+    it("still rejects an append when the caller refuses an existing library", async () => {
+      await seedVersion("React", "18.0.0", VersionStatus.COMPLETED);
 
-      expect(mockStore.claimVersion).toHaveBeenCalledWith("React", "19.0.0", "replace");
+      await expect(
+        manager.enqueueScrapeJob(
+          "React",
+          "19.0.0",
+          scrapeOptions("React", "19.0.0", { clean: false }),
+          { onExisting: "reject-library" },
+        ),
+      ).rejects.toBeInstanceOf(LibraryAlreadyExistsError);
     });
 
-    it("never relaxes an explicit reject-library for an append", async () => {
-      await manager.enqueueScrapeJob(
-        "React",
+    it("reports a job under the library's stored display name", async () => {
+      await seedVersion("React", "18.0.0", VersionStatus.COMPLETED);
+
+      const jobId = await manager.enqueueScrapeJob(
+        "react",
         "19.0.0",
-        { ...options, clean: false },
-        { onExisting: "reject-library" },
+        scrapeOptions("react"),
       );
-
-      expect(mockStore.claimVersion).toHaveBeenCalledWith(
-        "React",
-        "19.0.0",
-        "reject-library",
-      );
-    });
-
-    it("reports the job under the stored display name", async () => {
-      (mockStore.claimVersion as Mock).mockResolvedValueOnce({
-        versionId: 1,
-        library: "React",
-      });
-
-      const jobId = await manager.enqueueScrapeJob("react", "19.0.0", options);
 
       expect((await manager.getJob(jobId))?.library).toBe("React");
     });
   });
 
-  it("should start a queued job and transition to RUNNING", async () => {
-    // Simulate a long-running job
-    const pendingPromise = new Promise(() => {});
-    mockWorkerInstance.executeJob.mockReturnValue(pendingPromise);
-    const options = {
-      url: "http://a.com",
-      library: "libA",
-      version: "1.0",
-      maxPages: 1,
-      maxDepth: 1,
-    };
-    const jobId = await manager.enqueueScrapeJob("libA", "1.0", options);
-    await manager.start();
-    await vi.advanceTimersByTimeAsync(1);
-    const job = await manager.getJob(jobId);
-    expect(job?.status).toBe(PipelineJobStatus.RUNNING);
-    expect(PipelineWorker).toHaveBeenCalledOnce();
-    expect(mockWorkerInstance.executeJob).toHaveBeenCalledOnce();
+  describe("replacing a job in flight", () => {
+    // The store buckets by folded library name and normalized version label, so
+    // two jobs that differ only in spelling would clean and write one bucket in
+    // parallel, the second deleting what the first had written.
+    it.each([
+      ["the same library and version", ["libA", "1.0"], ["libA", "1.0"]],
+      ["an unversioned library", ["libA", undefined], ["libA", null]],
+      ["a differently spelled version", ["libA", " LATEST "], ["libA", "latest"]],
+      ["a differently cased library", ["LibA", "1.0"], [" liba ", "1.0"]],
+    ] as const)("supersedes a queued job for %s", async (_label, first, second) => {
+      const firstId = await manager.enqueueScrapeJob(
+        first[0],
+        first[1],
+        scrapeOptions(first[0]),
+      );
+      const secondId = await manager.enqueueScrapeJob(
+        second[0],
+        second[1],
+        scrapeOptions(second[0]),
+        { onExisting: "replace" },
+      );
+
+      expect(await statusOf(firstId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await statusOf(secondId)).toBe(PipelineJobStatus.QUEUED);
+    });
+
+    it("supersedes a running job for the same library and version, then runs the new one", async () => {
+      const release = holdScrapes();
+      await manager.start();
+      const firstId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA"),
+      );
+      await reachStatus(firstId, PipelineJobStatus.RUNNING);
+
+      const secondId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA"),
+        { onExisting: "replace" },
+      );
+      await manager.waitForJobCompletion(firstId);
+      await reachStatus(secondId, PipelineJobStatus.RUNNING);
+      release();
+      await manager.waitForJobCompletion(secondId);
+
+      expect(await statusOf(firstId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await statusOf(secondId)).toBe(PipelineJobStatus.COMPLETED);
+    });
+
+    it("keeps jobs for different versions of a library", async () => {
+      const firstId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA"),
+      );
+      await manager.enqueueScrapeJob("libA", "2.0", scrapeOptions("libA", "2.0"));
+
+      expect(await statusOf(firstId)).toBe(PipelineJobStatus.QUEUED);
+    });
   });
 
-  it("should complete a job and transition to COMPLETED", async () => {
-    const options = { url: "http://a.com", library: "libA", version: "1.0" };
-    const jobId = await manager.enqueueScrapeJob("libA", "1.0", options);
-    await manager.start();
-    await vi.advanceTimersByTimeAsync(1);
-    await manager.waitForJobCompletion(jobId);
-    const job = await manager.getJob(jobId);
-    expect(job?.status).toBe(PipelineJobStatus.COMPLETED);
-    expect(job?.finishedAt).toBeInstanceOf(Date);
-  });
+  describe("running jobs", () => {
+    it("runs an enqueued job to completion", async () => {
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await manager.waitForJobCompletion(jobId);
 
-  it.each([
-    ["queued", PipelineJobStatus.QUEUED],
-    ["running", PipelineJobStatus.RUNNING],
-    ["unversioned", PipelineJobStatus.QUEUED],
-  ])(
-    "should abort existing %s job for same library+version before enqueuing new job",
-    async (desc, initialStatus) => {
-      const options1 = {
-        url: "http://a.com",
-        library: "libA",
-        version: desc === "unversioned" ? "" : "1.0",
-      };
-      let resolveJob: (() => void) | undefined;
-      if (initialStatus === PipelineJobStatus.RUNNING) {
-        mockWorkerInstance.executeJob.mockReturnValue(
-          new Promise<void>((r) => {
-            resolveJob = () => r();
-          }),
-        );
-      }
-      const jobId1 = await manager.enqueueScrapeJob(
-        "libA",
-        desc === "unversioned" ? undefined : "1.0",
-        options1,
+      const job = await manager.getJob(jobId);
+      expect(job?.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(job?.startedAt).toBeInstanceOf(Date);
+      expect(job?.finishedAt).toBeInstanceOf(Date);
+      expect(scrape).toHaveBeenCalledWith(
+        expect.objectContaining({ url: SOURCE_URL, library: "libA", version: "1.0" }),
+        expect.any(Function),
+        expect.any(AbortSignal),
       );
-      if (initialStatus === PipelineJobStatus.RUNNING) {
-        await manager.start();
-        await vi.advanceTimersByTimeAsync(1);
-      }
-      const cancelSpy = vi.spyOn(manager, "cancelJob");
-      const options2 = {
-        url: "http://b.com",
-        library: "libA",
-        version: desc === "unversioned" ? "" : "1.0",
-      };
-      const jobId2 = await manager.enqueueScrapeJob(
-        "libA",
-        desc === "unversioned" ? undefined : "1.0",
-        options2,
+      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
+      expect((await store.getVersionById(versionId))?.status).toBe(
+        VersionStatus.COMPLETED,
       );
-      // Now wait for cancellation to propagate
-      if (resolveJob) resolveJob();
-      await manager.waitForJobCompletion(jobId1).catch(() => {});
-      const job1 = await manager.getJob(jobId1);
-      expect(cancelSpy).toHaveBeenCalledWith(jobId1);
-      expect(jobId2).not.toBe(jobId1);
-      expect(job1?.status).toBe(PipelineJobStatus.CANCELLED);
-      const job2 = await manager.getJob(jobId2);
-      expect([
+    });
+
+    it("announces each status change on the event bus", async () => {
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await manager.waitForJobCompletion(jobId);
+
+      expect(
+        statusEvents.filter((job) => job.id === jobId).map((job) => job.status),
+      ).toEqual([
         PipelineJobStatus.QUEUED,
         PipelineJobStatus.RUNNING,
         PipelineJobStatus.COMPLETED,
-      ]).toContain(job2?.status);
-    },
-  );
-
-  it("should transition job to FAILED if worker throws", async () => {
-    mockWorkerInstance.executeJob.mockRejectedValue(new Error("fail"));
-    const options = { url: "http://fail.com", library: "libFail", version: "1.0" };
-    const jobId = await manager.enqueueScrapeJob("libFail", "1.0", options);
-    await manager.start();
-    await vi.advanceTimersByTimeAsync(1);
-    await manager.waitForJobCompletion(jobId).catch(() => {}); // Handle expected rejection
-    const jobAfter = await manager.getJob(jobId);
-    expect(jobAfter?.status).toBe(PipelineJobStatus.FAILED);
-    expect(jobAfter?.error?.message).toBe("fail");
-  });
-
-  it("should cancel a job via cancelJob API", async () => {
-    let resolveJob: () => void = () => {};
-    mockWorkerInstance.executeJob.mockReturnValue(
-      new Promise<void>((r) => {
-        resolveJob = () => r();
-      }),
-    );
-    const options = { url: "http://cancel.com", library: "libCancel", version: "1.0" };
-    const jobId = await manager.enqueueScrapeJob("libCancel", "1.0", options);
-    await manager.start();
-    await vi.advanceTimersByTimeAsync(1);
-    await manager.cancelJob(jobId);
-    resolveJob();
-    await manager.waitForJobCompletion(jobId).catch(() => {});
-    const job = await manager.getJob(jobId);
-    expect(job?.status).toBe(PipelineJobStatus.CANCELLED);
-  });
-
-  it("should handle job progress updates during execution", async () => {
-    mockWorkerInstance.executeJob.mockImplementation(async (job, callbacks) => {
-      // Simulate progress callback from worker
-      await callbacks.onJobProgress?.(job, {
-        pagesScraped: 1,
-        totalPages: 1,
-        currentUrl: "url",
-        depth: 1,
-        maxDepth: 1,
-        document: undefined,
-        totalDiscovered: 1,
-        pagesIndexed: 0,
-        outcome: PageOutcome.Stored,
-      });
-    });
-    const options = {
-      url: "http://progress.com",
-      library: "libProgress",
-      version: "1.0",
-    };
-    const jobId = await manager.enqueueScrapeJob("libProgress", "1.0", options);
-    await manager.start();
-    await vi.advanceTimersByTimeAsync(1);
-    await manager.waitForJobCompletion(jobId);
-
-    // Verify job completed successfully (progress was processed)
-    const job = await manager.getJob(jobId);
-    expect(job?.status).toBe(PipelineJobStatus.COMPLETED);
-  });
-
-  it("should run jobs in parallel if concurrency > 1", async () => {
-    const mockEventBus = new EventBusService();
-    appConfig.scraper.maxConcurrency = 2;
-    manager = new PipelineManager(mockStore as DocumentManagementService, mockEventBus, {
-      appConfig: appConfig,
-    });
-    manager.setCallbacks(mockCallbacks);
-    const optionsA = { url: "http://a.com", library: "libA", version: "1.0" };
-    const optionsB = { url: "http://b.com", library: "libB", version: "1.0" };
-    const pendingPromise = new Promise(() => {});
-    mockWorkerInstance.executeJob.mockReturnValue(pendingPromise);
-    const jobIdA = await manager.enqueueScrapeJob("libA", "1.0", optionsA);
-    const jobIdB = await manager.enqueueScrapeJob("libB", "1.0", optionsB);
-    await manager.start();
-    await vi.advanceTimersByTimeAsync(1);
-    const jobA = await manager.getJob(jobIdA);
-    const jobB = await manager.getJob(jobIdB);
-    expect(jobA?.status).toBe(PipelineJobStatus.RUNNING);
-    expect(jobB?.status).toBe(PipelineJobStatus.RUNNING);
-  });
-
-  // --- Progress Update Tests ---
-  describe("Progress Updates", () => {
-    it("should update job progress in memory and database", async () => {
-      const job = createInternalTestJob({ versionId: 456 });
-      const progress = createTestProgress(50, 300);
-
-      await manager.updateJobProgress(job, progress);
-
-      // Verify in-memory updates
-      expect(job.progress).toEqual(progress);
-      expect(job.progressPages).toBe(50);
-      expect(job.progressMaxPages).toBe(300);
-      expect(job.updatedAt).toBeInstanceOf(Date);
-
-      // Verify database sync
-      expect(mockStore.updateVersionProgress).toHaveBeenCalledWith(456, 50, 300, 0);
+      ]);
     });
 
-    it("should handle database errors gracefully during progress updates", async () => {
-      (mockStore.updateVersionProgress as Mock).mockRejectedValue(new Error("DB error"));
-
-      const job = createInternalTestJob();
-      const progress = createTestProgress(30, 150);
-
-      // Should not throw
-      await expect(manager.updateJobProgress(job, progress)).resolves.not.toThrow();
-
-      // In-memory updates should still work
-      expect(job.progress).toEqual(progress);
-      expect(job.progressPages).toBe(30);
-      expect(job.progressMaxPages).toBe(150);
-    });
-
-    it("should provide updated progress data to UI tools", async () => {
-      const listJobsTool = new ListJobsTool(manager);
-      const jobId = "ui-test-job";
-
-      const job = createInternalTestJob({ id: jobId });
-      // Add job to manager's internal tracking
-      (manager as any).jobMap = new Map([[jobId, job]]);
-
-      // Update progress
-      const progress = createTestProgress(75, 200);
-      await manager.updateJobProgress(job, progress);
-
-      // Verify UI tool gets updated data
-      const result = await listJobsTool.execute({});
-      const uiJob = result.jobs.find((j: any) => j.id === jobId);
-
-      expect(uiJob).toBeDefined();
-      expect(uiJob!.progress).toEqual({
-        pages: 75,
-        pagesIndexed: 0,
-        totalPages: 200,
-        totalDiscovered: 200,
-      });
-    });
-
-    it("should handle sequential progress updates correctly", async () => {
-      const listJobsTool = new ListJobsTool(manager);
-      const jobId = "sequence-test-job";
-
-      const job = createInternalTestJob({ id: jobId });
-      // Add job to manager's internal tracking
-      (manager as any).jobMap = new Map([[jobId, job]]);
-
-      // Initial progress update
-      await manager.updateJobProgress(job, createTestProgress(25, 100));
-
-      // Check initial state
-      let result = await listJobsTool.execute({});
-      let uiJob = result.jobs.find((j: any) => j.id === jobId);
-      expect(uiJob?.progress?.pages).toBe(25);
-
-      // Update progress again
-      await manager.updateJobProgress(job, createTestProgress(75, 100));
-
-      // Check updated state
-      result = await listJobsTool.execute({});
-      uiJob = result.jobs.find((j: any) => j.id === jobId);
-      expect(uiJob?.progress?.pages).toBe(75);
-    });
-
-    it("should handle jobs without progress gracefully", async () => {
-      const listJobsTool = new ListJobsTool(manager);
-      const jobId = "no-progress-job";
-
-      const job = createTestJob({ id: jobId });
-      (manager as any).jobMap = new Map([[jobId, job]]);
-
-      const result = await listJobsTool.execute({});
-      const uiJob = result.jobs.find((j: any) => j.id === jobId);
-
-      expect(uiJob).toBeDefined();
-      expect(uiJob!.progress).toBeUndefined();
-      expect(uiJob!.id).toBe(jobId);
-    });
-  });
-
-  // --- Database Status Integration Tests ---
-  describe("Database Status Integration", () => {
-    it("should update database status when job is enqueued", async () => {
-      const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
-      await manager.enqueueScrapeJob("test-lib", "1.0", options);
-
-      // Should claim the library/version and update the claimed version to QUEUED
-      expect(mockStore.claimVersion).toHaveBeenCalledWith(
-        "test-lib",
-        "1.0",
-        "reject-version",
-      );
-      expect(mockStore.updateVersionStatus).toHaveBeenCalledWith(1, "queued", undefined);
-    });
-
-    it("should handle unversioned jobs correctly", async () => {
-      const options = { url: "http://example.com", library: "test-lib", version: "" };
-      await manager.enqueueScrapeJob("test-lib", null, options);
-
-      // Should treat null version as empty string
-      expect(mockStore.claimVersion).toHaveBeenCalledWith(
-        "test-lib",
-        "",
-        "reject-version",
-      );
-      expect(mockStore.updateVersionStatus).toHaveBeenCalledWith(1, "queued", undefined);
-    });
-
-    it("should recover pending jobs from database on start using enqueueRefreshJob", async () => {
-      const mockInterruptedVersions = [
-        {
-          id: 1,
-          library_name: "test-lib",
-          name: "1.0.0",
-          status: "running",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:01:00.000Z",
-        },
-        {
-          id: 2,
-          library_name: "interrupted-lib",
-          name: "2.0.0",
-          status: "queued",
-          created_at: "2025-01-01T00:00:00.000Z",
-          updated_at: "2025-01-01T00:00:00.000Z",
-        },
-      ];
-
-      // Create fresh mock store with all methods needed for enqueueRefreshJob
-      const recoveryMockStore = {
-        claimVersion: echoClaim(),
-        updateVersionStatus: vi.fn().mockResolvedValue(undefined),
-        updateVersionProgress: vi.fn().mockResolvedValue(undefined),
-        getVersionsByStatus: vi.fn().mockResolvedValue(mockInterruptedVersions),
-        requireVersion: vi.fn().mockImplementation(({ library }) => {
-          return Promise.resolve({ versionId: library === "test-lib" ? 1 : 2, library });
-        }),
-        getVersionById: vi.fn().mockImplementation((id: number) => {
-          return Promise.resolve({
-            id,
-            library_id: id,
-            name: id === 1 ? "1.0.0" : "2.0.0",
-            status: id === 1 ? "running" : "queued",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:01:00.000Z",
-          });
-        }),
-        getLibraryById: vi.fn().mockImplementation((id: number) => {
-          return Promise.resolve({
-            id,
-            name: id === 1 ? "test-lib" : "interrupted-lib",
-          });
-        }),
-        getPagesByVersionId: vi.fn().mockResolvedValue([]),
-        getScraperOptions: vi.fn().mockResolvedValue({
-          sourceUrl: "https://example.com",
-          options: { maxDepth: 2 },
-        }),
-        storeScraperOptions: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const mockEventBus = new EventBusService();
-      appConfig.scraper.maxConcurrency = 1;
-      const recoveryManager = new PipelineManager(
-        recoveryMockStore as any,
-        mockEventBus,
-        {
-          recoverJobs: true, // Explicitly enable recovery
-          appConfig: appConfig,
-        },
-      );
-
-      const enqueueRefreshSpy = vi.spyOn(recoveryManager, "enqueueRefreshJob");
-
-      await recoveryManager.start();
-
-      // Should have called enqueueRefreshJob for both interrupted versions
-      expect(enqueueRefreshSpy).toHaveBeenCalledWith("test-lib", "1.0.0");
-      expect(enqueueRefreshSpy).toHaveBeenCalledWith("interrupted-lib", "2.0.0");
-
-      // Should have loaded both jobs into the in-memory queue
-      const allJobs = await recoveryManager.getJobs();
-      expect(allJobs).toHaveLength(2);
-      expect(
-        allJobs.some((job) => job.library === "test-lib" && job.version === "1.0.0"),
-      ).toBe(true);
-      expect(
-        allJobs.some(
-          (job) => job.library === "interrupted-lib" && job.version === "2.0.0",
-        ),
-      ).toBe(true);
-
-      await recoveryManager.stop();
-    });
-
-    it("should map job statuses to database statuses correctly", async () => {
-      // Test that the mapping function works correctly by checking enum values
-      const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
-      const jobId = await manager.enqueueScrapeJob("test-lib", "1.0", options);
-
-      // Verify the job was created with correct status
-      const job = await manager.getJob(jobId);
-      expect(job?.status).toBe(PipelineJobStatus.QUEUED);
-      expect(job?.library).toBe("test-lib");
-      expect(job?.version).toBe("1.0");
-
-      // Verify database was called with correct mapped status
-      expect(mockStore.updateVersionStatus).toHaveBeenCalledWith(1, "queued", undefined);
-    });
-
-    it("should handle database errors gracefully", async () => {
-      // Mock database failure
-      (mockStore.updateVersionStatus as Mock).mockRejectedValue(new Error("DB Error"));
-
-      const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
-
-      // Should not throw even if database update fails
-      await expect(
-        manager.enqueueScrapeJob("test-lib", "1.0", options),
-      ).resolves.toBeDefined();
-
-      // Job should still be created in memory despite database error
-      const allJobs = await manager.getJobs();
-      expect(allJobs).toHaveLength(1);
-      expect(allJobs[0].library).toBe("test-lib");
-    });
-  });
-
-  describe("cleanup functionality", () => {
-    it("should stop accepting new jobs after stop is called", async () => {
-      // Start the manager
+    it("fails the job when the scrape throws, and rejects its completion", async () => {
+      scrape.mockRejectedValue(new Error("fail"));
       await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await expect(manager.waitForJobCompletion(jobId)).rejects.toThrow("fail");
 
-      // Stop the manager
+      const job = await manager.getJob(jobId);
+      expect(job?.status).toBe(PipelineJobStatus.FAILED);
+      expect(job?.error?.message).toBe("fail");
+      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
+      expect(await store.getVersionById(versionId)).toMatchObject({
+        status: VersionStatus.FAILED,
+        error_message: "fail",
+      });
+    });
+
+    it("starts the next queued job when a job finishes at concurrency 1", async () => {
+      const release = holdScrapes();
+      await manager.start();
+      const firstId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA"),
+      );
+      const secondId = await manager.enqueueScrapeJob(
+        "libB",
+        "1.0",
+        scrapeOptions("libB"),
+      );
+      await reachStatus(firstId, PipelineJobStatus.RUNNING);
+
+      expect(await statusOf(secondId)).toBe(PipelineJobStatus.QUEUED);
+
+      release();
+      await manager.waitForJobCompletion(firstId);
+      await manager.waitForJobCompletion(secondId);
+      expect(await statusOf(secondId)).toBe(PipelineJobStatus.COMPLETED);
+    });
+
+    it("runs jobs in parallel up to the configured concurrency", async () => {
+      manager = createManager({ concurrency: 2 });
+      holdScrapes();
+      await manager.start();
+      const firstId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA"),
+      );
+      const secondId = await manager.enqueueScrapeJob(
+        "libB",
+        "1.0",
+        scrapeOptions("libB"),
+      );
+
+      await reachStatus(firstId, PipelineJobStatus.RUNNING);
+      await reachStatus(secondId, PipelineJobStatus.RUNNING);
+    });
+
+    it("leaves jobs queued after stop and runs them on the next start", async () => {
+      await manager.start();
       await manager.stop();
 
-      // Attempting to enqueue new jobs should be handled gracefully
-      const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.QUEUED);
+      expect(scrape).not.toHaveBeenCalled();
 
-      // This should not cause the system to hang
-      try {
-        const jobId = await manager.enqueueScrapeJob("test-lib", "1.0", options);
-        // If it succeeds, verify the job exists
-        if (jobId) {
-          const job = await manager.getJob(jobId);
-          expect(job).toBeDefined();
-        }
-      } catch (error) {
-        // If it throws, that's also acceptable behavior for a stopped manager
-        expect(error).toBeDefined();
-      }
+      await manager.start();
+      await manager.waitForJobCompletion(jobId);
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
     });
 
-    it("should handle stop when manager is not running", async () => {
-      // Manager is not started, so stop should handle this gracefully
-      await expect(manager.stop()).resolves.toBeUndefined();
+    // start() reads every QUEUED/RUNNING version as interrupted, including those
+    // of jobs still queued in memory: with recoverJobs it re-enqueues them,
+    // cancelling the original job; without, it marks their version failed.
+    it.todo("keeps jobs enqueued before start() out of interrupted-job recovery");
 
-      // Should be able to call stop multiple times without issues
+    it("can be stopped when it is not running", async () => {
+      await expect(manager.stop()).resolves.toBeUndefined();
       await expect(manager.stop()).resolves.toBeUndefined();
     });
   });
 
-  // --- Refresh Job Tests ---
-  describe("enqueueRefreshJob", () => {
-    it("should successfully enqueue a refresh job with initial queue", async () => {
-      // Setup: Mock pages and scraper options for an existing version
-      const mockPages = [
-        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
-        { id: 2, url: "https://example.com/page2", depth: 1, etag: "etag2" },
-        { id: 3, url: "https://example.com/page3", depth: 1, etag: "etag3" },
-      ];
-
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com",
-        options: { maxDepth: 2 },
+  describe("progress", () => {
+    function scrapeReporting(...events: ScraperProgressEvent[]) {
+      scrape.mockImplementation(async (_options, onProgress) => {
+        for (const event of events) {
+          await onProgress(event);
+        }
       });
+    }
 
-      // Action: Enqueue a refresh job
-      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0");
+    it("keeps the latest progress on the job, in the store and on the event bus", async () => {
+      const progressEvents: ScraperProgressEvent[] = [];
+      eventBus.on(EventType.JOB_PROGRESS, ({ progress }) => {
+        progressEvents.push(progress);
+      });
+      scrapeReporting(progress(1, 4), progress(3, 4));
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await manager.waitForJobCompletion(jobId);
 
-      // Assertions: Verify the job was created with correct properties
-      expect(jobId).toBeDefined();
-      expect(typeof jobId).toBe("string");
+      expect(await manager.getJob(jobId)).toMatchObject({
+        progress: progress(3, 4),
+        progressPages: 3,
+        progressMaxPages: 4,
+        progressPagesIndexed: 2,
+      });
+      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
+      expect(await store.getVersionById(versionId)).toMatchObject({
+        progress_pages: 3,
+        progress_max_pages: 4,
+      });
+      expect(progressEvents).toEqual([progress(1, 4), progress(3, 4)]);
+    });
 
+    it("keeps progress and completes the job when the store cannot record progress", async () => {
+      vi.spyOn(store, "updateVersionProgress").mockRejectedValue(new Error("DB error"));
+      scrapeReporting(progress(2, 5));
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await manager.waitForJobCompletion(jobId);
+
+      expect(await manager.getJob(jobId)).toMatchObject({
+        status: PipelineJobStatus.COMPLETED,
+        progressPages: 2,
+        progressMaxPages: 5,
+      });
+    });
+  });
+
+  describe("cancellation", () => {
+    it("cancels a queued job, resolves its completion and never runs it", async () => {
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+
+      await manager.cancelJob(jobId);
+      await manager.start();
+
+      await expect(manager.waitForJobCompletion(jobId)).resolves.toBeUndefined();
       const job = await manager.getJob(jobId);
-      expect(job).toBeDefined();
-      expect(job?.status).toBe(PipelineJobStatus.QUEUED);
-      expect(job?.library).toBe("test-lib");
-      expect(job?.version).toBe("1.0.0");
-
-      // Verify the scraper options contain an initialQueue with the same number of pages
-      // Note: initialQueue is part of ScraperOptions but not VersionScraperOptions (storage type)
-      expect(job?.scraperOptions).toBeDefined();
-      const scraperOpts = job?.scraperOptions as any;
-      expect(scraperOpts?.initialQueue).toBeDefined();
-      expect(scraperOpts?.initialQueue).toHaveLength(mockPages.length);
-
-      // Verify maxPages is NOT set (allowing discovery of new pages during refresh)
-      expect(scraperOpts?.maxPages).toBeUndefined();
+      expect(job?.status).toBe(PipelineJobStatus.CANCELLED);
+      expect(job?.finishedAt).toBeInstanceOf(Date);
+      expect(scrape).not.toHaveBeenCalled();
     });
 
-    it("should replace rather than reject when refreshing a completed version", async () => {
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([
-        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
+    it("cancels a running job through its signal and resolves its completion", async () => {
+      holdScrapes();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
+
+      await manager.cancelJob(jobId);
+
+      await expect(manager.waitForJobCompletion(jobId)).resolves.toBeUndefined();
+      expect(
+        statusEvents.filter((job) => job.id === jobId).map((job) => job.status),
+      ).toEqual([
+        PipelineJobStatus.QUEUED,
+        PipelineJobStatus.RUNNING,
+        PipelineJobStatus.CANCELLING,
+        PipelineJobStatus.CANCELLED,
       ]);
-
-      await manager.enqueueRefreshJob("test-lib", "1.0.0");
-
-      expect(mockStore.claimVersion).toHaveBeenCalledWith("test-lib", "1.0.0", "replace");
+      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
+      expect((await store.getVersionById(versionId))?.status).toBe(
+        VersionStatus.CANCELLED,
+      );
     });
 
-    it("should replace when an incomplete version falls back to a full re-scrape", async () => {
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(456));
-      (mockStore.getVersionById as Mock).mockResolvedValue({
-        id: 456,
-        library_id: 1,
-        name: "1.0.0",
-        status: "failed",
-      });
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com",
-        options: {},
-      });
+    it("leaves a finished job as it is", async () => {
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await manager.waitForJobCompletion(jobId);
 
-      await manager.enqueueRefreshJob("test-lib", "1.0.0");
+      await manager.cancelJob(jobId);
 
-      expect(mockStore.claimVersion).toHaveBeenCalledWith("test-lib", "1.0.0", "replace");
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
     });
 
-    it("should fail for an unknown library without creating anything", async () => {
-      (mockStore.requireVersion as Mock).mockRejectedValue(
-        new LibraryNotFoundInStoreError("Reakt", []),
+    it("ignores an unknown job id", async () => {
+      await expect(manager.cancelJob("unknown")).resolves.toBeUndefined();
+    });
+
+    it("rejects waiting for an unknown job id", async () => {
+      await expect(manager.waitForJobCompletion("unknown")).rejects.toBeInstanceOf(
+        PipelineStateError,
+      );
+    });
+  });
+
+  describe("clearCompletedJobs", () => {
+    it("removes finished jobs, keeps the others and announces the change", async () => {
+      const jobListChanges = vi.fn();
+      eventBus.on(EventType.JOB_LIST_CHANGE, jobListChanges);
+      scrape.mockRejectedValueOnce(new Error("fail"));
+      await manager.start();
+      const failedId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA"),
+      );
+      await manager.waitForJobCompletion(failedId).catch(() => {});
+      const completedId = await manager.enqueueScrapeJob(
+        "libB",
+        "1.0",
+        scrapeOptions("libB"),
+      );
+      await manager.waitForJobCompletion(completedId);
+      await manager.stop();
+      const cancelledId = await manager.enqueueScrapeJob(
+        "libC",
+        "1.0",
+        scrapeOptions("libC"),
+      );
+      await manager.cancelJob(cancelledId);
+      const queuedId = await manager.enqueueScrapeJob(
+        "libD",
+        "1.0",
+        scrapeOptions("libD"),
       );
 
+      const cleared = await manager.clearCompletedJobs();
+
+      expect(cleared).toBe(3);
+      expect((await manager.getJobs()).map((job) => job.id)).toEqual([queuedId]);
+      expect(jobListChanges).toHaveBeenCalledOnce();
+    });
+
+    it("returns 0 and announces nothing when no job has finished", async () => {
+      const jobListChanges = vi.fn();
+      eventBus.on(EventType.JOB_LIST_CHANGE, jobListChanges);
+      await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+
+      expect(await manager.clearCompletedJobs()).toBe(0);
+      expect(jobListChanges).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("enqueueRefreshJob", () => {
+    const pages = [
+      { url: `${SOURCE_URL}/deep`, depth: 5, etag: '"deep"' },
+      { url: `${SOURCE_URL}/shallow`, depth: 0, etag: null },
+    ];
+
+    it.each([
+      ["1.0", "1.0"],
+      [null, null],
+    ])("re-checks every stored page of version %j", async (version, publicVersion) => {
+      await seedVersion("libA", version ?? "", VersionStatus.COMPLETED, {
+        pages,
+        options: { maxDepth: 2, maxPages: 50 },
+      });
+
+      const jobId = await manager.enqueueRefreshJob("libA", version);
+
+      const job = await manager.getJob(jobId);
+      expect(job?.version).toBe(publicVersion);
+      expect(job?.scraperOptions).toMatchObject({ isRefresh: true, maxDepth: 2 });
+      const queue = job?.scraperOptions?.initialQueue ?? [];
+      expect(queue).toHaveLength(2);
+      expect(queue).toEqual(
+        expect.arrayContaining(
+          pages.map((page) =>
+            expect.objectContaining({
+              url: page.url,
+              depth: page.depth,
+              etag: page.etag,
+              pageId: expect.any(Number),
+            }),
+          ),
+        ),
+      );
+    });
+
+    it("requests a representation from where its content came from", async () => {
+      const contentUrl = `${SOURCE_URL}/page.md`;
+      await seedVersion("libA", "1.0", VersionStatus.COMPLETED, {
+        pages: [{ url: `${SOURCE_URL}/page`, depth: 1, etag: '"md"', contentUrl }],
+      });
+
+      const jobId = await manager.enqueueRefreshJob("libA", "1.0");
+
+      const job = await manager.getJob(jobId);
+      expect(job?.scraperOptions?.initialQueue).toEqual([
+        expect.objectContaining({ url: contentUrl, identityUrl: `${SOURCE_URL}/page` }),
+      ]);
+    });
+
+    it.each([
+      ["1.0", "No pages found for libA@1.0"],
+      [undefined, "No pages found for libA@latest"],
+    ])("rejects version %j when it has no pages", async (version, message) => {
+      await seedVersion("libA", version ?? "", VersionStatus.COMPLETED);
+
+      await expect(manager.enqueueRefreshJob("libA", version)).rejects.toThrow(message);
+    });
+
+    it.each([VersionStatus.FAILED, VersionStatus.QUEUED])(
+      "re-scrapes a %s version from scratch with its stored options",
+      async (status) => {
+        await seedVersion("libA", "1.0", status, { pages, options: { maxDepth: 2 } });
+
+        const jobId = await manager.enqueueRefreshJob("libA", "1.0");
+
+        const options = (await manager.getJob(jobId))?.scraperOptions;
+        expect(options).toMatchObject({ url: SOURCE_URL, maxDepth: 2 });
+        expect(options?.isRefresh).toBeUndefined();
+        expect(options?.initialQueue).toBeUndefined();
+      },
+    );
+
+    it("rejects an unknown library without creating it", async () => {
       await expect(manager.enqueueRefreshJob("Reakt", "")).rejects.toBeInstanceOf(
         LibraryNotFoundInStoreError,
       );
-      expect(mockStore.claimVersion).not.toHaveBeenCalled();
+
+      expect(await store.listLibraries()).toEqual([]);
+      expect(await manager.getJobs()).toEqual([]);
     });
 
-    it("should name the library as it is stored in refresh errors", async () => {
-      (mockStore.requireVersion as Mock).mockResolvedValue({
-        versionId: 7,
-        library: "React",
-      });
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
+    it("names the library as it is stored in its errors", async () => {
+      await seedVersion("React", "1.0.0", VersionStatus.COMPLETED);
 
       await expect(manager.enqueueRefreshJob("react", "1.0.0")).rejects.toThrow(
         "No pages found for React@1.0.0",
       );
     });
 
-    it("should handle unversioned libraries during refresh", async () => {
-      const mockPages = [
-        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
-      ];
+    it("rejects re-scraping a version without stored options", async () => {
+      await seedVersion("libA", "1.0", VersionStatus.FAILED, { options: null });
 
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(789));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com",
-        options: {},
-      });
-
-      // Action: Enqueue refresh for unversioned library (null/undefined version)
-      const jobId = await manager.enqueueRefreshJob("unversioned-lib", null);
-
-      // Assertions
-      const job = await manager.getJob(jobId);
-      expect(job).toBeDefined();
-      expect(job?.library).toBe("unversioned-lib");
-      expect(job?.version).toBe(null); // Public API uses null for unversioned
-      const scraperOpts = job?.scraperOptions as any;
-      expect(scraperOpts?.initialQueue).toHaveLength(1);
-    });
-
-    it("should throw error when refreshing a version with no pages", async () => {
-      // Setup: Mock empty pages array
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(999));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
-
-      // Action & Assertion: Should throw with clear error message
-      await expect(manager.enqueueRefreshJob("empty-lib", "1.0.0")).rejects.toThrow(
-        "No pages found for empty-lib@1.0.0",
+      await expect(manager.enqueueRefreshJob("libA", "1.0")).rejects.toThrow(
+        "No stored scraper options found for libA@1.0",
       );
     });
 
-    it("should throw error when refreshing latest library with no pages", async () => {
-      // Setup: Mock empty pages array for latest library
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(888));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue([]);
+    it.each([
+      ["keeps stored preserveHashes", { preserveHashes: true }, undefined, true],
+      ["overrides stored preserveHashes", { preserveHashes: true }, false, false],
+    ])("%s", async (_label, stored, override, expected) => {
+      await seedVersion("libA", "1.0", VersionStatus.COMPLETED, {
+        pages: [{ url: `${SOURCE_URL}/#/guide`, depth: 0, etag: null }],
+        options: stored,
+      });
 
-      // Action & Assertion: Should throw with clear error message including "latest"
-      await expect(manager.enqueueRefreshJob("empty-lib", undefined)).rejects.toThrow(
-        "No pages found for empty-lib@latest",
+      const jobId = await manager.enqueueRefreshJob("libA", "1.0", {
+        preserveHashes: override,
+      });
+
+      expect((await manager.getJob(jobId))?.scraperOptions?.preserveHashes).toBe(
+        expected,
       );
     });
 
-    it("should preserve page depth and etag in initialQueue", async () => {
-      const mockPages = [
-        { id: 10, url: "https://example.com/deep", depth: 5, etag: "deep-etag" },
-        { id: 11, url: "https://example.com/shallow", depth: 0, etag: null },
-      ];
-
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(111));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com",
-        options: {},
-      });
-
-      const jobId = await manager.enqueueRefreshJob("depth-test", "1.0.0");
-      const job = await manager.getJob(jobId);
-
-      // Verify initialQueue contains depth and etag information
-      // Note: initialQueue is part of ScraperOptions but not VersionScraperOptions (storage type)
-      const scraperOpts = job?.scraperOptions as any;
-      const queue = scraperOpts?.initialQueue;
-      expect(queue).toBeDefined();
-      expect(queue).toHaveLength(2);
-
-      // Verify deep page
-      const deepItem = queue?.find(
-        (item: any) => item.url === "https://example.com/deep",
-      );
-      expect(deepItem).toBeDefined();
-      expect(deepItem?.depth).toBe(5);
-      expect(deepItem?.etag).toBe("deep-etag");
-      expect(deepItem?.pageId).toBe(10);
-
-      // Verify shallow page
-      const shallowItem = queue?.find(
-        (item: any) => item.url === "https://example.com/shallow",
-      );
-      expect(shallowItem).toBeDefined();
-      expect(shallowItem?.depth).toBe(0);
-      expect(shallowItem?.etag).toBe(null);
-      expect(shallowItem?.pageId).toBe(11);
-    });
-
-    it("should perform full re-scrape instead of refresh when version is not completed", async () => {
-      // Setup: Mock an incomplete version (failed scrape)
-      const mockPages = [
-        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
-        { id: 2, url: "https://example.com/page2", depth: 1, etag: "etag2" },
-      ];
-
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(555));
-      (mockStore.getVersionById as Mock).mockResolvedValue({
-        id: 555,
-        library_id: 1,
-        name: "1.0.0",
-        status: "failed", // Version was not completed
-        created_at: "2025-01-01T00:00:00.000Z",
-        updated_at: "2025-01-01T00:01:00.000Z",
-      });
-      (mockStore.getLibraryById as Mock).mockResolvedValue({
-        id: 1,
-        name: "incomplete-lib",
-      });
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com",
-        options: { maxDepth: 2 },
-      });
-
-      // Spy on enqueueJobWithStoredOptions to verify it's called
-      const enqueueStoredSpy = vi.spyOn(manager, "enqueueJobWithStoredOptions");
-      enqueueStoredSpy.mockResolvedValue("mock-job-id");
-
-      // Action: Attempt to enqueue a refresh job
-      const jobId = await manager.enqueueRefreshJob("incomplete-lib", "1.0.0");
-
-      // Assertions: Should have called enqueueJobWithStoredOptions instead of normal refresh
-      expect(enqueueStoredSpy).toHaveBeenCalledWith("incomplete-lib", "1.0.0", undefined);
-      expect(jobId).toBe("mock-job-id");
-
-      // Should NOT have called getPagesByVersionId since we're doing a full re-scrape
-      expect(mockStore.getPagesByVersionId).not.toHaveBeenCalled();
-    });
-
-    it("should perform full re-scrape for queued versions during refresh", async () => {
-      // Setup: Mock a queued version (never started)
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(666));
-      (mockStore.getVersionById as Mock).mockResolvedValue({
-        id: 666,
-        library_id: 2,
-        name: "2.0.0",
-        status: "queued", // Version is still queued
-        created_at: "2025-01-01T00:00:00.000Z",
-        updated_at: "2025-01-01T00:00:00.000Z",
-      });
-      (mockStore.getLibraryById as Mock).mockResolvedValue({
-        id: 2,
-        name: "queued-lib",
-      });
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com",
-        options: {},
-      });
-
-      // Spy on enqueueJobWithStoredOptions
-      const enqueueStoredSpy = vi.spyOn(manager, "enqueueJobWithStoredOptions");
-      enqueueStoredSpy.mockResolvedValue("queued-job-id");
-
-      // Action: Attempt to enqueue a refresh job
-      await manager.enqueueRefreshJob("queued-lib", "2.0.0");
-
-      // Assertions: Should perform full re-scrape for queued versions
-      expect(enqueueStoredSpy).toHaveBeenCalledWith("queued-lib", "2.0.0", undefined);
-    });
-
-    it("should perform normal refresh for completed versions", async () => {
-      // Setup: Mock a completed version
-      const mockPages = [
-        { id: 1, url: "https://example.com/page1", depth: 0, etag: "etag1" },
-      ];
-
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(777));
-      (mockStore.getVersionById as Mock).mockResolvedValue({
-        id: 777,
-        library_id: 3,
-        name: "3.0.0",
-        status: "completed", // Version is completed successfully
-        created_at: "2025-01-01T00:00:00.000Z",
-        updated_at: "2025-01-01T00:01:00.000Z",
-      });
-      (mockStore.getLibraryById as Mock).mockResolvedValue({
-        id: 3,
-        name: "completed-lib",
-      });
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com",
-        options: {},
-      });
-
-      // Spy on enqueueJobWithStoredOptions to ensure it's NOT called
-      const enqueueStoredSpy = vi.spyOn(manager, "enqueueJobWithStoredOptions");
-
-      // Action: Enqueue a refresh job
-      const jobId = await manager.enqueueRefreshJob("completed-lib", "3.0.0");
-
-      // Assertions: Should perform normal refresh, NOT full re-scrape
-      expect(enqueueStoredSpy).not.toHaveBeenCalled();
-      expect(mockStore.getPagesByVersionId).toHaveBeenCalledWith(777);
-
-      const job = await manager.getJob(jobId);
-      expect(job).toBeDefined();
-      expect(job?.library).toBe("completed-lib");
-      expect(job?.version).toBe("3.0.0");
-    });
-
-    it("should upgrade fetch mode to playwright when preserveHashes is enabled", async () => {
-      const jobId = await manager.enqueueScrapeJob("test-lib", "1.0.0", {
-        url: "https://example.com/#/guide",
-        library: "test-lib",
-        version: "1.0.0",
-        scrapeMode: "fetch" as any,
-        preserveHashes: true,
-      });
-
-      const job = await manager.getJob(jobId);
-      expect(job?.scraperOptions?.scrapeMode).toBe("playwright");
-      expect(job?.scraperOptions?.preserveHashes).toBe(true);
-    });
-
-    it("should reuse stored preserveHashes during refresh when no override is provided", async () => {
-      const mockPages = [
-        { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
-      ];
-
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(888));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com/#/guide",
+    it("defaults scrapeMode to auto when the stored options predate it", async () => {
+      // The seeded options carry no scrapeMode, like those written before it was stored.
+      await seedVersion("libA", "1.0", VersionStatus.COMPLETED, {
+        pages: [{ url: `${SOURCE_URL}/page`, depth: 0, etag: null }],
         options: { preserveHashes: true },
       });
 
-      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0");
-      const job = await manager.getJob(jobId);
+      const jobId = await manager.enqueueRefreshJob("libA", "1.0");
 
-      expect(job?.scraperOptions?.preserveHashes).toBe(true);
-    });
-
-    it("should override stored preserveHashes during refresh when explicitly provided", async () => {
-      const mockPages = [
-        { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
-      ];
-
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(889));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com/#/guide",
-        options: { preserveHashes: true },
-      });
-
-      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0", {
-        preserveHashes: false,
-      });
-      const job = await manager.getJob(jobId);
-
-      expect(job?.scraperOptions?.preserveHashes).toBe(false);
-    });
-
-    it("should default refresh jobs to auto scrapeMode when older stored options omit it", async () => {
-      const mockPages = [
-        { id: 1, url: "https://example.com/#/guide", depth: 0, etag: "etag1" },
-      ];
-
-      (mockStore.requireVersion as Mock).mockImplementation(foundVersion(890));
-      (mockStore.getPagesByVersionId as Mock).mockResolvedValue(mockPages);
-      (mockStore.getScraperOptions as Mock).mockResolvedValue({
-        sourceUrl: "https://example.com/#/guide",
-        options: { preserveHashes: true },
-      });
-
-      const jobId = await manager.enqueueRefreshJob("test-lib", "1.0.0", {
-        preserveHashes: true,
-      });
-      const job = await manager.getJob(jobId);
-
-      expect(job?.scraperOptions?.scrapeMode).toBe("auto");
-      expect(job?.scraperOptions?.preserveHashes).toBe(true);
+      expect((await manager.getJob(jobId))?.scraperOptions?.scrapeMode).toBe(
+        ScrapeMode.Auto,
+      );
     });
   });
 
-  // --- Interrupted Job Recovery Tests (Issue #317) ---
-  describe("Interrupted Job Recovery", () => {
-    describe("when recoverJobs is false", () => {
-      it("should mark RUNNING jobs as FAILED with 'Job interrupted' message", async () => {
-        const mockRunningVersions = [
-          {
-            id: 1,
-            library_name: "interrupted-lib",
-            name: "1.0.0",
-            status: "running",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:01:00.000Z",
-          },
-        ];
+  describe("interrupted jobs on start", () => {
+    async function seedInterrupted() {
+      const runningId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
+      const queuedId = await seedVersion("lib-b", "2.0", VersionStatus.QUEUED);
+      return { runningId, queuedId };
+    }
 
-        const recoveryMockStore = {
-          claimVersion: echoClaim(),
-          updateVersionStatus: vi.fn().mockResolvedValue(undefined),
-          getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
-            if (statuses.includes("running") || statuses.includes("queued")) {
-              return Promise.resolve(mockRunningVersions);
-            }
-            return Promise.resolve([]);
-          }),
-        };
+    it("re-enqueues them when recovery is enabled", async () => {
+      await seedInterrupted();
+      manager = createManager({ recoverJobs: true });
+      holdScrapes();
 
-        const mockEventBus = new EventBusService();
-        const recoveryManager = new PipelineManager(
-          recoveryMockStore as any,
-          mockEventBus,
-          {
-            recoverJobs: false,
-            appConfig: appConfig,
-          },
-        );
+      await manager.start();
 
-        await recoveryManager.start();
-
-        // Should mark the interrupted job as FAILED
-        expect(recoveryMockStore.updateVersionStatus).toHaveBeenCalledWith(
-          1,
-          "failed",
-          "Job interrupted",
-        );
-
-        // Should NOT have any jobs in the in-memory queue
-        const jobs = await recoveryManager.getJobs();
-        expect(jobs).toHaveLength(0);
-
-        await recoveryManager.stop();
-      });
-
-      it("should mark QUEUED jobs as FAILED with 'Job interrupted' message", async () => {
-        const mockQueuedVersions = [
-          {
-            id: 2,
-            library_name: "queued-lib",
-            name: "2.0.0",
-            status: "queued",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:00:00.000Z",
-          },
-        ];
-
-        const recoveryMockStore = {
-          claimVersion: echoClaim(),
-          updateVersionStatus: vi.fn().mockResolvedValue(undefined),
-          getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
-            if (statuses.includes("running") || statuses.includes("queued")) {
-              return Promise.resolve(mockQueuedVersions);
-            }
-            return Promise.resolve([]);
-          }),
-        };
-
-        const mockEventBus = new EventBusService();
-        const recoveryManager = new PipelineManager(
-          recoveryMockStore as any,
-          mockEventBus,
-          {
-            recoverJobs: false,
-            appConfig: appConfig,
-          },
-        );
-
-        await recoveryManager.start();
-
-        // Should mark the queued job as FAILED
-        expect(recoveryMockStore.updateVersionStatus).toHaveBeenCalledWith(
-          2,
-          "failed",
-          "Job interrupted",
-        );
-
-        await recoveryManager.stop();
-      });
-
-      it("should mark multiple interrupted jobs as FAILED", async () => {
-        const mockInterruptedVersions = [
-          {
-            id: 1,
-            library_name: "lib-a",
-            name: "1.0.0",
-            status: "running",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:01:00.000Z",
-          },
-          {
-            id: 2,
-            library_name: "lib-b",
-            name: "2.0.0",
-            status: "queued",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:00:00.000Z",
-          },
-        ];
-
-        const recoveryMockStore = {
-          claimVersion: echoClaim(),
-          updateVersionStatus: vi.fn().mockResolvedValue(undefined),
-          getVersionsByStatus: vi.fn().mockResolvedValue(mockInterruptedVersions),
-        };
-
-        const mockEventBus = new EventBusService();
-        const recoveryManager = new PipelineManager(
-          recoveryMockStore as any,
-          mockEventBus,
-          {
-            recoverJobs: false,
-            appConfig: appConfig,
-          },
-        );
-
-        await recoveryManager.start();
-
-        // Should mark both jobs as FAILED
-        expect(recoveryMockStore.updateVersionStatus).toHaveBeenCalledWith(
-          1,
-          "failed",
-          "Job interrupted",
-        );
-        expect(recoveryMockStore.updateVersionStatus).toHaveBeenCalledWith(
-          2,
-          "failed",
-          "Job interrupted",
-        );
-
-        await recoveryManager.stop();
-      });
+      const jobs = await manager.getJobs();
+      expect(jobs.map((job) => [job.library, job.version, job.sourceUrl])).toEqual(
+        expect.arrayContaining([
+          ["lib-a", "1.0", SOURCE_URL],
+          ["lib-b", "2.0", SOURCE_URL],
+        ]),
+      );
+      expect(jobs).toHaveLength(2);
     });
 
-    describe("when recoverJobs is true", () => {
-      it("should use enqueueRefreshJob for recovery", async () => {
-        const mockRunningVersions = [
-          {
-            id: 1,
-            library_name: "interrupted-lib",
-            name: "1.0.0",
-            status: "running",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:01:00.000Z",
-            source_url: "https://example.com",
-            scraper_options: JSON.stringify({ url: "https://example.com" }),
-          },
-        ];
-
-        const recoveryMockStore = {
-          claimVersion: echoClaim(),
-          updateVersionStatus: vi.fn().mockResolvedValue(undefined),
-          updateVersionProgress: vi.fn().mockResolvedValue(undefined),
-          getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
-            if (statuses.includes("running") || statuses.includes("queued")) {
-              return Promise.resolve(mockRunningVersions);
-            }
-            return Promise.resolve([]);
-          }),
-          requireVersion: vi.fn().mockImplementation(foundVersion(1)),
-          getVersionById: vi.fn().mockResolvedValue({
-            id: 1,
-            library_id: 1,
-            name: "1.0.0",
-            status: "running",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:01:00.000Z",
-          }),
-          getLibraryById: vi.fn().mockResolvedValue({
-            id: 1,
-            name: "interrupted-lib",
-          }),
-          getPagesByVersionId: vi.fn().mockResolvedValue([]),
-          getScraperOptions: vi.fn().mockResolvedValue({
-            sourceUrl: "https://example.com",
-            options: { maxDepth: 2 },
-          }),
-          storeScraperOptions: vi.fn().mockResolvedValue(undefined),
-        };
-
-        const mockEventBus = new EventBusService();
-        const recoveryManager = new PipelineManager(
-          recoveryMockStore as any,
-          mockEventBus,
-          {
-            recoverJobs: true,
-            appConfig: appConfig,
-          },
-        );
-
-        const enqueueRefreshSpy = vi.spyOn(recoveryManager, "enqueueRefreshJob");
-
-        await recoveryManager.start();
-
-        // Should have called enqueueRefreshJob for recovery
-        expect(enqueueRefreshSpy).toHaveBeenCalledWith("interrupted-lib", "1.0.0");
-
-        await recoveryManager.stop();
+    it("marks a version failed when recovery cannot re-enqueue it", async () => {
+      const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING, {
+        options: null,
       });
+      manager = createManager({ recoverJobs: true });
 
-      it("should mark job as FAILED when recovery fails", async () => {
-        const mockRunningVersions = [
-          {
-            id: 1,
-            library_name: "no-options-lib",
-            name: "1.0.0",
-            status: "running",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:01:00.000Z",
-          },
-        ];
+      await manager.start();
 
-        const recoveryMockStore = {
-          claimVersion: echoClaim(),
-          updateVersionStatus: vi.fn().mockResolvedValue(undefined),
-          getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
-            if (statuses.includes("running") || statuses.includes("queued")) {
-              return Promise.resolve(mockRunningVersions);
-            }
-            return Promise.resolve([]);
-          }),
-          requireVersion: vi.fn().mockImplementation(foundVersion(1)),
-          getVersionById: vi.fn().mockResolvedValue({
-            id: 1,
-            library_id: 1,
-            name: "1.0.0",
-            status: "running",
-            created_at: "2025-01-01T00:00:00.000Z",
-            updated_at: "2025-01-01T00:01:00.000Z",
-          }),
-          getLibraryById: vi.fn().mockResolvedValue({
-            id: 1,
-            name: "no-options-lib",
-          }),
-          getPagesByVersionId: vi.fn().mockResolvedValue([]),
-          getScraperOptions: vi.fn().mockResolvedValue(null), // No stored options
-        };
-
-        const mockEventBus = new EventBusService();
-        const recoveryManager = new PipelineManager(
-          recoveryMockStore as any,
-          mockEventBus,
-          {
-            recoverJobs: true,
-            appConfig: appConfig,
-          },
-        );
-
-        await recoveryManager.start();
-
-        // Should mark the job as FAILED with error message
-        expect(recoveryMockStore.updateVersionStatus).toHaveBeenCalledWith(
-          1,
-          "failed",
-          expect.stringContaining("Recovery failed"),
-        );
-
-        await recoveryManager.stop();
+      expect(await store.getVersionById(versionId)).toMatchObject({
+        status: VersionStatus.FAILED,
+        error_message: expect.stringContaining("Recovery failed"),
       });
+      expect(await manager.getJobs()).toEqual([]);
+    });
+
+    it("marks them failed without enqueueing when recovery is disabled", async () => {
+      const { runningId, queuedId } = await seedInterrupted();
+      manager = createManager({ recoverJobs: false });
+
+      await manager.start();
+
+      for (const versionId of [runningId, queuedId]) {
+        expect(await store.getVersionById(versionId)).toMatchObject({
+          status: VersionStatus.FAILED,
+          error_message: "Job interrupted",
+        });
+      }
+      expect(await manager.getJobs()).toEqual([]);
     });
   });
 });

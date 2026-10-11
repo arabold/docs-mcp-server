@@ -45,12 +45,34 @@ E2E tests use a mock server (powered by MSW) to intercept requests to external s
 - **Configuration**: `test/mock-server.ts`
 - **Fixtures**: `test/fixtures/` contains sample responses
 - **Setup file**: `test/setup-e2e.ts` initializes the mock server
+- **Unmocked requests fail**: the last handler in `test/mock-server.ts` answers
+  every request no other handler claims with a network error, and
+  `test/setup-e2e.ts` refuses WebSocket connections the same way. Only loopback
+  passes through, so a test cannot reach the real network by accident. Opt-in
+  live suites call `allowLiveNetwork()` in `beforeAll` once their credentials
+  are set, and release it in `afterAll`.
 
 ### Adding New Mock Endpoints
 
 1. Add fixture data to `test/fixtures/`
 2. Update `test/mock-server.ts` to add the new handler
 3. The mock server will automatically intercept matching requests
+
+### Crawl Suites
+
+Suites that crawl a website (refresh, progress, unprocessable content, empty
+pages, Markdown identity) describe the site per test instead of adding handlers
+to `mock-server.ts`:
+
+- `mockSite(origin)` (`test/mock-site.ts`) serves one origin from a route table
+  through the same MSW server. A page with an ETag answers `304` to a request
+  carrying it, `llms.txt` answers `404` unless defined, `stall()` holds a request
+  open until the test ends, and every request is logged with its
+  `If-None-Match`. A request for a path with no route fails the test.
+- `usePipelineHarness(...)` (`test/pipeline-harness.ts`) builds a real
+  `PipelineManager` over an in-memory store for each test, runs scrapes and
+  refreshes to completion, records their progress events, and reads back what
+  the store holds.
 
 ## Live Tests
 
@@ -78,5 +100,5 @@ npm run typecheck:build
 - `vite.config.ts`: Unified test configuration for Vitest
 - `tsconfig.json`: Includes all source and test files for development
 - `tsconfig.build.json`: Production-only TypeScript config (excludes tests)
-- `test/setup.ts`: Common test setup (logger mocks, etc.)
+- `test/setup-env.ts`: Common test setup (logger mock, localStorage polyfill)
 - `test/setup-e2e.ts`: E2E-specific setup (includes mock server)

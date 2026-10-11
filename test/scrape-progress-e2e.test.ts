@@ -4,363 +4,263 @@
  * The `scrape-progress-reporting` capability defines four counters and an
  * invariant relating them. Unit tests pin the arithmetic inside
  * `BaseScraperStrategy`; these tests cover what only a whole-pipeline run can
- * show: that the numbers a real crawl produces survive the trip through
- * `PipelineManager` into the job record, and that the value an MCP client reads
- * back after completion is the value the scraper computed.
- *
- * Uses nock to mock HTTP responses and an in-memory database.
+ * show: that the numbers a real crawl or refresh produces survive the trip
+ * through `PipelineManager` into the job record, and that the value an MCP
+ * client reads back after completion is the value the scraper computed.
  */
 
-import nock from "nock";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EventBusService, EventType } from "../src/events";
-import { PipelineManager } from "../src/pipeline/PipelineManager";
+import { describe, expect, it } from "vitest";
 import { PipelineJobStatus } from "../src/pipeline/types";
-import { PageOutcome, ScrapeMode, type ScraperOptions } from "../src/scraper/types";
-import { DocumentManagementService } from "../src/store/DocumentManagementService";
+import { PageOutcome } from "../src/scraper/types";
 import { GetJobInfoTool } from "../src/tools/GetJobInfoTool";
-import { type AppConfig, loadConfig } from "../src/utils/config";
-import { mockOriginsWithNock } from "./nock-helpers";
-
-const TEST_BASE_URL = "http://progress-docs.example.com";
-const TEST_LIBRARY = "progress-lib";
-const TEST_VERSION = "1.0.0";
-
-/**
- * Builds an HTML page linking to each of `links`, so a crawl fans out
- * predictably from the root.
- */
-function hubPage(links: string[]): string {
-  const anchors = links.map((href) => `<a href="${href}">${href}</a>`).join("");
-  return `<html><body><h1>Hub</h1>${anchors}</body></html>`;
-}
-
-/**
- * Answers the llms.txt probe with a 404, the way a site without one does.
- *
- * `WebScraperStrategy` probes a couple of llms.txt candidates before crawling.
- * Left unmocked, each one fails inside nock (see `mockOriginsWithNock`). A
- * persistent 404 is what a real site without one answers.
- */
-function mockLlmsTxtMisses(): void {
-  nock(TEST_BASE_URL).persist().get(/llms\.txt$/).reply(404);
-}
-
-function leafPage(title: string): string {
-  return `<html><body><h1>${title}</h1><p>Body text for ${title}.</p></body></html>`;
-}
+import { hubPage, leafPage, mockSite } from "./mock-site";
+import { usePipelineHarness } from "./pipeline-harness";
 
 describe("Scrape progress counters E2E", () => {
-  let docService: DocumentManagementService;
-  let pipelineManager: PipelineManager;
-  let eventBus: EventBusService;
-  let appConfig: AppConfig;
-  /** Every progress event the run emitted, in order. */
-  let progressEvents: Array<{
-    pagesScraped: number;
-    totalPages: number;
-    totalDiscovered: number;
-    pagesIndexed: number;
-    outcome: PageOutcome;
-    currentUrl: string;
-  }>;
-
-  beforeEach(async () => {
-    appConfig = loadConfig();
-    appConfig.app.storePath = ":memory:";
-    appConfig.app.embeddingModel = ""; // counters are independent of embeddings
-    appConfig.scraper.security.network.allowPrivateNetworks = true;
-    // One worker keeps the event order deterministic, which matters for the
-    // monotonicity assertions below.
-    appConfig.scraper.maxConcurrency = 1;
-    // An unmocked request fails inside nock; retrying it would only add backoff.
-    appConfig.scraper.fetcher.maxRetries = 0;
-
-    eventBus = new EventBusService();
-    docService = new DocumentManagementService(eventBus, appConfig);
-    await docService.initialize();
-
-    pipelineManager = new PipelineManager(docService, eventBus, {
-      recoverJobs: false,
-      appConfig,
-    });
-    await pipelineManager.start();
-
-    progressEvents = [];
-    eventBus.on(EventType.JOB_PROGRESS, ({ progress }) => {
-      progressEvents.push({
-        pagesScraped: progress.pagesScraped,
-        totalPages: progress.totalPages,
-        totalDiscovered: progress.totalDiscovered,
-        pagesIndexed: progress.pagesIndexed,
-        outcome: progress.outcome,
-        currentUrl: progress.currentUrl,
-      });
-    });
-
-    nock.cleanAll();
-    mockOriginsWithNock(TEST_BASE_URL);
-    mockLlmsTxtMisses();
+  const site = mockSite("http://progress-docs.example.com");
+  const h = usePipelineHarness({
+    library: "progress-lib",
+    version: "1.0.0",
+    defaults: { url: site.url("/") },
   });
 
-  afterEach(async () => {
-    await pipelineManager.stop();
-    await docService.shutdown();
-    nock.cleanAll();
-  });
+  const lastEvent = () => {
+    const event = h.events[h.events.length - 1];
+    if (!event) throw new Error("The job emitted no progress events");
+    return event;
+  };
 
-  /** Runs a scrape to completion and returns the finished job record. */
-  async function runScrape(options: Partial<ScraperOptions>) {
-    const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-      url: `${TEST_BASE_URL}/`,
-      library: TEST_LIBRARY,
-      version: TEST_VERSION,
-      maxPages: 100,
-      maxDepth: 3,
-      // Plain fetch: these tests are about progress counters, and a headless
-      // browser adds only latency and rendering variance.
-      scrapeMode: ScrapeMode.Fetch,
-      ...options,
-    } satisfies ScraperOptions);
-    await pipelineManager.waitForJobCompletion(jobId);
-    const job = await pipelineManager.getJob(jobId);
-    if (!job) throw new Error(`job ${jobId} vanished after completion`);
+  /** Reads the job back through the MCP tool, the way a client would. */
+  async function jobInfo(jobId: string) {
+    const { job } = await new GetJobInfoTool(h.pipelineManager).execute({ jobId });
     return job;
   }
 
-  const lastEvent = () => progressEvents[progressEvents.length - 1];
+  describe("during a scrape", () => {
+    it("converges pagesScraped on totalPages when the queue drains", async () => {
+      site
+        .page("/", hubPage(["/a", "/b", "/c"]))
+        .page("/a", leafPage("A"))
+        .page("/b", leafPage("B"))
+        .page("/c", leafPage("C"));
 
-  it("converges pagesScraped on totalPages when the queue drains", async () => {
-    nock(TEST_BASE_URL)
-      .get("/")
-      .reply(200, hubPage(["/a", "/b", "/c"]), { "Content-Type": "text/html" })
-      .get("/a")
-      .reply(200, leafPage("A"), { "Content-Type": "text/html" })
-      .get("/b")
-      .reply(200, leafPage("B"), { "Content-Type": "text/html" })
-      .get("/c")
-      .reply(200, leafPage("C"), { "Content-Type": "text/html" });
+      const job = await h.scrape();
 
-    const job = await runScrape({});
-
-    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-
-    // Root plus three leaves, every one of them stored.
-    const final = lastEvent();
-    expect(final.pagesScraped).toBe(4);
-    expect(final.totalPages).toBe(4);
-    expect(final.pagesIndexed).toBe(4);
-    expect(final.totalDiscovered).toBe(4);
-
-    // The point of the invariant: the fraction reads 100%, not 4 of 100.
-    expect(final.pagesScraped / final.totalPages).toBe(1);
-    expect(final.totalPages).not.toBe(100);
-  }, 30000);
-
-  it("counts non-content outcomes in pagesScraped but not pagesIndexed", async () => {
-    // Two pages store content, one 404s. All three are processed.
-    nock(TEST_BASE_URL)
-      .get("/")
-      .reply(200, hubPage(["/kept", "/gone"]), { "Content-Type": "text/html" })
-      .get("/kept")
-      .reply(200, leafPage("Kept"), { "Content-Type": "text/html" })
-      .get("/gone")
-      .reply(404);
-
-    const job = await runScrape({ ignoreErrors: true });
-
-    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-
-    const final = lastEvent();
-    expect(final.pagesScraped).toBe(3); // root + kept + gone
-    expect(final.pagesIndexed).toBe(2); // root + kept
-    expect(final.totalPages).toBe(3);
-
-    // The 404 emitted its own event naming the outcome, rather than advancing
-    // the count silently.
-    const absent = progressEvents.filter((e) => e.outcome === PageOutcome.Absent);
-    expect(absent).toHaveLength(1);
-    expect(absent[0].currentUrl).toBe(`${TEST_BASE_URL}/gone`);
-
-    // Every queued item reached exactly one outcome.
-    expect(progressEvents).toHaveLength(3);
-  }, 30000);
-
-  it("bounds pagesIndexed by maxPages while pagesScraped absorbs the misses", async () => {
-    // Six links: three store content, three 404. With maxPages 3, the crawl
-    // must keep going past the misses until three pages have actually indexed.
-    const scope = nock(TEST_BASE_URL)
-      .get("/")
-      .reply(200, hubPage(["/miss1", "/hit1", "/miss2", "/hit2", "/miss3"]), {
-        "Content-Type": "text/html",
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await h.storedUrls()).toEqual(["/", "/a", "/b", "/c"].map(site.url));
+      // The point of the invariant: the fraction reads 4 of 4, not 4 of maxPages.
+      expect(lastEvent()).toMatchObject({
+        pagesScraped: 4,
+        totalPages: 4,
+        pagesIndexed: 4,
+        totalDiscovered: 4,
       });
-    for (const name of ["hit1", "hit2"]) {
-      scope.get(`/${name}`).reply(200, leafPage(name), { "Content-Type": "text/html" });
-    }
-    for (const name of ["miss1", "miss2", "miss3"]) {
-      scope.get(`/${name}`).reply(404);
-    }
+    });
 
-    const job = await runScrape({ maxPages: 3, ignoreErrors: true });
+    it("counts non-content outcomes in pagesScraped but not pagesIndexed", async () => {
+      site
+        .page("/", hubPage(["/kept", "/gone"]))
+        .page("/kept", leafPage("Kept"))
+        .notFound("/gone");
 
-    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      const job = await h.scrape();
 
-    const final = lastEvent();
-    // Root + hit1 + hit2 produce content and exhaust the budget of 3.
-    expect(final.pagesIndexed).toBe(3);
-    // The 404s were processed but did not consume the budget, so more items
-    // were scraped than indexed.
-    expect(final.pagesScraped).toBeGreaterThan(final.pagesIndexed);
-    // The denominator tracked the extra work rather than staying at maxPages,
-    // so the fraction still reads 100% at the end.
-    expect(final.totalPages).toBe(final.pagesScraped);
-    // totalDiscovered counts admissions, unbounded by the limit.
-    expect(final.totalDiscovered).toBe(6);
-  }, 30000);
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await h.storedUrls()).toEqual([site.url("/"), site.url("/kept")]);
+      expect(lastEvent()).toMatchObject({
+        pagesScraped: 3,
+        pagesIndexed: 2,
+        totalPages: 3,
+      });
+      // Every item reached exactly one outcome, and the 404 named its own
+      // rather than advancing the count silently.
+      expect(h.events.map((e) => [e.currentUrl, e.outcome])).toEqual([
+        [site.url("/"), PageOutcome.Stored],
+        [site.url("/kept"), PageOutcome.Stored],
+        [site.url("/gone"), PageOutcome.Absent],
+      ]);
+    });
 
-  it("never reports pagesScraped above totalPages at any point", async () => {
-    const links = Array.from({ length: 8 }, (_, i) => `/p${i}`);
-    const scope = nock(TEST_BASE_URL)
-      .get("/")
-      .reply(200, hubPage(links), { "Content-Type": "text/html" });
-    for (const [i, link] of links.entries()) {
-      // Alternate stored and missing so the clamp is exercised mid-crawl.
-      if (i % 2 === 0) {
-        scope.get(link).reply(200, leafPage(link), { "Content-Type": "text/html" });
-      } else {
-        scope.get(link).reply(404);
+    it("bounds pagesIndexed by maxPages while pagesScraped absorbs the misses", async () => {
+      // Five links: two store content, three 404. With maxPages 3 the crawl must
+      // keep going past the misses until three pages have actually indexed.
+      site
+        .page("/", hubPage(["/miss1", "/hit1", "/miss2", "/hit2", "/miss3"]))
+        .page("/hit1", leafPage("hit1"))
+        .page("/hit2", leafPage("hit2"))
+        .notFound("/miss1")
+        .notFound("/miss2")
+        .notFound("/miss3");
+
+      const job = await h.scrape({ maxPages: 3 });
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      // Root, hit1 and hit2 exhaust the budget of three, so the crawl stops
+      // there and never asks for the last miss.
+      expect(await h.storedUrls()).toEqual(["/", "/hit1", "/hit2"].map(site.url));
+      expect(site.wasRequested("/miss3")).toBe(false);
+      // The two misses before it were processed without consuming the budget,
+      // and the denominator tracked that work rather than staying at maxPages.
+      expect(lastEvent()).toMatchObject({
+        pagesIndexed: 3,
+        pagesScraped: 5,
+        totalPages: 5,
+        // Admissions, unbounded by the limit: root plus five links.
+        totalDiscovered: 6,
+      });
+    });
+
+    it("never reports pagesScraped above totalPages at any point", async () => {
+      const links = Array.from({ length: 8 }, (_, i) => `/p${i}`);
+      site.page("/", hubPage(links));
+      for (const [i, link] of links.entries()) {
+        // Alternate stored and missing so the clamp is exercised mid-crawl.
+        if (i % 2 === 0) site.page(link, leafPage(link));
+        else site.notFound(link);
       }
-    }
 
-    await runScrape({ maxPages: 3, ignoreErrors: true });
+      await h.scrape({ maxPages: 3 });
 
-    expect(progressEvents.length).toBeGreaterThan(0);
-    for (const event of progressEvents) {
-      expect(event.pagesScraped).toBeLessThanOrEqual(event.totalPages);
-      expect(event.pagesIndexed).toBeLessThanOrEqual(event.pagesScraped);
-      expect(event.totalPages).toBeLessThanOrEqual(event.totalDiscovered);
-    }
-
-    // pagesScraped advances by exactly one per event, never skipping or
-    // repeating — the "every item reaches exactly one outcome" rule.
-    const scraped = progressEvents.map((e) => e.pagesScraped);
-    expect(scraped).toEqual(scraped.map((_, i) => i + 1));
-  }, 30000);
-
-  it("persists all three counters on the job record for later reads", async () => {
-    nock(TEST_BASE_URL)
-      .get("/")
-      .reply(200, hubPage(["/one", "/two"]), { "Content-Type": "text/html" })
-      .get("/one")
-      .reply(200, leafPage("One"), { "Content-Type": "text/html" })
-      .get("/two")
-      .reply(404);
-
-    const job = await runScrape({ ignoreErrors: true });
-    const final = lastEvent();
-
-    // The persisted columns carry the values the crawl ended on, rather than
-    // being live-only or reconstructed from a different source.
-    expect(job.progressPages).toBe(final.pagesScraped);
-    expect(job.progressMaxPages).toBe(final.totalPages);
-    expect(job.progressPagesIndexed).toBe(final.pagesIndexed);
-
-    // And an MCP client reading the job back sees the same numbers. This is the
-    // link the unit tests cannot cover: `progressPagesIndexed` has to survive
-    // the write to the job record and the read back through the tool layer.
-    const { job: jobInfo } = await new GetJobInfoTool(pipelineManager).execute({
-      jobId: job.id,
+      expect(h.events.length).toBeGreaterThan(0);
+      for (const event of h.events) {
+        expect(event.pagesScraped).toBeLessThanOrEqual(event.totalPages);
+        expect(event.pagesIndexed).toBeLessThanOrEqual(event.pagesScraped);
+        expect(event.totalPages).toBeLessThanOrEqual(event.totalDiscovered);
+      }
+      // pagesScraped advances by exactly one per event, never skipping or
+      // repeating: every item reaches exactly one outcome.
+      const scraped = h.events.map((e) => e.pagesScraped);
+      expect(scraped).toEqual(scraped.map((_, i) => i + 1));
     });
-    expect(jobInfo.progress).toBeDefined();
-    expect(jobInfo.progress?.pages).toBe(final.pagesScraped);
-    expect(jobInfo.progress?.totalPages).toBe(final.totalPages);
-    expect(jobInfo.progress?.pagesIndexed).toBe(final.pagesIndexed);
-    // Not null — a completed crawl that indexed pages must never read as unknown.
-    expect(jobInfo.progress?.pagesIndexed).not.toBeNull();
-  }, 30000);
 
-  it("does not adjust a cancelled job's counters to look complete", async () => {
-    // A slow hub with many children: cancelling mid-crawl leaves queued items
-    // unprocessed, and the counters must show that rather than being squared up.
-    const links = Array.from({ length: 12 }, (_, i) => `/slow${i}`);
-    const scope = nock(TEST_BASE_URL)
-      .get("/")
-      .reply(200, hubPage(links), { "Content-Type": "text/html" });
-    for (const link of links) {
-      scope
-        .get(link)
-        .delay(200)
-        .reply(200, leafPage(link), { "Content-Type": "text/html" });
-    }
+    it("persists all three counters on the job record for later reads", async () => {
+      site
+        .page("/", hubPage(["/one", "/two"]))
+        .page("/one", leafPage("One"))
+        .notFound("/two");
 
-    const jobId = await pipelineManager.enqueueScrapeJob(TEST_LIBRARY, TEST_VERSION, {
-      url: `${TEST_BASE_URL}/`,
-      library: TEST_LIBRARY,
-      version: TEST_VERSION,
-      maxPages: 100,
-      maxDepth: 3,
-      scrapeMode: ScrapeMode.Fetch,
-    } satisfies ScraperOptions);
+      const job = await h.scrape();
+      const final = lastEvent();
 
-    // Cancel once the crawl has discovered the children and processed a few.
-    await new Promise<void>((resolve) => {
-      const stop = eventBus.on(EventType.JOB_PROGRESS, ({ progress }) => {
-        if (progress.pagesScraped >= 3) {
-          stop();
-          resolve();
-        }
+      // The persisted columns carry the values the crawl ended on, rather than
+      // being live-only or reconstructed from a different source.
+      expect(job.progressPages).toBe(final.pagesScraped);
+      expect(job.progressMaxPages).toBe(final.totalPages);
+      expect(job.progressPagesIndexed).toBe(final.pagesIndexed);
+      // And an MCP client reading the job back sees the same numbers: the
+      // counters survive the write to the job record and the read back through
+      // the tool layer.
+      expect((await jobInfo(job.id)).progress).toMatchObject({
+        pages: final.pagesScraped,
+        totalPages: final.totalPages,
+        pagesIndexed: final.pagesIndexed,
       });
     });
-    await pipelineManager.cancelJob(jobId);
-    await pipelineManager.waitForJobCompletion(jobId).catch(() => {
-      // Cancellation surfaces as a rejection; the job record is what we assert on.
+
+    it("does not adjust a cancelled job's counters to look complete", async () => {
+      // One worker takes the links in order, so the crawl stores the root, /a
+      // and /b, then waits on /stall with the rest of the queue untouched.
+      const links = ["/a", "/b", "/stall", "/c", "/d", "/e"];
+      site.page("/", hubPage(links)).stall("/stall");
+      for (const link of ["/a", "/b", "/c", "/d", "/e"]) site.page(link, leafPage(link));
+
+      const jobId = await h.enqueueScrape();
+      await site.waitForRequest("/stall");
+      await h.pipelineManager.cancelJob(jobId);
+      const job = await h.finish(jobId);
+
+      expect(job.status).toBe(PipelineJobStatus.CANCELLED);
+      expect(site.wasRequested("/c")).toBe(false);
+      expect(lastEvent()).toMatchObject({
+        pagesScraped: 3,
+        pagesIndexed: 3,
+        totalPages: 1 + links.length,
+      });
+      // Asserted on the persisted record too: the counters a client reads back
+      // are the job's, and squaring them up on cancellation would leave every
+      // in-flight event untouched and unnoticed.
+      expect(job.progressPages).toBe(3);
+      expect(job.progressPagesIndexed).toBe(3);
+      expect(job.progressMaxPages).toBe(1 + links.length);
     });
 
-    const job = await pipelineManager.getJob(jobId);
-    expect(job?.status).toBe(PipelineJobStatus.CANCELLED);
+    it("counts one page once when both its representations are crawled", async () => {
+      // A document reachable as `/guide.md` and `/guide` resolves to one
+      // identity, and both routes are stored: the store decides which
+      // representation to keep. Counting the second as a new page spent a unit
+      // of the page budget on a page that was never added, so a crawl asked for
+      // N stopped short of N and reported N anyway. `/extra` is the page that
+      // went missing.
+      site
+        .page("/", hubPage(["/guide.md", "/guide", "/extra"]))
+        .page("/guide.md", "# Guide\n\nMarkdown body.", { type: "text/markdown" })
+        .page("/guide", leafPage("Guide"))
+        .page("/extra", leafPage("Extra"));
 
-    const final = lastEvent();
-    expect(final.pagesScraped).toBeLessThan(final.totalPages);
+      const job = await h.scrape({ maxPages: 3 });
 
-    // Asserted on the persisted record, not only on the event stream: the
-    // counters a client reads back are the job's, and squaring them up on
-    // cancellation would leave every in-flight event untouched and unnoticed.
-    expect(job?.progressPages).toBe(final.pagesScraped);
-    expect(job?.progressMaxPages).toBe(final.totalPages);
-    expect(job?.progressPages ?? 0).toBeLessThan(job?.progressMaxPages ?? 0);
-    expect(job?.progressPagesIndexed).toBe(final.pagesIndexed);
-  }, 30000);
-
-  it("counts one page once when both its representations are crawled", async () => {
-    // A document reachable as `/guide.md` and `/guide` resolves to one identity,
-    // and both routes are stored — the store decides which representation to
-    // keep. Counting the second as a new page spent a unit of the page budget on
-    // a page that was never added, so a crawl asked for N stopped short of N and
-    // reported N anyway. `/extra` is the page that went missing.
-    nock(TEST_BASE_URL)
-      .get("/")
-      .reply(200, hubPage(["/guide.md", "/guide", "/extra"]), {
-        "Content-Type": "text/html",
-      })
-      .get("/guide.md")
-      .reply(200, "# Guide\n\nMarkdown body.", { "Content-Type": "text/markdown" })
-      .get("/guide")
-      .reply(200, leafPage("Guide"), { "Content-Type": "text/html" })
-      .get("/extra")
-      .reply(200, leafPage("Extra"), { "Content-Type": "text/html" });
-
-    const job = await runScrape({ maxPages: 3 });
-    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-
-    const versionId = await docService.ensureVersion({
-      library: TEST_LIBRARY,
-      version: TEST_VERSION,
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await h.storedUrls()).toEqual(["/", "/extra", "/guide"].map(site.url));
+      expect(job.progressPagesIndexed).toBe(3);
     });
-    const urls = (await docService.getPagesByVersionId(versionId)).map((p) => p.url);
+  });
 
-    expect(job.progressPagesIndexed).toBe(urls.length);
-    expect(urls).toHaveLength(3);
-    expect(urls).toContain(`${TEST_BASE_URL}/extra`);
-    expect(urls).not.toContain(`${TEST_BASE_URL}/guide.md`);
-  }, 30000);
+  describe("during a refresh", () => {
+    it("counts a refresh that changes nothing as processed but not indexed", async () => {
+      site
+        .page("/", hubPage(["/a", "/b"]), { etag: '"home-v1"' })
+        .page("/a", leafPage("A"), { etag: '"a-v1"' })
+        .page("/b", leafPage("B"), { etag: '"b-v1"' });
+      await h.scrape();
+
+      const refresh = await h.refresh();
+
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(h.events.map((e) => e.outcome)).toEqual([
+        PageOutcome.Unchanged,
+        PageOutcome.Unchanged,
+        PageOutcome.Unchanged,
+      ]);
+      expect(lastEvent()).toMatchObject({
+        pagesScraped: 3,
+        totalPages: 3,
+        pagesIndexed: 0,
+      });
+      // Zero, not unknown: a refresh that indexed nothing still reports a count.
+      expect(refresh.progressPagesIndexed).toBe(0);
+      expect((await jobInfo(refresh.id)).progress).toMatchObject({
+        pages: 3,
+        totalPages: 3,
+        pagesIndexed: 0,
+      });
+    });
+
+    it("counts unchanged, deleted and updated pages once each", async () => {
+      site
+        .page("/", hubPage(["/same", "/gone", "/edited"]), { etag: '"home-v1"' })
+        .page("/same", leafPage("Same"), { etag: '"same-v1"' })
+        .page("/gone", leafPage("Gone"), { etag: '"gone-v1"' })
+        .page("/edited", leafPage("Edited"), { etag: '"edited-v1"' });
+      await h.scrape();
+
+      site
+        .notFound("/gone")
+        .page("/edited", leafPage("Edited", "Revised text."), { etag: '"edited-v2"' });
+      const refresh = await h.refresh();
+
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(h.outcomeOf(site.url("/same"))).toBe(PageOutcome.Unchanged);
+      expect(h.outcomeOf(site.url("/gone"))).toBe(PageOutcome.Absent);
+      expect(h.outcomeOf(site.url("/edited"))).toBe(PageOutcome.Stored);
+      // Four stored pages, four outcomes; only the edited page indexed anew.
+      expect(lastEvent()).toMatchObject({
+        pagesScraped: 4,
+        totalPages: 4,
+        pagesIndexed: 1,
+      });
+      expect(refresh.progressPages).toBe(4);
+      expect(refresh.progressMaxPages).toBe(4);
+      expect(refresh.progressPagesIndexed).toBe(1);
+    });
+  });
 });

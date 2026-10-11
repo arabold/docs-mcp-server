@@ -6,21 +6,21 @@
  */
 
 import { afterAll, afterEach, beforeAll } from "vitest";
-import { server } from "./mock-server";
+import { mayPassThrough, server } from "./mock-server";
 
 // Start mock server before all tests
 beforeAll(() => {
   server.listen({
+    // mock-server.ts answers every HTTP request itself, so only WebSocket
+    // connections, which have no handlers, arrive here. The same rule applies:
+    // loopback (or an opt-in live suite) goes through, anything else fails
+    // instead of reaching the network.
     onUnhandledRequest(request, print) {
-      if (
-        request.url.includes("127.0.0.1") ||
-        request.url.includes("localhost") ||
-        request.url.includes("clerk.accounts.dev") ||
-        request.url.includes("worker.example.com")
-      ) {
+      if (mayPassThrough(new URL(request.url).hostname)) {
         return;
       }
-      print.warning();
+      print.error();
+      throw new Error(`Unmocked connection in a test: ${request.url}`);
     },
   });
 });
