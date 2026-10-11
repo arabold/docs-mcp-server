@@ -194,6 +194,20 @@ describe("PipelineClient", () => {
       );
     });
 
+    it("should reject with the worker's message from a relayed failure event", async () => {
+      const waitPromise = client.waitForJobCompletion("job-123");
+
+      // PipelineManager emits FAILED before it sets `error`; only `errorMessage` has the text
+      eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+        ...runningJob,
+        status: "failed",
+        error: null,
+        errorMessage: "Outside the allowed roots",
+      } as any);
+
+      await expect(waitPromise).rejects.toThrow("Outside the allowed roots");
+    });
+
     it("should reject for a failed job that carries no error message", async () => {
       const waitPromise = client.waitForJobCompletion("job-123");
 

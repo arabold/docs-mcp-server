@@ -234,14 +234,20 @@ export class PipelineClient implements IPipeline {
         }
       };
 
-      const settleIfDone = (job: Pick<PipelineJob, "status" | "error">) => {
+      const settleIfDone = (
+        job: Pick<PipelineJob, "status" | "error" | "errorMessage">,
+      ) => {
         switch (job.status) {
           case PipelineJobStatus.COMPLETED:
           case PipelineJobStatus.CANCELLED:
             finish();
             break;
           case PipelineJobStatus.FAILED:
-            finish(new Error(job.error?.message ?? `Job ${jobId} failed`));
+            // The worker emits the FAILED status before it sets `error`, so a
+            // relayed event carries the text only in `errorMessage`
+            finish(
+              new Error(job.error?.message || job.errorMessage || `Job ${jobId} failed`),
+            );
             break;
         }
       };
