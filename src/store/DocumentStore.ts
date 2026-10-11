@@ -149,7 +149,7 @@ export class DocumentStore {
     // Updated for new schema - documents table now uses page_id
     insertDocument: Database.Statement<[number, string, string, number]>;
     // Updated for new schema - embeddings stored directly in documents table
-    insertEmbedding: Database.Statement<[string, bigint]>;
+    insertEmbedding: Database.Statement<[Buffer, bigint]>;
     // New statement for pages table
     insertPage: Database.Statement<
       [
@@ -301,7 +301,7 @@ export class DocumentStore {
   private prepareStatements(): void {
     const statements = {
       getById: this.db.prepare<[bigint]>(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url 
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url 
          FROM documents d
          JOIN pages p ON d.page_id = p.id
          WHERE d.id = ?`,
@@ -310,7 +310,7 @@ export class DocumentStore {
       insertDocument: this.db.prepare<[number, string, string, number]>(
         "INSERT INTO documents (page_id, content, metadata, sort_order) VALUES (?, ?, ?, ?)",
       ),
-      insertEmbedding: this.db.prepare<[string, bigint]>(
+      insertEmbedding: this.db.prepare<[Buffer, bigint]>(
         "UPDATE documents SET embedding = ? WHERE id = ?",
       ),
       insertPage: this.db.prepare<
@@ -427,7 +427,7 @@ export class DocumentStore {
       getChildChunks: this.db.prepare<
         [string, string, string, number, string, bigint, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -443,7 +443,7 @@ export class DocumentStore {
       getPrecedingSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -458,7 +458,7 @@ export class DocumentStore {
       getSubsequentSiblings: this.db.prepare<
         [string, string, string, bigint, string, number]
       >(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -471,7 +471,7 @@ export class DocumentStore {
         LIMIT ?
       `),
       getParentChunk: this.db.prepare<[string, string, string, string, bigint]>(`
-        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
+        SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         JOIN libraries l ON v.library_id = l.id
@@ -1260,12 +1260,12 @@ export class DocumentStore {
           d.id,
           v.library_id,
           v.id,
-          json_extract(d.embedding, '$')
+          d.embedding
         FROM documents d
         JOIN pages p ON d.page_id = p.id
         JOIN versions v ON p.version_id = v.id
         WHERE d.embedding IS NOT NULL
-          AND vec_length(json_extract(d.embedding, '$')) = ?
+          AND vec_length(d.embedding) = ?
           AND NOT EXISTS (
             SELECT 1 FROM documents_vec existing WHERE existing.rowid = d.id
           )
@@ -2109,7 +2109,7 @@ export class DocumentStore {
           // Insert into vector table only if vector search is enabled
           if (this.isVectorSearchEnabled && paddedEmbeddings.length > 0) {
             this.statements.insertEmbedding.run(
-              JSON.stringify(paddedEmbeddings[docIndex]),
+              Buffer.from(new Float32Array(paddedEmbeddings[docIndex]).buffer),
               BigInt(rowId),
             );
           }
@@ -2655,7 +2655,7 @@ export class DocumentStore {
       // Use parameterized query for variable number of IDs
       const placeholders = ids.map(() => "?").join(",");
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id
@@ -2687,7 +2687,7 @@ export class DocumentStore {
     try {
       const normalizedVersion = normalizeVersionLabel(version);
       const stmt = this.db.prepare(
-        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.embedding, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
+        `SELECT d.id, d.page_id, d.content, json(d.metadata) as metadata, d.sort_order, d.created_at, p.url, p.title, p.source_content_type, p.content_type, p.content_url FROM documents d
          JOIN pages p ON d.page_id = p.id
          JOIN versions v ON p.version_id = v.id
          JOIN libraries l ON v.library_id = l.id
