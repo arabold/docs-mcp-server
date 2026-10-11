@@ -162,6 +162,13 @@ export interface VersionRef {
   version: string; // empty string for unversioned
 }
 
+/** A version found or claimed in the store. */
+export interface ResolvedVersion {
+  versionId: number;
+  /** The library's stored display name. */
+  library: string;
+}
+
 /**
  * Normalizes a version label for storage and lookup.
  *
@@ -223,8 +230,8 @@ export function normalizeLibraryDisplayName(library: string): string {
 /** Longest name accepted for a new library, counted in Unicode code points. */
 export const MAX_LIBRARY_NAME_LENGTH = 100;
 
-/** Unicode general category Cc: C0/C1 controls such as tab, newline and ESC. */
-const CONTROL_CHARACTER = /\p{Cc}/u;
+/** Unicode general category Cc: C0 controls, DEL and C1 controls such as tab, newline and ESC. */
+export const CONTROL_CHARACTER = /\p{Cc}/u;
 
 /**
  * Explains why a name is unacceptable for a new library.

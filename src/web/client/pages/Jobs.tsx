@@ -13,6 +13,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { PipelineJobStatus } from "../../../pipeline/types";
+import { withoutRunOnlyOptions } from "../../../scraper/types";
 import {
   useCancelJob,
   useClearCompletedJobs,
@@ -173,11 +174,7 @@ export default function Jobs() {
       // Failed jobs never finished indexing, so re-run a full scrape (not an
       // incremental refresh, which assumes previously-indexed content): a
       // failed refresh's queue and refresh flag are left behind.
-      const {
-        isRefresh: _isRefresh,
-        initialQueue: _initialQueue,
-        ...scrapeOptions
-      } = job.scraperOptions;
+      const scrapeOptions = withoutRunOnlyOptions(job.scraperOptions);
       await enqueueScrapeJob.mutateAsync({
         library: job.library,
         version: job.version || undefined,

@@ -1500,7 +1500,7 @@ describe("DocumentStore - Common Functionality", () => {
           const claimed = await store.claimVersion("Svelte", "5.0.0", policy);
 
           expect(claimed.library).toBe("Svelte");
-          expect(await store.findVersionId("svelte", "5.0.0")).toBe(claimed.versionId);
+          expect(await store.findVersion("svelte", "5.0.0")).toEqual(claimed);
         },
       );
 
@@ -1510,7 +1510,7 @@ describe("DocumentStore - Common Functionality", () => {
         await expect(
           store.claimVersion(" REACT ", "19.0.0", "reject-library"),
         ).rejects.toThrow(new LibraryAlreadyExistsError("React"));
-        expect(await store.findVersionId("react", "19.0.0")).toBeNull();
+        expect(await store.findVersion("react", "19.0.0")).toBeNull();
         await expectVersionUntouched("react", "18.0.0", versionId);
       });
 
@@ -1548,13 +1548,13 @@ describe("DocumentStore - Common Functionality", () => {
       });
     });
 
-    describe("findVersionId", () => {
+    describe("findVersion", () => {
       it("returns null for an unknown library or version and creates nothing", async () => {
         await store.resolveVersionId("React", "18.0.0");
         const before = await store.queryLibraryVersions();
 
-        expect(await store.findVersionId("vue", "")).toBeNull();
-        expect(await store.findVersionId("react", "99.0.0")).toBeNull();
+        expect(await store.findVersion("vue", "")).toBeNull();
+        expect(await store.findVersion("react", "99.0.0")).toBeNull();
         expect(await store.queryLibraryVersions()).toEqual(before);
       });
     });
@@ -1589,7 +1589,7 @@ describe("DocumentStore - Common Functionality", () => {
         await expect(store.removeVersion("react", "")).rejects.toThrow();
         vi.restoreAllMocks();
 
-        expect(await store.findVersionId("react", "")).not.toBeNull();
+        expect(await store.findVersion("react", "")).not.toBeNull();
         expect(await store.checkDocumentExists("react", "")).toBe(true);
         expect(
           (await store.queryLibraryVersions()).get("React")?.[0].uniqueUrlCount,

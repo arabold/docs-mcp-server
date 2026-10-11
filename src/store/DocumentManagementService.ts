@@ -45,6 +45,7 @@ import type {
   ListVersionChunksResult,
   PageContentOptions,
   PageContentResult,
+  ResolvedVersion,
   ScraperConfig,
   StoreSearchResult,
   VersionChunkStats,
@@ -227,7 +228,7 @@ export class DocumentManagementService {
 
   /**
    * Ensures a library/version exists using a VersionRef and returns version ID.
-   * Delegates to existing ensureLibraryAndVersion for storage.
+   * The `VersionRef` form of {@link ensureLibraryAndVersion}.
    */
   async ensureVersion(ref: VersionRef): Promise<number> {
     return this.ensureLibraryAndVersion(ref.library, ref.version);
@@ -241,16 +242,8 @@ export class DocumentManagementService {
     library: string,
     version: string,
     policy: ExistingTargetPolicy,
-  ): Promise<{ versionId: number; library: string }> {
+  ): Promise<ResolvedVersion> {
     return this.store.claimVersion(library, version, policy);
-  }
-
-  /**
-   * Looks up a version without creating anything.
-   * @returns The version id, or `null` when the library or version does not exist.
-   */
-  async findVersionId(ref: VersionRef): Promise<number | null> {
-    return this.store.findVersionId(ref.library, ref.version);
   }
 
   /**
@@ -260,7 +253,7 @@ export class DocumentManagementService {
    * @throws {LibraryNotFoundInStoreError} When the library does not exist (with suggestions).
    * @throws {VersionNotFoundInStoreError} When the library exists but the version does not.
    */
-  async requireVersion(ref: VersionRef): Promise<{ versionId: number; library: string }> {
+  async requireVersion(ref: VersionRef): Promise<ResolvedVersion> {
     const found = await this.store.findVersion(ref.library, ref.version);
     if (found) {
       return found;
@@ -269,20 +262,17 @@ export class DocumentManagementService {
   }
 
   /**
-   * Builds the error for a version that does not resolve: library-not-found
-   * (with suggestions) when the library itself is missing, otherwise
-   * version-not-found naming the library as it is stored.
+   * Builds the version-not-found error for a version that does not resolve,
+   * naming the library as it is stored.
+   * @throws {LibraryNotFoundInStoreError} When the library itself is missing (with suggestions).
    */
   private async versionNotFound(
     library: string,
     version: string,
-  ): Promise<LibraryNotFoundInStoreError | VersionNotFoundInStoreError> {
-    const libraryRecord = await this.store.getLibrary(library);
-    if (!libraryRecord) {
-      return this.libraryNotFound(library);
-    }
+  ): Promise<VersionNotFoundInStoreError> {
+    const { displayName } = await this.requireLibrary(library);
     return new VersionNotFoundInStoreError(
-      libraryRecord.displayName,
+      displayName,
       version,
       await this.listAvailableLabels(library),
     );
@@ -338,23 +328,29 @@ export class DocumentManagementService {
   async validateLibraryExists(library: string): Promise<void> {
     logger.info(`🔎 Validating existence of library: ${library}`);
 
-    // Check if the library exists in the libraries table
-    const libraryRecord = await this.store.getLibrary(library);
+    await this.requireLibrary(library);
 
+    logger.info(`✅ Library '${library}' confirmed to exist.`);
+  }
+
+  /**
+   * Looks up a library that must exist, without creating anything.
+   * @throws {LibraryNotFoundInStoreError} When it does not (with suggestions).
+   */
+  private async requireLibrary(library: string): Promise<{ displayName: string }> {
+    const libraryRecord = await this.store.getLibrary(library);
     if (!libraryRecord) {
       throw await this.libraryNotFound(library);
     }
-
-    logger.info(`✅ Library '${library}' confirmed to exist.`);
+    return libraryRecord;
   }
 
   /** Builds the library-not-found error, suggesting similarly named libraries. */
   private async libraryNotFound(library: string): Promise<LibraryNotFoundInStoreError> {
     logger.warn(`⚠️  Library '${library}' not found.`);
 
-    // Library doesn't exist, fetch all libraries to provide suggestions
-    const allLibraries = await this.listLibraries();
-    const libraryNames = allLibraries.map((lib) => lib.library);
+    // Library doesn't exist; suggest from the stored display names
+    const libraryNames = [...(await this.store.queryLibraryVersions()).keys()];
 
     let suggestions: string[] = [];
     if (libraryNames.length > 0) {
@@ -904,12 +900,9 @@ export class DocumentManagementService {
     library: string,
     version: string | null | undefined,
   ): Promise<{ library: string; version: string }> {
-    const libraryRecord = await this.store.getLibrary(library);
-    if (!libraryRecord) {
-      throw await this.libraryNotFound(library);
-    }
+    const { displayName } = await this.requireLibrary(library);
     const { bestMatch } = await this.findBestVersion(library, version ?? undefined);
-    return { library: libraryRecord.displayName, version: bestMatch ?? "" };
+    return { library: displayName, version: bestMatch ?? "" };
   }
 
   /**

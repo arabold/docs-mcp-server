@@ -53,6 +53,7 @@ describe("PipelineWorker", () => {
       id: "test-job-id",
       library: "test-lib",
       version: "1.0.0",
+      versionId: 1,
       status: PipelineJobStatus.RUNNING, // Assume worker receives a running job
       progress: null,
       error: null,

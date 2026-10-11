@@ -125,7 +125,6 @@ describe("PipelineManager", () => {
 
     mockStore = {
       // Database status tracking methods
-      ensureLibraryAndVersion: vi.fn().mockResolvedValue(1), // Return mock version ID
       claimVersion: echoClaim(),
       updateVersionStatus: vi.fn().mockResolvedValue(undefined),
       updateVersionProgress: vi.fn().mockResolvedValue(undefined), // For progress tests
@@ -575,8 +574,12 @@ describe("PipelineManager", () => {
       const options = { url: "http://example.com", library: "test-lib", version: "1.0" };
       await manager.enqueueScrapeJob("test-lib", "1.0", options);
 
-      // Should ensure library/version exists and update status to QUEUED
-      expect(mockStore.ensureLibraryAndVersion).toHaveBeenCalledWith("test-lib", "1.0");
+      // Should claim the library/version and update the claimed version to QUEUED
+      expect(mockStore.claimVersion).toHaveBeenCalledWith(
+        "test-lib",
+        "1.0",
+        "reject-version",
+      );
       expect(mockStore.updateVersionStatus).toHaveBeenCalledWith(1, "queued", undefined);
     });
 
@@ -585,7 +588,11 @@ describe("PipelineManager", () => {
       await manager.enqueueScrapeJob("test-lib", null, options);
 
       // Should treat null version as empty string
-      expect(mockStore.ensureLibraryAndVersion).toHaveBeenCalledWith("test-lib", "");
+      expect(mockStore.claimVersion).toHaveBeenCalledWith(
+        "test-lib",
+        "",
+        "reject-version",
+      );
       expect(mockStore.updateVersionStatus).toHaveBeenCalledWith(1, "queued", undefined);
     });
 
@@ -611,7 +618,6 @@ describe("PipelineManager", () => {
 
       // Create fresh mock store with all methods needed for enqueueRefreshJob
       const recoveryMockStore = {
-        ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
         claimVersion: echoClaim(),
         updateVersionStatus: vi.fn().mockResolvedValue(undefined),
         updateVersionProgress: vi.fn().mockResolvedValue(undefined),
@@ -823,7 +829,6 @@ describe("PipelineManager", () => {
         LibraryNotFoundInStoreError,
       );
       expect(mockStore.claimVersion).not.toHaveBeenCalled();
-      expect(mockStore.ensureLibraryAndVersion).not.toHaveBeenCalled();
     });
 
     it("should name the library as it is stored in refresh errors", async () => {
@@ -1129,7 +1134,6 @@ describe("PipelineManager", () => {
         ];
 
         const recoveryMockStore = {
-          ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
           claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
@@ -1179,7 +1183,6 @@ describe("PipelineManager", () => {
         ];
 
         const recoveryMockStore = {
-          ensureLibraryAndVersion: vi.fn().mockResolvedValue(2),
           claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
@@ -1233,7 +1236,6 @@ describe("PipelineManager", () => {
         ];
 
         const recoveryMockStore = {
-          ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
           claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockResolvedValue(mockInterruptedVersions),
@@ -1283,7 +1285,6 @@ describe("PipelineManager", () => {
         ];
 
         const recoveryMockStore = {
-          ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
           claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           updateVersionProgress: vi.fn().mockResolvedValue(undefined),
@@ -1293,9 +1294,7 @@ describe("PipelineManager", () => {
             }
             return Promise.resolve([]);
           }),
-          requireVersion: vi
-            .fn()
-            .mockResolvedValue({ versionId: 1, library: "test-lib" }),
+          requireVersion: vi.fn().mockImplementation(foundVersion(1)),
           getVersionById: vi.fn().mockResolvedValue({
             id: 1,
             library_id: 1,
@@ -1349,7 +1348,6 @@ describe("PipelineManager", () => {
         ];
 
         const recoveryMockStore = {
-          ensureLibraryAndVersion: vi.fn().mockResolvedValue(1),
           claimVersion: echoClaim(),
           updateVersionStatus: vi.fn().mockResolvedValue(undefined),
           getVersionsByStatus: vi.fn().mockImplementation((statuses: string[]) => {
@@ -1358,9 +1356,7 @@ describe("PipelineManager", () => {
             }
             return Promise.resolve([]);
           }),
-          requireVersion: vi
-            .fn()
-            .mockResolvedValue({ versionId: 1, library: "test-lib" }),
+          requireVersion: vi.fn().mockImplementation(foundVersion(1)),
           getVersionById: vi.fn().mockResolvedValue({
             id: 1,
             library_id: 1,

@@ -389,7 +389,9 @@ describe("Library identity end-to-end", () => {
       await upgraded.initialize();
       try {
         expect((await upgraded.listLibraries()).map((l) => l.library)).toEqual(["react"]);
-        expect(await upgraded.findVersionId({ library: "react", version: "1.0.0" })).not.toBeNull();
+        await expect(
+          upgraded.requireVersion({ library: "react", version: "1.0.0" }),
+        ).resolves.toMatchObject({ library: "react" });
       } finally {
         await upgraded.shutdown();
       }

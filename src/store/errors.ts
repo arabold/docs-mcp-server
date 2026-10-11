@@ -1,3 +1,5 @@
+import { CONTROL_CHARACTER } from "./types";
+
 /**
  * Base error class for all store-related errors.
  * Provides consistent error handling with optional cause tracking.
@@ -18,8 +20,7 @@ export class StoreError extends Error {
   }
 }
 
-/** Unicode general category Cc: C0 controls, DEL and C1 controls. */
-const CONTROL_CHARACTERS = /\p{Cc}/gu;
+const CONTROL_CHARACTERS = new RegExp(CONTROL_CHARACTER.source, "gu");
 
 function escapeControlCharacter(char: string): string {
   const code = char.charCodeAt(0);
@@ -36,6 +37,14 @@ function escapeControlCharacter(char: string): string {
  */
 export function escapeControlCharacters(text: string): string {
   return text.replace(CONTROL_CHARACTERS, escapeControlCharacter);
+}
+
+/**
+ * Labels a library version as `name@version` for logs and messages, with
+ * control characters escaped and unversioned documentation shown as `latest`.
+ */
+export function formatVersionLabel(library: string, version: string): string {
+  return `${escapeControlCharacters(library)}@${version || "latest"}`;
 }
 
 /**

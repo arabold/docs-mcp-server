@@ -14,12 +14,8 @@ import { ScraperRegistry, ScraperService } from "../scraper";
 import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
-import { escapeControlCharacters } from "../store/errors";
-import {
-  normalizeLibraryName,
-  normalizeVersionLabel,
-  VersionStatus,
-} from "../store/types";
+import { formatVersionLabel } from "../store/errors";
+import { libraryNamesMatch, normalizeVersionLabel, VersionStatus } from "../store/types";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError } from "./errors";
@@ -257,7 +253,6 @@ export class PipelineManager implements IPipeline {
     // two jobs against one bucket, where the second one's clean-before-scrape
     // deleted pages the first had already written — and both reported success.
     const normalizedVersion = normalizeVersionLabel(version);
-    const normalizedLibrary = normalizeLibraryName(library);
 
     // Claim the target before touching any job, so a rejected request cannot
     // cancel the job it conflicts with. Appending clears nothing, so it is not an
@@ -271,14 +266,13 @@ export class PipelineManager implements IPipeline {
     const allJobs = await this.getJobs();
     const duplicateJobs = allJobs.filter(
       (job) =>
-        normalizeLibraryName(job.library) === normalizedLibrary &&
+        libraryNamesMatch(job.library, library) &&
         normalizeVersionLabel(job.version) === normalizedVersion &&
         [PipelineJobStatus.QUEUED, PipelineJobStatus.RUNNING].includes(job.status),
     );
+    const label = formatVersionLabel(claimed.library, normalizedVersion);
     for (const job of duplicateJobs) {
-      logger.info(
-        `🚫 Aborting duplicate job for ${library}@${normalizedVersion}: ${job.id}`,
-      );
+      logger.info(`🚫 Aborting duplicate job for ${label}: ${job.id}`);
       await this.cancelJob(job.id);
     }
 
@@ -301,6 +295,7 @@ export class PipelineManager implements IPipeline {
       // The stored display name, not the caller's casing
       library: claimed.library,
       version: normalizedVersion,
+      versionId: claimed.versionId,
       status: PipelineJobStatus.QUEUED,
       progress: null,
       error: null,
@@ -324,9 +319,7 @@ export class PipelineManager implements IPipeline {
 
     this.jobMap.set(jobId, job);
     this.jobQueue.push(jobId);
-    logger.info(
-      `📝 Job enqueued: ${jobId} for ${library}${normalizedVersion ? `@${normalizedVersion}` : " (latest)"}`,
-    );
+    logger.info(`📝 Job enqueued: ${jobId} for ${label}`);
 
     // Update database status to QUEUED
     await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
@@ -363,18 +356,12 @@ export class PipelineManager implements IPipeline {
         library,
         version: normalizedVersion,
       });
-      const label = `${escapeControlCharacters(displayName)}@${normalizedVersion || "latest"}`;
+      const label = formatVersionLabel(displayName, normalizedVersion);
 
       // Check the version's status to detect incomplete scrapes
       const versionInfo = await this.store.getVersionById(versionId);
       if (!versionInfo) {
         throw new Error(`Version ID ${versionId} not found`);
-      }
-
-      // Get library information
-      const libraryInfo = await this.store.getLibraryById(versionInfo.library_id);
-      if (!libraryInfo) {
-        throw new Error(`Library ID ${versionInfo.library_id} not found`);
       }
 
       // If the version is not completed, it means the previous scrape was interrupted
@@ -469,7 +456,7 @@ export class PipelineManager implements IPipeline {
         library,
         version: normalizedVersion,
       });
-      const label = `${escapeControlCharacters(displayName)}@${normalizedVersion || "latest"}`;
+      const label = formatVersionLabel(displayName, normalizedVersion);
       const stored = await this.store.getScraperOptions(versionId);
 
       if (!stored) {
@@ -780,14 +767,10 @@ export class PipelineManager implements IPipeline {
 
     // Update database status
     try {
-      // Ensure the library and version exist and get the version ID
-      const versionId = await this.store.ensureLibraryAndVersion(
-        job.library,
-        job.version,
-      );
+      // The version was claimed when the job was enqueued
+      const { versionId } = job;
 
       // Update job object with database fields (single source of truth)
-      job.versionId = versionId;
       job.versionStatus = this.mapJobStatusToVersionStatus(newStatus);
 
       const dbStatus = this.mapJobStatusToVersionStatus(newStatus);

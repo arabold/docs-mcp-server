@@ -3,6 +3,7 @@ import type { Embeddings } from "@langchain/core/embeddings";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import type { ScrapeResult, ScraperOptions } from "../scraper/types";
+import { withoutRunOnlyOptions } from "../scraper/types";
 import { type AppConfig, isVectorDimensionExplicit } from "../utils/config";
 import { logger } from "../utils/logger";
 import { MimeTypeUtils } from "../utils/mimeTypeUtils";
@@ -35,6 +36,7 @@ import type {
   ListVersionChunksOptions,
   ListVersionChunksResult,
   PageListItem,
+  ResolvedVersion,
   StoredScraperOptions,
   VersionChunkListItem,
   VersionChunkStats,
@@ -1362,14 +1364,14 @@ export class DocumentStore {
     library: string,
     version: string,
     policy: ExistingTargetPolicy,
-  ): Promise<{ versionId: number; library: string }> {
+  ): Promise<ResolvedVersion> {
     // Last point every write passes through: apply the single version label
     // contract here so an entry point that forgets to normalize cannot create a
     // duplicate bucket (e.g. " 1.0.0 " alongside "1.0.0").
     const label = normalizeVersionLabel(version);
     const storedVersion = denormalizeVersionName(label);
 
-    const claim = this.db.transaction((): { versionId: number; library: string } => {
+    const claim = this.db.transaction((): ResolvedVersion => {
       const libraryRow = this.getOrCreateLibraryRow(library, policy === "reject-library");
 
       // Insert-or-ignore; inside the IMMEDIATE transaction, an insert that
@@ -1394,17 +1396,6 @@ export class DocumentStore {
   }
 
   /**
-   * Looks up a version without creating anything.
-   *
-   * @param library Library name in any casing or padding.
-   * @param version Version label; empty for unversioned documentation.
-   * @returns The version id, or `null` when the library or version does not exist.
-   */
-  async findVersionId(library: string, version: string): Promise<number | null> {
-    return (await this.findVersion(library, version))?.versionId ?? null;
-  }
-
-  /**
    * Looks up a version without creating anything, with its library's display name.
    *
    * @param library Library name in any casing or padding.
@@ -1412,10 +1403,7 @@ export class DocumentStore {
    * @returns The version id and the library's stored display name, or `null`
    *   when the library or version does not exist.
    */
-  async findVersion(
-    library: string,
-    version: string,
-  ): Promise<{ versionId: number; library: string } | null> {
+  async findVersion(library: string, version: string): Promise<ResolvedVersion | null> {
     const row = this.statements.getVersionId.get(
       normalizeLibraryName(library),
       normalizeVersionLabel(version),
@@ -1604,11 +1592,8 @@ export class DocumentStore {
         url: source_url,
         library: _library,
         version: _version,
-        signal: _signal,
-        initialQueue: _initialQueue,
-        isRefresh: _isRefresh,
         ...scraper_options
-      } = options;
+      } = withoutRunOnlyOptions(options);
 
       const optionsJson = JSON.stringify(scraper_options);
       this.statements.updateVersionScraperOptions.run(source_url, optionsJson, versionId);

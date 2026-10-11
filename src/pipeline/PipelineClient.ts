@@ -32,20 +32,17 @@ import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from ".
  * message, so this process's own router relays it unchanged (the web UI then
  * sees the same 409/400/404 as in front of a local pipeline). The worker's router
  * already decided which errors a caller can act on; anything it left as an
- * internal error, or a failure that never reached it, is not relayed.
+ * internal error, or a failure that never reached it, is wrapped as a plain
+ * error prefixed with `failure`.
  *
- * @returns The error to rethrow, or `null` when there is no actionable code.
+ * @returns The error to rethrow.
  */
-function relayEnqueueError(error: unknown): TRPCError | null {
+function toEnqueueError(error: unknown, failure: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
   const code = (error as { data?: { code?: unknown } } | null)?.data?.code;
-  if (!RELAYED_ENQUEUE_ERROR_CODES.includes(code as RelayedEnqueueErrorCode)) {
-    return null;
-  }
-  return new TRPCError({
-    code: code as RelayedEnqueueErrorCode,
-    message: error instanceof Error ? error.message : String(error),
-    cause: error,
-  });
+  return RELAYED_ENQUEUE_ERROR_CODES.includes(code as RelayedEnqueueErrorCode)
+    ? new TRPCError({ code: code as RelayedEnqueueErrorCode, message, cause: error })
+    : new Error(`${failure}: ${message}`);
 }
 
 /**
@@ -127,13 +124,7 @@ export class PipelineClient implements IPipeline {
       logger.debug(`Job ${result.jobId} enqueued successfully`);
       return result.jobId;
     } catch (error) {
-      const relayed = relayEnqueueError(error);
-      if (relayed) {
-        throw relayed;
-      }
-      throw new Error(
-        `Failed to enqueue job: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw toEnqueueError(error, "Failed to enqueue job");
     }
   }
 
@@ -152,13 +143,7 @@ export class PipelineClient implements IPipeline {
       logger.debug(`Refresh job ${result.jobId} enqueued successfully`);
       return result.jobId;
     } catch (error) {
-      const relayed = relayEnqueueError(error);
-      if (relayed) {
-        throw relayed;
-      }
-      throw new Error(
-        `Failed to enqueue refresh job: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      throw toEnqueueError(error, "Failed to enqueue refresh job");
     }
   }
 

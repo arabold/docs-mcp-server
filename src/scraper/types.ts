@@ -143,6 +143,26 @@ export interface ScraperOptions {
   internalAllowedFileRoots?: string[];
 }
 
+/** Options that only steer a single run, never stored or resubmitted. */
+type RunOnlyScraperOption = "signal" | "initialQueue" | "isRefresh";
+
+/**
+ * Drops the options that only steer a single run (its cancellation signal and
+ * a refresh's queue and flag), leaving what reproduces the scrape: what the
+ * store keeps, and what a retry resubmits.
+ */
+export function withoutRunOnlyOptions<T extends Partial<ScraperOptions>>(
+  options: T,
+): Omit<T, RunOnlyScraperOption> {
+  const {
+    signal: _signal,
+    initialQueue: _initialQueue,
+    isRefresh: _isRefresh,
+    ...reproducible
+  } = options;
+  return reproducible;
+}
+
 /**
  * Result of scraping a single page.
  */
