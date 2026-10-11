@@ -37,6 +37,8 @@ describe("Markdown variant identity E2E", () => {
     appConfig.app.embeddingModel = "";
     appConfig.scraper.security.network.allowPrivateNetworks = true;
     appConfig.scraper.maxConcurrency = 1;
+    // An unmocked request fails inside nock; retrying it would only add backoff.
+    appConfig.scraper.fetcher.maxRetries = 0;
 
     const eventBus = new EventBusService();
     docService = new DocumentManagementService(eventBus, appConfig);
@@ -347,9 +349,11 @@ describe("Markdown variant identity E2E", () => {
         { "Content-Type": "text/html" },
       );
 
-    expect((await runScrape({ preserveHashes: true }))?.status).toBe(
-      PipelineJobStatus.COMPLETED,
-    );
+    // Hash routes only exist in a browser, so this crawl renders.
+    expect(
+      (await runScrape({ preserveHashes: true, scrapeMode: ScrapeMode.Playwright }))
+        ?.status,
+    ).toBe(PipelineJobStatus.COMPLETED);
 
     const urls = await storedUrls();
     expect(urls).toContain(`${TEST_BASE_URL}/#/alpha`);
@@ -374,9 +378,11 @@ describe("Markdown variant identity E2E", () => {
         "Content-Type": "text/html",
       });
 
-    expect((await runScrape({ preserveHashes: true }))?.status).toBe(
-      PipelineJobStatus.COMPLETED,
-    );
+    // Hash routes only exist in a browser, so this crawl renders.
+    expect(
+      (await runScrape({ preserveHashes: true, scrapeMode: ScrapeMode.Playwright }))
+        ?.status,
+    ).toBe(PipelineJobStatus.COMPLETED);
 
     const urls = await storedUrls();
     expect(urls.filter((u) => u.startsWith(`${TEST_BASE_URL}/docs`))).toEqual([

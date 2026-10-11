@@ -55,6 +55,8 @@ describe("Refresh Pipeline E2E Tests", () => {
     const registry = new ScraperRegistry(appConfig);
     scraperService = new ScraperService(registry);
     appConfig.scraper.maxConcurrency = 3;
+    // An unmocked request fails inside nock; retrying it would only add backoff.
+    appConfig.scraper.fetcher.maxRetries = 0;
     pipelineManager = new PipelineManager(docService, eventBus, {
       recoverJobs: false,
       appConfig: appConfig,
@@ -67,8 +69,7 @@ describe("Refresh Pipeline E2E Tests", () => {
 
     // Answer the llms.txt probe the way a site without one does. The scraper
     // probes for llms.txt before crawling; left unmocked those requests fail
-    // inside nock and the fetcher retries them with backoff — about 7 seconds
-    // per scrape job.
+    // inside nock.
     nock(TEST_BASE_URL).persist().get(/llms\.txt$/).reply(404);
   });
 
