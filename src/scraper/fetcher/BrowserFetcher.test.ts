@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
 import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
@@ -6,6 +6,7 @@ import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 vi.mock("playwright", () => ({
   chromium: {
     launch: vi.fn(),
+    executablePath: vi.fn(),
   },
 }));
 
@@ -511,6 +512,56 @@ describe("BrowserFetcher", () => {
       await pendingFetch;
 
       expect(browser.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("launchBrowser", () => {
+    beforeEach(() => {
+      // Playwright's managed full build is installed, and nothing overrides it.
+      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "");
+      vi.mocked(chromium.executablePath).mockReturnValue(process.execPath);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("launches the full build when the headless shell is not installed", async () => {
+      // What `playwright install --no-shell` leaves behind.
+      const { browser } = buildBrowser();
+      vi.mocked(chromium.launch)
+        .mockRejectedValueOnce(
+          new Error(
+            "browserType.launch: Executable doesn't exist at /ms-playwright/chromium_headless_shell-1228/chrome-headless-shell",
+          ),
+        )
+        .mockResolvedValueOnce(browser as never);
+
+      await expect(BrowserFetcher.launchBrowser()).resolves.toBe(browser);
+      expect(chromium.launch).toHaveBeenLastCalledWith(
+        expect.objectContaining({ channel: "chromium", headless: true }),
+      );
+    });
+
+    it("does not retry a launch that failed for another reason", async () => {
+      vi.mocked(chromium.launch).mockRejectedValue(
+        new Error("browserType.launch: Target page, context or browser has been closed"),
+      );
+
+      await expect(BrowserFetcher.launchBrowser()).rejects.toThrow(/has been closed/);
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not swap a configured executable for the full build", async () => {
+      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/opt/missing/chromium");
+      vi.mocked(chromium.launch).mockRejectedValue(
+        new Error(
+          "browserType.launch: Executable doesn't exist at /opt/missing/chromium",
+        ),
+      );
+
+      await expect(BrowserFetcher.launchBrowser()).rejects.toThrow(/doesn't exist/);
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
     });
   });
 });

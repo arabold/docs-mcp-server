@@ -9,8 +9,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { chromium } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { BrowserFetcher } from "../src/scraper/fetcher/BrowserFetcher";
 import { FetchStatus } from "../src/scraper/fetcher/types";
 import { type AppConfig, loadConfig } from "../src/utils/config";
@@ -50,12 +49,6 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
   let fetcher: BrowserFetcher;
 
   beforeAll(async () => {
-    // CI installs Playwright's browsers with --no-shell, so point the fetcher
-    // at the full Chromium build, as the Docker image does with its own.
-    if (!process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH) {
-      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", chromium.executablePath());
-    }
-
     server = createServer((req, res) => {
       const path = req.url ?? "/";
       requests.push(path);
@@ -78,7 +71,6 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
   afterAll(async () => {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    vi.unstubAllEnvs();
   });
 
   beforeEach(() => {
