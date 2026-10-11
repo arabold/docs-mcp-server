@@ -21,4 +21,4 @@
 
 - [x] 4.1 Use lower-precedence Docker environment aliases and add protocol/host alias regression cases; verify all Docker tests pass against the rebuilt ARM64 image, including generic-over-alias precedence.
 - [x] 4.2 Update the Docker MCP client snippet to select stdio and align the implementation documentation and design; verify the documented invocation matches the tested stdio launch.
-- [ ] 4.3 Commit and push the verified corrections, reply to the review comments, and resolve the threads; verify the remote PR head and thread resolution state.
+- [x] 4.3 Commit and push the verified corrections, reply to the review comments, and resolve the threads; verify the remote PR head and thread resolution state.
