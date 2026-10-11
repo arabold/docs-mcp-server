@@ -1,4 +1,4 @@
-import { type ChildProcess, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http, { createServer, type IncomingMessage, type Server } from "node:http";
 import net, { type AddressInfo } from "node:net";
@@ -25,6 +25,62 @@ export function getCliCommand(): { cmd: string; args: string[] } {
   // Fallback to vite-node
   const srcEntry = path.join(projectRoot, "src", "index.ts");
   return { cmd: "npx", args: ["vite-node", srcEntry] };
+}
+
+/**
+ * Spawns a long-running CLI command (a server or worker) and waits until it
+ * logs that it is available. Output is collected across chunks, so a ready
+ * line split between two reads still counts.
+ *
+ * @param args CLI arguments, e.g. `["worker", "--port", "6280"]`.
+ * @param env Extra environment variables; `undefined` removes one.
+ * @param timeoutMs How long to wait for the ready line (default 30 s).
+ * @returns The process and the URL from its "available at" line; stop it with `stopChildProcess`.
+ */
+export async function startCliServer(
+  args: string[],
+  env: Record<string, string | undefined> = {},
+  timeoutMs = 30000,
+): Promise<{ process: ChildProcess; url: string }> {
+  const { cmd, args: cliArgs } = getCliCommand();
+  const child = spawn(cmd, [...cliArgs, ...args], {
+    cwd: path.resolve(import.meta.dirname, ".."),
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, VITEST_WORKER_ID: undefined, ...env },
+  });
+
+  const url = await new Promise<string>((resolve, reject) => {
+    let output = "";
+    let ready = false;
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`Server startup timed out. Output: ${output}`));
+    }, timeoutMs);
+    const handleOutput = (data: Buffer) => {
+      if (ready) {
+        return;
+      }
+      output += data.toString();
+      const match = output.match(/available at (http:\/\/\S+)/);
+      if (match) {
+        ready = true;
+        clearTimeout(timeout);
+        resolve(match[1]);
+      }
+    };
+    child.stdout?.on("data", handleOutput);
+    child.stderr?.on("data", handleOutput);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(new Error(`Server process error: ${error.message}`));
+    });
+    child.on("exit", (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Server exited with code ${code}. Output: ${output}`));
+    });
+  });
+
+  return { process: child, url };
 }
 
 /**
