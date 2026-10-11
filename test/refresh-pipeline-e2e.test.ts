@@ -89,6 +89,36 @@ describe("Refresh pipeline E2E", () => {
       expect(stale.some((r) => r.content.includes("Original content"))).toBe(false);
     });
 
+    it("refreshes several pages at once with each outcome landing on its own page", async () => {
+      // The crawl keeps up to maxConcurrency items in flight, so the store sees
+      // these results interleaved rather than one page at a time.
+      h.config.scraper.maxConcurrency = 3;
+      const leaves = ["/a", "/b", "/c", "/d", "/e"];
+      site.page("/", hubPage(leaves), { etag: '"home-v1"' });
+      for (const path of leaves) {
+        site.page(path, leafPage(path, `Original ${path}`), { etag: `"${path}-v1"` });
+      }
+      await h.scrape();
+
+      site
+        .notFound("/b")
+        .page("/c", leafPage("/c", "Updated /c"), { etag: '"/c-v2"' })
+        .notFound("/e");
+      const refresh = await h.refresh();
+
+      expect(refresh.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(h.outcomeOf(site.url("/a"))).toBe(PageOutcome.Unchanged);
+      expect(h.outcomeOf(site.url("/b"))).toBe(PageOutcome.Absent);
+      expect(h.outcomeOf(site.url("/c"))).toBe(PageOutcome.Stored);
+      expect(h.outcomeOf(site.url("/d"))).toBe(PageOutcome.Unchanged);
+      expect(h.outcomeOf(site.url("/e"))).toBe(PageOutcome.Absent);
+      expect(await h.storedUrls()).toEqual(
+        ["/", "/a", "/c", "/d"].map((path) => site.url(path)),
+      );
+      expect(await h.contentOf(site.url("/c"))).toContain("Updated /c");
+      expect(await h.contentOf(site.url("/d"))).toContain("Original /d");
+    });
+
     it("indexes pages first linked from a page that changed", async () => {
       site
         .page("/", hubPage(["/page1"]), { etag: '"home-v1"' })
@@ -170,9 +200,10 @@ describe("Refresh pipeline E2E", () => {
 
     it("drops a page that stalls past the fetch timeout and crawls the rest", async () => {
       // The stall only ends when the fetcher gives up, so the timeout has to be
-      // real. A short one keeps the wait well inside the test's budget, and one
-      // retry with a short backoff still exercises timeout-then-retry.
-      h.config.scraper.fetcher.timeoutMs = 500;
+      // real. The other pages answer in-process within a few milliseconds, so
+      // a short one still leaves them a wide margin, and one retry with a short
+      // backoff exercises timeout-then-retry in a fraction of a second.
+      h.config.scraper.fetcher.timeoutMs = 100;
       h.config.scraper.fetcher.maxRetries = 1;
       h.config.scraper.fetcher.baseDelayMs = 10;
       site
@@ -234,7 +265,10 @@ describe("Refresh pipeline E2E", () => {
 
   describe("network access policy (allowlist mode)", () => {
     const allowed = mockSite("http://docs.allowed.example");
-    const blocked = mockSite("http://evil.blocked.example");
+    // An address from a documentation range (RFC 5737): the access policy checks
+    // it against allowedCidrs directly, where a host name would need a real DNS
+    // lookup before it could be refused.
+    const blocked = mockSite("http://203.0.113.10");
 
     beforeEach(() => {
       const { network } = h.config.scraper.security;
@@ -253,7 +287,7 @@ describe("Refresh pipeline E2E", () => {
       expect(await h.storedUrls()).toEqual([allowed.url("/")]);
     });
 
-    it("fails a job for a host off the allowlist without contacting it", async () => {
+    it("fails a job for an address off the allowlist without contacting it", async () => {
       const job = await h.scrape({ url: blocked.url("/"), maxDepth: 0 });
 
       expect(job.status).toBe(PipelineJobStatus.FAILED);
