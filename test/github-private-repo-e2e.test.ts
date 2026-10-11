@@ -17,6 +17,7 @@ import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
+import { allowLiveNetwork } from "./mock-server";
 
 // Load environment variables from .env file
 config();
@@ -38,6 +39,7 @@ describe("GitHub Private Repository E2E Tests", () => {
   const appConfig = loadConfig();
 
   const hasAuth = !!(process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
+  let releaseNetwork = (): void => {};
 
   beforeAll(async () => {
     if (!hasAuth) {
@@ -46,6 +48,9 @@ describe("GitHub Private Repository E2E Tests", () => {
       );
       return;
     }
+
+    // These tests read a real private repository on GitHub.
+    releaseNetwork = allowLiveNetwork();
 
     // Create temporary directory for test database
     tempDir = mkdtempSync(path.join(tmpdir(), "github-private-repo-e2e-test-"));
@@ -67,6 +72,7 @@ describe("GitHub Private Repository E2E Tests", () => {
   }, 30000);
 
   afterAll(async () => {
+    releaseNetwork();
     if (pipeline) {
       await pipeline.stop();
     }

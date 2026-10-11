@@ -6,7 +6,7 @@
  * external services.
  */
 
-import { http, HttpResponse } from "msw";
+import { HttpResponse, http, passthrough } from "msw";
 import { setupServer } from "msw/node";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -158,5 +158,55 @@ export const handlers = [
   }),
 ];
 
+/** How many opt-in live suites currently let requests through to the network. */
+let liveSuites = 0;
+
+/**
+ * Lets every request through to the real network until the returned function
+ * runs. Only for opt-in live suites: they call it in `beforeAll` once their
+ * credentials are known to be set, and call the result in `afterAll`.
+ *
+ * @returns A function that withdraws the permission; calling it again does nothing.
+ */
+export function allowLiveNetwork(): () => void {
+  liveSuites++;
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      liveSuites--;
+    }
+  };
+}
+
+/**
+ * Whether a request may go through unmocked: to a server a test started on
+ * loopback, or anywhere while an opt-in live suite runs.
+ *
+ * @param hostname The request's host name, as `URL.hostname` gives it.
+ * @returns True when the request should go through unmocked.
+ */
+export function mayPassThrough(hostname: string): boolean {
+  return (
+    liveSuites > 0 ||
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "[::1]"
+  );
+}
+
+/**
+ * Answers every request that no handler above, and no handler a test adds with
+ * `server.use(...)`, claims. Anything outside `mayPassThrough` fails at once as a
+ * network error rather than reaching the real network.
+ */
+const unmockedRequestHandler = http.all("*", ({ request }) => {
+  if (mayPassThrough(new URL(request.url).hostname)) {
+    return passthrough();
+  }
+  console.error(`Unmocked request in a test: ${request.method} ${request.url}`);
+  return HttpResponse.error();
+});
+
 // Create and export the mock server
-export const server = setupServer(...handlers);
+export const server = setupServer(...handlers, unmockedRequestHandler);

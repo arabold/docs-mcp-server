@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { JwtAccessTokenVerifier } from "../src/auth/JwtAccessTokenVerifier";
 import { LogLevel, setLogLevel } from "../src/utils/logger";
 import { startInProcessServer } from "./in-process-server";
+import { allowLiveNetwork } from "./mock-server";
 import {
   getFreePort,
   type LocalIssuer,
@@ -203,6 +204,16 @@ describe("Authentication End-to-End", () => {
 });
 
 describe.skipIf(!process.env.DOCS_MCP_AUTH_ISSUER_URL)("Live identity provider", () => {
+  // Discovery and the signing keys come from the real provider, whose key host
+  // may differ from the issuer's.
+  let releaseNetwork = (): void => {};
+  beforeAll(() => {
+    releaseNetwork = allowLiveNetwork();
+  });
+  afterAll(() => {
+    releaseNetwork();
+  });
+
   it("discovers the configured provider's metadata and signing keys", async () => {
     const issuerUrl = process.env.DOCS_MCP_AUTH_ISSUER_URL ?? "";
     const publicUrl = process.env.DOCS_MCP_SERVER_PUBLIC_URL ?? "https://example.com";
