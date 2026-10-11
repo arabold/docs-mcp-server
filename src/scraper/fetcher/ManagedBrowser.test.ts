@@ -84,24 +84,57 @@ describe("ManagedBrowser", () => {
   });
 
   describe("retire", () => {
-    it("kills Chromium when it does not close in time", async () => {
+    it("kills Chromium by the process ID read at launch when it does not close in time", async () => {
+      const browser = {
+        ...buildBrowser(),
+        close: vi.fn(() => new Promise(() => {})),
+        // Chromium reports its own process ID over CDP.
+        newBrowserCDPSession: vi.fn().mockResolvedValue({
+          send: vi.fn().mockResolvedValue({
+            processInfo: [
+              { type: "GPU", id: 4243 },
+              { type: "browser", id: 4242 },
+            ],
+          }),
+          detach: vi.fn().mockResolvedValue(undefined),
+        }),
+      };
+      vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
       vi.useFakeTimers();
       try {
-        const kill = vi.fn().mockReturnValue(true);
-        const browser = {
-          ...buildBrowser(),
-          close: vi.fn(() => new Promise(() => {})),
-          process: () => ({ killed: false, pid: 4242, kill }),
-        };
         const managed = new ManagedBrowser(scraperConfig);
+        await managed.get();
 
         const retiring = managed.retire(browser as never, "stuck");
         await vi.advanceTimersByTimeAsync(scraperConfig.pageTimeoutMs);
         await retiring;
 
-        expect(kill).toHaveBeenCalledWith("SIGKILL");
+        expect(kill).toHaveBeenCalledWith(4242, "SIGKILL");
       } finally {
         vi.useRealTimers();
+        kill.mockRestore();
+      }
+    });
+
+    it("gives up on a browser that will not close when its process ID is unknown", async () => {
+      // The mocked browser has no CDP session, so no process ID was recorded.
+      const browser = { ...buildBrowser(), close: vi.fn(() => new Promise(() => {})) };
+      vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      vi.useFakeTimers();
+      try {
+        const managed = new ManagedBrowser(scraperConfig);
+        await managed.get();
+
+        const retiring = managed.retire(browser as never, "stuck");
+        await vi.advanceTimersByTimeAsync(scraperConfig.pageTimeoutMs);
+        await retiring;
+
+        expect(kill).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+        kill.mockRestore();
       }
     });
 

@@ -267,6 +267,25 @@ describe("HtmlPlaywrightMiddleware", () => {
       launchSpy.mockRestore();
     });
 
+    it("should keep the browser when only the route cleanup fails", async () => {
+      const initialHtml = "<html><body><p>Test</p></body></html>";
+      const pageSpy = createMockPlaywrightPage(initialHtml);
+      pageSpy.unroute = vi.fn().mockRejectedValue(new Error("Route already removed"));
+      const browserSpy = createMockBrowser(pageSpy);
+      const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+      await playwrightMiddleware.process(
+        createPipelineTestContext(initialHtml, "https://example.com/test"),
+        vi.fn(),
+      );
+
+      // The page and context closed, so nothing suggests Chromium is stuck.
+      expect(pageSpy.close).toHaveBeenCalled();
+      expect(browserSpy.close).not.toHaveBeenCalled();
+
+      launchSpy.mockRestore();
+    });
+
     it("should bound hung page cleanup and reset the browser", async () => {
       vi.useFakeTimers();
       try {

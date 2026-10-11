@@ -4,12 +4,13 @@
  * Chromium is killed with SIGKILL, the way the OS ends it under memory
  * pressure. The fetcher must launch a new browser for the pages that follow,
  * retry the page Chromium died loading, and never start more than one browser
- * for pages that ask at the same time.
+ * for pages that ask at the same time. A browser that will not close is killed.
  */
 
 import { createServer, type Server } from "node:http";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserFetcher } from "../src/scraper/fetcher/BrowserFetcher";
+import { ManagedBrowser } from "../src/scraper/fetcher/ManagedBrowser";
 import { FetchStatus } from "../src/scraper/fetcher/types";
 import { type AppConfig, loadConfig } from "../src/utils/config";
 import { chromiumPids, listenOnFreePort } from "./test-helpers";
@@ -101,5 +102,21 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
       FetchStatus.SUCCESS,
     ]);
     expect(chromiumPids()).toHaveLength(1);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("Browser that will not close", () => {
+  it("kills the Chromium process when closing it times out", async () => {
+    const config = loadConfig().scraper;
+    config.pageTimeoutMs = 500;
+    const managed = new ManagedBrowser(config);
+    const browser = await managed.get();
+    expect(chromiumPids()).toHaveLength(1);
+
+    // A browser that never answers the close request.
+    browser.close = () => new Promise<void>(() => {});
+    await managed.retire(browser, "close timed out in test");
+
+    await vi.waitFor(() => expect(chromiumPids()).toHaveLength(0), { timeout: 5000 });
   });
 });

@@ -4,15 +4,12 @@ import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { withTimeout } from "../../utils/timeout";
 
-interface BrowserProcessHandle {
-  killed: boolean;
-  pid?: number;
-  kill(signal?: NodeJS.Signals | number): boolean;
-}
-
-interface BrowserWithProcessHandle extends Browser {
-  process(): BrowserProcessHandle | null;
-}
+/**
+ * Process IDs of the browsers `ManagedBrowser.launch()` started. Playwright's
+ * `Browser` does not expose its process, so the ID is read over CDP at launch,
+ * while the browser still answers.
+ */
+const browserPids = new WeakMap<Browser, number>();
 
 /**
  * One headless Chromium that the browser fetcher and the HTML renderer can
@@ -113,8 +110,9 @@ export class ManagedBrowser {
       ],
     };
 
+    let browser: Browser;
     try {
-      return await chromium.launch(options);
+      browser = await chromium.launch(options);
     } catch (error) {
       const missingExecutable =
         error instanceof Error && error.message.includes("Executable doesn't exist");
@@ -122,7 +120,28 @@ export class ManagedBrowser {
         throw error;
       }
       logger.debug("Playwright's headless shell is not installed; using the full build");
-      return chromium.launch({ ...options, channel: "chromium" });
+      browser = await chromium.launch({ ...options, channel: "chromium" });
+    }
+
+    await ManagedBrowser.recordProcessId(browser);
+    return browser;
+  }
+
+  /**
+   * Remembers the browser's process ID, so a browser that will not close can
+   * still be killed. Best effort: without an ID, the kill is skipped.
+   */
+  private static async recordProcessId(browser: Browser): Promise<void> {
+    try {
+      const session = await browser.newBrowserCDPSession();
+      const { processInfo } = await session.send("SystemInfo.getProcessInfo");
+      await session.detach();
+      const pid = processInfo.find((info) => info.type === "browser")?.id;
+      if (pid) {
+        browserPids.set(browser, pid);
+      }
+    } catch (error) {
+      logger.debug(`Could not read the browser process ID: ${error}`);
     }
   }
 
@@ -165,22 +184,20 @@ export class ManagedBrowser {
   }
 
   private static killProcess(browser: Browser, reason: string): void {
-    const browserProcess =
-      "process" in browser && typeof browser.process === "function"
-        ? (browser as BrowserWithProcessHandle).process()
-        : null;
-    if (!browserProcess || browserProcess.killed) {
+    const pid = browserPids.get(browser);
+    if (!pid) {
+      logger.warn(`⚠️  Cannot kill the Playwright browser, its process ID is unknown`);
       return;
     }
 
-    const pid = browserProcess.pid ? ` pid=${browserProcess.pid}` : "";
-    logger.warn(`⚠️  Force killing Playwright browser process${pid}: ${reason}`);
+    logger.warn(`⚠️  Force killing Playwright browser process pid=${pid}: ${reason}`);
     try {
-      if (!browserProcess.kill("SIGKILL")) {
-        logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}`);
-      }
+      process.kill(pid, "SIGKILL");
     } catch (error) {
-      logger.warn(`⚠️  Failed to force kill Playwright browser process${pid}: ${error}`);
+      // ESRCH: the process has already exited.
+      logger.warn(
+        `⚠️  Failed to force kill Playwright browser process pid=${pid}: ${error}`,
+      );
     }
   }
 }

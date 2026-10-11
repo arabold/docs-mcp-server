@@ -127,12 +127,19 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     await this.managedBrowser.close();
   }
 
+  /**
+   * Removes the page's routes and closes the page and its context, each within
+   * the page timeout.
+   *
+   * @returns Whether the page and context closed. A route that fails to clear
+   * is only logged: it says nothing about whether Chromium still responds.
+   */
   private async cleanupPageAndContext(
     page: Page | null,
     browserContext: BrowserContext | null,
     source: string,
   ): Promise<boolean> {
-    let cleanupSucceeded = true;
+    let closed = true;
     const timeoutMs = this.getPageTimeoutMs();
 
     if (page) {
@@ -143,14 +150,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           `Playwright route cleanup for ${source}`,
         );
       } catch (error) {
-        cleanupSucceeded = false;
         logger.warn(`⚠️  Playwright route cleanup failed for ${source}: ${error}`);
       }
 
       try {
         await withTimeout(page.close(), timeoutMs, `Playwright page close for ${source}`);
       } catch (error) {
-        cleanupSucceeded = false;
+        closed = false;
         logger.warn(`⚠️  Playwright page cleanup failed for ${source}: ${error}`);
       }
     }
@@ -163,12 +169,12 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           `Playwright browser context close for ${source}`,
         );
       } catch (error) {
-        cleanupSucceeded = false;
+        closed = false;
         logger.warn(`⚠️  Playwright context cleanup failed for ${source}: ${error}`);
       }
     }
 
-    return cleanupSucceeded;
+    return closed;
   }
 
   /**
@@ -1121,7 +1127,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
           : new Error(`Playwright rendering failed: ${String(error)}`),
       );
     } finally {
-      const cleanupSucceeded = await this.cleanupPageAndContext(
+      const closed = await this.cleanupPageAndContext(
         page,
         browserContext,
         context.source,
@@ -1129,7 +1135,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       // A page or context that will not close may have left Chromium stuck,
       // so replace it. A failed render alone does not: its context closed
       // cleanly, and other pages may be using the same browser.
-      if (!cleanupSucceeded && browser) {
+      if (!closed && browser) {
         await this.managedBrowser.retire(
           browser,
           `reset after Playwright cleanup failure for ${context.source}`,
