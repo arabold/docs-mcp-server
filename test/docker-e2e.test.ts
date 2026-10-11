@@ -8,6 +8,7 @@
  *   4. The Xberg-backed PDF pipeline can extract a PDF from a mounted volume.
  *   5. The web server serves the built admin UI (SPA shell, hashed assets,
  *      client-route fallback) and the tRPC API over HTTP.
+ *   6. No-argument startup serves HTTP, while transport and binding overrides work.
  *
  * Skipped automatically when Docker is not available on the host.
  *
@@ -17,9 +18,12 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import Database from "better-sqlite3";
 import { ZipArchive } from "archiver";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -307,7 +311,15 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     }
   }, 240_000);
 
-  it("serves the web UI over HTTP (SPA shell, hashed asset, deep-link fallback, and API)", async () => {
+  it.each([
+    { name: "no-argument startup", args: [], mcp: true },
+    { name: "startup with only --verbose", args: ["--verbose"], mcp: true },
+    {
+      name: "the explicit web subcommand",
+      args: ["web", "--host", "0.0.0.0", "--port", "6280"],
+      mcp: false,
+    },
+  ])("serves HTTP through $name", async ({ args, mcp }) => {
     // Run the web server detached and let Docker pick a free host port (-P), so
     // the test never clashes with a port already bound on the CI host. The
     // image sets DOCS_MCP_STORE_PATH=/data (writable), so no mount is needed —
@@ -315,16 +327,11 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     const run = await docker([
       "run",
       "-d",
-      "--rm",
       "-P",
       "-e",
       "DOCS_MCP_TELEMETRY=false",
       IMAGE_TAG,
-      "web",
-      "--host",
-      "0.0.0.0",
-      "--port",
-      "6280",
+      ...args,
     ]);
     expect(run.status, `docker run failed: ${run.stderr}`).toBe(0);
     const containerId = run.stdout.trim();
@@ -344,7 +351,12 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
         if (status === 200) ready = true;
         else await new Promise((resolve) => setTimeout(resolve, 1000));
       }
-      expect(ready, "web server did not become ready within 60s").toBe(true);
+      if (!ready) {
+        const logs = await docker(["logs", containerId]);
+        throw new Error(
+          `HTTP server did not become ready within 60s:\n${logs.stdout}\n${logs.stderr}`,
+        );
+      }
 
       // 1. The SPA shell is served at the root.
       const root = await fetch(`${base}/`);
@@ -370,12 +382,142 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       expect(api.status).toBe(200);
       expect(api.headers.get("content-type")).toMatch(/application\/json/);
       const body = (await api.json()) as {
-        result?: { data?: { json?: { worker?: { mode?: string } } } };
+        result?: {
+          data?: {
+            json?: {
+              worker?: { mode?: string };
+              services?: {
+                web?: boolean;
+                api?: boolean;
+                mcp?: boolean;
+                worker?: boolean;
+              };
+            };
+          };
+        };
       };
       expect(body.result?.data?.json?.worker?.mode).toBe("embedded");
+      expect(body.result?.data?.json?.services).toEqual({
+        web: true,
+        api: true,
+        mcp,
+        worker: true,
+      });
+      if (mcp) {
+        const client = new Client({ name: "docker-http-test", version: "1.0.0" });
+        try {
+          await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", base)));
+          const tools = await client.listTools();
+          expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");
+        } finally {
+          await client.close();
+        }
+      }
     } finally {
-      // Best-effort stop (also triggers --rm cleanup); ignore if already gone.
-      await docker(["rm", "-f", containerId]);
+      await docker(["rm", "-f", "-v", containerId]);
     }
   }, 120_000);
+
+  it.each([
+    {
+      name: "generic runtime environment over the protocol alias",
+      envArgs: ["-e", "DOCS_MCP_SERVER_PROTOCOL=stdio"],
+      cliArgs: [],
+    },
+    {
+      name: "runtime protocol alias",
+      envArgs: ["-e", "DOCS_MCP_PROTOCOL=stdio"],
+      cliArgs: [],
+    },
+    {
+      name: "CLI arguments over an HTTP environment override",
+      envArgs: ["-e", "DOCS_MCP_SERVER_PROTOCOL=http"],
+      cliArgs: ["--protocol", "stdio"],
+    },
+  ])("serves MCP over stdio selected by $name", async ({ envArgs, cliArgs }) => {
+    const containerName = `docs-mcp-stdio-${randomUUID()}`;
+    const transport = new StdioClientTransport({
+      command: "docker",
+      args: [
+        "run",
+        "-i",
+        "--name",
+        containerName,
+        "-e",
+        "DOCS_MCP_TELEMETRY=false",
+        ...envArgs,
+        IMAGE_TAG,
+        ...cliArgs,
+      ],
+    });
+    const client = new Client({ name: "docker-stdio-test", version: "1.0.0" });
+    try {
+      await client.connect(transport);
+      const tools = await client.listTools();
+      expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");
+    } finally {
+      try {
+        await client.close();
+      } finally {
+        try {
+          await transport.close();
+        } finally {
+          await docker(["rm", "-f", "-v", containerName]);
+        }
+      }
+    }
+  }, 60_000);
+
+  it.each([
+    {
+      name: "image defaults",
+      envArgs: [],
+      expected: { protocol: "http", host: "0.0.0.0", port: 6280 },
+    },
+    {
+      name: "generic runtime host override over aliases",
+      envArgs: [
+        "-e",
+        "DOCS_MCP_SERVER_HOST=127.0.0.1",
+        "-e",
+        "DOCS_MCP_HOST=0.0.0.0",
+        "-e",
+        "HOST=0.0.0.0",
+      ],
+      expected: { protocol: "http", host: "127.0.0.1", port: 6280 },
+    },
+    {
+      name: "runtime DOCS_MCP_HOST alias",
+      envArgs: ["-e", "DOCS_MCP_HOST=127.0.0.1"],
+      expected: { protocol: "http", host: "127.0.0.1", port: 6280 },
+    },
+    {
+      name: "runtime HOST alias",
+      envArgs: ["-e", "HOST=127.0.0.1"],
+      expected: { protocol: "http", host: "127.0.0.1", port: 6280 },
+    },
+    {
+      name: "runtime port override",
+      envArgs: ["-e", "DOCS_MCP_SERVER_PORTS_DEFAULT=6380"],
+      expected: { protocol: "http", host: "0.0.0.0", port: 6380 },
+    },
+  ])("resolves server configuration from $name", async ({ envArgs, expected }) => {
+    const r = await docker([
+      "run",
+      "--rm",
+      "-e",
+      "DOCS_MCP_TELEMETRY=false",
+      ...envArgs,
+      IMAGE_TAG,
+      "config",
+      "get",
+      "server",
+    ]);
+    expect(r.status, `config get failed: ${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      protocol: expected.protocol,
+      host: expected.host,
+      ports: { default: expected.port },
+    });
+  });
 });

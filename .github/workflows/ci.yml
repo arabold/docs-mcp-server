@@ -73,9 +73,19 @@ jobs:
         run: npm run build
 
   docker-test:
-    name: Docker image E2E
-    runs-on: ubuntu-latest
+    name: Docker image E2E (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs: build # Only run once unit tests + build pass
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -97,9 +107,10 @@ jobs:
         with:
           context: .
           load: true
+          platforms: ${{ matrix.platform }}
           tags: docs-mcp-server:e2e-test
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=docker-e2e-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-e2e-${{ matrix.arch }}
 
       - name: Run Docker E2E tests
         env:

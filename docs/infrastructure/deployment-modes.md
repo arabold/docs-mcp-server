@@ -56,7 +56,7 @@ Upgrade the worker together with, or before, its coordinators. The worker owns t
 
 ## Protocol Auto-Detection
 
-The system automatically selects communication protocol based on execution environment:
+Outside Docker, the system automatically selects communication protocol based on execution environment. The Docker image defaults to HTTP regardless of TTY status; runtime environment variables or CLI flags can select another protocol.
 
 ### Detection Logic
 
@@ -120,11 +120,17 @@ The server answers to IP addresses, `localhost` and single-label names such as a
 
 ### Single Container
 
-```dockerfile
-FROM ghcr.io/arabold/docs-mcp-server:latest
-EXPOSE 6280
-CMD ["--protocol", "http", "--port", "6280"]
+```bash
+docker run --rm \
+  -v docs-mcp-data:/data \
+  -v docs-mcp-config:/config \
+  -p 6280:6280 \
+  ghcr.io/arabold/docs-mcp-server:latest
 ```
+
+The image starts the unified HTTP server on `0.0.0.0:6280` with the Web UI, API, and MCP endpoint enabled. Its `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0` environment defaults remain active with unrelated arguments such as `--verbose`. Override them with runtime environment variables or CLI flags; image environment values take precedence over config-file values. Both supported aliases and generic environment overrides remain available.
+
+Docker stdio clients use `docker run --rm -i ghcr.io/arabold/docs-mcp-server:latest --protocol stdio`, keeping stdin open without allocating a TTY. `DOCS_MCP_SERVER_PROTOCOL=auto` restores TTY-based protocol selection. See [Installation](../setup/installation.md#option-2-docker) for the complete override and persistence options.
 
 ### Multi-Container (Docker Compose)
 

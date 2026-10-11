@@ -122,9 +122,10 @@ docker run --rm \
   -v docs-mcp-data:/data \
   -v docs-mcp-config:/config \
   -p 6280:6280 \
-  ghcr.io/arabold/docs-mcp-server:latest \
-  --protocol http --host 0.0.0.0 --port 6280
+  ghcr.io/arabold/docs-mcp-server:latest
 ```
+
+The Docker image defaults to HTTP on `0.0.0.0:6280`, serving the Web UI, API, and MCP endpoint. For stdio clients, use `docker run --rm -i ghcr.io/arabold/docs-mcp-server:latest --protocol stdio`. See [Installation](docs/setup/installation.md#option-2-docker) for configuration overrides.
 
 </details>
 

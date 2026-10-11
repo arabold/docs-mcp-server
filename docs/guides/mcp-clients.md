@@ -294,7 +294,7 @@ npx -y @smithery/cli@latest install @arabold/docs-mcp-server --client <CLIENT_NA
 
 ## 🐋 Docker Configuration
 
-If you prefer using Docker for the client connection:
+For a Docker-based stdio client connection, select `--protocol stdio` explicitly and keep stdin open with `-i`. The image defaults to HTTP when no protocol override is supplied.
 
 ```json
 {
@@ -304,7 +304,8 @@ If you prefer using Docker for the client connection:
       "args": [
         "run", "-i", "--rm",
         "-v", "docs-mcp-data:/data",
-        "ghcr.io/arabold/docs-mcp-server:latest"
+        "ghcr.io/arabold/docs-mcp-server:latest",
+        "--protocol", "stdio"
       ]
     }
   }
