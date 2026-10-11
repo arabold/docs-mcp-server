@@ -73,11 +73,12 @@ export class BrowserFetcher implements ContentFetcher {
       try {
         return await this.fetchWithBrowser(browser, source, options);
       } catch (error) {
-        if (browser.isConnected() || options?.signal?.aborted) {
+        if (this.managedBrowser.isCurrent(browser) || options?.signal?.aborted) {
           throw error;
         }
-        // Chromium exited under this page (e.g. under memory pressure), so the
-        // page never got a fair attempt. Relaunch and give it one more.
+        // The browser went away under this page: Chromium exited (e.g. under
+        // memory pressure), or another user retired it. The page never got a
+        // fair attempt, so give it one more on the current browser.
         logger.warn(`⚠️  Browser closed while fetching ${source}, retrying once`);
         return await this.fetchWithBrowser(
           await this.managedBrowser.get(),
@@ -198,7 +199,15 @@ export class BrowserFetcher implements ContentFetcher {
         // while requests are routed. Fetch those through the context's request
         // API instead (see fetchViaRequest): it shares cookies — so any
         // anti-bot clearance carries over — but does not try to render them.
-        if (/ERR_INVALID_ARGUMENT|ERR_ABORTED|Download is starting/i.test(message)) {
+        // A navigation cut off because its page or browser is going away (for
+        // example, the browser was replaced) is reported as ERR_ABORTED too,
+        // with "frame was detached"; that is no download, so it is not
+        // fetched again here.
+        const frameDetached = /frame was detached/i.test(message);
+        if (
+          !frameDetached &&
+          /ERR_INVALID_ARGUMENT|ERR_ABORTED|Download is starting/i.test(message)
+        ) {
           return await this.fetchViaRequest(
             page,
             source,

@@ -12,6 +12,7 @@ vi.mock("playwright", () => ({
 import { chromium } from "playwright";
 import { BrowserFetcher } from "./BrowserFetcher";
 import { FingerprintGenerator } from "./FingerprintGenerator";
+import { ManagedBrowser } from "./ManagedBrowser";
 import { FetchStatus } from "./types";
 
 /**
@@ -350,6 +351,24 @@ describe("BrowserFetcher", () => {
     expect(requestOptions.headers).toEqual(expect.objectContaining({ "X-Test": "1" }));
   });
 
+  it("does not fetch through the request API when the page was detached mid-navigation", async () => {
+    // Chromium reports a navigation cut off by a closing browser as ERR_ABORTED
+    // too; fetching the resource again there only adds a request.
+    const goto = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("page.goto: net::ERR_ABORTED; maybe frame was detached?"),
+      );
+    const requestGet = vi.fn();
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    await expect(fetcher.fetch("https://example.com/page")).rejects.toThrow(
+      /ERR_ABORTED/,
+    );
+    expect(requestGet).not.toHaveBeenCalled();
+  });
+
   it("fetches a file the browser downloads through the request API", async () => {
     // With requests routed, Playwright reports a download as "Download is
     // starting" rather than a network error.
@@ -527,6 +546,27 @@ describe("BrowserFetcher", () => {
       await expect(fetcher.fetch("https://example.com")).rejects.toThrow(ScraperError);
       expect(chromium.launch).toHaveBeenCalledTimes(1);
       expect(browser.newContext).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries when another user retired the shared browser, before it reports disconnected", async () => {
+      // On Linux the navigation fails with "frame was detached" while the
+      // retired browser is still closing and still reports connected.
+      const managed = new ManagedBrowser(loadConfig().scraper);
+      const { browser: retired } = buildBrowser();
+      retired.newContext.mockImplementation(async () => {
+        void managed.retire(retired as never, "replaced by the renderer");
+        throw new Error("page.goto: net::ERR_ABORTED; maybe frame was detached?");
+      });
+      const { browser: replacement } = buildBrowser();
+      vi.mocked(chromium.launch)
+        .mockResolvedValueOnce(retired as never)
+        .mockResolvedValueOnce(replacement as never);
+      const fetcher = new BrowserFetcher(loadConfig().scraper, managed);
+
+      const result = await fetcher.fetch("https://example.com");
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(replacement.newContext).toHaveBeenCalledTimes(1);
     });
 
     it("does not retry when the fetch was aborted, even though the browser is gone", async () => {

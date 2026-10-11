@@ -83,6 +83,32 @@ describe("ManagedBrowser", () => {
     });
   });
 
+  describe("isCurrent", () => {
+    it("stops treating a retired browser as current before it disconnects", async () => {
+      const launched = mockLaunches();
+      const managed = new ManagedBrowser(scraperConfig);
+      const browser = await managed.get();
+      expect(managed.isCurrent(browser)).toBe(true);
+
+      // Closing takes a while; the browser still reports connected meanwhile.
+      launched[0].close.mockImplementation(() => new Promise(() => {}));
+      void managed.retire(browser, "replaced");
+
+      expect(launched[0].isConnected()).toBe(true);
+      expect(managed.isCurrent(browser)).toBe(false);
+    });
+
+    it("does not treat a browser that exited as current", async () => {
+      const launched = mockLaunches();
+      const managed = new ManagedBrowser(scraperConfig);
+      const browser = await managed.get();
+
+      launched[0].isConnected.mockReturnValue(false);
+
+      expect(managed.isCurrent(browser)).toBe(false);
+    });
+  });
+
   describe("retire", () => {
     it("kills Chromium by the process ID read at launch when it does not close in time", async () => {
       const browser = {
