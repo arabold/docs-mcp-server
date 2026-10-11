@@ -8,7 +8,7 @@ See `proposal.md` for motivation and the local ARM64 baseline. The image has an 
 
 **Goals:** Keep the change in container configuration, preserve explicit overrides and CLI subcommands, and exercise the packaged application rather than inferring startup behavior from image metadata.
 
-**Non-Goals:** Change the application-wide defaults, suppress the ONNX warning, alter authentication or port-publishing policy, or add an ARM64 CI matrix.
+**Non-Goals:** Change the application-wide defaults, suppress the ONNX warning, or alter authentication or port-publishing policy.
 
 ## Decisions
 
@@ -30,9 +30,18 @@ Verify binding overrides through generic variables and both host aliases with th
 
 Remove now-unnecessary HTTP/host/port arguments from the main Docker examples. Explain the HTTP default, how to override the binding, and explicit stdio operation with stdin kept open. Update the Docker client configuration in `docs/guides/mcp-clients.md` to select stdio explicitly. Replace the derived-image HTTP `CMD` example with direct use of the published image.
 
+### Run the Docker suite on both native architectures
+
+Extend the existing Docker job with `amd64` on `ubuntu-latest` and `arm64` on `ubuntu-24.04-arm`. Set each build's platform explicitly and retain `load: true`, so the existing suite uses a locally loaded production image. Use architecture-specific GitHub cache scopes for both cache import and export to prevent the matrix builds from overwriting each other's cache.
+
+Disable matrix fail-fast so a failure on either architecture does not cancel the other diagnostic result. Keep the existing prerequisite jobs and test command. Native runners exercise their real CPU environment; QEMU emulation is unnecessary.
+
 ## Program Design
 
 ```text
+  .github/
+    workflows/
+~     ci.yml                                 # build and test Docker natively on amd64 and arm64
 ~ Dockerfile                                  # add runtime protocol and host environment defaults
 ~ README.md                                   # simplify the Docker quick-start command
 ~ ARCHITECTURE.md                              # distinguish container defaults from CLI auto-detection

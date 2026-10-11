@@ -210,6 +210,8 @@ The entry point resolves protocol based on TTY status:
 
 The Docker image sets `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0`, so no-argument container startup serves HTTP even without a TTY. These lower-precedence aliases enter the existing environment configuration layer; unrelated CLI options preserve them, while runtime aliases, generic environment variables, and explicit CLI flags can override them. Docker stdio clients select `--protocol stdio` and keep stdin open with `docker run -i`.
 
+CI builds and runs the production Docker image's E2E suite on native x86-64 and ARM64 Linux runners. Each architecture uses its own build cache. Release builds publish both architectures under the same image tag.
+
 ### Pipeline Selection
 
 The PipelineFactory chooses implementation based on configuration:

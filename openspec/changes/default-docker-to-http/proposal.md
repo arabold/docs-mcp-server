@@ -11,6 +11,7 @@ A Docker launch without arguments selects stdio and exits cleanly when stdin clo
 - **BREAKING**: Docker users relying on automatic stdio selection must explicitly select stdio or restore protocol auto-detection. Non-container CLI defaults remain unchanged.
 - Align the README and deployment documentation with the Docker defaults and describe explicit stdio operation.
 - Extend the existing Docker E2E suite to cover no-argument startup and configuration overrides.
+- Build and run the Docker E2E suite on native x86-64 and ARM64 CI runners.
 
 ## Capabilities
 
@@ -26,5 +27,6 @@ None.
 
 - `Dockerfile`: Container environment defaults; existing entrypoint and subcommands remain intact.
 - `test/docker-e2e.test.ts`: Real-container startup and override regression coverage.
+- `.github/workflows/ci.yml`: Native Docker build/test matrix with architecture-specific caches.
 - `README.md`, `ARCHITECTURE.md`, `docs/setup/installation.md`, `docs/guides/mcp-clients.md`, and `docs/infrastructure/deployment-modes.md`: Docker usage and protocol-default documentation.
 - No application configuration-loader changes, dependency changes, or image-platform changes.
