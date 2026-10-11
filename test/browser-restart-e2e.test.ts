@@ -4,7 +4,8 @@
  * Chromium is killed with SIGKILL, the way the OS ends it under memory
  * pressure. The fetcher must launch a new browser for the pages that follow,
  * retry the page Chromium died loading, and never start more than one browser
- * for pages that ask at the same time. A browser that will not close is killed.
+ * for pages that ask at the same time. A page whose shared browser another user
+ * replaces is retried too, and a browser that will not close is killed.
  */
 
 import { createServer, type Server } from "node:http";
@@ -27,6 +28,8 @@ function killChromium(): number[] {
 describe.skipIf(process.platform === "win32")("Browser restart after Chromium dies", () => {
   const requests: string[] = [];
   let crashOnPath: string | null = null;
+  let retireOnPath: string | null = null;
+  let sharedBrowser: ManagedBrowser | null = null;
   let server: Server;
   let baseUrl: string;
   let config: AppConfig["scraper"];
@@ -40,6 +43,13 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
         // Chromium dies while this page loads; the request is never answered.
         crashOnPath = null;
         killChromium();
+        return;
+      }
+      if (path === retireOnPath && sharedBrowser) {
+        // Another user of the shared browser replaces it while this page loads.
+        retireOnPath = null;
+        const managed = sharedBrowser;
+        void managed.get().then((browser) => managed.retire(browser, "test"));
         return;
       }
       res.writeHead(200, { "content-type": "text/html" });
@@ -60,6 +70,8 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
   beforeEach(() => {
     requests.length = 0;
     crashOnPath = null;
+    retireOnPath = null;
+    sharedBrowser = null;
     fetcher = new BrowserFetcher(config);
   });
 
@@ -102,6 +114,24 @@ describe.skipIf(process.platform === "win32")("Browser restart after Chromium di
       FetchStatus.SUCCESS,
     ]);
     expect(chromiumPids()).toHaveLength(1);
+  });
+
+  it("retries the page on a new browser when another user retires the shared one", async () => {
+    // The renderer replaces a browser it shares with the fetcher when a page
+    // will not close; the fetcher's page in that browser must not be lost.
+    sharedBrowser = new ManagedBrowser(config);
+    const sharingFetcher = new BrowserFetcher(config, sharedBrowser);
+    retireOnPath = "/retired";
+
+    try {
+      const result = await sharingFetcher.fetch(`${baseUrl}/retired`);
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.content.toString()).toContain("Page /retired");
+      expect(requests.filter((path) => path === "/retired")).toHaveLength(2);
+    } finally {
+      await sharingFetcher.close();
+    }
   });
 });
 

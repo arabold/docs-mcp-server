@@ -326,6 +326,39 @@ describe("HtmlPlaywrightMiddleware", () => {
       }
     });
 
+    it("should replace the browser when a page's context will not close", async () => {
+      vi.useFakeTimers();
+      try {
+        const initialHtml = "<html><body><p>Test</p></body></html>";
+        const pageSpy = createMockPlaywrightPage(initialHtml);
+        const contextSpy = {
+          newPage: vi.fn().mockResolvedValue(pageSpy),
+          close: vi.fn().mockImplementation(() => new Promise(() => {})),
+        };
+        const browserSpy = {
+          newContext: vi.fn().mockResolvedValue(contextSpy),
+          isConnected: vi.fn().mockReturnValue(true),
+          on: vi.fn(),
+          close: vi.fn().mockResolvedValue(undefined),
+        } as unknown as MockedObject<Browser>;
+        const launchSpy = vi.spyOn(chromium, "launch").mockResolvedValue(browserSpy);
+
+        const processPromise = playwrightMiddleware.process(
+          createPipelineTestContext(initialHtml, "https://example.com/test"),
+          vi.fn(),
+        );
+        await vi.advanceTimersByTimeAsync(5000);
+        await processPromise;
+
+        expect(pageSpy.close).toHaveBeenCalled();
+        expect(browserSpy.close).toHaveBeenCalled();
+
+        launchSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("should share one browser launch between concurrent pages", async () => {
       const initialHtml = "<html><body><p>Test</p></body></html>";
       const browserSpy = createMockBrowser(createMockPlaywrightPage(initialHtml));
