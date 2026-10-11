@@ -11,7 +11,7 @@
 
 import { createServer } from "node:http";
 import { Client, SSEClientTransport } from "@modelcontextprotocol/client";
-import { chromium } from "playwright";
+import type { Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService, EventType } from "../src/events";
 import { RemoteEventProxy } from "../src/events/RemoteEventProxy";
@@ -20,6 +20,7 @@ import { startInProcessServer } from "./in-process-server";
 import {
   getFreePort,
   type LocalIssuer,
+  launchChromium,
   listenOnFreePort,
   startLocalIssuer,
   startPrefixProxy,
@@ -152,11 +153,11 @@ describe("Serving under a base path behind a reverse proxy", () => {
   });
 
   describe("web UI in a browser", () => {
-    let browser: Awaited<ReturnType<typeof chromium.launch>>;
+    let browser: Browser;
 
     beforeAll(async () => {
       proxy.setMode("strip");
-      browser = await chromium.launch();
+      browser = await launchChromium();
     }, 30000);
 
     afterAll(async () => {

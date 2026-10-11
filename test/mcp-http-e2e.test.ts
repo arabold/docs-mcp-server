@@ -16,12 +16,12 @@ import {
   SSEClientTransport,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import { chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type ClientOptions, WebSocket as WsClient } from "ws";
 import {
   getCliCommand,
   getFreePort,
+  launchChromium,
   requestWithHost,
   stopChildProcess,
   tryNodeWebSocket,
@@ -207,7 +207,7 @@ describe("MCP HTTP server E2E", () => {
   });
 
   it("renders the web UI in a browser at the root, including a deep link", async () => {
-    const browser = await chromium.launch();
+    const browser = await launchChromium();
     try {
       const page = await browser.newPage();
       await page.goto(new URL("/libraries/react", baseUrl).href);

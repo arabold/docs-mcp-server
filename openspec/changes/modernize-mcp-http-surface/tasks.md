@@ -209,6 +209,10 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
 
 - [x] 11.6 Name the protected resource the way MCP clients name the server: `resource_name` is `server.title`, or `server.name` without one, instead of a fixed string. Verify `protectedResourceMetadata.test.ts` covers both cases, and `test/auth-e2e.test.ts` reads the configured title from the metadata at both locations.
 
+- [x] 11.7 Check `server.publicUrl` for an empty segment before dropping the trailing slash, and drop only one, so `https://example.com/docs//` is refused like `//docs`. Verify `serverOrigin.test.ts` rejects `https://example.com/docs//` and `https://example.com//`.
+
+- [x] 11.8 Launch the full Chromium build in the browser E2E tests (`launchChromium` in `test/test-helpers.ts`), since CI installs Playwright's browsers with `--no-shell`. Verify `test/mcp-http-e2e.test.ts` and `test/base-path-e2e.test.ts` pass with a `PLAYWRIGHT_BROWSERS_PATH` that holds no headless shell.
+
 ## 12. Archive follow-up
 
 - [ ] 12.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.

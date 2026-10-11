@@ -5,6 +5,7 @@ import net, { type AddressInfo } from "node:net";
 import path from "node:path";
 import type { Database } from "better-sqlite3";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
+import { type Browser, chromium } from "playwright";
 
 /**
  * Returns the command and arguments to run the CLI.
@@ -70,6 +71,16 @@ export function restorePre017Libraries(db: Database): void {
     CREATE UNIQUE INDEX idx_libraries_lower_name ON libraries(LOWER(name));
     DELETE FROM _schema_migrations WHERE id = '017-add-library-display-name.sql';
   `);
+}
+
+/**
+ * Launch headless Chromium for the browser E2E tests. CI installs only the
+ * full Chromium build (`playwright install --no-shell`), so this asks for it
+ * instead of the headless shell Playwright launches by default.
+ * @returns The browser; close it when done.
+ */
+export function launchChromium(): Promise<Browser> {
+  return chromium.launch({ channel: "chromium" });
 }
 
 /** Listen on a random loopback port and return it. */
