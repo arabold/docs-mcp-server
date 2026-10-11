@@ -7,6 +7,7 @@
  */
 
 import type { AppConfig } from "../../utils/config";
+import type { ManagedBrowser } from "../fetcher/ManagedBrowser";
 import { DocumentPipeline } from "./DocumentPipeline";
 import { HtmlPipeline } from "./HtmlPipeline";
 import { JsonPipeline } from "./JsonPipeline";
@@ -27,14 +28,20 @@ export class PipelineFactory {
    * Each pipeline now handles both preprocessing and content-specific splitting.
    * TextPipeline is placed last as the universal fallback for unknown content types.
    *
+   * @param appConfig - Application configuration.
+   * @param managedBrowser - The browser the HTML pipeline renders with; pass
+   * one to share it with the browser fetcher.
    * @returns Array of content pipelines in processing order
    */
-  public static createStandardPipelines(appConfig: AppConfig): ContentPipeline[] {
+  public static createStandardPipelines(
+    appConfig: AppConfig,
+    managedBrowser?: ManagedBrowser,
+  ): ContentPipeline[] {
     return [
       new JsonPipeline(appConfig),
       new SourceCodePipeline(appConfig),
       new DocumentPipeline(appConfig), // PDF, Office docs, OpenDocument, RTF, eBooks, Jupyter notebooks
-      new HtmlPipeline(appConfig),
+      new HtmlPipeline(appConfig, managedBrowser),
       new MarkdownPipeline(appConfig),
       new TextPipeline(appConfig), // Universal fallback - must be last
     ];

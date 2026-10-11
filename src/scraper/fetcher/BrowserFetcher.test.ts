@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
 import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
@@ -6,7 +6,6 @@ import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 vi.mock("playwright", () => ({
   chromium: {
     launch: vi.fn(),
-    executablePath: vi.fn(),
   },
 }));
 
@@ -462,20 +461,7 @@ describe("BrowserFetcher", () => {
     expect(result.etag).toBe("real-etag");
   });
 
-  describe("browser lifecycle", () => {
-    it("launches a new browser for later pages once Chromium has exited", async () => {
-      const first = mockBrowser();
-      const fetcher = new BrowserFetcher(loadConfig().scraper);
-
-      await fetcher.fetch("https://example.com/a");
-      first.browser.isConnected.mockReturnValue(false);
-      const second = mockBrowser();
-      await fetcher.fetch("https://example.com/b");
-
-      expect(chromium.launch).toHaveBeenCalledTimes(2);
-      expect(second.browser.newContext).toHaveBeenCalledTimes(1);
-    });
-
+  describe("Chromium exiting mid-fetch", () => {
     it("retries a page once on a new browser when Chromium exits during the fetch", async () => {
       const { browser } = mockBrowser();
       vi.mocked(chromium.launch).mockResolvedValueOnce(crashingBrowser() as never);
@@ -505,93 +491,6 @@ describe("BrowserFetcher", () => {
       await expect(fetcher.fetch("https://example.com")).rejects.toThrow(ScraperError);
       expect(chromium.launch).toHaveBeenCalledTimes(1);
       expect(browser.newContext).toHaveBeenCalledTimes(1);
-    });
-
-    it("shares one browser launch between concurrent fetches", async () => {
-      mockBrowser();
-      // Skip the DNS lookup in the access check, so all three fetches ask for a
-      // browser at the same time instead of one after another.
-      const config = loadConfig().scraper;
-      config.security.network.allowPrivateNetworks = true;
-      const fetcher = new BrowserFetcher(config);
-
-      await Promise.all([
-        fetcher.fetch("https://example.com/a"),
-        fetcher.fetch("https://example.com/b"),
-        fetcher.fetch("https://example.com/c"),
-      ]);
-
-      expect(chromium.launch).toHaveBeenCalledTimes(1);
-    });
-
-    it("closes a browser whose launch was still in flight", async () => {
-      const { browser } = buildBrowser();
-      let finishLaunch: (value: unknown) => void = () => undefined;
-      vi.mocked(chromium.launch).mockReturnValue(
-        new Promise((resolve) => {
-          finishLaunch = resolve;
-        }) as never,
-      );
-      const fetcher = new BrowserFetcher(loadConfig().scraper);
-
-      const pendingFetch = fetcher.fetch("https://example.com").catch(() => undefined);
-      await vi.waitFor(() => expect(chromium.launch).toHaveBeenCalled());
-      const closing = fetcher.close();
-      finishLaunch(browser);
-      await closing;
-      await pendingFetch;
-
-      expect(browser.close).toHaveBeenCalled();
-    });
-  });
-
-  describe("launchBrowser", () => {
-    beforeEach(() => {
-      // Playwright's managed full build is installed, and nothing overrides it.
-      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "");
-      vi.mocked(chromium.executablePath).mockReturnValue(process.execPath);
-    });
-
-    afterEach(() => {
-      vi.unstubAllEnvs();
-    });
-
-    it("launches the full build when the headless shell is not installed", async () => {
-      // What `playwright install --no-shell` leaves behind.
-      const { browser } = buildBrowser();
-      vi.mocked(chromium.launch)
-        .mockRejectedValueOnce(
-          new Error(
-            "browserType.launch: Executable doesn't exist at /ms-playwright/chromium_headless_shell-1228/chrome-headless-shell",
-          ),
-        )
-        .mockResolvedValueOnce(browser as never);
-
-      await expect(BrowserFetcher.launchBrowser()).resolves.toBe(browser);
-      expect(chromium.launch).toHaveBeenLastCalledWith(
-        expect.objectContaining({ channel: "chromium", headless: true }),
-      );
-    });
-
-    it("does not retry a launch that failed for another reason", async () => {
-      vi.mocked(chromium.launch).mockRejectedValue(
-        new Error("browserType.launch: Target page, context or browser has been closed"),
-      );
-
-      await expect(BrowserFetcher.launchBrowser()).rejects.toThrow(/has been closed/);
-      expect(chromium.launch).toHaveBeenCalledTimes(1);
-    });
-
-    it("does not swap a configured executable for the full build", async () => {
-      vi.stubEnv("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH", "/opt/missing/chromium");
-      vi.mocked(chromium.launch).mockRejectedValue(
-        new Error(
-          "browserType.launch: Executable doesn't exist at /opt/missing/chromium",
-        ),
-      );
-
-      await expect(BrowserFetcher.launchBrowser()).rejects.toThrow(/doesn't exist/);
-      expect(chromium.launch).toHaveBeenCalledTimes(1);
     });
   });
 });

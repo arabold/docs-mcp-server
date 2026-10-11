@@ -7,29 +7,12 @@
  * for pages that ask at the same time.
  */
 
-import { spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { BrowserFetcher } from "../src/scraper/fetcher/BrowserFetcher";
 import { FetchStatus } from "../src/scraper/fetcher/types";
 import { type AppConfig, loadConfig } from "../src/utils/config";
-import { listenOnFreePort } from "./test-helpers";
-
-/**
- * PIDs of the Chromium browsers this test process launched. Playwright starts
- * the browser as a direct child, talking to it over `--remote-debugging-pipe`;
- * its renderer and GPU helpers are children of the browser, not of this process.
- */
-function chromiumPids(): number[] {
-  // pgrep exits with 1 when nothing matches, which spawnSync does not treat as
-  // an error.
-  const { stdout } = spawnSync(
-    "pgrep",
-    ["-P", String(process.pid), "-f", "remote-debugging-pipe"],
-    { encoding: "utf8" },
-  );
-  return stdout.split("\n").filter(Boolean).map(Number);
-}
+import { chromiumPids, listenOnFreePort } from "./test-helpers";
 
 /** Kills every Chromium this process launched and returns their PIDs. */
 function killChromium(): number[] {

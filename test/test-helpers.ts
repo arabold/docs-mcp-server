@@ -1,4 +1,4 @@
-import type { ChildProcess } from "node:child_process";
+import { type ChildProcess, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import http, { createServer, type IncomingMessage, type Server } from "node:http";
 import net, { type AddressInfo } from "node:net";
@@ -82,6 +82,23 @@ export function restorePre017Libraries(db: Database): void {
  */
 export function launchChromium(): Promise<Browser> {
   return chromium.launch({ channel: "chromium" });
+}
+
+/**
+ * PIDs of the Chromium browsers this test process launched. Playwright starts
+ * the browser as a direct child, talking to it over `--remote-debugging-pipe`;
+ * its renderer and GPU helpers are children of the browser, not of this process.
+ * Relies on `pgrep`, so it is not available on Windows.
+ */
+export function chromiumPids(): number[] {
+  // pgrep exits with 1 when nothing matches, which spawnSync does not treat as
+  // an error.
+  const { stdout } = spawnSync(
+    "pgrep",
+    ["-P", String(process.pid), "-f", "remote-debugging-pipe"],
+    { encoding: "utf8" },
+  );
+  return stdout.split("\n").filter(Boolean).map(Number);
 }
 
 /** Listen on a random loopback port and return it. */

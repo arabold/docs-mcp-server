@@ -15,7 +15,7 @@ import {
   stripMarkdownExtension,
   type UrlNormalizerOptions,
 } from "../../utils/url";
-import { AutoDetectFetcher } from "../fetcher";
+import { AutoDetectFetcher, ManagedBrowser } from "../fetcher";
 import { FetchStatus, type RawContent } from "../fetcher/types";
 import {
   createMimeTypeCapabilityPredicate,
@@ -69,8 +69,10 @@ export class WebScraperStrategy extends BaseScraperStrategy {
   constructor(config: AppConfig, options: WebScraperStrategyOptions = {}) {
     super(config, { urlNormalizerOptions: options.urlNormalizerOptions });
     this.shouldFollowLinkFn = options.shouldFollowLink;
-    this.fetcher = new AutoDetectFetcher(config.scraper);
-    this.pipelines = PipelineFactory.createStandardPipelines(config);
+    // The browser fallback and the HTML renderer share one Chromium.
+    const managedBrowser = new ManagedBrowser(config.scraper);
+    this.fetcher = new AutoDetectFetcher(config.scraper, managedBrowser);
+    this.pipelines = PipelineFactory.createStandardPipelines(config, managedBrowser);
     this.canProcessMimeType = createMimeTypeCapabilityPredicate(this.pipelines);
     this.localFileStrategy = new LocalFileStrategy(config);
   }

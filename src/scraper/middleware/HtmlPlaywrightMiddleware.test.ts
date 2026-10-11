@@ -188,14 +188,7 @@ describe("HtmlPlaywrightMiddleware", () => {
   });
 
   afterEach(async () => {
-    // Clean up any browser instances
-    // @ts-expect-error Accessing private property for testing
-    if (playwrightMiddleware.browser) {
-      // @ts-expect-error Accessing private property for testing
-      await playwrightMiddleware.browser.close();
-      // @ts-expect-error Accessing private property for testing
-      playwrightMiddleware.browser = null;
-    }
+    await playwrightMiddleware.closeBrowser();
   });
 
   afterAll(async () => {
@@ -240,7 +233,7 @@ describe("HtmlPlaywrightMiddleware", () => {
       launchSpy.mockRestore();
     });
 
-    it("should reset the browser after a Playwright render timeout", async () => {
+    it("should keep the browser after a render failure whose page closed cleanly", async () => {
       const initialHtml = "<html><body><p>Test</p></body></html>";
       const context = createPipelineTestContext(initialHtml, "https://example.com/test");
       const next = vi.fn();
@@ -267,7 +260,8 @@ describe("HtmlPlaywrightMiddleware", () => {
       expect(context.errors[0].message).toContain("Timeout 5000ms exceeded");
       expect(pageSpy.close).toHaveBeenCalled();
       expect(contextSpy.close).toHaveBeenCalled();
-      expect(browserSpy.close).toHaveBeenCalled();
+      // Other pages may be using the browser, and nothing suggests it is stuck.
+      expect(browserSpy.close).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalled();
 
       launchSpy.mockRestore();
@@ -328,42 +322,6 @@ describe("HtmlPlaywrightMiddleware", () => {
       );
 
       expect(launchSpy).toHaveBeenCalledTimes(1);
-
-      launchSpy.mockRestore();
-    });
-
-    it("should reset only the browser the failed page used", async () => {
-      const initialHtml = "<html><body><p>Test</p></body></html>";
-      const firstPage = createMockPlaywrightPage(initialHtml);
-      const firstBrowser = createMockBrowser(firstPage);
-      const secondBrowser = createMockBrowser(createMockPlaywrightPage(initialHtml));
-      const launchSpy = vi
-        .spyOn(chromium, "launch")
-        .mockResolvedValue(secondBrowser)
-        .mockResolvedValueOnce(firstBrowser);
-      // While the first page renders, its browser disconnects and another page
-      // launches a replacement. Then the first page's render fails.
-      firstPage.waitForSelector = vi.fn().mockImplementation(async () => {
-        vi.mocked(firstBrowser.isConnected).mockReturnValue(false);
-        await playwrightMiddleware.process(
-          createPipelineTestContext(initialHtml, "https://example.com/other"),
-          vi.fn(),
-        );
-        throw new Error("Timeout 5000ms exceeded");
-      });
-
-      await playwrightMiddleware.process(
-        createPipelineTestContext(initialHtml, "https://example.com/test"),
-        vi.fn(),
-      );
-      await playwrightMiddleware.process(
-        createPipelineTestContext(initialHtml, "https://example.com/next"),
-        vi.fn(),
-      );
-
-      expect(firstBrowser.close).toHaveBeenCalled();
-      expect(secondBrowser.close).not.toHaveBeenCalled();
-      expect(launchSpy).toHaveBeenCalledTimes(2);
 
       launchSpy.mockRestore();
     });
