@@ -18,9 +18,45 @@ function readFixture(filename: string): string {
   return readFileSync(join(fixturesDir, filename), "utf-8");
 }
 
-// Define mock handlers for httpbin.org endpoints
+/** Output dimension of text-embedding-3-small, the model the vector suites use. */
+const EMBEDDING_DIMENSION = 1536;
+
+/** 32-bit FNV-1a hash of a string. */
+function fnv1a(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/**
+ * Embeds text as a normalized bag of hashed character trigrams.
+ *
+ * The vector is deterministic and never all zeros. Texts that share words, or
+ * parts of words, get closer vectors, so search ranking by similarity means
+ * something: a misspelled word still lands near its correct spelling, which
+ * full-text search does not match.
+ */
+function embedText(text: string): number[] {
+  const vector = new Array<number>(EMBEDDING_DIMENSION).fill(0);
+  for (const word of text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []) {
+    const marked = `^${word}$`;
+    for (let i = 0; i + 3 <= marked.length; i++) {
+      vector[fnv1a(marked.slice(i, i + 3)) % EMBEDDING_DIMENSION] += 1;
+    }
+  }
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+  if (norm === 0) {
+    vector[0] = 1;
+    return vector;
+  }
+  return vector.map((value) => value / norm);
+}
+
 export const handlers = [
-  // OpenAI embeddings mock - returns a zero vector to satisfy embedding calls in tests
+  // OpenAI embeddings: deterministic, similarity-preserving vectors (see embedText)
   http.post("https://api.openai.com/v1/embeddings", async ({ request }) => {
     // OpenAI accepts `input` as either a string or string[]
     const body = (await request.json()) as { input?: string | string[]; model?: string };
@@ -31,12 +67,10 @@ export const handlers = [
         ? [body.input]
         : [];
 
-    const vector = Array(1536).fill(0);
-
     return HttpResponse.json({
-      data: inputs.map((_, index) => ({
+      data: inputs.map((input, index) => ({
         object: "embedding",
-        embedding: vector,
+        embedding: embedText(input),
         index,
       })),
       model: body?.model ?? "text-embedding-3-small",
