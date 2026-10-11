@@ -54,22 +54,44 @@ describe("createMimeTypeCapabilityPredicate", () => {
     expect(widened("image/png")).toBe(false);
   });
 
-  it("is never more restrictive than the pipeline-selection loop", () => {
-    // The gates call canProcess without content; the selection loop calls it with a
-    // buffer. Anything the predicate accepts must still be accepted with content in
-    // hand, or a gate could admit content that nothing can process.
-    const body = Buffer.from("# hello\n\nworld\n");
-    const accepted = [
+  // The gates call canProcess without content; the selection loop calls it with the
+  // fetched body. A gate that rejected something the loop would accept would drop
+  // processable content, so the predicate must be the more permissive side.
+  describe("relation to the pipeline-selection loop", () => {
+    const bodies = {
+      text: Buffer.from("# hello\n\nworld\n"),
+      binary: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]),
+    };
+    const mimeTypes = [
       "text/html",
       "text/markdown",
-      "application/json",
-      "text/x-python",
       "text/plain",
+      "text/x-python",
+      "application/json",
+      "application/pdf",
+      "image/png",
+      "application/octet-stream",
     ];
 
-    for (const mimeType of accepted) {
-      expect(canProcess(mimeType)).toBe(true);
-      expect(pipelines.some((p) => p.canProcess(mimeType, body))).toBe(true);
-    }
+    it("accepts every type the loop accepts with the body in hand", () => {
+      const selectedByLoop = mimeTypes.flatMap((mimeType) =>
+        Object.values(bodies)
+          .filter((body) =>
+            pipelines.some((pipeline) => pipeline.canProcess(mimeType, body)),
+          )
+          .map(() => mimeType),
+      );
+
+      expect(selectedByLoop.length).toBeGreaterThan(0);
+      expect(selectedByLoop.filter((mimeType) => !canProcess(mimeType))).toEqual([]);
+    });
+
+    it("may accept a type that the loop refuses once it sees the body", () => {
+      // TextPipeline refuses content with null bytes, which only the loop can see.
+      expect(canProcess("text/plain")).toBe(true);
+      expect(
+        pipelines.some((pipeline) => pipeline.canProcess("text/plain", bodies.binary)),
+      ).toBe(false);
+    });
   });
 });
