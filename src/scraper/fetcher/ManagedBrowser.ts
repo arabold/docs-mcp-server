@@ -29,6 +29,17 @@ export class ManagedBrowser {
   }
 
   /**
+   * Tells whether `browser` is still the one `get()` hands out: connected, and
+   * not retired, closed or replaced. A retired browser stops being current at
+   * once, before Chromium reports it disconnected.
+   *
+   * @param browser - A browser this instance handed out earlier.
+   */
+  isCurrent(browser: Browser): boolean {
+    return this.browser === browser && browser.isConnected();
+  }
+
+  /**
    * Returns a connected browser, launching one on first use and again after
    * Chromium has exited. Concurrent callers share a single launch.
    */

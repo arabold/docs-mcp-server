@@ -584,6 +584,51 @@ describe("BaseScraperStrategy", () => {
     expect(progressCallback).not.toHaveBeenCalled();
   });
 
+  it("should stop and wait for running items before a failed crawl rejects", async () => {
+    // The caller cleans up (closes the browser, deletes temp files) as soon as
+    // the crawl rejects, so no item may still be running at that point.
+    const options: ScraperOptions = {
+      url: "https://example.com/",
+      library: "test",
+      version: "1.0.0",
+      maxPages: 5,
+      maxDepth: 1,
+      ignoreErrors: false,
+    };
+    let slowItemSettled = false;
+    strategy.processItem.mockImplementation(
+      async (item: QueueItem, _options: ScraperOptions, signal?: AbortSignal) => {
+        if (item.url === "https://example.com/") {
+          return {
+            content: {
+              textContent: "root",
+              metadata: {},
+              links: [],
+              errors: [],
+              chunks: [],
+            },
+            links: ["https://example.com/fails", "https://example.com/slow"],
+            status: FetchStatus.SUCCESS,
+          };
+        }
+        if (item.url === "https://example.com/fails") {
+          throw new Error("Child failed");
+        }
+        // Still loading when its sibling fails; it ends only once aborted.
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        slowItemSettled = true;
+        throw new Error("Slow item aborted");
+      },
+    );
+
+    await expect(
+      strategy.scrape(options, vi.fn<ProgressCallback<ScraperProgressEvent>>()),
+    ).rejects.toThrowError("Child failed");
+    expect(slowItemSettled).toBe(true);
+  });
+
   it("should count non-refresh child NOT_FOUND as a terminal failure but continue crawling", async () => {
     const options: ScraperOptions = {
       url: "https://example.com/",

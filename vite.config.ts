@@ -76,6 +76,11 @@ export default defineConfig({
     globals: true,
     environment: "node",
     testTimeout: 30000, // 30 seconds for network operations
+    // Every test file runs in a fresh child process. The browser suites count
+    // the Chromium processes this process launched (`chromiumPids`), which
+    // only works while no other file shares it.
+    pool: "forks",
+    isolate: true,
     // Include both unit tests and e2e tests
     include: [
       "src/**/*.test.ts",

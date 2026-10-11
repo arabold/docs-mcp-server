@@ -190,7 +190,8 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).toHaveBeenCalledWith(
       testUrl,
       expect.objectContaining({
-        signal: undefined, // scrape doesn't pass signal in this basic call
+        // Items always run on the crawl's own signal, even without a job signal.
+        signal: expect.any(AbortSignal),
         followRedirects: options.followRedirects, // Check default from options
       }),
     );
@@ -216,7 +217,7 @@ describe("WebScraperStrategy", () => {
     expect(mockFetchFn).toHaveBeenCalledWith(
       "https://example.com",
       expect.objectContaining({
-        signal: undefined,
+        signal: expect.any(AbortSignal),
         followRedirects: false, // Explicitly false from options
       }),
     );

@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService, EventType } from "../src/events";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { PipelineJobStatus } from "../src/pipeline/types";
-import { PageOutcome, type ScraperOptions } from "../src/scraper/types";
+import { PageOutcome, ScrapeMode, type ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { GetJobInfoTool } from "../src/tools/GetJobInfoTool";
 import { type AppConfig, loadConfig } from "../src/utils/config";
@@ -114,6 +114,9 @@ describe("Scrape progress counters E2E", () => {
       version: TEST_VERSION,
       maxPages: 100,
       maxDepth: 3,
+      // Plain fetch: these tests are about progress counters, and a headless
+      // browser adds only latency and rendering variance.
+      scrapeMode: ScrapeMode.Fetch,
       ...options,
     } satisfies ScraperOptions);
     await pipelineManager.waitForJobCompletion(jobId);
@@ -293,6 +296,7 @@ describe("Scrape progress counters E2E", () => {
       version: TEST_VERSION,
       maxPages: 100,
       maxDepth: 3,
+      scrapeMode: ScrapeMode.Fetch,
     } satisfies ScraperOptions);
 
     // Cancel once the crawl has discovered the children and processed a few.

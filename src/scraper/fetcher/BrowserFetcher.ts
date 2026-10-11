@@ -66,17 +66,19 @@ export class BrowserFetcher implements ContentFetcher {
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
     try {
+      options?.signal?.throwIfAborted();
       await this.accessPolicy.assertNetworkUrlAllowed(source);
 
       const browser = await this.managedBrowser.get();
       try {
         return await this.fetchWithBrowser(browser, source, options);
       } catch (error) {
-        if (browser.isConnected() || options?.signal?.aborted) {
+        if (this.managedBrowser.isCurrent(browser) || options?.signal?.aborted) {
           throw error;
         }
-        // Chromium exited under this page (e.g. under memory pressure), so the
-        // page never got a fair attempt. Relaunch and give it one more.
+        // The browser went away under this page: Chromium exited (e.g. under
+        // memory pressure), or another user retired it. The page never got a
+        // fair attempt, so give it one more on the current browser.
         logger.warn(`⚠️  Browser closed while fetching ${source}, retrying once`);
         return await this.fetchWithBrowser(
           await this.managedBrowser.get(),
@@ -121,6 +123,12 @@ export class BrowserFetcher implements ContentFetcher {
     let page: Page | null = null;
     let browserContext: { newPage(): Promise<Page>; close(): Promise<void> } | null =
       null;
+    // Aborting closes the context, which ends a navigation in progress instead
+    // of letting it run until it times out.
+    const closeOnAbort = (): void => {
+      void browserContext?.close().catch(() => undefined);
+    };
+    options?.signal?.addEventListener("abort", closeOnAbort, { once: true });
 
     try {
       const fingerprintHeaders = this.fingerprintGenerator.generateHeaders();
@@ -133,6 +141,8 @@ export class BrowserFetcher implements ContentFetcher {
           "https://browser-context.local",
         ),
       });
+      // An abort before the context existed had nothing to close.
+      options?.signal?.throwIfAborted();
       page = await browserContext.newPage();
       await page.setViewportSize({ width: 1920, height: 1080 });
 
@@ -147,19 +157,18 @@ export class BrowserFetcher implements ContentFetcher {
 
       // Compose the browser-like fingerprint headers used both for the page's
       // own navigation and (if needed) the non-navigable request-API fallback,
-      // so the two look like the same client to anti-bot checks. Chromium sets
-      // the Sec-Fetch-* headers itself; overriding them would make it fail the
-      // page's scripts, styles and other sub-resources.
-      const requestHeaders = withoutSecFetchHeaders(
-        withMarkdownPreferredAccept(
-          {
-            ...fingerprintHeaders,
-            ...options?.headers,
-          },
-          options?.headers,
-        ),
+      // so the two look like the same client to anti-bot checks.
+      const requestHeaders = withMarkdownPreferredAccept(
+        {
+          ...fingerprintHeaders,
+          ...options?.headers,
+        },
+        options?.headers,
       );
-      await page.setExtraHTTPHeaders(requestHeaders);
+      // Chromium sets the Sec-Fetch-* headers itself; overriding them would make
+      // it fail the page's scripts, styles and other sub-resources. The request
+      // API is Playwright's own client, so it keeps them.
+      await page.setExtraHTTPHeaders(withoutSecFetchHeaders(requestHeaders));
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
@@ -184,12 +193,21 @@ export class BrowserFetcher implements ContentFetcher {
         response = await page.goto(source, { waitUntil: "load", timeout });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // Non-navigable resources (Markdown, JSON, plain text, ...) make the
+        // Non-navigable resources (Markdown, JSON, binary files, ...) make the
         // browser begin a download, so page.goto rejects with
-        // ERR_INVALID_ARGUMENT / ERR_ABORTED. Fetch those through the context's
-        // request API instead (see fetchViaRequest): it shares cookies — so any
+        // ERR_INVALID_ARGUMENT / ERR_ABORTED, or with "Download is starting"
+        // while requests are routed. Fetch those through the context's request
+        // API instead (see fetchViaRequest): it shares cookies — so any
         // anti-bot clearance carries over — but does not try to render them.
-        if (/ERR_INVALID_ARGUMENT|ERR_ABORTED/i.test(message)) {
+        // A navigation cut off because its page or browser is going away (for
+        // example, the browser was replaced) is reported as ERR_ABORTED too,
+        // with "frame was detached"; that is no download, so it is not
+        // fetched again here.
+        const frameDetached = /frame was detached/i.test(message);
+        if (
+          !frameDetached &&
+          /ERR_INVALID_ARGUMENT|ERR_ABORTED|Download is starting/i.test(message)
+        ) {
           return await this.fetchViaRequest(
             page,
             source,
@@ -276,6 +294,7 @@ export class BrowserFetcher implements ContentFetcher {
         status: FetchStatus.SUCCESS,
       } satisfies RawContent;
     } finally {
+      options?.signal?.removeEventListener("abort", closeOnAbort);
       await page?.unroute("**/*").catch(() => undefined);
       await page?.close().catch(() => undefined);
       await browserContext?.close().catch(() => undefined);
@@ -293,9 +312,11 @@ export class BrowserFetcher implements ContentFetcher {
    * @param source - The non-navigable resource URL to fetch.
    * @param options - The original fetch options (headers, redirect policy).
    * @param timeout - Navigation/request timeout in milliseconds.
-   * @param headers - The same composed fingerprint/Accept headers set on the
-   * page via `setExtraHTTPHeaders`, so the request-API call presents the same
-   * client identity as the browser that (potentially) just solved a challenge.
+   * @param headers - The composed fingerprint and caller headers, including
+   * any Sec-Fetch-* values among them. The page itself leaves those to
+   * Chromium; the request-API call sends them as composed, so it presents the
+   * same client identity as the browser that (potentially) just solved a
+   * challenge.
    * @returns The fetched raw content.
    */
   private async fetchViaRequest(

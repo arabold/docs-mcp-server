@@ -15,7 +15,7 @@ import { vol } from "memfs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { ScraperService } from "../src/scraper/ScraperService";
-import type { ScraperOptions } from "../src/scraper/types";
+import { ScrapeMode, type ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { EventBusService } from "../src/events";
 import type { StoreSearchResult } from "../src/store/types";
@@ -105,6 +105,9 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        // Plain fetch: these tests are about refresh outcomes, and a headless
+        // browser adds only latency and rendering variance.
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       // Wait for job to complete
@@ -185,6 +188,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(initialJobId);
@@ -259,6 +263,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(initialJobId);
@@ -312,6 +317,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(initialJobId);
@@ -388,6 +394,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       // Should complete successfully despite the 404
@@ -449,6 +456,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(jobId);
@@ -528,6 +536,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         maxPages: 10,
         maxDepth: 2,
         ignoreErrors: true,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(jobId);
@@ -586,6 +595,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(jobId);
@@ -632,6 +642,7 @@ describe("Refresh Pipeline E2E Tests", () => {
         version: TEST_VERSION,
         maxPages: 10,
         maxDepth: 2,
+        scrapeMode: ScrapeMode.Fetch,
       } satisfies ScraperOptions);
 
       await pipelineManager.waitForJobCompletion(initialJobId);
@@ -709,6 +720,7 @@ describe("Refresh Pipeline E2E Tests", () => {
           version: TEST_FILE_VERSION,
           maxPages: 10,
           maxDepth: 2,
+          scrapeMode: ScrapeMode.Fetch,
         } satisfies ScraperOptions,
       );
 
@@ -802,6 +814,7 @@ describe("Refresh Pipeline E2E Tests", () => {
           version: TEST_FILE_VERSION,
           maxPages: 10,
           maxDepth: 2,
+          scrapeMode: ScrapeMode.Fetch,
         } satisfies ScraperOptions,
       );
 
@@ -872,6 +885,7 @@ describe("Refresh Pipeline E2E Tests", () => {
           version: "1.0.0",
           maxPages: 1,
           maxDepth: 0,
+          scrapeMode: ScrapeMode.Fetch,
         } satisfies ScraperOptions,
       );
       await pipelineManager.waitForJobCompletion(allowedJobId);
@@ -894,6 +908,7 @@ describe("Refresh Pipeline E2E Tests", () => {
           version: "1.0.0",
           maxPages: 1,
           maxDepth: 0,
+          scrapeMode: ScrapeMode.Fetch,
         } satisfies ScraperOptions,
       );
       // The job is expected to fail with an AccessPolicyError; surface it as
