@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
@@ -62,20 +65,21 @@ const opts = (overrides: Partial<ScraperOptions> = {}): ScraperOptions => ({
   ...overrides,
 });
 
-/** Crawls with a fresh strategy and returns every progress event. */
+/** Crawls, with a fresh strategy unless one is given, and returns every progress event. */
 async function crawl(
   overrides: Partial<ScraperOptions> = {},
-  strategyOptions: WebScraperStrategyOptions = {},
+  strategy = new WebScraperStrategy(config),
 ): Promise<ScraperProgressEvent[]> {
   const events: ScraperProgressEvent[] = [];
-  await new WebScraperStrategy(config, strategyOptions).scrape(
-    opts(overrides),
-    async (event) => {
-      events.push(event);
-    },
-  );
+  await strategy.scrape(opts(overrides), async (event) => {
+    events.push(event);
+  });
   return events;
 }
+
+/** A strategy that follows only the links `shouldFollowLink` accepts. */
+const following = (shouldFollowLink: WebScraperStrategyOptions["shouldFollowLink"]) =>
+  new WebScraperStrategy(config, { shouldFollowLink });
 
 const fetchedUrls = (): string[] => fetchSpy.mock.calls.map(([url]) => url);
 /** Requested URLs other than llms.txt probes, in request order. */
@@ -224,9 +228,73 @@ describe("WebScraperStrategy", () => {
         }),
       ]);
     });
+
+    it("withholds the validators when the pipeline errors and extracts nothing", async () => {
+      // An oversized document is refused by its pipeline with an error, which says
+      // nothing about the page; a stored etag would stop the next refresh retrying.
+      const smallDocuments = {
+        ...config,
+        scraper: {
+          ...config.scraper,
+          document: { ...config.scraper.document, maxSize: 8 },
+        },
+      };
+      serve({
+        [`${ROOT}manual.pdf`]: {
+          content: Buffer.alloc(64),
+          mimeType: "application/pdf",
+          etag: '"v2"',
+          lastModified: "2026-01-01T00:00:00.000Z",
+        },
+      });
+
+      const events = await crawl(
+        { url: `${ROOT}manual.pdf`, maxDepth: 0 },
+        new WebScraperStrategy(smallDocuments),
+      );
+
+      expect(events[0]?.emptyPage).toMatchObject({
+        etag: null,
+        lastModified: null,
+        pipelineFailed: true,
+      });
+    });
   });
 
   describe("page identity", () => {
+    it("records Markdown reached through a redirect under the requested URL", async () => {
+      // Judged on where the bytes came from: an extensionless URL that redirects
+      // to a .md file is a published Markdown representation of that page.
+      serve({
+        [`${ROOT}guide`]: {
+          content: "# Guide\n\nBody.",
+          mimeType: "text/plain",
+          source: `${ROOT}guide.md`,
+        },
+      });
+
+      const events = await crawl({ url: `${ROOT}guide`, maxDepth: 0 });
+
+      expect(events[0]?.result).toMatchObject({
+        url: `${ROOT}guide`,
+        contentUrl: `${ROOT}guide.md`,
+        contentType: "text/markdown",
+      });
+    });
+
+    it("records where an empty Markdown variant was read from", async () => {
+      // Without it, the next refresh would ask the page while sending the
+      // validator the Markdown file issued.
+      serve({ [`${ROOT}guide.md`]: markdown("") });
+
+      const events = await crawl({ url: `${ROOT}guide.md`, maxDepth: 0 });
+
+      expect(events[0]?.emptyPage).toMatchObject({
+        url: `${ROOT}guide`,
+        contentUrl: `${ROOT}guide.md`,
+      });
+    });
+
     it.each([
       [
         "a Markdown file",
@@ -485,7 +553,7 @@ describe("WebScraperStrategy", () => {
 
       await crawl(
         {},
-        { shouldFollowLink: (_base, target) => target.pathname.includes("allowed") },
+        following((_base, target) => target.pathname.includes("allowed")),
       );
 
       expect(fetchedPages()).toEqual([
@@ -685,6 +753,36 @@ describe("WebScraperStrategy", () => {
 
       expect(fetchedPages()).toContain(`${ROOT}new/index.html.md`);
     });
+
+    it("admits llms.txt entries through the same gates as discovered links", async () => {
+      serve({
+        [ROOT]: html("Root"),
+        [`${ROOT}llms.txt`]: llmsTxt(
+          `${ROOT}docs.zip`,
+          `${ROOT}diagram.png`,
+          `${ROOT}blocked`,
+          `${ROOT}ok`,
+        ),
+      });
+
+      await crawl(
+        { maxDepth: 0 },
+        following((_base, target) => !target.pathname.includes("blocked")),
+      );
+
+      expect(fetchedPages()).toEqual([ROOT, `${ROOT}ok/index.html.md`, `${ROOT}ok`]);
+    });
+
+    it("probes llms.txt without the content-type gate pages are fetched with", async () => {
+      // The index is parsed directly rather than by a pipeline, so the types the
+      // pipelines read must not decide whether it is downloaded.
+      serve({ [ROOT]: html("Root") });
+
+      await crawl({ maxDepth: 0 });
+
+      expect(requestOptions(`${ROOT}llms.txt`)).not.toHaveProperty("acceptsMimeType");
+      expect(requestOptions(ROOT)).toHaveProperty("acceptsMimeType");
+    });
   });
 
   describe("queue-time link gate", () => {
@@ -693,6 +791,9 @@ describe("WebScraperStrategy", () => {
       "/assets/photo.jpg",
       "/assets/flame.svg",
       "/assets/demo.mp4",
+      // Archives are readable as a start URL but deliberately not followed.
+      "/downloads/docs.zip",
+      "/downloads/docs.tar.gz",
     ])("never requests a link to %s", async (href) => {
       serve({ [ROOT]: html("Root", [href]) });
 
@@ -729,6 +830,48 @@ describe("WebScraperStrategy", () => {
       // The root plus the one processable link; the images never enter the queue.
       expect(events.at(-1)).toMatchObject({ totalDiscovered: 2, pagesScraped: 2 });
     });
+
+    // Currently requested: links on a page that extracted no text bypass these gates.
+    it.todo("applies the link gates to links on a page that extracted no text");
+  });
+
+  describe("archive start URL", () => {
+    const archive = readFileSync(
+      path.join(__dirname, "../../../test/fixtures/archive.zip"),
+    );
+    /** Temp copies of the downloaded archive named `name`. */
+    const tempCopies = (name: string): string[] =>
+      readdirSync(os.tmpdir()).filter((file) => file.endsWith(`-${name}`));
+
+    it("reports a downloaded archive as a container rather than a page", async () => {
+      serve({ [`${ROOT}docs.zip`]: { content: archive, mimeType: "application/zip" } });
+      const strategy = new WebScraperStrategy(config);
+
+      const events = await crawl({ url: `${ROOT}docs.zip`, maxDepth: 0 }, strategy);
+      await strategy.cleanup();
+
+      expect(events.map((event) => event.outcome)).toEqual([PageOutcome.Empty]);
+      expect(events[0]?.emptyPage).toBeUndefined();
+    });
+
+    it("deletes the downloaded archive on cleanup", async () => {
+      const name = `cleanup-${Date.now()}.zip`;
+      serve({ [`${ROOT}${name}`]: { content: archive, mimeType: "application/zip" } });
+      const strategy = new WebScraperStrategy(config);
+      await crawl({ url: `${ROOT}${name}`, maxDepth: 0 }, strategy);
+      expect(tempCopies(name)).toHaveLength(1);
+
+      await strategy.cleanup();
+
+      expect(tempCopies(name)).toEqual([]);
+    });
+
+    // The two tests above stop at the archive itself (maxDepth 0), so they hold
+    // whether or not its members are crawled. Currently none is: the listing scopes
+    // file:// entries against the https start URL and drops them all. Once queued,
+    // a member would still fail, read through FileFetcher, which cannot stat a path
+    // inside a zip (ENOTDIR).
+    it.todo("indexes the members of an archive served at the start URL");
   });
 
   describe("refresh", () => {
