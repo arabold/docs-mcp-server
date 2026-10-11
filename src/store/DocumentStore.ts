@@ -1130,6 +1130,10 @@ export class DocumentStore {
    * `{ vacuum: false }` to checkpoint with PASSIVE, which never waits on
    * readers or writers.
    *
+   * The explicit path also merges the FTS5 index first. FTS5 records deletes
+   * as markers in new index segments, so removed text keeps occupying live
+   * pages until a merge drops it; only then does VACUUM see those pages as free.
+   *
    * @param options.force Always VACUUM even if no free pages are detected
    * @param options.vacuum When `false`, only run a non-blocking WAL checkpoint
    * @returns Size before/after compaction and whether VACUUM ran
@@ -1149,6 +1153,10 @@ export class DocumentStore {
       const force = options?.force === true;
       const allowVacuum = options?.vacuum !== false;
       const beforeBytes = this.getOnDiskSizeBytes();
+
+      if (allowVacuum) {
+        this.db.exec("INSERT INTO documents_fts(documents_fts) VALUES('optimize')");
+      }
 
       // PASSIVE never waits; TRUNCATE is reserved for the exclusive compact path.
       this.db.pragma(
