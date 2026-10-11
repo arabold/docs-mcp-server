@@ -208,7 +208,7 @@ The entry point resolves protocol based on TTY status:
 - Has TTY (interactive terminal): HTTP transport with Server-Sent Events
 - Manual override: `--protocol stdio|http` bypasses detection
 
-The Docker image sets `DOCS_MCP_SERVER_PROTOCOL=http` and `DOCS_MCP_SERVER_HOST=0.0.0.0`, so no-argument container startup serves HTTP even without a TTY. These values enter the existing environment configuration layer; unrelated CLI options preserve them, and explicit CLI flags override them. Docker stdio clients select `--protocol stdio` and keep stdin open with `docker run -i`.
+The Docker image sets `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0`, so no-argument container startup serves HTTP even without a TTY. These lower-precedence aliases enter the existing environment configuration layer; unrelated CLI options preserve them, while runtime aliases, generic environment variables, and explicit CLI flags can override them. Docker stdio clients select `--protocol stdio` and keep stdin open with `docker run -i`.
 
 ### Pipeline Selection
 

@@ -14,7 +14,7 @@ See `proposal.md` for motivation and the local ARM64 baseline. The image has an 
 
 ### Use container environment defaults instead of CMD arguments
 
-Set `DOCS_MCP_SERVER_PROTOCOL=http` and `DOCS_MCP_SERVER_HOST=0.0.0.0` in the runtime stage. Keep the existing port default and entrypoint.
+Set the lower-precedence alias `DOCS_MCP_PROTOCOL=http` in the runtime stage and retain the existing `HOST=0.0.0.0`, port default, and entrypoint. Do not set generic protocol or host variables in the image: generic variables outrank supported aliases, so image-level generic defaults would suppress runtime `DOCS_MCP_PROTOCOL`, `DOCS_MCP_HOST`, and `HOST` overrides.
 
 An HTTP `CMD` is rejected because Docker replaces it entirely when a caller supplies any application argument; a launch with only `--verbose` would fall back to stdio again. Environment defaults survive unrelated arguments, while runtime `-e` values and explicit CLI options continue to override them.
 
@@ -24,11 +24,11 @@ Do not change the configuration loader or add container-detection logic. Its exi
 
 Keep the explicit `web` subcommand test and the existing scrape tests. Add default unified-server coverage for no arguments and `--verbose`, checking HTTP readiness and enabled services. Exercise stdio selection through both runtime environment and CLI overrides with the existing MCP client/stdio-transport pattern, connecting to `docker run -i`.
 
-Verify the binding overrides with the packaged `config get` command, and retain the existing non-container CLI tests for protocol auto-detection. Do not make warning text, log silence, or CPU-vendor detection a pass/fail condition.
+Verify binding overrides through generic variables and both host aliases with the packaged `config get` command; verify protocol selection through both its alias and generic variable. Assert generic overrides still outrank aliases, and retain the existing non-container CLI tests for protocol auto-detection. Do not make warning text, log silence, or CPU-vendor detection a pass/fail condition.
 
 ### Make the simplified Docker command the documented default
 
-Remove now-unnecessary HTTP/host/port arguments from the main Docker examples. Explain the HTTP default, how to override the binding, and explicit stdio operation with stdin kept open. Replace the derived-image HTTP `CMD` example with direct use of the published image.
+Remove now-unnecessary HTTP/host/port arguments from the main Docker examples. Explain the HTTP default, how to override the binding, and explicit stdio operation with stdin kept open. Update the Docker client configuration in `docs/guides/mcp-clients.md` to select stdio explicitly. Replace the derived-image HTTP `CMD` example with direct use of the published image.
 
 ## Program Design
 
@@ -41,6 +41,8 @@ Remove now-unnecessary HTTP/host/port arguments from the main Docker examples. E
 ~     installation.md                         # document defaults, overrides, and explicit stdio
     infrastructure/
 ~     deployment-modes.md                     # align the single-container example and default description
+    guides/
+~     mcp-clients.md                          # explicitly select stdio in Docker client configuration
   test/
 ~   docker-e2e.test.ts                        # cover default startup and override compatibility
 ```

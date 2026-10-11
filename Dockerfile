@@ -79,8 +79,7 @@ VOLUME /config
 EXPOSE 6280
 ENV PORT=6280
 ENV HOST=0.0.0.0
-ENV DOCS_MCP_SERVER_PROTOCOL=http
-ENV DOCS_MCP_SERVER_HOST=0.0.0.0
+ENV DOCS_MCP_PROTOCOL=http
 
 # Drop privileges before running the app. Named Docker volumes inherit
 # this ownership automatically; if you bind-mount a host directory onto

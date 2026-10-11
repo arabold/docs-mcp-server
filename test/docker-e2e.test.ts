@@ -420,8 +420,13 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
 
   it.each([
     {
-      name: "runtime environment",
+      name: "generic runtime environment over the protocol alias",
       envArgs: ["-e", "DOCS_MCP_SERVER_PROTOCOL=stdio"],
+      cliArgs: [],
+    },
+    {
+      name: "runtime protocol alias",
+      envArgs: ["-e", "DOCS_MCP_PROTOCOL=stdio"],
       cliArgs: [],
     },
     {
@@ -470,8 +475,25 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       expected: { protocol: "http", host: "0.0.0.0", port: 6280 },
     },
     {
-      name: "runtime host override",
-      envArgs: ["-e", "DOCS_MCP_SERVER_HOST=127.0.0.1"],
+      name: "generic runtime host override over aliases",
+      envArgs: [
+        "-e",
+        "DOCS_MCP_SERVER_HOST=127.0.0.1",
+        "-e",
+        "DOCS_MCP_HOST=0.0.0.0",
+        "-e",
+        "HOST=0.0.0.0",
+      ],
+      expected: { protocol: "http", host: "127.0.0.1", port: 6280 },
+    },
+    {
+      name: "runtime DOCS_MCP_HOST alias",
+      envArgs: ["-e", "DOCS_MCP_HOST=127.0.0.1"],
+      expected: { protocol: "http", host: "127.0.0.1", port: 6280 },
+    },
+    {
+      name: "runtime HOST alias",
+      envArgs: ["-e", "HOST=127.0.0.1"],
       expected: { protocol: "http", host: "127.0.0.1", port: 6280 },
     },
     {

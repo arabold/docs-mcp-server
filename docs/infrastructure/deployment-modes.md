@@ -128,7 +128,7 @@ docker run --rm \
   ghcr.io/arabold/docs-mcp-server:latest
 ```
 
-The image starts the unified HTTP server on `0.0.0.0:6280` with the Web UI, API, and MCP endpoint enabled. Its `DOCS_MCP_SERVER_PROTOCOL=http` and `DOCS_MCP_SERVER_HOST=0.0.0.0` environment defaults remain active with unrelated arguments such as `--verbose`. Override them with runtime environment variables or CLI flags; image environment values take precedence over config-file values.
+The image starts the unified HTTP server on `0.0.0.0:6280` with the Web UI, API, and MCP endpoint enabled. Its `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0` environment defaults remain active with unrelated arguments such as `--verbose`. Override them with runtime environment variables or CLI flags; image environment values take precedence over config-file values. Both supported aliases and generic environment overrides remain available.
 
 Docker stdio clients use `docker run --rm -i ghcr.io/arabold/docs-mcp-server:latest --protocol stdio`, keeping stdin open without allocating a TTY. `DOCS_MCP_SERVER_PROTOCOL=auto` restores TTY-based protocol selection. See [Installation](../setup/installation.md#option-2-docker) for the complete override and persistence options.
 

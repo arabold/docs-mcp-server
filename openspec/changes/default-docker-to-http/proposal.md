@@ -26,5 +26,5 @@ None.
 
 - `Dockerfile`: Container environment defaults; existing entrypoint and subcommands remain intact.
 - `test/docker-e2e.test.ts`: Real-container startup and override regression coverage.
-- `README.md`, `ARCHITECTURE.md`, `docs/setup/installation.md`, and `docs/infrastructure/deployment-modes.md`: Docker usage and protocol-default documentation.
+- `README.md`, `ARCHITECTURE.md`, `docs/setup/installation.md`, `docs/guides/mcp-clients.md`, and `docs/infrastructure/deployment-modes.md`: Docker usage and protocol-default documentation.
 - No application configuration-loader changes, dependency changes, or image-platform changes.

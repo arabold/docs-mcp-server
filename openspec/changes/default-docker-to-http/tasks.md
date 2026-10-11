@@ -16,3 +16,9 @@
 
 - [x] 3.1 Build the changed image locally on ARM64 and run the complete Docker E2E suite plus the existing CLI default/protocol tests under Node 22; verify no-argument startup is fixed, explicit web/scrape commands still work, and non-container defaults remain unchanged.
 - [x] 3.2 Run the repository-required checks, commit without bypassing hooks, push the session branch, and create the requested pull request referencing issue #533; verify the pushed commit and returned PR URL identify this change.
+
+## 4. Review Corrections
+
+- [x] 4.1 Use lower-precedence Docker environment aliases and add protocol/host alias regression cases; verify all Docker tests pass against the rebuilt ARM64 image, including generic-over-alias precedence.
+- [x] 4.2 Update the Docker MCP client snippet to select stdio and align the implementation documentation and design; verify the documented invocation matches the tested stdio launch.
+- [ ] 4.3 Commit and push the verified corrections, reply to the review comments, and resolve the threads; verify the remote PR head and thread resolution state.
