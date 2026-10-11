@@ -687,6 +687,9 @@ describe("Auto-generated Environment Variable Overrides", () => {
   beforeEach(() => {
     originalEnv = { ...process.env };
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-auto-env-test-"));
+    // Some tests here exercise the managed default config path, which the test
+    // environment's DOCS_MCP_CONFIG would otherwise replace.
+    delete process.env.DOCS_MCP_CONFIG;
   });
 
   afterEach(() => {
