@@ -14,6 +14,10 @@ import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../src/pipeline/types";
 import { type PageOutcome, ScrapeMode, type ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
+import {
+  LibraryNotFoundInStoreError,
+  VersionNotFoundInStoreError,
+} from "../src/store/errors";
 import type { StoreSearchResult } from "../src/store/types";
 import { type AppConfig, loadConfig } from "../src/utils/config";
 
@@ -37,6 +41,9 @@ export interface StoredPage {
   content_url: string | null;
 }
 
+/** Scrape options for one run; anything left out comes from the defaults. */
+export type ScrapeRequest = Partial<Omit<ScraperOptions, "library" | "version">>;
+
 /** Options for {@link usePipelineHarness}. */
 export interface PipelineHarnessOptions {
   /** The library every job indexes into. */
@@ -44,19 +51,16 @@ export interface PipelineHarnessOptions {
   /** The version every job indexes into. */
   version: string;
   /** Scrape options applied to every `scrape()` unless the call overrides them. */
-  defaults?: Partial<ScraperOptions>;
-  /** Adjusts the configuration before the services are built. */
-  configure?: (config: AppConfig) => void;
+  defaults?: ScrapeRequest;
 }
-
-/** Scrape options for one run; anything left out comes from the defaults. */
-export type ScrapeRequest = Partial<Omit<ScraperOptions, "library" | "version">>;
 
 /** The pipeline under test. See {@link usePipelineHarness}. */
 export interface PipelineHarness {
   /** The configuration of the current test's services. Changes apply to the next job. */
   readonly config: AppConfig;
+  /** The current test's pipeline manager. */
   readonly pipelineManager: PipelineManager;
+  /** The current test's document service. */
   readonly docService: DocumentManagementService;
   /** Progress events of the most recently started job, in order. */
   readonly events: readonly ProgressRecord[];
@@ -94,7 +98,8 @@ const FINAL_STATUSES = new Set([
  * this is the built-in defaults), then sets an in-memory store, no embeddings,
  * one worker, no fetch retries and Fetch mode, and allows private networks so
  * the access policy never resolves the mock hosts through DNS. After each test
- * it cancels any job still running and shuts the services down.
+ * it cancels any job still running and shuts the services down. A test that
+ * needs other settings changes `config` before starting a job.
  *
  * @param options The library and version to index into, and optional defaults.
  * @returns The harness, valid inside tests and hooks.
@@ -126,7 +131,6 @@ export function usePipelineHarness(options: PipelineHarnessOptions): PipelineHar
     config.scraper.maxConcurrency = 1;
     config.scraper.fetcher.maxRetries = 0;
     config.scraper.security.network.allowPrivateNetworks = true;
-    options.configure?.(config);
 
     const eventBus = new EventBusService();
     const docService = new DocumentManagementService(eventBus, config);
@@ -249,11 +253,24 @@ export function usePipelineHarness(options: PipelineHarnessOptions): PipelineHar
     return jobId;
   }
 
+  /**
+   * Reads the stored pages without creating the version, which would make the
+   * next scrape of it an overwrite the store refuses.
+   */
   async function pages(): Promise<StoredPage[]> {
     const { docService } = active();
-    return docService.getPagesByVersionId(
-      await docService.ensureVersion({ library, version }),
-    );
+    try {
+      const { versionId } = await docService.requireVersion({ library, version });
+      return docService.getPagesByVersionId(versionId);
+    } catch (error) {
+      if (
+        error instanceof LibraryNotFoundInStoreError ||
+        error instanceof VersionNotFoundInStoreError
+      ) {
+        return [];
+      }
+      throw error;
+    }
   }
 
   return harness;
