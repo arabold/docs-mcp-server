@@ -62,6 +62,7 @@ When authentication is enabled, the server SHALL publish OAuth 2.0 Protected Res
 - `resource` SHALL equal the public URL of the MCP endpoint.
 - `authorization_servers` SHALL contain exactly the configured issuer.
 - `bearer_methods_supported` SHALL be `["header"]`.
+- `resource_name` SHALL be the server's title, or its name when no title is configured.
 
 The document SHALL be served in two places: at the public URL followed by `/.well-known/oauth-protected-resource/mcp`, and at the well-known location RFC 9728 derives from the MCP endpoint URL. The two coincide when the public URL has no path.
 
@@ -74,6 +75,16 @@ Every value in the document SHALL come from configuration, never from the reques
 - **THEN** the document's `resource` SHALL be `https://example.com/docs/mcp`
 - **AND** its `authorization_servers` SHALL be `["https://auth.example.com"]`
 - **AND** its `bearer_methods_supported` SHALL be `["header"]`
+
+#### Scenario: Resource named like the MCP server
+
+- **WHEN** `server.title` is `Acme Docs`
+- **THEN** the document's `resource_name` SHALL be `Acme Docs`
+
+#### Scenario: Resource named without a title
+
+- **WHEN** no server title is configured and `server.name` is `acme-docs`
+- **THEN** the document's `resource_name` SHALL be `acme-docs`
 
 #### Scenario: RFC 9728 location for a path-hosted server
 

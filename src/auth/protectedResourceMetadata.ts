@@ -2,29 +2,35 @@
  * OAuth 2.0 Protected Resource Metadata (RFC 9728) for the MCP endpoint, and
  * the pieces of the discovery challenge that point clients at it.
  *
- * Every value derives from configuration (the public location and the issuer),
- * never from the request's `Host` header: clients bind tokens to the
- * `resource` published here, so a spoofable value would let an attacker steer
- * that binding.
+ * Every value derives from configuration, never from the request's `Host`
+ * header: clients bind tokens to the `resource` published here, so a
+ * spoofable value would let an attacker steer that binding.
  */
+
+import { type BaseMetadata, getDisplayName } from "@modelcontextprotocol/server";
 
 const WELL_KNOWN_PREFIX = "/.well-known/oauth-protected-resource";
 
 /**
  * Build the protected resource metadata document.
+ *
+ * The resource is named the way MCP clients name the server: by its title, or
+ * by its name when there is no title.
  * @param options.mcpEndpointUrl - Public URL of the MCP endpoint, which is the resource identifier.
  * @param options.issuerUrl - The authorization server's issuer identifier.
+ * @param options.server - The server's configured name and optional title.
  * @returns The RFC 9728 document.
  */
 export function buildProtectedResourceMetadata(options: {
   mcpEndpointUrl: string;
   issuerUrl: string;
+  server: BaseMetadata;
 }): Record<string, unknown> {
   return {
     resource: options.mcpEndpointUrl,
     authorization_servers: [options.issuerUrl],
     bearer_methods_supported: ["header"],
-    resource_name: "Documentation MCP Server",
+    resource_name: getDisplayName(options.server),
     resource_documentation: "https://github.com/arabold/docs-mcp-server#readme",
   };
 }

@@ -207,6 +207,8 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
 
 - [x] 11.5 Keep the worker URL's path on the worker link's WebSocket: `PipelineClient` and `RemoteEventProxy` derive it with `toWebSocketUrl` (`src/utils/url.ts`) instead of the bare origin. Verify `test/base-path-e2e.test.ts` forwards a worker event through the prefix proxy in both modes (it fails with the origin-only URL), and `PipelineClient.test.ts` and `url.test.ts` cover the URL.
 
+- [x] 11.6 Name the protected resource the way MCP clients name the server: `resource_name` is `server.title`, or `server.name` without one, instead of a fixed string. Verify `protectedResourceMetadata.test.ts` covers both cases, and `test/auth-e2e.test.ts` reads the configured title from the metadata at both locations.
+
 ## 12. Archive follow-up
 
 - [ ] 12.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.

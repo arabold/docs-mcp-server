@@ -63,6 +63,7 @@ describe("Authentication End-to-End", () => {
       publicUrl,
       issuerUrl: issuer.url,
       enableWebInterface: false,
+      serverTitle: "Acme Docs",
     });
   }, 30000);
 
@@ -95,6 +96,7 @@ describe("Authentication End-to-End", () => {
         resource: audience,
         authorization_servers: [issuer.url],
         bearer_methods_supported: ["header"],
+        resource_name: "Acme Docs",
       });
     });
 

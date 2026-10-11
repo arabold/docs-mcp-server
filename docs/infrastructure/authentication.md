@@ -42,7 +42,7 @@ sequenceDiagram
 ```
 
 1. **Challenge.** A request without a valid token gets `401` with `WWW-Authenticate: Bearer resource_metadata="<public URL>/.well-known/oauth-protected-resource/mcp"`. When the request carried a token that was rejected, the challenge also carries `error="invalid_token"`.
-2. **Metadata.** The protected resource metadata (RFC 9728) names the MCP endpoint's public URL as `resource` and the configured issuer as the only authorization server. It is served at the URL in the challenge and at the RFC 9728 well-known location, and it is readable from any origin.
+2. **Metadata.** The protected resource metadata (RFC 9728) names the MCP endpoint's public URL as `resource` and the configured issuer as the only authorization server. Its `resource_name` is the server's title, or its name when there is no title, so clients that show it at sign-in use the same name as everywhere else. It is served at the URL in the challenge and at the RFC 9728 well-known location, and it is readable from any origin.
 3. **Sign-in.** The client talks to the provider directly. It asks for a token for the `resource` it just learned, per RFC 8707.
 4. **Requests.** The client sends `Authorization: Bearer <token>` on every request.
 

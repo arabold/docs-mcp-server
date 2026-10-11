@@ -676,6 +676,7 @@ export class AppServer {
     const document = buildProtectedResourceMetadata({
       mcpEndpointUrl: this.mcpEndpointUrl,
       issuerUrl,
+      server: this.appConfig.server,
     });
     for (const metadataPath of protectedResourceMetadataPaths(
       this.location.basePath,

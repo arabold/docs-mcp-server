@@ -93,6 +93,7 @@ A global `onRequest` hook applies it on every bind, before any route, and the `u
 
 **Serve protected resource metadata ourselves, and advertise it under the base path.**
 - The document is `{ resource, authorization_servers: [issuer], bearer_methods_supported: ["header"], resource_name }`, without `scopes_supported`.
+- `resource_name` is `server.title`, or `server.name` without a title. That is the name MCP clients show for the server, so a client that shows the resource name at sign-in shows the same one.
 - The challenge's `resource_metadata` is `<publicUrl>/.well-known/oauth-protected-resource/mcp`. It sits inside the proxy's location, so *that* URL needs no extra proxy rule.
 - When the base path is non-empty, the server also answers the RFC 9728 host-root location, `/.well-known/oauth-protected-resource<basePath>/mcp`. That location sits outside the proxy's `/docs/` location, so the proxy guide adds a rule for it, and the base-path E2E suite checks it.
 - With a base path, `/.well-known/oauth-protected-resource/mcp` is also reachable at the host root, because `rewriteUrl` leaves it alone. That's harmless: its `resource` doesn't match that location, so clients discard it under RFC 9728 §3.3.

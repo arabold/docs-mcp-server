@@ -21,6 +21,7 @@ import { loadConfig } from "../src/utils/config";
  * @param options.publicUrl - The public URL, possibly with a base path.
  * @param options.issuerUrl - The issuer to authenticate against; omit to disable auth.
  * @param options.enableWebInterface - Whether to serve the web UI (default `true`).
+ * @param options.serverTitle - The server's title; omit for none.
  * @returns The server's event bus, and `stop`, which shuts everything down and removes the store.
  */
 export async function startInProcessServer(options: {
@@ -28,6 +29,7 @@ export async function startInProcessServer(options: {
   publicUrl: string;
   issuerUrl?: string;
   enableWebInterface?: boolean;
+  serverTitle?: string;
 }): Promise<{ eventBus: EventBusService; stop: () => Promise<void> }> {
   const tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-e2e-"));
   const appConfig = loadConfig();
@@ -35,6 +37,7 @@ export async function startInProcessServer(options: {
   appConfig.app.embeddingModel = "";
   appConfig.server.host = "127.0.0.1";
   appConfig.server.publicUrl = options.publicUrl;
+  appConfig.server.title = options.serverTitle;
   appConfig.auth.enabled = options.issuerUrl !== undefined;
   appConfig.auth.issuerUrl = options.issuerUrl ?? "";
   appConfig.auth.audience = "";

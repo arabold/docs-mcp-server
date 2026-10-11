@@ -11,6 +11,7 @@ describe("buildProtectedResourceMetadata", () => {
     const document = buildProtectedResourceMetadata({
       mcpEndpointUrl: "https://example.com/docs/mcp",
       issuerUrl: "https://auth.example.com",
+      server: { name: "docs-mcp-server" },
     });
 
     expect(document).toMatchObject({
@@ -24,9 +25,23 @@ describe("buildProtectedResourceMetadata", () => {
     const document = buildProtectedResourceMetadata({
       mcpEndpointUrl: "https://example.com/mcp",
       issuerUrl: "https://auth.example.com",
+      server: { name: "docs-mcp-server" },
     });
 
     expect(document).not.toHaveProperty("scopes_supported");
+  });
+
+  it.each([
+    ["its title", { name: "acme-docs", title: "Acme Docs" }, "Acme Docs"],
+    ["its name when it has no title", { name: "acme-docs" }, "acme-docs"],
+  ])("names the resource after the server by %s", (_label, server, expected) => {
+    const document = buildProtectedResourceMetadata({
+      mcpEndpointUrl: "https://example.com/mcp",
+      issuerUrl: "https://auth.example.com",
+      server,
+    });
+
+    expect(document.resource_name).toBe(expected);
   });
 });
 
