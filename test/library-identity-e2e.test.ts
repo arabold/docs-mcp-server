@@ -76,7 +76,7 @@ describe("Library identity end-to-end", () => {
     docService = new DocumentManagementService(new EventBusService(), appConfig);
     await docService.initialize();
     pipeline = new PipelineManager(docService, new EventBusService(), {
-      recoverJobs: false,
+      interruptedJobs: "fail",
       appConfig,
     });
     scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);

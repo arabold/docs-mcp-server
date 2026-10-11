@@ -58,7 +58,7 @@ describe("GitHub Private Repository E2E Tests", () => {
 
     // Initialize services
     const eventBus = new EventBusService();
-    backend = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
+    backend = await openBackend({ appConfig, eventBus, jobs: { interruptedJobs: "fail" } });
     docService = backend.docService;
     pipeline = backend.pipeline;
 

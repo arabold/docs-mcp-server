@@ -115,7 +115,7 @@ export function createMcpCommand(cli: Argv) {
           appConfig,
           eventBus,
           serverUrl,
-          jobs: { recoverJobs: false }, // MCP command doesn't support job recovery
+          jobs: { interruptedJobs: "fail" }, // MCP command doesn't support job recovery
           onEmbeddingModelChange: handleEmbeddingModelChange,
         });
         // Registered first, so shutdown closes it even when a server fails to start

@@ -35,7 +35,7 @@ describe("Version resolution end-to-end", () => {
     // Never started: jobs stay QUEUED, so nothing is actually scraped and we can
     // inspect the version label each entry point recorded.
     pipeline = new PipelineManager(docService, new EventBusService(), {
-      recoverJobs: false,
+      interruptedJobs: "fail",
       appConfig,
     });
   });

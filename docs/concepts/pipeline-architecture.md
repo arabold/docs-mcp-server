@@ -69,7 +69,7 @@ Opens the services an entry point runs on and selects the pipeline implementatio
 ```typescript
 interface OpenBackendOptions {
   serverUrl?: string; // External worker URL; local without it
-  jobs?: false | { recoverJobs: boolean };
+  jobs?: false | { interruptedJobs: "recover" | "fail" | "leave" };
   // ...appConfig, eventBus, onEmbeddingModelChange
 }
 ```
@@ -77,9 +77,11 @@ interface OpenBackendOptions {
 **Selection Logic:**
 
 - `jobs: false` → no pipeline (read-only commands and the CLI `remove`)
-- `jobs: { recoverJobs }` with `serverUrl` → PipelineClient (external worker)
-- `jobs: { recoverJobs: true }` → PipelineManager with recovery, started
-- `jobs: { recoverJobs: false }` → PipelineManager without recovery, started
+- `jobs: { interruptedJobs }` with `serverUrl` → PipelineClient (external worker, which handles its own interrupted jobs)
+- `jobs: { interruptedJobs }` locally → PipelineManager, started; `interruptedJobs` decides what it does with the versions an earlier run left RUNNING or QUEUED:
+  - `recover`: runs them again as refresh jobs (`worker`, and the default command with `--resume`)
+  - `fail`: marks them FAILED with "Job interrupted", so users can retry them (the other server commands)
+  - `leave`: changes nothing (`scrape`, `refresh`). These commands run only their own job; a server on the same store may be running the others
 
 ### PipelineManager
 
@@ -95,7 +97,7 @@ Manages job queue and worker coordination for embedded processing:
 
 **Job Recovery:**
 
-- Loads QUEUED and RUNNING jobs from database on startup
+- Set to `recover`, loads QUEUED and RUNNING jobs from the database on startup
 - Resets RUNNING jobs to QUEUED for re-execution
 - Maintains job configuration for reproducible processing
 
@@ -184,7 +186,7 @@ All state changes immediately write to database:
 
 ### Recovery Mechanism
 
-Database state enables automatic recovery:
+Database state enables automatic recovery in the process that hosts the store (a pipeline set to `recover`):
 
 1. Load pending jobs on startup
 2. Reset RUNNING jobs to QUEUED
