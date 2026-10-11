@@ -15,7 +15,7 @@ import { EventBusService } from "../src/events";
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
 import { createLocalDocumentManagement } from "../src/store";
 import { loadConfig } from "../src/utils/config";
-import { getCliCommand } from "./test-helpers";
+import { getCliCommand, writeTestConfig } from "./test-helpers";
 
 describe("MCP stdio server E2E", () => {
   let client: Client | null = null;
@@ -257,4 +257,46 @@ describe("MCP stdio server E2E", () => {
     expect(textOf(read)).toContain("> Source: https://example.com/docs/guide");
     expect(textOf(read)).toContain("# Guide\n\nInstall the package first.");
   }, 60000);
+
+  it("rejects scrape_docs for an existing version and names the replace argument", async () => {
+    const projectRoot = path.resolve(import.meta.dirname, "..");
+    storeDir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-replace-"));
+    const configPath = writeTestConfig(storeDir);
+
+    const testEnv = { ...process.env };
+    delete testEnv.VITEST_WORKER_ID;
+    const { cmd, args } = getCliCommand();
+    transport = new StdioClientTransport({
+      command: cmd,
+      args,
+      cwd: projectRoot,
+      env: {
+        ...testEnv,
+        DOCS_MCP_STORE_PATH: storeDir,
+        DOCS_MCP_CONFIG: configPath,
+        DOCS_MCP_TELEMETRY: "false",
+      },
+    });
+    const connected = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+    client = connected;
+    await connected.connect(transport);
+
+    const scrape = () =>
+      connected.callTool({
+        name: "scrape_docs",
+        arguments: {
+          library: "Stdio Lib",
+          url: `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`,
+        },
+      });
+
+    const first = await scrape();
+    expect(first.isError).toBeFalsy();
+
+    const second = await scrape();
+    expect(second.isError).toBe(true);
+    const text = (second.content as Array<{ text: string }>)[0].text;
+    expect(text).toContain('"Stdio Lib"');
+    expect(text).toContain("replace: true");
+  }, 30000);
 });

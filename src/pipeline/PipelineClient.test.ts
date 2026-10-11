@@ -1,3 +1,4 @@
+import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
@@ -90,6 +91,56 @@ describe("PipelineClient", () => {
       await expect(client.enqueueScrapeJob("invalid", null, {} as any)).rejects.toThrow(
         "Failed to enqueue job: Bad request",
       );
+    });
+    it("should forward the overwrite intent", async () => {
+      mockClient.enqueueScrapeJob.mutate.mockResolvedValueOnce({ jobId: "job-1" });
+
+      await client.enqueueScrapeJob("react", null, { url: "https://react.dev" } as any, {
+        onExisting: "replace",
+      });
+
+      expect(mockClient.enqueueScrapeJob.mutate).toHaveBeenCalledWith(
+        expect.objectContaining({ onExisting: "replace" }),
+      );
+    });
+
+    it("should relay a worker conflict as a TRPCError with the same code and message", async () => {
+      const workerError = Object.assign(new Error('Library "React" already exists.'), {
+        data: { code: "CONFLICT" },
+      });
+      mockClient.enqueueScrapeJob.mutate.mockRejectedValueOnce(workerError);
+
+      const failure = client.enqueueScrapeJob("react", null, {} as any);
+
+      await expect(failure).rejects.toBeInstanceOf(TRPCError);
+      await expect(failure).rejects.toMatchObject({
+        code: "CONFLICT",
+        message: 'Library "React" already exists.',
+      });
+    });
+
+    it("should keep other worker codes in the generic enqueue error", async () => {
+      const workerError = Object.assign(new Error("Unauthorized"), {
+        data: { code: "UNAUTHORIZED" },
+      });
+      mockClient.enqueueScrapeJob.mutate.mockRejectedValueOnce(workerError);
+
+      const failure = client.enqueueScrapeJob("react", null, {} as any);
+
+      await expect(failure).rejects.not.toBeInstanceOf(TRPCError);
+      await expect(failure).rejects.toThrow("Failed to enqueue job: Unauthorized");
+    });
+
+    it("should relay a refresh NOT_FOUND from the worker", async () => {
+      const workerError = Object.assign(new Error("Library Reakt not found in store."), {
+        data: { code: "NOT_FOUND" },
+      });
+      mockClient.enqueueRefreshJob.mutate.mockRejectedValueOnce(workerError);
+
+      await expect(client.enqueueRefreshJob("reakt", null)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        message: "Library Reakt not found in store.",
+      });
     });
   });
 

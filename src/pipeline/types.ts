@@ -71,9 +71,11 @@ export interface PipelineJob {
  * always have complete runtime configuration available.
  */
 export interface InternalPipelineJob
-  extends Omit<PipelineJob, "version" | "error" | "scraperOptions"> {
+  extends Omit<PipelineJob, "version" | "error" | "scraperOptions" | "versionId"> {
   /** The library version associated with the job (internal uses string). */
   version: string;
+  /** Database version ID, claimed when the job is enqueued. */
+  versionId: number;
   /** Error object if the job failed. */
   error: Error | null;
   /** Complete scraper options with runtime configuration. */

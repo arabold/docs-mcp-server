@@ -51,6 +51,7 @@ npx @arabold/docs-mcp-server@latest scrape <library> <url> [options]
 | `--embedding-model <model>` | | | Embedding model configuration |
 | `--server-url <url>` | | | Remote pipeline worker URL |
 | `--clean` | | `true` | Clear existing documents before scraping |
+| `--replace` | | `false` | Rebuild the library version if it already exists |
 | `--quiet` | | | Suppress non-error diagnostics |
 | `--verbose` | | | Enable debug logging |
 
@@ -190,8 +191,12 @@ npx @arabold/docs-mcp-server@latest compact
   scope when you only need a subset.
 - **Local files** must use the `file://` URL scheme
   (e.g. `file:///absolute/path/to/docs`).
-- **`--clean` is on by default** for `scrape`, meaning existing documents for
-  the same library+version are removed before re-indexing. Pass `--no-clean` to
-  append instead.
+- **`scrape` never overwrites by accident.** Scraping a library version that
+  already exists fails and leaves it untouched. Pass `--replace` to rebuild it
+  from scratch, use `refresh` to update it in place, or pass `--no-clean` to add
+  more documents to it.
+- **Library names keep their casing** (`React`, `Next.js Docs`) and are matched
+  case-insensitively, so `react` reaches `React`. No character in a name has a
+  special meaning: use `--version 18`, not `react@18`.
 - **`refresh`** only works on previously indexed content. It uses HTTP ETags to
   skip pages that have not changed, making it much faster than a full re-scrape.
