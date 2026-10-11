@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CancellationError } from "../../pipeline/errors";
 import { type AppConfig, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
@@ -14,7 +14,10 @@ const ROOT = "https://example.com/";
 
 /** What the fake answers for an item; `url` defaults to the item's own URL. */
 type Reply = Omit<ProcessItemResult, "url"> & { url?: string };
-type Responder = (item: QueueItem) => Reply | Error | Promise<Reply | Error>;
+type Responder = (
+  item: QueueItem,
+  signal?: AbortSignal,
+) => Reply | Error | Promise<Reply | Error>;
 /** A site as a URL-keyed map, or as a function of the queued item. */
 type Site = Record<string, Reply | Error> | Responder;
 
@@ -23,6 +26,8 @@ interface CrawlSetup {
   signal?: AbortSignal;
   /** Stands in for a strategy's own URL canonicalization. */
   canonicalize?: (url: string) => string;
+  /** Runs after each progress event is recorded, the way a job stores the page. */
+  report?: (event: ScraperProgressEvent) => Promise<void>;
 }
 
 interface CrawlRun {
@@ -56,9 +61,13 @@ class TestScraperStrategy extends BaseScraperStrategy {
       : super.canonicalizeStoredUrl(url, options);
   }
 
-  protected override async processItem(item: QueueItem): Promise<ProcessItemResult> {
+  protected override async processItem(
+    item: QueueItem,
+    _options: ScraperOptions,
+    signal?: AbortSignal,
+  ): Promise<ProcessItemResult> {
     this.processed.push(item);
-    const reply = await this.respond(item);
+    const reply = await this.respond(item, signal);
     if (reply instanceof Error) throw reply;
     return { url: item.url, ...reply };
   }
@@ -101,6 +110,7 @@ function startCrawl(
     opts(overrides),
     async (event) => {
       events.push(event);
+      await setup.report?.(event);
     },
     setup.signal,
   );
@@ -283,6 +293,28 @@ describe("BaseScraperStrategy", () => {
       await expect(run.done).rejects.toThrow("Child page error");
       expect(storedUrls(run.events)).toEqual([ROOT]);
     });
+
+    it("stops and waits for running items before a failed crawl rejects", async () => {
+      // The caller cleans up (closes the browser, deletes temp files) as soon as
+      // the crawl rejects, so no item may still be running at that point.
+      let slowItemSettled = false;
+      const run = startCrawl(
+        async (item, signal) => {
+          if (item.depth === 0) return page([`${ROOT}fails`, `${ROOT}slow`]);
+          if (item.url === `${ROOT}fails`) return new Error("Child failed");
+          // Still loading when its sibling fails; it ends only once aborted.
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          slowItemSettled = true;
+          return new Error("Slow item aborted");
+        },
+        { maxPages: 5, maxDepth: 1, ignoreErrors: false },
+      );
+
+      await expect(run.done).rejects.toThrow("Child failed");
+      expect(slowItemSettled).toBe(true);
+    });
   });
 
   describe("failure-rate threshold", () => {
@@ -378,18 +410,17 @@ describe("BaseScraperStrategy", () => {
       await expect(run.done).rejects.toThrow(/Scrape aborted/);
     });
 
-    it("drops the rest of a concurrent batch once the threshold trips", async () => {
-      // Ten children fail at once; an eleventh in the same batch succeeds only
-      // after the threshold has tripped, and must not be reported as stored.
-      let release = (): void => {};
-      const late = new Promise<void>((resolve) => {
-        release = resolve;
-      });
+    it("does not report an item that finishes after the threshold trips", async () => {
+      // Ten children fail at once; an eleventh running alongside them succeeds
+      // only once the tripped threshold stops it, and must not be reported as
+      // stored. The crawl waits for it before rejecting.
       const run = startCrawl(
-        async (item) => {
+        async (item, signal) => {
           if (item.depth === 0) return page(children(11));
           if (childIndex(item) < 10) return new Error("child failed");
-          await late;
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
           return page();
         },
         { ignoreErrors: true, maxConcurrency: 11 },
@@ -397,14 +428,147 @@ describe("BaseScraperStrategy", () => {
       );
 
       await expect(run.done).rejects.toThrow(/Scrape aborted after 10\/10/);
-      release();
-      await new Promise(setImmediate);
 
+      expect(run.processed.map((item) => item.url)).toContain(`${ROOT}p10`);
       expect(eventFor(run.events, `${ROOT}p10`)).toBeUndefined();
     });
 
     // Currently counted: a refresh of a site that withdrew its Markdown files aborts.
     it.todo("does not count a missing representation with a page to fall back to");
+  });
+
+  describe("concurrent processing", () => {
+    const at = (path: string) => `${ROOT}${path}`;
+
+    /** A promise the test resolves by hand, to hold one item mid-flight. */
+    const gate = () => {
+      let open = (): void => {};
+      const closed = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      return { closed, open };
+    };
+
+    it("keeps the other slots working while one item is slow", async () => {
+      // A URL stuck in retry backoff used to hold its whole batch, so the crawl
+      // looked frozen on whichever page had finished last (#490).
+      const slow = gate();
+      const others = ["a", "b", "c", "d"].map(at);
+      const run = startCrawl(
+        async (item) => {
+          if (item.depth === 0) return page([at("slow"), ...others]);
+          if (item.url === at("slow")) await slow.closed;
+          return page();
+        },
+        { maxConcurrency: 3 },
+      );
+
+      await vi.waitFor(() =>
+        expect(run.events.map((e) => e.currentUrl)).toEqual(
+          expect.arrayContaining(others),
+        ),
+      );
+      expect(eventFor(run.events, at("slow"))).toBeUndefined();
+      slow.open();
+      await run.done;
+
+      expect(run.events.at(-1)).toMatchObject({
+        pagesScraped: 6,
+        totalPages: 6,
+        pagesIndexed: 6,
+      });
+    });
+
+    it("offers each URL at its shortest depth when items finish out of order", async () => {
+      // A links straight to X; B reaches X only through C. B finishing first must
+      // not let C claim X one level deeper than A offers it.
+      const a = gate();
+      const links: Record<string, string[]> = {
+        [ROOT]: [at("A"), at("B")],
+        [at("A")]: [at("X")],
+        [at("B")]: [at("C")],
+        [at("C")]: [at("X")],
+      };
+      const run = startCrawl(
+        async (item) => {
+          if (item.url === at("A")) await a.closed;
+          return page(links[item.url] ?? []);
+        },
+        { maxConcurrency: 3 },
+      );
+
+      await vi.waitFor(() => expect(eventFor(run.events, at("B"))).toBeDefined());
+      a.open();
+      await run.done;
+
+      expect(run.processed.map((item) => item.url)).toEqual([
+        ROOT,
+        at("A"),
+        at("B"),
+        at("X"),
+        at("C"),
+      ]);
+      expect(run.processed.find((item) => item.url === at("X"))?.depth).toBe(2);
+    });
+
+    it("does not finish while a page at the limit is still being stored", async () => {
+      // Reaching maxPages stops new items from starting, but a running item may
+      // have counted its page and still be storing it. The crawl must not resolve
+      // before that write settles, or the job completes with a write pending.
+      const store = gate();
+      const run = startCrawl(
+        (item) => page(item.depth === 0 ? [at("a"), at("b")] : []),
+        { maxPages: 3, maxConcurrency: 3 },
+        {
+          report: async (event) => {
+            if (event.currentUrl === at("a")) await store.closed;
+          },
+        },
+      );
+      let settled = false;
+      const watched = run.done.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+
+      await vi.waitFor(() => expect(eventFor(run.events, at("b"))).toBeDefined());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(settled).toBe(false);
+      store.open();
+      await watched;
+      await run.done;
+      expect(run.events.at(-1)).toMatchObject({ pagesIndexed: 3 });
+    });
+
+    it("refills a freed slot without indexing past maxPages", async () => {
+      // A slot freed by an item that stored nothing may be refilled, but only
+      // while the running items could not already reach the limit between them.
+      // More slots than the budget leaves, so the limit itself has to hold.
+      const run = await crawl(
+        async (item) => {
+          if (item.depth === 0) return page(["skip", "p1", "p2", "p3", "p4"].map(at));
+          if (item.url === at("skip")) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+            return skipped();
+          }
+          return page();
+        },
+        { maxPages: 3, maxConcurrency: 4 },
+      );
+
+      expect(Math.max(...run.events.map((e) => e.pagesIndexed ?? 0))).toBe(3);
+      expect(run.processed).toHaveLength(4);
+      expect(run.events.at(-1)).toMatchObject({
+        pagesScraped: 4,
+        totalPages: 4,
+        pagesIndexed: 3,
+      });
+    });
   });
 
   describe("refresh", () => {
@@ -604,7 +768,6 @@ describe("BaseScraperStrategy", () => {
 
     it("visits pages breadth-first, each at its shallowest depth", async () => {
       // / -> A, B, D;  A -> B;  B -> C, E;  C -> X;  D -> E;  E -> X.
-      // D and E finish after their batch-mates, which must not reorder the queue.
       const links: Record<string, string[]> = {
         [ROOT]: [`${ROOT}A`, `${ROOT}B`, `${ROOT}D`],
         [`${ROOT}A`]: [`${ROOT}B`],
@@ -613,15 +776,9 @@ describe("BaseScraperStrategy", () => {
         [`${ROOT}D`]: [`${ROOT}E`],
         [`${ROOT}E`]: [`${ROOT}X`],
       };
-      const run = await crawl(
-        async (item) => {
-          if (item.url.endsWith("/D") || item.url.endsWith("/E")) {
-            await new Promise(setImmediate);
-          }
-          return page(links[item.url] ?? []);
-        },
-        { maxConcurrency: 3 },
-      );
+      const run = await crawl((item) => page(links[item.url] ?? []), {
+        maxConcurrency: 3,
+      });
 
       expect(
         run.processed.map((item) => [item.url.slice(ROOT.length), item.depth]),
@@ -656,6 +813,33 @@ describe("BaseScraperStrategy", () => {
       );
 
       expect(urls(run.processed)).toEqual([start, `${ROOT}docs/intro`]);
+    });
+
+    it("follows file links only inside the roots an archive declares, carrying them on", async () => {
+      // A web archive unpacks into file:// members. Those cross the protocol
+      // scope as continuations of the accepted scrape, but a link the archive
+      // content points outside its own root must stay out of the queue.
+      const archive = "https://example.com/docs.zip";
+      const roots = ["/tmp/scraper-docs.zip"];
+      const member = "file:///tmp/scraper-docs.zip/guide.md";
+      const nested = "file:///tmp/scraper-docs.zip/api.md";
+      const run = await crawl(
+        {
+          [archive]: empty({
+            links: ["file:///etc/passwd", member],
+            internalAllowedFileRoots: roots,
+            isContainer: true,
+          }),
+          [member]: page([nested, "file:///etc/hosts"]),
+          [nested]: page(),
+        },
+        { url: archive },
+      );
+
+      expect(run.processed.slice(1)).toEqual([
+        { url: member, depth: 1, internalAllowedFileRoots: roots },
+        { url: nested, depth: 2, internalAllowedFileRoots: roots },
+      ]);
     });
   });
 

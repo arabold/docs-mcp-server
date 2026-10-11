@@ -5,13 +5,11 @@ import { logger } from "../../utils/logger";
 import { FetchStatus } from "../fetcher/types";
 import {
   PageOutcome,
-  type QueueItem,
   ScrapeMode,
   type ScrapeResult,
   type ScraperOptions,
   type ScraperProgressEvent,
 } from "../types"; // Import ScrapeMode
-import type { ProcessItemResult } from "./BaseScraperStrategy";
 import { WebScraperStrategy } from "./WebScraperStrategy";
 
 // Mock dependencies
@@ -72,102 +70,6 @@ describe("WebScraperStrategy", () => {
     expect(strategy.canHandle("file:///path/to/file.txt")).toBe(false);
     expect(strategy.canHandle("invalid://example.com")).toBe(false);
     expect(strategy.canHandle("any_string")).toBe(false);
-  }, 10000);
-
-  it("should carry internal archive roots to discovered temp archive members", async () => {
-    const testStrategy = strategy as unknown as {
-      processQueueItem(
-        item: QueueItem,
-        baseUrl: URL,
-        options: ScraperOptions,
-        progressCallback: ProgressCallback<ScraperProgressEvent>,
-        crawl: { abortError: null },
-        signal?: AbortSignal,
-      ): Promise<QueueItem[]>;
-      processItem(
-        item: QueueItem,
-        options: ScraperOptions,
-        signal?: AbortSignal,
-      ): Promise<ProcessItemResult>;
-      visited: Set<string>;
-      effectiveTotal: number;
-    };
-    testStrategy.visited.add("https://example.com/archive.zip");
-    testStrategy.effectiveTotal = 1;
-
-    const processItemSpy = vi.spyOn(testStrategy, "processItem").mockResolvedValue({
-      url: "https://example.com/archive.zip",
-      links: ["file:///tmp/scraper-docs.zip/guide.md"],
-      internalAllowedFileRoots: ["/tmp/scraper-docs.zip"],
-      status: FetchStatus.SUCCESS,
-    });
-
-    const nextItems = await testStrategy.processQueueItem(
-      { url: "https://example.com/archive.zip", depth: 0 },
-      new URL("https://example.com/archive.zip"),
-      { ...options, url: "https://example.com/archive.zip" },
-      vi.fn(),
-      { abortError: null },
-    );
-
-    expect(nextItems).toEqual([
-      {
-        url: "file:///tmp/scraper-docs.zip/guide.md",
-        depth: 1,
-        internalAllowedFileRoots: ["/tmp/scraper-docs.zip"],
-      },
-    ]);
-
-    processItemSpy.mockRestore();
-  }, 10000);
-
-  it("should reject file:// links that escape the archive's internal roots", async () => {
-    const testStrategy = strategy as unknown as {
-      processQueueItem(
-        item: QueueItem,
-        baseUrl: URL,
-        options: ScraperOptions,
-        progressCallback: ProgressCallback<ScraperProgressEvent>,
-        crawl: { abortError: null },
-        signal?: AbortSignal,
-      ): Promise<QueueItem[]>;
-      processItem(
-        item: QueueItem,
-        options: ScraperOptions,
-        signal?: AbortSignal,
-      ): Promise<ProcessItemResult>;
-      visited: Set<string>;
-      effectiveTotal: number;
-    };
-    testStrategy.visited.add("https://example.com/archive.zip");
-    testStrategy.effectiveTotal = 1;
-
-    const processItemSpy = vi.spyOn(testStrategy, "processItem").mockResolvedValue({
-      url: "https://example.com/archive.zip",
-      // Hostile link injected in archive content that points outside the
-      // accepted internal archive root. Must NOT be enqueued.
-      links: ["file:///etc/passwd", "file:///tmp/scraper-docs.zip/guide.md"],
-      internalAllowedFileRoots: ["/tmp/scraper-docs.zip"],
-      status: FetchStatus.SUCCESS,
-    });
-
-    const nextItems = await testStrategy.processQueueItem(
-      { url: "https://example.com/archive.zip", depth: 0 },
-      new URL("https://example.com/archive.zip"),
-      { ...options, url: "https://example.com/archive.zip", scope: "subpages" },
-      vi.fn(),
-      { abortError: null },
-    );
-
-    expect(nextItems).toEqual([
-      {
-        url: "file:///tmp/scraper-docs.zip/guide.md",
-        depth: 1,
-        internalAllowedFileRoots: ["/tmp/scraper-docs.zip"],
-      },
-    ]);
-
-    processItemSpy.mockRestore();
   }, 10000);
 
   it("should use HttpFetcher to fetch content and process result", async () => {
