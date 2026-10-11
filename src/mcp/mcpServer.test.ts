@@ -372,7 +372,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should pass replace to ScrapeTool and default it to false", async () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
 
     expect(
@@ -394,7 +394,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should return an existing-version conflict as a tool error naming the remedy", async () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
     vi.mocked(mockTools.scrape.execute).mockRejectedValueOnce(
       new VersionAlreadyExistsError("React", ""),
@@ -419,7 +419,7 @@ describe("MCP versions resource", () => {
 
   async function readVersions(uri: string) {
     vi.mocked(mockTools.listLibraries.execute).mockResolvedValue(listedLibraries as any);
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const template = (server as any)._registeredResourceTemplates.versions;
     const variables = template.resourceTemplate.uriTemplate.match(uri);
     const result = await template.readCallback(new URL(uri), variables, {});

@@ -15,7 +15,7 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
-import { createMcpServerInstance } from "../src/mcp/mcpServer";
+import { createMcpServerInstance, resolveServerInstructions } from "../src/mcp/mcpServer";
 import type { McpServerTools } from "../src/mcp/tools";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { pipelineRouter } from "../src/pipeline/trpc/router";
@@ -141,7 +141,11 @@ describe("Library identity end-to-end", () => {
       ).resolves.toHaveProperty("jobId");
 
       const tools = { listLibraries: new ListLibrariesTool(docService) } as McpServerTools;
-      const server = createMcpServerInstance(tools, appConfig);
+      const server = createMcpServerInstance(
+        tools,
+        appConfig,
+        resolveServerInstructions(appConfig),
+      );
       const template = (server as any)._registeredResourceTemplates.versions;
       const uri = "docs://libraries/react/versions";
       const resource = await template.readCallback(
