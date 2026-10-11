@@ -168,7 +168,7 @@ Settings for the API and MCP servers.
 |:-------|:--------|:------------|
 | `name` | `docs-mcp-server` | Server name reported to MCP clients during initialization. Set this to tell instances apart when running more than one. |
 | `title` | - | Human-readable server title reported to MCP clients alongside `name`. Clients that support it display the title; others fall back to `name`. |
-| `instructions` | - | Instructions text sent to MCP clients during initialization. Clients inject it into the model's context, so use it to describe what this server indexes and how to use it. Mutually exclusive with `instructionsFile`. |
+| `instructions` | built-in | Instructions text sent to MCP clients during initialization. Clients inject it into the model's context, so use it to describe what this server indexes and how to use it. When neither `instructions` nor `instructionsFile` is set, the server sends built-in instructions that explain how its tools work together; configured text replaces them entirely. Mutually exclusive with `instructionsFile`. |
 | `instructionsFile` | - | Path to a file whose contents are used as `instructions`. Use an absolute path: relative paths resolve against the working directory, which is often unpredictable when a desktop client launches the server over stdio. Read once at startup; a missing or unreadable file fails startup. Setting both `instructions` and `instructionsFile` also fails startup. |
 | `protocol` | `auto` | Server protocol (`stdio`, `http`, or `auto`). |
 | `host` | `127.0.0.1` | Host interface to bind to. Use `0.0.0.0` to listen on all IPv4 interfaces. |

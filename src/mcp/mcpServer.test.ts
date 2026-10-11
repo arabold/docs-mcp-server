@@ -12,6 +12,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
+import { buildDefaultInstructions } from "./defaultInstructions";
 import { createMcpServerInstance, resolveServerInstructions } from "./mcpServer";
 import type { McpServerTools } from "./tools";
 
@@ -89,14 +90,19 @@ const mockTools: McpServerTools = {
   } as any,
 };
 
+/** Creates a server the way the entry points do, with instructions resolved from the config. */
+function createServer(config: AppConfig): McpServer {
+  return createMcpServerInstance(mockTools, config, resolveServerInstructions(config));
+}
+
 describe("MCP Server Read-Only Mode", () => {
   it("should create server instance in normal mode", () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     expect(server).toBeInstanceOf(McpServer);
   });
 
   it("should create server instance in read-only mode", () => {
-    const server = createMcpServerInstance(mockTools, mockReadOnlyConfig);
+    const server = createServer(mockReadOnlyConfig);
     expect(server).toBeInstanceOf(McpServer);
   });
 
@@ -104,7 +110,7 @@ describe("MCP Server Read-Only Mode", () => {
     // This test verifies that the server can be created successfully
     // without advertising prompts capability, which was the root cause
     // of the issue with some MCP clients failing to connect
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     expect(server).toBeInstanceOf(McpServer);
 
     // Verify the server has the expected name and can be instantiated
@@ -113,8 +119,8 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should register read_page and list_pages in both normal and read-only mode", () => {
-    const normalServer = createMcpServerInstance(mockTools, mockConfig);
-    const readOnlyServer = createMcpServerInstance(mockTools, mockReadOnlyConfig);
+    const normalServer = createServer(mockConfig);
+    const readOnlyServer = createServer(mockReadOnlyConfig);
 
     expect((normalServer as any)._registeredTools.read_page).toBeDefined();
     expect((normalServer as any)._registeredTools.list_pages).toBeDefined();
@@ -124,7 +130,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should handle read_page tool execution and format source header", async () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const readPageTool = (server as any)._registeredTools.read_page;
 
     expect(readPageTool).toBeDefined();
@@ -156,7 +162,7 @@ describe("MCP Server Read-Only Mode", () => {
       totalChunks: 5,
       nextChunk: 4,
     });
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const readPageTool = (server as any)._registeredTools.read_page;
 
     const response = await readPageTool.handler({
@@ -182,7 +188,7 @@ describe("MCP Server Read-Only Mode", () => {
       totalChunks: 3,
       nextChunk: null,
     });
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const readPageTool = (server as any)._registeredTools.read_page;
 
     const response = await readPageTool.handler({
@@ -197,7 +203,7 @@ describe("MCP Server Read-Only Mode", () => {
 
   it("should not send read_page URLs or paths to telemetry", async () => {
     vi.mocked(telemetry.track).mockClear();
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const readPageTool = (server as any)._registeredTools.read_page;
     const secretUrl = "file:///private/documents/secret.md#token";
 
@@ -216,7 +222,7 @@ describe("MCP Server Read-Only Mode", () => {
 
   it("should not send list_pages URL filters to telemetry", async () => {
     vi.mocked(telemetry.track).mockClear();
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const listPagesTool = (server as any)._registeredTools.list_pages;
     const contains = "/private/secret/path";
 
@@ -243,7 +249,7 @@ describe("MCP Server Read-Only Mode", () => {
       hasMore: false,
     });
 
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const listPagesTool = (server as any)._registeredTools.list_pages;
 
     expect(listPagesTool).toBeDefined();
@@ -259,7 +265,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should register scrape_docs with preserveHashes support and propagate it", async () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
 
     expect(scrapeTool).toBeDefined();
@@ -288,7 +294,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should normalize includePatterns/excludePatterns to string arrays", async () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
 
     // Single pattern passed as a string stays whole, commas preserved
@@ -330,7 +336,7 @@ describe("MCP Server Read-Only Mode", () => {
   });
 
   it("should split comma-separated pattern strings without breaking regex constructs", () => {
-    const server = createMcpServerInstance(mockTools, mockConfig);
+    const server = createServer(mockConfig);
     const scrapeTool = (server as any)._registeredTools.scrape_docs;
     const parse = (includePatterns: string) =>
       scrapeTool.inputSchema.parse({
@@ -384,7 +390,7 @@ describe("MCP Server identity", () => {
       server: { name: "acme-docs" },
     } as unknown as AppConfig;
 
-    const client = await connectClient(createMcpServerInstance(mockTools, config));
+    const client = await connectClient(createServer(config));
 
     expect(client.getServerVersion()).toEqual({
       name: "acme-docs",
@@ -398,7 +404,7 @@ describe("MCP Server identity", () => {
       server: { name: "acme-docs", title: "Acme Internal Docs" },
     } as unknown as AppConfig;
 
-    const client = await connectClient(createMcpServerInstance(mockTools, config));
+    const client = await connectClient(createServer(config));
 
     expect(client.getServerVersion()).toEqual({
       name: "acme-docs",
@@ -419,11 +425,33 @@ describe("MCP Server identity", () => {
     expect(client.getInstructions()).toBe("Search acme docs before answering.");
   });
 
-  it("sends no instructions when none are given", async () => {
-    const client = await connectClient(createMcpServerInstance(mockTools, mockConfig));
+  it("sends the built-in instructions when none are configured", async () => {
+    const client = await connectClient(createServer(mockConfig));
 
-    expect(client.getInstructions()).toBeUndefined();
+    expect(client.getInstructions()).toBe(buildDefaultInstructions(false));
   });
+
+  it.each([
+    { mode: "normal", config: mockConfig },
+    { mode: "read-only", config: mockReadOnlyConfig },
+  ])(
+    "names only registered tools in the built-in instructions ($mode mode)",
+    async ({ config }) => {
+      const client = await connectClient(createServer(config));
+      const { tools } = await client.listTools();
+      const registered = tools.map((tool) => tool.name);
+
+      // Tool names are the backtick-quoted snake_case words; parameters like `version` are not.
+      const named = [
+        ...(client.getInstructions() ?? "").matchAll(/`([a-z]+(?:_[a-z]+)+)`/g),
+      ].map((match) => match[1]);
+
+      expect(named.length).toBeGreaterThan(0);
+      for (const name of named) {
+        expect(registered).toContain(name);
+      }
+    },
+  );
 });
 
 describe("resolveServerInstructions", () => {
@@ -437,7 +465,7 @@ describe("resolveServerInstructions", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("returns inline instructions", () => {
+  it("returns configured inline instructions in place of the built-in text", () => {
     const config = {
       ...mockConfig,
       server: { name: "acme-docs", instructions: "Search acme docs before answering." },
@@ -446,7 +474,7 @@ describe("resolveServerInstructions", () => {
     expect(resolveServerInstructions(config)).toBe("Search acme docs before answering.");
   });
 
-  it("reads instructions from the configured file", () => {
+  it("returns the configured file contents in place of the built-in text", () => {
     const instructionsFile = path.join(tmpDir, "instructions.md");
     fs.writeFileSync(instructionsFile, "# Acme docs\n\nAlways search first.\n");
     const config = {
@@ -459,8 +487,11 @@ describe("resolveServerInstructions", () => {
     );
   });
 
-  it("returns undefined when no instructions are configured", () => {
-    expect(resolveServerInstructions(mockConfig)).toBeUndefined();
+  it("returns the built-in instructions for the current mode when none are configured", () => {
+    expect(resolveServerInstructions(mockConfig)).toBe(buildDefaultInstructions(false));
+    expect(resolveServerInstructions(mockReadOnlyConfig)).toBe(
+      buildDefaultInstructions(true),
+    );
   });
 
   it("fails when both inline instructions and an instructions file are set", () => {

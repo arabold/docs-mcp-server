@@ -258,6 +258,17 @@ describe("Configuration Loading", () => {
       expect(config.server.instructionsFile).toBeUndefined();
     });
 
+    it("never writes instructions into the auto-saved default config file", () => {
+      const config = loadConfig({}, {}); // No args -> Default System Path, auto-saved
+
+      const saved = fs.readFileSync(
+        path.join(process.cwd(), ".vitest-config-mock", "config.yaml"),
+        "utf8",
+      );
+      expect(config.server.instructions).toBeUndefined();
+      expect(saved).not.toMatch(/^\s*instructions:/m);
+    });
+
     it("applies server.name from env over config file", () => {
       const configPath = path.join(tmpDir, "server-name-env.yaml");
       fs.writeFileSync(configPath, "server:\n  name: file-name\n");
