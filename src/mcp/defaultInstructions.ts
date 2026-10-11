@@ -10,20 +10,20 @@ const INTRO =
 
 const SEARCH =
   "- `search_docs` searches one library. Pass `version` when the project uses a specific version; " +
-  "without it, the latest indexed version is searched.";
+  "without it, the newest indexed version is searched when there is one.";
 
 const DISCOVER =
   "- Library names must match an indexed library. If a search cannot find the library, " +
   "call `list_libraries` for the exact names and versions.";
 
 const INDEX =
-  "- If a library is not indexed, read its documentation with `fetch_url` to answer now; " +
-  "`scrape_docs` can index it so later searches find it. " +
+  "- `fetch_url` is for libraries that are not indexed: read their documentation to answer now. " +
+  "`scrape_docs` can index a library so later searches find it. " +
   "Indexing runs in the background: check progress with `get_job_info` and search once the job has completed.";
 
 const READ_ONLY =
   "- This server is read-only and cannot index new documentation. " +
-  "If a library is not indexed, read its documentation with `fetch_url`.";
+  "`fetch_url` is for libraries that are not indexed: read their documentation to answer now.";
 
 /**
  * Builds the built-in instructions for the given mode.

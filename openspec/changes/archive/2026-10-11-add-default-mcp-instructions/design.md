@@ -89,31 +89,35 @@ export function createMcpServerInstance(
 
 `startStdioServer()` and `registerMcpService()` need no change: they already pass the result of `resolveServerInstructions()`.
 
-Text when indexing is available. The read-only text replaces the last bullet with "This server is read-only and cannot index new documentation. If a library is not indexed, read its documentation with `fetch_url`.":
+Text when indexing is available. The read-only text replaces the last bullet with "This server is read-only and cannot index new documentation. `fetch_url` is for libraries that are not indexed: read their documentation to answer now.":
 
 ```
 This server searches up-to-date documentation for libraries and packages. When a question depends on a library's API or behavior, search here before answering from memory.
 
-- `search_docs` searches one library. Pass `version` when the project uses a specific version; without it, the latest indexed version is searched.
+- `search_docs` searches one library. Pass `version` when the project uses a specific version; without it, the newest indexed version is searched when there is one.
 - Library names must match an indexed library. If a search cannot find the library, call `list_libraries` for the exact names and versions.
-- If a library is not indexed, read its documentation with `fetch_url` to answer now; `scrape_docs` can index it so later searches find it. Indexing runs in the background: check progress with `get_job_info` and search once the job has completed.
+- `fetch_url` is for libraries that are not indexed: read their documentation to answer now. `scrape_docs` can index a library so later searches find it. Indexing runs in the background: check progress with `get_job_info` and search once the job has completed.
 ```
 
-The text leaves out guidance that a tool description already gives. `read_page` and `list_pages` are not mentioned: the `read_page` description already points from search results to the whole page, and the evaluation below showed the same behavior with and without a sentence about it.
+The text leaves out guidance that a tool description or a tool response already gives, and keeps the focus on `search_docs`. Two details matter because the text would otherwise mislead the model:
+
+- "when there is one": a library with several tags such as `stable` and `next` and no semantic version has no newest version (see the version-resolution spec). Without a version, such a search falls back to unversioned documentation or returns the available versions. The version-not-found response lists them, and the model searched again with one of them in every run, with or without the text, so the text does not repeat that.
+- The `fetch_url` bullet says which libraries it is for. An earlier wording ("If a library is not indexed, read its documentation with `fetch_url`") was the only place that told the model how to read documentation, and the model then read pages of an indexed library with `fetch_url` in 2 of 5 runs. Without any text it used `read_page` every time. Scoping `fetch_url` restores that without promoting `read_page`, which is a minor tool next to `search_docs`.
 
 ### Evaluation
 
-A one-off promptfoo run (`gpt-5.4-mini`, 5 runs per variant) replayed short conversations with and without the text as the system prompt and checked the model's next step:
+A one-off promptfoo run (`gpt-5.4-mini`, 8 runs per variant) replayed short conversations with and without the final text as the system prompt and checked the model's next step:
 
 | Situation | With text | Without |
 |---|---|---|
-| New question, no version mentioned: a lookup tool first | 5/5 | 5/5 |
-| New question, project uses React 18.2: `search_docs` with that version | 5/5 | 5/5 |
-| `search_docs` reports the library is not indexed: discover or index next | 5/5 | 5/5 |
-| `list_libraries` shows the library is missing: read its documentation instead of answering from memory | 5/5 | 0/5 |
-| Search excerpts cover only part of a page: `read_page` next | 5/5 | 5/5 |
+| New question, no version mentioned: a lookup tool first | 8/8 | 7/8 |
+| New question, project uses React 18.2: `search_docs` with that version | 8/8 | 5/8 |
+| `search_docs` reports the library is not indexed: discover or index next | 8/8 | 7/8 |
+| `list_libraries` shows the library is missing: read its documentation instead of answering from memory | 8/8 | 0/8 |
+| Search excerpts cover only part of a page: `read_page` next | 8/8 | 7/8 |
+| Search returns available versions instead of results: search again with one of them | 8/8 | 8/8 |
 
-Over five runs with successive drafts, the text never failed the first two situations (50 of 50), while the model without it failed 9 of 50. An earlier draft also asked the model to end its answer by offering to index the library; it did so in 0 of 10 runs, so that sentence was dropped.
+Earlier runs with successive drafts showed the same pattern. An earlier draft also asked the model to end its answer by offering to index the library; it did so in 0 of 10 runs, so that sentence was dropped.
 
 ## Risks / Trade-offs
 
