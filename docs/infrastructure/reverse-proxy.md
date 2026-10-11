@@ -12,7 +12,7 @@ npx @arabold/docs-mcp-server@latest --host 127.0.0.1 --public-url https://exampl
 
 Every URL the server advertises derives from it: the MCP endpoint in startup output and the web UI, the authentication metadata, and the URLs the web UI calls. Without it, the server can only describe its bind address, which clients behind a proxy can't reach. On a loopback bind it also refuses API requests from the public host's pages, because it can't know that host is its own.
 
-The server answers every route both with the path prefix and without it. So it works whether the proxy strips `/docs` before forwarding (the common nginx and Traefik setup) or passes it through. The path's first segment must not be one of the server's own routes (`mcp`, `api`, `assets`, `.well-known`).
+The server answers every route both with the path prefix and without it. So it works whether the proxy strips `/docs` before forwarding (the common nginx and Traefik setup) or passes it through. The path's first segment must not be one of the server's own routes (`mcp`, `api`, `assets`, `.well-known`, `sse`, `messages`, `oauth`) or a root file such as `favicon.ico`.
 
 Open the web UI under the path, e.g. `https://example.com/docs/`. With a base path configured, the UI doesn't load at unprefixed URLs.
 
@@ -94,7 +94,7 @@ With Docker labels, the same routers and middleware become `traefik.http.routers
 
 The server's own authentication covers the MCP endpoint only; see [Authentication](./authentication.md). Put the web UI and `/api` behind your proxy's sign-in, for example OAuth2-Proxy, Authelia, Traefik `forwardAuth`, nginx `auth_request`, or Cloudflare Access.
 
-Exclude the MCP endpoint and its metadata from that sign-in (`/docs/mcp`, `/docs/.well-known/`, and the host-root metadata location). MCP clients authenticate there with bearer tokens and can't complete a browser sign-in.
+Exclude the MCP endpoint and its metadata from that sign-in (`/docs/mcp`, `/docs/.well-known/`, and the host-root metadata location). MCP clients authenticate there with bearer tokens and can't complete a browser sign-in. The server accepts WebSocket upgrades only at `/docs/api` and at the web UI root `/docs/`, where coordinators of earlier releases connect. Keep both behind the sign-in, so it also covers the live-update socket: protecting `/docs/api` alone leaves the socket open at `/docs/`.
 
 ## Browser-Based MCP Clients
 

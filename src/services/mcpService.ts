@@ -47,6 +47,9 @@ import type { PublicLocation } from "../utils/serverOrigin";
 /** Path of the MCP endpoint, relative to the public URL. */
 export const MCP_ENDPOINT_PATH = "/mcp";
 
+/** Path of the deprecated HTTP+SSE transport's event stream, relative to the public URL. */
+export const LEGACY_SSE_PATH = "/sse";
+
 /** Authentication for the MCP endpoint. */
 export interface McpEndpointAuth {
   /** Verifies bearer tokens; throws `OAuthError` for any rejection. */
@@ -218,7 +221,7 @@ function registerLegacySseTransport(
   let capWarned = false;
 
   server.get(
-    "/sse",
+    LEGACY_SSE_PATH,
     { onRequest: createOriginCheck(deps.originPolicy) },
     async (request, reply) => {
       // Each stream holds an MCP server instance until the client leaves, so

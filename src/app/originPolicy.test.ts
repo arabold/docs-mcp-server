@@ -167,17 +167,29 @@ describe("setCorsPreflightHeaders", () => {
 });
 
 describe("isLoopbackBindHost", () => {
-  it.each(["127.0.0.1", "127.0.1.1", "localhost", "::1", "[::1]"])(
-    "treats %s as loopback",
-    (host) => {
-      expect(isLoopbackBindHost(host)).toBe(true);
-    },
-  );
+  it.each([
+    "127.0.0.1",
+    "127.0.1.1",
+    "localhost",
+    "::1",
+    "[::1]",
+    "0:0:0:0:0:0:0:1",
+    "[0:0:0:0:0:0:0:1]",
+    "::ffff:127.0.0.1",
+    "::1%lo0",
+  ])("treats %s as loopback", (host) => {
+    expect(isLoopbackBindHost(host)).toBe(true);
+  });
 
-  it.each(["0.0.0.0", "::", "192.168.1.10", "docs.internal"])(
-    "treats %s as network-exposed",
-    (host) => {
-      expect(isLoopbackBindHost(host)).toBe(false);
-    },
-  );
+  it.each([
+    "0.0.0.0",
+    "::",
+    "0:0:0:0:0:0:0:0",
+    "::ffff:10.0.0.1",
+    "fe80::1%en0",
+    "192.168.1.10",
+    "docs.internal",
+  ])("treats %s as network-exposed", (host) => {
+    expect(isLoopbackBindHost(host)).toBe(false);
+  });
 });

@@ -13,7 +13,7 @@
  */
 
 import type { ServerResponse } from "node:http";
-import { isIP } from "node:net";
+import { BlockList, isIP } from "node:net";
 import { localhostAllowedOrigins } from "@modelcontextprotocol/server";
 import { stripIpv6Brackets } from "../utils/serverOrigin";
 
@@ -200,14 +200,24 @@ export function setCorsPreflightHeaders(
 }
 
 /**
+ * Loopback addresses. `BlockList` matches every IPv6 notation, IPv4-mapped
+ * addresses (`::ffff:127.0.0.1`) and zone IDs (`::1%lo0`).
+ */
+const LOOPBACK_ADDRESSES = new BlockList();
+LOOPBACK_ADDRESSES.addSubnet("127.0.0.0", 8, "ipv4");
+LOOPBACK_ADDRESSES.addAddress("::1", "ipv6");
+
+/**
  * Whether the server listens only on the loopback interface, where no reverse
  * proxy stands between it and a local browser.
  * @param host - The configured bind host.
- * @returns `true` for `localhost`, `127.0.0.0/8` and `::1`.
+ * @returns `true` for `localhost`, `127.0.0.0/8` and `::1`, in any notation.
  */
 export function isLoopbackBindHost(host: string): boolean {
   const unbracketed = stripIpv6Brackets(host.trim().toLowerCase());
-  return (
-    unbracketed === "localhost" || unbracketed === "::1" || /^127\./.test(unbracketed)
-  );
+  const family = isIP(unbracketed);
+  if (family === 0) {
+    return unbracketed === "localhost";
+  }
+  return LOOPBACK_ADDRESSES.check(unbracketed, family === 6 ? "ipv6" : "ipv4");
 }

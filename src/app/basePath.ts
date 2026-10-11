@@ -61,14 +61,8 @@ export function isUnderPath(pathname: string, prefix: string): boolean {
   return pathname === prefix || pathname.startsWith(`${prefix}/`);
 }
 
-/**
- * Paths that never fall back to the web UI: the server's own root routes, plus
- * the removed OAuth proxy endpoints, so clients probing those get a clean 404
- * instead of an HTML page.
- */
-const NON_SPA_PREFIXES = [...RESERVED_ROOT_SEGMENTS, "oauth"].map(
-  (segment) => `/${segment}`,
-);
+/** Paths that never fall back to the web UI; see {@link RESERVED_ROOT_SEGMENTS}. */
+const NON_SPA_PREFIXES = RESERVED_ROOT_SEGMENTS.map((segment) => `/${segment}`);
 
 /**
  * Whether an unmatched request should get the web UI shell, so client-side
@@ -83,4 +77,19 @@ export function servesSpaShell(method: string, url: string): boolean {
   }
   const pathname = url.split("?")[0];
   return !NON_SPA_PREFIXES.some((prefix) => isUnderPath(pathname, prefix));
+}
+
+/**
+ * Whether a WebSocket upgrade targets the API's live-update socket: `/api`,
+ * where the web UI and coordinators connect, or the root, where coordinators
+ * of earlier releases connect. The MCP endpoint and every other path are
+ * refused, so a proxy that signs in the web UI and `/api` but leaves `/mcp` to
+ * bearer tokens also covers the socket.
+ * @param url - The upgrade request's URL, with or without the base path.
+ * @param basePath - `""` or a path without a trailing slash.
+ * @returns `true` when the upgrade may reach the API's socket.
+ */
+export function isApiSocketPath(url: string, basePath: string): boolean {
+  const pathname = stripBasePath(url, basePath).split("?")[0];
+  return pathname === "/" || isUnderPath(pathname, "/api");
 }

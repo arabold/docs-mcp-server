@@ -32,6 +32,7 @@ const mockFastify = vi.hoisted(() => ({
 const mockMcpService = vi.hoisted(() => ({
   registerMcpService: vi.fn(),
   MCP_ENDPOINT_PATH: "/mcp",
+  LEGACY_SSE_PATH: "/sse",
 }));
 
 const mockTrpcService = vi.hoisted(() => ({

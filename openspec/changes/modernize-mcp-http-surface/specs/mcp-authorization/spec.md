@@ -209,6 +209,27 @@ At startup with authentication enabled, the server SHALL state which endpoint au
 - **AND** a request to the HTTP API carries no token
 - **THEN** the request SHALL NOT be refused for lack of authentication
 
+### Requirement: Only the API accepts WebSocket upgrades
+
+The server SHALL accept a WebSocket upgrade only at `/api` and the paths below it, where the web UI and coordinators connect, or at the root, where coordinators of earlier releases connect, with or without the public URL's path in front. It SHALL refuse an upgrade at any other path, including the MCP endpoint and its metadata, with HTTP 404. A reverse proxy that signs in the web UI and `/api` but leaves the MCP endpoint to bearer tokens therefore covers every WebSocket the server serves.
+
+#### Scenario: Upgrade on the MCP endpoint
+
+- **WHEN** the public URL is `https://example.com/docs`
+- **AND** a client sends a WebSocket upgrade to `/docs/mcp`
+- **THEN** the upgrade SHALL be refused with HTTP 404
+
+#### Scenario: Upgrade on the API
+
+- **WHEN** the public URL is `https://example.com/docs`
+- **AND** a client sends a WebSocket upgrade to `/docs/api`
+- **THEN** the upgrade SHALL be accepted
+
+#### Scenario: Coordinator of an earlier release
+
+- **WHEN** a coordinator of an earlier release sends a WebSocket upgrade to the worker's root path
+- **THEN** the upgrade SHALL be accepted
+
 ### Requirement: Requests for unknown host names are refused
 
 On every bind, the server SHALL answer HTTP 403 to any request, and refuse any WebSocket upgrade, whose `Host` header names a host other than:
@@ -253,7 +274,7 @@ This stops DNS rebinding: a page on an attacker's domain that resolves to the se
 
 ### Requirement: The API rejects foreign browser origins on a loopback bind
 
-When the server is bound to a loopback address, the HTTP API at `/api` and its WebSocket SHALL reject any request or WebSocket upgrade whose `Origin` header is present but is not an allowed origin. The allowed origins are those defined for the MCP endpoint. A request without an `Origin` header SHALL be served. When the server is bound to any other address, the API SHALL NOT check `Origin`.
+When the server is bound to a loopback address (`localhost`, `127.0.0.0/8` or `::1`, in any IPv6 notation), the HTTP API at `/api` and its WebSocket SHALL reject any request or WebSocket upgrade whose `Origin` header is present but is not an allowed origin. The allowed origins are those defined for the MCP endpoint. A request without an `Origin` header SHALL be served. When the server is bound to any other address, the API SHALL NOT check `Origin`.
 
 #### Scenario: Foreign page calls the API on a local install
 
@@ -272,6 +293,12 @@ When the server is bound to a loopback address, the HTTP API at `/api` and its W
 - **WHEN** the server is bound to `127.0.0.1`
 - **AND** the web UI is loaded from `http://localhost:6280`
 - **THEN** its API requests and its WebSocket SHALL be served
+
+#### Scenario: IPv6 loopback in its full notation
+
+- **WHEN** the server is bound to `0:0:0:0:0:0:0:1`
+- **AND** a request to the HTTP API carries `Origin: https://attacker.example`
+- **THEN** the response SHALL be HTTP 403
 
 #### Scenario: Network-exposed bind
 

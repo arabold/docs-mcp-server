@@ -85,7 +85,7 @@ describe("buildSystemInfo", () => {
       appConfig,
       MCP_URL,
     );
-    expect(enabled.mcp).toEqual({ enabled: true, endpoints: [MCP_URL] });
+    expect(enabled.mcp).toMatchObject({ enabled: true, url: MCP_URL });
 
     const disabled = buildSystemInfo(
       baseServerConfig({ enableMcpServer: false }),
@@ -94,6 +94,25 @@ describe("buildSystemInfo", () => {
     );
     expect(disabled.mcp).toEqual({ enabled: false, endpoints: [] });
   });
+
+  it.each([
+    [false, ["/mcp", "/sse"]],
+    [true, ["/mcp"]],
+  ])(
+    "lists the relative paths served with auth enabled = %s",
+    (authEnabled, endpoints) => {
+      const config: AppConfig = JSON.parse(JSON.stringify(appConfig));
+      config.auth.enabled = authEnabled;
+
+      const info = buildSystemInfo(
+        baseServerConfig({ enableMcpServer: true }),
+        config,
+        MCP_URL,
+      );
+
+      expect(info.mcp.endpoints).toEqual(endpoints);
+    },
+  );
 
   it("omits the issuer when auth is disabled", () => {
     const disabledAuthConfig: AppConfig = JSON.parse(JSON.stringify(appConfig));

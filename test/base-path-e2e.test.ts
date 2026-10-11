@@ -24,7 +24,7 @@ import {
   listenOnFreePort,
   startLocalIssuer,
   startPrefixProxy,
-  tryNodeWebSocket,
+  tryWebSocket,
 } from "./test-helpers";
 
 const BASE_PATH = "/docs";
@@ -81,8 +81,17 @@ describe("Serving under a base path behind a reverse proxy", () => {
       const api = await fetch(`${publicUrl}/api/ping`);
 
       expect(api.status).toBe(200);
-      expect(await tryNodeWebSocket(`${publicUrl.replace(/^http/, "ws")}/api`)).toBe("open");
+      expect(await tryWebSocket(`${publicUrl.replace(/^http/, "ws")}/api`)).toBe("open");
     });
+
+    it.each(["/mcp", "/.well-known/oauth-protected-resource/mcp", "/libraries"])(
+      "refuses a WebSocket upgrade on %s under the path, which is not the API",
+      async (pathname) => {
+        expect(await tryWebSocket(`${publicUrl.replace(/^http/, "ws")}${pathname}`)).toBe(
+          "refused",
+        );
+      },
+    );
 
     it("forwards the worker's events to a coordinator that links to it under the path", async () => {
       const localBus = new EventBusService();

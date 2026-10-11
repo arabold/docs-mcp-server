@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Database } from "better-sqlite3";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { type Browser, chromium } from "playwright";
+import { type ClientOptions, WebSocket } from "ws";
 
 /**
  * Returns the command and arguments to run the CLI.
@@ -246,19 +247,33 @@ export async function startPrefixProxy(upstreamPort: number, basePath: string) {
 }
 
 /**
- * Open a WebSocket with Node's global client, the one the worker link uses
- * through tRPC, and report whether the upgrade succeeded.
+ * Open a WebSocket and report whether the server accepted the upgrade. Uses the
+ * `ws` package rather than Node's global `WebSocket`, which the test setup's
+ * MSW interceptor reports as open before the server has answered.
  * @param url - The `ws://` URL.
- * @returns `"open"` or `"refused"`.
+ * @param options - Client options, e.g. an `origin` to send; none by default.
+ * @returns `"open"`, `"refused"`, or `"no answer"` when the server has not
+ *   answered the upgrade within five seconds.
  */
-export async function tryNodeWebSocket(url: string): Promise<"open" | "refused"> {
-  const socket = new WebSocket(url);
+export async function tryWebSocket(
+  url: string,
+  options: ClientOptions = {},
+): Promise<"open" | "refused" | "no answer"> {
+  const socket = new WebSocket(url, options);
   return await new Promise((resolve) => {
-    socket.addEventListener("open", () => {
+    const timer = setTimeout(() => {
+      resolve("no answer");
+      socket.terminate();
+    }, 5000);
+    const settle = (outcome: "open" | "refused") => {
+      clearTimeout(timer);
+      resolve(outcome);
+    };
+    socket.on("open", () => {
       socket.close();
-      resolve("open");
+      settle("open");
     });
-    socket.addEventListener("error", () => resolve("refused"));
+    socket.on("error", () => settle("refused"));
   });
 }
 

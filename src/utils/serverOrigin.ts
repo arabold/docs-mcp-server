@@ -33,10 +33,12 @@ export function normalizePublicOrigin(
 }
 
 /**
- * First path segments of the server's own root routes. A public URL must not
- * start with one: stripping such a base path from a request the proxy already
- * stripped would remove the route itself (`/mcp` under a base path of `/mcp`
- * would become `/`). These paths also never fall back to the web UI.
+ * First path segments of the server's own root routes, plus `oauth` for the
+ * removed OAuth proxy endpoints. A public URL must not start with one:
+ * stripping such a base path from a request the proxy already stripped would
+ * remove the route itself (`/mcp` under a base path of `/mcp` would become
+ * `/`). These paths also never fall back to the web UI, so clients probing the
+ * removed endpoints get a clean 404 instead of an HTML page.
  */
 export const RESERVED_ROOT_SEGMENTS: readonly string[] = [
   "mcp",
@@ -45,6 +47,7 @@ export const RESERVED_ROOT_SEGMENTS: readonly string[] = [
   ".well-known",
   "sse",
   "messages",
+  "oauth",
 ];
 
 /**
@@ -94,7 +97,7 @@ export function normalizePublicUrl(value: string | undefined): string | undefine
     (RESERVED_ROOT_SEGMENTS.includes(firstSegment) || firstSegment.includes("."))
   ) {
     throw new Error(
-      `server.publicUrl path must not start with "/${firstSegment}": the server serves its own route or file there, so requests could not be told apart. Choose a different path, such as "/docs".`,
+      `server.publicUrl path must not start with "/${firstSegment}": the server reserves that path for its own routes and files, so requests could not be told apart. Choose a different path, such as "/docs".`,
     );
   }
 

@@ -7,8 +7,8 @@ The Docs MCP Server is compatible with any client that supports the [Model Conte
 Most clients support two connection modes:
 1.  **Remote/HTTP**: Connects to a running server instance (e.g., via Docker).
     *   **URL**: `http://localhost:6280/mcp` (Streamable HTTP)
-    *   The HTTP endpoint speaks MCP protocol revision **2026-07-28** and earlier revisions.
-2.  **Local/Stdio**: Spawns the server process directly. Works with every client and protocol revision.
+    *   The HTTP endpoint speaks MCP protocol revision **2026-07-28**, and serves clients on the earlier revisions from 2024-11-05 to 2025-11-25 too.
+2.  **Local/Stdio**: Spawns the server process directly. Serves clients on protocol revision 2026-07-28 and on the earlier revisions from 2024-11-05 to 2025-11-25.
     *   **Command**: `npx`
     *   **Args**: `["-y", "@arabold/docs-mcp-server@latest"]`
 

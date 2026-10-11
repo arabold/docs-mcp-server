@@ -213,6 +213,16 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
 
 - [x] 11.8 Launch the full Chromium build in the browser E2E tests (`launchChromium` in `test/test-helpers.ts`), since CI installs Playwright's browsers with `--no-shell`. Verify `test/mcp-http-e2e.test.ts` and `test/base-path-e2e.test.ts` pass with a `PLAYWRIGHT_BROWSERS_PATH` that holds no headless shell.
 
+- [x] 11.9 Accept WebSocket upgrades only at `/api` and the root (`isApiSocketPath` in `src/app/basePath.ts`), with or without the base path, and answer 404 elsewhere, so an upgrade on `/mcp` no longer reaches the unauthenticated API socket behind a proxy that signs in only the web UI and `/api`. Probe sockets with the `ws` package (`tryWebSocket` in `test/test-helpers.ts`): MSW reports Node's global `WebSocket` as open before the server answers. Verify `basePath.test.ts`, and `test/mcp-http-e2e.test.ts` and `test/base-path-e2e.test.ts` refuse `/mcp`, `/sse`, the metadata path and a web UI route (they fail without the check).
+
+- [x] 11.10 Recognize `::1` in any IPv6 notation, and IPv4-mapped `127.0.0.0/8`, as a loopback bind, so the API's origin shield stays on. Verify `originPolicy.test.ts` covers `0:0:0:0:0:0:0:1` and `::ffff:127.0.0.1`.
+
+- [x] 11.11 Keep `getSystemHealth`'s `mcp.endpoints` as relative paths (`/mcp`, plus `/sse` while authentication is off) and add `mcp.url` for the advertised MCP endpoint URL, which the web UI shows. Verify `systemInfo.test.ts`.
+
+- [x] 11.12 Reserve `oauth` as a first path segment of `server.publicUrl`, so a probe of the removed `/oauth/authorize` still gets 404. Verify `serverOrigin.test.ts` rejects `https://example.com/oauth`.
+
+- [x] 11.13 Name the supported protocol revisions in `docs/guides/mcp-clients.md` (2026-07-28, and 2024-11-05 to 2025-11-25) instead of "every protocol revision".
+
 ## 12. Archive follow-up
 
 - [ ] 12.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.

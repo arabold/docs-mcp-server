@@ -11,6 +11,7 @@
  */
 import type { AppServerConfig } from "../app/AppServerConfig";
 import type { AppConfig } from "../utils/config";
+import { LEGACY_SSE_PATH, MCP_ENDPOINT_PATH } from "./mcpService";
 
 /** Which top-level services this process was started with. */
 export interface SystemInfoServices {
@@ -28,12 +29,14 @@ export type SystemInfoWorker =
   | { mode: "embedded"; maxConcurrency: number }
   | { mode: "remote"; url: string };
 
-/** MCP protocol exposure, when enabled. */
-export interface SystemInfoMcp {
-  enabled: boolean;
-  /** Advertised absolute URLs of the MCP endpoint (empty when disabled). */
-  endpoints: string[];
-}
+/**
+ * MCP protocol exposure. `endpoints` lists the paths the MCP server answers
+ * on, relative to the public URL; `url` is the advertised MCP endpoint URL
+ * clients connect to.
+ */
+export type SystemInfoMcp =
+  | { enabled: true; endpoints: string[]; url: string }
+  | { enabled: false; endpoints: string[] };
 
 /** OAuth2/OIDC authentication configuration. */
 export interface SystemInfoAuth {
@@ -92,10 +95,16 @@ export function buildSystemInfo(
     worker: serverConfig.externalWorkerUrl
       ? { mode: "remote", url: serverConfig.externalWorkerUrl }
       : { mode: "embedded", maxConcurrency: appConfig.scraper.maxConcurrency },
-    mcp: {
-      enabled: mcpEnabled,
-      endpoints: mcpEnabled ? [mcpEndpointUrl] : [],
-    },
+    // The deprecated SSE transport is served only while authentication is off.
+    mcp: mcpEnabled
+      ? {
+          enabled: true,
+          endpoints: authEnabled
+            ? [MCP_ENDPOINT_PATH]
+            : [MCP_ENDPOINT_PATH, LEGACY_SSE_PATH],
+          url: mcpEndpointUrl,
+        }
+      : { enabled: false, endpoints: [] },
     auth: {
       enabled: authEnabled,
       issuer:

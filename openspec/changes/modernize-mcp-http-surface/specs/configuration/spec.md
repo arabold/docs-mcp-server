@@ -10,7 +10,7 @@ The configuration system SHALL reject, with a clear validation error, a value th
 - carries credentials, a query string, or a fragment;
 - uses a protocol other than `http` or `https`;
 - has a path with an empty segment (`//`);
-- has a path whose first segment names a route or file the server itself serves at its root, such as `mcp`, `api`, `assets` or `favicon.ico`.
+- has a path whose first segment names a route or file the server itself serves at its root, such as `mcp`, `api`, `assets` or `favicon.ico`, or `oauth`, where the removed OAuth proxy endpoints answered.
 
 A trailing slash SHALL be ignored.
 
@@ -42,6 +42,10 @@ A trailing slash SHALL be ignored.
 #### Scenario: Path collides with a server route
 - **WHEN** `server.publicUrl` is configured as `https://example.com/mcp`
 - **THEN** configuration loading MUST reject the value with an error explaining that the path's first segment collides with a route the server serves
+
+#### Scenario: Path collides with the removed OAuth endpoints
+- **WHEN** `server.publicUrl` is configured as `https://example.com/oauth`
+- **THEN** configuration loading MUST reject the value, so a probe of `/oauth/authorize` still gets HTTP 404 rather than the web UI
 
 #### Scenario: Path collides with a root file
 - **WHEN** `server.publicUrl` is configured as `https://example.com/favicon.ico`

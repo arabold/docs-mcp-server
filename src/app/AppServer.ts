@@ -6,6 +6,7 @@
 import { readFile } from "node:fs/promises";
 import type { IncomingHttpHeaders } from "node:http";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import fastifyStatic from "@fastify/static";
 import Fastify, {
   type FastifyError,
@@ -44,7 +45,13 @@ import {
   resolvePublicLocation,
 } from "../utils/serverOrigin";
 import type { AppServerConfig } from "./AppServerConfig";
-import { injectBaseHref, isUnderPath, servesSpaShell, stripBasePath } from "./basePath";
+import {
+  injectBaseHref,
+  isApiSocketPath,
+  isUnderPath,
+  servesSpaShell,
+  stripBasePath,
+} from "./basePath";
 import {
   createHostPolicy,
   createOriginPolicy,
@@ -535,14 +542,13 @@ export class AppServer {
       // a foreign page must not open the live-update stream, which is the only
       // WebSocket the server serves.
       if (this.refusal(request.headers, true)) {
-        socket.write(
-          "HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
-        );
-        socket.destroy();
+        refuseUpgrade(socket, "403 Forbidden");
         return;
       }
-      // Let the WebSocket server handle all upgrade requests.
-      // tRPC's WebSocket handler manages routing internally after connection is established.
+      if (!isApiSocketPath(request.url ?? "/", this.location.basePath)) {
+        refuseUpgrade(socket, "404 Not Found");
+        return;
+      }
       this.wss?.handleUpgrade(request, socket, head, (ws) => {
         this.wss?.emit("connection", ws, request);
       });
@@ -790,4 +796,17 @@ export class AppServer {
       logger.info(`   • ${service}`);
     }
   }
+}
+
+/**
+ * Answer a WebSocket upgrade with an HTTP error and close the connection once
+ * the answer is sent. Node no longer watches an upgraded socket, so a client
+ * that resets the connection must not raise an unhandled error.
+ * @param socket - The upgrade request's socket.
+ * @param status - Status code and reason, e.g. `404 Not Found`.
+ */
+function refuseUpgrade(socket: Duplex, status: string): void {
+  socket.on("error", () => socket.destroy());
+  socket.once("finish", () => socket.destroy());
+  socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }

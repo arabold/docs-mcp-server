@@ -17,14 +17,13 @@ import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type ClientOptions, WebSocket as WsClient } from "ws";
 import {
   getCliCommand,
   getFreePort,
   launchChromium,
   requestWithHost,
   stopChildProcess,
-  tryNodeWebSocket,
+  tryWebSocket,
 } from "./test-helpers";
 
 /** Spawns the server and resolves with its advertised base URL once it is ready. */
@@ -81,21 +80,6 @@ async function connectClient(baseUrl: string): Promise<Client> {
   );
   await client.connect(new StreamableHTTPClientTransport(new URL("/mcp", baseUrl)));
   return client;
-}
-
-/**
- * Opens a WebSocket with explicit handshake options, such as the `Origin` a
- * browser page sends or a rebound `Host`.
- */
-async function tryWebSocketWith(url: string, options: ClientOptions): Promise<"open" | "refused"> {
-  const socket = new WsClient(url, options);
-  return await new Promise((resolve) => {
-    socket.on("open", () => {
-      socket.close();
-      resolve("open");
-    });
-    socket.on("error", () => resolve("refused"));
-  });
 }
 
 describe("MCP HTTP server E2E", () => {
@@ -246,13 +230,28 @@ describe("MCP HTTP server E2E", () => {
     expect(response.status).toBe(403);
   });
 
-  it("accepts the WebSocket from Node's client and refuses it from a foreign origin", async () => {
+  it("accepts the WebSocket without an Origin header and refuses it from a foreign origin", async () => {
     const wsUrl = new URL("/api", baseUrl).href.replace(/^http/, "ws");
 
-    expect(await tryNodeWebSocket(wsUrl)).toBe("open");
-    expect(await tryWebSocketWith(wsUrl, { origin: new URL(baseUrl).origin })).toBe("open");
-    expect(await tryWebSocketWith(wsUrl, { origin: "https://attacker.example" })).toBe("refused");
+    expect(await tryWebSocket(wsUrl)).toBe("open");
+    expect(await tryWebSocket(wsUrl, { origin: new URL(baseUrl).origin })).toBe("open");
+    expect(await tryWebSocket(wsUrl, { origin: "https://attacker.example" })).toBe("refused");
   });
+
+  it("accepts the WebSocket at the root, where coordinators of earlier releases connect", async () => {
+    expect(await tryWebSocket(new URL("/", baseUrl).href.replace(/^http/, "ws"))).toBe(
+      "open",
+    );
+  });
+
+  it.each(["/mcp", "/sse", "/libraries"])(
+    "refuses a WebSocket upgrade on %s, which is not the API",
+    async (pathname) => {
+      const wsUrl = new URL(pathname, baseUrl).href.replace(/^http/, "ws");
+
+      expect(await tryWebSocket(wsUrl)).toBe("refused");
+    },
+  );
 
   it.each([
     ["GET", "/api/ping"],
@@ -285,7 +284,7 @@ describe("MCP HTTP server E2E", () => {
   it("refuses the WebSocket for a foreign host name", async () => {
     const wsUrl = new URL("/api", baseUrl).href.replace(/^http/, "ws");
 
-    const outcome = await tryWebSocketWith(wsUrl, {
+    const outcome = await tryWebSocket(wsUrl, {
       headers: { host: `attacker.rebind.example:${new URL(baseUrl).port}` },
     });
 

@@ -131,9 +131,7 @@ export default function Settings() {
       value: health.mcp.enabled ? (
         <>
           <Pill variant="ok">enabled</Pill>
-          {health.mcp.endpoints.map((endpoint) => (
-            <Chip key={endpoint}>{endpoint}</Chip>
-          ))}
+          <Chip>{health.mcp.url}</Chip>
         </>
       ) : (
         <Pill variant="idle">disabled</Pill>

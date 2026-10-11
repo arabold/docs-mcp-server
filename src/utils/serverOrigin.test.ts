@@ -87,10 +87,13 @@ describe("server origin helpers", () => {
     "https://example.com/MCP",
     "https://example.com/favicon.ico",
     "https://example.com/manifest.json/docs",
+    "https://example.com/oauth",
   ])(
     "rejects public URL %s whose first segment collides with a route or file",
     (value) => {
-      expect(() => normalizePublicUrl(value)).toThrow(/serves its own route or file/);
+      expect(() => normalizePublicUrl(value)).toThrow(
+        /reserves that path for its own routes and files/,
+      );
     },
   );
 

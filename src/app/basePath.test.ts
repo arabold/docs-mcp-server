@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { injectBaseHref, servesSpaShell, stripBasePath } from "./basePath";
+import {
+  injectBaseHref,
+  isApiSocketPath,
+  servesSpaShell,
+  stripBasePath,
+} from "./basePath";
 
 describe("stripBasePath", () => {
   it.each([
@@ -73,5 +78,31 @@ describe("servesSpaShell", () => {
 
   it("does not serve the shell for non-GET requests", () => {
     expect(servesSpaShell("POST", "/libraries")).toBe(false);
+  });
+});
+
+describe("isApiSocketPath", () => {
+  it.each([
+    ["/api", ""],
+    ["/api?connectionParams=1", ""],
+    ["/", ""],
+    ["/docs/api", "/docs"],
+    ["/api", "/docs"],
+    ["/docs", "/docs"],
+    ["/docs/", "/docs"],
+  ])("accepts %s with base path %j", (url, basePath) => {
+    expect(isApiSocketPath(url, basePath)).toBe(true);
+  });
+
+  it.each([
+    ["/mcp", ""],
+    ["/sse", ""],
+    ["/libraries", ""],
+    ["/apix", ""],
+    ["/docs/mcp", "/docs"],
+    ["/mcp", "/docs"],
+    ["/docs/.well-known/oauth-protected-resource/mcp", "/docs"],
+  ])("refuses %s with base path %j", (url, basePath) => {
+    expect(isApiSocketPath(url, basePath)).toBe(false);
   });
 });
