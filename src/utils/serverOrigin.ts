@@ -76,14 +76,15 @@ export function normalizePublicUrl(value: string | undefined): string | undefine
     throw new Error("server.publicUrl must not include a query string or fragment.");
   }
 
-  const path = parsed.pathname.replace(/\/+$/, "");
   // A path starting with "//" would become a scheme-relative URL in the web
-  // UI's <base href>, pointing the browser at another host.
-  if (path.includes("//")) {
+  // UI's <base href>, pointing the browser at another host. The check runs
+  // before the trailing slash is dropped, so "/docs//" is refused too.
+  if (parsed.pathname.includes("//")) {
     throw new Error(
-      `server.publicUrl path must not contain an empty segment ("//"): "${path}".`,
+      `server.publicUrl path must not contain an empty segment ("//"): "${parsed.pathname}".`,
     );
   }
+  const path = parsed.pathname.replace(/\/$/, "");
 
   // Root files such as favicon.ico or manifest.json are the only dotted
   // first segments the server serves; a base path must not shadow them.

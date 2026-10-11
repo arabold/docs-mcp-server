@@ -73,6 +73,8 @@ describe("server origin helpers", () => {
     "not a url",
     "https://example.com//docs",
     "https://example.com/docs//api",
+    "https://example.com/docs//",
+    "https://example.com//",
   ])("rejects invalid public URL %s", (value) => {
     expect(() => normalizePublicUrl(value)).toThrow(/server\.publicUrl/);
   });
