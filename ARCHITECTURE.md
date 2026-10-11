@@ -20,7 +20,7 @@ The system runs in two modes:
 
 **Distributed Mode**: Separate coordinator and worker processes. Used for scaling processing workload across multiple containers.
 
-Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP transport for interactive terminals (has TTY).
+Outside Docker, protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP transport for interactive terminals (has TTY). The Docker image supplies environment defaults for HTTP on all container interfaces, overridable by runtime environment variables or CLI flags.
 
 ### Technology Stack
 
@@ -208,6 +208,8 @@ The entry point resolves protocol based on TTY status:
 - Has TTY (interactive terminal): HTTP transport with Server-Sent Events
 - Manual override: `--protocol stdio|http` bypasses detection
 
+The Docker image sets `DOCS_MCP_SERVER_PROTOCOL=http` and `DOCS_MCP_SERVER_HOST=0.0.0.0`, so no-argument container startup serves HTTP even without a TTY. These values enter the existing environment configuration layer; unrelated CLI options preserve them, and explicit CLI flags override them. Docker stdio clients select `--protocol stdio` and keep stdin open with `docker run -i`.
+
 ### Pipeline Selection
 
 The PipelineFactory chooses implementation based on configuration:
@@ -325,7 +327,7 @@ The MCP server exposes tools as protocol-compliant endpoints, built on the MCP T
 - **Host check**: a global hook refuses (`403`) every request and WebSocket upgrade whose `Host` names an unknown host, which stops DNS rebinding. Accepted are IP literals, `localhost`, single-label names, the public URL's host and the hosts of `server.allowedOrigins` (`createHostPolicy` in `src/app/originPolicy.ts`).
 - **Deprecated HTTP+SSE transport**: `GET /sse` and `POST /messages`, registered only while authentication is off, for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
 
-Protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP transport for interactive terminals (has TTY).
+Protocol selection defaults to TTY-based auto-detection outside Docker. The Docker image defaults to HTTP on all container interfaces; runtime environment variables and CLI flags can override it.
 
 When authentication is enabled, the HTTP transport acts as an OAuth 2.0 resource server. It publishes protected resource metadata and accepts only JWTs the configured identity provider issued for its public URL; see [Authentication](docs/infrastructure/authentication.md).
 

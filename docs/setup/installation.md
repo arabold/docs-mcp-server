@@ -27,9 +27,23 @@ docker run --rm \
   -v docs-mcp-data:/data \
   -v docs-mcp-config:/config \
   -p 6280:6280 \
-  ghcr.io/arabold/docs-mcp-server:latest \
-  --protocol http --host 0.0.0.0 --port 6280
+  ghcr.io/arabold/docs-mcp-server:latest
 ```
+
+**Server defaults:** The Docker image starts the unified HTTP server on `0.0.0.0:6280`, with the Web UI, API, and MCP endpoint enabled. These defaults remain active when you supply unrelated options such as `--verbose`. The Node.js CLI retains TTY-based protocol auto-detection.
+
+**Overrides:** Set `DOCS_MCP_SERVER_PROTOCOL`, `DOCS_MCP_SERVER_HOST`, or `DOCS_MCP_SERVER_PORTS_DEFAULT` with Docker's `-e` option, or pass `--protocol`, `--host`, and `--port` after the image name. CLI flags take precedence over environment variables, which take precedence over config-file values. The image supplies protocol and host environment values, so use runtime environment variables or CLI flags to change those settings. Adjust the container port in `-p` when changing the server port.
+
+**Stdio clients:** Select stdio explicitly and keep stdin open with `-i` (without `-t`):
+
+```bash
+docker run --rm -i \
+  -v docs-mcp-data:/data \
+  -v docs-mcp-config:/config \
+  ghcr.io/arabold/docs-mcp-server:latest --protocol stdio
+```
+
+`-e DOCS_MCP_SERVER_PROTOCOL=stdio` also selects stdio. Set it to `auto` to restore TTY-based protocol selection used by earlier images.
 
 **Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
 
