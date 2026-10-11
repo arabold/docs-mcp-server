@@ -831,9 +831,9 @@ export class DocumentManagementService {
     pathOrUrl: string,
     options: PageContentOptions = {},
   ): Promise<PageContentResult> {
-    const resolvedVersion = await this.resolvePageVersion(library, version);
-    const url = await this.findPageUrl(library, resolvedVersion, pathOrUrl);
-    const chunks = await this.store.findChunksByUrl(library, resolvedVersion, url);
+    const resolved = await this.resolvePageVersion(library, version);
+    const url = await this.findPageUrl(resolved.library, resolved.version, pathOrUrl);
+    const chunks = await this.store.findChunksByUrl(library, resolved.version, url);
     const contentType = chunks[0]?.content_type ?? null;
     const strategy = createContentAssemblyStrategy(contentType, this.appConfig);
 
@@ -876,17 +876,17 @@ export class DocumentManagementService {
     version: string | null | undefined,
     options: ListPagesOptions = {},
   ): Promise<ListPagesResult> {
-    const resolvedVersion = await this.resolvePageVersion(library, version);
+    const resolved = await this.resolvePageVersion(library, version);
     const limit = options.limit ?? 50;
     const offset = options.offset ?? 0;
-    const { total, pages } = await this.store.listPages(library, resolvedVersion, {
+    const { total, pages } = await this.store.listPages(library, resolved.version, {
       contains: options.contains,
       limit,
       offset,
     });
     return {
-      library,
-      version: resolvedVersion,
+      library: resolved.library,
+      version: resolved.version,
       total,
       pages,
       limit,
@@ -897,18 +897,25 @@ export class DocumentManagementService {
 
   /**
    * Validates the library and resolves the version label whose pages to read.
+   * @returns The library's stored display name and the resolved version label.
+   * @throws {LibraryNotFoundInStoreError} When the library does not exist (with suggestions).
    */
   private async resolvePageVersion(
     library: string,
     version: string | null | undefined,
-  ): Promise<string> {
-    await this.validateLibraryExists(library);
+  ): Promise<{ library: string; version: string }> {
+    const libraryRecord = await this.store.getLibrary(library);
+    if (!libraryRecord) {
+      throw await this.libraryNotFound(library);
+    }
     const { bestMatch } = await this.findBestVersion(library, version ?? undefined);
-    return bestMatch ?? "";
+    return { library: libraryRecord.displayName, version: bestMatch ?? "" };
   }
 
   /**
    * Resolves a page URL or path to the URL of exactly one stored page.
+   * `library` is the stored display name, which the not-found and ambiguous
+   * errors repeat.
    *
    * An absolute URL must equal a stored URL; a path must match the end of one.
    * Each is tried as given, spelled the way the scraper stores URLs, and decoded,

@@ -1489,7 +1489,11 @@ describe("DocumentManagementService", () => {
 
       beforeEach(() => {
         pages = [];
-        mockStore.getLibrary.mockResolvedValue({ id: 1, name: library });
+        mockStore.getLibrary.mockResolvedValue({
+          id: 1,
+          name: library,
+          displayName: library,
+        });
         mockStore.checkDocumentExists.mockResolvedValue(false);
         mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
         // A fake that honors the store's lookup contracts over the `pages` list above.

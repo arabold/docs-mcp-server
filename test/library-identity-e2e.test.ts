@@ -25,6 +25,7 @@ import { DocumentManagementService } from "../src/store/DocumentManagementServic
 import {
   LibraryAlreadyExistsError,
   LibraryNotFoundInStoreError,
+  PageNotFoundInStoreError,
   VersionAlreadyExistsError,
   VersionNotFoundInStoreError,
 } from "../src/store/errors";
@@ -212,6 +213,16 @@ describe("Library identity end-to-end", () => {
         constructor: LibraryNotFoundInStoreError,
         similarLibraries: ["React"],
       });
+    });
+
+    it("is shown when listing and reading pages", async () => {
+      await seedIndexed("React", "18.0.0");
+
+      const listing = await docService.listPages("react", "18.0.0");
+      expect(listing.library).toBe("React");
+      await expect(
+        docService.getPageContent("REACT", "18.0.0", "/missing"),
+      ).rejects.toMatchObject({ constructor: PageNotFoundInStoreError, library: "React" });
     });
 
     it("keeps the casing a library was created with through ensureVersion", async () => {

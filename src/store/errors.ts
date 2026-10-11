@@ -141,10 +141,10 @@ export class PageNotFoundInStoreError extends StoreError {
     public readonly pathOrUrl: string,
     public readonly suggestions: string[] = [],
   ) {
-    const versionText = version ? ` (version: ${version})` : "";
-    let text = `Page '${pathOrUrl}' for library '${library}'${versionText} not found in store.`;
+    const versionText = version ? ` (version: ${escapeControlCharacters(version)})` : "";
+    let text = `Page '${escapeControlCharacters(pathOrUrl)}' for library '${escapeControlCharacters(library)}'${versionText} not found in store.`;
     if (suggestions.length > 0) {
-      text += ` Did you mean: ${suggestions.join(", ")}?`;
+      text += ` Did you mean: ${suggestions.map(escapeControlCharacters).join(", ")}?`;
     }
     super(text);
   }
@@ -161,9 +161,9 @@ export class AmbiguousPageInStoreError extends StoreError {
     public readonly pathOrUrl: string,
     public readonly matches: string[],
   ) {
-    const versionText = version ? ` (version: ${version})` : "";
+    const versionText = version ? ` (version: ${escapeControlCharacters(version)})` : "";
     super(
-      `Page '${pathOrUrl}' for library '${library}'${versionText} matches more than one page: ${matches.join(", ")}. Pass the full URL of the page to read.`,
+      `Page '${escapeControlCharacters(pathOrUrl)}' for library '${escapeControlCharacters(library)}'${versionText} matches more than one page: ${matches.map(escapeControlCharacters).join(", ")}. Pass the full URL of the page to read.`,
     );
   }
 }

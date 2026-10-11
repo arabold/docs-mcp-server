@@ -4,9 +4,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  AmbiguousPageInStoreError,
   InvalidLibraryNameError,
   LibraryAlreadyExistsError,
   LibraryNotFoundInStoreError,
+  PageNotFoundInStoreError,
   VersionAlreadyExistsError,
   VersionNotFoundInStoreError,
 } from "./errors";
@@ -54,6 +56,14 @@ describe("library identity errors", () => {
     [
       "VersionNotFoundInStoreError",
       new VersionNotFoundInStoreError(NAME, "1\u00850", [NAME]),
+    ],
+    [
+      "PageNotFoundInStoreError",
+      new PageNotFoundInStoreError(NAME, "1\u00850", NAME, [NAME]),
+    ],
+    [
+      "AmbiguousPageInStoreError",
+      new AmbiguousPageInStoreError(NAME, "1\u00850", NAME, [NAME]),
     ],
   ])("%s escapes every control character in names", (_label, error) => {
     expect(error.message).toContain(ESCAPED);
