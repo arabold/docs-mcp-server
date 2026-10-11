@@ -388,6 +388,14 @@ describe("Library identity end-to-end", () => {
 
       expect(await versionsOf("React")).toEqual(["19.0"]);
     });
+
+    it("fails for a library that is not indexed and leaves the others", async () => {
+      await seedIndexed("React", "19.0");
+
+      await expect(removeWithCli("vue")).rejects.toThrow("Library vue not found in store");
+
+      expect(await versionsOf("React")).toEqual(["19.0"]);
+    });
   });
 
   it("rejects Add library for an existing name in any casing", async () => {

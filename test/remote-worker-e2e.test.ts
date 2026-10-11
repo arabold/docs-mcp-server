@@ -5,7 +5,8 @@
  * a TCP proxy, so the test can drop and restore the connection while the
  * worker keeps running. Checks what the coordinator's users see: the health
  * report while the connection is up, down and back, that views are told to
- * refetch once it returns, and that removing a version cancels the worker's job.
+ * refetch once it returns and live job updates flow again, and that removing a
+ * version cancels the worker's job.
  */
 
 import type { ChildProcess } from "node:child_process";
@@ -14,6 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { EventType } from "../src/events";
+import type { PipelineJob } from "../src/pipeline/types";
 import { createApiClient } from "../src/services/apiClient";
 import {
   createTcpProxy,
@@ -81,11 +83,27 @@ describe("Web server in front of a remote worker", () => {
         mode: "remote",
         connected,
       });
+    const scrapeOnWorker = async (library: string) => {
+      const { jobId } = await workerClient.api.enqueueScrapeJob.mutate({
+        library,
+        version: null,
+        options: { url: fixtureUrl, library, version: "" },
+      });
+      return jobId;
+    };
 
     const listChanges: number[] = [];
+    const statusChanges: PipelineJob[] = [];
     const subscription = coordinatorClient.api.events.subscribe.subscribe(
-      { events: [EventType.JOB_LIST_CHANGE] },
-      { onData: () => listChanges.push(Date.now()) },
+      { events: [EventType.JOB_LIST_CHANGE, EventType.JOB_STATUS_CHANGE] },
+      {
+        onData: (event) => {
+          if (event.type === EventType.JOB_LIST_CHANGE) listChanges.push(Date.now());
+          if (event.type === EventType.JOB_STATUS_CHANGE) {
+            statusChanges.push(event.payload as PipelineJob);
+          }
+        },
+      },
     );
 
     try {
@@ -95,14 +113,10 @@ describe("Web server in front of a remote worker", () => {
       await vi.waitFor(() => expectConnected(false), { timeout: 30_000, interval: 200 });
 
       // A job runs to the end on the worker while the coordinator cannot hear it
-      const { jobId } = await workerClient.api.enqueueScrapeJob.mutate({
-        library: "outage",
-        version: null,
-        options: { url: fixtureUrl, library: "outage", version: "" },
-      });
+      const missedJobId = await scrapeOnWorker("outage");
       await vi.waitFor(
         async () =>
-          expect((await workerClient.api.getJob.query({ id: jobId }))?.status).toBe(
+          expect((await workerClient.api.getJob.query({ id: missedJobId }))?.status).toBe(
             "completed",
           ),
         { timeout: 30_000, interval: 200 },
@@ -116,12 +130,21 @@ describe("Web server in front of a remote worker", () => {
         interval: 200,
       });
 
-      const { jobs } = await coordinatorClient.api.getJobs.query();
-      expect(jobs.find((job) => job.id === jobId)?.status).toBe("completed");
+      // Live updates reach the coordinator's views again
+      const laterJobId = await scrapeOnWorker("after-outage");
+      await vi.waitFor(
+        () =>
+          expect(statusChanges).toContainEqual(
+            expect.objectContaining({ id: laterJobId, status: "completed" }),
+          ),
+        { timeout: 30_000, interval: 200 },
+      );
     } finally {
       subscription.unsubscribe();
       coordinatorClient.close();
       workerClient.close();
+      // The next test reaches the worker through the proxy too
+      await proxy.listen(proxyPort);
     }
     // The tRPC client backs off up to several seconds between reconnects; CI runs slower
   }, 150_000);

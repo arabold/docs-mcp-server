@@ -642,31 +642,6 @@ describe("AppServer Behavior Tests", () => {
       expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
     });
 
-    it("should successfully start server with external worker configured", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: true,
-        enableMcpServer: false,
-        enableApiServer: false,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        backend({ mode: "remote", workerUrl: "http://worker.example.com" }),
-        config,
-        appConfig,
-      );
-
-      const fastifyInstance = await server.start();
-
-      // Verify server started successfully
-      expect(fastifyInstance).toBe(mockFastify);
-      expect(mockFastify.listen).toHaveBeenCalled();
-
-      // Verify web interface (SPA static handler) was set up but not the
-      // embedded worker
-      expect(mockFastify.get).toHaveBeenCalledWith("/", expect.any(Function));
-    });
-
     it("should handle server startup failure gracefully", async () => {
       const startupError = new Error("Port already in use");
       mockFastify.listen.mockRejectedValue(startupError);
@@ -703,13 +678,13 @@ describe("AppServer Behavior Tests", () => {
       expect(mockFastify.close).toHaveBeenCalled();
     });
 
-    it("should handle shutdown failure and still attempt all cleanup", async () => {
+    it("should reject when closing the HTTP server fails", async () => {
       const shutdownError = new Error("Cleanup failed");
       mockFastify.close.mockRejectedValue(shutdownError);
 
       const config: AppServerConfig = {
         enableWebInterface: false,
-        enableMcpServer: true, // Enable MCP server so it gets cleaned up too
+        enableMcpServer: true,
         enableApiServer: false,
         port: 3000,
       };
@@ -742,38 +717,6 @@ describe("AppServer Behavior Tests", () => {
         expect.any(Object), // eventBus
         expect.any(Object), // systemInfo
         undefined, // isWorkerConnected (embedded worker mode)
-      );
-    });
-
-    it("should thread a remote worker mode and connectivity check into the tRPC context when using an external worker", async () => {
-      const config: AppServerConfig = {
-        enableWebInterface: false,
-        enableMcpServer: false,
-        enableApiServer: true,
-        port: 3000,
-      };
-
-      const server = new AppServer(
-        backend({
-          mode: "remote",
-          workerUrl: "http://worker.example.com",
-          isWorkerConnected: () => true,
-        }),
-        config,
-        appConfig,
-      );
-
-      await server.start();
-
-      expect(mockTrpcService.registerTrpcService).toHaveBeenCalledWith(
-        mockFastify,
-        mockPipeline,
-        mockDocService,
-        expect.any(Object), // eventBus
-        expect.objectContaining({
-          worker: { mode: "remote", url: "http://worker.example.com" },
-        }),
-        expect.any(Function), // isWorkerConnected, only populated in remote mode
       );
     });
 

@@ -267,6 +267,22 @@ describe("PipelineManager", () => {
       expect(await store.listLibraries()).toEqual([]);
     });
 
+    it("matches the running job however the library and version are padded or cased", async () => {
+      holdScrapes();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob(
+        "react",
+        "19.0",
+        scrapeOptions("react", "19.0"),
+      );
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
+
+      await manager.removeVersion(" React ", " 19.0 ");
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
     it("waits for an enqueue in progress, then cancels the job it registered", async () => {
       const gate = deferred();
       const claim = store.claimVersion.bind(store);

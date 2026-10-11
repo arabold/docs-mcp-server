@@ -148,12 +148,24 @@ export function createTcpProxy(
   };
 
   return {
-    /** Starts accepting on `port` (a free one when omitted); returns the port. */
+    /**
+     * Starts accepting on `port` (a free one when omitted) and returns the
+     * port; while it is accepting already, returns the port it uses.
+     */
     async listen(port = 0): Promise<number> {
-      server = net.createServer((client) => client.once("data", (first) => forward(client, first)));
-      if (port === 0) return listenOnFreePort(server);
-      await new Promise<void>((resolve) => server?.listen(port, "127.0.0.1", resolve));
-      return port;
+      if (server?.listening) return (server.address() as AddressInfo).port;
+      const listener = net.createServer((client) =>
+        client.once("data", (first) => forward(client, first)),
+      );
+      server = listener;
+      await new Promise<void>((resolve, reject) => {
+        listener.once("error", reject);
+        listener.listen(port, "127.0.0.1", () => {
+          listener.off("error", reject);
+          resolve();
+        });
+      });
+      return (listener.address() as AddressInfo).port;
     },
     /** Drops every connection and stops accepting new ones. */
     async cut(): Promise<void> {
@@ -180,12 +192,15 @@ export async function startRunningSlowJob(
   library: string,
   version: string | null,
 ): Promise<string> {
+  // Limits far past the chain the site serves, so only a cancellation ends the job
   const options = {
     url: siteUrl,
     library,
     version: version ?? "",
     scrapeMode: ScrapeMode.Fetch,
     maxConcurrency: 1,
+    maxDepth: 100_000,
+    maxPages: 100_000,
   } as ScraperOptions;
   const { jobId } = await api.enqueueScrapeJob.mutate({ library, version, options });
   await vi.waitFor(
@@ -204,11 +219,12 @@ export async function startRunningSlowJob(
  *
  * @param dir Directory to write `config.yaml` into.
  * @param options.allowPrivateNetworks Let scrapes reach local test servers.
+ * @param options.maxConcurrency How many jobs run at once; the default otherwise.
  * @returns The config file's path.
  */
 export function writeTestConfig(
   dir: string,
-  options: { allowPrivateNetworks?: boolean } = {},
+  options: { allowPrivateNetworks?: boolean; maxConcurrency?: number } = {},
 ): string {
   const configPath = path.join(dir, "config.yaml");
   fs.writeFileSync(
@@ -218,6 +234,7 @@ export function writeTestConfig(
       '  embeddingModel: ""',
       "  telemetryEnabled: false",
       "scraper:",
+      ...(options.maxConcurrency ? [`  maxConcurrency: ${options.maxConcurrency}`] : []),
       "  security:",
       "    fileAccess:",
       "      mode: unrestricted",

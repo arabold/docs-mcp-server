@@ -1,6 +1,6 @@
 import { createWSClient } from "@trpc/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createApiClient, createApiLinks, toWebSocketUrl } from "./apiClient";
+import { createApiLinks, toWebSocketUrl } from "./apiClient";
 
 vi.mock("@trpc/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@trpc/client")>();
@@ -40,15 +40,5 @@ describe("createApiLinks", () => {
 
     expect(createWSClient).not.toHaveBeenCalled();
     expect(links).toHaveLength(1);
-  });
-
-  it("closes the WebSocket it opened", () => {
-    const { close } = createApiClient("http://localhost:8080/api", {
-      subscriptions: true,
-    });
-    close();
-
-    const wsClient = vi.mocked(createWSClient).mock.results[0]?.value;
-    expect(wsClient.close).toHaveBeenCalledTimes(1);
   });
 });

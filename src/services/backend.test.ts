@@ -1,200 +1,254 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { startInProcessServer } from "../../test/in-process-server";
+import { leafPage, mockSite } from "../../test/mock-site";
+import { getFreePort } from "../../test/test-helpers";
 import { EventBusService } from "../events/EventBusService";
-import { RemoteEventProxy } from "../events/RemoteEventProxy";
-import { PipelineClient } from "../pipeline/PipelineClient";
+import { EventType } from "../events/types";
 import { PipelineManager } from "../pipeline/PipelineManager";
-import { DocumentManagementClient } from "../store/DocumentManagementClient";
+import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
 import { DocumentManagementService } from "../store/DocumentManagementService";
 import { EmbeddingModelChangedError } from "../store/errors";
+import { VersionStatus } from "../store/types";
 import { loadConfig } from "../utils/config";
-import { createApiClient, pingApi } from "./apiClient";
-import { openBackend } from "./backend";
-
-vi.mock("../pipeline/PipelineManager");
-vi.mock("../pipeline/PipelineClient", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../pipeline/PipelineClient")>()),
-  PipelineClient: vi.fn(),
-}));
-vi.mock("../store/DocumentManagementService");
-vi.mock("../store/DocumentManagementClient");
-vi.mock("../events/RemoteEventProxy");
-vi.mock("./apiClient", () => ({
-  createApiClient: vi.fn(),
-  pingApi: vi.fn(),
-}));
-
-const workerUrl = "http://worker:8080/api";
-const closeApi = vi.fn();
-
-function options(overrides: Partial<Parameters<typeof openBackend>[0]> = {}) {
-  const appConfig = loadConfig();
-  appConfig.app.storePath = "/tmp/store";
-  return { appConfig, eventBus: new EventBusService(), ...overrides };
-}
+import { type Backend, type OpenBackendOptions, openBackend } from "./backend";
 
 describe("openBackend", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(createApiClient).mockReturnValue({ api: {} as never, close: closeApi });
-    vi.mocked(pingApi).mockResolvedValue(undefined);
-    vi.mocked(RemoteEventProxy.prototype.connect).mockReturnValue(new Promise(() => {}));
+  const opened: Backend[] = [];
+
+  /** Opens a backend that the test's cleanup closes. */
+  async function open(options: OpenBackendOptions): Promise<Backend> {
+    const backend = await openBackend(options);
+    opened.push(backend);
+    return backend;
+  }
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await Promise.allSettled(opened.splice(0).map((backend) => backend.close()));
   });
 
   describe("local", () => {
-    it.each([undefined, false] as const)(
-      "opens no pipeline for documents only (jobs: %s)",
-      async (jobs) => {
-        const backend = await openBackend(options({ jobs }));
+    let storePath: string;
 
-        expect(backend.mode).toBe("local");
-        expect(backend.docService).toBeInstanceOf(DocumentManagementService);
+    function localOptions(
+      overrides: Partial<OpenBackendOptions> = {},
+    ): OpenBackendOptions {
+      const appConfig = loadConfig();
+      appConfig.app.storePath = storePath;
+      appConfig.app.embeddingModel = "";
+      return { appConfig, eventBus: new EventBusService(), ...overrides };
+    }
+
+    /** Opens the store on its own, the way another process would. */
+    async function withStore<T>(work: (store: DocumentManagementService) => Promise<T>) {
+      const { appConfig, eventBus } = localOptions();
+      const store = new DocumentManagementService(eventBus, appConfig);
+      await store.initialize();
+      try {
+        return await work(store);
+      } finally {
+        await store.shutdown();
+      }
+    }
+
+    /** Leaves react 19.0 RUNNING, as a scrape in another process would. */
+    function seedRunningScrape(): Promise<number> {
+      return withStore(async (store) => {
+        const versionId = await store.ensureVersion({
+          library: "react",
+          version: "19.0",
+        });
+        await store.updateVersionStatus(versionId, VersionStatus.RUNNING);
+        return versionId;
+      });
+    }
+
+    function statusOfSeededScrape(): Promise<VersionStatus | undefined> {
+      return withStore(async (store) => {
+        const [react] = await store.listLibraries();
+        return react?.versions[0]?.status;
+      });
+    }
+
+    beforeEach(() => {
+      storePath = mkdtempSync(join(tmpdir(), "docs-mcp-backend-"));
+    });
+
+    afterEach(() => {
+      rmSync(storePath, { recursive: true, force: true });
+    });
+
+    it.each([undefined, false] as const)(
+      "leaves a scrape that another process runs alone for documents only (jobs: %s)",
+      async (jobs) => {
+        await seedRunningScrape();
+
+        const backend = await open(localOptions({ jobs }));
+
         expect(backend.pipeline).toBeUndefined();
-        expect(PipelineManager).not.toHaveBeenCalled();
+        expect(await statusOfSeededScrape()).toBe(VersionStatus.RUNNING);
       },
     );
 
-    it("starts a pipeline that recovers jobs as asked", async () => {
-      const backend = await openBackend(options({ jobs: { recoverJobs: true } }));
+    it("marks an interrupted scrape failed when it runs jobs without recovering them", async () => {
+      await seedRunningScrape();
 
-      expect(PipelineManager).toHaveBeenCalledWith(
-        backend.docService,
-        backend.eventBus,
-        expect.objectContaining({ recoverJobs: true }),
-      );
-      expect(backend.pipeline).toBe(vi.mocked(PipelineManager).mock.instances[0]);
-      expect(PipelineManager.prototype.start).toHaveBeenCalledTimes(1);
+      const backend = await open(localOptions({ jobs: { recoverJobs: false } }));
+
+      expect(backend.pipeline).toBeInstanceOf(PipelineManager);
+      expect(await statusOfSeededScrape()).toBe(VersionStatus.FAILED);
     });
 
-    it("hands a changed embedding model to the handler", async () => {
+    it("hands a changed embedding model to the handler and opens anyway", async () => {
       const changed = new EmbeddingModelChangedError("a", "1", "b", "2");
-      vi.mocked(DocumentManagementService.prototype.initialize).mockRejectedValueOnce(
+      vi.spyOn(DocumentManagementService.prototype, "initialize").mockRejectedValueOnce(
         changed,
       );
       const onEmbeddingModelChange = vi.fn().mockResolvedValue(undefined);
 
-      await openBackend(options({ onEmbeddingModelChange }));
+      const backend = await open(localOptions({ onEmbeddingModelChange }));
 
-      expect(onEmbeddingModelChange).toHaveBeenCalledWith(
-        changed,
-        expect.any(DocumentManagementService),
-      );
+      expect(onEmbeddingModelChange).toHaveBeenCalledWith(changed, backend.docService);
     });
 
-    it("rethrows other store errors and closes the store", async () => {
-      vi.mocked(DocumentManagementService.prototype.initialize).mockRejectedValueOnce(
+    it("closes the store and rethrows any other error opening it", async () => {
+      vi.spyOn(DocumentManagementService.prototype, "initialize").mockRejectedValueOnce(
         new Error("disk full"),
       );
+      const shutdown = vi.spyOn(DocumentManagementService.prototype, "shutdown");
 
       await expect(
-        openBackend(options({ onEmbeddingModelChange: vi.fn() })),
+        openBackend(localOptions({ onEmbeddingModelChange: vi.fn() })),
       ).rejects.toThrow("disk full");
-      expect(DocumentManagementService.prototype.shutdown).toHaveBeenCalledTimes(1);
+      expect(shutdown).toHaveBeenCalledTimes(1);
     });
 
     it("closes the store when the pipeline fails to start", async () => {
-      vi.mocked(PipelineManager.prototype.start).mockRejectedValueOnce(new Error("busy"));
+      vi.spyOn(PipelineManager.prototype, "start").mockRejectedValueOnce(
+        new Error("busy"),
+      );
+      const shutdown = vi.spyOn(DocumentManagementService.prototype, "shutdown");
 
       await expect(
-        openBackend(options({ jobs: { recoverJobs: false } })),
+        openBackend(localOptions({ jobs: { recoverJobs: false } })),
       ).rejects.toThrow("busy");
-      expect(DocumentManagementService.prototype.shutdown).toHaveBeenCalledTimes(1);
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes the store even when stopping the pipeline fails, and reports that failure", async () => {
+      const backend = await openBackend(localOptions({ jobs: { recoverJobs: false } }));
+      vi.spyOn(PipelineManager.prototype, "stop").mockRejectedValueOnce(
+        new Error("stuck"),
+      );
+      const shutdown = vi.spyOn(DocumentManagementService.prototype, "shutdown");
+
+      await expect(backend.close()).rejects.toThrow("stuck");
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    });
+
+    it("closes once however often it is asked", async () => {
+      const backend = await openBackend(localOptions({ jobs: { recoverJobs: false } }));
+      const shutdown = vi.spyOn(DocumentManagementService.prototype, "shutdown");
+
+      await Promise.all([backend.close(), backend.close()]);
+      await backend.close();
+
+      expect(shutdown).toHaveBeenCalledTimes(1);
     });
   });
 
   describe("remote", () => {
-    it("checks the worker once and opens no WebSocket for documents only", async () => {
-      const backend = await openBackend(options({ serverUrl: workerUrl }));
+    const site = mockSite("https://docs.example.com");
+    let worker: Awaited<ReturnType<typeof startInProcessServer>>;
+    let workerUrl: string;
 
-      expect(backend.mode).toBe("remote");
-      expect(backend.workerUrl).toBe(workerUrl);
-      expect(backend.docService).toBeInstanceOf(DocumentManagementClient);
-      expect(backend.pipeline).toBeUndefined();
-      expect(createApiClient).toHaveBeenCalledWith(workerUrl, { subscriptions: false });
-      expect(pingApi).toHaveBeenCalledTimes(1);
-      expect(RemoteEventProxy).not.toHaveBeenCalled();
+    function remoteOptions(
+      overrides: Partial<OpenBackendOptions> = {},
+    ): OpenBackendOptions {
+      const appConfig = loadConfig();
+      appConfig.app.storePath = "";
+      return {
+        appConfig,
+        eventBus: new EventBusService(),
+        serverUrl: workerUrl,
+        ...overrides,
+      };
+    }
+
+    /** Scrapes the mock site's page into the worker as `library`. */
+    async function scrapeOnWorker(backend: Backend, library: string): Promise<string> {
+      const pipeline = backend.pipeline;
+      if (!pipeline) throw new Error("The backend has no pipeline");
+      site.page("/", leafPage(`${library} docs`));
+      const jobId = await pipeline.enqueueScrapeJob(library, null, {
+        url: site.url("/"),
+        library,
+        version: "",
+        maxPages: 1,
+      });
+      await pipeline.waitForJobCompletion(jobId);
+      return jobId;
+    }
+
+    beforeAll(async () => {
+      const port = await getFreePort();
+      worker = await startInProcessServer({
+        port,
+        publicUrl: `http://127.0.0.1:${port}`,
+        enableWebInterface: false,
+      });
+      workerUrl = `http://127.0.0.1:${port}/api`;
     });
 
-    it("fails with the worker's error and closes the client when it does not answer", async () => {
-      vi.mocked(pingApi).mockRejectedValueOnce(new Error("Failed to connect to server"));
-
-      await expect(openBackend(options({ serverUrl: workerUrl }))).rejects.toThrow(
-        "Failed to connect to server",
-      );
-      expect(closeApi).toHaveBeenCalledTimes(1);
+    afterAll(async () => {
+      await worker?.stop();
     });
 
-    it.each([{ recoverJobs: true }, { recoverJobs: false }] as const)(
-      "starts relaying events without waiting for them (jobs: %o)",
-      async (jobs) => {
-        const backend = await openBackend(options({ serverUrl: workerUrl, jobs }));
+    it("runs a job on the worker and relays its events to the local bus", async () => {
+      const backend = await open(remoteOptions({ jobs: { recoverJobs: false } }));
+      const statuses: PipelineJob[] = [];
+      backend.eventBus.on(EventType.JOB_STATUS_CHANGE, (job) => statuses.push(job));
 
-        expect(createApiClient).toHaveBeenCalledWith(workerUrl, { subscriptions: true });
-        expect(backend.pipeline).toBe(vi.mocked(PipelineClient).mock.instances[0]);
-        expect(RemoteEventProxy.prototype.connect).toHaveBeenCalledTimes(1);
-        expect(PipelineManager).not.toHaveBeenCalled();
-      },
-    );
-
-    it("reports the worker connected while the relay is live", async () => {
-      vi.mocked(RemoteEventProxy.prototype.isActive).mockReturnValue(true);
-
-      const backend = await openBackend(
-        options({ serverUrl: workerUrl, jobs: { recoverJobs: false } }),
-      );
+      const jobId = await scrapeOnWorker(backend, "relayed");
 
       expect(backend.isWorkerConnected?.()).toBe(true);
-    });
-  });
-
-  describe("close", () => {
-    it("stops the pipeline before the store", async () => {
-      const order: string[] = [];
-      vi.mocked(PipelineManager.prototype.stop).mockImplementation(async () => {
-        order.push("pipeline");
-      });
-      vi.mocked(DocumentManagementService.prototype.shutdown).mockImplementation(
-        async () => {
-          order.push("store");
-        },
+      expect(statuses.filter((job) => job.id === jobId).map((job) => job.status)).toEqual(
+        expect.arrayContaining([PipelineJobStatus.RUNNING, PipelineJobStatus.COMPLETED]),
       );
-      const backend = await openBackend(options({ jobs: { recoverJobs: false } }));
-
-      await backend.close();
-
-      expect(order).toEqual(["pipeline", "store"]);
     });
 
-    it("disconnects the relay before closing the client", async () => {
-      const order: string[] = [];
-      vi.mocked(RemoteEventProxy.prototype.disconnect).mockImplementation(() => {
-        order.push("relay");
-      });
-      closeApi.mockImplementation(() => order.push("client"));
-      const backend = await openBackend(
-        options({ serverUrl: workerUrl, jobs: { recoverJobs: false } }),
+    it("reads the worker's documents without a pipeline", async () => {
+      await scrapeOnWorker(
+        await open(remoteOptions({ jobs: { recoverJobs: false } })),
+        "read",
       );
 
-      await backend.close();
+      const backend = await open(remoteOptions());
 
-      expect(order).toEqual(["relay", "client"]);
+      expect(backend.mode).toBe("remote");
+      expect(backend.pipeline).toBeUndefined();
+      const libraries = await backend.docService.listLibraries();
+      expect(libraries.map((library) => library.library)).toContain("read");
     });
 
-    it("runs every step when one fails and rejects with the first error", async () => {
-      vi.mocked(PipelineManager.prototype.stop).mockRejectedValueOnce(new Error("stuck"));
-      const backend = await openBackend(options({ jobs: { recoverJobs: false } }));
+    it("fails with the URL to check when the worker does not answer", async () => {
+      const deadUrl = `http://127.0.0.1:${await getFreePort()}/api`;
 
-      await expect(backend.close()).rejects.toThrow("stuck");
-      expect(DocumentManagementService.prototype.shutdown).toHaveBeenCalledTimes(1);
-    });
-
-    it("closes only once", async () => {
-      const backend = await openBackend(options({ jobs: { recoverJobs: false } }));
-
-      await backend.close();
-      await backend.close();
-
-      expect(PipelineManager.prototype.stop).toHaveBeenCalledTimes(1);
-      expect(DocumentManagementService.prototype.shutdown).toHaveBeenCalledTimes(1);
+      await expect(openBackend(remoteOptions({ serverUrl: deadUrl }))).rejects.toThrow(
+        `Failed to connect to server at ${deadUrl}`,
+      );
     });
   });
 });

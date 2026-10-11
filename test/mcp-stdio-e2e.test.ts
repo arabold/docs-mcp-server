@@ -2,23 +2,32 @@
  * E2E test for MCP server running in stdio mode.
  *
  * This test spawns the MCP server as a child process, communicates via stdin/stdout
- * using the MCP protocol, and verifies basic functionality works correctly.
+ * using the MCP protocol, and verifies basic functionality works correctly, with
+ * a local store and with a remote worker.
  */
 
+import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { Client } from "@modelcontextprotocol/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../src/events";
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
 import { DocumentManagementService } from "../src/store";
 import { loadConfig } from "../src/utils/config";
-import { getCliCommand, writeTestConfig } from "./test-helpers";
+import { getCliCommand, startWorker, stopChildProcess, writeTestConfig } from "./test-helpers";
 
-/** A transport that spawns the CLI over stdio with a test store and no telemetry. */
-function createStdioTransport(overrides: Record<string, string> = {}): StdioClientTransport {
+/**
+ * A transport that spawns the CLI over stdio with a test store and no telemetry.
+ * @param overrides Environment variables to set.
+ * @param cliArgs Arguments for the CLI; none runs the default command.
+ */
+function createStdioTransport(
+  overrides: Record<string, string> = {},
+  cliArgs: string[] = [],
+): StdioClientTransport {
   const projectRoot = path.resolve(import.meta.dirname, "..");
   // Without VITEST_WORKER_ID the child process logs as it does in production.
   const env = { ...process.env };
@@ -26,7 +35,7 @@ function createStdioTransport(overrides: Record<string, string> = {}): StdioClie
   const { cmd, args } = getCliCommand();
   return new StdioClientTransport({
     command: cmd,
-    args,
+    args: [...args, ...cliArgs],
     cwd: projectRoot,
     env: {
       ...env,
@@ -41,6 +50,7 @@ describe("MCP stdio server E2E", () => {
   let client: Client | null = null;
   let transport: StdioClientTransport | null = null;
   let storeDir: string | null = null;
+  let worker: ChildProcess | undefined;
 
   beforeEach(() => {
     // Reset state before each test
@@ -68,6 +78,9 @@ describe("MCP stdio server E2E", () => {
       }
       transport = null;
     }
+
+    await stopChildProcess(worker);
+    worker = undefined;
 
     // Remove a seeded store only after the server has released it
     if (storeDir) {
@@ -262,4 +275,60 @@ describe("MCP stdio server E2E", () => {
     expect(text).toContain('"Stdio Lib"');
     expect(text).toContain("replace: true");
   }, 30000);
+
+  it("scrapes, searches and removes through a remote worker", async () => {
+    const projectRoot = path.resolve(import.meta.dirname, "..");
+    storeDir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-remote-"));
+    const configPath = writeTestConfig(storeDir);
+    const started = await startWorker(storeDir, configPath);
+    worker = started.process;
+
+    transport = createStdioTransport({ DOCS_MCP_CONFIG: configPath }, [
+      "mcp",
+      "--protocol",
+      "stdio",
+      "--server-url",
+      started.url,
+    ]);
+    const connected = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+    client = connected;
+    await connected.connect(transport);
+    const textOf = (result: Awaited<ReturnType<Client["callTool"]>>) =>
+      (result.content as Array<{ text: string }>).map((part) => part.text).join("\n");
+
+    const scraped = await connected.callTool({
+      name: "scrape_docs",
+      arguments: {
+        library: "Remote Lib",
+        url: `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`,
+      },
+    });
+    expect(scraped.isError, textOf(scraped)).toBeFalsy();
+
+    // The scrape runs on the worker; its documents become searchable there
+    await vi.waitFor(
+      async () => {
+        const found = await connected.callTool({
+          name: "search_docs",
+          arguments: { library: "Remote Lib", query: "blacksmith" },
+        });
+        expect(textOf(found)).toContain("blacksmith");
+      },
+      { timeout: 30_000, interval: 500 },
+    );
+
+    const listLibraries = async () => {
+      const listed = await connected.callTool({ name: "list_libraries", arguments: {} });
+      expect(listed.isError, textOf(listed)).toBeFalsy();
+      return textOf(listed);
+    };
+    expect(await listLibraries()).toContain("Remote Lib");
+
+    const removed = await connected.callTool({
+      name: "remove_docs",
+      arguments: { library: "Remote Lib" },
+    });
+    expect(removed.isError, textOf(removed)).toBeFalsy();
+    expect(await listLibraries()).not.toContain("Remote Lib");
+  }, 90_000);
 });

@@ -69,16 +69,31 @@ describe("refresh command", () => {
     vi.clearAllMocks();
   });
 
-  it("starts pipeline and executes RefreshVersionTool", async () => {
+  it("refreshes the given library version and waits for the job", async () => {
     const parser = yargs().scriptName("test");
     createRefreshCommand(parser);
 
-    await parser.parse(`refresh react --version 18.0.0 --embedding-model mock-model`);
+    await parser.parse(`refresh react --version 18.0.0`);
+
+    const execute = vi.mocked(RefreshVersionTool).mock.results[0]?.value.execute;
+    expect(execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        library: "react",
+        version: "18.0.0",
+        waitForCompletion: true,
+      }),
+    );
+  });
+
+  it("runs on a backend that recovers no jobs, and closes it", async () => {
+    const parser = yargs().scriptName("test");
+    createRefreshCommand(parser);
+
+    await parser.parse(`refresh react`);
 
     expect(openBackend).toHaveBeenCalledWith(
       expect.objectContaining({ jobs: { recoverJobs: false } }),
     );
-    expect(RefreshVersionTool).toHaveBeenCalledWith(pipelineMock);
     expect(closeBackend).toHaveBeenCalledTimes(1);
   });
 

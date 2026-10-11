@@ -68,20 +68,35 @@ describe("RemoteEventProxy", () => {
     expect(relay.isActive()).toBe(true);
   });
 
-  it("resolves connect with false when nothing answers in time", async () => {
+  it("resolves connect with false when the worker refuses the connection", async () => {
     const worker = await startWorkerEvents();
     const { port } = worker;
     await worker.stop();
     const { relay } = relayTo(port);
 
-    await expect(relay.connect(200)).resolves.toBe(false);
+    await expect(relay.connect(5000)).resolves.toBe(false);
     expect(relay.isActive()).toBe(false);
   });
 
-  it("shares one attempt between calls made while connecting", () => {
-    const { relay } = relayTo(1);
+  it("connects once for calls made while connecting, and relays each event once", async () => {
+    const worker = await startWorkerEvents();
+    cleanups.push(() => worker.stop());
+    const { relay, localBus } = relayTo(worker.port);
+    let libraryChanges = 0;
+    localBus.on(EventType.LIBRARY_CHANGE, () => libraryChanges++);
+    const listChanged = new Promise<void>((resolve) =>
+      localBus.on(EventType.JOB_LIST_CHANGE, () => resolve()),
+    );
 
-    expect(relay.connect(200)).toBe(relay.connect(5000));
+    await expect(
+      Promise.all([relay.connect(5000), relay.connect(5000)]),
+    ).resolves.toEqual([true, true]);
+    // A second subscription would deliver the first event again before the second
+    worker.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+    worker.eventBus.emit(EventType.JOB_LIST_CHANGE, undefined);
+    await listChanged;
+
+    expect(libraryChanges).toBe(1);
   });
 
   it("reports a dropped stream as down, and as live again once the worker is back", async () => {

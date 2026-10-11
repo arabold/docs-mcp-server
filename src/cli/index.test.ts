@@ -117,28 +117,11 @@ vi.mock("../utils/paths", () => ({
   getProjectRoot: vi.fn().mockReturnValue("/mocked/project/root"),
 }));
 
-vi.mock("../store", async () => {
-  const actual = await vi.importActual<any>("../store");
-  return {
-    ...actual,
-    DocumentManagementService: vi.fn().mockImplementation(function () {
-      return {
-        initialize: vi.fn().mockResolvedValue(undefined),
-        shutdown: vi.fn(),
-      };
-    }),
-  };
-});
 vi.mock("../services/backend", () => ({
   openBackend: vi.fn(async (opts: any) => {
     capturedCreateArgs.push(opts);
     return { docService: {}, close: vi.fn() } as any;
   }),
-}));
-vi.mock("../store/errors", () => ({
-  EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {
-    name = "EmbeddingModelChangedError";
-  },
 }));
 
 vi.mock("../app", () => ({
