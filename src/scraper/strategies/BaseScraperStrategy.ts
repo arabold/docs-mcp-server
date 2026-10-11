@@ -821,64 +821,82 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     let nextSeq = 0;
     let nextToAdmit = 0;
 
-    // Runs until nothing is left running. Reaching `maxPages` only stops new
-    // items from starting: an item counts its page before storing it, so exiting
-    // on the count alone would resolve the crawl with that write still pending.
-    while (true) {
-      // Check for cancellation at the start of each loop iteration
-      if (signal?.aborted) {
-        logger.debug(`${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal.`);
-        throw new CancellationError(
-          `${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal`,
-        );
-      }
+    // Items run on a signal of their own. When the crawl ends early, because an
+    // item failed or the job was cancelled, aborting it stops the items still
+    // running, and the crawl waits for them before it returns. Otherwise the
+    // caller's cleanup would close the browser or delete files while they still
+    // use them, and an item could launch a new browser that nobody closes.
+    const items = new AbortController();
+    const abortItems = (): void => items.abort(signal?.reason);
+    signal?.addEventListener("abort", abortItems, { once: true });
 
-      // Counting running items against the remaining budget is what stops
-      // concurrent work overshooting the limit: at most `maxPages - pagesIndexed`
-      // items run, so at most that many of them can index.
-      while (
-        running.size < maxConcurrency &&
-        this.pagesIndexed + running.size < maxPages
-      ) {
-        const item = queue.shift();
-        if (!item) break;
-        const seq = nextSeq++;
-        // Always use latest canonical base (may have been updated after first fetch)
-        baseUrl = this.canonicalBaseUrl ?? baseUrl;
-        running.set(
-          seq,
-          this.processQueueItem(
-            item,
-            baseUrl,
-            options,
-            progressCallback,
-            crawl,
-            signal,
-          ).then((offered) => {
-            finished.set(seq, offered);
-            return seq;
-          }),
-        );
-      }
+    try {
+      // Runs until nothing is left running. Reaching `maxPages` only stops new
+      // items from starting: an item counts its page before storing it, so
+      // exiting on the count alone would resolve the crawl with that write
+      // still pending.
+      while (true) {
+        // Check for cancellation at the start of each loop iteration
+        if (signal?.aborted) {
+          logger.debug(`${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal.`);
+          throw new CancellationError(
+            `${isRefreshMode ? "Refresh" : "Scraping"} cancelled by signal`,
+          );
+        }
 
-      if (running.size === 0) {
-        break;
-      }
+        // Counting running items against the remaining budget is what stops
+        // concurrent work overshooting the limit: at most `maxPages - pagesIndexed`
+        // items run, so at most that many of them can index.
+        while (
+          running.size < maxConcurrency &&
+          this.pagesIndexed + running.size < maxPages
+        ) {
+          const item = queue.shift();
+          if (!item) break;
+          const seq = nextSeq++;
+          // Always use latest canonical base (may have been updated after first fetch)
+          baseUrl = this.canonicalBaseUrl ?? baseUrl;
+          running.set(
+            seq,
+            this.processQueueItem(
+              item,
+              baseUrl,
+              options,
+              progressCallback,
+              crawl,
+              items.signal,
+            ).then((offered) => {
+              finished.set(seq, offered);
+              return seq;
+            }),
+          );
+        }
 
-      running.delete(await Promise.race(running.values()));
+        if (running.size === 0) {
+          break;
+        }
 
-      // Admit in dequeue order, not completion order, so the queue stays
-      // breadth-first: a URL is first offered at its shortest depth however the
-      // running items finish, and the crawl order does not depend on timing.
-      for (
-        let offered = finished.get(nextToAdmit);
-        offered !== undefined;
-        offered = finished.get(nextToAdmit)
-      ) {
-        finished.delete(nextToAdmit);
-        nextToAdmit++;
-        queue.push(...this.admitToQueue(offered, options));
+        running.delete(await Promise.race(running.values()));
+
+        // Admit in dequeue order, not completion order, so the queue stays
+        // breadth-first: a URL is first offered at its shortest depth however the
+        // running items finish, and the crawl order does not depend on timing.
+        for (
+          let offered = finished.get(nextToAdmit);
+          offered !== undefined;
+          offered = finished.get(nextToAdmit)
+        ) {
+          finished.delete(nextToAdmit);
+          nextToAdmit++;
+          queue.push(...this.admitToQueue(offered, options));
+        }
       }
+    } catch (error) {
+      items.abort(error);
+      await Promise.allSettled(running.values());
+      throw error;
+    } finally {
+      signal?.removeEventListener("abort", abortItems);
     }
   }
 

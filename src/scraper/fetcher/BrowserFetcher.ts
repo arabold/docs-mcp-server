@@ -66,6 +66,7 @@ export class BrowserFetcher implements ContentFetcher {
 
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
     try {
+      options?.signal?.throwIfAborted();
       await this.accessPolicy.assertNetworkUrlAllowed(source);
 
       const browser = await this.managedBrowser.get();
@@ -121,6 +122,12 @@ export class BrowserFetcher implements ContentFetcher {
     let page: Page | null = null;
     let browserContext: { newPage(): Promise<Page>; close(): Promise<void> } | null =
       null;
+    // Aborting closes the context, which ends a navigation in progress instead
+    // of letting it run until it times out.
+    const closeOnAbort = (): void => {
+      void browserContext?.close().catch(() => undefined);
+    };
+    options?.signal?.addEventListener("abort", closeOnAbort, { once: true });
 
     try {
       const fingerprintHeaders = this.fingerprintGenerator.generateHeaders();
@@ -133,6 +140,8 @@ export class BrowserFetcher implements ContentFetcher {
           "https://browser-context.local",
         ),
       });
+      // An abort before the context existed had nothing to close.
+      options?.signal?.throwIfAborted();
       page = await browserContext.newPage();
       await page.setViewportSize({ width: 1920, height: 1080 });
 
@@ -276,6 +285,7 @@ export class BrowserFetcher implements ContentFetcher {
         status: FetchStatus.SUCCESS,
       } satisfies RawContent;
     } finally {
+      options?.signal?.removeEventListener("abort", closeOnAbort);
       await page?.unroute("**/*").catch(() => undefined);
       await page?.close().catch(() => undefined);
       await browserContext?.close().catch(() => undefined);

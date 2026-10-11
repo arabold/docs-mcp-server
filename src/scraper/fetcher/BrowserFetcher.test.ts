@@ -492,5 +492,53 @@ describe("BrowserFetcher", () => {
       expect(chromium.launch).toHaveBeenCalledTimes(1);
       expect(browser.newContext).toHaveBeenCalledTimes(1);
     });
+
+    it("does not retry when the fetch was aborted, even though the browser is gone", async () => {
+      // The crawl aborts its items and then closes the shared browser; a retry
+      // would launch a new one after that cleanup.
+      const controller = new AbortController();
+      const browser = crashingBrowser();
+      browser.newContext.mockImplementation(async () => {
+        controller.abort();
+        browser.isConnected.mockReturnValue(false);
+        throw new Error(
+          "browser.newContext: Target page, context or browser has been closed",
+        );
+      });
+      vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+      const fetcher = new BrowserFetcher(loadConfig().scraper);
+
+      await expect(
+        fetcher.fetch("https://example.com", { signal: controller.signal }),
+      ).rejects.toThrow("Browser fetch cancelled");
+      expect(chromium.launch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("stops a page that is still loading when the fetch is aborted", async () => {
+    // Closing the context ends the navigation at once; otherwise an aborted
+    // fetch would wait for the navigation timeout.
+    let failNavigation: (error: Error) => void = () => undefined;
+    const goto = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          failNavigation = reject;
+        }),
+    );
+    const { context } = mockBrowser({ goto });
+    context.close.mockImplementation(async () => {
+      failNavigation(
+        new Error("page.goto: Target page, context or browser has been closed"),
+      );
+    });
+    const controller = new AbortController();
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+
+    const fetching = fetcher.fetch("https://example.com", { signal: controller.signal });
+    await vi.waitFor(() => expect(goto).toHaveBeenCalled());
+    controller.abort();
+
+    await expect(fetching).rejects.toThrow("Browser fetch cancelled");
+    expect(context.close).toHaveBeenCalled();
   });
 });
