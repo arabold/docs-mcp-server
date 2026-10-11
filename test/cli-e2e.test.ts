@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
+import { ScrapeMode } from "../src/scraper/types";
 import { createApiClient } from "../src/services/apiClient";
+import { openBackend } from "../src/services/backend";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { loadConfig } from "../src/utils/config";
 import {
@@ -22,9 +24,9 @@ describe("CLI E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
   const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
 
-  /** The status and progress lines a scrape printed. */
+  /** The status and progress lines a scrape or refresh printed. */
   function progressLines(output: string): string[] {
-    return output.split("\n").filter((line) => /[🚀📄] Scraping /u.test(line));
+    return output.split("\n").filter((line) => /[🚀📄] (Scraping|Refreshing) /u.test(line));
   }
 
   /** Run the CLI; with `timeoutMs`, kill it after that long and report exit code 1. */
@@ -277,5 +279,120 @@ describe("CLI E2E", () => {
         await site.close();
       }
     }, 60_000);
+
+    describe("the same remotely as locally", () => {
+      let localStore: string;
+
+      /**
+       * Runs a command against the worker and, at the same time, locally on
+       * `localStorePath`.
+       */
+      function runBoth(args: string[], localStorePath: string) {
+        return Promise.all([
+          runCli([...args, "--server-url", workerUrl, "--config", configPath], 40_000),
+          runCli([...args, "--store-path", localStorePath, "--config", configPath], 40_000),
+        ]);
+      }
+
+      /** Scrapes the fixture as `library@version`, on the worker or into a local store. */
+      async function seed(
+        target: { serverUrl: string } | { storePath: string },
+        library: string,
+        version: string,
+      ): Promise<void> {
+        const appConfig = loadConfig({}, { configPath });
+        if ("storePath" in target) appConfig.app.storePath = target.storePath;
+        const backend = await openBackend({
+          appConfig,
+          eventBus: new EventBusService(),
+          serverUrl: "serverUrl" in target ? target.serverUrl : undefined,
+          jobs: { recoverJobs: false },
+        });
+        try {
+          const jobId = await backend.pipeline.enqueueScrapeJob(library, version, {
+            url: fixtureUrl,
+            library,
+            version,
+            scrapeMode: ScrapeMode.Fetch,
+          });
+          await backend.pipeline.waitForJobCompletion(jobId);
+        } finally {
+          await backend.close();
+        }
+      }
+
+      beforeAll(async () => {
+        localStore = mkdtempSync(path.join(tmpdir(), "cli-e2e-local-"));
+        for (const target of [{ serverUrl: workerUrl }, { storePath: localStore }]) {
+          await seed(target, "Parity", "1.2.0");
+          await seed(target, "Removed", "1.0");
+        }
+      }, 60_000);
+
+      afterAll(() => {
+        rmSync(localStore, { recursive: true, force: true });
+      });
+
+      // The local run opens the worker's own store, so both read the same data
+      it.each([
+        { args: ["list"], shows: '"Parity"' },
+        { args: ["search", "Parity", "blacksmith"], shows: "blacksmith" },
+        { args: ["find-version", "Parity", "--version", "1.x"], shows: "1.2.0" },
+      ])("$args.0 prints what a local run prints for the same store", async ({ args, shows }) => {
+        const [remote, local] = await runBoth(args, storePath);
+
+        expect(remote.code, remote.stderr).toBe(0);
+        expect(local.code, local.stderr).toBe(0);
+        expect(remote.stdout).toContain(shows);
+        expect(remote.stdout).toBe(local.stdout);
+      }, 60_000);
+
+      it("refresh shows the same progress and summary", async () => {
+        const [remote, local] = await runBoth(
+          ["refresh", "Parity", "--version", "1.2.0", "--verbose"],
+          localStore,
+        );
+
+        for (const result of [remote, local]) {
+          expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
+        }
+        const summary = (stdout: string) =>
+          stdout.split("\n").filter((line) => line.startsWith("Successfully refreshed"));
+        expect(summary(remote.stdout)).toEqual(["Successfully refreshed 1 pages"]);
+        expect(summary(remote.stdout)).toEqual(summary(local.stdout));
+        expect(progressLines(`${remote.stdout}${remote.stderr}`)).toEqual([
+          "🚀 Refreshing Parity v1.2.0...",
+          "📄 Refreshing Parity v1.2.0: 1/1 pages",
+        ]);
+        expect(progressLines(`${remote.stdout}${remote.stderr}`)).toEqual(
+          progressLines(`${local.stdout}${local.stderr}`),
+        );
+      }, 60_000);
+
+      it("remove prints the same and removes the version from either store", async () => {
+        const [remote, local] = await runBoth(["remove", "Removed", "--version", "1.0"], localStore);
+
+        expect(remote.code, remote.stderr).toBe(0);
+        expect(local.code, local.stderr).toBe(0);
+        expect(remote.stdout).toContain("Removed");
+        expect(remote.stdout).toBe(local.stdout);
+        const [remoteList, localList] = await runBoth(["list"], localStore);
+        expect(remoteList.stdout).toContain('"Parity"');
+        expect(remoteList.stdout).not.toContain('"Removed"');
+        expect(localList.stdout).toContain('"Parity"');
+        expect(localList.stdout).not.toContain('"Removed"');
+      }, 60_000);
+
+      it("compact compacts the store it runs on", async () => {
+        const results = await runBoth(["compact"], localStore);
+
+        for (const result of results) {
+          expect(result.code, result.stderr).toBe(0);
+          expect(result.stdout).toMatch(
+            /^(Compacted store from .+ to .+ \(reclaimed .+\)\.|Store is already compact\.)\n$/,
+          );
+        }
+      }, 60_000);
+    });
   });
 });
