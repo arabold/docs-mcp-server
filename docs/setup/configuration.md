@@ -213,7 +213,7 @@ Settings controlling the web scraping behavior.
 | `maxDepth` | `3` | Maximum link depth to traverse. |
 | `maxConcurrency` | `3` | Number of concurrent page fetches. |
 | `preserveHashes` | `false` | Preserve hash fragments as page identity for hash-routed SPA docs sites. |
-| `pageTimeoutMs` | `5000` | Timeout for a single page load (ms). |
+| `pageTimeoutMs` | `5000` | Timeout for a single page load (ms). Also bounds closing the browser and its pages; a browser that does not close in time is killed. |
 | `browserTimeoutMs` | `30000` | Timeout for the browser instance (ms). |
 | `fetcher.maxRetries` | `6` | Number of retries for failed requests. |
 | `fetcher.baseDelayMs` | `1000` | Initial delay for exponential backoff (ms). |
