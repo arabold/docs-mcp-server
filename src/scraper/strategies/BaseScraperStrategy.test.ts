@@ -224,6 +224,21 @@ describe("BaseScraperStrategy", () => {
 
       expect(run.events.map((e) => e.outcome)).toEqual([PageOutcome.Skipped]);
     });
+
+    it("does not fail the job while a missing start URL can fall back to its page", async () => {
+      // The start URL is a stored page's Markdown representation; a 404 there
+      // says nothing about the page until the page itself has been asked.
+      const start = `${ROOT}guide.md`;
+      const run = await crawl(
+        { [start]: notFound(), [`${ROOT}guide`]: page() },
+        {
+          url: start,
+          initialQueue: [stored(start, 7, { depth: 0, identityUrl: `${ROOT}guide` })],
+        },
+      );
+
+      expect(storedUrls(run.events)).toEqual([`${ROOT}guide`]);
+    });
   });
 
   describe("child failures", () => {
@@ -257,6 +272,16 @@ describe("BaseScraperStrategy", () => {
         result: null,
       });
       expect(storedUrls(run.events)).toEqual([ROOT, `${ROOT}valid`]);
+    });
+
+    it("fails the job with the child's error when ignoreErrors is off", async () => {
+      const run = startCrawl({
+        [ROOT]: page([`${ROOT}broken`]),
+        [`${ROOT}broken`]: new Error("Child page error"),
+      });
+
+      await expect(run.done).rejects.toThrow("Child page error");
+      expect(storedUrls(run.events)).toEqual([ROOT]);
     });
   });
 
@@ -352,6 +377,34 @@ describe("BaseScraperStrategy", () => {
 
       await expect(run.done).rejects.toThrow(/Scrape aborted/);
     });
+
+    it("drops the rest of a concurrent batch once the threshold trips", async () => {
+      // Ten children fail at once; an eleventh in the same batch succeeds only
+      // after the threshold has tripped, and must not be reported as stored.
+      let release = (): void => {};
+      const late = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const run = startCrawl(
+        async (item) => {
+          if (item.depth === 0) return page(children(11));
+          if (childIndex(item) < 10) return new Error("child failed");
+          await late;
+          return page();
+        },
+        { ignoreErrors: true, maxConcurrency: 11 },
+        { abortOnFailureRate: 0.5 },
+      );
+
+      await expect(run.done).rejects.toThrow(/Scrape aborted after 10\/10/);
+      release();
+      await new Promise(setImmediate);
+
+      expect(eventFor(run.events, `${ROOT}p10`)).toBeUndefined();
+    });
+
+    // Currently counted: a refresh of a site that withdrew its Markdown files aborts.
+    it.todo("does not count a missing representation with a page to fall back to");
   });
 
   describe("refresh", () => {
@@ -419,6 +472,95 @@ describe("BaseScraperStrategy", () => {
         pageId: 101,
         result: null,
       });
+    });
+
+    it("asks the page itself, without the stale validator, when its representation is gone", async () => {
+      const run = await crawl(
+        { [ROOT]: page(), [`${ROOT}guide.md`]: notFound(), [`${ROOT}guide`]: page() },
+        {
+          initialQueue: [
+            stored(`${ROOT}guide.md`, 7, {
+              etag: '"md-etag"',
+              identityUrl: `${ROOT}guide`,
+            }),
+          ],
+        },
+      );
+
+      expect(run.processed.at(-1)).toEqual({
+        url: `${ROOT}guide`,
+        depth: 1,
+        pageId: 7,
+        etag: null,
+      });
+      expect(run.events.some((e) => e.deleted)).toBe(false);
+    });
+
+    it("deletes the page when neither its representation nor the page is served", async () => {
+      const run = await crawl(
+        { [ROOT]: page(), [`${ROOT}guide.md`]: notFound(), [`${ROOT}guide`]: notFound() },
+        {
+          initialQueue: [stored(`${ROOT}guide.md`, 7, { identityUrl: `${ROOT}guide` })],
+        },
+      );
+
+      expect(run.events.filter((e) => e.deleted)).toEqual([
+        expect.objectContaining({ currentUrl: `${ROOT}guide`, pageId: 7 }),
+      ]);
+    });
+  });
+
+  describe("page identity", () => {
+    it("sends a second representation of a stored page without counting it again", async () => {
+      // `/guide` and `/guide.md` are queued together; the second resolves to the
+      // identity the first already stored.
+      const run = await crawl({
+        [ROOT]: page([`${ROOT}guide`, `${ROOT}guide.md`]),
+        [`${ROOT}guide`]: page(),
+        [`${ROOT}guide.md`]: page([], { url: `${ROOT}guide` }),
+      });
+
+      const guide = run.events.filter((e) => e.result?.url === `${ROOT}guide`);
+      expect(guide.map((e) => e.result?.isAdditionalRepresentation)).toEqual([
+        false,
+        true,
+      ]);
+      expect(lastEvent(run.events)).toMatchObject({ pagesScraped: 3, pagesIndexed: 2 });
+    });
+
+    it("does not queue a page already stored under another spelling", async () => {
+      const run = await crawl({
+        [ROOT]: page([`${ROOT}guide.md`]),
+        [`${ROOT}guide.md`]: page([`${ROOT}guide`], { url: `${ROOT}guide` }),
+      });
+
+      expect(urls(run.processed)).toEqual([ROOT, `${ROOT}guide.md`]);
+    });
+
+    it.each([
+      ["stored", page()],
+      ["empty", empty()],
+    ])(
+      "records where a %s page was read from when its identity moves",
+      async (_label, reply) => {
+        const run = await crawl(
+          { [`${ROOT}docs/`]: reply },
+          { url: `${ROOT}docs/`, maxDepth: 0 },
+          { canonicalize: (url) => url.replace(/\/+$/, "") },
+        );
+
+        const event = lastEvent(run.events);
+        expect(event?.result?.url ?? event?.emptyPage?.url).toBe(`${ROOT}docs`);
+        expect(event?.result?.contentUrl ?? event?.emptyPage?.contentUrl).toBe(
+          `${ROOT}docs/`,
+        );
+      },
+    );
+
+    it("keeps the retrieval location a strategy reports", async () => {
+      const run = await crawl({ [ROOT]: page([], { contentUrl: `${ROOT}index.md` }) });
+
+      expect(lastEvent(run.events)?.result?.contentUrl).toBe(`${ROOT}index.md`);
     });
   });
 
