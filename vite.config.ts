@@ -1,4 +1,6 @@
 import { defineConfig } from "vitest/config";
+import { randomUUID } from 'crypto';
+import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import packageJson from "./package.json";
@@ -104,6 +106,18 @@ export default defineConfig({
     env: {
       // Silence dotenv v17 "injected env" banners during test runs.
       DOTENV_CONFIG_QUIET: "true",
+      // Without an explicit path, loadConfig() reads the developer's own system
+      // config.yaml and writes defaults back into it. An explicit path is
+      // read-only, and this one never exists: its directory is named afresh for
+      // each run and never created, so no leftover file can be waiting there.
+      // loadConfig() in tests (and in the CLIs the E2E suites spawn, which
+      // inherit the variable) therefore starts from the built-in defaults unless
+      // a test passes a config of its own.
+      DOCS_MCP_CONFIG: path.join(
+        os.tmpdir(),
+        `docs-mcp-server-tests-${randomUUID()}`,
+        "no-config.yaml",
+      ),
     },
   },
 });

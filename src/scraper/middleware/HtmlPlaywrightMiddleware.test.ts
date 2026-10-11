@@ -25,7 +25,13 @@ vi.mock("playwright", async () =>
   vi.importActual<typeof import("playwright")>("playwright"),
 );
 
-import { type Browser, chromium, type Frame, type Page } from "playwright";
+import {
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Frame,
+  type Page,
+} from "playwright";
 
 /**
  * A scraper config for these tests: the real defaults with file access opened
@@ -401,6 +407,97 @@ describe("HtmlPlaywrightMiddleware", () => {
       expect(browserSpy.close).toHaveBeenCalled();
 
       launchSpy.mockRestore();
+    });
+
+    describe("render deadline", () => {
+      const browserTimeoutMs = 1000;
+      const hang = () => new Promise<never>(() => {});
+
+      type HangPoint = (mocks: {
+        browser: MockedObject<Browser>;
+        browserContext: BrowserContext;
+        page: MockedObject<Page>;
+      }) => void;
+
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      });
+
+      // `opened` names what the render had opened before it hung, which must be
+      // closed although the render never finished. Only a render that hung before
+      // it had a context of its own was waiting on the shared browser itself, so
+      // only that one replaces the browser.
+      it.each<[string, HangPoint, Array<"browserContext" | "page">, boolean]>([
+        [
+          "browser context creation",
+          ({ browser }) => (browser.newContext = vi.fn(hang)),
+          [],
+          true,
+        ],
+        [
+          "page creation",
+          ({ browserContext }) => (browserContext.newPage = vi.fn(hang)),
+          ["browserContext"],
+          false,
+        ],
+        [
+          "content extraction",
+          ({ page }) => (page.content = vi.fn(hang)),
+          ["page", "browserContext"],
+          false,
+        ],
+      ])(
+        "abandons a render that hangs in %s",
+        async (_, hangIn, opened, replacesBrowser) => {
+          const middleware = new HtmlPlaywrightMiddleware({
+            ...makeScraperConfig(),
+            pageTimeoutMs: 100,
+            browserTimeoutMs,
+          });
+          const initialHtml = "<html><body><p>Fetched</p></body></html>";
+          const context = createPipelineTestContext(
+            initialHtml,
+            "https://example.com/test",
+          );
+          const next = vi.fn();
+
+          const page = createMockPlaywrightPage("<p>Rendered</p>");
+          const browser = createMockBrowser(page);
+          // createMockBrowser hands out one context, so this is the one the render gets.
+          const browserContext = await browser.newContext();
+          hangIn({ browser, browserContext, page });
+          vi.spyOn(chromium, "launch").mockResolvedValue(browser);
+
+          const processing = middleware.process(context, next);
+
+          // Navigation alone may use the whole browser timeout, so the render is still
+          // running just before it.
+          await vi.advanceTimersByTimeAsync(browserTimeoutMs - 1);
+          expect(next).not.toHaveBeenCalled();
+
+          await vi.runAllTimersAsync();
+          await processing;
+
+          expect(context.errors).toHaveLength(1);
+          expect(context.errors[0].message).toContain("timed out");
+          expect(context.content).toBe(initialHtml);
+          const mocks = { browserContext, page };
+          for (const name of opened) {
+            expect(mocks[name].close).toHaveBeenCalled();
+          }
+          if (replacesBrowser) {
+            expect(browser.close).toHaveBeenCalled();
+          } else {
+            expect(browser.close).not.toHaveBeenCalled();
+          }
+          expect(next).toHaveBeenCalled();
+        },
+      );
     });
 
     it("should skip processing when scrapeMode is not playwright/auto", async () => {

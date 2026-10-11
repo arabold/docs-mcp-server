@@ -45,6 +45,12 @@ interface CachedResource {
   contentType: string;
 }
 
+/** The Playwright objects a render opens, held where the caller can close them. */
+interface RenderHandles {
+  page: Page | null;
+  browserContext: BrowserContext | null;
+}
+
 /**
  * Middleware to process HTML content using Playwright for rendering dynamic content,
  * *if* the scrapeMode option requires it ('playwright' or 'auto').
@@ -117,6 +123,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
   private getBrowserTimeoutMs(): number {
     return this.config.browserTimeoutMs ?? defaults.scraper.browserTimeoutMs;
+  }
+
+  /**
+   * Upper bound for one page render. Navigation has its own timeout; the waits
+   * and extraction after it share six page timeouts of headroom. Several of those
+   * Playwright calls take no timeout at all, and a wedged Chromium leaves them
+   * pending, so the whole render runs under this bound.
+   */
+  private getRenderTimeoutMs(): number {
+    return this.getBrowserTimeoutMs() + 6 * this.getPageTimeoutMs();
   }
 
   /**
@@ -1016,108 +1032,18 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       `Running Playwright rendering for ${context.source} (scrapeMode: '${scrapeMode}')`,
     );
 
-    let page: Page | null = null;
-    let browserContext: BrowserContext | null = null;
+    const handles: RenderHandles = { page: null, browserContext: null };
     let renderedHtml: string | null = null;
     let browser: Browser | null = null;
 
-    // Extract credentials and origin using helper
-    const { credentials, origin } = extractCredentialsAndOrigin(context.source);
-
-    // Extract custom headers (Record<string, string>)
-    const customHeaders: Record<string, string> = context.options?.headers ?? {};
-
     try {
+      // Outside the deadline: launching has its own timeout, and a browser that
+      // finished launching after the deadline would have no owner to close it.
       browser = await this.managedBrowser.get();
-
-      // Always create a browser context (with or without credentials)
-      browserContext = await browser.newContext({
-        userAgent: getHeader(customHeaders, "user-agent") || DEFAULT_BROWSER_USER_AGENT,
-        viewport: { width: 1920, height: 1080 },
-        ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
-          "https://browser-context.local",
-        ),
-        ...(credentials ? { httpCredentials: credentials } : {}),
-      });
-      page = await browserContext.newPage();
-
-      logger.debug(`Playwright: Processing ${context.source}`);
-
-      // Inject shadow DOM extractor script early
-      await this.injectShadowDOMExtractor(page);
-
-      const initialRequestUrl = (() => {
-        try {
-          const initialUrl = new URL(context.source);
-          initialUrl.hash = "";
-          return initialUrl.toString();
-        } catch {
-          return context.source;
-        }
-      })();
-
-      // Set up route interception with special handling for the initial page load
-      await page.route("**/*", async (route) => {
-        const reqUrl = route.request().url();
-
-        // Serve the initial HTML for the main page (bypass cache and fetch)
-        if (reqUrl === initialRequestUrl) {
-          try {
-            return await route.fulfill({
-              status: 200,
-              contentType: "text/html; charset=utf-8",
-              body: context.content,
-            });
-          } catch (error) {
-            if (this.isRouteAlreadyHandledError(error)) {
-              logger.debug(`Route already handled (initial page): ${reqUrl}`);
-              return;
-            }
-            // Re-throw other errors
-            throw error;
-          }
-        }
-
-        // For all other requests, use the standard caching logic
-        await this.handleSubresourceRoute(
-          route,
-          customHeaders,
-          credentials ?? undefined,
-          origin ?? undefined,
-        );
-      });
-
-      // Wait for either body (normal HTML) or frameset (frameset documents) to appear
-      const pageTimeoutMs = this.getPageTimeoutMs();
-
-      // Load initial HTML content
-      await page.goto(context.source, {
-        waitUntil: "load",
-        timeout: this.getBrowserTimeoutMs(),
-      });
-
-      await page.waitForSelector("body, frameset", {
-        timeout: pageTimeoutMs,
-      });
-
-      // Wait for network idle to let dynamic content initialize
-      try {
-        await page.waitForLoadState("networkidle", {
-          timeout: pageTimeoutMs,
-        });
-      } catch {
-        logger.debug("Network idle timeout, proceeding anyway");
-      }
-
-      await this.waitForLoadingToComplete(page);
-      await this.waitForIframesToLoad(page);
-      await this.waitForFramesetsToLoad(page);
-
-      // Extract content using shadow DOM-aware method
-      const { content, method } = await this.extractContentWithShadowDOMSupport(page);
-      renderedHtml = content;
-      logger.debug(
-        `Playwright: Successfully rendered content for ${context.source} using ${method}`,
+      renderedHtml = await withTimeout(
+        this.renderPage(browser, context, handles),
+        this.getRenderTimeoutMs(),
+        `Playwright render for ${context.source}`,
       );
     } catch (error) {
       logger.error(`❌ Playwright failed to render ${context.source}: ${error}`);
@@ -1128,17 +1054,23 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       );
     } finally {
       const closed = await this.cleanupPageAndContext(
-        page,
-        browserContext,
+        handles.page,
+        handles.browserContext,
         context.source,
       );
-      // A page or context that will not close may have left Chromium stuck,
-      // so replace it. A failed render alone does not: its context closed
-      // cleanly, and other pages may be using the same browser.
-      if (!closed && browser) {
+      // A page or context that will not close may have left Chromium stuck, and
+      // so may a render that failed before it had a context of its own: that
+      // call was waiting on the browser itself. Either way, replace it. A failed
+      // render alone does not: its context closed cleanly, and other pages may be
+      // using the same browser.
+      const failedBeforeContext =
+        renderedHtml === null && handles.browserContext === null;
+      if (browser && (!closed || failedBeforeContext)) {
         await this.managedBrowser.retire(
           browser,
-          `reset after Playwright cleanup failure for ${context.source}`,
+          closed
+            ? `reset after Playwright could not open a context for ${context.source}`
+            : `reset after Playwright cleanup failure for ${context.source}`,
         );
       }
     }
@@ -1155,6 +1087,113 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     }
 
     await next();
+  }
+
+  /**
+   * Renders `context.content` in a new browser context and returns the result.
+   *
+   * Records the context and page in `handles` as soon as they exist, so the caller
+   * can close them even when it abandons the render midway.
+   */
+  private async renderPage(
+    browser: Browser,
+    context: MiddlewareContext,
+    handles: RenderHandles,
+  ): Promise<string> {
+    const { credentials, origin } = extractCredentialsAndOrigin(context.source);
+    const customHeaders: Record<string, string> = context.options?.headers ?? {};
+
+    // Always create a browser context (with or without credentials)
+    const browserContext = await browser.newContext({
+      userAgent: getHeader(customHeaders, "user-agent") || DEFAULT_BROWSER_USER_AGENT,
+      viewport: { width: 1920, height: 1080 },
+      ignoreHTTPSErrors: this.accessPolicy.shouldAllowInvalidTls(
+        "https://browser-context.local",
+      ),
+      ...(credentials ? { httpCredentials: credentials } : {}),
+    });
+    handles.browserContext = browserContext;
+    const page = await browserContext.newPage();
+    handles.page = page;
+
+    logger.debug(`Playwright: Processing ${context.source}`);
+
+    // Inject shadow DOM extractor script early
+    await this.injectShadowDOMExtractor(page);
+
+    const initialRequestUrl = (() => {
+      try {
+        const initialUrl = new URL(context.source);
+        initialUrl.hash = "";
+        return initialUrl.toString();
+      } catch {
+        return context.source;
+      }
+    })();
+
+    // Set up route interception with special handling for the initial page load
+    await page.route("**/*", async (route) => {
+      const reqUrl = route.request().url();
+
+      // Serve the initial HTML for the main page (bypass cache and fetch)
+      if (reqUrl === initialRequestUrl) {
+        try {
+          return await route.fulfill({
+            status: 200,
+            contentType: "text/html; charset=utf-8",
+            body: context.content,
+          });
+        } catch (error) {
+          if (this.isRouteAlreadyHandledError(error)) {
+            logger.debug(`Route already handled (initial page): ${reqUrl}`);
+            return;
+          }
+          // Re-throw other errors
+          throw error;
+        }
+      }
+
+      // For all other requests, use the standard caching logic
+      await this.handleSubresourceRoute(
+        route,
+        customHeaders,
+        credentials ?? undefined,
+        origin ?? undefined,
+      );
+    });
+
+    // Wait for either body (normal HTML) or frameset (frameset documents) to appear
+    const pageTimeoutMs = this.getPageTimeoutMs();
+
+    // Load initial HTML content
+    await page.goto(context.source, {
+      waitUntil: "load",
+      timeout: this.getBrowserTimeoutMs(),
+    });
+
+    await page.waitForSelector("body, frameset", {
+      timeout: pageTimeoutMs,
+    });
+
+    // Wait for network idle to let dynamic content initialize
+    try {
+      await page.waitForLoadState("networkidle", {
+        timeout: pageTimeoutMs,
+      });
+    } catch {
+      logger.debug("Network idle timeout, proceeding anyway");
+    }
+
+    await this.waitForLoadingToComplete(page);
+    await this.waitForIframesToLoad(page);
+    await this.waitForFramesetsToLoad(page);
+
+    // Extract content using shadow DOM-aware method
+    const { content, method } = await this.extractContentWithShadowDOMSupport(page);
+    logger.debug(
+      `Playwright: Successfully rendered content for ${context.source} using ${method}`,
+    );
+    return content;
   }
 
   /**

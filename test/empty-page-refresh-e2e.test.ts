@@ -22,6 +22,7 @@ import { PageOutcome, ScrapeMode, type ScraperOptions } from "../src/scraper/typ
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import type { StoreSearchResult } from "../src/store/types";
 import { type AppConfig, loadConfig } from "../src/utils/config";
+import { mockOriginsWithNock } from "./nock-helpers";
 
 const TEST_BASE_URL = "http://empty-docs.example.com";
 const TEST_LIBRARY = "empty-lib";
@@ -36,9 +37,8 @@ function populatedPage(): string {
  * Answers the llms.txt probe with a 404, the way a site without one does.
  *
  * `WebScraperStrategy` probes a couple of llms.txt candidates before crawling.
- * Left unmocked they escape to the real network, where the unresolvable test
- * host costs three retries with backoff per candidate — about 14 seconds a job.
- * A persistent 404 is both faster and closer to what a real site answers.
+ * Left unmocked, each one fails inside nock (see `mockOriginsWithNock`). A
+ * persistent 404 is what a real site without one answers.
  */
 function mockLlmsTxtMisses(): void {
   nock(TEST_BASE_URL).persist().get(/llms\.txt$/).reply(404);
@@ -67,6 +67,8 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     appConfig.app.embeddingModel = "";
     appConfig.scraper.security.network.allowPrivateNetworks = true;
     appConfig.scraper.maxConcurrency = 1;
+    // An unmocked request fails inside nock; retrying it would only add backoff.
+    appConfig.scraper.fetcher.maxRetries = 0;
 
     eventBus = new EventBusService();
     docService = new DocumentManagementService(eventBus, appConfig);
@@ -87,6 +89,7 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     });
 
     nock.cleanAll();
+    mockOriginsWithNock(TEST_BASE_URL);
     mockLlmsTxtMisses();
   });
 
@@ -163,7 +166,7 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     expect(page).toBeDefined();
     expect(await articleIsSearchable()).toBe(false);
     expect(page?.etag).toBe('"article-v2"');
-  }, 60000);
+  });
 
   it("leaves content and etag untouched when extraction fails", async () => {
     nock(TEST_BASE_URL).get("/article").reply(200, populatedPage(), {
@@ -190,7 +193,7 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     expect(await articleIsSearchable()).toBe(true);
     const page = await storedArticle();
     expect(page?.etag).toBe('"article-v1"');
-  }, 60000);
+  });
 
   it("retries on the next refresh after a withheld etag, restoring content", async () => {
     nock(TEST_BASE_URL).get("/article").reply(200, populatedPage(), {
@@ -228,7 +231,7 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     // Content is back and the validator has finally advanced.
     expect(await articleIsSearchable()).toBe(true);
     expect((await storedArticle())?.etag).toBe('"article-v3"');
-  }, 90000);
+  });
 
   it("keeps an empty page empty across a 304 refresh", async () => {
     // A page recorded as empty carries a validator, so subsequent refreshes
@@ -257,5 +260,5 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     expect(progressEvents.map((e) => e.outcome)).toContain(PageOutcome.Unchanged);
     expect((await storedArticle())?.etag).toBe('"empty-v1"');
     expect(await articleIsSearchable()).toBe(false);
-  }, 60000);
+  });
 });

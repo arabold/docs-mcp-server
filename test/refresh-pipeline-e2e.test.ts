@@ -21,6 +21,7 @@ import { EventBusService } from "../src/events";
 import type { StoreSearchResult } from "../src/store/types";
 import { ScraperRegistry } from "../src/scraper";
 import { loadConfig, type AppConfig } from "../src/utils/config";
+import { mockOriginsWithNock } from "./nock-helpers";
 
 // Mock file system for file-based tests
 vi.mock("node:fs/promises", () => ({ default: vol.promises }));
@@ -54,6 +55,8 @@ describe("Refresh Pipeline E2E Tests", () => {
     const registry = new ScraperRegistry(appConfig);
     scraperService = new ScraperService(registry);
     appConfig.scraper.maxConcurrency = 3;
+    // An unmocked request fails inside nock; retrying it would only add backoff.
+    appConfig.scraper.fetcher.maxRetries = 0;
     pipelineManager = new PipelineManager(docService, eventBus, {
       recoverJobs: false,
       appConfig: appConfig,
@@ -62,11 +65,11 @@ describe("Refresh Pipeline E2E Tests", () => {
 
     // Clear any previous nock mocks
     nock.cleanAll();
+    mockOriginsWithNock(TEST_BASE_URL);
 
     // Answer the llms.txt probe the way a site without one does. The scraper
-    // probes for llms.txt before crawling; left unmocked those requests escape
-    // to the real network, where the unresolvable test host costs three retries
-    // with backoff — about 7 seconds per scrape job, spent waiting on DNS.
+    // probes for llms.txt before crawling; left unmocked those requests fail
+    // inside nock.
     nock(TEST_BASE_URL).persist().get(/llms\.txt$/).reply(404);
   });
 
@@ -863,6 +866,7 @@ describe("Refresh Pipeline E2E Tests", () => {
       appConfig.scraper.security.network.allowedHosts = [ALLOWED_HOST];
       appConfig.scraper.security.network.allowedCidrs = [];
       appConfig.scraper.security.network.allowPrivateNetworks = false;
+      mockOriginsWithNock(ALLOWED_BASE, BLOCKED_BASE);
     });
 
     it("scrapes allowlisted hosts and rejects non-allowlisted hosts end-to-end", async () => {

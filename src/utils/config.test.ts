@@ -31,6 +31,23 @@ vi.mock("./paths", () => ({
   getProjectRoot: vi.fn().mockReturnValue(undefined), // Default to undefined to rely on explicit searchDirs
 }));
 
+// vite.config.ts points DOCS_MCP_CONFIG at a missing file for every test run.
+// These tests cover config path resolution, including the managed default path,
+// so they start without it. Several describes below replace `process.env`
+// wholesale, which `vi.stubEnv` does not follow, so this edits it directly.
+let testRunConfigPath: string | undefined;
+
+beforeEach(() => {
+  testRunConfigPath = process.env.DOCS_MCP_CONFIG;
+  delete process.env.DOCS_MCP_CONFIG;
+});
+
+afterEach(() => {
+  if (testRunConfigPath !== undefined) {
+    process.env.DOCS_MCP_CONFIG = testRunConfigPath;
+  }
+});
+
 describe("Configuration Loading", () => {
   let tmpDir: string;
   let originalEnv: NodeJS.ProcessEnv;
@@ -45,7 +62,6 @@ describe("Configuration Loading", () => {
     });
 
     // Clear relevant env vars
-    delete process.env.DOCS_MCP_CONFIG;
     delete process.env.DOCS_MCP_TELEMETRY;
     delete process.env.DOCS_MCP_READ_ONLY;
     delete process.env.DOCS_MCP_STORE_PATH;

@@ -20,6 +20,7 @@ import { PageOutcome, ScrapeMode, type ScraperOptions } from "../src/scraper/typ
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { GetJobInfoTool } from "../src/tools/GetJobInfoTool";
 import { type AppConfig, loadConfig } from "../src/utils/config";
+import { mockOriginsWithNock } from "./nock-helpers";
 
 const TEST_BASE_URL = "http://progress-docs.example.com";
 const TEST_LIBRARY = "progress-lib";
@@ -38,9 +39,8 @@ function hubPage(links: string[]): string {
  * Answers the llms.txt probe with a 404, the way a site without one does.
  *
  * `WebScraperStrategy` probes a couple of llms.txt candidates before crawling.
- * Left unmocked they escape to the real network, where the unresolvable test
- * host costs three retries with backoff per candidate — about 14 seconds a job.
- * A persistent 404 is both faster and closer to what a real site answers.
+ * Left unmocked, each one fails inside nock (see `mockOriginsWithNock`). A
+ * persistent 404 is what a real site without one answers.
  */
 function mockLlmsTxtMisses(): void {
   nock(TEST_BASE_URL).persist().get(/llms\.txt$/).reply(404);
@@ -73,6 +73,8 @@ describe("Scrape progress counters E2E", () => {
     // One worker keeps the event order deterministic, which matters for the
     // monotonicity assertions below.
     appConfig.scraper.maxConcurrency = 1;
+    // An unmocked request fails inside nock; retrying it would only add backoff.
+    appConfig.scraper.fetcher.maxRetries = 0;
 
     eventBus = new EventBusService();
     docService = new DocumentManagementService(eventBus, appConfig);
@@ -97,6 +99,7 @@ describe("Scrape progress counters E2E", () => {
     });
 
     nock.cleanAll();
+    mockOriginsWithNock(TEST_BASE_URL);
     mockLlmsTxtMisses();
   });
 
