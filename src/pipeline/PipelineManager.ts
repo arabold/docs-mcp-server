@@ -15,7 +15,12 @@ import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { formatVersionLabel } from "../store/errors";
-import { libraryNamesMatch, normalizeVersionLabel, VersionStatus } from "../store/types";
+import {
+  libraryNamesMatch,
+  normalizeLibraryName,
+  normalizeVersionLabel,
+  VersionStatus,
+} from "../store/types";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError } from "./errors";
@@ -29,6 +34,8 @@ import { PipelineJobStatus } from "./types";
  */
 export class PipelineManager implements IPipeline {
   private jobMap: Map<string, InternalPipelineJob> = new Map();
+  /** The last enqueue or removal per library version; see `withVersionLock`. */
+  private readonly versionLocks = new Map<string, Promise<void>>();
   private jobQueue: string[] = [];
   private activeWorkers: Set<string> = new Set();
   private isRunning = false;
@@ -231,6 +238,64 @@ export class PipelineManager implements IPipeline {
   }
 
   /**
+   * Runs `work` once any earlier enqueue or removal of the same library version
+   * has finished, so the two never interleave.
+   */
+  private async withVersionLock<T>(
+    library: string,
+    normalizedVersion: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const key = `${normalizeLibraryName(library)}\u0000${normalizedVersion}`;
+    const previous = this.versionLocks.get(key) ?? Promise.resolve();
+    const result = previous.then(work);
+    const settled = result.then(
+      () => {},
+      () => {},
+    );
+    this.versionLocks.set(key, settled);
+    try {
+      return await result;
+    } finally {
+      if (this.versionLocks.get(key) === settled) {
+        this.versionLocks.delete(key);
+      }
+    }
+  }
+
+  /**
+   * Removes a library version: cancels a queued or running job for it, waits
+   * until that job has ended, then removes the version, and the library with its
+   * last version. A job enqueued for the same version meanwhile is registered
+   * only after the removal is done.
+   */
+  async removeVersion(
+    library: string,
+    version: string | undefined | null,
+  ): Promise<void> {
+    const normalizedVersion = normalizeVersionLabel(version);
+    await this.withVersionLock(library, normalizedVersion, async () => {
+      const jobs = Array.from(this.jobMap.values()).filter(
+        (job) =>
+          libraryNamesMatch(job.library, library) &&
+          normalizeVersionLabel(job.version) === normalizedVersion &&
+          (job.status === PipelineJobStatus.QUEUED ||
+            job.status === PipelineJobStatus.RUNNING),
+      );
+      for (const job of jobs) {
+        logger.info(
+          `🚫 Aborting job for ${formatVersionLabel(job.library, normalizedVersion)} before removal: ${job.id}`,
+        );
+        await this.cancelJob(job.id);
+        // The job has ended either way; a failure while it stopped does not
+        // keep its version from being removed.
+        await this.waitForJobCompletion(job.id).catch(() => {});
+      }
+      await this.store.removeVersion(library, version);
+    });
+  }
+
+  /**
    * Enqueues a new document processing job.
    *
    * The target library and version are claimed first: by default an existing
@@ -247,91 +312,95 @@ export class PipelineManager implements IPipeline {
     options: ScraperOptions,
     enqueue: EnqueueScrapeOptions = {},
   ): Promise<string> {
-    // Normalized so the job is deduped against the bucket it will be stored
-    // under. Both halves of the key need it: the store buckets by folded
-    // library name too, so comparing those exactly let `Docs` and `docs` run as
-    // two jobs against one bucket, where the second one's clean-before-scrape
-    // deleted pages the first had already written — and both reported success.
-    const normalizedVersion = normalizeVersionLabel(version);
+    // A removal of this version cannot run between the claim below and the job
+    // it registers, so it either sees the job and cancels it, or runs first.
+    return this.withVersionLock(library, normalizeVersionLabel(version), async () => {
+      // Normalized so the job is deduped against the bucket it will be stored
+      // under. Both halves of the key need it: the store buckets by folded
+      // library name too, so comparing those exactly let `Docs` and `docs` run as
+      // two jobs against one bucket, where the second one's clean-before-scrape
+      // deleted pages the first had already written — and both reported success.
+      const normalizedVersion = normalizeVersionLabel(version);
 
-    // Claim the target before touching any job, so a rejected request cannot
-    // cancel the job it conflicts with. Appending clears nothing, so it is not an
-    // overwrite and may write into an existing version.
-    const requested = enqueue.onExisting ?? "reject-version";
-    const policy =
-      options.clean === false && requested === "reject-version" ? "replace" : requested;
-    const claimed = await this.store.claimVersion(library, normalizedVersion, policy);
+      // Claim the target before touching any job, so a rejected request cannot
+      // cancel the job it conflicts with. Appending clears nothing, so it is not an
+      // overwrite and may write into an existing version.
+      const requested = enqueue.onExisting ?? "reject-version";
+      const policy =
+        options.clean === false && requested === "reject-version" ? "replace" : requested;
+      const claimed = await this.store.claimVersion(library, normalizedVersion, policy);
 
-    // Abort any existing QUEUED or RUNNING job for the same library+version
-    const allJobs = await this.getJobs();
-    const duplicateJobs = allJobs.filter(
-      (job) =>
-        libraryNamesMatch(job.library, library) &&
-        normalizeVersionLabel(job.version) === normalizedVersion &&
-        [PipelineJobStatus.QUEUED, PipelineJobStatus.RUNNING].includes(job.status),
-    );
-    const label = formatVersionLabel(claimed.library, normalizedVersion);
-    for (const job of duplicateJobs) {
-      logger.info(`🚫 Aborting duplicate job for ${label}: ${job.id}`);
-      await this.cancelJob(job.id);
-    }
+      // Abort any existing QUEUED or RUNNING job for the same library+version
+      const allJobs = await this.getJobs();
+      const duplicateJobs = allJobs.filter(
+        (job) =>
+          libraryNamesMatch(job.library, library) &&
+          normalizeVersionLabel(job.version) === normalizedVersion &&
+          [PipelineJobStatus.QUEUED, PipelineJobStatus.RUNNING].includes(job.status),
+      );
+      const label = formatVersionLabel(claimed.library, normalizedVersion);
+      for (const job of duplicateJobs) {
+        logger.info(`🚫 Aborting duplicate job for ${label}: ${job.id}`);
+        await this.cancelJob(job.id);
+      }
 
-    const normalizedOptions = this.normalizeScraperOptions(options);
+      const normalizedOptions = this.normalizeScraperOptions(options);
 
-    const jobId = uuidv4();
-    const abortController = new AbortController();
-    let resolveCompletion!: () => void;
-    let rejectCompletion!: (reason?: unknown) => void;
+      const jobId = uuidv4();
+      const abortController = new AbortController();
+      let resolveCompletion!: () => void;
+      let rejectCompletion!: (reason?: unknown) => void;
 
-    const completionPromise = new Promise<void>((resolve, reject) => {
-      resolveCompletion = resolve;
-      rejectCompletion = reject;
-    });
-    // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
-    completionPromise.catch(() => {});
-
-    const job: InternalPipelineJob = {
-      id: jobId,
-      // The stored display name, not the caller's casing
-      library: claimed.library,
-      version: normalizedVersion,
-      versionId: claimed.versionId,
-      status: PipelineJobStatus.QUEUED,
-      progress: null,
-      error: null,
-      createdAt: new Date(),
-      startedAt: null,
-      finishedAt: null,
-      abortController,
-      completionPromise,
-      resolveCompletion,
-      rejectCompletion,
-      // Database fields (single source of truth)
-      // Will be populated by updateJobStatus
-      progressPages: 0,
-      progressPagesIndexed: 0,
-      progressMaxPages: 0,
-      errorMessage: null,
-      updatedAt: new Date(),
-      sourceUrl: normalizedOptions.url,
-      scraperOptions: normalizedOptions,
-    };
-
-    this.jobMap.set(jobId, job);
-    this.jobQueue.push(jobId);
-    logger.info(`📝 Job enqueued: ${jobId} for ${label}`);
-
-    // Update database status to QUEUED
-    await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
-
-    // Trigger processing if manager is running
-    if (this.isRunning) {
-      this._processQueue().catch((error) => {
-        logger.error(`❌ Error in processQueue during enqueue: ${error}`);
+      const completionPromise = new Promise<void>((resolve, reject) => {
+        resolveCompletion = resolve;
+        rejectCompletion = reject;
       });
-    }
+      // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
+      completionPromise.catch(() => {});
 
-    return jobId;
+      const job: InternalPipelineJob = {
+        id: jobId,
+        // The stored display name, not the caller's casing
+        library: claimed.library,
+        version: normalizedVersion,
+        versionId: claimed.versionId,
+        status: PipelineJobStatus.QUEUED,
+        progress: null,
+        error: null,
+        createdAt: new Date(),
+        startedAt: null,
+        finishedAt: null,
+        abortController,
+        completionPromise,
+        resolveCompletion,
+        rejectCompletion,
+        // Database fields (single source of truth)
+        // Will be populated by updateJobStatus
+        progressPages: 0,
+        progressPagesIndexed: 0,
+        progressMaxPages: 0,
+        errorMessage: null,
+        updatedAt: new Date(),
+        sourceUrl: normalizedOptions.url,
+        scraperOptions: normalizedOptions,
+      };
+
+      this.jobMap.set(jobId, job);
+      this.jobQueue.push(jobId);
+      logger.info(`📝 Job enqueued: ${jobId} for ${label}`);
+
+      // Update database status to QUEUED
+      await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
+
+      // Trigger processing if manager is running
+      if (this.isRunning) {
+        this._processQueue().catch((error) => {
+          logger.error(`❌ Error in processQueue during enqueue: ${error}`);
+        });
+      }
+
+      return jobId;
+    });
   }
 
   /**

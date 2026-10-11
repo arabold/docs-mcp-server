@@ -243,6 +243,13 @@ The CLI `remove`, the MCP `remove_docs` tool and the web UI all remove through `
 - The data router's `removeVersion` stays the raw store operation; neither the web UI nor the remote
   client calls it any more.
 
+The cancel and the removal happen in the pipeline that runs the jobs: `IPipeline.removeVersion()`
+cancels a queued or running job for the version, waits until it has ended, and removes the version.
+`PipelineManager` runs it under a per-version lock that `enqueueScrapeJob()` also takes around its claim
+of the version and the job it registers, so an enqueue racing a removal cannot register its job after the
+removal looked for jobs and then write the deleted version back. `PipelineClient.removeVersion()` calls the
+worker's `removeDocs`, so a coordinator's removal reaches that lock on the worker.
+
 Visible CLI changes: an unknown library now fails with "not found" (`RemoveTool` checks it exists)
 instead of reporting success, and `remove.ts` prints `RemoveTool`'s error as is instead of wrapping it
 in a second "Failed to remove" prefix. The `--version` help says an omitted version means the
@@ -386,6 +393,8 @@ function startAppServer(backend: JobsBackend, serverConfig: AppServerConfig,
 // src/tools
 onJobEnqueued?: (jobId: string) => void;                 // ScrapeTool, RefreshVersionTool options
 new RemoveTool(docService: IDocumentManagement, pipeline: IPipeline | undefined);
+// IPipeline: cancel the version's job, wait, remove; serialized with enqueue (PipelineManager)
+removeVersion(library: string, version: string | undefined | null): Promise<void>;
 
 // src/telemetry/TelemetryService.ts
 setJobTracking(enabled: boolean): void;

@@ -55,5 +55,12 @@ export interface IPipeline {
   cancelJob(jobId: string): Promise<void>;
   clearCompletedJobs(): Promise<number>;
   waitForJobCompletion(jobId: string): Promise<void>;
+  /**
+   * Removes a library version: cancels a queued or running job for it, waits
+   * until that job has ended, then removes the version, and the library with its
+   * last version. A job enqueued for the same version meanwhile is registered
+   * only after the removal is done, so it cannot slip in between.
+   */
+  removeVersion(library: string, version: string | undefined | null): Promise<void>;
   setCallbacks(callbacks: PipelineManagerCallbacks): void;
 }

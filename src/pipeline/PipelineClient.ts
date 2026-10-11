@@ -272,6 +272,14 @@ export class PipelineClient implements IPipeline {
     });
   }
 
+  /** Removes the version on the worker, which cancels its own job for it first. */
+  async removeVersion(
+    library: string,
+    version: string | undefined | null,
+  ): Promise<void> {
+    await this.client.removeDocs.mutate({ library, version: version ?? null });
+  }
+
   setCallbacks(_callbacks: PipelineManagerCallbacks): void {
     // For external pipeline, callbacks are not used since all updates come via event bus
     logger.debug("PipelineClient.setCallbacks called - no-op for external worker");

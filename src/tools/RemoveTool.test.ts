@@ -15,11 +15,9 @@ const mockDocService = {
   // Add other methods used by DocumentManagementService if needed, mocking them with vi.fn()
 } as MockedObject<DocumentManagementService>;
 
-// Create pipeline mock
+// A pipeline removes the version itself, after cancelling its job for it
 const mockPipeline = {
-  getJobs: vi.fn(),
-  cancelJob: vi.fn(),
-  waitForJobCompletion: vi.fn(),
+  removeVersion: vi.fn(),
 } as unknown as IPipeline;
 
 describe("RemoveTool", () => {
@@ -28,7 +26,8 @@ describe("RemoveTool", () => {
   beforeEach(() => {
     // Reset mocks before each test
     vi.resetAllMocks(); // Resets all mocks, including those on mockDocService
-    removeTool = new RemoveTool(mockDocService, mockPipeline); // Pass both mocks
+    // Without a pipeline, the document service removes the version
+    removeTool = new RemoveTool(mockDocService, undefined);
   });
 
   it("should call removeVersion with library and version", async () => {
@@ -36,7 +35,6 @@ describe("RemoveTool", () => {
     // Setup mocks
     mockDocService.validateLibraryExists.mockResolvedValue(undefined);
     mockDocService.removeVersion.mockResolvedValue(undefined);
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     const result = await removeTool.execute(args);
 
@@ -53,7 +51,6 @@ describe("RemoveTool", () => {
     // Setup mocks
     mockDocService.validateLibraryExists.mockResolvedValue(undefined);
     mockDocService.removeVersion.mockResolvedValue(undefined);
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     const result = await removeTool.execute(args);
 
@@ -70,7 +67,6 @@ describe("RemoveTool", () => {
     // Setup mocks
     mockDocService.validateLibraryExists.mockResolvedValue(undefined);
     mockDocService.removeVersion.mockResolvedValue(undefined);
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     const result = await removeTool.execute(args);
 
@@ -88,7 +84,6 @@ describe("RemoveTool", () => {
     // Setup mocks
     mockDocService.validateLibraryExists.mockResolvedValue(undefined);
     mockDocService.removeVersion.mockRejectedValue(testError);
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     // Use try-catch to ensure the mock call check happens even after rejection
     try {
@@ -110,7 +105,6 @@ describe("RemoveTool", () => {
     // Setup mocks - validation passes but removeVersion fails
     mockDocService.validateLibraryExists.mockResolvedValue(undefined);
     mockDocService.removeVersion.mockRejectedValue(testError);
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     // Use try-catch to ensure the mock call check happens even after rejection
     try {
@@ -139,105 +133,18 @@ describe("RemoveTool", () => {
     expect(result.message).toBe("Successfully removed react@18.2.0.");
   });
 
-  it("should abort and wait for QUEUED job for same library+version before deletion", async () => {
-    // Mock pipeline with QUEUED job
-    const mockLocalPipeline = {
-      getJobs: vi
-        .fn()
-        .mockResolvedValue([
-          { id: "job-1", library: "libX", version: "1.0.0", status: "queued" },
-        ]),
-      cancelJob: vi.fn().mockResolvedValue(undefined),
-      waitForJobCompletion: vi.fn().mockResolvedValue(undefined),
-    } as unknown as IPipeline;
-
-    const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
+  it("should remove through the pipeline when there is one", async () => {
     mockDocService.validateLibraryExists.mockResolvedValue(undefined);
-    mockDocService.removeVersion.mockResolvedValue(undefined);
 
-    const args: RemoveToolArgs = { library: "libX", version: "1.0.0" };
-    const result = await removeToolWithPipeline.execute(args);
+    const result = await new RemoveTool(mockDocService, mockPipeline).execute({
+      library: "libX",
+      version: "1.0.0",
+    });
 
-    expect(mockLocalPipeline.getJobs).toHaveBeenCalled();
-    expect(mockLocalPipeline.cancelJob).toHaveBeenCalledWith("job-1");
-    expect(mockLocalPipeline.waitForJobCompletion).toHaveBeenCalledWith("job-1");
-    expect(mockDocService.removeVersion).toHaveBeenCalledWith("libX", "1.0.0");
-    expect(result.message).toContain("Successfully removed libX@1.0.0");
-  });
-
-  it("should abort a job whose label differs only by case or whitespace", async () => {
-    // The job is stored under the normalized label; remove_docs used to compare
-    // the caller's raw string, so " 1.0.0 " silently aborted nothing and the
-    // running job kept writing into the version being deleted.
-    const mockLocalPipeline = {
-      getJobs: vi
-        .fn()
-        .mockResolvedValue([
-          { id: "job-9", library: "libx", version: "1.0.0", status: "queued" },
-        ]),
-      cancelJob: vi.fn().mockResolvedValue(undefined),
-      waitForJobCompletion: vi.fn().mockResolvedValue(undefined),
-    } as unknown as IPipeline;
-
-    const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
-    mockDocService.validateLibraryExists.mockResolvedValue(undefined);
-    mockDocService.removeVersion.mockResolvedValue(undefined);
-
-    await removeToolWithPipeline.execute({ library: " LibX ", version: " 1.0.0 " });
-
-    expect(mockLocalPipeline.cancelJob).toHaveBeenCalledWith("job-9");
-    expect(mockLocalPipeline.waitForJobCompletion).toHaveBeenCalledWith("job-9");
-  });
-
-  it("should abort and wait for RUNNING job for same library+version before deletion", async () => {
-    const mockLocalPipeline = {
-      getJobs: vi
-        .fn()
-        .mockResolvedValue([
-          { id: "job-2", library: "libY", version: "2.0.0", status: "running" },
-        ]),
-      cancelJob: vi.fn().mockResolvedValue(undefined),
-      waitForJobCompletion: vi.fn().mockResolvedValue(undefined),
-    } as unknown as IPipeline;
-
-    const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
-    mockDocService.validateLibraryExists.mockResolvedValue(undefined);
-    mockDocService.removeVersion.mockResolvedValue(undefined);
-
-    const args: RemoveToolArgs = { library: "libY", version: "2.0.0" };
-    const result = await removeToolWithPipeline.execute(args);
-
-    expect(mockLocalPipeline.getJobs).toHaveBeenCalled();
-    expect(mockLocalPipeline.cancelJob).toHaveBeenCalledWith("job-2");
-    expect(mockLocalPipeline.waitForJobCompletion).toHaveBeenCalledWith("job-2");
-    expect(mockDocService.removeVersion).toHaveBeenCalledWith("libY", "2.0.0");
-    expect(result.message).toContain("Successfully removed libY@2.0.0");
-  });
-
-  it("should abort and wait for jobs for unversioned (empty string) before deletion", async () => {
-    const mockLocalPipeline = {
-      getJobs: vi.fn().mockResolvedValue([
-        { id: "job-3", library: "libZ", version: "", status: "queued" },
-        { id: "job-4", library: "libZ", version: "", status: "running" },
-      ]),
-      cancelJob: vi.fn().mockResolvedValue(undefined),
-      waitForJobCompletion: vi.fn().mockResolvedValue(undefined),
-    } as unknown as IPipeline;
-
-    const removeToolWithPipeline = new RemoveTool(mockDocService, mockLocalPipeline);
-    mockDocService.validateLibraryExists.mockResolvedValue(undefined);
-    mockDocService.removeVersion.mockResolvedValue(undefined);
-
-    const args: RemoveToolArgs = { library: "libZ", version: "" };
-    const result = await removeToolWithPipeline.execute(args);
-
-    expect(mockLocalPipeline.getJobs).toHaveBeenCalled();
-    expect(mockLocalPipeline.cancelJob).toHaveBeenCalledWith("job-3");
-    expect(mockLocalPipeline.cancelJob).toHaveBeenCalledWith("job-4");
-    expect(mockLocalPipeline.waitForJobCompletion).toHaveBeenCalledWith("job-3");
-    expect(mockLocalPipeline.waitForJobCompletion).toHaveBeenCalledWith("job-4");
-    expect(mockDocService.removeVersion).toHaveBeenCalledWith("libZ", "");
-    expect(result.message).toContain("Successfully removed libZ");
+    expect(mockDocService.validateLibraryExists).toHaveBeenCalledWith("libX");
+    expect(mockPipeline.removeVersion).toHaveBeenCalledWith("libX", "1.0.0");
+    expect(mockDocService.removeVersion).not.toHaveBeenCalled();
+    expect(result.message).toBe("Successfully removed libX@1.0.0.");
   });
 
   it("should throw LibraryNotFoundInStoreError when library doesn't exist", async () => {
@@ -247,7 +154,6 @@ describe("RemoveTool", () => {
     );
     // Mock validateLibraryExists to throw an error
     mockDocService.validateLibraryExists.mockRejectedValue(testError);
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     await expect(removeTool.execute(args)).rejects.toThrow();
 
@@ -265,8 +171,6 @@ describe("RemoveTool", () => {
 
     // removeVersion succeeds even though the library is in a broken state
     mockDocService.removeVersion.mockResolvedValue(undefined);
-
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     // The deletion should succeed without throwing confusing errors
     const result = await removeTool.execute(args);
@@ -286,8 +190,6 @@ describe("RemoveTool", () => {
       "Library nonexistent-lib not found in store. Did you mean: d1, docs.codex.io?",
     );
     mockDocService.validateLibraryExists.mockRejectedValue(testError);
-
-    (mockPipeline.getJobs as any).mockResolvedValue([]);
 
     // Should get a clear error about the library not existing
     await expect(removeTool.execute(args)).rejects.toThrow(
