@@ -44,6 +44,26 @@
       }
     },
     {
+      "includes": ["**/src/services/apiClient.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**", "!@trpc/client", "!superjson", "!./appRouter"],
+                    "message": "The web UI bundles this module, so it may import only @trpc/client, superjson and the AppRouter type."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["**/src/**/*.test.ts", "**/src/**/*.test.tsx"],
       "linter": {
         "rules": {

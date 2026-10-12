@@ -1,19 +1,6 @@
 import type { ScraperOptions } from "../../scraper/types";
 import type { ExistingTargetPolicy } from "../../store/types";
-import type { AppConfig } from "../../utils/config";
-import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "../types";
-
-/**
- * Options for configuring pipeline behavior.
- */
-export interface PipelineOptions {
-  /** Whether this pipeline should recover interrupted jobs on startup */
-  recoverJobs?: boolean;
-  /** URL of external pipeline server (if using remote pipeline) */
-  serverUrl?: string;
-  /** Resolved configuration to propagate to pipeline components */
-  appConfig: AppConfig;
-}
+import type { PipelineJob, PipelineJobStatus } from "../types";
 
 /**
  * The tRPC codes the pipeline router gives enqueue errors a caller can act on:
@@ -43,10 +30,9 @@ export interface EnqueueScrapeOptions {
 /**
  * Common interface that both PipelineManager and PipelineClient implement.
  * Uses public PipelineJob interface for API consistency across implementations.
+ * Starting and stopping belongs to whoever created the pipeline (see `openBackend`).
  */
 export interface IPipeline {
-  start(): Promise<void>;
-  stop(): Promise<void>;
   /**
    * Enqueues a scrape job.
    * @throws {LibraryAlreadyExistsError | VersionAlreadyExistsError} When the target exists and
@@ -69,5 +55,11 @@ export interface IPipeline {
   cancelJob(jobId: string): Promise<void>;
   clearCompletedJobs(): Promise<number>;
   waitForJobCompletion(jobId: string): Promise<void>;
-  setCallbacks(callbacks: PipelineManagerCallbacks): void;
+  /**
+   * Removes a library version: cancels a queued or running job for it, waits
+   * until that job has ended, then removes the version, and the library with its
+   * last version. A job enqueued for the same version meanwhile is registered
+   * only after the removal is done, so it cannot slip in between.
+   */
+  removeVersion(library: string, version: string | undefined | null): Promise<void>;
 }

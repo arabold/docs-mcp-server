@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EventBusService } from "../../events";
 import type { Chunk } from "../../splitter/types";
 import { loadConfig } from "../../utils/config";
-import type { DocumentManagementService } from "../DocumentManagementService";
-import { createLocalDocumentManagement } from "../index";
+import { DocumentManagementService } from "../DocumentManagementService";
 import { dataRouter } from "./router";
 
 /**
@@ -32,7 +31,8 @@ describe("dataRouter - chunk explorer procedures", () => {
     appConfig.app.embeddingModel = ""; // FTS-only: no external credentials required
 
     const eventBus = new EventBusService();
-    docService = await createLocalDocumentManagement(eventBus, appConfig);
+    docService = new DocumentManagementService(eventBus, appConfig);
+    await docService.initialize();
     caller = dataRouter.createCaller({ docService });
 
     // Page 1: two chunks

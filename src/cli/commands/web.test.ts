@@ -5,23 +5,22 @@ import yargs from "yargs";
 import * as appModule from "../../app";
 import { createWebCommand } from "./web";
 
-const pipelineMock = {
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-};
+const pipelineMock = {};
 
 // Mock startAppServer
 vi.mock("../../app", () => ({
   startAppServer: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
 
-vi.mock("../../store", () => ({
-  createDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async (options: { serverUrl?: string }) => ({
+    workerUrl: options.serverUrl,
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: {},
+    isWorkerConnected: undefined,
+    close: vi.fn(),
+  })),
 }));
 vi.mock("../../events", () => ({
   getEventBus: vi.fn(() => ({
@@ -92,10 +91,11 @@ describe("web command", () => {
     // One way is to throw an error inside registerGlobalServices which is called right before waiting.
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop"); // Break the execution flow
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop"); // Break the execution flow
+      });
 
     try {
       await parser.parse(`web --port 3000`);
@@ -105,7 +105,7 @@ describe("web command", () => {
 
     expect(appModule.startAppServer).toHaveBeenCalled();
     const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[3]; // 4th arg is config
+    const config = callArgs[1]; // 2nd arg is config
     expect(config.enableWebInterface).toBe(true);
     expect(config.enableMcpServer).toBe(false);
     expect(config.port).toBe(6281); // From mocked loadConfig/validatePort logic, arguments override?

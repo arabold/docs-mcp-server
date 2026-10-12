@@ -11,8 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { config } from "dotenv";
-import { createLocalDocumentManagement } from "../src/store";
-import { PipelineFactory } from "../src/pipeline/PipelineFactory";
+import { type Backend, openBackend } from "../src/services/backend";
 import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
@@ -28,13 +27,12 @@ const PRIVATE_REPO_LIBRARY = "private-test-repo";
 const PRIVATE_REPO_VERSION = "1.0.0";
 
 describe("GitHub Private Repository E2E Tests", () => {
-  let docService: ReturnType<typeof createLocalDocumentManagement> extends Promise<infer T>
-    ? T
-    : never;
+  let docService: Backend["docService"];
   let scrapeTool: ScrapeTool;
   let searchTool: SearchTool;
   // biome-ignore lint/suspicious/noExplicitAny: E2E test setup requires flexible typing
   let pipeline: any;
+  let backend: Backend | undefined;
   let tempDir: string;
   const appConfig = loadConfig();
 
@@ -60,12 +58,9 @@ describe("GitHub Private Repository E2E Tests", () => {
 
     // Initialize services
     const eventBus = new EventBusService();
-    docService = await createLocalDocumentManagement(eventBus, appConfig);
-
-    pipeline = await PipelineFactory.createPipeline(docService, eventBus, {
-      appConfig: appConfig,
-    });
-    await pipeline.start();
+    backend = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
+    docService = backend.docService;
+    pipeline = backend.pipeline;
 
     scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
     searchTool = new SearchTool(docService);
@@ -73,12 +68,7 @@ describe("GitHub Private Repository E2E Tests", () => {
 
   afterAll(async () => {
     releaseNetwork();
-    if (pipeline) {
-      await pipeline.stop();
-    }
-    if (docService) {
-      await docService.shutdown();
-    }
+    await backend?.close();
     if (tempDir) {
       try {
         rmSync(tempDir, { recursive: true, force: true });

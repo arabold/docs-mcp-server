@@ -8,12 +8,11 @@ import { createInterface } from "node:readline";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
-import { EventBusService } from "../events";
+import type { EventBusService } from "../events";
 import {
   EmbeddingConfig,
   type EmbeddingModelConfig,
 } from "../store/embeddings/EmbeddingConfig";
-import { TelemetryService } from "../telemetry";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
@@ -171,14 +170,16 @@ export function validateHost(hostString: string): string {
  *
  * AppConfig is the source of truth for host/auth/telemetry/read-only settings.
  * AppServerConfig only selects which services to run and which port to bind to.
+ * Whether the server runs jobs itself or uses a worker follows from the backend.
+ *
+ * @param options Which services to run, the port, and startup details.
+ * @returns The server configuration.
  */
 export function createAppServerConfig(options: {
   enableWebInterface?: boolean;
   enableMcpServer?: boolean;
   enableApiServer?: boolean;
-  enableWorker?: boolean;
   port: number;
-  externalWorkerUrl?: string;
   showLogo?: boolean;
   startupContext?: {
     cliCommand?: string;
@@ -190,9 +191,7 @@ export function createAppServerConfig(options: {
     enableWebInterface: options.enableWebInterface ?? false,
     enableMcpServer: options.enableMcpServer ?? true,
     enableApiServer: options.enableApiServer ?? false,
-    enableWorker: options.enableWorker ?? true,
     port: options.port,
-    externalWorkerUrl: options.externalWorkerUrl,
     showLogo: options.showLogo ?? true,
     startupContext: options.startupContext,
   };
@@ -318,20 +317,6 @@ function warnHttpUsage(port: number): void {
         "Consider using HTTPS for security.",
     );
   }
-}
-
-/**
- * Creates EventBusService and TelemetryService together.
- * The TelemetryService automatically subscribes to events from the EventBusService.
- * @returns Object containing both services
- */
-export function createEventServices(): {
-  eventBus: EventBusService;
-  telemetryService: TelemetryService;
-} {
-  const eventBus = new EventBusService();
-  const telemetryService = new TelemetryService(eventBus);
-  return { eventBus, telemetryService };
 }
 
 /**

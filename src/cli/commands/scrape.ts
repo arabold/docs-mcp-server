@@ -3,17 +3,15 @@
  */
 
 import type { Argv } from "yargs";
-import { EventType } from "../../events";
-import { PipelineFactory, PipelineJobStatus, type PipelineOptions } from "../../pipeline";
-import type { IPipeline } from "../../pipeline/trpc/interfaces";
 import { ScrapeMode } from "../../scraper/types";
-import { createDocumentManagement } from "../../store";
-import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
+import { followJobLogs } from "../JobOutputFollower";
 import { renderTextOutput } from "../output";
+import { registerGlobalServices } from "../services";
 import { type CliContext, getEventBus, parseHeaders } from "../utils";
 
 export function createScrapeCommand(cli: Argv) {
@@ -190,61 +188,28 @@ export function createScrapeCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService: IDocumentManagement = await createDocumentManagement({
+      const backend = await openBackend({
         serverUrl,
         eventBus,
-        appConfig: appConfig,
+        appConfig,
+        jobs: { recoverJobs: false },
       });
-      let pipeline: IPipeline | null = null;
 
       // Display initial status
       logger.info("⏳ Initializing scraping job...");
 
-      // Subscribe to event bus for progress updates (only for local pipelines)
-      let unsubscribeProgress: (() => void) | null = null;
-      let unsubscribeStatus: (() => void) | null = null;
+      registerGlobalServices({ backend });
 
-      if (!serverUrl) {
-        unsubscribeProgress = eventBus.on(EventType.JOB_PROGRESS, (event) => {
-          const { job, progress } = event;
-          logger.info(
-            `📄 Scraping ${job.library}${job.version ? ` v${job.version}` : ""}: ${progress.pagesScraped}/${progress.totalPages} pages`,
-          );
-        });
-
-        unsubscribeStatus = eventBus.on(EventType.JOB_STATUS_CHANGE, (event) => {
-          if (event.status === PipelineJobStatus.RUNNING) {
-            logger.info(
-              `🚀 Scraping ${event.library}${event.version ? ` v${event.version}` : ""}...`,
-            );
-          }
-        });
-      }
+      // Report this command's own job; a shared worker also runs other clients' jobs
+      const follower = followJobLogs(backend.eventBus, "Scraping");
 
       try {
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: false,
-          serverUrl,
-          appConfig: appConfig,
-        };
-
-        pipeline = serverUrl
-          ? await PipelineFactory.createPipeline(undefined, eventBus, {
-              serverUrl,
-              ...pipelineOptions,
-            })
-          : await PipelineFactory.createPipeline(
-              docService as unknown as never,
-              eventBus,
-              pipelineOptions,
-            );
-
-        await pipeline.start();
-        const scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
+        const scrapeTool = new ScrapeTool(backend.pipeline, appConfig.scraper);
 
         const headers = parseHeaders((argv.header as string[]) || []);
 
         const result = await scrapeTool.execute({
+          onJobEnqueued: (jobId) => follower.follow(jobId),
           url,
           library,
           version: argv.version as string | undefined,
@@ -282,11 +247,9 @@ export function createScrapeCommand(cli: Argv) {
         );
         throw error;
       } finally {
-        if (unsubscribeProgress) unsubscribeProgress();
-        if (unsubscribeStatus) unsubscribeStatus();
+        follower.dispose();
 
-        if (pipeline) await pipeline.stop();
-        await docService.shutdown();
+        await backend.close();
       }
     },
   );

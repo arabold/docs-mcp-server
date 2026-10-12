@@ -15,6 +15,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createCli } from "../src/cli";
 import { EventBusService } from "../src/events";
 import { createMcpServerFactory } from "../src/mcp/mcpServer";
 import type { McpServerTools } from "../src/mcp/tools";
@@ -39,7 +40,7 @@ import { RemoveTool } from "../src/tools/RemoveTool";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
 import { type AppConfig, loadConfig } from "../src/utils/config";
-import { restorePre017Libraries } from "./test-helpers";
+import { restorePre017Libraries, writeTestConfig } from "./test-helpers";
 
 const DOCS_URL = "https://example.com/docs";
 
@@ -336,6 +337,65 @@ describe("Library identity end-to-end", () => {
 
     await scrape("ReAct");
     expect((await listed()).map((l) => l.name)).toEqual(["ReAct"]);
+  });
+
+  describe("CLI remove (#532)", () => {
+    /** Runs `docs-mcp-server remove <args>` in process against this store. */
+    async function removeWithCli(...args: string[]) {
+      await docService.shutdown();
+      try {
+        await createCli([]).parseAsync([
+          "remove",
+          ...args,
+          "--store-path",
+          tempDir,
+          "--config",
+          writeTestConfig(tempDir),
+        ]);
+      } finally {
+        await openServices();
+      }
+    }
+
+    async function versionsOf(name: string) {
+      return (await listed()).find((library) => library.name === name)?.versions.map(
+        (v) => v.version,
+      );
+    }
+
+    it("removes the library together with its only version", async () => {
+      await seedIndexed("React", "19.0");
+
+      await removeWithCli("react", "--version", "19.0");
+
+      expect(await listed()).toEqual([]);
+    });
+
+    it("keeps the library while another version remains", async () => {
+      await seedIndexed("React", "18.0");
+      await seedIndexed("React", "19.0");
+
+      await removeWithCli("react", "--version", "19.0");
+
+      expect(await versionsOf("React")).toEqual(["18.0"]);
+    });
+
+    it("removes the unversioned documentation when --version is omitted", async () => {
+      await seedIndexed("React", "");
+      await seedIndexed("React", "19.0");
+
+      await removeWithCli("react");
+
+      expect(await versionsOf("React")).toEqual(["19.0"]);
+    });
+
+    it("fails for a library that is not indexed and leaves the others", async () => {
+      await seedIndexed("React", "19.0");
+
+      await expect(removeWithCli("vue")).rejects.toThrow("Library vue not found in store");
+
+      expect(await versionsOf("React")).toEqual(["19.0"]);
+    });
   });
 
   it("rejects Add library for an existing name in any casing", async () => {

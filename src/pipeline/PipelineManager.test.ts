@@ -241,6 +241,97 @@ describe("PipelineManager", () => {
     });
   });
 
+  describe("removeVersion", () => {
+    /** A promise with its resolve function, to hold a store call open. */
+    function deferred() {
+      let resolve: () => void = () => {};
+      const promise = new Promise<void>((r) => {
+        resolve = r;
+      });
+      return { promise, resolve };
+    }
+
+    it("cancels the version's running job and removes the version once it has ended", async () => {
+      holdScrapes();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
+
+      await manager.removeVersion("react", "19.0");
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
+    it("matches the running job however the library and version are padded or cased", async () => {
+      holdScrapes();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob(
+        "react",
+        "19.0",
+        scrapeOptions("react", "19.0"),
+      );
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
+
+      await manager.removeVersion(" React ", " 19.0 ");
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
+    it("waits for an enqueue in progress, then cancels the job it registered", async () => {
+      const gate = deferred();
+      const claim = store.claimVersion.bind(store);
+      vi.spyOn(store, "claimVersion").mockImplementationOnce(async (...args) => {
+        await gate.promise;
+        return claim(...args);
+      });
+
+      const enqueued = manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      const removed = manager.removeVersion("React", "19.0");
+      gate.resolve();
+      const jobId = await enqueued;
+      await removed;
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
+    it("holds an enqueue of the same version until the removal is done", async () => {
+      await seedVersion("React", "19.0", VersionStatus.COMPLETED);
+      const gate = deferred();
+      const remove = store.removeVersion.bind(store);
+      vi.spyOn(store, "removeVersion").mockImplementationOnce(async (...args) => {
+        await gate.promise;
+        return remove(...args);
+      });
+      const claim = vi.spyOn(store, "claimVersion");
+
+      const removed = manager.removeVersion("React", "19.0");
+      const enqueued = manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(claim).not.toHaveBeenCalled();
+
+      gate.resolve();
+      await removed;
+      // The version is gone, so the default reject-version claim succeeds
+      const jobId = await enqueued;
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.QUEUED);
+    });
+  });
+
   describe("overwrite protection", () => {
     it.each([
       ["queued by an earlier enqueue", false],

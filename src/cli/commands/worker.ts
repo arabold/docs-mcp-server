@@ -4,8 +4,7 @@
 
 import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { createLocalDocumentManagement } from "../../store";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
@@ -77,23 +76,19 @@ export function createWorkerCommand(cli: Argv) {
 
         const eventBus = getEventBus(argv as CliContext);
 
-        const docService = await createLocalDocumentManagement(eventBus, appConfig);
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: (argv.resume as boolean) ?? true,
-          appConfig: appConfig,
-        };
-        const pipeline = await PipelineFactory.createPipeline(
-          docService,
+        const backend = await openBackend({
+          appConfig,
           eventBus,
-          pipelineOptions,
-        );
+          jobs: { recoverJobs: (argv.resume as boolean) ?? true },
+        });
+        // Registered first, so shutdown closes it even when a server fails to start
+        registerGlobalServices({ backend });
 
         // Configure worker-only server
         const config = createAppServerConfig({
           enableWebInterface: false,
           enableMcpServer: false,
           enableApiServer: true,
-          enableWorker: true,
           port: appConfig.server.ports.worker,
           showLogo: argv.logo as boolean,
           startupContext: {
@@ -101,18 +96,9 @@ export function createWorkerCommand(cli: Argv) {
           },
         });
 
-        const appServer = await startAppServer(
-          docService,
-          pipeline,
-          eventBus,
-          config,
-          appConfig,
-        );
+        const appServer = await startAppServer(backend, config, appConfig);
 
-        registerGlobalServices({
-          appServer,
-          docService,
-        });
+        registerGlobalServices({ appServer });
 
         await new Promise(() => {}); // Keep running forever
       } catch (error) {

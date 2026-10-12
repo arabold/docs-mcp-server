@@ -80,6 +80,24 @@ describe("systemHealthRouter.getSystemHealth", () => {
     });
   });
 
+  it("still reports a remote worker as disconnected when it cannot be asked for its embeddings", async () => {
+    const ctx = buildContext({
+      systemInfo: baseSystemInfo({
+        worker: { mode: "remote", url: "http://worker.example.com" },
+      }),
+      isWorkerConnected: vi.fn().mockReturnValue(false),
+    });
+    vi.mocked(ctx.docService.getEmbeddingConfigInfo).mockRejectedValue(
+      new Error("fetch failed"),
+    );
+    const caller = systemHealthRouter.createCaller(ctx);
+
+    const health = await caller.getSystemHealth();
+
+    expect(health.worker).toMatchObject({ mode: "remote", connected: false });
+    expect(health.embeddings).toBeNull();
+  });
+
   it("returns embeddings: null when running in full-text-search-only mode", async () => {
     const ctx = buildContext();
     const caller = systemHealthRouter.createCaller(ctx);

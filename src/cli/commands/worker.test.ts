@@ -3,25 +3,25 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import * as appModule from "../../app";
+import { openBackend } from "../../services/backend";
 import { createWorkerCommand } from "./worker";
 
-const pipelineMock = {
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-};
+const pipelineMock = {};
 
 // Mock startAppServer
 vi.mock("../../app", () => ({
   startAppServer: vi.fn(async () => ({ shutdown: vi.fn() })),
 }));
 
-vi.mock("../../store", () => ({
-  createLocalDocumentManagement: vi.fn(async () => ({ shutdown: vi.fn() })),
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async (options: { serverUrl?: string }) => ({
+    workerUrl: options.serverUrl,
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: {},
+    isWorkerConnected: undefined,
+    close: vi.fn(),
+  })),
 }));
 vi.mock("../../events", () => ({
   getEventBus: vi.fn(() => ({
@@ -81,10 +81,11 @@ describe("worker command", () => {
     createWorkerCommand(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     try {
       await parser.parse(`worker --port 8080`);
@@ -94,8 +95,11 @@ describe("worker command", () => {
 
     expect(appModule.startAppServer).toHaveBeenCalled();
     const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[3]; // 4th arg is config
-    expect(config.enableWorker).toBe(true);
+    const config = callArgs[1]; // 2nd arg is config
+    // Jobs run in the worker's own process, recovering interrupted ones by default
+    expect(openBackend).toHaveBeenCalledWith(
+      expect.objectContaining({ jobs: { recoverJobs: true } }),
+    );
     expect(config.enableApiServer).toBe(true);
     expect(config.enableWebInterface).toBe(false);
     expect(config.port).toBe(8080);

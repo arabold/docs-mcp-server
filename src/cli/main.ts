@@ -13,16 +13,11 @@ import { createCli } from "./index";
 
 // Module-level variables are now in ./services.ts
 import {
+  closeActiveBackend,
   getActiveAppServer,
-  getActiveDocService,
   getActiveMcpStdioServer,
-  getActivePipelineManager,
-  getActiveTelemetryService,
   setActiveAppServer,
-  setActiveDocService,
   setActiveMcpStdioServer,
-  setActivePipelineManager,
-  setActiveTelemetryService,
 } from "./services";
 
 let isShuttingDown = false;
@@ -53,30 +48,8 @@ const sigintHandler = async (): Promise<void> => {
       logger.debug("SIGINT: MCP server stopped.");
     }
 
-    // Shutdown active services
-    logger.debug("SIGINT: Shutting down active services...");
-    // Only shutdown pipeline if not managed by AppServer (e.g., in stdio mode)
-    const pipeline = getActivePipelineManager();
-    if (pipeline && !appServer) {
-      await pipeline.stop();
-      setActivePipelineManager(null);
-      logger.debug("SIGINT: PipelineManager stopped.");
-    }
-
-    const docService = getActiveDocService();
-    if (docService) {
-      await docService.shutdown();
-      setActiveDocService(null);
-      logger.debug("SIGINT: DocumentManagementService shut down.");
-    }
-
-    // Cleanup TelemetryService (removes event listeners)
-    const telemetryService = getActiveTelemetryService();
-    if (telemetryService) {
-      telemetryService.shutdown();
-      setActiveTelemetryService(null);
-      logger.debug("SIGINT: TelemetryService shut down.");
-    }
+    // The servers have stopped, so nothing uses the backend any more
+    await closeActiveBackend();
 
     // Analytics shutdown is handled by AppServer.stop() above
     // Only shutdown analytics if no AppServer was running
@@ -179,31 +152,12 @@ export async function runCli(): Promise<void> {
         );
       }
 
-      const pipeline = getActivePipelineManager();
-      if (pipeline && !appServer) {
-        shutdownPromises.push(
-          pipeline
-            .stop()
-            .then(() => {
-              setActivePipelineManager(null);
-            })
-            .catch((e) => logger.error(`❌ Error stopping pipeline: ${e}`)),
-        );
-      }
-
-      const docService = getActiveDocService();
-      if (docService) {
-        shutdownPromises.push(
-          docService
-            .shutdown()
-            .then(() => {
-              setActiveDocService(null);
-            })
-            .catch((e) => logger.error(`❌ Error shutting down doc service: ${e}`)),
-        );
-      }
-
       await Promise.allSettled(shutdownPromises);
+
+      // Close the backend once the servers that use it have stopped
+      await closeActiveBackend().catch((e) =>
+        logger.error(`❌ Error closing backend: ${e}`),
+      );
     }
     process.exit(1);
   }
@@ -226,40 +180,20 @@ if (import.meta.hot) {
     isShuttingDown = true;
 
     try {
-      const shutdownPromises: Promise<void>[] = [];
-
       const appServer = getActiveAppServer();
       if (appServer) {
         logger.debug("Shutting down AppServer...");
-        shutdownPromises.push(
-          appServer.stop().then(() => {
+        // A failed stop still closes the backend below
+        await appServer.stop().then(
+          () => {
             setActiveAppServer(null);
             logger.debug("AppServer shut down.");
-          }),
+          },
+          () => {},
         );
       }
 
-      const pipeline = getActivePipelineManager();
-      if (pipeline && !appServer) {
-        shutdownPromises.push(
-          pipeline.stop().then(() => {
-            setActivePipelineManager(null);
-            logger.debug("PipelineManager stopped.");
-          }),
-        );
-      }
-
-      const docService = getActiveDocService();
-      if (docService) {
-        shutdownPromises.push(
-          docService.shutdown().then(() => {
-            setActiveDocService(null);
-            logger.debug("DocumentManagementService shut down.");
-          }),
-        );
-      }
-
-      await Promise.allSettled(shutdownPromises);
+      await closeActiveBackend();
       logger.debug("Active services shut down.");
     } catch (hmrError) {
       logger.error(`❌ Error during HMR cleanup: ${hmrError}`);

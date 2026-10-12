@@ -10,53 +10,51 @@ import { join } from "node:path";
 import { startAppServer } from "../src/app";
 import { createAppServerConfig } from "../src/cli/utils";
 import { EventBusService } from "../src/events";
-import { PipelineFactory } from "../src/pipeline/PipelineFactory";
-import { createLocalDocumentManagement } from "../src/store";
+import { openBackend } from "../src/services/backend";
 import { loadConfig } from "../src/utils/config";
+import { getFreePort } from "./test-helpers";
 
 /**
  * Start the application on `port` with `server.publicUrl` set and a fresh
  * store, with authentication against `issuerUrl` when one is given.
- * @param options.port - The port to listen on (127.0.0.1).
- * @param options.publicUrl - The public URL, possibly with a base path.
+ * @param options.port - The port to listen on (127.0.0.1); a free one by default.
+ * @param options.publicUrl - The public URL, possibly with a base path; the listening address by default.
  * @param options.issuerUrl - The issuer to authenticate against; omit to disable auth.
  * @param options.enableWebInterface - Whether to serve the web UI (default `true`).
  * @param options.serverTitle - The server's title; omit for none.
- * @returns The server's event bus, and `stop`, which shuts everything down and removes the store.
+ * @returns The server's event bus, its API URL on the listening port, and
+ *   `stop`, which shuts everything down and removes the store.
  */
-export async function startInProcessServer(options: {
-  port: number;
-  publicUrl: string;
-  issuerUrl?: string;
-  enableWebInterface?: boolean;
-  serverTitle?: string;
-}): Promise<{ eventBus: EventBusService; stop: () => Promise<void> }> {
+export async function startInProcessServer(
+  options: {
+    port?: number;
+    publicUrl?: string;
+    issuerUrl?: string;
+    enableWebInterface?: boolean;
+    serverTitle?: string;
+  } = {},
+): Promise<{ eventBus: EventBusService; apiUrl: string; stop: () => Promise<void> }> {
+  const port = options.port ?? (await getFreePort());
   const tempDir = mkdtempSync(join(tmpdir(), "docs-mcp-e2e-"));
   const appConfig = loadConfig();
   appConfig.app.storePath = tempDir;
   appConfig.app.embeddingModel = "";
   appConfig.server.host = "127.0.0.1";
-  appConfig.server.publicUrl = options.publicUrl;
+  appConfig.server.publicUrl = options.publicUrl ?? `http://127.0.0.1:${port}`;
   appConfig.server.title = options.serverTitle;
   appConfig.auth.enabled = options.issuerUrl !== undefined;
   appConfig.auth.issuerUrl = options.issuerUrl ?? "";
   appConfig.auth.audience = "";
 
   const eventBus = new EventBusService();
-  const docService = await createLocalDocumentManagement(eventBus, appConfig);
-  const pipeline = await PipelineFactory.createPipeline(docService as never, eventBus, {
-    appConfig,
-  });
+  const backend = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
   const appServer = await startAppServer(
-    docService,
-    pipeline,
-    eventBus,
+    backend,
     createAppServerConfig({
       enableWebInterface: options.enableWebInterface ?? true,
       enableMcpServer: true,
       enableApiServer: true,
-      enableWorker: true,
-      port: options.port,
+      port,
       showLogo: false,
       startupContext: { cliCommand: "test", mcpProtocol: "http" },
     }),
@@ -65,10 +63,10 @@ export async function startInProcessServer(options: {
 
   return {
     eventBus,
+    apiUrl: `http://127.0.0.1:${port}/api`,
     async stop() {
       await appServer.stop();
-      await pipeline.stop();
-      await docService.shutdown();
+      await backend.close();
       rmSync(tempDir, { recursive: true, force: true });
     },
   };

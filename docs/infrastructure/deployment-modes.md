@@ -26,8 +26,9 @@ Services can be selectively enabled via AppServerConfig:
 
 - `enableMcpServer`: MCP protocol endpoint
 - `enableWebInterface`: Web UI and management API
-- `enableWorker`: Embedded job processing
 - `enableApiServer`: HTTP API for pipeline and data operations (served at `/api`)
+
+Jobs run in the server's own process unless it is started with `--server-url`; the backend the server serves (see `openBackend()`) decides this.
 
 ## Distributed Mode
 

@@ -16,12 +16,8 @@ import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { EventBusService } from "../src/events";
-import { PipelineManager } from "../src/pipeline/PipelineManager";
-import {
-  createLocalDocumentManagement,
-  type DocumentManagementService,
-  LibraryNotFoundInStoreError,
-} from "../src/store";
+import { type Backend, openBackend } from "../src/services/backend";
+import { LibraryNotFoundInStoreError } from "../src/store";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
 import { loadConfig } from "../src/utils/config";
@@ -58,8 +54,7 @@ describe("Vector search E2E", () => {
   let tempDir: string;
   /** `file://` URL of the directory the pages are written to. */
   let docsUrl: string;
-  let docService: DocumentManagementService;
-  let pipeline: PipelineManager;
+  let backend: Backend | undefined;
   let searchTool: SearchTool;
 
   beforeAll(async () => {
@@ -82,26 +77,21 @@ describe("Vector search E2E", () => {
     appConfig.scraper.security.fileAccess.allowedRoots = [docsDir];
 
     const eventBus = new EventBusService();
-    docService = await createLocalDocumentManagement(eventBus, appConfig);
-    pipeline = new PipelineManager(docService, eventBus, {
-      recoverJobs: false,
-      appConfig,
-    });
-    await pipeline.start();
+    const opened = await openBackend({ appConfig, eventBus, jobs: { recoverJobs: false } });
+    backend = opened;
 
-    await new ScrapeTool(pipeline, appConfig.scraper).execute({
+    await new ScrapeTool(opened.pipeline, appConfig.scraper).execute({
       library: LIBRARY,
       version: VERSION,
       url: docsUrl,
       waitForCompletion: true,
     });
 
-    searchTool = new SearchTool(docService);
+    searchTool = new SearchTool(opened.docService);
   });
 
   afterAll(async () => {
-    await pipeline?.stop();
-    await docService?.shutdown();
+    await backend?.close();
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
     }

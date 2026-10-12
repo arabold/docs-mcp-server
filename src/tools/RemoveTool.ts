@@ -1,7 +1,5 @@
 import type { IPipeline } from "../pipeline/trpc/interfaces";
-import { PipelineJobStatus } from "../pipeline/types";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
-import { normalizeLibraryName, normalizeVersionLabel } from "../store/types";
 import { logger } from "../utils/logger";
 import { ToolError, ValidationError } from "./errors";
 
@@ -19,14 +17,22 @@ export interface RemoveToolArgs {
  * This class provides the core logic, intended to be called by the McpServer.
  */
 export class RemoveTool {
+  /**
+   * @param documentManagementService Checks the library exists, and removes the
+   *   version when there is no pipeline.
+   * @param pipeline Cancels its job for the version and removes it. Without one
+   *   nothing is cancelled here: a CLI process runs no jobs, and a remote store
+   *   has the worker cancel its own job when it removes the version.
+   */
   constructor(
     private readonly documentManagementService: IDocumentManagement,
-    private readonly pipeline: IPipeline,
+    private readonly pipeline: IPipeline | undefined,
   ) {}
 
   /**
    * Executes the tool to remove the specified library version completely.
-   * Aborts any QUEUED/RUNNING job for the same library+version before deleting.
+   * Aborts any QUEUED/RUNNING job for the same library+version before deleting,
+   * when there is a pipeline to see it.
    * Removes all documents, the version record, and the library if no other versions exist.
    */
   async execute(args: RemoveToolArgs): Promise<{ message: string }> {
@@ -46,29 +52,13 @@ export class RemoveTool {
       // Validate that the library exists before attempting removal
       await this.documentManagementService.validateLibraryExists(library);
 
-      // Abort any QUEUED or RUNNING job for this library+version
-      const allJobs = await this.pipeline.getJobs();
-      const normalizedLibrary = normalizeLibraryName(library);
-      const normalizedVersion = normalizeVersionLabel(version);
-      const jobs = allJobs.filter(
-        (job) =>
-          normalizeLibraryName(job.library) === normalizedLibrary &&
-          normalizeVersionLabel(job.version) === normalizedVersion &&
-          (job.status === PipelineJobStatus.QUEUED ||
-            job.status === PipelineJobStatus.RUNNING),
+      // The pipeline cancels its job for the version and removes it, locked
+      // against an enqueue of the same version. Without one, this process runs
+      // no jobs, and a remote store has the worker do the same.
+      await (this.pipeline ?? this.documentManagementService).removeVersion(
+        library,
+        version,
       );
-
-      for (const job of jobs) {
-        logger.info(
-          `🚫 Aborting job for ${library}@${version ?? ""} before deletion: ${job.id}`,
-        );
-        await this.pipeline.cancelJob(job.id);
-        // Wait for job to finish cancelling if running
-        await this.pipeline.waitForJobCompletion(job.id);
-      }
-
-      // Core logic: Call the document management service to remove the version completely
-      await this.documentManagementService.removeVersion(library, version);
 
       const message = `Successfully removed ${library}${version ? `@${version}` : ""}.`;
       logger.info(`✅ ${message}`);

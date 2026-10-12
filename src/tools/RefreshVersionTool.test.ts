@@ -62,6 +62,17 @@ describe("RefreshVersionTool", () => {
     },
   );
 
+  it("should report the job id before waiting for the job", async () => {
+    const onJobEnqueued = vi.fn(() => {
+      expect(mockPipeline.waitForJobCompletion).not.toHaveBeenCalled();
+    });
+
+    await refreshTool.execute({ library: "test-lib", onJobEnqueued });
+
+    expect(onJobEnqueued).toHaveBeenCalledWith(MOCK_JOB_ID);
+    expect(mockPipeline.waitForJobCompletion).toHaveBeenCalledTimes(1);
+  });
+
   it("should return the job id without waiting when waitForCompletion is false", async () => {
     const result = await refreshTool.execute({
       library: "test-lib",
