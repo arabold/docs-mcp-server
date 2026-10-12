@@ -126,12 +126,6 @@ export class PipelineWorker {
     // and resolving/rejecting the completion promise based on the outcome here.
   }
 
-  // --- Old methods removed ---
-  // process()
-  // stop()
-  // setCallbacks()
-  // handleScrapingProgress()
-
   /**
    * Records a page that exists but holds no content, replacing what was stored.
    *

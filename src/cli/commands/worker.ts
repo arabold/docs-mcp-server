@@ -81,8 +81,7 @@ export function createWorkerCommand(cli: Argv) {
           eventBus,
           jobs: { recoverJobs: (argv.resume as boolean) ?? true },
         });
-        // Registered before any transport starts, so a remote backend turns job
-        // telemetry off before the worker's first relayed event
+        // Registered first, so shutdown closes it even when a server fails to start
         registerGlobalServices({ backend });
 
         // Configure worker-only server

@@ -13,11 +13,15 @@ import path from "node:path";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { Client } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EventBusService } from "../src/events";
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
-import { DocumentManagementService } from "../src/store";
-import { loadConfig } from "../src/utils/config";
-import { getCliCommand, startWorker, stopChildProcess, writeTestConfig } from "./test-helpers";
+import {
+  getCliCommand,
+  HTML_FIXTURE_URL,
+  startWorker,
+  stopChildProcess,
+  withStore,
+  writeTestConfig,
+} from "./test-helpers";
 
 /**
  * A transport that spawns the CLI over stdio with a test store and no telemetry.
@@ -44,6 +48,11 @@ function createStdioTransport(
       ...overrides,
     },
   });
+}
+
+/** The text of a tool result, its parts joined. */
+function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
+  return (result.content as Array<{ text: string }>).map((part) => part.text).join("\n");
 }
 
 describe("MCP stdio server E2E", () => {
@@ -195,12 +204,8 @@ describe("MCP stdio server E2E", () => {
     storeDir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-pages-"));
 
     // Seed a real store before the server opens it
-    const appConfig = loadConfig();
-    appConfig.app.storePath = storeDir;
-    appConfig.app.embeddingModel = "";
-    const docService = new DocumentManagementService(new EventBusService(), appConfig);
-    await docService.initialize();
-    await docService.addScrapeResult("pages-lib", "1.0.0", 1, {
+    await withStore(storeDir, (store) =>
+      store.addScrapeResult("pages-lib", "1.0.0", 1, {
       url: "https://example.com/docs/guide",
       title: "Guide",
       sourceContentType: "text/markdown",
@@ -216,8 +221,8 @@ describe("MCP stdio server E2E", () => {
           section: { level: 1, path: ["Guide"] },
         },
       ],
-    });
-    await docService.shutdown();
+      }),
+    );
 
     transport = createStdioTransport({
       DOCS_MCP_STORE_PATH: storeDir,
@@ -225,9 +230,6 @@ describe("MCP stdio server E2E", () => {
     });
     client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
     await client.connect(transport);
-
-    const textOf = (result: Awaited<ReturnType<Client["callTool"]>>) =>
-      (result.content as Array<{ type: string; text: string }>)[0].text;
 
     const listed = await client.callTool({
       name: "list_pages",
@@ -245,7 +247,6 @@ describe("MCP stdio server E2E", () => {
   }, 60000);
 
   it("rejects scrape_docs for an existing version and names the replace argument", async () => {
-    const projectRoot = path.resolve(import.meta.dirname, "..");
     storeDir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-replace-"));
     const configPath = writeTestConfig(storeDir);
 
@@ -262,7 +263,7 @@ describe("MCP stdio server E2E", () => {
         name: "scrape_docs",
         arguments: {
           library: "Stdio Lib",
-          url: `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`,
+          url: HTML_FIXTURE_URL,
         },
       });
 
@@ -271,13 +272,11 @@ describe("MCP stdio server E2E", () => {
 
     const second = await scrape();
     expect(second.isError).toBe(true);
-    const text = (second.content as Array<{ text: string }>)[0].text;
-    expect(text).toContain('"Stdio Lib"');
-    expect(text).toContain("replace: true");
+    expect(textOf(second)).toContain('"Stdio Lib"');
+    expect(textOf(second)).toContain("replace: true");
   }, 30000);
 
   it("scrapes, searches and removes through a remote worker", async () => {
-    const projectRoot = path.resolve(import.meta.dirname, "..");
     storeDir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-remote-"));
     const configPath = writeTestConfig(storeDir);
     const started = await startWorker(storeDir, configPath);
@@ -293,14 +292,12 @@ describe("MCP stdio server E2E", () => {
     const connected = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
     client = connected;
     await connected.connect(transport);
-    const textOf = (result: Awaited<ReturnType<Client["callTool"]>>) =>
-      (result.content as Array<{ text: string }>).map((part) => part.text).join("\n");
 
     const scraped = await connected.callTool({
       name: "scrape_docs",
       arguments: {
         library: "Remote Lib",
-        url: `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`,
+        url: HTML_FIXTURE_URL,
       },
     });
     expect(scraped.isError, textOf(scraped)).toBeFalsy();

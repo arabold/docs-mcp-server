@@ -126,7 +126,7 @@ export class AppServer {
 
   /** Whether jobs run in this process rather than on a remote worker. */
   private get runsJobs(): boolean {
-    return this.backend.mode === "local";
+    return this.backend.workerUrl === undefined;
   }
 
   /**

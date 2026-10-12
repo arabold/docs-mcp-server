@@ -53,7 +53,6 @@ export interface IDocumentManagement {
     pathOrUrl: string,
     options?: PageContentOptions,
   ): Promise<PageContentResult>;
-  removeAllDocuments(library: string, version?: string | null): Promise<void>;
   removeVersion(library: string, version?: string | null): Promise<void>;
   /**
    * Reclaims unused SQLite pages and truncates the WAL file.

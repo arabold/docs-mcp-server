@@ -1,6 +1,8 @@
 /**
  * TelemetryService listens to events from the EventBusService and tracks them to analytics.
  * This decouples telemetry concerns from the PipelineManager, following the event-driven architecture.
+ * A local backend starts one with its pipeline, so only the process that runs a
+ * job reports it; relayed copies of a remote worker's events are not reported.
  */
 
 import type { EventBusService } from "../events/EventBusService";
@@ -13,22 +15,10 @@ import { TelemetryEvent, telemetry } from "./telemetry";
 export class TelemetryService {
   private eventBus: EventBusService;
   private unsubscribers: (() => void)[] = [];
-  private trackJobs = true;
 
   constructor(eventBus: EventBusService) {
     this.eventBus = eventBus;
     this.setupEventListeners();
-  }
-
-  /**
-   * Turns reporting of pipeline job events on or off. A process whose jobs run
-   * on a remote worker turns it off: the worker reports them, and the events
-   * this process sees are relayed copies.
-   *
-   * @param enabled Whether job events seen on the bus are reported.
-   */
-  setJobTracking(enabled: boolean): void {
-    this.trackJobs = enabled;
   }
 
   /**
@@ -57,9 +47,6 @@ export class TelemetryService {
    * Only tracks events for meaningful state transitions: started, completed, and failed.
    */
   private handleJobStatusChange(job: PipelineJob): void {
-    if (!this.trackJobs) {
-      return;
-    }
     const duration = job.startedAt ? Date.now() - job.startedAt.getTime() : null;
     const queueWaitTime =
       job.startedAt && job.createdAt

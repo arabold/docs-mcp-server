@@ -119,8 +119,7 @@ export function createDefaultAction(cli: Argv) {
         jobs: { recoverJobs: (argv.resume as boolean) || false },
         onEmbeddingModelChange: handleEmbeddingModelChange,
       });
-      // Registered before any transport starts, so a remote backend turns job
-      // telemetry off before the worker's first relayed event
+      // Registered first, so shutdown closes it even when a server fails to start
       registerGlobalServices({ backend });
 
       if (resolvedProtocol === "stdio") {

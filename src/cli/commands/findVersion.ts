@@ -53,7 +53,6 @@ export function createFindVersionCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      // Find version command doesn't need embeddings - explicitly disable for local execution
       const backend = await openBackend({
         serverUrl,
         eventBus,

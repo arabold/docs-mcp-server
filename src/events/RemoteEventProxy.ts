@@ -82,11 +82,9 @@ export class RemoteEventProxy {
   /** Ends the subscription and stops trying to subscribe again. */
   disconnect(): void {
     this.stopped = true;
-    this.generation++;
     clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
-    this.subscription?.unsubscribe();
-    this.subscription = null;
+    this.endSubscription();
     this.live = false;
     this.pending?.settle(false);
   }
@@ -129,10 +127,7 @@ export class RemoteEventProxy {
 
   private resubscribeLater(): void {
     this.setLive(false);
-    this.generation++;
-    this.subscription?.unsubscribe();
-    this.subscription = null;
-    if (this.retryTimer) return;
+    this.endSubscription();
 
     const delay = Math.min(
       RESUBSCRIBE_BASE_DELAY_MS * 2 ** this.attempts,
@@ -146,6 +141,13 @@ export class RemoteEventProxy {
     }, delay);
     // A pending retry alone must not keep a finished CLI process alive.
     this.retryTimer.unref?.();
+  }
+
+  /** Ends the current subscription; its later callbacks are ignored. */
+  private endSubscription(): void {
+    this.generation++;
+    this.subscription?.unsubscribe();
+    this.subscription = null;
   }
 
   private setLive(live: boolean): void {

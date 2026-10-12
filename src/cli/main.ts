@@ -16,10 +16,8 @@ import {
   closeActiveBackend,
   getActiveAppServer,
   getActiveMcpStdioServer,
-  getActiveTelemetryService,
   setActiveAppServer,
   setActiveMcpStdioServer,
-  setActiveTelemetryService,
 } from "./services";
 
 let isShuttingDown = false;
@@ -52,14 +50,6 @@ const sigintHandler = async (): Promise<void> => {
 
     // The servers have stopped, so nothing uses the backend any more
     await closeActiveBackend();
-
-    // Cleanup TelemetryService (removes event listeners)
-    const telemetryService = getActiveTelemetryService();
-    if (telemetryService) {
-      telemetryService.shutdown();
-      setActiveTelemetryService(null);
-      logger.debug("SIGINT: TelemetryService shut down.");
-    }
 
     // Analytics shutdown is handled by AppServer.stop() above
     // Only shutdown analytics if no AppServer was running
@@ -190,20 +180,18 @@ if (import.meta.hot) {
     isShuttingDown = true;
 
     try {
-      const shutdownPromises: Promise<void>[] = [];
-
       const appServer = getActiveAppServer();
       if (appServer) {
         logger.debug("Shutting down AppServer...");
-        shutdownPromises.push(
-          appServer.stop().then(() => {
+        // A failed stop still closes the backend below
+        await appServer.stop().then(
+          () => {
             setActiveAppServer(null);
             logger.debug("AppServer shut down.");
-          }),
+          },
+          () => {},
         );
       }
-
-      await Promise.allSettled(shutdownPromises);
 
       await closeActiveBackend();
       logger.debug("Active services shut down.");

@@ -75,8 +75,7 @@ export function createWebCommand(cli: Argv) {
           serverUrl,
           jobs: { recoverJobs: false }, // Web command doesn't support job recovery
         });
-        // Registered before any transport starts, so a remote backend turns job
-        // telemetry off before the worker's first relayed event
+        // Registered first, so shutdown closes it even when a server fails to start
         registerGlobalServices({ backend });
 
         // Configure web-only server

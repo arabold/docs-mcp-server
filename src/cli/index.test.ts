@@ -39,12 +39,6 @@ vi.mock("../telemetry", async () => {
   return {
     initTelemetry: vi.fn(),
     shouldEnableTelemetry: vi.fn().mockReturnValue(false),
-    TelemetryService: vi.fn().mockImplementation(function () {
-      return {
-        setJobTracking: vi.fn(),
-        shutdown: vi.fn(),
-      };
-    }),
     telemetry: {
       isEnabled: vi.fn().mockReturnValue(false),
       setGlobalContext: vi.fn(),

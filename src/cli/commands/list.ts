@@ -36,7 +36,6 @@ export function createListCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      // List command doesn't need embeddings - explicitly disable for local execution
       const backend = await openBackend({
         eventBus,
         serverUrl,

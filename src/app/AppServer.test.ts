@@ -77,9 +77,7 @@ describe("AppServer Behavior Tests", () => {
     mockDocService = {
       getActiveEmbeddingConfig: vi.fn().mockReturnValue(null),
     };
-    mockPipeline = {
-      setCallbacks: vi.fn(), // Add mock for setCallbacks method
-    };
+    mockPipeline = {};
 
     // Setup default mock returns
     mockFastify.register.mockResolvedValue(undefined);
@@ -98,7 +96,6 @@ describe("AppServer Behavior Tests", () => {
   /** The backend a server receives; local unless overridden. */
   function backend(overrides: Partial<JobsBackend> = {}): JobsBackend {
     return {
-      mode: "local",
       workerUrl: undefined,
       docService: mockDocService as DocumentManagementService,
       pipeline: mockPipeline as IPipeline,

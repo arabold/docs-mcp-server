@@ -111,12 +111,6 @@ export class ScrapeTool {
     // Use the injected pipeline instance
     const pipeline = this.pipeline;
 
-    // Remove internal progress tracking and callbacks
-    // let pagesScraped = 0;
-    // let lastReportedPages = 0;
-    // const reportProgress = ...
-    // pipeline.setCallbacks(...)
-
     // Normalize pipeline version argument: use null for unversioned to be explicit cross-platform
     const enqueueVersion: string | null = internalVersion === "" ? null : internalVersion;
 

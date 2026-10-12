@@ -13,16 +13,43 @@ import {
 } from "vitest";
 import { startInProcessServer } from "../../test/in-process-server";
 import { leafPage, mockSite } from "../../test/mock-site";
-import { getFreePort } from "../../test/test-helpers";
+import { getFreePort, withStore } from "../../test/test-helpers";
 import { EventBusService } from "../events/EventBusService";
 import { EventType } from "../events/types";
 import { PipelineManager } from "../pipeline/PipelineManager";
 import { type PipelineJob, PipelineJobStatus } from "../pipeline/types";
+import { ScrapeMode } from "../scraper/types";
 import { DocumentManagementService } from "../store/DocumentManagementService";
 import { EmbeddingModelChangedError } from "../store/errors";
 import { VersionStatus } from "../store/types";
+import { TelemetryEvent, telemetry } from "../telemetry/telemetry";
 import { loadConfig } from "../utils/config";
 import { type Backend, type OpenBackendOptions, openBackend } from "./backend";
+
+vi.mock("../telemetry/telemetry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../telemetry/telemetry")>()),
+  telemetry: { track: vi.fn(), isEnabled: vi.fn(() => false), shutdown: vi.fn() },
+}));
+
+/** A job event as the pipeline announces it once the job starts. */
+const runningJob = {
+  id: "job-1",
+  library: "react",
+  version: null,
+  status: PipelineJobStatus.RUNNING,
+  createdAt: new Date(),
+  startedAt: new Date(),
+} as unknown as PipelineJob;
+
+/** Whether a job's start was reported to telemetry. */
+function reportedStart(jobId: string): boolean {
+  return vi
+    .mocked(telemetry.track)
+    .mock.calls.some(
+      ([event, properties]) =>
+        event === TelemetryEvent.PIPELINE_JOB_STARTED && properties?.jobId === jobId,
+    );
+}
 
 describe("openBackend", () => {
   const opened: Backend[] = [];
@@ -36,6 +63,7 @@ describe("openBackend", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.mocked(telemetry.track).mockClear();
     await Promise.allSettled(opened.splice(0).map((backend) => backend.close()));
   });
 
@@ -51,21 +79,9 @@ describe("openBackend", () => {
       return { appConfig, eventBus: new EventBusService(), ...overrides };
     }
 
-    /** Opens the store on its own, the way another process would. */
-    async function withStore<T>(work: (store: DocumentManagementService) => Promise<T>) {
-      const { appConfig, eventBus } = localOptions();
-      const store = new DocumentManagementService(eventBus, appConfig);
-      await store.initialize();
-      try {
-        return await work(store);
-      } finally {
-        await store.shutdown();
-      }
-    }
-
     /** Leaves react 19.0 RUNNING, as a scrape in another process would. */
     function seedRunningScrape(): Promise<number> {
-      return withStore(async (store) => {
+      return withStore(storePath, async (store) => {
         const versionId = await store.ensureVersion({
           library: "react",
           version: "19.0",
@@ -76,7 +92,7 @@ describe("openBackend", () => {
     }
 
     function statusOfSeededScrape(): Promise<VersionStatus | undefined> {
-      return withStore(async (store) => {
+      return withStore(storePath, async (store) => {
         const [react] = await store.listLibraries();
         return react?.versions[0]?.status;
       });
@@ -109,6 +125,14 @@ describe("openBackend", () => {
 
       expect(backend.pipeline).toBeInstanceOf(PipelineManager);
       expect(await statusOfSeededScrape()).toBe(VersionStatus.FAILED);
+    });
+
+    it("reports the jobs its pipeline runs to telemetry", async () => {
+      const backend = await open(localOptions({ jobs: { recoverJobs: false } }));
+
+      backend.eventBus.emit(EventType.JOB_STATUS_CHANGE, runningJob);
+
+      expect(reportedStart(runningJob.id)).toBe(true);
     });
 
     it("hands a changed embedding model to the handler and opens anyway", async () => {
@@ -197,19 +221,15 @@ describe("openBackend", () => {
         library,
         version: "",
         maxPages: 1,
+        scrapeMode: ScrapeMode.Fetch,
       });
       await pipeline.waitForJobCompletion(jobId);
       return jobId;
     }
 
     beforeAll(async () => {
-      const port = await getFreePort();
-      worker = await startInProcessServer({
-        port,
-        publicUrl: `http://127.0.0.1:${port}`,
-        enableWebInterface: false,
-      });
-      workerUrl = `http://127.0.0.1:${port}/api`;
+      worker = await startInProcessServer({ enableWebInterface: false });
+      workerUrl = worker.apiUrl;
     });
 
     afterAll(async () => {
@@ -229,6 +249,15 @@ describe("openBackend", () => {
       );
     });
 
+    it("leaves reporting the worker's jobs to the worker", async () => {
+      const backend = await open(remoteOptions({ jobs: { recoverJobs: false } }));
+
+      // A relayed event arrives on the local bus like this one
+      backend.eventBus.emit(EventType.JOB_STATUS_CHANGE, runningJob);
+
+      expect(reportedStart(runningJob.id)).toBe(false);
+    });
+
     it("reads the worker's documents without a pipeline", async () => {
       await scrapeOnWorker(
         await open(remoteOptions({ jobs: { recoverJobs: false } })),
@@ -237,7 +266,7 @@ describe("openBackend", () => {
 
       const backend = await open(remoteOptions());
 
-      expect(backend.mode).toBe("remote");
+      expect(backend.workerUrl).toBe(workerUrl);
       expect(backend.pipeline).toBeUndefined();
       const libraries = await backend.docService.listLibraries();
       expect(libraries.map((library) => library.library)).toContain("read");

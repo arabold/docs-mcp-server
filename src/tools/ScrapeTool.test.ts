@@ -32,8 +32,6 @@ describe("ScrapeTool", () => {
         status: PipelineJobStatus.COMPLETED,
         progress: { pagesScraped: 0 }, // Default progress
       } as Partial<PipelineJob>),
-      // setCallbacks mock removed
-      // stop: vi.fn().mockResolvedValue(undefined), // Mock if needed
     };
 
     // Mock the constructor of PipelineManager to return our mock instance

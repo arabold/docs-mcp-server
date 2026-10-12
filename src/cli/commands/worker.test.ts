@@ -6,10 +6,7 @@ import * as appModule from "../../app";
 import { openBackend } from "../../services/backend";
 import { createWorkerCommand } from "./worker";
 
-const pipelineMock = {
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-};
+const pipelineMock = {};
 
 // Mock startAppServer
 vi.mock("../../app", () => ({
@@ -18,7 +15,6 @@ vi.mock("../../app", () => ({
 
 vi.mock("../../services/backend", () => ({
   openBackend: vi.fn(async (options: { serverUrl?: string }) => ({
-    mode: options.serverUrl ? "remote" : "local",
     workerUrl: options.serverUrl,
     docService: {},
     pipeline: pipelineMock,

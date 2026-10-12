@@ -8,12 +8,11 @@ import { createInterface } from "node:readline";
 import { chromium } from "playwright";
 import type { AppServerConfig } from "../app";
 import type { AuthConfig } from "../auth/types";
-import { EventBusService } from "../events";
+import type { EventBusService } from "../events";
 import {
   EmbeddingConfig,
   type EmbeddingModelConfig,
 } from "../store/embeddings/EmbeddingConfig";
-import { TelemetryService } from "../telemetry";
 import { logger } from "../utils/logger";
 import { getProjectRoot } from "../utils/paths";
 import type { GlobalOptions } from "./types";
@@ -318,20 +317,6 @@ function warnHttpUsage(port: number): void {
         "Consider using HTTPS for security.",
     );
   }
-}
-
-/**
- * Creates EventBusService and TelemetryService together.
- * The TelemetryService automatically subscribes to events from the EventBusService.
- * @returns Object containing both services
- */
-export function createEventServices(): {
-  eventBus: EventBusService;
-  telemetryService: TelemetryService;
-} {
-  const eventBus = new EventBusService();
-  const telemetryService = new TelemetryService(eventBus);
-  return { eventBus, telemetryService };
 }
 
 /**

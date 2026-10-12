@@ -62,14 +62,6 @@ export class PipelineManager implements IPipeline {
   }
 
   /**
-   * No-op method for backward compatibility with IPipeline interface.
-   * Events are now emitted directly to EventBusService.
-   */
-  setCallbacks(_callbacks: unknown): void {
-    // No-op: callbacks are no longer used
-  }
-
-  /**
    * Converts internal job representation to public job interface.
    */
   private toPublicJob(job: InternalPipelineJob): PipelineJob {
@@ -238,6 +230,25 @@ export class PipelineManager implements IPipeline {
   }
 
   /**
+   * The QUEUED or RUNNING jobs for a library version. The library name and the
+   * version are both matched the way the store buckets them: comparing names
+   * exactly let `Docs` and `docs` run as two jobs against one bucket, where the
+   * second one's clean-before-scrape deleted pages the first had already written.
+   */
+  private activeJobsFor(
+    library: string,
+    normalizedVersion: string,
+  ): InternalPipelineJob[] {
+    return Array.from(this.jobMap.values()).filter(
+      (job) =>
+        libraryNamesMatch(job.library, library) &&
+        normalizeVersionLabel(job.version) === normalizedVersion &&
+        (job.status === PipelineJobStatus.QUEUED ||
+          job.status === PipelineJobStatus.RUNNING),
+    );
+  }
+
+  /**
    * Runs `work` once any earlier enqueue or removal of the same library version
    * has finished, so the two never interleave.
    */
@@ -275,14 +286,7 @@ export class PipelineManager implements IPipeline {
   ): Promise<void> {
     const normalizedVersion = normalizeVersionLabel(version);
     await this.withVersionLock(library, normalizedVersion, async () => {
-      const jobs = Array.from(this.jobMap.values()).filter(
-        (job) =>
-          libraryNamesMatch(job.library, library) &&
-          normalizeVersionLabel(job.version) === normalizedVersion &&
-          (job.status === PipelineJobStatus.QUEUED ||
-            job.status === PipelineJobStatus.RUNNING),
-      );
-      for (const job of jobs) {
+      for (const job of this.activeJobsFor(library, normalizedVersion)) {
         logger.info(
           `🚫 Aborting job for ${formatVersionLabel(job.library, normalizedVersion)} before removal: ${job.id}`,
         );
@@ -312,16 +316,10 @@ export class PipelineManager implements IPipeline {
     options: ScraperOptions,
     enqueue: EnqueueScrapeOptions = {},
   ): Promise<string> {
+    const normalizedVersion = normalizeVersionLabel(version);
     // A removal of this version cannot run between the claim below and the job
     // it registers, so it either sees the job and cancels it, or runs first.
-    return this.withVersionLock(library, normalizeVersionLabel(version), async () => {
-      // Normalized so the job is deduped against the bucket it will be stored
-      // under. Both halves of the key need it: the store buckets by folded
-      // library name too, so comparing those exactly let `Docs` and `docs` run as
-      // two jobs against one bucket, where the second one's clean-before-scrape
-      // deleted pages the first had already written — and both reported success.
-      const normalizedVersion = normalizeVersionLabel(version);
-
+    return this.withVersionLock(library, normalizedVersion, async () => {
       // Claim the target before touching any job, so a rejected request cannot
       // cancel the job it conflicts with. Appending clears nothing, so it is not an
       // overwrite and may write into an existing version.
@@ -331,15 +329,8 @@ export class PipelineManager implements IPipeline {
       const claimed = await this.store.claimVersion(library, normalizedVersion, policy);
 
       // Abort any existing QUEUED or RUNNING job for the same library+version
-      const allJobs = await this.getJobs();
-      const duplicateJobs = allJobs.filter(
-        (job) =>
-          libraryNamesMatch(job.library, library) &&
-          normalizeVersionLabel(job.version) === normalizedVersion &&
-          [PipelineJobStatus.QUEUED, PipelineJobStatus.RUNNING].includes(job.status),
-      );
       const label = formatVersionLabel(claimed.library, normalizedVersion);
-      for (const job of duplicateJobs) {
+      for (const job of this.activeJobsFor(library, normalizedVersion)) {
         logger.info(`🚫 Aborting duplicate job for ${label}: ${job.id}`);
         await this.cancelJob(job.id);
       }

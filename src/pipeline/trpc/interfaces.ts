@@ -1,6 +1,6 @@
 import type { ScraperOptions } from "../../scraper/types";
 import type { ExistingTargetPolicy } from "../../store/types";
-import type { PipelineJob, PipelineJobStatus, PipelineManagerCallbacks } from "../types";
+import type { PipelineJob, PipelineJobStatus } from "../types";
 
 /**
  * The tRPC codes the pipeline router gives enqueue errors a caller can act on:
@@ -62,5 +62,4 @@ export interface IPipeline {
    * only after the removal is done, so it cannot slip in between.
    */
   removeVersion(library: string, version: string | undefined | null): Promise<void>;
-  setCallbacks(callbacks: PipelineManagerCallbacks): void;
 }

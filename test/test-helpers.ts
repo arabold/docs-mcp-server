@@ -3,13 +3,48 @@ import fs from "node:fs";
 import http, { createServer, type IncomingMessage, type Server } from "node:http";
 import net, { type AddressInfo } from "node:net";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { Database } from "better-sqlite3";
 import { exportJWK, generateKeyPair, type JWK, SignJWT } from "jose";
 import { type Browser, chromium } from "playwright";
 import { expect, vi } from "vitest";
 import { type ClientOptions, WebSocket } from "ws";
+import { EventBusService } from "../src/events/EventBusService";
 import { ScrapeMode, type ScraperOptions } from "../src/scraper/types";
 import type { ApiClient } from "../src/services/apiClient";
+import { DocumentManagementService } from "../src/store/DocumentManagementService";
+import { loadConfig } from "../src/utils/config";
+
+/** The `file://` URL of the one-page HTML fixture the CLI and worker suites scrape. */
+export const HTML_FIXTURE_URL = pathToFileURL(
+  path.resolve(import.meta.dirname, "fixtures", "html.html"),
+).href;
+
+/**
+ * Opens the FTS-only store at `storePath` on its own, the way another process
+ * would, runs `work` on it, and closes it again.
+ *
+ * @param storePath The store directory.
+ * @param work What to do with the open store.
+ * @param options.configPath A config file to load instead of the defaults.
+ * @returns What `work` returns.
+ */
+export async function withStore<T>(
+  storePath: string,
+  work: (store: DocumentManagementService) => Promise<T>,
+  options: { configPath?: string } = {},
+): Promise<T> {
+  const config = loadConfig({}, options.configPath ? { configPath: options.configPath } : {});
+  config.app.storePath = storePath;
+  config.app.embeddingModel = "";
+  const store = new DocumentManagementService(new EventBusService(), config);
+  await store.initialize();
+  try {
+    return await work(store);
+  } finally {
+    await store.shutdown();
+  }
+}
 
 /**
  * Returns the command and arguments to run the CLI.

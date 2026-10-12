@@ -126,7 +126,7 @@ Services integrate telemetry through direct analytics usage:
 **Pipeline Jobs** (`src/telemetry/TelemetryService.ts`)
 
 - Pipeline job start, completion and failure events with global context
-- Reported only by the process that runs the job: a process whose backend uses a remote worker turns job tracking off, because the worker reports its own jobs
+- Reported only by the process that runs the job: a local backend starts the service with its pipeline, and a backend that uses a remote worker starts none, because the worker reports its own jobs
 - Performance metrics for background processing
 
 **MCP Service** (`src/services/mcpService.ts`)

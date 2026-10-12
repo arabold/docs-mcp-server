@@ -14,10 +14,6 @@ export interface JobOutputHandlers {
   onProgress(job: PipelineJob, progress: ScraperProgressEvent): void;
 }
 
-type JobEvent =
-  | { kind: "status"; job: PipelineJob }
-  | { kind: "progress"; job: PipelineJob; progress: ScraperProgressEvent };
-
 /**
  * Passes a command the status and progress events of the job it submitted, and
  * no others. A shared worker runs jobs for several clients, and a job can start
@@ -26,8 +22,8 @@ type JobEvent =
  * events once {@link follow} names it.
  */
 export class JobOutputFollower {
-  /** Events received before {@link follow} named the job. */
-  private buffered: JobEvent[] = [];
+  /** Events received before {@link follow} named the job, ready to hand on. */
+  private buffered: Array<{ jobId: string; deliver: () => void }> = [];
   private jobId: string | null = null;
   private readonly unsubscribers: Array<() => void>;
 
@@ -37,16 +33,13 @@ export class JobOutputFollower {
    * @param eventBus The bus the job's events arrive on.
    * @param handlers What to do with the followed job's events.
    */
-  constructor(
-    eventBus: EventBusService,
-    private readonly handlers: JobOutputHandlers,
-  ) {
+  constructor(eventBus: EventBusService, handlers: JobOutputHandlers) {
     this.unsubscribers = [
       eventBus.on(EventType.JOB_STATUS_CHANGE, (job) =>
-        this.receive({ kind: "status", job }),
+        this.receive(job.id, () => handlers.onStatus(job)),
       ),
       eventBus.on(EventType.JOB_PROGRESS, ({ job, progress }) =>
-        this.receive({ kind: "progress", job, progress }),
+        this.receive(job.id, () => handlers.onProgress(job, progress)),
       ),
     ];
   }
@@ -59,10 +52,8 @@ export class JobOutputFollower {
    */
   follow(jobId: string): void {
     this.jobId = jobId;
-    const buffered = this.buffered;
-    this.buffered = [];
-    for (const event of buffered) {
-      this.deliver(event);
+    for (const event of this.buffered.splice(0)) {
+      this.receive(event.jobId, event.deliver);
     }
   }
 
@@ -74,22 +65,11 @@ export class JobOutputFollower {
     this.buffered = [];
   }
 
-  private receive(event: JobEvent): void {
+  private receive(jobId: string, deliver: () => void): void {
     if (this.jobId === null) {
-      this.buffered.push(event);
-    } else {
-      this.deliver(event);
-    }
-  }
-
-  private deliver(event: JobEvent): void {
-    if (event.job.id !== this.jobId) {
-      return;
-    }
-    if (event.kind === "status") {
-      this.handlers.onStatus(event.job);
-    } else {
-      this.handlers.onProgress(event.job, event.progress);
+      this.buffered.push({ jobId, deliver });
+    } else if (jobId === this.jobId) {
+      deliver();
     }
   }
 }

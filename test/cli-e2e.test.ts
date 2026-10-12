@@ -7,22 +7,23 @@ import { EventBusService } from "../src/events";
 import { ScrapeMode } from "../src/scraper/types";
 import { createApiClient } from "../src/services/apiClient";
 import { openBackend } from "../src/services/backend";
-import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { loadConfig } from "../src/utils/config";
 import {
   createTcpProxy,
   getCliCommand,
   getFreePort,
+  HTML_FIXTURE_URL,
   startRunningSlowJob,
   startSlowSite,
   startWorker,
   stopChildProcess,
+  withStore,
   writeTestConfig,
 } from "./test-helpers";
 
 describe("CLI E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
-  const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
+  const fixtureUrl = HTML_FIXTURE_URL;
 
   /** The status and progress lines a scrape or refresh printed. */
   function progressLines(output: string): string[] {
@@ -108,12 +109,9 @@ describe("CLI E2E", () => {
 
     try {
       // Seed the existing version in-process rather than with a third CLI run.
-      const config = loadConfig({}, { configPath });
-      config.app.storePath = storePath;
-      const docService = new DocumentManagementService(new EventBusService(), config);
-      await docService.initialize();
-      await docService.ensureVersion({ library: "React", version: "" });
-      await docService.shutdown();
+      await withStore(storePath, (store) => store.ensureVersion({ library: "React", version: "" }), {
+        configPath,
+      });
 
       const rejected = await runCli(scrapeArgs);
       expect(rejected.code).not.toBe(0);
@@ -158,24 +156,23 @@ describe("CLI E2E", () => {
       rmSync(storePath, { recursive: true, force: true });
     });
 
-    /**
-     * Scrapes `url` as `library`, through the worker at `serverUrl` or, with
-     * `{ storePath }`, locally, showing diagnostics.
-     */
-    function scrape(
-      library: string,
-      target: { serverUrl: string } | { storePath: string } = { serverUrl: workerUrl },
-      url = fixtureUrl,
-    ) {
-      const backendArgs =
-        "serverUrl" in target
-          ? ["--server-url", target.serverUrl]
-          : ["--store-path", target.storePath];
-      // --verbose: without a terminal the CLI shows errors only. The cap turns
-      // a client that never returns into a failed assertion instead of a test
-      // timeout that leaves the CLI process behind.
+    /** Where a command runs: on the worker at `serverUrl`, or locally on `storePath`. */
+    type Target = { serverUrl: string } | { storePath: string };
+
+    function backendArgs(target: Target): string[] {
+      return "serverUrl" in target
+        ? ["--server-url", target.serverUrl, "--config", configPath]
+        : ["--store-path", target.storePath, "--config", configPath];
+    }
+
+    /** Scrapes `url` as `library` on `target`, showing diagnostics. */
+    function scrape(library: string, target: Target = { serverUrl: workerUrl }, url = fixtureUrl) {
+      // --verbose: without a terminal the CLI shows errors only. Fetch mode
+      // starts no browser for the fixture. The cap turns a client that never
+      // returns into a failed assertion instead of a test timeout that leaves
+      // the CLI process behind.
       return runCli(
-        ["scrape", library, url, ...backendArgs, "--config", configPath, "--verbose"],
+        ["scrape", library, url, ...backendArgs(target), "--scrape-mode", "fetch", "--verbose"],
         40_000,
       );
     }
@@ -289,17 +286,13 @@ describe("CLI E2E", () => {
        */
       function runBoth(args: string[], localStorePath: string) {
         return Promise.all([
-          runCli([...args, "--server-url", workerUrl, "--config", configPath], 40_000),
-          runCli([...args, "--store-path", localStorePath, "--config", configPath], 40_000),
+          runCli([...args, ...backendArgs({ serverUrl: workerUrl })], 40_000),
+          runCli([...args, ...backendArgs({ storePath: localStorePath })], 40_000),
         ]);
       }
 
       /** Scrapes the fixture as `library@version`, on the worker or into a local store. */
-      async function seed(
-        target: { serverUrl: string } | { storePath: string },
-        library: string,
-        version: string,
-      ): Promise<void> {
+      async function seed(target: Target, library: string, version: string): Promise<void> {
         const appConfig = loadConfig({}, { configPath });
         if ("storePath" in target) appConfig.app.storePath = target.storePath;
         const backend = await openBackend({
@@ -323,10 +316,12 @@ describe("CLI E2E", () => {
 
       beforeAll(async () => {
         localStore = mkdtempSync(path.join(tmpdir(), "cli-e2e-local-"));
-        for (const target of [{ serverUrl: workerUrl }, { storePath: localStore }]) {
-          await seed(target, "Parity", "1.2.0");
-          await seed(target, "Removed", "1.0");
-        }
+        await Promise.all(
+          [{ serverUrl: workerUrl }, { storePath: localStore }].map(async (target) => {
+            await seed(target, "Parity", "1.2.0");
+            await seed(target, "Removed", "1.0");
+          }),
+        );
       }, 60_000);
 
       afterAll(() => {
@@ -376,11 +371,19 @@ describe("CLI E2E", () => {
         expect(local.code, local.stderr).toBe(0);
         expect(remote.stdout).toContain("Removed");
         expect(remote.stdout).toBe(local.stdout);
-        const [remoteList, localList] = await runBoth(["list"], localStore);
-        expect(remoteList.stdout).toContain('"Parity"');
-        expect(remoteList.stdout).not.toContain('"Removed"');
-        expect(localList.stdout).toContain('"Parity"');
-        expect(localList.stdout).not.toContain('"Removed"');
+        const { api, close } = createApiClient(workerUrl, { subscriptions: false });
+        try {
+          for (const libraries of [
+            await api.listLibraries.query(),
+            await withStore(localStore, (store) => store.listLibraries(), { configPath }),
+          ]) {
+            const names = libraries.map((lib) => lib.library);
+            expect(names).toContain("Parity");
+            expect(names).not.toContain("Removed");
+          }
+        } finally {
+          close();
+        }
       }, 60_000);
 
       it("compact compacts the store it runs on", async () => {

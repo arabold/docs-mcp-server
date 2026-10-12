@@ -11,10 +11,10 @@ import {
 } from "vitest";
 import { startInProcessServer } from "../../test/in-process-server";
 import { leafPage, mockSite } from "../../test/mock-site";
-import { getFreePort } from "../../test/test-helpers";
 import { EventBusService } from "../events/EventBusService";
 import type { RemoteEventProxy } from "../events/RemoteEventProxy";
 import { EventType } from "../events/types";
+import { ScrapeMode } from "../scraper/types";
 import type { ApiClient } from "../services/apiClient";
 import { type JobsBackend, openBackend } from "../services/backend";
 import { loadConfig } from "../utils/config";
@@ -23,7 +23,6 @@ import { EVENTS_CONNECT_TIMEOUT_MS, PipelineClient } from "./PipelineClient";
 
 // The worker's API client, as PipelineClient calls it
 const mockClient: any = {
-  ping: { query: vi.fn() },
   enqueueScrapeJob: { mutate: vi.fn() },
   enqueueRefreshJob: { mutate: vi.fn() },
   getJob: { query: vi.fn() },
@@ -44,7 +43,6 @@ describe("PipelineClient", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     // Reset default mock behaviors
-    mockClient.ping.query.mockResolvedValue({ status: "ok" });
     mockClient.enqueueScrapeJob.mutate.mockResolvedValue({ jobId: "job-123" });
     mockClient.enqueueRefreshJob.mutate.mockResolvedValue({ jobId: "job-456" });
     mockClient.getJob.query.mockResolvedValue(undefined);
@@ -320,22 +318,18 @@ describe("PipelineClient against a worker", () => {
       library,
       version: "",
       maxPages: 1,
+      scrapeMode: ScrapeMode.Fetch,
     });
   }
 
   beforeAll(async () => {
-    const port = await getFreePort();
-    worker = await startInProcessServer({
-      port,
-      publicUrl: `http://127.0.0.1:${port}`,
-      enableWebInterface: false,
-    });
+    worker = await startInProcessServer({ enableWebInterface: false });
     const appConfig = loadConfig();
     appConfig.app.storePath = "";
     backend = await openBackend({
       appConfig,
       eventBus: new EventBusService(),
-      serverUrl: `http://127.0.0.1:${port}/api`,
+      serverUrl: worker.apiUrl,
       jobs: { recoverJobs: false },
     });
   });

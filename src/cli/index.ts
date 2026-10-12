@@ -5,12 +5,7 @@
 import yargs, { type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
 import { EventBusService } from "../events";
-import {
-  initTelemetry,
-  shouldEnableTelemetry,
-  TelemetryService,
-  telemetry,
-} from "../telemetry";
+import { initTelemetry, shouldEnableTelemetry, telemetry } from "../telemetry";
 import { loadConfig } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
 // Commands
@@ -28,7 +23,6 @@ import { createSearchCommand } from "./commands/search";
 import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
 import { applyGlobalCliOutputMode, registerGlobalOutputOptions } from "./output";
-import { registerGlobalServices } from "./services";
 
 /** Every command the CLI registers. */
 export const COMMAND_FACTORIES: ReadonlyArray<(cli: Argv) => void> = [
@@ -97,7 +91,6 @@ export function registerGlobalOptions<T>(cli: Argv<T>) {
 export function createCli(argv: string[]): Argv {
   // Global service instances
   let globalEventBus: EventBusService | null = null;
-  let globalTelemetryService: TelemetryService | null = null;
   const commandStartTimes = new Map<string, number>();
 
   const cli = registerGlobalOptions(yargs(hideBin(argv)))
@@ -144,10 +137,6 @@ export function createCli(argv: string[]): Argv {
       // 4. Init Services
       if (!globalEventBus) {
         globalEventBus = new EventBusService();
-      }
-      if (!globalTelemetryService) {
-        globalTelemetryService = new TelemetryService(globalEventBus);
-        registerGlobalServices({ telemetryService: globalTelemetryService });
       }
 
       // 5. Attach to argv context

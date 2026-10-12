@@ -103,10 +103,6 @@ export class DocumentManagementClient implements IDocumentManagement {
     await this.client.removeDocs.mutate({ library, version });
   }
 
-  async removeAllDocuments(library: string, version?: string | null): Promise<void> {
-    await this.client.removeAllDocuments.mutate({ library, version: version ?? null });
-  }
-
   async compact(options?: { force?: boolean; vacuum?: boolean }): Promise<CompactResult> {
     return this.client.compact.mutate(options ?? {});
   }

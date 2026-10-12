@@ -17,11 +17,7 @@ import {
   RELAYED_ENQUEUE_ERROR_CODES,
   type RelayedEnqueueErrorCode,
 } from "./trpc/interfaces";
-import {
-  type PipelineJob,
-  PipelineJobStatus,
-  type PipelineManagerCallbacks,
-} from "./types";
+import { type PipelineJob, PipelineJobStatus } from "./types";
 
 /**
  * How long submitting the first job waits for the worker's event stream, so the
@@ -278,10 +274,5 @@ export class PipelineClient implements IPipeline {
     version: string | undefined | null,
   ): Promise<void> {
     await this.client.removeDocs.mutate({ library, version: version ?? null });
-  }
-
-  setCallbacks(_callbacks: PipelineManagerCallbacks): void {
-    // For external pipeline, callbacks are not used since all updates come via event bus
-    logger.debug("PipelineClient.setCallbacks called - no-op for external worker");
   }
 }

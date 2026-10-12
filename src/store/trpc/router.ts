@@ -174,36 +174,6 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
-    removeVersion: tt.procedure
-      .input(z.object({ library: nonEmpty, version: optionalVersion }))
-      .mutation(
-        async ({
-          ctx,
-          input,
-        }: {
-          ctx: DataTrpcContext;
-          input: { library: string; version: string | null | undefined };
-        }) => {
-          await ctx.docService.removeVersion(input.library, input.version ?? null);
-          return { ok: true } as const;
-        },
-      ),
-
-    removeAllDocuments: tt.procedure
-      .input(z.object({ library: nonEmpty, version: optionalVersion }))
-      .mutation(
-        async ({
-          ctx,
-          input,
-        }: {
-          ctx: DataTrpcContext;
-          input: { library: string; version: string | null | undefined };
-        }) => {
-          await ctx.docService.removeAllDocuments(input.library, input.version ?? null);
-          return { ok: true } as const;
-        },
-      ),
-
     compact: tt.procedure
       .input(
         z

@@ -111,7 +111,7 @@ None.
   procedure in `src/services/appRouter.ts`, and the web UI hook that deletes a version.
 - `src/tools/ScrapeTool.ts`, `src/tools/RefreshVersionTool.ts`: tell the caller the job id before
   waiting. `src/tools/search-provider.ts`: opens a documents-only backend.
-- `src/telemetry/TelemetryService.ts`: job tracking only where jobs run.
+- `src/telemetry/TelemetryService.ts`: started by a local backend with its pipeline, so jobs are reported only where they run.
 - `src/web/client/main.tsx`, `src/web/client/api/hooks.ts`, `CONVENTIONS.md`.
 - Tests: new unit tests for the shared client, the backend, the relay and the CLI job follower; a new
   `test/remote-worker-e2e.test.ts` for a web server in front of a worker; `test/cli-e2e.test.ts`,

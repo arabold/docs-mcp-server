@@ -16,10 +16,12 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { EventType } from "../src/events";
 import type { PipelineJob } from "../src/pipeline/types";
+import { ScrapeMode } from "../src/scraper/types";
 import { createApiClient } from "../src/services/apiClient";
 import {
   createTcpProxy,
   getFreePort,
+  HTML_FIXTURE_URL,
   startCliServer,
   startRunningSlowJob,
   startSlowSite,
@@ -29,8 +31,7 @@ import {
 } from "./test-helpers";
 
 describe("Web server in front of a remote worker", () => {
-  const projectRoot = path.resolve(import.meta.dirname, "..");
-  const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
+  const fixtureUrl = HTML_FIXTURE_URL;
   let storePath: string;
   let worker: ChildProcess | undefined;
   let coordinator: ChildProcess | undefined;
@@ -87,7 +88,7 @@ describe("Web server in front of a remote worker", () => {
       const { jobId } = await workerClient.api.enqueueScrapeJob.mutate({
         library,
         version: null,
-        options: { url: fixtureUrl, library, version: "" },
+        options: { url: fixtureUrl, library, version: "", scrapeMode: ScrapeMode.Fetch },
       });
       return jobId;
     };

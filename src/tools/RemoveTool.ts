@@ -55,11 +55,10 @@ export class RemoveTool {
       // The pipeline cancels its job for the version and removes it, locked
       // against an enqueue of the same version. Without one, this process runs
       // no jobs, and a remote store has the worker do the same.
-      if (this.pipeline) {
-        await this.pipeline.removeVersion(library, version);
-      } else {
-        await this.documentManagementService.removeVersion(library, version);
-      }
+      await (this.pipeline ?? this.documentManagementService).removeVersion(
+        library,
+        version,
+      );
 
       const message = `Successfully removed ${library}${version ? `@${version}` : ""}.`;
       logger.info(`✅ ${message}`);

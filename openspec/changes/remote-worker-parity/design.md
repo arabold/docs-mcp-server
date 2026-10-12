@@ -154,7 +154,7 @@ the version (decision 7).
 `openBackend()` overloads return a `JobsBackend` (pipeline required) for `{ recoverJobs }`, which is what
 `startAppServer()` takes. Whether jobs run in the server's process comes from the backend:
 `AppServerConfig` loses `enableWorker` and `externalWorkerUrl`, and `AppServer` and `buildSystemInfo`
-read `backend.mode` and `backend.workerUrl`, so `web` and `mcp` no longer derive either from
+read `backend.workerUrl`, so `web` and `mcp` no longer derive either from
 `--server-url`. `IPipeline` and `IDocumentManagement` lose their lifecycle methods
 (`start`/`stop`, `initialize`/`shutdown`), which only the backend calls, on the concrete classes.
 
@@ -261,12 +261,15 @@ paths without the job cancel.
 
 ### 8. Telemetry reports a job where it runs
 
-`TelemetryService` gains `setJobTracking(enabled)`. `registerGlobalServices({ backend })` enables it only
-for a local backend with a pipeline. The worker reports its own jobs; a CLI or coordinator relaying
-them no longer reports them again. This also ends today's double reporting by coordinators.
+A local backend that starts a pipeline starts `TelemetryService` on its bus, before the pipeline, so it
+also sees jobs recovered on start; it stops with the backend. A remote or documents-only backend starts
+none. The worker reports its own jobs; a CLI or coordinator relaying them no longer reports them again.
+This also ends today's double reporting by coordinators.
 
-Alternative considered: *mark relayed events on the bus.* Changes the event payloads and every
-listener's contract for one consumer's sake.
+Alternatives considered: *mark relayed events on the bus.* Changes the event payloads and every
+listener's contract for one consumer's sake. *One global `TelemetryService` that a remote backend
+switches off.* Correct only if the switch runs before the first relayed event, an ordering every entry
+point must keep.
 
 ## Program Design
 
@@ -294,7 +297,7 @@ src/events/
 ~ RemoteEventProxy.ts           # typed subscription; live state; resubscribe on error; catch-up events
 + RemoteEventProxy.test.ts
 src/telemetry/
-~ TelemetryService.ts           # setJobTracking()
+~ TelemetryService.ts           # started by a local backend with its pipeline
 ~ TelemetryService.test.ts
 src/app/
 ~ AppServer.ts                  # takes a JobsBackend; no relay; no pipeline start/stop
@@ -304,7 +307,7 @@ src/cli/
 ~ commands/*.ts                 # all eleven: openBackend(); no branching on --server-url
 ~ commands/*.test.ts            # mock openBackend() instead of the removed factories
 ~ utils.ts                      # createAppServerConfig() without worker fields
-~ services.ts                   # registers one Backend; sets telemetry job tracking
+~ services.ts                   # registers one Backend
 ~ main.ts                       # closes the Backend after servers stop
 + JobOutputFollower.ts
 + JobOutputFollower.test.ts
@@ -360,8 +363,7 @@ interface OpenBackendOptions {
                             service: DocumentManagementService) => Promise<void>;
 }
 interface Backend {
-  readonly mode: "local" | "remote";
-  readonly workerUrl: string | undefined;                // remote only
+  readonly workerUrl: string | undefined;                // remote only; local when undefined
   readonly docService: IDocumentManagement;
   readonly pipeline: IPipeline | undefined;
   readonly eventBus: EventBusService;
@@ -396,9 +398,6 @@ new RemoveTool(docService: IDocumentManagement, pipeline: IPipeline | undefined)
 // IPipeline: cancel the version's job, wait, remove; serialized with enqueue (PipelineManager)
 removeVersion(library: string, version: string | undefined | null): Promise<void>;
 
-// src/telemetry/TelemetryService.ts
-setJobTracking(enabled: boolean): void;
-
 // src/cli/JobOutputFollower.ts
 class JobOutputFollower {
   constructor(eventBus: EventBusService, handlers: {
@@ -429,7 +428,7 @@ openBackend({ jobs })                                            # local
 
 scrape command
 +   backend = openBackend({ serverUrl, jobs: { recoverJobs: false } })
-+   registerGlobalServices({ backend })                          # telemetry job tracking: local only
++   registerGlobalServices({ backend })                          # closed on shutdown
 +   follower = new JobOutputFollower(backend.eventBus, …)        # buffers
     ScrapeTool.execute({ …, onJobEnqueued: (id) => follower.follow(id) })
       pipeline.enqueueScrapeJob()

@@ -16,6 +16,7 @@ import { DocumentManagementClient } from "../store/DocumentManagementClient";
 import { DocumentManagementService } from "../store/DocumentManagementService";
 import { EmbeddingModelChangedError } from "../store/errors";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
+import { TelemetryService } from "../telemetry/TelemetryService";
 import type { AppConfig } from "../utils/config";
 import { logger } from "../utils/logger";
 import { createApiClient, pingApi } from "./apiClient";
@@ -51,8 +52,7 @@ export interface OpenBackendOptions {
 
 /** Services opened by {@link openBackend}. */
 export interface Backend {
-  readonly mode: "local" | "remote";
-  /** The worker's API URL, for a remote backend. */
+  /** The worker's API URL for a remote backend; undefined for a local one. */
   readonly workerUrl: string | undefined;
   readonly docService: IDocumentManagement;
   /** The pipeline, when `jobs` asked for one that this backend can provide. */
@@ -119,6 +119,9 @@ async function openLocal(options: OpenBackendOptions, closer: Closer): Promise<B
 
   let pipeline: IPipeline | undefined;
   if (jobs) {
+    // Reports the jobs this process runs, from the first one recovered on start
+    const jobTelemetry = new TelemetryService(eventBus);
+    closer.add(() => jobTelemetry.shutdown());
     const manager = new PipelineManager(docService, eventBus, {
       recoverJobs: jobs.recoverJobs,
       appConfig,
@@ -129,7 +132,6 @@ async function openLocal(options: OpenBackendOptions, closer: Closer): Promise<B
   }
 
   return {
-    mode: "local",
     workerUrl: undefined,
     docService,
     pipeline,
@@ -164,7 +166,6 @@ async function openRemote(
   }
 
   return {
-    mode: "remote",
     workerUrl,
     docService,
     pipeline,
