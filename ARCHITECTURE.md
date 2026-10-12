@@ -205,7 +205,7 @@ Every entry point opens its services with `openBackend()` (`src/services/backend
 
 - `serverUrl` specified: a remote backend. Its API client's HTTP calls and its event WebSocket use the same worker URL, path included, so a worker behind a path-prefixed reverse proxy works.
 - `jobs: false`: documents only, for read-only commands and the CLI `remove`; no pipeline, and no WebSocket to a worker. A remote store removes a version through the worker's `removeDocs`, which cancels the worker's job for it first
-- `jobs: { recoverJobs }`: a started PipelineManager locally, with or without job recovery from the database; the worker's pipeline remotely
+- `jobs: { interruptedJobs }`: a started PipelineManager locally, which recovers the jobs an earlier run left unfinished (`recover`), marks them failed (`fail`), or leaves them alone (`leave`); the worker's pipeline remotely. Server commands host the store and recover or fail them; `scrape` and `refresh` run only their own job and leave the rest to the server
 
 ## Core Components
 

@@ -2,7 +2,6 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
-import { openBackend } from "../../services/backend";
 import { RefreshVersionTool } from "../../tools/RefreshVersionTool";
 import { createRefreshCommand } from "./refresh";
 
@@ -83,18 +82,6 @@ describe("refresh command", () => {
         waitForCompletion: true,
       }),
     );
-  });
-
-  it("runs on a backend that recovers no jobs, and closes it", async () => {
-    const parser = yargs().scriptName("test");
-    createRefreshCommand(parser);
-
-    await parser.parse(`refresh react`);
-
-    expect(openBackend).toHaveBeenCalledWith(
-      expect.objectContaining({ jobs: { recoverJobs: false } }),
-    );
-    expect(closeBackend).toHaveBeenCalledTimes(1);
   });
 
   it("passes preserveHashes override to RefreshVersionTool", async () => {

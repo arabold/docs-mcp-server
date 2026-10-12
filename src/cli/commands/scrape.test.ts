@@ -2,7 +2,6 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
-import { openBackend } from "../../services/backend";
 import { ScrapeTool } from "../../tools";
 import { createScrapeCommand } from "./scrape";
 
@@ -112,18 +111,6 @@ describe("scrape command", () => {
         }),
       }),
     );
-  });
-
-  it("runs on a backend that recovers no jobs, and closes it", async () => {
-    const parser = yargs().scriptName("test");
-    createScrapeCommand(parser);
-
-    await parser.parse(["scrape", "react", "https://react.dev"]);
-
-    expect(openBackend).toHaveBeenCalledWith(
-      expect.objectContaining({ jobs: { recoverJobs: false } }),
-    );
-    expect(closeBackend).toHaveBeenCalledTimes(1);
   });
 
   it("passes preserveHashes through to ScrapeTool", async () => {

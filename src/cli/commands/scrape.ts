@@ -192,7 +192,8 @@ export function createScrapeCommand(cli: Argv) {
         serverUrl,
         eventBus,
         appConfig,
-        jobs: { recoverJobs: false },
+        // Runs only its own job; the process hosting the store handles the rest
+        jobs: { interruptedJobs: "leave" },
       });
 
       // Display initial status
