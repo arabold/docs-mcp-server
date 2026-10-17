@@ -126,11 +126,13 @@ export async function startCliServer(
  *
  * @param storePath The worker's store directory.
  * @param configPath The config file to start it with.
+ * @param extraArgs More worker options, for example `["--no-resume"]`.
  * @returns The process and the worker's API URL; stop it with `stopChildProcess`.
  */
 export async function startWorker(
   storePath: string,
   configPath: string,
+  extraArgs: string[] = [],
 ): Promise<{ process: ChildProcess; url: string }> {
   return startCliServer(
     [
@@ -143,6 +145,7 @@ export async function startWorker(
       storePath,
       "--config",
       configPath,
+      ...extraArgs,
     ],
     { LOG_LEVEL: "info" },
   );
