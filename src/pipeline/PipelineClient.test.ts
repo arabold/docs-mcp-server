@@ -251,6 +251,28 @@ describe("PipelineClient", () => {
       expect((outcome as Error).message).toContain("Connection refused");
     });
 
+    it("should give up on a lookup the worker never answers", async () => {
+      vi.useFakeTimers();
+      // Like the real client, the query rejects once its signal aborts
+      mockClient.getJob.query.mockImplementation(
+        (_input: unknown, request?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) =>
+            request?.signal?.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            ),
+          ),
+      );
+      let outcome: unknown;
+      client.waitForJobCompletion("job-123").catch((error) => (outcome = error));
+
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain("the worker did not answer for 30 s");
+    });
+
     it("should look up every second while the worker's events do not arrive", async () => {
       vi.useFakeTimers();
       void client.waitForJobCompletion("job-123");

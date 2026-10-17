@@ -305,6 +305,32 @@ describe("PipelineManager", () => {
       expect(await store.listLibraries()).toEqual([]);
     });
 
+    it("keeps a refresh in progress from bringing back a version removed meanwhile", async () => {
+      await seedVersion("React", "19.0", VersionStatus.COMPLETED, {
+        pages: [{ url: `${SOURCE_URL}/guide`, depth: 0, etag: null }],
+      });
+      const reading = deferred();
+      const gate = deferred();
+      const readOptions = store.getScraperOptions.bind(store);
+      vi.spyOn(store, "getScraperOptions").mockImplementationOnce(async (...args) => {
+        reading.resolve();
+        await gate.promise;
+        return readOptions(...args);
+      });
+
+      const refreshed = manager.enqueueRefreshJob("React", "19.0");
+      // The refresh has read the version and its pages but registered no job yet
+      await reading.promise;
+      const removed = manager.removeVersion("React", "19.0");
+      await new Promise((resolve) => setImmediate(resolve));
+      gate.resolve();
+      const jobId = await refreshed;
+      await removed;
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
     it("holds an enqueue of the same version until the removal is done", async () => {
       await seedVersion("React", "19.0", VersionStatus.COMPLETED);
       const gate = deferred();

@@ -317,81 +317,94 @@ export class PipelineManager implements IPipeline {
     enqueue: EnqueueScrapeOptions = {},
   ): Promise<string> {
     const normalizedVersion = normalizeVersionLabel(version);
-    // A removal of this version cannot run between the claim below and the job
-    // it registers, so it either sees the job and cancels it, or runs first.
-    return this.withVersionLock(library, normalizedVersion, async () => {
-      // Claim the target before touching any job, so a rejected request cannot
-      // cancel the job it conflicts with. Appending clears nothing, so it is not an
-      // overwrite and may write into an existing version.
-      const requested = enqueue.onExisting ?? "reject-version";
-      const policy =
-        options.clean === false && requested === "reject-version" ? "replace" : requested;
-      const claimed = await this.store.claimVersion(library, normalizedVersion, policy);
+    // A removal of this version cannot run between the claim and the job it
+    // registers, so it either sees the job and cancels it, or runs first.
+    return this.withVersionLock(library, normalizedVersion, () =>
+      this.registerScrapeJob(library, normalizedVersion, options, enqueue),
+    );
+  }
 
-      // Abort any existing QUEUED or RUNNING job for the same library+version
-      const label = formatVersionLabel(claimed.library, normalizedVersion);
-      for (const job of this.activeJobsFor(library, normalizedVersion)) {
-        logger.info(`🚫 Aborting duplicate job for ${label}: ${job.id}`);
-        await this.cancelJob(job.id);
-      }
+  /**
+   * Claims the library version and registers a job for it. Callers hold the
+   * version's lock (see {@link withVersionLock}).
+   */
+  private async registerScrapeJob(
+    library: string,
+    normalizedVersion: string,
+    options: ScraperOptions,
+    enqueue: EnqueueScrapeOptions,
+  ): Promise<string> {
+    // Claim the target before touching any job, so a rejected request cannot
+    // cancel the job it conflicts with. Appending clears nothing, so it is not an
+    // overwrite and may write into an existing version.
+    const requested = enqueue.onExisting ?? "reject-version";
+    const policy =
+      options.clean === false && requested === "reject-version" ? "replace" : requested;
+    const claimed = await this.store.claimVersion(library, normalizedVersion, policy);
 
-      const normalizedOptions = this.normalizeScraperOptions(options);
+    // Abort any existing QUEUED or RUNNING job for the same library+version
+    const label = formatVersionLabel(claimed.library, normalizedVersion);
+    for (const job of this.activeJobsFor(library, normalizedVersion)) {
+      logger.info(`🚫 Aborting duplicate job for ${label}: ${job.id}`);
+      await this.cancelJob(job.id);
+    }
 
-      const jobId = uuidv4();
-      const abortController = new AbortController();
-      let resolveCompletion!: () => void;
-      let rejectCompletion!: (reason?: unknown) => void;
+    const normalizedOptions = this.normalizeScraperOptions(options);
 
-      const completionPromise = new Promise<void>((resolve, reject) => {
-        resolveCompletion = resolve;
-        rejectCompletion = reject;
-      });
-      // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
-      completionPromise.catch(() => {});
+    const jobId = uuidv4();
+    const abortController = new AbortController();
+    let resolveCompletion!: () => void;
+    let rejectCompletion!: (reason?: unknown) => void;
 
-      const job: InternalPipelineJob = {
-        id: jobId,
-        // The stored display name, not the caller's casing
-        library: claimed.library,
-        version: normalizedVersion,
-        versionId: claimed.versionId,
-        status: PipelineJobStatus.QUEUED,
-        progress: null,
-        error: null,
-        createdAt: new Date(),
-        startedAt: null,
-        finishedAt: null,
-        abortController,
-        completionPromise,
-        resolveCompletion,
-        rejectCompletion,
-        // Database fields (single source of truth)
-        // Will be populated by updateJobStatus
-        progressPages: 0,
-        progressPagesIndexed: 0,
-        progressMaxPages: 0,
-        errorMessage: null,
-        updatedAt: new Date(),
-        sourceUrl: normalizedOptions.url,
-        scraperOptions: normalizedOptions,
-      };
-
-      this.jobMap.set(jobId, job);
-      this.jobQueue.push(jobId);
-      logger.info(`📝 Job enqueued: ${jobId} for ${label}`);
-
-      // Update database status to QUEUED
-      await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
-
-      // Trigger processing if manager is running
-      if (this.isRunning) {
-        this._processQueue().catch((error) => {
-          logger.error(`❌ Error in processQueue during enqueue: ${error}`);
-        });
-      }
-
-      return jobId;
+    const completionPromise = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
     });
+    // Prevent unhandled rejection warnings if rejection occurs before consumers attach handlers
+    completionPromise.catch(() => {});
+
+    const job: InternalPipelineJob = {
+      id: jobId,
+      // The stored display name, not the caller's casing
+      library: claimed.library,
+      version: normalizedVersion,
+      versionId: claimed.versionId,
+      status: PipelineJobStatus.QUEUED,
+      progress: null,
+      error: null,
+      createdAt: new Date(),
+      startedAt: null,
+      finishedAt: null,
+      abortController,
+      completionPromise,
+      resolveCompletion,
+      rejectCompletion,
+      // Database fields (single source of truth)
+      // Will be populated by updateJobStatus
+      progressPages: 0,
+      progressPagesIndexed: 0,
+      progressMaxPages: 0,
+      errorMessage: null,
+      updatedAt: new Date(),
+      sourceUrl: normalizedOptions.url,
+      scraperOptions: normalizedOptions,
+    };
+
+    this.jobMap.set(jobId, job);
+    this.jobQueue.push(jobId);
+    logger.info(`📝 Job enqueued: ${jobId} for ${label}`);
+
+    // Update database status to QUEUED
+    await this.updateJobStatus(job, PipelineJobStatus.QUEUED);
+
+    // Trigger processing if manager is running
+    if (this.isRunning) {
+      this._processQueue().catch((error) => {
+        logger.error(`❌ Error in processQueue during enqueue: ${error}`);
+      });
+    }
+
+    return jobId;
   }
 
   /**
@@ -408,95 +421,99 @@ export class PipelineManager implements IPipeline {
   ): Promise<string> {
     const normalizedVersion = normalizeVersionLabel(version);
 
-    try {
-      // Look the version up without creating it: refreshing an unknown library
-      // or version fails with a not-found error and leaves nothing behind. From
-      // here on, the library is named as it is stored.
-      const { versionId, library: displayName } = await this.store.requireVersion({
-        library,
-        version: normalizedVersion,
-      });
-      const label = formatVersionLabel(displayName, normalizedVersion);
+    // Held from the first read until the job is registered, so a removal of
+    // this version runs before the refresh reads it or after its job exists
+    return this.withVersionLock(library, normalizedVersion, async () => {
+      try {
+        // Look the version up without creating it: refreshing an unknown library
+        // or version fails with a not-found error and leaves nothing behind. From
+        // here on, the library is named as it is stored.
+        const { versionId, library: displayName } = await this.store.requireVersion({
+          library,
+          version: normalizedVersion,
+        });
+        const label = formatVersionLabel(displayName, normalizedVersion);
 
-      // Check the version's status to detect incomplete scrapes
-      const versionInfo = await this.store.getVersionById(versionId);
-      if (!versionInfo) {
-        throw new Error(`Version ID ${versionId} not found`);
+        // Check the version's status to detect incomplete scrapes
+        const versionInfo = await this.store.getVersionById(versionId);
+        if (!versionInfo) {
+          throw new Error(`Version ID ${versionId} not found`);
+        }
+
+        // If the version is not completed, it means the previous scrape was interrupted
+        // or failed. In this case, perform a full re-scrape instead of a refresh.
+        if (versionInfo && versionInfo.status !== VersionStatus.COMPLETED) {
+          logger.info(
+            `⚠️  Version ${label} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
+          );
+          return this.reindexWithStoredOptions(displayName, normalizedVersion, options);
+        }
+
+        // Get all pages for this version with their ETags and depths
+        const pages = await this.store.getPagesByVersionId(versionId);
+
+        // Debug: Log first page to see what data we're getting
+        if (pages.length > 0) {
+          logger.debug(
+            `Sample page data: url=${pages[0].url}, etag=${pages[0].etag}, depth=${pages[0].depth}`,
+          );
+        }
+
+        if (pages.length === 0) {
+          throw new Error(
+            `No pages found for ${label}. Use scrape_docs to index it first.`,
+          );
+        }
+
+        logger.info(`🔄 Preparing refresh job for ${label} with ${pages.length} page(s)`);
+
+        // Build initialQueue from pages with original depth values.
+        //
+        // Requests go to where the content actually came from, which differs from
+        // the page's URL when a representation lives elsewhere — a published
+        // Markdown file recorded under the page it represents. Asking for the URL
+        // instead would retrieve a different representation, and would send the
+        // stored validator to a resource that never issued it. `content_url` is
+        // NULL for pages retrieved from their own address, including every row
+        // written before representations were resolved to a shared identity.
+        const initialQueue = pages.map((page) => ({
+          url: page.content_url ?? page.url,
+          depth: page.depth ?? 0, // Use original depth, fallback to 0 for old data
+          pageId: page.id,
+          etag: page.etag,
+          // Carried so a withdrawn representation does not read as a withdrawn
+          // page: the scraper asks this address before deleting anything.
+          identityUrl: page.content_url ? page.url : undefined,
+        }));
+        // Get stored scraper options to retrieve the source URL and other options
+        const storedOptions = await this.store.getScraperOptions(versionId);
+
+        // Build scraper options with initialQueue and isRefresh flag
+        const scraperOptions = {
+          url: storedOptions?.sourceUrl || pages[0].url, // Required but not used when initialQueue is set
+          library: displayName,
+          version: normalizedVersion,
+          ...(storedOptions?.options || {}), // Include stored options if available (spread first)
+          ...(options?.preserveHashes !== undefined
+            ? { preserveHashes: options.preserveHashes }
+            : {}),
+          // Override with refresh-specific options (these must come after the spread)
+          initialQueue, // Pre-populated queue with existing pages
+          isRefresh: true, // Mark this as a refresh operation
+        };
+
+        // Enqueue as a standard scrape job with the initialQueue
+        logger.info(`📝 Enqueueing refresh job for ${label}`);
+        // A refresh acts on an existing version by definition, so it replaces
+        // rather than being rejected; isRefresh keeps the worker from clearing it.
+        return this.registerScrapeJob(displayName, normalizedVersion, scraperOptions, {
+          onExisting: "replace",
+        });
+      } catch (error) {
+        logger.error(`❌ Failed to enqueue refresh job: ${error}`);
+        throw error;
       }
-
-      // If the version is not completed, it means the previous scrape was interrupted
-      // or failed. In this case, perform a full re-scrape instead of a refresh.
-      if (versionInfo && versionInfo.status !== VersionStatus.COMPLETED) {
-        logger.info(
-          `⚠️  Version ${label} has status "${versionInfo.status}". Performing full re-scrape instead of refresh.`,
-        );
-        return this.enqueueJobWithStoredOptions(displayName, normalizedVersion, options);
-      }
-
-      // Get all pages for this version with their ETags and depths
-      const pages = await this.store.getPagesByVersionId(versionId);
-
-      // Debug: Log first page to see what data we're getting
-      if (pages.length > 0) {
-        logger.debug(
-          `Sample page data: url=${pages[0].url}, etag=${pages[0].etag}, depth=${pages[0].depth}`,
-        );
-      }
-
-      if (pages.length === 0) {
-        throw new Error(
-          `No pages found for ${label}. Use scrape_docs to index it first.`,
-        );
-      }
-
-      logger.info(`🔄 Preparing refresh job for ${label} with ${pages.length} page(s)`);
-
-      // Build initialQueue from pages with original depth values.
-      //
-      // Requests go to where the content actually came from, which differs from
-      // the page's URL when a representation lives elsewhere — a published
-      // Markdown file recorded under the page it represents. Asking for the URL
-      // instead would retrieve a different representation, and would send the
-      // stored validator to a resource that never issued it. `content_url` is
-      // NULL for pages retrieved from their own address, including every row
-      // written before representations were resolved to a shared identity.
-      const initialQueue = pages.map((page) => ({
-        url: page.content_url ?? page.url,
-        depth: page.depth ?? 0, // Use original depth, fallback to 0 for old data
-        pageId: page.id,
-        etag: page.etag,
-        // Carried so a withdrawn representation does not read as a withdrawn
-        // page: the scraper asks this address before deleting anything.
-        identityUrl: page.content_url ? page.url : undefined,
-      }));
-      // Get stored scraper options to retrieve the source URL and other options
-      const storedOptions = await this.store.getScraperOptions(versionId);
-
-      // Build scraper options with initialQueue and isRefresh flag
-      const scraperOptions = {
-        url: storedOptions?.sourceUrl || pages[0].url, // Required but not used when initialQueue is set
-        library: displayName,
-        version: normalizedVersion,
-        ...(storedOptions?.options || {}), // Include stored options if available (spread first)
-        ...(options?.preserveHashes !== undefined
-          ? { preserveHashes: options.preserveHashes }
-          : {}),
-        // Override with refresh-specific options (these must come after the spread)
-        initialQueue, // Pre-populated queue with existing pages
-        isRefresh: true, // Mark this as a refresh operation
-      };
-
-      // Enqueue as a standard scrape job with the initialQueue
-      logger.info(`📝 Enqueueing refresh job for ${label}`);
-      // A refresh acts on an existing version by definition, so it replaces
-      // rather than being rejected; isRefresh keeps the worker from clearing it.
-      return this.enqueueScrapeJob(displayName, normalizedVersion, scraperOptions, {
-        onExisting: "replace",
-      });
-    } catch (error) {
-      logger.error(`❌ Failed to enqueue refresh job: ${error}`);
-      throw error;
-    }
+    });
   }
 
   /**
@@ -509,7 +526,20 @@ export class PipelineManager implements IPipeline {
     options?: Pick<ScraperOptions, "preserveHashes">,
   ): Promise<string> {
     const normalizedVersion = normalizeVersionLabel(version);
+    return this.withVersionLock(library, normalizedVersion, () =>
+      this.reindexWithStoredOptions(library, normalizedVersion, options),
+    );
+  }
 
+  /**
+   * Re-indexes a version with its stored options. Callers hold the version's
+   * lock (see {@link withVersionLock}).
+   */
+  private async reindexWithStoredOptions(
+    library: string,
+    normalizedVersion: string,
+    options?: Pick<ScraperOptions, "preserveHashes">,
+  ): Promise<string> {
     try {
       // Get the version ID to retrieve stored options, without creating it
       const { versionId, library: displayName } = await this.store.requireVersion({
@@ -539,7 +569,7 @@ export class PipelineManager implements IPipeline {
       logger.info(`🔄 Re-indexing ${label} with stored options from ${stored.sourceUrl}`);
 
       // Re-indexes an existing version (refresh fall-back, recovery), so it replaces
-      return this.enqueueScrapeJob(displayName, normalizedVersion, completeOptions, {
+      return this.registerScrapeJob(displayName, normalizedVersion, completeOptions, {
         onExisting: "replace",
       });
     } catch (error) {

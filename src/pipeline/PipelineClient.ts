@@ -133,10 +133,10 @@ export class PipelineClient implements IPipeline {
     }
   }
 
-  async getJob(jobId: string): Promise<PipelineJob | undefined> {
+  async getJob(jobId: string, signal?: AbortSignal): Promise<PipelineJob | undefined> {
     try {
       // superjson automatically deserializes Date objects
-      return await this.client.getJob.query({ id: jobId });
+      return await this.client.getJob.query({ id: jobId }, { signal });
     } catch (error) {
       throw new Error(
         `Failed to get job ${jobId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -234,9 +234,30 @@ export class PipelineClient implements IPipeline {
         }
       });
 
+      // A lookup the worker never answers fails when the give-up window ends,
+      // so a stalled request cannot keep the wait open
+      const lookUp = async () => {
+        const deadline = new AbortController();
+        const timer = setTimeout(
+          () => deadline.abort(),
+          lastAnswerAt + JOB_LOOKUP_GIVE_UP_MS - Date.now(),
+        );
+        try {
+          return await this.getJob(jobId, deadline.signal);
+        } catch (error) {
+          throw deadline.signal.aborted
+            ? new Error(
+                `Failed to get job ${jobId}: the worker did not answer for ${JOB_LOOKUP_GIVE_UP_MS / 1000} s`,
+              )
+            : error;
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+
       const poll = async () => {
         try {
-          const job = await this.getJob(jobId);
+          const job = await lookUp();
           lastAnswerAt = Date.now();
           if (!job) {
             // Clearing finished jobs or restarting the worker drops the record

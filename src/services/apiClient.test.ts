@@ -1,6 +1,9 @@
+import { once } from "node:events";
+import { createServer, type Socket } from "node:net";
 import { createWSClient } from "@trpc/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createApiLinks, toWebSocketUrl } from "./apiClient";
+import { listenOnFreePort } from "../../test/test-helpers";
+import { createApiClient, createApiLinks, toWebSocketUrl } from "./apiClient";
 
 vi.mock("@trpc/client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@trpc/client")>();
@@ -40,5 +43,31 @@ describe("createApiLinks", () => {
 
     expect(createWSClient).not.toHaveBeenCalled();
     expect(links).toHaveLength(1);
+  });
+});
+
+describe("createApiClient", () => {
+  // PipelineClient bounds a job lookup the worker never answers by aborting it
+  it("rejects a query when its signal aborts while the server stays silent", async () => {
+    const sockets = new Set<Socket>();
+    const silent = createServer((socket) => sockets.add(socket));
+    const port = await listenOnFreePort(silent);
+    const { api, close } = createApiClient(`http://127.0.0.1:${port}/api`, {
+      subscriptions: false,
+    });
+    const controller = new AbortController();
+    try {
+      const connected = once(silent, "connection");
+      const lookup = api.getJob.query({ id: "job-1" }, { signal: controller.signal });
+      await connected;
+
+      controller.abort();
+
+      await expect(lookup).rejects.toThrow();
+    } finally {
+      close();
+      for (const socket of sockets) socket.destroy();
+      await new Promise<void>((resolve) => silent.close(() => resolve()));
+    }
   });
 });

@@ -199,8 +199,10 @@ periodic lookups) and reads the relay's state at each scheduling:
   connects.
 
 Giving up changes from "five failed lookups in a row" to "no successful lookup for
-`JOB_LOOKUP_GIVE_UP_MS` (30 s)", because a count means a different duration at each interval. The
-immediate lookup also covers a job that finished before the relay connected.
+`JOB_LOOKUP_GIVE_UP_MS` (30 s)", because a count means a different duration at each interval. A lookup
+still unanswered when that window ends is aborted, so a request the worker never answers counts as a
+failed lookup instead of holding the wait open. The immediate lookup also covers a job that finished
+before the relay connected.
 
 Alternative considered: *re-check pending waits when the subscription restarts and skip periodic
 lookups while live.* Needs a callback into every wait and still misses an event lost without a visible
@@ -247,7 +249,9 @@ The cancel and the removal happen in the pipeline that runs the jobs: `IPipeline
 cancels a queued or running job for the version, waits until it has ended, and removes the version.
 `PipelineManager` runs it under a per-version lock that `enqueueScrapeJob()` also takes around its claim
 of the version and the job it registers, so an enqueue racing a removal cannot register its job after the
-removal looked for jobs and then write the deleted version back. `PipelineClient.removeVersion()` calls the
+removal looked for jobs and then write the deleted version back. A refresh, and a re-index with stored
+options, hold the same lock from their first read of the version until their job is registered, so a
+removal runs before they read it or after their job exists. `PipelineClient.removeVersion()` calls the
 worker's `removeDocs`, so a coordinator's removal reaches that lock on the worker.
 
 Visible CLI changes: an unknown library now fails with "not found" (`RemoveTool` checks it exists)
