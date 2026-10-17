@@ -16,7 +16,8 @@
 
 ## 4. Read-only servers
 
-- [x] 4.1 `mcp` and the default command pass `"leave"` when started read-only. Verify with an MCP stdio E2E: `mcp --read-only` started on a store with a RUNNING version leaves it RUNNING.
+- [x] 4.1 `mcp` and the default command pass `"leave"` when started read-only. Verify with an MCP stdio E2E: each started read-only on a store with a RUNNING version leaves it RUNNING.
+- [x] 4.2 Verify the whole hand-off with a crash: kill a worker mid-scrape, run a local `scrape` on the store, and check that the next worker finishes the crashed job (`test/job-recovery-e2e.test.ts`).
 
 ## 5. Docs
 

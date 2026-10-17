@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,9 +11,9 @@ import { VersionStatus } from "../src/store/types";
 import { loadConfig } from "../src/utils/config";
 import {
   createTcpProxy,
-  getCliCommand,
   getFreePort,
   HTML_FIXTURE_URL,
+  runCli,
   startRunningSlowJob,
   startSlowSite,
   startWorker,
@@ -29,42 +29,6 @@ describe("CLI E2E", () => {
   /** The status and progress lines a scrape or refresh printed. */
   function progressLines(output: string): string[] {
     return output.split("\n").filter((line) => /[🚀📄] (Scraping|Refreshing) /u.test(line));
-  }
-
-  /** Run the CLI; with `timeoutMs`, kill it after that long and report exit code 1. */
-  async function runCli(
-    args: string[],
-    timeoutMs?: number,
-  ): Promise<{ code: number; stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      const { cmd, args: cliArgs } = getCliCommand();
-      const proc = spawn(cmd, [...cliArgs, ...args], {
-        cwd: projectRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, VITEST_WORKER_ID: undefined },
-        timeout: timeoutMs,
-        killSignal: "SIGKILL",
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        resolve({ code: code ?? 1, stdout, stderr });
-      });
-
-      proc.on("error", (err) => {
-        reject(err);
-      });
-    });
   }
 
   it("should show help with --help", async () => {

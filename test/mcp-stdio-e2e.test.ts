@@ -277,7 +277,13 @@ describe("MCP stdio server E2E", () => {
     expect(textOf(second)).toContain("replace: true");
   }, 30000);
 
-  it("leaves a version another process is running alone in read-only mode", async () => {
+  it.each([
+    { command: "mcp", cliArgs: ["mcp", "--protocol", "stdio", "--read-only"] },
+    // Without a terminal, the default command serves MCP over stdio
+    { command: "the default command", cliArgs: ["--read-only"] },
+  ])("$command leaves a version another process is running alone in read-only mode", async ({
+    cliArgs,
+  }) => {
     const dir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-read-only-"));
     storeDir = dir;
     const statusOfBusy = () =>
@@ -288,12 +294,10 @@ describe("MCP stdio server E2E", () => {
       await store.updateVersionStatus(versionId, VersionStatus.RUNNING);
     });
 
-    transport = createStdioTransport({ DOCS_MCP_STORE_PATH: dir, DOCS_MCP_EMBEDDING_MODEL: "" }, [
-      "mcp",
-      "--protocol",
-      "stdio",
-      "--read-only",
-    ]);
+    transport = createStdioTransport(
+      { DOCS_MCP_STORE_PATH: dir, DOCS_MCP_EMBEDDING_MODEL: "" },
+      cliArgs,
+    );
     client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
     // Connected means the server has opened the store and started up
     await client.connect(transport);
