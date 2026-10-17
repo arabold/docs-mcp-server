@@ -58,7 +58,7 @@ When the PipelineManager starts set to recover interrupted jobs, it SHALL recove
 
 ### Requirement: One-Shot Commands Leave Interrupted Jobs Alone
 
-A local one-shot command that runs a job (`scrape`, `refresh`) SHALL start its pipeline set to leave interrupted jobs alone: it SHALL NOT change the status of any version other than the one its own job works on, and SHALL NOT recover other versions. The process that hosts the store handles interrupted jobs.
+A local one-shot command that runs a job (`scrape`, `refresh`), and a server started read-only, SHALL start its pipeline set to leave interrupted jobs alone: it SHALL NOT change the status of any version other than one its own job works on, and SHALL NOT recover other versions. The process that runs jobs on the store handles interrupted ones.
 
 #### Scenario: CLI scrape while a server runs a job on the same store
 
@@ -73,8 +73,14 @@ A local one-shot command that runs a job (`scrape`, `refresh`) SHALL start its p
 - **THEN** the interrupted version's status SHALL still be QUEUED
 - **AND** the version SHALL NOT be recovered by the command
 
+#### Scenario: Read-only server beside a worker
+
+- **GIVEN** a version has status RUNNING because a worker on the same store is scraping it
+- **WHEN** `mcp` or the default command starts read-only on that store
+- **THEN** the version's status SHALL still be RUNNING
+
 #### Scenario: Server commands still handle interrupted jobs
 
 - **GIVEN** a version has status RUNNING from an interrupted session
-- **WHEN** a server command (`worker`, `web`, `mcp`, or the default command) starts on the store
+- **WHEN** a server command (`worker`, `web`, `mcp`, or the default command) starts on the store, not read-only
 - **THEN** it SHALL recover the version when started with `--resume` (`worker` and the default command offer it), and otherwise mark it FAILED with "Job interrupted"

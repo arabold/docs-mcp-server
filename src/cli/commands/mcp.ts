@@ -115,7 +115,9 @@ export function createMcpCommand(cli: Argv) {
           appConfig,
           eventBus,
           serverUrl,
-          jobs: { interruptedJobs: "fail" }, // MCP command doesn't support job recovery
+          // No job recovery here; a read-only server runs no jobs, so it leaves
+          // interrupted ones to the process that does
+          jobs: { interruptedJobs: appConfig.app.readOnly ? "leave" : "fail" },
           onEmbeddingModelChange: handleEmbeddingModelChange,
         });
         // Registered first, so shutdown closes it even when a server fails to start

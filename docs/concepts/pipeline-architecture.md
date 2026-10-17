@@ -81,7 +81,7 @@ interface OpenBackendOptions {
 - `jobs: { interruptedJobs }` locally → PipelineManager, started; `interruptedJobs` decides what it does with the versions an earlier run left RUNNING or QUEUED:
   - `recover`: runs them again as refresh jobs (`worker`, and the default command with `--resume`)
   - `fail`: marks them FAILED with "Job interrupted", so users can retry them (the other server commands)
-  - `leave`: changes nothing (`scrape`, `refresh`). These commands run only their own job; a server on the same store may be running the others
+  - `leave`: changes nothing (`scrape`, `refresh`, and `mcp` or the default command started read-only). These run only their own job, or none; a server on the same store may be running the others
 
 ### PipelineManager
 

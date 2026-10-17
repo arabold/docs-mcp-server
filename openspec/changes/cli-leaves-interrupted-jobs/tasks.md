@@ -14,6 +14,10 @@
 
 - [x] 3.1 Add a CLI E2E: seed a RUNNING version from another process, run a local `scrape` of a different library, and verify the seeded version is still RUNNING; then verify a `refresh` leaves it too.
 
-## 4. Docs
+## 4. Read-only servers
 
-- [x] 4.1 Update ARCHITECTURE.md, `docs/concepts/pipeline-architecture.md` and the AGENTS.md test inventory; verify no `recoverJobs` remains outside archived changes (`grep -rn recoverJobs src test tests docs ARCHITECTURE.md`).
+- [x] 4.1 `mcp` and the default command pass `"leave"` when started read-only. Verify with an MCP stdio E2E: `mcp --read-only` started on a store with a RUNNING version leaves it RUNNING.
+
+## 5. Docs
+
+- [x] 5.1 Update ARCHITECTURE.md, `docs/concepts/pipeline-architecture.md` and the AGENTS.md test inventory; verify no `recoverJobs` remains outside archived changes (`grep -rn recoverJobs src test tests docs ARCHITECTURE.md`).
