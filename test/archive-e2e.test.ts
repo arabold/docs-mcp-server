@@ -8,6 +8,7 @@
 
 import { realpathSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
 import { PipelineJobStatus } from "../src/pipeline/types";
 import { usePipelineHarness } from "./pipeline-harness";
@@ -28,9 +29,11 @@ const ZIP_MEMBERS = [
   "xml.xml",
 ];
 
+/** The `file://` URL of `archive`, percent-encoded the way stored URLs are. */
+const archiveUrl = (archive: string) => pathToFileURL(path.join(FIXTURES_DIR, archive)).href;
+
 /** The URL a member of `archive` is stored under. */
-const memberUrl = (archive: string, member: string) =>
-  `file://${FIXTURES_DIR}/${archive}/${member}`;
+const memberUrl = (archive: string, member: string) => `${archiveUrl(archive)}/${member}`;
 
 describe("Local archive E2E", () => {
   const h = usePipelineHarness({
@@ -45,7 +48,7 @@ describe("Local archive E2E", () => {
   });
 
   it("indexes the members of a ZIP archive", async () => {
-    const job = await h.scrape({ url: `file://${FIXTURES_DIR}/archive.zip` });
+    const job = await h.scrape({ url: archiveUrl("archive.zip") });
 
     expect(job.status, job.errorMessage ?? undefined).toBe(PipelineJobStatus.COMPLETED);
     expect(await h.storedUrls()).toEqual(
@@ -56,7 +59,7 @@ describe("Local archive E2E", () => {
   });
 
   it.each(["archive.tar", "archive.tgz"])("indexes the members of %s", async (archive) => {
-    const job = await h.scrape({ url: `file://${FIXTURES_DIR}/${archive}` });
+    const job = await h.scrape({ url: archiveUrl(archive) });
 
     expect(job.status, job.errorMessage ?? undefined).toBe(PipelineJobStatus.COMPLETED);
     expect(await h.storedUrls()).toEqual([
