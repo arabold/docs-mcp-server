@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
@@ -117,6 +118,55 @@ function createScrapeResult(
     etag: options?.etag,
     lastModified: options?.lastModified,
   } satisfies ScrapeResult;
+}
+
+/**
+ * Runs `action` and returns its result together with the query plan of the
+ * first statement it ran whose SQL contains `sqlFragment`, bound to the same
+ * parameters. Throws when no such statement ran.
+ */
+async function queryPlanOf<T>(
+  store: DocumentStore,
+  sqlFragment: string,
+  action: () => Promise<T>,
+): Promise<{ result: T; plan: string[] }> {
+  // @ts-expect-error Accessing private property for testing
+  const db: DatabaseType = store.db;
+  const statementPrototype: Statement = Object.getPrototypeOf(db.prepare("SELECT 1"));
+  const all = vi.spyOn(statementPrototype, "all");
+  let result: T;
+  let captured: { source: string; params: unknown[] } | undefined;
+  try {
+    result = await action();
+    const statements = all.mock.contexts as Statement[];
+    const call = statements.findIndex((statement) =>
+      statement.source.includes(sqlFragment),
+    );
+    if (call >= 0) {
+      captured = { source: statements[call].source, params: all.mock.calls[call] };
+    }
+  } finally {
+    all.mockRestore();
+  }
+  if (!captured) {
+    throw new Error(`No statement containing "${sqlFragment}" ran`);
+  }
+  const plan = db
+    .prepare(`EXPLAIN QUERY PLAN ${captured.source}`)
+    .all(...captured.params) as { detail: string }[];
+  return { result, plan: plan.map((row) => row.detail) };
+}
+
+/**
+ * Asserts that a full-text plan filters by version from the covering indexes
+ * before it reads any document, and that the match runs once rather than once
+ * per chunk id (`0:=M` means SQLite handed the id list to FTS5).
+ */
+function expectVersionFilteredFullTextPlan(plan: string[]): void {
+  expect(plan).toContainEqual(expect.stringMatching(/^SCAN f VIRTUAL TABLE INDEX 0:M\d/));
+  expect(plan).toContain(
+    "SEARCH vd USING COVERING INDEX idx_documents_sort_order (page_id=?)",
+  );
 }
 
 /**
@@ -346,6 +396,43 @@ describe("DocumentStore - With Embeddings", () => {
       });
       // Window bounds are present and correctly ordered.
       expect(history.since <= history.until).toBe(true);
+    });
+
+    it("counts a page's chunks on the day the page was first indexed", async () => {
+      const page = ["Page", "https://example.com/page"] as const;
+      await store.addDocuments(
+        "activitylib",
+        "1.0.0",
+        1,
+        createScrapeResult(...page, "v1"),
+      );
+      // @ts-expect-error Accessing private property for testing
+      store.db.prepare("UPDATE pages SET created_at = datetime('now', '-3 days')").run();
+      // A refresh keeps the page row but replaces its chunks.
+      await store.addDocuments(
+        "activitylib",
+        "1.0.0",
+        1,
+        createScrapeResult(...page, "v2"),
+      );
+
+      const history = await store.getActivityHistory(7);
+
+      expect(history.days.at(-4)).toMatchObject({ pages: 1, chunks: 1 });
+      expect(history.days.at(-1)).toMatchObject({ pages: 0, chunks: 0 });
+    });
+
+    it("counts activity through indexes instead of scanning pages or documents", async () => {
+      const { plan } = await queryPlanOf(store, "WITH RECURSIVE calendar", () =>
+        store.getActivityHistory(90),
+      );
+
+      expect(plan).toContain(
+        "SEARCH p USING COVERING INDEX idx_pages_created_at (created_at>?)",
+      );
+      expect(plan).toContain(
+        "SEARCH c USING COVERING INDEX idx_documents_sort_order (page_id=?)",
+      );
     });
 
     it("clamps the activity window and zero-fills empty stores", async () => {
@@ -714,6 +801,48 @@ describe("DocumentStore - With Embeddings", () => {
         } else {
           process.env.OPENAI_API_KEY = originalApiKey;
         }
+      }
+    });
+
+    it("filters full-text hits by version before reading other libraries' rows", async () => {
+      vi.stubEnv("OPENAI_API_KEY", "test-key-for-fts-filter");
+      try {
+        await store.shutdown();
+        store = new DocumentStore(":memory:", appConfig);
+        await store.initialize();
+
+        await store.addDocuments(
+          "searchtest",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "JavaScript Programming Guide",
+            "https://example.com/js-guide",
+            "JavaScript programming tutorial with code examples and functions",
+          ),
+        );
+        await store.addDocuments(
+          "otherlib",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Other JavaScript Guide",
+            "https://other.example.com/js-guide",
+            "JavaScript programming tutorial from another library",
+          ),
+        );
+
+        // Capturing the hybrid query's own CTE proves the hybrid path ran.
+        const { result, plan } = await queryPlanOf(
+          store,
+          "fts_scores AS MATERIALIZED",
+          () => store.findByContent("searchtest", "1.0.0", "JavaScript programming", 10),
+        );
+
+        expect(result.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
+        expectVersionFilteredFullTextPlan(plan);
+      } finally {
+        vi.unstubAllEnvs();
       }
     });
   });
@@ -1294,6 +1423,26 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       expect(results[0]).toHaveProperty("fts_rank");
       // Should NOT have vector rank since vectorization is disabled
       expect((results[0] as any).vec_rank).toBeUndefined();
+    });
+
+    it("filters full-text hits by version before reading other libraries' rows", async () => {
+      await store.addDocuments(
+        "otherlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Other Hooks Guide",
+          "https://other.example.com/react-hooks",
+          "React hooks from another library.",
+        ),
+      );
+
+      const { result, plan } = await queryPlanOf(store, "documents_fts MATCH", () =>
+        store.findByContent("testlib", "1.0.0", "React hooks", 5),
+      );
+
+      expect(result.map((r) => r.url)).toEqual(["https://example.com/react-hooks"]);
+      expectVersionFilteredFullTextPlan(plan);
     });
 
     it("should handle various search queries correctly", async () => {
