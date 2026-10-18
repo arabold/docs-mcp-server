@@ -1,364 +1,43 @@
-# Telemetry Architecture
+# Telemetry
 
-The MCP Documentation Server implements privacy-first telemetry to understand usage patterns, monitor performance, and improve user experience. The system is designed with user privacy as the primary concern while providing valuable insights for product development.
+The server sends usage events to PostHog, so the maintainers can see which features are used and where they fail. Telemetry is on by default in release builds and can be turned off with one setting.
 
-## Core Principles
+## Turning Telemetry Off
 
-### Privacy First
+Any of these turns telemetry off:
 
-- **No Sensitive Data**: Never collects URLs, document content, search queries, or authentication tokens
-- **Metadata Only**: Tracks counts, durations, success/failure states, and performance metrics
-- **Data Sanitization**: Built-in utilities ensure no personally identifiable information is collected
-- **User Control**: Simple opt-out mechanisms via CLI flags and environment variables
+- the CLI flag `--no-telemetry` (or `--telemetry=false`), for one run;
+- the environment variable `DOCS_MCP_TELEMETRY=false`, or the generic `DOCS_MCP_APP_TELEMETRY_ENABLED=false`;
+- `app.telemetryEnabled: false` in the configuration file.
 
-### Minimal Performance Impact
+The CLI flag wins over the environment, and the environment over the configuration file; see [Configuration](../setup/configuration.md). With `--verbose`, the log states whether telemetry is on, and if it is off, whether that is the user's choice or a build without a PostHog key.
 
-- **Synchronous Design**: Simple, lightweight telemetry with minimal overhead
-- **Graceful Degradation**: System continues functioning normally when telemetry fails
-- **No Dependencies**: Core application never depends on telemetry functionality
-- **Installation ID Only**: Uses persistent UUID for consistent analytics without user tracking
+Only builds made with a `POSTHOG_API_KEY` send anything. The release workflow builds the npm package and the Docker image with the key. A build from source without it sends no events.
 
-### Simple Architecture
+## What Is Sent
 
-- **Direct Analytics**: Direct PostHog integration with installation ID as distinct user
-- **Global Context**: Application-level properties automatically included in all events
-- **Easy Integration**: Simple analytics interface for application components
+Every event carries an installation ID: a random UUID created on first run and kept in an `installation.id` file, so events from one installation can be grouped. It is random and not tied to any account. PostHog's GeoIP lookup is turned off.
 
-## System Architecture
+Each event also carries context about the running process:
 
-### Core Components
+- for a server: the app version, platform and Node.js version, the enabled services, whether authentication and read-only mode are on, and the embedding provider, model and dimensions;
+- for a CLI command: the app version, platform, Node.js version and command name.
 
-The telemetry system consists of three main components:
+The events are:
 
-**Analytics Layer** (`src/telemetry/analytics.ts`)
+- `app_started` and `app_shutdown`, when a server starts and stops. They carry the enabled services, the port, whether jobs run on a remote worker, the starting command, and whether the shutdown was clean.
+- `cli_command`, when a CLI command starts. It carries the command's options. For `scrape` and `fetch-url` that includes the URL; for `search`, the query; for the library commands, the library name and version. Header values passed with `--header` are not sent, only whether there were any.
+- `tool_used`, when an MCP client calls a tool. It carries the tool name and some of its arguments: library names and versions, the host name (not the full URL) for `scrape_docs` and `fetch_url`, and the first 100 characters of a `search_docs` query.
+- `pipeline_job_started`, `pipeline_job_completed` and `pipeline_job_failed`, for scrape and refresh jobs. They carry the job ID, the library name, whether a version was given, the page limit, the time spent waiting and running, the pages processed, and for a failed job its error message.
 
-- PostHog integration with privacy-optimized configuration
-- Event tracking with automatic global context inclusion
-- Installation ID as the distinct user identifier
-- Simple, focused API without unnecessary complexity
+Errors go to PostHog's error tracking with their message and stack trace: unhandled errors and promise rejections in a server, errors the HTTP server answers with an error response (with the method and route), and failures to store processed content (with the library, version, MIME type and content size).
 
-**PostHog Client** (`src/telemetry/postHogClient.ts`)
+No event carries document content. Error messages, and the URLs and queries listed above, are sent as they are.
 
-- Automatic camelCase to snake_case property conversion for PostHog compatibility
-- Privacy-optimized PostHog configuration
-- Error tracking with native PostHog exception capture
+## How It Works
 
-**Configuration Management** (`src/telemetry/TelemetryConfig.ts`)
+The `telemetry` object in [src/telemetry/telemetry.ts](../../src/telemetry/telemetry.ts) holds the process's context, adds it to each event, and hands the event to `PostHogClient` ([src/telemetry/postHogClient.ts](../../src/telemetry/postHogClient.ts)), which renames properties to snake_case and sends them in batches. The CLI middleware in [src/cli/index.ts](../../src/cli/index.ts) turns telemetry on or off for the run before any command starts. When it is off, every call returns at once.
 
-- Installation ID generation and persistence using UUID
-- Telemetry enable/disable controls via environment variables and CLI flags
-- Configuration validation and fallback handling
+The events come from the code they describe: CLI command handlers, the MCP tool handlers in [src/mcp/mcpServer.ts](../../src/mcp/mcpServer.ts), and the lifecycle and error handlers of `AppServer`. `TelemetryService` ([src/telemetry/TelemetryService.ts](../../src/telemetry/TelemetryService.ts)) reports pipeline jobs from the event bus. `openBackend()` starts it together with a local pipeline, so only the process that runs a job reports it: a coordinator that relays a remote worker's events reports none of them.
 
-**Service Layer** (`src/telemetry/TelemetryService.ts`)
-
-- Simple service factory providing session management
-- Unified interface for application components
-- Handles configuration and analytics integration
-
-**Data Sanitization** (`src/telemetry/sanitizer.ts`)
-
-- Essential privacy protection functions:
-  - Domain extraction without exposing paths
-  - Protocol detection for file and web URLs
-  - Error message sanitization removing sensitive information
-  - Search query analysis without storing content
-  - CLI flag extraction for usage patterns
-- User agent categorization for browser analytics
-- Content size categorization for processing insights
-
-### Session Management (Future Feature)
-
-> **Note**: Session management has been removed from the current implementation to simplify the telemetry system. The current system uses global context and event-specific properties for meaningful analytics without the complexity of session tracking.
-
-**Future Session Concepts** (Not Currently Implemented):
-
-Session tracking could be added in the future to provide:
-
-- User journey mapping across tool usage
-- Connection duration tracking for MCP clients
-- CLI command workflow analysis
-- Per-session error correlation
-
-**Current Approach**: Instead of sessions, the system uses:
-
-- **Installation ID**: Consistent user identification across application runs
-- **Global Context**: Application-level properties (version, platform, configuration)
-- **Event Properties**: Specific context per event (tool name, duration, success/failure)
-- **Correlation IDs**: For related events (e.g., pipeline job tracking)
-
-This provides 90% of the analytical value with 10% of the complexity.
-
-### Installation ID System
-
-The system uses a persistent installation identifier for consistent analytics:
-
-**Installation ID Generation** (`src/telemetry/TelemetryConfig.ts`)
-
-- Creates UUID-based installation identifier stored in `installation.id`
-- Uses `envPaths` standard for cross-platform directory location (`~/.local/share/docs-mcp-server/`)
-- Reads the store path from the shared configuration (YAML/env/CLI), including `DOCS_MCP_STORE_PATH` for containerized deployments
-- Provides consistent identification across application runs without user tracking
-- Falls back to new UUID generation if file is corrupted or missing
-
-## Integration Points
-
-### Application Server Integration
-
-The AppServer tracks application lifecycle events with global context:
-
-**Application Lifecycle Tracking**
-
-- Application startup/shutdown events with service configuration
-- Service availability and enabled features
-- Application-level error tracking and performance metrics
-
-**Integration Pattern**
-
-- AppServer emits application lifecycle events
-- Individual services create user interaction sessions when appropriate
-- Background services (worker, API) emit events within application context
-- No competing session creation between services
-
-### Service-Level Integration
-
-Services integrate telemetry through direct analytics usage:
-
-**Pipeline Jobs** (`src/telemetry/TelemetryService.ts`)
-
-- Pipeline job start, completion and failure events with global context
-- Reported only by the process that runs the job: a local backend starts the service with its pipeline, and a backend that uses a remote worker starts none, because the worker reports its own jobs
-- Performance metrics for background processing
-
-**MCP Service** (`src/services/mcpService.ts`)
-
-- Simple connection logging for client tracking
-- No session management - just basic connection events
-
-**Web Service** (`src/services/webService.ts`)
-
-- Direct event tracking for web interface usage
-- No session management needed
-
-## Data Collection Patterns
-
-### Event Types
-
-The system tracks essential event types for usage understanding:
-
-- `app_started` / `app_shutdown`: Application lifecycle tracking
-- `cli_command`: CLI command execution and outcomes
-- `tool_used`: Individual tool execution and outcomes
-- `pipeline_job_started`: Pipeline job initiation
-- `pipeline_job_completed`: Pipeline job successful completion
-- `pipeline_job_failed`: Pipeline job failures
-- **Error Tracking**: PostHog's native exception tracking with full stack traces and context
-
-### Global Context
-
-All events automatically include global application context:
-
-- Application version and platform information
-- Installation ID for consistent user identification
-- AI/embedding configuration
-- Service configuration and enabled features
-- Automatic timestamp inclusion
-
-Property names follow PostHog's snake_case convention through automatic conversion from internal camelCase names.
-
-## Telemetry Properties Reference
-
-The following table details all telemetry properties, their usage patterns, and tracking scope:
-
-| Property                               | Type     | Scope  | Events                 | Description                                             |
-| -------------------------------------- | -------- | ------ | ---------------------- | ------------------------------------------------------- |
-| **Global Context (Application-level)** |          |        |                        |                                                         |
-| `appVersion`                           | string   | Global | All events             | Application version from package.json                   |
-| `appPlatform`                          | string   | Global | All events             | Node.js platform (darwin, linux, win32)                 |
-| `appNodeVersion`                       | string   | Global | All events             | Node.js version                                         |
-| `appServicesEnabled`                   | string[] | Global | All events             | List of enabled services                                |
-| `appAuthEnabled`                       | boolean  | Global | All events             | Whether authentication is configured                    |
-| `appReadOnly`                          | boolean  | Global | All events             | Whether app is in read-only mode                        |
-| `aiEmbeddingProvider`                  | string   | Global | All events             | Provider: "openai", "google", "aws", "microsoft"        |
-| `aiEmbeddingModel`                     | string   | Global | All events             | Model name: "text-embedding-3-small", etc.              |
-| `aiEmbeddingDimensions`                | number   | Global | All events             | Embedding dimensions used                               |
-| **Event Context**                      |          |        |                        |                                                         |
-| `timestamp`                            | ISO8601  | Event  | All events             | Event timestamp (automatically added)                   |
-| **Application Configuration**          |          |        |                        |                                                         |
-| `services`                             | string[] | Event  | APP_STARTED            | List of enabled services                                |
-| `port`                                 | number   | Event  | APP_STARTED            | Server port number                                      |
-| `externalWorker`                       | boolean  | Event  | APP_STARTED            | Whether external worker is configured                   |
-| `cliCommand`                           | string   | Event  | APP_STARTED            | CLI command name (when started via CLI)                 |
-| `mcpProtocol`                          | enum     | Event  | APP_STARTED            | MCP protocol: "stdio" or "http" (when MCP enabled)      |
-| `mcpTransport`                         | enum     | Event  | APP_STARTED            | MCP transport: "sse" or "streamable" (when MCP enabled) |
-| **Application Lifecycle**              |          |        |                        |                                                         |
-| `graceful`                             | boolean  | Event  | APP_SHUTDOWN           | Whether shutdown was graceful                           |
-| **CLI Commands**                       |          |        |                        |                                                         |
-| `cliCommand`                           | string   | Event  | CLI_COMMAND            | CLI command name being executed                         |
-| `success`                              | boolean  | Event  | CLI_COMMAND            | Whether command execution succeeded                     |
-| `durationMs`                           | number   | Event  | CLI_COMMAND            | Command execution duration                              |
-| **Tool Usage**                         |          |        |                        |                                                         |
-| `tool`                                 | string   | Event  | TOOL_USED              | Tool name being executed                                |
-| `success`                              | boolean  | Event  | TOOL_USED              | Whether tool execution succeeded                        |
-| `durationMs`                           | number   | Event  | TOOL_USED              | Tool execution duration                                 |
-| **Pipeline Jobs**                      |          |        |                        |                                                         |
-| `jobId`                                | string   | Event  | PIPELINE*JOB*\*        | Anonymous job identifier for correlation                |
-| `library`                              | string   | Event  | PIPELINE*JOB*\*        | Library being processed                                 |
-| `hasVersion`                           | boolean  | Event  | PIPELINE*JOB*\*        | Whether library version was specified                   |
-| `maxPagesConfigured`                   | number   | Event  | PIPELINE*JOB*\*        | Maximum pages configured                                |
-| `queueWaitTimeMs`                      | number   | Event  | PIPELINE_JOB_STARTED   | Time job waited in queue before starting                |
-| `durationMs`                           | number   | Event  | PIPELINE_JOB_COMPLETED | Job execution duration                                  |
-| `durationMs`                           | number   | Event  | PIPELINE_JOB_FAILED    | Job execution duration before failure                   |
-| `pagesProcessed`                       | number   | Event  | PIPELINE_JOB_COMPLETED | Total pages successfully processed                      |
-| `pagesProcessed`                       | number   | Event  | PIPELINE_JOB_FAILED    | Pages processed before failure                          |
-| `throughputPagesPerSecond`             | number   | Event  | PIPELINE_JOB_COMPLETED | Processing throughput                                   |
-| `hasError`                             | boolean  | Event  | PIPELINE_JOB_FAILED    | Whether job had errors (always true)                    |
-| `errorMessage`                         | string   | Event  | PIPELINE_JOB_FAILED    | Sanitized error message                                 |
-
-### Property Scope Definitions
-
-- **Global**: Properties set once at application startup and included in all events automatically
-- **Session**: Properties tied to a user interaction session, managed by SessionTracker
-- **Event**: Properties specific to individual events, passed explicitly when tracking
-
-### Tracking Pattern Summary
-
-**Global Context (automatic inclusion):**
-
-- Application metadata: `appVersion`, `appPlatform`, `appAuthEnabled`, `appReadOnly`
-- AI/Embedding configuration: `aiEmbeddingProvider`, `aiEmbeddingModel`, `aiEmbeddingDimensions`
-
-**Application Configuration (APP_STARTED event):**
-
-- Service configuration: `services`, `port`, `externalWorker`
-- MCP configuration: `mcpProtocol`, `mcpTransport` (when MCP service enabled)
-- CLI context: `cliCommand` (when started via CLI)
-
-**Event-specific Properties:**
-
-- Passed explicitly when tracking specific events
-- Include performance metrics, outcomes, and event-specific context
-- `jobId` used for correlating related pipeline events across the pipeline lifecycle
-
-This approach minimizes event payload size while ensuring all relevant context is available for analysis and debugging.
-
-### Privacy-Safe Data Collection
-
-The system ensures privacy through essential data sanitization:
-
-**URL and Path Sanitization**
-
-- Hostname extraction without paths or parameters (`extractHostname`)
-- Protocol identification for file and web URLs (`extractProtocol`)
-- Error message sanitization removing sensitive paths and tokens (`sanitizeErrorMessage`)
-
-**Error Information**
-
-- **Native Error Tracking**: PostHog's exception capture with full stack traces and automatic grouping
-- Error sanitization functions available for sensitive contexts (`sanitizeError`, `sanitizeErrorMessage`)
-- Component identification and contextual information
-- Enhanced debugging capabilities with source code integration
-
-**Usage Patterns**
-
-- CLI flag extraction without values (`extractCliFlags`)
-- Search query analysis without storing content (`analyzeSearchQuery`)
-- Basic performance metrics without sensitive data
-
-## Configuration and Control
-
-### User Control Mechanisms
-
-Telemetry opt-in/out is part of `appConfig.app.telemetryEnabled` with precedence: defaults → `docs-mcp.config.yaml` (or `DOCS_MCP_CONFIG`) → legacy envs → generic env `DOCS_MCP_<KEY>` → CLI flags for the current run.
-
-**CLI Flags**
-
-- `--no-telemetry`: Disable all telemetry for current session
-
-**Environment Variables**
-
-- `DOCS_MCP_TELEMETRY=false`: Global disable telemetry collection
-- `DOCS_MCP_STORE_PATH=/custom/path`: Override installation ID storage location (useful for Docker volumes)
-- YAML equivalents: `app.telemetryEnabled: false`, `app.storePath: /custom/path`
-
-**Configuration Integration**
-
-- Simple enable/disable configuration
-- Graceful fallback when disabled
-- No impact on core functionality when opted out
-
-**Runtime Behavior**
-
-- Telemetry failures never affect application functionality
-- Simple fallback to no-op behavior when disabled
-- Installation ID persisted locally in standard user data directory
-
-### Development and Testing
-
-**Development Mode**
-
-- Environment-based configuration for development vs production
-- Enhanced logging for telemetry debugging when needed
-
-**Testing**
-
-- Comprehensive test coverage for all telemetry functions
-- Privacy validation in data sanitization tests
-- Behavior-focused testing without timing dependencies
-
-## Analytics and Insights
-
-### Usage Analytics
-
-The simplified telemetry system provides essential insights:
-
-- Tool usage patterns across different interfaces
-- Session frequency and basic engagement metrics
-- Error patterns and system reliability
-- Feature adoption trends
-
-### Performance Monitoring
-
-Key performance insights include:
-
-- Error rates and common failure patterns
-- Basic processing performance metrics
-- System stability and reliability trends
-
-### Product Intelligence
-
-Strategic insights for product development:
-
-- Interface preference trends (CLI vs MCP vs Web)
-- Tool popularity and usage patterns
-- Error categorization for improvement priorities
-
-## Privacy Compliance
-
-### Data Minimization
-
-The system implements strict data minimization:
-
-- Only essential data collection for core insights
-- Installation ID as the only persistent identifier
-- No user tracking or cross-session correlation beyond installation
-- Minimal data retention with focus on current patterns
-
-### Transparency
-
-Users have clear control and visibility:
-
-- Simple opt-out mechanisms
-- Clear documentation of collected data types
-- No hidden or complex data collection
-- Installation ID stored locally and under user control
-
-### Security
-
-Telemetry data protection:
-
-- Encrypted transmission to analytics service
-- No sensitive local storage beyond installation ID
-- Simple UUID-based identification system
-- Essential data sanitization to prevent information leakage
-
-The simplified telemetry architecture provides essential insights while maintaining user privacy and system simplicity, enabling focused product development without complex tracking systems.
+A failure to send never affects the application. The client logs it at debug level and carries on.

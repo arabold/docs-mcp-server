@@ -1,11 +1,11 @@
 ---
 name: docs-search
 description: >-
-  Search and query the Grounded Docs MCP Server documentation index.
-  Covers listing indexed libraries, searching documentation content,
-  and resolving library versions. Use when you need to look up API
-  references, find code examples, or check which documentation is
-  available in the local index.
+  Search the Grounded Docs MCP Server documentation index. Covers listing
+  indexed libraries, searching documentation content, and resolving
+  library versions. Use when you need to look up API references, find
+  code examples, or check which documentation is available in the local
+  index.
 compatibility: Requires Node.js 22+ and npx
 metadata:
   author: grounded.tools
@@ -14,51 +14,60 @@ metadata:
 # Docs Search
 
 Search the local Grounded Docs index for library documentation. These commands
-return structured data (JSON by default in non-interactive sessions) and never
-modify the index.
+print JSON by default and never change the index.
 
 ## When to use
 
-- You need to answer a question about a library's API or behaviour.
-- You want to check which libraries and versions are already indexed.
-- You need to resolve which documentation version best matches a constraint.
+- You need to answer a question about a library's API or behavior.
+- You want to check which libraries and versions are indexed.
+- You need the indexed version that best matches a version constraint.
 
-Always run `list` first if you are unsure whether a library has been indexed.
-If nothing is indexed yet, use the **docs-manage** skill to scrape documentation
-before searching.
+Run `list` first if you are unsure whether a library is indexed. If it is not,
+use the **docs-manage** skill to index it before searching.
 
 ## Commands
 
-### list
-
-List every indexed library and its available versions.
-
-```bash
-npx @arabold/docs-mcp-server@latest list [--output yaml]
-```
+All three commands accept these flags:
 
 | Flag | Description |
 |------|-------------|
-| `--output json\|yaml\|toon` | Structured output format (default: JSON in non-interactive) |
-| `--server-url <url>` | Connect to a remote pipeline worker instead of the local store |
-| `--quiet` | Suppress non-error diagnostics |
-| `--verbose` | Enable debug logging |
+| `--output json\|yaml\|toon` | Output format (default: JSON) |
+| `--server-url <url>` | Use a remote worker (e.g. `http://localhost:8080/api`) instead of the local store |
+| `--quiet` | Log errors only |
+| `--verbose` | Log debug output |
 
-Example output (YAML):
+### list
+
+List every indexed library and its versions.
+
+```bash
+npx @arabold/docs-mcp-server@latest list --output yaml
+```
+
+Example output:
 
 ```yaml
-- library: react
+- name: react
   versions:
-    - "19.0.0"
-    - "18.3.1"
-- library: typescript
-  versions:
-    - "5.7.0"
+    - id: 1
+      version: 19.0.0
+      documentCount: 412
+      uniqueUrlCount: 198
+      indexedAt: 2026-10-18T22:28:47.000Z
+      status: completed
+      sourceUrl: https://react.dev/reference/react
+      preserveHashes: false
 ```
+
+An empty `version` is the library's unversioned documentation. A version with
+`status: completed` is fully indexed. Other statuses (`queued`, `running`,
+`updating`, `failed`, `cancelled`, `not_indexed`) mean the content may be
+missing or incomplete, and such a version may carry a `progress` field. An
+empty index prints `[]`.
 
 ### search
 
-Search documents in an indexed library by natural-language query.
+Search an indexed library with a natural-language query.
 
 ```bash
 npx @arabold/docs-mcp-server@latest search <library> "<query>" [options]
@@ -66,14 +75,10 @@ npx @arabold/docs-mcp-server@latest search <library> "<query>" [options]
 
 | Flag | Alias | Default | Description |
 |------|-------|---------|-------------|
-| `--version <ver>` | `-v` | latest | Version constraint (exact or range, e.g. `18.x`, `5.2.x`) |
-| `--limit <n>` | `-l` | `5` | Maximum number of results |
-| `--exact-match` | `-e` | `false` | Only match the exact version, no fallback |
-| `--embedding-model <model>` | | | Embedding model (e.g. `openai:text-embedding-3-small`) |
-| `--server-url <url>` | | | Remote pipeline worker URL |
-| `--output json\|yaml\|toon` | | JSON | Structured output format |
-| `--quiet` | | | Suppress non-error diagnostics |
-| `--verbose` | | | Enable debug logging |
+| `--version <ver>` | `-v` | newest version | Exact version or range (e.g. `18.x`, `5.2.x`). An exact version also matches the closest older version. |
+| `--limit <n>` | `-l` | `5` | Maximum number of results (1 to 100) |
+| `--exact-match` | `-e` | `false` | Match only the exact `--version`, without falling back to an older one. Requires `--version`. |
+| `--embedding-model <model>` | | | Embedding model, e.g. `openai:text-embedding-3-small` |
 
 Example:
 
@@ -81,11 +86,20 @@ Example:
 npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --version 18.x --limit 3 --output yaml
 ```
 
-Each result contains a content snippet, source URL, and relevance score.
+The output is a list with one entry per matching page:
+
+- `url`: the page's URL
+- `content`: the matching passage with surrounding context, as Markdown or text
+- `score`: relevance score
+- `mimeType`, `sourceMimeType`: the stored and original content types
+- `contentUrl`: present when the content came from a different URL than `url`
+
+No matches print `[]`. A library that is not indexed makes the command fail
+with an error that suggests similar library names.
 
 ### find-version
 
-Resolve the best matching documentation version for a library.
+Resolve the indexed version that best matches a pattern.
 
 ```bash
 npx @arabold/docs-mcp-server@latest find-version <library> [--version <pattern>]
@@ -93,11 +107,7 @@ npx @arabold/docs-mcp-server@latest find-version <library> [--version <pattern>]
 
 | Flag | Alias | Description |
 |------|-------|-------------|
-| `--version <pattern>` | `-v` | Version pattern to match (supports ranges) |
-| `--server-url <url>` | | Remote pipeline worker URL |
-| `--output json\|yaml\|toon` | | Structured output format |
-| `--quiet` | | Suppress non-error diagnostics |
-| `--verbose` | | Enable debug logging |
+| `--version <pattern>` | `-v` | Exact version or range; omit it for the newest version |
 
 Example:
 
@@ -105,17 +115,21 @@ Example:
 npx @arabold/docs-mcp-server@latest find-version react --version "18.x" --output yaml
 ```
 
-Returns the resolved version string and library metadata.
+```yaml
+bestMatch: 18.3.1
+hasUnversioned: false
+message: "Best match: 18.3.1."
+```
+
+`bestMatch` is `null` when no version matches but unversioned documentation
+exists (`hasUnversioned: true`). When neither exists, the command fails.
 
 ## Interpreting output
 
-All three commands emit structured data to **stdout**. Diagnostics and progress
-messages go to **stderr** and are suppressed by default in non-interactive
-sessions. Use `--verbose` (or set `LOG_LEVEL=INFO`) to re-enable them.
-Use `--quiet` to suppress all non-error diagnostics regardless of session type.
-
-To capture results programmatically, parse stdout as JSON (the default) or
-request `--output yaml` for a more readable format.
+Results go to **stdout** as JSON unless `--output` names another format.
+Logs go to **stderr**; outside a terminal only errors are logged. Set
+`LOG_LEVEL=INFO` or pass `--verbose` to see progress messages. A failed command
+exits with a non-zero status.
 
 ## Typical workflow
 
@@ -126,5 +140,5 @@ npx @arabold/docs-mcp-server@latest list --output yaml
 # 2. Search for relevant docs
 npx @arabold/docs-mcp-server@latest search react "server components" --version 19.x --output yaml
 
-# 3. If no results, index the docs first (see docs-manage skill), then retry
+# 3. If the library is missing, index it first (docs-manage skill), then search again
 ```

@@ -1,131 +1,113 @@
 # Web Client Conventions
 
-This is the React admin dashboard that replaces the old HTMX/Alpine server-rendered
-web UI. It is a standard Vite + React + React Router + tRPC/React Query SPA, built by
-`vite.config.web.ts` into the project-root `public/` directory and served by
-`AppServer` (Fastify static files + a SPA catch-all for client-side routes).
+The web UI is a React single-page app built with Vite, React Router, and tRPC
+on React Query. `vite.config.web.ts` builds it into the project-root `public/`
+directory. `AppServer` serves that directory and answers every client-side
+route (`/libraries`, `/jobs`, ...) with `index.html`, so deep links and reloads
+work.
 
-Read this file before adding a page, a data hook, or a UI component here.
+Read this file before adding a page, a data hook, or a component.
 
-## Directory layout
+## Building
 
-```
-src/web/client/
-├── index.html          # Vite entry HTML (script tag points at main.tsx)
-├── main.tsx             # Bootstraps QueryClient, tRPC client (HTTP+WS), BrowserRouter, imports styles/
-├── App.tsx               # Real app shell (Shell: Sidebar + Topbar + <Outlet/>) and the route table
-├── api/
-│   ├── trpc.ts            # createTRPCReact<AppRouter>() — the typed tRPC client
-│   └── hooks.ts            # Thin hooks wrapping the procedures pages call
-├── styles/
-│   ├── theme.css            # Design tokens (4 theme blocks), base reset, keyframes, reduced-motion guard
-│   └── components.css       # Every component class ported from the admin mockup + responsive breakpoints
-├── hooks/
-│   └── useTheme.ts          # Theme preference hook (light/dark/auto), used by ThemeToggle
-├── pages/
-│   ├── Overview.tsx
-│   ├── Libraries.tsx        # Real implementation — also the reference example for components/
-│   ├── LibraryDetail.tsx
-│   ├── Jobs.tsx
-│   ├── Search.tsx
-│   └── Settings.tsx
-└── components/              # Shared UI library (Wave 2) — see components/README.md
-```
+`npm run build:web` builds the UI once; `npm run build` builds it together with
+the server. `npm run dev` runs the server under vite-node and rebuilds the UI
+into `public/` on every change. The server reads `index.html` once and keeps it
+in memory, so restart it to load a rebuilt UI.
 
-`AppRouter` (the merged tRPC router type) lives at `src/services/appRouter.ts` and is
-always imported here as a **type-only** import (`import type { AppRouter } from
-"../../../services/appRouter"`), so no server code or its dependencies (e.g.
-better-sqlite3) is ever bundled into the browser build.
+## How the Client Is Organized
 
-Code the browser shares with the server comes from modules that stay free of server
-dependencies: the type modules (`src/{events,pipeline,store,scraper}/types`) and
-`src/services/apiClient.ts`, whose `createApiLinks()` builds the client links in
-`main.tsx` exactly as Node processes build theirs for a remote worker. A Biome rule
-limits `apiClient.ts` to `@trpc/client`, `superjson` and the `AppRouter` type.
+- `main.tsx` starts the app: the React Query client, the tRPC client, and the
+  router. The server injects a `<base href>` for its public path (for example
+  `/docs/`), and `main.tsx` derives the router's `basename` and the API URL from
+  it.
+- `App.tsx` holds the route table and `Shell`, the layout every page renders
+  in: sidebar, topbar, and an `<Outlet/>` for the page. `AppProviders` wraps the
+  routes with the toast, confirm-dialog and documentation-drawer providers.
+- `api/trpc.ts` is the typed tRPC client, and `api/hooks.ts` has one thin hook
+  per procedure the UI calls.
+- `pages/` has one file per route. Parts that only one page uses live in a
+  folder named after it, such as `pages/jobs/` and `pages/library-detail/`.
+- `components/` is the shared component library. Its
+  [README](./components/README.md) lists every component.
+- `hooks/` holds app-wide hooks (theme, live updates, the release check), and
+  `utils/` holds pure helpers.
+- `styles/theme.css` defines the design tokens for light and dark themes, and
+  `styles/components.css` defines every component class. `main.tsx` imports
+  both once.
 
-## Adding a page + route
+## Code Shared With the Server
 
-1. Create `src/web/client/pages/MyPage.tsx`. The project's `tsconfig.json` sets the
-   default JSX runtime to `react`, so no per-file pragma is needed.
-2. Export a default component:
+The browser bundle must not pull in server code or its dependencies (such as
+`better-sqlite3`). The client therefore imports from the server only:
 
-   ```tsx
-   export default function MyPage() {
-     return <div>My Page</div>;
-   }
-   ```
+- types, as type-only imports. `AppRouter` (`src/services/appRouter.ts`) is
+  always imported with `import type`;
+- the type modules `src/{events,pipeline,store,scraper}/types`, which have no
+  server dependencies;
+- `src/services/apiClient.ts`, whose `createApiLinks()` builds the client's
+  links in `main.tsx` the same way Node processes build theirs for a remote
+  worker. A Biome rule limits that file's imports to `@trpc/client`,
+  `superjson` and the `AppRouter` type.
 
-3. Register the route in `App.tsx`, inside the `<Shell>` route's children:
+Biome also forbids the global `crypto` in `src/web/client/`:
+`crypto.randomUUID()` and `crypto.subtle` exist only in secure contexts, and
+the UI is often served over plain HTTP on a LAN address.
+
+## Adding a Page
+
+1. Create `pages/MyPage.tsx` with a default export. The project's
+   `tsconfig.json` sets the React JSX runtime, so no pragma is needed.
+2. Register the route in `App.tsx`, inside the `<Shell>` route:
 
    ```tsx
    <Route path="my-page" element={<MyPage />} />
    ```
 
-No other wiring is required — `vite.config.web.ts` builds every file reachable from
-`main.tsx`, and the Fastify catch-all in `AppServer` serves `index.html` for any
-unmatched GET route so deep links and refreshes work.
+3. Add the page's title and breadcrumb to `useRouteTitle()` in
+   `components/Topbar.tsx`. Without an entry, the topbar shows "Overview".
+4. If the page belongs in the navigation, add a `NavLink` to
+   `components/Sidebar.tsx`.
+
+Link between pages with React Router's `Link` or `NavLink` and route paths
+such as `/jobs`; the router adds the server's path prefix. Build any other URL
+relative to the document base, the way `main.tsx` builds the API URL.
 
 ## Calling the API
 
-Never call `trpc.<procedure>.useQuery`/`useMutation` directly from a page. Add (or
-reuse) a thin wrapper in `api/hooks.ts` instead — it keeps the procedure surface
-pages depend on explicit and typed, and gives later waves one place to add
-cross-cutting concerns (e.g. shared error toasts) without touching every page.
-
-Example — the pattern `Libraries.tsx` already follows:
+Pages call the API through the hooks in `api/hooks.ts`, never through
+`trpc.<procedure>.useQuery` or `useMutation` directly. That keeps the set of
+procedures the UI depends on in one typed place. When a page needs a procedure
+that has no hook yet, add one that only passes through:
 
 ```tsx
 // api/hooks.ts
 export function useListLibraries() {
   return trpc.listLibraries.useQuery();
 }
-
-// pages/Libraries.tsx
-import { useListLibraries } from "../api/hooks";
-
-export default function Libraries() {
-  const { data, isLoading, isError, error } = useListLibraries();
-  if (isLoading) return <div>Loading…</div>;
-  if (isError) return <div>Failed to load: {error.message}</div>;
-  return (
-    <ul>
-      {(data ?? []).map((lib) => (
-        <li key={lib.library}>{lib.library}</li>
-      ))}
-    </ul>
-  );
-}
 ```
 
-For a mutation, wrap it the same way (`useEnqueueScrapeJob`, `useCancelJob`, etc. in
-`api/hooks.ts` are already there) and call `.mutate()` / `.mutateAsync()` from the page.
+Call `.mutate()` or `.mutateAsync()` on a mutation hook such as
+`useEnqueueRefreshJob()`, then refresh the affected queries through
+`trpc.useUtils()`.
 
-For the real-time event stream, use `useEventsSubscription` from `api/hooks.ts`; it
-wraps `trpc.events.subscribe.useSubscription`, which rides the WebSocket link
-configured in `main.tsx` (queries and mutations use the HTTP batch link instead).
+`Shell` mounts `useLiveInvalidation()`, which subscribes to job and library
+events over the WebSocket link and refreshes the job list, the library list
+and the system health as they change. Pages that show those queries stay
+current without code of their own. For other live data, subscribe with
+`useEventsSubscription()` from `api/hooks.ts`.
 
-## Styling and shared components
+## Styling and Components
 
-The design system and shared component library are in place (Wave 2). Before
-writing any markup or CSS in a page, **read
-[`components/README.md`](./components/README.md)** — it catalogues every
-shared component (import path, props, one-line usage), plus how to use the
-app-wide toast/confirm-dialog/documentation-drawer APIs
-(`useToast`/`useConfirm`/`useDocumentationDrawer`). Reuse what's there instead
-of reinventing a button, table, badge, form field, modal, or drawer.
+The UI uses plain CSS classes from `styles/components.css` and the tokens in
+`styles/theme.css`, with no Tailwind, component library, or chart library;
+charts are hand-drawn SVG (`components/AreaChart.tsx`).
 
-Quick orientation:
+Before writing markup in a page, read
+[`components/README.md`](./components/README.md). It lists every shared
+component and the app-wide toast, confirm-dialog and documentation-drawer
+hooks. Reuse what is there. When a page needs a control the library lacks, add
+it to `components/` instead of styling it inside the page.
 
-- `styles/theme.css` + `styles/components.css` — the full design system,
-  ported verbatim from the admin mockup (imported once from `main.tsx`).
-- `components/` — one file per component (Button, Card, Pill, Table, Modal,
-  Drawer, Toast, etc.) — see the README for the full list.
-- `App.tsx`'s `Shell` — the real sidebar/topbar/content layout — already
-  wires up the icon sprite and the overlay providers; pages just render their
-  content inside `<Outlet/>`.
-- `pages/Libraries.tsx` — a real (non-placeholder) page that demonstrates the
-  intended composition; use it as a reference when building the remaining
-  pages (Overview, Jobs, Search, Settings, LibraryDetail).
-
-Still no Tailwind, no third-party component library, and no chart library —
-charts are hand-rolled SVG (`AreaChart` in `components/`).
+`pages/Libraries.tsx` is a compact example of a page built from the shared
+components.

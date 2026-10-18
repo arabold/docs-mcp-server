@@ -3,9 +3,9 @@ name: docs-manage
 description: >-
   Manage the Grounded Docs MCP Server documentation index. Covers scraping
   and indexing documentation from URLs or local files, refreshing existing
-  indexes with changed content, removing libraries from the index, and
-  compacting the SQLite store. Use when you need to add, update, or delete
-  indexed documentation, or reclaim disk space after removals.
+  indexes with changed content, removing library versions from the index,
+  and compacting the SQLite store. Use when you need to add, update, or
+  delete indexed documentation, or reclaim disk space after removals.
 compatibility: Requires Node.js 22+ and npx
 metadata:
   author: grounded.tools
@@ -13,22 +13,31 @@ metadata:
 
 # Docs Manage
 
-Index, refresh, and remove library documentation in the local Grounded Docs
-store. These commands modify the index and produce plain-text status messages
-on stdout.
+Index, refresh and remove library documentation in the local Grounded Docs
+store. These commands change the index and print a plain-text result on
+stdout.
 
 ## When to use
 
-- A library is not yet indexed and you need its docs available for search.
-- Documentation may be stale and you want to pull in updated pages.
-- You want to remove a library or version from the index to free space.
-- The store file is still large after removals and you want to compact it.
+- A library is not indexed yet and you need its docs for search.
+- Indexed documentation may be stale and you want the changed pages.
+- You want to remove a library version from the index.
+- The store file is still large after removals and you want to shrink it.
 
 ## Commands
 
+Every command accepts these flags:
+
+| Flag | Description |
+|------|-------------|
+| `--server-url <url>` | Use a remote worker (e.g. `http://localhost:8080/api`) instead of the local store |
+| `--quiet` | Log errors only |
+| `--verbose` | Log debug output |
+
 ### scrape
 
-Download and index documentation from a URL or local directory.
+Download and index documentation from a URL or a local folder. The command
+returns when indexing has finished.
 
 ```bash
 npx @arabold/docs-mcp-server@latest scrape <library> <url> [options]
@@ -36,52 +45,56 @@ npx @arabold/docs-mcp-server@latest scrape <library> <url> [options]
 
 | Flag | Alias | Default | Description |
 |------|-------|---------|-------------|
-| `--version <ver>` | `-v` | | Library version label |
-| `--max-pages <n>` | `-p` | config default | Maximum pages to scrape |
-| `--max-depth <n>` | `-d` | config default | Maximum navigation depth |
-| `--max-concurrency <n>` | `-c` | config default | Concurrent page requests |
-| `--ignore-errors` | | `true` | Continue on individual page errors |
-| `--scope subpages\|hostname\|domain` | | `subpages` | Crawling boundary |
-| `--follow-redirects` | | `true` | Follow HTTP redirects |
-| `--no-follow-redirects` | | | Disable following redirects |
-| `--scrape-mode auto\|fetch\|playwright` | | `auto` | HTML processing strategy |
-| `--include-pattern <glob>` | | | URL include pattern (repeatable) |
-| `--exclude-pattern <glob>` | | | URL exclude pattern (repeatable, takes precedence) |
+| `--version <ver>` | `-v` | unversioned | Version label to index under |
+| `--max-pages <n>` | `-p` | `1000` | Maximum pages to index |
+| `--max-depth <n>` | `-d` | `3` | Maximum link depth from the start URL |
+| `--max-concurrency <n>` | `-c` | `3` | Pages fetched at the same time |
+| `--scope subpages\|hostname\|domain` | | `subpages` | Crawl boundary: the start URL's path, its host name, or its domain with subdomains |
+| `--include-pattern <pattern>` | | | Only crawl matching URLs (glob, or regex as `/pattern/`; repeatable) |
+| `--exclude-pattern <pattern>` | | | Skip matching URLs (repeatable; wins over include) |
+| `--scrape-mode auto\|fetch\|playwright` | | `auto` | `auto` and `playwright` render HTML in headless Chromium; `fetch` skips JavaScript |
 | `--header "Name: Value"` | | | Custom HTTP header (repeatable) |
-| `--embedding-model <model>` | | | Embedding model configuration |
-| `--server-url <url>` | | | Remote pipeline worker URL |
-| `--clean` | | `true` | Clear existing documents before scraping |
-| `--replace` | | `false` | Rebuild the library version if it already exists |
-| `--quiet` | | | Suppress non-error diagnostics |
-| `--verbose` | | | Enable debug logging |
+| `--no-follow-redirects` | | follows redirects | Treat HTTP redirects as errors |
+| `--no-ignore-errors` | | ignores errors | Fail the scrape when a page fails instead of skipping it |
+| `--preserve-hashes` | | `false` | Keep `#/route` fragments, for documentation sites routed by URL hash |
+| `--replace` | | `false` | Rebuild the version if it already exists |
+| `--no-clean` | | | Add documents to an existing version instead of failing |
+| `--embedding-model <model>` | | | Embedding model, e.g. `openai:text-embedding-3-small` |
+
+The page, depth and concurrency defaults come from the server configuration
+and may differ on the user's machine.
 
 Examples:
 
 ```bash
-# Scrape React docs, version-tagged
+# Index React docs under a version
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react --version 19.0.0
 
-# Scrape local files
-npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/docs/my-library
+# Index a local folder
+npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/Documents/my-library
 
-# Scrape with depth and page limits
+# Limit the crawl
 npx @arabold/docs-mcp-server@latest scrape nextjs https://nextjs.org/docs --max-pages 200 --max-depth 3
 
-# Scrape with custom headers (e.g. authentication)
-npx @arabold/docs-mcp-server@latest scrape internal-api https://docs.internal.com \
+# Send an auth header with every request
+npx @arabold/docs-mcp-server@latest scrape internal-api https://docs.example.com \
   --header "Authorization: Bearer tok_xxx"
 
-# Exclude changelog pages
+# Skip changelog pages
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react \
   --exclude-pattern "**/changelog*"
 ```
 
-Output is a plain-text status line, e.g. `Successfully scraped 42 pages`.
-Progress updates appear on stderr during the run.
+On success it prints `Successfully scraped <n> pages`. Even while it ignores
+errors, a scrape fails when the start URL fails, or when more than half of the
+other pages fail (by default).
 
 ### refresh
 
-Re-scrape an existing library version, skipping unchanged pages via HTTP ETags.
+Update an indexed version in place. Unchanged pages are skipped: web pages by
+HTTP ETag, local files by modification time. Deleted pages are removed and new
+links are crawled. A version whose last indexing did not finish is scraped
+again from scratch. The original scrape options are reused.
 
 ```bash
 npx @arabold/docs-mcp-server@latest refresh <library> [options]
@@ -89,11 +102,9 @@ npx @arabold/docs-mcp-server@latest refresh <library> [options]
 
 | Flag | Alias | Description |
 |------|-------|-------------|
-| `--version <ver>` | `-v` | Version to refresh (omit for latest) |
-| `--embedding-model <model>` | | Embedding model configuration |
-| `--server-url <url>` | | Remote pipeline worker URL |
-| `--quiet` | | Suppress non-error diagnostics |
-| `--verbose` | | Enable debug logging |
+| `--version <ver>` | `-v` | Version to refresh. Omit it only for unversioned documentation. |
+| `--preserve-hashes` | | Override the stored hash-route setting for this refresh |
+| `--embedding-model <model>` | | Embedding model |
 
 Example:
 
@@ -101,12 +112,13 @@ Example:
 npx @arabold/docs-mcp-server@latest refresh react --version 19.0.0
 ```
 
-The library and version must already be indexed. Use `scrape` for first-time
-indexing.
+The version must already be indexed; use `scrape` for new ones. On success it
+prints `Successfully refreshed <n> pages`.
 
 ### remove
 
-Delete a library (or a specific version) from the index.
+Remove a library version from the index. Removing a library's last version
+removes the library.
 
 ```bash
 npx @arabold/docs-mcp-server@latest remove <library> [options]
@@ -114,10 +126,7 @@ npx @arabold/docs-mcp-server@latest remove <library> [options]
 
 | Flag | Alias | Description |
 |------|-------|-------------|
-| `--version <ver>` | `-v` | Specific version to remove (omit to remove latest) |
-| `--server-url <url>` | | Remote pipeline worker URL |
-| `--quiet` | | Suppress non-error diagnostics |
-| `--verbose` | | Enable debug logging |
+| `--version <ver>` | `-v` | Version to remove. Without it, the command removes the unversioned documentation. |
 
 Example:
 
@@ -125,48 +134,35 @@ Example:
 npx @arabold/docs-mcp-server@latest remove react --version 18.3.1
 ```
 
-This is destructive and cannot be undone. Re-run `scrape` to re-index.
-Bulk deletes checkpoint the WAL without locking readers. Use `compact` when
-idle if the main store file is still large.
+It prints `Successfully removed react@18.3.1.` and fails if the library is not
+indexed. Removal cannot be undone; run `scrape` again to re-index. Run `list`
+(docs-search skill) first to get the exact version labels.
 
 ### compact
 
-Reclaim unused SQLite pages and truncate the WAL file so the store shrinks
-on disk. This takes an exclusive lock and may block searches until it
-finishes. VACUUM uses temporary files to keep memory usage low, so make sure
-there is enough free disk space for SQLite's temporary copy of the database.
+Shrink the store file by reclaiming unused space. Removing documentation does
+not shrink the file by itself. Compaction takes an exclusive lock, so searches
+may wait until it finishes. It also needs free disk space for a temporary copy
+of the store. Run it when nothing else is using the store.
 
 ```bash
-npx @arabold/docs-mcp-server@latest compact [options]
+npx @arabold/docs-mcp-server@latest compact [--force]
 ```
 
-| Flag | Alias | Description |
-|------|-------|-------------|
-| `--force` | | Run VACUUM even when SQLite reports no free pages |
-| `--server-url <url>` | | Remote pipeline worker URL |
-| `--quiet` | | Suppress non-error diagnostics |
-| `--verbose` | | Enable debug logging |
+| Flag | Description |
+|------|-------------|
+| `--force` | Rewrite the store even when SQLite reports no free pages |
 
-Example:
+It prints `Compacted store from <size> to <size> (reclaimed <size>).` or
+`Store is already compact.`
 
-```bash
-npx @arabold/docs-mcp-server@latest compact
-```
+## Output behavior
 
-Removing documentation does not shrink the main SQLite file. Bulk deletes
-only run a non-blocking WAL checkpoint. Run this command when the store is
-idle to VACUUM and reclaim free pages. Add `--force` only when you want to
-rewrite the store even if SQLite reports no free pages.
-
-## Output behaviour
-
-All three commands write plain-text status messages to **stdout** and
-diagnostics to **stderr**. The global `--output` flag is accepted but has no
-effect because the output is plain text, not structured data.
-
-In non-interactive sessions, diagnostics are suppressed by default. Use
-`--verbose` (or set `LOG_LEVEL=INFO`) to re-enable them. Use `--quiet` to
-suppress all non-error diagnostics regardless of session type.
+Each command prints one plain-text result line on **stdout** and ignores
+`--output`. Logs go to **stderr**: in a terminal they include progress lines
+such as `📄 Scraping react v19.0.0: 3/10 pages`; outside a terminal only errors
+are logged. Set `LOG_LEVEL=INFO` or pass `--verbose` to see progress. A failed
+command exits with a non-zero status.
 
 ## Typical workflow
 
@@ -174,29 +170,30 @@ suppress all non-error diagnostics regardless of session type.
 # 1. Index documentation for the first time
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react --version 19.0.0
 
-# 2. Later, refresh to pick up any changes
+# 2. Later, pick up changed pages
 npx @arabold/docs-mcp-server@latest refresh react --version 19.0.0
 
-# 3. Clean up old versions
+# 3. Remove an old version
 npx @arabold/docs-mcp-server@latest remove react --version 18.3.1
 
-# 4. Reclaim unused store space if needed
+# 4. Shrink the store if needed
 npx @arabold/docs-mcp-server@latest compact
 ```
 
 ## Important notes
 
-- **Scraping can take time.** Large documentation sites with hundreds of pages
-  may run for several minutes. Use `--max-pages` and `--max-depth` to limit
-  scope when you only need a subset.
-- **Local files** must use the `file://` URL scheme
-  (e.g. `file:///absolute/path/to/docs`).
-- **`scrape` never overwrites by accident.** Scraping a library version that
-  already exists fails and leaves it untouched. Pass `--replace` to rebuild it
-  from scratch, use `refresh` to update it in place, or pass `--no-clean` to add
-  more documents to it.
-- **Library names keep their casing** (`React`, `Next.js Docs`) and are matched
+- **Scraping takes time.** Large sites can run for several minutes. Use
+  `--max-pages` and `--max-depth` when you only need part of a site.
+- **`scrape` never overwrites by accident.** Scraping a version that already
+  exists fails and leaves it untouched. Pass `--replace` to rebuild it, use
+  `refresh` to update it in place, or pass `--no-clean` to add to it.
+- **Library names keep their casing** (`React`, `Next.js Docs`) and match
   case-insensitively, so `react` reaches `React`. No character in a name has a
   special meaning: use `--version 18`, not `react@18`.
-- **`refresh`** only works on previously indexed content. It uses HTTP ETags to
-  skip pages that have not changed, making it much faster than a full re-scrape.
+- **Local files** need a `file://` URL with an absolute path. By default only
+  files inside the user's Documents folder can be indexed. To index another
+  folder, ask the user before allowing it, then run the command with
+  `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS=/path/to/folder`.
+- **Private network addresses** such as `localhost` or `10.x.x.x` are refused
+  by default. The user can allow them in the server configuration
+  (`scraper.security.network`).

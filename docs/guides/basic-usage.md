@@ -1,57 +1,54 @@
 # Basic Usage
 
-Once the server is running, you can interact with it via the Web Interface, CLI, or your AI Assistant.
+You work with the Docs MCP Server through the web interface, the command line, or an AI assistant connected over MCP. All three use the same local document store.
 
-## 🌐 Web Interface
+## Web Interface
 
-If you are running the Standalone Server (Docker or npx), the web interface is available at:
+Starting the server without a command (`npx @arabold/docs-mcp-server@latest`, or the Docker image) serves the web interface at **`http://localhost:6280`**. It has these pages:
 
-**`http://localhost:6280`**
+- **Overview**: totals, recent indexing activity, system health and running jobs.
+- **Libraries**: every indexed library. **Add library** starts indexing a new one, and **Refresh** updates all its versions.
+- **A library's page**: its versions, with **Add version** and **Refresh all**. For each version it shows the scrape settings, the stored chunks, and the actions **Refresh (incremental)**, **Edit & re-index** and **Remove version**.
+- **Jobs & Queue**: running, queued, failed and finished jobs. Cancel a job, retry a failed one, or clear finished jobs.
+- **Search Playground**: runs a query against a library and version and shows the results an AI assistant would get.
+- **Settings**: the running server's configuration, read-only.
 
-Use this interface to:
--   **Add New Documentation:** Submit URLs for indexing.
--   **Monitor Jobs:** Watch the scraping and indexing progress.
--   **Manage Library:** View and delete indexed documentation.
--   **Search:** Manually test search queries to see what the AI will see.
+The web interface has no sign-in of its own. To expose it beyond your machine, put it behind a reverse proxy with sign-in; see [Reverse Proxy Deployment](../infrastructure/reverse-proxy.md#protecting-the-web-ui-and-api).
 
 ### Launching Web UI for Embedded Server
 
-If you are using the [Embedded Server](../setup/installation.md#embedded-server) (running inside your AI tool), it does not expose a web interface by default. You can launch a temporary web UI that connects to the same database:
+The [embedded server](../setup/installation.md#embedded-server) that an AI tool starts over stdio serves no web interface. To manage its documentation, start the web interface on its own:
 
 ```bash
-OPENAI_API_KEY="your-key" npx @arabold/docs-mcp-server@latest web --port 6281
+OPENAI_API_KEY="your-key" npx @arabold/docs-mcp-server@latest web
 ```
 
-Open `http://localhost:6281`. Stop the process (`Ctrl+C`) when finished.
+It opens at `http://localhost:6281` and uses the same document store. Pass it the same settings as the embedded server, such as the embedding API key and any `--store-path`. Stop it with `Ctrl+C` when you are done.
 
-## 💻 CLI Usage
+## CLI Usage
 
-The CLI lets you index and query documentation directly from the command line — no running server required. This is ideal for scripting, CI pipelines, and AI coding agents.
-
-**Note:** If you are using the Embedded Server, ensure you don't run concurrent write operations (scraping) if the database is locked.
+The CLI indexes and searches documentation without a running server, which suits scripts, CI pipelines and AI coding agents. It reads and writes the same document store as the server.
 
 ### Index Documentation
 
-Download and index documentation from a URL or local directory:
+Index documentation from a URL:
 
 ```bash
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 ```
 
-You can tag a specific version, limit crawl depth, and more:
+Name a version and limit the crawl:
 
 ```bash
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react \
   --version 19.0.0 --max-pages 200 --max-depth 3
 ```
 
-Local files are also supported using the `file://` URL scheme:
+By default, a crawl indexes up to 1000 pages, at most 3 links deep, within the starting URL's path (`--scope subpages`). The page and depth defaults come from the [scraper configuration](../setup/configuration.md#scraper-scraper). `npx @arabold/docs-mcp-server@latest scrape --help` lists all options, including include and exclude patterns, custom headers and `--scrape-mode`.
 
-```bash
-npx @arabold/docs-mcp-server@latest scrape mylib file:///Users/me/docs/my-library
-```
+Local folders and files use `file://` URLs; see [Scraping Local Files](#scraping-local-files).
 
-Scraping a library version that already exists fails and leaves it untouched. To re-index it from scratch, pass `--replace`; to update it in place, skipping unchanged pages, use `refresh`; to add more documents to it, pass `--no-clean`:
+Scraping a library version that already exists fails and leaves it untouched. To re-index it from scratch, pass `--replace`. To update it in place, skipping unchanged pages, use `refresh`. To add more documents to it, pass `--no-clean`.
 
 ```bash
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react --version 19.0.0 --replace
@@ -60,117 +57,121 @@ npx @arabold/docs-mcp-server@latest refresh react --version 19.0.0
 
 ### Library Names
 
-- A library keeps the name as you entered it (`React`, `Next.js Docs`), and names are matched case-insensitively, so `react` and `REACT` reach the same library.
-- In the Web UI, **Add library** refuses a name that already exists — add a version to the existing library instead.
+- A library keeps the name as you entered it (`React`, `Next.js Docs`), and names match case-insensitively, so `react` and `REACT` reach the same library.
+- In the web interface, **Add library** refuses a name that already exists. Add a version to the existing library instead.
 - A new library's name must not be empty, must not contain control characters (such as tabs or line breaks), and can be at most 100 characters.
 - No character in a name has a special meaning: `react@18` is a library named `react@18`. Use `--version 18` to index a version.
 
 ### Search the Index
 
-Query indexed documentation by library name and a natural-language query:
+Search a library with a natural-language query:
 
 ```bash
 npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
 ```
 
-Use `--version` to target a specific version and `--limit` to control the number of results:
+Without `--version`, the search uses the newest version. `--version` takes an exact version or a range such as `19.x`. An exact version also matches the closest older version; add `--exact-match` to prevent that. `--limit` sets the number of results (5 by default, at most 100).
 
 ```bash
 npx @arabold/docs-mcp-server@latest search react "server components" --version 19.x --limit 3
 ```
 
+Each result is one page: its `url`, the matching passage with surrounding context as `content`, and a relevance `score`.
+
 ### Fetch a Single Page
 
-Fetch any URL and convert it to Markdown without adding it to the index:
+Fetch one URL and print it as Markdown, without adding it to the index:
 
 ```bash
 npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
 ```
 
+HTML pages and documents such as PDFs come back as Markdown; JSON, XML and plain text come back unchanged. `fetch-url` also accepts `file://` URLs, and takes `--header`, `--scrape-mode` and `--no-follow-redirects`.
+
 ### Other Commands
 
 | Command | Description |
 |---------|-------------|
-| `list` | List all indexed libraries and their versions |
-| `find-version <library>` | Resolve the best matching version for a library |
-| `refresh <library>` | Re-scrape an existing library, skipping unchanged pages |
-| `remove <library>` | Delete a library or version from the index |
-| `compact` | Reclaim unused SQLite pages and shrink the store. Takes an exclusive lock, may block searches, and needs temporary disk space while it runs. |
+| `list` | List indexed libraries with each version's status, source URL and counts. |
+| `find-version <library>` | Resolve the version that best matches `--version` (the newest when omitted). |
+| `refresh <library>` | Re-index an existing version, skipping unchanged pages. Without `--version`, it refreshes the unversioned documentation. |
+| `remove <library>` | Remove the version given by `--version`, or the unversioned documentation without it. Removing a library's last version removes the library. |
+| `compact` | Reclaim unused space in the store file. It takes an exclusive lock, may block searches while it runs, and needs free disk space for a temporary copy of the store. |
 
-Run `npx @arabold/docs-mcp-server@latest --help` for the full command reference.
+The server commands `mcp`, `web` and `worker` are described in [Deployment Modes](../infrastructure/deployment-modes.md#commands), and `config` in [Configuration](../setup/configuration.md#the-config-command). `npx @arabold/docs-mcp-server@latest <command> --help` shows each command's options.
+
+`list`, `search`, `find-version`, `scrape`, `refresh`, `remove` and `compact` accept `--server-url` (for example `http://localhost:8080/api`) to work against a separate worker process instead of the local store.
 
 ### Output Behavior
 
-- Structured commands (`list`, `search`, `find-version`) default to **JSON** on stdout in non-interactive runs.
-- Use `--output json|yaml|toon` to pick a format.
-- Plain-text commands (`fetch-url`, `scrape`, `refresh`, `remove`, `compact`) write their output directly to stdout.
-- Use `--quiet` to suppress non-error diagnostics or `--verbose` for debug output.
-- In non-interactive runs, diagnostics stay off stdout so agents and scripts can parse results safely.
+- `list`, `search` and `find-version` print JSON on stdout. Use `--output json|yaml|toon` to pick another format.
+- `fetch-url`, `scrape`, `refresh`, `remove` and `compact` print plain text on stdout and ignore `--output`.
+- Logs go to stderr. In a terminal they include progress messages; otherwise only errors appear, so scripts and agents can parse stdout. Set `LOG_LEVEL=INFO` to see progress messages anyway.
+- `--verbose` adds debug output, and `--quiet` limits logs to errors.
+- A failed command exits with a non-zero status and prints the error on stderr.
 
 ### Using CLI and Server Together
 
-Starting the server without any command runs both the MCP endpoint and the web interface:
+Starting the server without a command runs the MCP endpoint and the web interface:
 
 ```bash
 npx @arabold/docs-mcp-server@latest
 ```
 
-You can then use the CLI in parallel to query the same local database, for example from an AI coding agent, while managing documentation through the web UI at **[http://localhost:6280](http://localhost:6280)**.
+The CLI can run alongside it on the same store, for example from an AI coding agent, while you manage documentation in the web interface at `http://localhost:6280`.
 
 ### Agent Skills
 
-The repository ships with ready-made [Agent Skills](https://agentskills.io) in the [`skills/`](https://github.com/arabold/docs-mcp-server/tree/main/skills) directory. Agent Skills are an open format for giving AI coding agents new capabilities — they contain structured instructions that teach an agent how to use the CLI commands above.
-
-**Bundled skills:**
+The [`skills/`](https://github.com/arabold/docs-mcp-server/tree/main/skills) directory holds [Agent Skills](https://agentskills.io): instruction files that teach AI coding agents to use the CLI commands above.
 
 | Skill | Purpose |
 |-------|---------|
-| **docs-search** | Search and query the documentation index (`list`, `search`, `find-version`) |
-| **docs-manage** | Manage the index — scrape, refresh, and remove documentation |
-| **fetch-url** | Fetch a single URL and convert it to Markdown |
+| `docs-search` | Find indexed libraries and search them (`list`, `search`, `find-version`) |
+| `docs-manage` | Index, refresh, remove and compact documentation (`scrape`, `refresh`, `remove`, `compact`) |
+| `fetch-url` | Fetch a single URL as Markdown |
 
-Each skill folder contains a `SKILL.md` file with structured instructions, command references, flag tables, and example workflows. Compatible agents discover these files automatically and load the relevant skill when a matching task is detected.
+Each skill is a folder with a `SKILL.md` file. Copy the folders to the skills location your agent reads, for example for [Claude Code](https://code.claude.com/docs/en/skills), [Gemini CLI](https://geminicli.com/docs/cli/skills/) or [Cursor](https://cursor.com/docs/skills). The agent then loads a skill when a task matches it. [agentskills.io](https://agentskills.io) has the specification and the list of compatible agents.
 
-Skills are supported by a growing number of agents including Claude Code, Gemini CLI, Cursor, OpenCode, Roo Code, and many others. Copy the skill folders from the [`skills/`](https://github.com/arabold/docs-mcp-server/tree/main/skills) directory into the appropriate location for your agent. Consult your agent's documentation for the correct path — for example, [Claude Code](https://code.claude.com/docs/en/skills), [Gemini CLI](https://geminicli.com/docs/cli/skills/), or [Cursor](https://cursor.com/docs/context/skills).
+## Scraping Local Files
 
-See **[agentskills.io](https://agentskills.io)** for the full specification and a list of all compatible agents.
+The web interface, the CLI and the `scrape_docs` tool index local files and folders through `file://` URLs:
 
-## 📂 Scraping Local Files
+- `file:///Users/me/Documents/docs/index.html` indexes one file.
+- `file:///Users/me/Documents/docs/my-library` indexes a folder and its subfolders, including the contents of ZIP and TAR archives.
 
-You can index documentation from your local filesystem using `file://` URLs. This works in both the Web UI and CLI.
+Text files such as HTML, Markdown and source code are indexed, and so are documents such as PDF, Word, Excel and PowerPoint files. Files of other types, hidden files and symbolic links are skipped. See [Supported Formats](../concepts/supported-formats.md) for the full list.
 
-### Requirements
--   Supports text files (HTML, Markdown, source code, etc.) and documents (PDF, Word, Excel, PowerPoint, and more). See [Supported Formats](../concepts/supported-formats.md) for the full list.
--   Unsupported binary files (images, videos, executables) are skipped.
--   **Docker Users:** You must mount the local directory into the container first.
+By default, the server reads local files only inside your Documents folder. To index another folder, add it to the allowed roots of the process that runs the scrape, for example:
 
-### Examples
+```bash
+DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS=/srv/docs \
+  npx @arabold/docs-mcp-server@latest scrape mylib file:///srv/docs/my-library
+```
 
-**Web UI / CLI Input:**
--   `file:///Users/me/docs/index.html` (Single file)
--   `file:///Users/me/docs/my-library` (Directory)
+The list replaces the default, so name the Documents folder too if you still need it: `'["$DOCUMENTS", "/srv/docs"]'`. [File Access](../setup/configuration.md#file-access-scrapersecurityfileaccess) describes the setting and how to keep it in the configuration file.
 
-**Docker Example:**
+### Docker
 
-If your docs are in `/absolute/path/to/docs` on your host:
+A container sees only the folders you mount into it. Mount the folder and allow its path inside the container:
 
-1.  **Mount the volume:**
-    ```bash
-    docker run --rm \
-      -v /absolute/path/to/docs:/docs:ro \
-      ... (other args) ...
-      ghcr.io/arabold/docs-mcp-server:latest
-    ```
+```bash
+docker run --rm \
+  -v docs-mcp-data:/data \
+  -v docs-mcp-config:/config \
+  -v /absolute/path/to/docs:/docs:ro \
+  -e DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS=/docs \
+  -p 6280:6280 \
+  ghcr.io/arabold/docs-mcp-server:latest
+```
 
-2.  **Scrape using the container path:**
-    URL: `file:///docs`
+Then index `file:///docs` from the web interface or an AI assistant.
 
-## 🤖 AI Assistant Usage
+## AI Assistant Usage
 
-Once connected, your AI assistant (Claude, Cline, etc.) will have access to tools like `scrape_docs` and `search_docs`.
+A connected AI assistant uses the server's MCP tools, such as `search_docs` to look things up and `scrape_docs` to index new documentation. [Connecting MCP Clients](mcp-clients.md#available-tools) lists every tool and how to connect your client.
 
-**Example Prompt:**
-> "Please scrape the React documentation from https://react.dev/reference/react for library 'react' version '18.x'"
+Example requests:
 
-**Example Query:**
-> "How does the useState hook work in React? Please check the documentation."
+> "Index the React documentation from https://react.dev/reference/react as library 'react', version '19.0.0'."
+
+> "How does the useState hook work in React? Check the documentation."

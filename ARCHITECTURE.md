@@ -2,92 +2,55 @@
 
 ## System Overview
 
-The Documentation MCP Server indexes documentation from web sources, local files, and package registries, making it searchable via the Model Context Protocol (MCP). The system processes content into vector embeddings and provides search capabilities to AI coding assistants.
+The Documentation MCP Server indexes documentation and makes it searchable for AI coding assistants. It fetches content from websites, GitHub repositories, npm and PyPI packages, and local files and archives. It splits the content into chunks and stores them in SQLite with a full-text index and, when an embedding model is configured, vector embeddings. Search, library management and job control are available over the Model Context Protocol (MCP), the CLI and a web interface.
 
-### Core Functions
+Each library version is indexed and searched on its own. Indexing runs as asynchronous jobs whose state is stored with the version, so a worker that restarts can pick up the jobs an earlier run left unfinished.
 
-- Documentation scraping from web, local files, npm/PyPI registries
-- Semantic search using vector embeddings (OpenAI, Google, Azure, AWS providers)
-- Version-specific documentation queries
-- Asynchronous job processing with recovery
-- Multiple access interfaces: CLI, MCP protocol, web UI
-
-### Deployment Modes
-
-The system runs in two modes:
-
-**Unified Server**: Single process containing MCP server, web interface, and embedded worker. Default mode for development and simple deployments.
-
-**Distributed Mode**: Separate coordinator and worker processes. Used for scaling processing workload across multiple containers.
-
-Outside Docker, protocol selection is automatic - stdio transport for AI tools (no TTY), HTTP transport for interactive terminals (has TTY). The Docker image supplies environment defaults for HTTP on all container interfaces, overridable by runtime environment variables or CLI flags.
+This document is the overview. The documents under [References](#references) cover each area in depth. [AGENTS.md](AGENTS.md) holds the development workflow, code style, logging and testing conventions.
 
 ### Technology Stack
 
-- Node.js 22.x, TypeScript, Vite build system
-- Vitest for testing
-- React, React Router, tRPC and TanStack Query for the web interface, styled with plain CSS
-- Fastify for HTTP, tRPC for the application API and its WebSocket event stream
-- LangChain.js for embeddings, Playwright for scraping
-- SQLite with schema migrations
+- Node.js 22 and TypeScript. Vite builds the server and the web interface, and Vitest runs the tests.
+- SQLite through better-sqlite3, with FTS5 for full-text search and sqlite-vec for vectors. SQL migrations live in `db/migrations/`.
+- LangChain.js for the embedding clients (OpenAI and OpenAI-compatible APIs, Google Gemini and Vertex AI, AWS Bedrock, Azure OpenAI) and for recursive text splitting. tree-sitter parses source code.
+- Playwright with Chromium renders JavaScript pages and fetches pages behind anti-bot challenges. Xberg extracts text from PDF, Office and other binary documents.
+- Fastify serves HTTP. tRPC carries the application API and its WebSocket event stream. The MCP TypeScript SDK implements the MCP server.
+- The web interface uses React, React Router, tRPC and TanStack Query, styled with plain CSS.
 
-## Configuration System
+### Source Layout
 
-Configuration resolves once per process via `loadConfig` in `src/utils/config.ts`. The system uses a strict **Zod schema** (`AppConfigSchema`) to validate and merge settings from four layers: Defaults < Config File (`config.yaml`) < Environment Variables < CLI Arguments.
+| Path | Contents |
+|---|---|
+| `src/index.ts`, `src/cli/` | Entry point and the CLI commands; every server mode starts here |
+| `src/app/` | `AppServer` (Fastify), public URL and base-path handling, host and origin policy |
+| `src/services/` | `openBackend`, the API client, the merged tRPC router, the MCP HTTP service |
+| `src/mcp/` | MCP server, tool registration, stdio transport, built-in instructions |
+| `src/tools/` | Business logic shared by the CLI and MCP |
+| `src/pipeline/` | Job queue, job execution and the client for a remote worker |
+| `src/events/` | `EventBus` and the relay for a remote worker's events |
+| `src/scraper/` | Source strategies, fetchers, middleware and content pipelines |
+| `src/splitter/` | Chunking: semantic, greedy, JSON, text and source-code splitters |
+| `src/store/` | SQLite store, document management, search, result assembly, embeddings |
+| `src/auth/` | Access-token verification and protected resource metadata for the MCP endpoint |
+| `src/telemetry/` | Usage telemetry (PostHog) |
+| `src/utils/` | Configuration, logging, paths, URL and MIME helpers, archive readers |
+| `src/types/` | Shared type declarations |
+| `src/web/client/` | React web interface; see its [conventions](src/web/client/CONVENTIONS.md) |
+| `db/migrations/` | SQL schema migrations |
 
-**Loading Logic**:
+## Configuration
 
-- **Explicit Config (Read-Only)**: Files loaded via `--config` or `DOCS_MCP_CONFIG` are never modified by the server.
-- **System Default (Read-Write)**: If no explicit config is provided, the server attempts to load from the system default path (e.g., `~/Library/Preferences/docs-mcp-server/config.yaml`). The server automatically updates this file with new defaults on startup.
+Configuration comes from four layers, each overriding the one before: built-in defaults, the config file (`config.yaml`), environment variables, and CLI arguments. `loadConfig` in `src/utils/config.ts` merges them and validates the result against one Zod schema, so the rest of the code receives a fully typed `AppConfig`.
 
-All default values are unified in a single `DEFAULT_CONFIG` source of truth. The loading process ensures that the resulting `AppConfig` object is fully typed and validated before the application starts.
-
-For detailed options and precedence rules, see [Configuration Concepts](docs/concepts/configuration.md).
-
-### Directory Structure
-
-```
-src/
-├── index.ts                         # Main entry point with CLI, protocol detection
-├── app/                             # Unified server implementation
-│   ├── AppServer.ts                 # Modular service composition
-│   └── AppServerConfig.ts           # Service configuration interface
-├── mcp/                             # MCP server implementation
-│   ├── mcpServer.ts                 # MCP protocol server
-│   ├── tools.ts                     # MCP tool definitions
-│   └── startStdioServer.ts          # Stdio transport setup
-├── pipeline/                        # Asynchronous job processing
-│   ├── PipelineManager.ts           # Job queue and worker coordination
-│   ├── PipelineClient.ts            # Pipeline on a remote worker, over the API client
-│   ├── PipelineWorker.ts            # Individual job execution
-│   └── trpc/                        # tRPC router for pipeline procedures
-├── scraper/                         # Content acquisition and processing
-│   ├── fetcher/                     # HTTP and file content fetching
-│   ├── middleware/                  # Content transformation pipeline
-│   ├── pipelines/                   # Content-type-specific processing
-│   ├── strategies/                  # Source-specific scraping strategies
-│   └── utils/                       # Scraping utilities
-├── services/                        # Backend factory, API client, service registration
-├── splitter/                        # Document chunking and segmentation
-│   ├── GreedySplitter.ts            # Universal size optimization
-│   ├── SemanticMarkdownSplitter.ts  # Structure-aware markdown splitting
-│   ├── JsonDocumentSplitter.ts      # Hierarchical JSON splitting
-│   ├── TextDocumentSplitter.ts      # Line-based text/code splitting
-│   └── splitters/                   # ContentSplitter implementations (deprecated)
-├── store/                           # Data storage and retrieval
-├── tools/                           # Business logic implementations
-├── types/                           # Shared TypeScript interfaces
-├── utils/                           # Common utilities
-└── web/client/                      # React web UI (see CONVENTIONS.md there)
-```
+A config file named with `--config` or `DOCS_MCP_CONFIG` is read-only to the server. Without one, the server uses the file in the system configuration directory and writes new default values back to it at startup. See [Configuration](docs/setup/configuration.md) for the options and their environment variables.
 
 ## System Architecture
 
-The system uses a layered architecture where interfaces delegate to shared tools, which coordinate pipeline operations for content processing and storage. The architecture supports two deployment modes with different event flow patterns.
+Interfaces delegate to shared tools and services, which run jobs through the pipeline and read and write the store. The same components run in one process, or split between coordinators and a shared worker.
 
 ### Unified Mode (Local In-Process)
 
-In unified mode, all components run within a single process. The `PipelineManager` executes jobs directly and emits events to the local `EventBus`, which notifies all consumers in real-time.
+In unified mode, all components run in one process. The default command serves the MCP endpoint, the web interface and the API together. `web`, `mcp`, `scrape` and `refresh` start their own pipeline when they have no `--server-url`. `PipelineManager` runs jobs in the process and emits events to the local `EventBus`, which every interface reads.
 
 ```mermaid
 graph TD
@@ -100,46 +63,36 @@ graph TD
             MCP[MCP Server]
         end
 
-        subgraph "Core Services"
-            EB[EventBus Service]
-            DOC[Document Service]
+        subgraph "Services"
+            BACKEND[openBackend]
+            DOC[DocumentManagementService]
+            EB[EventBus]
         end
 
         subgraph "Pipeline"
-            BACKEND[openBackend]
             MANAGER[PipelineManager]
             WORKER[PipelineWorker]
         end
 
         subgraph "Content Processing"
-            SCRAPER[Scraper]
-            SPLITTER[Splitter]
-            EMBEDDER[Embeddings]
+            SCRAPER[Scraper and Content Pipelines]
+            STORE[DocumentStore]
         end
 
         %% Command Flow
         CLI & WEB & MCP --> BACKEND
+        BACKEND -->|Opens| DOC
         BACKEND -->|Creates and starts| MANAGER
-        MANAGER -->|Manages| WORKER
-        WORKER --> SCRAPER
-        SCRAPER --> SPLITTER
-        SPLITTER --> EMBEDDER
+        MANAGER -->|Runs jobs| WORKER
+        WORKER -->|Fetches and splits| SCRAPER
+        WORKER -->|Stores chunks| DOC
+        DOC -->|Embeds and writes| STORE
 
         %% Event Flow
-        MANAGER -.->|Emits Events| EB
+        MANAGER & DOC -.->|Emits Events| EB
         EB -.->|Real-time Updates| CLI & WEB & MCP
-
-        %% Data Flow
-        EMBEDDER -->|Stores Content| DOC
     end
 ```
-
-**Key Characteristics:**
-
-- Direct method calls between components
-- Local event propagation via `EventBus`
-- Immediate job status updates
-- Simple deployment (single process)
 
 ### Distributed Mode (Hub & Spoke)
 
@@ -179,84 +132,59 @@ graph TD
     TRPC -.->|WebSocket: Events| API
 ```
 
-**Key Characteristics:**
+One worker runs every job, and any number of coordinators share it. Commands travel over HTTP and events over one WebSocket; both links come from `src/services/apiClient.ts`, which the web UI uses too.
 
-- **Hub**: Shared worker process executes all jobs
-- **Spokes**: Independent coordinator processes (Web, MCP, CLI)
-- **Split-Link Communication**: HTTP for commands, WebSocket for events; the links come from `src/services/apiClient.ts`, which the web UI uses too
-- **Event Bridging**: every remote backend that has a pipeline relays the worker's events; a command waits briefly for the stream before its first job, and when the stream returns after a drop, the relay emits `JOB_LIST_CHANGE` and `LIBRARY_CHANGE` so views refetch what they missed
-- **Scalability**: Multiple coordinators can share one worker
-- **Transparency**: Consumers use the same `EventBus` API regardless of mode
-
-### Protocol Auto-Detection
-
-The entry point resolves protocol based on TTY status:
-
-- No TTY (stdin/stdout redirected): stdio transport for direct MCP communication
-- Has TTY (interactive terminal): HTTP transport with Server-Sent Events
-- Manual override: `--protocol stdio|http` bypasses detection
-
-The Docker image sets `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0`, so no-argument container startup serves HTTP even without a TTY. These lower-precedence aliases enter the existing environment configuration layer; unrelated CLI options preserve them, while runtime aliases, generic environment variables, and explicit CLI flags can override them. Docker stdio clients select `--protocol stdio` and keep stdin open with `docker run -i`.
-
-CI builds and runs the production Docker image's E2E suite on native x86-64 and ARM64 Linux runners. Each architecture uses its own build cache. Release builds publish both architectures under the same image tag.
+Every remote backend that has a pipeline relays the worker's events. A command waits briefly for the event stream before its first job. When the stream returns after a drop, the relay emits `JOB_LIST_CHANGE` and `LIBRARY_CHANGE` so views refetch what they missed.
 
 ### Backend Selection
 
 Every entry point opens its services with `openBackend()` (`src/services/backend.ts`), which decides local or remote from the worker URL and owns starting and stopping what it creates. Naming clarifies the mode: PipelineManager runs an in-process worker; PipelineClient uses an out-of-process worker.
 
 - `serverUrl` specified: a remote backend. Its API client's HTTP calls and its event WebSocket use the same worker URL, path included, so a worker behind a path-prefixed reverse proxy works.
-- `jobs: false`: documents only, for read-only commands and the CLI `remove`; no pipeline, and no WebSocket to a worker. A remote store removes a version through the worker's `removeDocs`, which cancels the worker's job for it first
-- `jobs: { interruptedJobs }`: a started PipelineManager locally, which recovers the jobs an earlier run left unfinished (`recover`), marks them failed (`fail`), or leaves them alone (`leave`); the worker's pipeline remotely. Server commands host the store and recover or fail them; `scrape`, `refresh` and read-only servers run only their own job, or none, and leave the rest to the server
+- `jobs: false`: documents only, for read-only commands and the CLI `remove`; no pipeline, and no WebSocket to a worker. A remote store removes a version through the worker's `removeDocs`, which cancels the worker's job for it first.
+- `jobs: { interruptedJobs }`: a started PipelineManager locally, with a policy for the jobs an earlier run left unfinished; the worker's pipeline remotely. Server commands host the store and recover or fail those jobs; `scrape`, `refresh` and read-only servers run only their own job, or none, and leave the rest to the server. See [Interrupted Jobs](docs/concepts/pipeline-architecture.md#interrupted-jobs).
+
+### Servers and Protocols
+
+`AppServer` composes the HTTP surface for each server command. The default command serves the MCP endpoint, the web interface and the API. `web` serves the web interface and the API, `mcp` over HTTP serves only the MCP endpoint, and `worker` serves only the API.
+
+Outside Docker, the default command and `mcp` choose their MCP transport from the terminal. When neither stdin nor stdout is a TTY, as when an AI tool launches the server, they serve MCP over stdio. Otherwise they start the HTTP server, with MCP over Streamable HTTP at `/mcp`. `--protocol stdio|http` overrides the detection.
+
+The Docker image sets `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0`, so a container started without arguments serves HTTP on all interfaces even without a TTY. These are ordinary environment defaults: a variable passed to `docker run` or a CLI flag overrides them. Docker stdio clients pass `--protocol stdio` and keep stdin open with `docker run -i`.
+
+CI builds and runs the production Docker image's E2E suite on native x86-64 and ARM64 Linux runners. Each architecture uses its own build cache. Release builds publish both architectures under the same image tag.
 
 ## Core Components
 
 ### Tools Layer
 
-Business logic resides in the tools layer to enable code reuse across interfaces. Tools operate on shared pipeline and storage services, eliminating interface-specific implementations. CLI commands and MCP endpoints delegate to the same tool implementations; the application API that the web UI calls exposes the same pipeline and storage services.
-
-The tools layer includes:
-
-- Document scraping with configuration persistence
-- Semantic search across indexed content
-- Library and version management
-- Job lifecycle management (status, progress, cancellation)
-- URL fetching and markdown conversion
+Business logic lives in `src/tools/`, one class per operation: scraping and refreshing, search, listing libraries and pages, finding a version, reading a page, removing documents, job control, and fetching a single URL as Markdown. The CLI commands and the MCP tools call these classes, so both interfaces behave the same. The web interface calls the application API, which exposes the same pipeline and document services.
 
 ### Pipeline Management
 
-The pipeline system manages asynchronous job processing with persistent state and real-time event propagation:
+The pipeline runs jobs asynchronously, persists their state, and reports their progress as events. See [Pipeline Architecture](docs/concepts/pipeline-architecture.md) and [Event Bus Architecture](docs/concepts/eventbus-architecture.md).
 
-**PipelineManager**: Coordinates job queue, concurrency limits, and state synchronization. Maintains write-through architecture where job state updates immediately persist to database. Emits events to `EventBus` for real-time status updates to all consumers.
+`PipelineManager` owns the job queue and the concurrency limit. It writes every job state change to the database as it happens (write-through), so the job record in the store is always current and a restarted process can find unfinished jobs. It emits each change on the `EventBus`.
 
-**PipelineWorker**: Executes individual jobs, orchestrating content fetching, processing, and storage. Reports progress through callbacks to the manager, which are converted to events.
+`PipelineWorker` executes one job: it runs the scrape and stores each page's chunks through `DocumentManagementService`. It reports progress to the manager, which turns it into events.
 
-**PipelineClient**: Provides the PipelineManager interface for a remote worker by calling the worker's API. Before its first job it waits briefly for the event stream, so a job that starts at once does not lose its first events. `waitForJobCompletion` settles on a relayed `JOB_STATUS_CHANGE` or on the worker's `getJob` state, which it checks right away and then every 10 seconds while events arrive, or every second while they do not.
+`PipelineClient` provides the same pipeline interface for a remote worker by calling the worker's API, and keeps no job state of its own. Before its first job it waits briefly for the event stream, so a job that starts at once does not lose its first events. See [Remote Pipeline](docs/concepts/pipeline-architecture.md#remote-pipeline).
 
-**RemoteEventProxy**: Bridges events from a remote worker to the local `EventBus` through one subscription on the backend's API client. The WebSocket client reconnects dropped connections; the proxy subscribes again when the subscription itself ends. Its live state backs the web server's `worker.connected` health field.
+`RemoteEventProxy` bridges events from a remote worker to the local `EventBus` through one subscription on the backend's API client. The WebSocket client reconnects dropped connections; the proxy subscribes again when the subscription itself ends. Its live state backs the web server's `worker.connected` health field.
 
-**EventBus**: Central pub/sub service that decouples event producers (PipelineManager) from consumers (CLI, Web UI, MCP). Enables real-time updates without direct coupling between components.
+`EventBus` is the in-process publish and subscribe service between producers (`PipelineManager`, `DocumentManagementService`) and consumers (CLI, web interface, MCP), so the components do not depend on each other directly.
 
-Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED, with a running job passing through CANCELLING until it stops writing. All state transitions persist to database and emit events, enabling both recovery after restart and real-time monitoring. See [Event Bus Architecture](docs/concepts/eventbus-architecture.md) for detailed event flow diagrams.
+Job states progress through QUEUED, RUNNING, and then COMPLETED, FAILED or CANCELLED, with a running job passing through CANCELLING until it stops writing. See [Job Lifecycle](docs/concepts/pipeline-architecture.md#job-lifecycle).
 
 ### Content Processing
 
-Content processing follows a modular strategy-pipeline-splitter architecture:
+A scrape runs through three layers. A scraper strategy (`src/scraper/strategies/`) handles one kind of source: websites, GitHub repositories, npm and PyPI packages, or local files and archives. It discovers pages and fetches each one through a fetcher, which reads over HTTP, through a headless browser, or from the file system. A content pipeline, chosen by MIME type, turns the raw content into chunks. HTML and Markdown pass through a middleware chain that extracts the content, metadata and links. PDF, Office and other binary documents go through Xberg. JSON and source code have their own pipelines, and a text pipeline takes everything else. The store then embeds the chunks and writes them. See [Content Processing](docs/concepts/content-processing.md) and [Supported Formats](docs/concepts/supported-formats.md).
 
-1. **Scraper Strategies**: Handle different source types (web, local files, package registries)
-2. **Content Fetchers**: Retrieve raw content from various sources (HTTP, filesystem, APIs)
-3. **Processing Pipelines**: Transform content using middleware chains and content-type-specific logic
-4. **Document Processing**: Extract text from binary documents (PDF, Office, EPUB, etc.) using Xberg
-5. **Document Splitters**: Segment content into semantic chunks preserving document structure
-6. **Size Optimization**: Apply universal chunk sizing for optimal embedding generation
-7. **Embedders**: Generate vector embeddings using configured provider
+Most pipelines split in two phases: a structure-aware splitter cuts along the document's headings, code blocks, tables and lists, and `GreedySplitter` then merges small chunks up to the configured size. The JSON and source-code pipelines use their own splitters. See [Splitter Hierarchy](docs/concepts/splitter-hierarchy.md) and [Source Code Splitter](docs/concepts/source-code-splitter.md).
 
-The system uses a two-phase splitting approach: semantic splitting preserves document structure, followed by size optimization for embedding quality. See [Content Processing](docs/concepts/content-processing.md) for detailed processing flows.
+`TextContentSplitter`, which the Markdown, text and source-code splitters use for plain text, enforces a fence-balance invariant: no chunk boundary may fall inside an open ` ``` ` or `~~~` fenced code block, even when the block is embedded in a list item, blockquote, or arbitrary wrapper. When honoring this invariant would force a chunk past `maxChunkSize`, the splitter accepts the oversize chunk (logging a warning) rather than break the fence. Downstream renderers and LLM consumers always get balanced fences.
 
-Across all splitting strategies, `TextContentSplitter` enforces a fence-balance invariant: no chunk boundary may fall inside an open ` ``` ` or `~~~` fenced code block, even when the block is embedded in a list item, blockquote, or arbitrary wrapper. When honoring this invariant would force a chunk past `maxChunkSize`, the splitter accepts the oversize chunk (logging a warning) rather than break the fence — guaranteeing balanced fences for downstream renderers and LLM consumers.
-
-For web sources, `WebScraperStrategy` performs an ingestion-time `llms.txt` probe during scrapes and refreshes. It checks the input URL's parent directory before the site root, parses curated Markdown links with `llmsTxtParser`, and adds accepted links to the BFS queue only after the depth-0 page establishes the canonical post-redirect scope base. Queue entries seeded this way carry `fromLlmsTxt`, which makes `processItem` try the spec-defined `.md` URL variant before fetching the original page.
-
-HTTP and browser-backed web fetches default to `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` unless the caller provides an explicit `Accept` header. Markdown MIME responses route directly to `MarkdownPipeline`; HTML continues through `HtmlPipeline`, and generic `text/plain` remains on the text fallback except for accepted llms.txt `.md` variants.
+Web fetches ask for Markdown first in their `Accept` header. A Markdown response goes to `MarkdownPipeline`, and HTML goes to `HtmlPipeline`. During scrapes and refreshes, `WebScraperStrategy` also looks for an `llms.txt` file near the start URL and at the site root. It queues the Markdown links the file lists once the start page has fixed the crawl's scope, and fetches the `.md` variant of each listed page first. A page fetched as its Markdown variant is stored under its canonical URL, so both forms of a page are one page.
 
 #### Browser lifecycle
 
@@ -270,7 +198,7 @@ Playwright's headless shell is the default binary. Installs made with `playwrigh
 
 #### Sub-resource blocklist
 
-During Playwright-driven page rendering, `HtmlPlaywrightMiddleware` aborts requests to a small, hand-curated list of third-party hosts that pages commonly load but that never carry documentation content: analytics SDKs, session-replay agents, chat widgets, captcha runtimes, and social-embed runtime JS. The list lives in [src/scraper/middleware/subresourceBlocklist.ts](src/scraper/middleware/subresourceBlocklist.ts) and matches on hostname suffix (with a label boundary) plus an optional path prefix. Two categories are deliberately excluded: **advertising networks**, to avoid triggering anti-adblock detection on monetized sites, and **generic CDNs** (unpkg, jsDelivr, cdnjs), because pages legitimately fetch content-bearing libraries from them. The top-level navigation and any iframe document navigations are always exempt — the check short-circuits on Playwright's `resourceType === "document"`. The feature is governed by a single config flag, `scraper.skipKnownTrackers`, which defaults to `true`.
+During Playwright-driven page rendering, `HtmlPlaywrightMiddleware` aborts requests to a small, hand-curated list of third-party hosts that pages commonly load but that never carry documentation content: analytics SDKs, session-replay agents, chat widgets, captcha runtimes, and social-embed runtime JS. The list lives in [src/scraper/middleware/subresourceBlocklist.ts](src/scraper/middleware/subresourceBlocklist.ts) and matches on hostname suffix (with a label boundary) plus an optional path prefix. Two categories are deliberately excluded: advertising networks, to avoid triggering anti-adblock detection on monetized sites, and generic CDNs (unpkg, jsDelivr, cdnjs), because pages legitimately fetch content-bearing libraries from them. The top-level navigation and any iframe document navigations are always exempt — the check short-circuits on Playwright's `resourceType === "document"`. The feature is governed by a single config flag, `scraper.skipKnownTrackers`, which defaults to `true`.
 
 #### Unprocessable-content filtering
 
@@ -285,18 +213,19 @@ A skipped resource is neither content nor a failure: it stores no page and is ex
 
 There is no configuration flag. The fetch-time gate applies the same predicate the pipeline-selection loop already applies, just earlier, so disabling it would produce a byte-identical index more slowly. On the reference crawl used for issue #490 the two gates cut HTTP requests from 2158 to 1013 and removed roughly 265 MB of discarded image downloads, while indexing exactly the same 806 documents.
 
-### Storage Architecture
+#### Scrape progress counters
 
-SQLite database with normalized schema:
+A scrape reports four counters. `totalDiscovered` counts URLs admitted to the queue; `totalPages` is how many items the job expects to process; `pagesScraped` counts items dequeued and given an outcome; `pagesIndexed` counts those that produced stored content. The first two move at enqueue, the last two at outcome.
 
-- `libraries`: Library metadata and organization
-- `versions`: Version tracking with indexing status and configuration
-- `pages`: Page-level metadata (URL, title, ETag, content type, crawl depth)
-- `documents`: Content chunks with embeddings and metadata
+`pagesScraped` converges on `totalPages` because every queued item reaches exactly one outcome — depth, scope, patterns and content type are all filtered before admission, so nothing is queued and then silently discarded. `maxPages` bounds `pagesIndexed` rather than attempts, so asking for 100 pages yields 100 pages; the denominator stretches by the number of items that produced nothing, which keeps the fraction able to complete.
 
-The `versions` table serves as the job state hub, storing progress, errors, and scraper configuration for reproducible re-indexing.
+Every event names its outcome — stored, unchanged, absent, empty, skipped or failed. This matters most for the two that both arrive without content: a `304` is unchanged and the stored page is kept, while an empty `200` means the page exists and holds nothing, and its stored content is replaced. When a pipeline errors while producing nothing, nothing has been learned about the page, so the previous content is left alone and the response validator withheld, which keeps the next refresh unconditional instead of caching a failure forever. See [Refresh Architecture](docs/concepts/refresh-architecture.md).
 
-DocumentManagementService handles CRUD operations and version resolution. DocumentRetrieverService provides hybrid search combining vector similarity and full-text search using Reciprocal Rank Fusion (RRF) with configurable weights. The search system implements dual-mode FTS query generation for improved recall (combining exact phrase and keyword matching) and uses an overfetch factor to retrieve more candidates before final ranking.
+### Storage and Search
+
+The store is one SQLite database. The `libraries`, `versions`, `pages` and `documents` tables form a normalized hierarchy, where `documents` holds the chunks. `documents_fts` (FTS5) and `documents_vec` (sqlite-vec) index the chunks, and triggers keep them in step. The `metadata` table records the active embedding model, so a changed model is detected at startup. A version row is also the job record: it holds the job's status, progress and error, and the scraper options, so a refresh repeats the original scrape. See [Data Storage](docs/concepts/data-storage.md).
+
+`DocumentManagementService` manages libraries and versions and resolves version labels. `DocumentStore` runs hybrid search: it fuses full-text and vector results with Reciprocal Rank Fusion, using configurable weights and an overfetch factor, and its full-text query matches the whole phrase as well as the single terms. Without an embedding model, search uses the full-text index alone. `DocumentRetrieverService` expands each hit with the surrounding chunks, using an assembly strategy chosen by content type. See [Search Result Reassembly](docs/concepts/search-result-reassembly.md).
 
 ## Interface Implementations
 
@@ -331,9 +260,9 @@ graph LR
 
 `AppServer` serves the app when the web interface is enabled (the default command and `web`):
 
-- **Static files**: `@fastify/static` serves `public/`, which holds the hashed build assets and the favicons.
-- **SPA shell**: `/`, `/index.html` and every other unmatched `GET` or `HEAD` request get `index.html` with a `<base href>` for the public URL's path, so deep links and page reloads open the app. Unmatched paths under `/api`, `/mcp`, `/assets`, `/.well-known`, `/sse` and `/messages` get a JSON `404`.
-- **API**: the merged tRPC router (`AppRouter` in `src/services/appRouter.ts`) at `/api`. Queries and mutations use HTTP; the `events.subscribe` subscription uses a WebSocket on the same path. The `worker` command serves the API without the web interface.
+- Static files: `@fastify/static` serves `public/`, which holds the hashed build assets and the favicons.
+- SPA shell: `/`, `/index.html` and every other unmatched `GET` or `HEAD` request get `index.html` with a `<base href>` for the public URL's path, so deep links and page reloads open the app. Unmatched paths under `/api`, `/mcp`, `/assets`, `/.well-known`, `/sse` and `/messages` get a JSON `404`.
+- API: the merged tRPC router (`AppRouter` in `src/services/appRouter.ts`) at `/api`. Queries and mutations use HTTP; the `events.subscribe` subscription uses a WebSocket on the same path. The `worker` command serves the API without the web interface.
 
 The browser builds its links with `createApiLinks()` from `src/services/apiClient.ts`, the same function coordinators use to reach a remote worker, and imports `AppRouter` as a type only, so no server code enters the browser bundle. The app shell holds one event subscription for job and library events and invalidates the affected queries, so every view refetches as jobs run and the corpus changes.
 
@@ -345,82 +274,31 @@ See [Web Client Conventions](src/web/client/CONVENTIONS.md) for the client's dir
 
 ### MCP Protocol Integration
 
-The MCP server exposes tools as protocol-compliant endpoints, built on the MCP TypeScript SDK v2. Two transports are supported:
+The MCP server publishes the tools layer as MCP tools. It is built on the MCP TypeScript SDK v2 and has these transports and checks:
 
-- **stdio transport**: For command-line integration and AI tools. Serves clients on protocol revision 2026-07-28 and on earlier, handshake-based revisions.
-- **HTTP transport**: Streamable HTTP at `/mcp`, for protocol revision 2026-07-28 and, statelessly, for clients on earlier handshake-based revisions. The SDK's per-request handler is mounted on the application's Fastify route. Before it, the route checks the browser `Origin`, answers CORS preflights and non-POST methods, and verifies bearer tokens when authentication is enabled.
-- **Host check**: a global hook refuses (`403`) every request and WebSocket upgrade whose `Host` names an unknown host, which stops DNS rebinding. Accepted are IP literals, `localhost`, single-label names, the public URL's host and the hosts of `server.allowedOrigins` (`createHostPolicy` in `src/app/originPolicy.ts`).
-- **Deprecated HTTP+SSE transport**: `GET /sse` and `POST /messages`, registered only while authentication is off, for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
-
-Protocol selection defaults to TTY-based auto-detection outside Docker. The Docker image defaults to HTTP on all container interfaces; runtime environment variables and CLI flags can override it.
+- stdio transport: for AI tools that launch the server as a child process. It serves clients on protocol revision 2026-07-28 and on earlier, handshake-based revisions.
+- HTTP transport: Streamable HTTP at `/mcp`, for protocol revision 2026-07-28 and, statelessly, for clients on earlier handshake-based revisions. The SDK's per-request handler is mounted on the application's Fastify route. Before it, the route checks the browser `Origin`, answers CORS preflights and non-POST methods, and verifies bearer tokens when authentication is enabled.
+- Host check: a global hook refuses (`403`) every request and WebSocket upgrade whose `Host` names an unknown host, which stops DNS rebinding. Accepted are IP literals, `localhost`, single-label names, the public URL's host and the hosts of `server.allowedOrigins` (`createHostPolicy` in `src/app/originPolicy.ts`).
+- Deprecated HTTP+SSE transport: `GET /sse` and `POST /messages`, registered only while authentication is off, for handshake-era clients. It uses the SDK's frozen `SSEServerTransport` from `@modelcontextprotocol/server-legacy`, with one MCP server instance per stream, and goes away in a future major release.
 
 When authentication is enabled, the HTTP transport acts as an OAuth 2.0 resource server. It publishes protected resource metadata and accepts only JWTs the configured identity provider issued for its public URL; see [Authentication](docs/infrastructure/authentication.md).
 
 All advertised URLs derive from one resolved public location (`server.publicUrl`). The server answers every route with or without that URL's path prefix, so it runs behind reverse proxies that strip the prefix or forward it; see [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md).
 
-Available MCP tools mirror CLI functionality: document scraping, search, library management, and job control. Tools maintain identical interfaces across CLI and MCP access methods.
+The MCP tools cover search, scraping and refreshing, library and version lookup, page browsing, job control, removal, and URL fetching. They call the same tool classes as the CLI. Read-only mode leaves out the scraping, job and removal tools.
 
 During initialization the server sends instructions that clients add to the model's context. Tool descriptions explain one tool each; the instructions explain how the tools work together. Configured instructions (`server.instructions` or `server.instructionsFile`) replace the built-in text entirely. The built-in text depends on read-only mode and names only the tools registered in that mode.
 
-### Configuration and Deployment
+## Benchmarking
 
-Configuration uses environment variables with sensible defaults. Database location auto-detects project-local storage or system application directory.
+A search-quality benchmark measures the retrieval quality of `SearchTool`. It computes deterministic IR metrics (MRR, Recall@k, nDCG@k, Hit@k) against a labelled dataset, plus LLM-judged scores for chunk coherence, faithfulness and answerability. It measures retrieval only, not answer generation.
 
-The AppServer provides modular service composition, enabling selective feature activation based on deployment requirements.
+The headline metrics fail the run when they regress against a checked-in baseline; the LLM-judged scores are informational. The benchmark runs on manual dispatch and on a weekly schedule (`.github/workflows/eval.yml`), not on pull requests.
 
-## Development Guidelines
-
-### Code Organization
-
-- Tools implement business logic with interface-agnostic design
-- Pipeline components handle asynchronous processing concerns
-- Storage layer abstracts database operations with migration support
-- Interfaces delegate to tools rather than implementing logic directly
-
-### Testing Strategy
-
-Tests focus on public API behavior and observable side effects. Mock only external dependencies (databases, APIs, filesystem). Tests should remain stable across refactoring by avoiding implementation detail assertions.
-
-### Logging
-
-Hierarchical logging strategy:
-
-- Tools layer: User-facing operations and results
-- Core components: Operational status and state changes
-- Processing layer: Detailed progress and error conditions
-
-Use `console.*` for direct user output, `logger.*` for application events.
-
-### Error Handling
-
-Errors propagate through the tools layer with context preservation. Job failures store detailed error information for debugging and user feedback.
-
-## Architectural Patterns
-
-### Write-Through Architecture
-
-Pipeline jobs serve as single source of truth, containing both runtime state and database fields. All updates immediately synchronize to database, ensuring consistency and recovery capability.
-
-### Functionality-Based Design
-
-Components are selected based on capability requirements rather than deployment context. `openBackend()` chooses implementations based on desired functionality (embedded vs external, documents only vs jobs, recovery vs immediate).
-
-### Protocol Abstraction
-
-Transport layer abstracts stdio vs HTTP differences, enabling identical tool functionality across access methods.
-
-## Extension Points
-
-New functionality should follow established patterns:
-
-- Implement core logic in tools layer for interface reuse
-- Add pipeline workers for new content processing types
-- Extend scraper middleware for additional content sources
-- Use migration system for schema changes
+- [Benchmarking guide](docs/guides/benchmarking.md): prerequisites, running the benchmark, reading the results.
+- [Search evaluation internals](tests/search-eval/README.md): how the benchmark runs and how to extend it.
 
 ## References
-
-Detailed documentation for specific architectural areas:
 
 ### Concepts
 
@@ -431,50 +309,19 @@ Detailed documentation for specific architectural areas:
 - [Data Storage](docs/concepts/data-storage.md) - Database design and embedding management
 - [Refresh Architecture](docs/concepts/refresh-architecture.md) - Efficient re-indexing with change detection
 - [Splitter Hierarchy](docs/concepts/splitter-hierarchy.md) - Document chunk organization and hierarchy
-- [Search Result Reassembly](docs/concepts/search-result-reassembly.md) - Search result processing and assembly
+- [Search Result Reassembly](docs/concepts/search-result-reassembly.md) - Turning matched chunks into passages, and the assembly strategies
 - [Source Code Splitter](docs/concepts/source-code-splitter.md) - Source code chunking strategies
-- [Content Agnostic Assembly](docs/concepts/content-agnostic-assembly.md) - Content assembly patterns
 
 ### Infrastructure
 
 - [Deployment Modes](docs/infrastructure/deployment-modes.md) - Protocol detection and server modes
 - [Authentication](docs/infrastructure/authentication.md) - OAuth 2.0 resource-server authentication for the MCP endpoint
 - [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md) - Serving under a public URL and path behind nginx or Traefik
+- [Security](docs/infrastructure/security.md) - Network and file access policy for scraping, and deployment controls
 - [Telemetry](docs/infrastructure/telemetry.md) - Privacy-first telemetry architecture
 
-## Benchmarking
+### Setup and Guides
 
-The retrieval quality of `SearchTool` is measured by the search-quality benchmark.
-It produces deterministic IR metrics (MRR, Recall@k, nDCG@k, Hit@k) against a
-labelled qrel dataset, plus LLM-judged chunk-coherence / faithfulness / answerability
-scores. Scope is retrieval-only — end-to-end RAG generation is intentionally
-out of scope.
-
-Headline metrics gate regressions against a checked-in baseline; LLM-judged scores
-are observational. The benchmark runs on `workflow_dispatch` and a weekly schedule
-and is not wired into PR-required checks.
-
-- **Operator guide:** [docs/guides/benchmarking.md](docs/guides/benchmarking.md) — prerequisites, how to run, how to interpret results.
-- **Developer internals:** [tests/search-eval/README.md](tests/search-eval/README.md) — file layout and extension points.
-
-#### Scrape progress counters
-
-A scrape reports four counters. `totalDiscovered` counts URLs admitted to the
-queue; `totalPages` is how many items the job expects to process; `pagesScraped`
-counts items dequeued and given an outcome; `pagesIndexed` counts those that
-produced stored content. The first two move at enqueue, the last two at outcome.
-
-`pagesScraped` converges on `totalPages` because every queued item reaches
-exactly one outcome — depth, scope, patterns and content type are all filtered
-before admission, so nothing is queued and then silently discarded. `maxPages`
-bounds `pagesIndexed` rather than attempts, so asking for 100 pages yields 100
-pages; the denominator stretches by the number of items that produced nothing,
-which keeps the fraction able to complete.
-
-Every event names its outcome — stored, unchanged, absent, empty, skipped or
-failed. This matters most for the two that both arrive without content: a `304`
-is unchanged and the stored page is kept, while an empty `200` means the page
-exists and holds nothing, and its stored content is replaced. When a pipeline
-*errors* while producing nothing we have learned nothing about the page, so the
-previous content is left alone and the response validator withheld, which keeps
-the next refresh unconditional instead of caching a failure forever.
+- [Configuration](docs/setup/configuration.md) - Configuration layers, options and environment variables
+- [Embedding Models](docs/guides/embedding-models.md) - Choosing and configuring an embedding provider
+- [Benchmarking](docs/guides/benchmarking.md) - Running the search-quality benchmark

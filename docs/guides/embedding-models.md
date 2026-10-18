@@ -1,54 +1,48 @@
-# Embedding Model Configuration
+# Embedding Models
 
-This guide details how to configure the embedding models used for vector search. You can set the embedding model using the `app.embeddingModel` configuration key, the `DOCS_MCP_EMBEDDING_MODEL` environment variable, or the `--embedding-model` CLI flag.
+An embedding model turns each chunk of documentation into a vector, so that search finds passages by meaning as well as by their words. Search combines these vector results with full-text results. Without an embedding model, the server runs full-text search only.
 
-## Model Selection
+## Choosing a Model
 
-If you leave the model empty but provide `OPENAI_API_KEY`, the server defaults to `text-embedding-3-small`.
+Set the model with one of these, listed from highest to lowest precedence:
 
-**Supported Options:**
+- the `--embedding-model` flag;
+- the `DOCS_MCP_APP_EMBEDDING_MODEL` or `DOCS_MCP_EMBEDDING_MODEL` environment variable;
+- `app.embeddingModel` in the config file (see [Configuration](../setup/configuration.md)).
 
-- `text-embedding-3-small` (default, OpenAI)
-- `openai:snowflake-arctic-embed2` (OpenAI-compatible, e.g., Ollama)
-- `vertex:text-embedding-004` (Google Vertex AI)
-- `gemini:embedding-001` (Google Gemini)
-- `aws:amazon.titan-embed-text-v1` (AWS Bedrock)
-- `microsoft:text-embedding-ada-002` (Azure OpenAI)
-- `nomic-embed-text:latest` (OpenAI-compatible, tagged model name)
-- `second-state/jina-embeddings-v3-GGUF:Q4_K_M` (OpenAI-compatible, namespaced and quantized)
-- Or any OpenAI-compatible model name
+The default is OpenAI's `text-embedding-3-small`, which needs `OPENAI_API_KEY`. When the credentials of the selected provider are missing, the server starts anyway, logs a warning and runs full-text search only.
 
-A prefix is read as a provider only when it is one of the provider names above
-(`openai`, `vertex`, `gemini`, `aws`, `microsoft`), matched
-case-insensitively. Any other model name is passed through to your
-OpenAI-compatible endpoint unchanged, so names carrying a namespace, tag, or
-quantization suffix — the form Ollama, LM Studio, and llama.cpp use — work as
-written and do not need an `openai:` prefix.
+A model is written as `provider:model`:
 
-## Provider Configuration
+| Prefix | Provider | Example |
+|:-------|:---------|:--------|
+| none or `openai` | OpenAI or an OpenAI-compatible server (Ollama, LM Studio, llama.cpp and others) | `text-embedding-3-small`, `nomic-embed-text:latest` |
+| `vertex` | Google Vertex AI | `vertex:text-embedding-004` |
+| `gemini` | Google Gemini API | `gemini:gemini-embedding-001` |
+| `aws` | AWS Bedrock | `aws:amazon.titan-embed-text-v1` |
+| `microsoft` | Azure OpenAI | `microsoft:text-embedding-ada-002` |
 
-Provider credentials use the provider-specific environment variables listed below.
+A prefix counts as a provider only when it is one of these names, in any letter case. Any other name goes to the OpenAI-compatible endpoint unchanged. Names with a namespace, tag or quantization suffix, as Ollama, LM Studio and llama.cpp write them, work as written and need no `openai:` prefix: `nomic-embed-text:latest`, `second-state/jina-embeddings-v3-GGUF:Q4_K_M`.
 
-| Variable                           | Description                                           |
-| ---------------------------------- | ----------------------------------------------------- |
-| `DOCS_MCP_EMBEDDING_MODEL`         | Embedding model to use.                               |
-| `OPENAI_API_KEY`                   | OpenAI API key for embeddings.                        |
-| `OPENAI_API_BASE`                  | Custom OpenAI-compatible API endpoint (e.g., Ollama). |
-| `GOOGLE_API_KEY`                   | Google API key for Gemini embeddings.                 |
-| `GOOGLE_APPLICATION_CREDENTIALS`   | Path to Google service account JSON for Vertex AI.    |
-| `AWS_ACCESS_KEY_ID`                | AWS key for Bedrock embeddings.                       |
-| `AWS_SECRET_ACCESS_KEY`            | AWS secret for Bedrock embeddings.                    |
-| `AWS_REGION`                       | AWS region for Bedrock.                               |
-| `AZURE_OPENAI_API_KEY`             | Azure OpenAI API key.                                 |
-| `AZURE_OPENAI_API_INSTANCE_NAME`   | Azure OpenAI instance name.                           |
-| `AZURE_OPENAI_API_DEPLOYMENT_NAME` | Azure OpenAI deployment name.                         |
-| `AZURE_OPENAI_API_VERSION`         | Azure OpenAI API version.                             |
+## Provider Credentials
 
-### Examples
+Each provider reads its credentials from environment variables:
 
-Here are complete configuration examples for different embedding providers.
+| Provider | Required | Optional |
+|:---------|:---------|:---------|
+| OpenAI and compatible | `OPENAI_API_KEY` | `OPENAI_API_BASE`: base URL of an OpenAI-compatible API |
+| Vertex AI | `GOOGLE_APPLICATION_CREDENTIALS`: path to a service account JSON key | |
+| Gemini | `GOOGLE_API_KEY` | |
+| AWS Bedrock | `BEDROCK_AWS_REGION` or `AWS_REGION` (the first wins), and either `AWS_PROFILE` or both `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` | `AWS_SESSION_TOKEN` |
+| Azure OpenAI | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_API_INSTANCE_NAME`, `AZURE_OPENAI_API_DEPLOYMENT_NAME`, `AZURE_OPENAI_API_VERSION` | |
 
-#### OpenAI (Default)
+An OpenAI-compatible server that needs no key still needs `OPENAI_API_KEY` set, to any value.
+
+Where the variables go depends on how you run the server: prefix the command, pass `-e` to `docker run`, write them to `.env` for Docker Compose, or list them under `env` in an MCP client's settings. [Installation](../setup/installation.md) shows each.
+
+## Examples
+
+### OpenAI
 
 ```bash
 OPENAI_API_KEY="sk-proj-your-openai-api-key" \
@@ -56,9 +50,9 @@ DOCS_MCP_EMBEDDING_MODEL="text-embedding-3-small" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-#### Ollama (Local)
+### Ollama
 
-Run local models compatible with the OpenAI API format.
+Pull the model in Ollama first (`ollama pull nomic-embed-text`).
 
 ```bash
 OPENAI_API_KEY="ollama" \
@@ -67,9 +61,9 @@ DOCS_MCP_EMBEDDING_MODEL="nomic-embed-text:latest" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-#### LM Studio (Local)
+### LM Studio
 
-Connect to LM Studio's local inference server.
+Start LM Studio's local server with an embedding model loaded.
 
 ```bash
 OPENAI_API_KEY="lmstudio" \
@@ -78,19 +72,17 @@ DOCS_MCP_EMBEDDING_MODEL="text-embedding-qwen3-embedding-4b" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-#### Google Gemini
-
-Use Google's Gemini API directly.
+### Google Gemini
 
 ```bash
 GOOGLE_API_KEY="your-google-api-key" \
-DOCS_MCP_EMBEDDING_MODEL="gemini:embedding-001" \
+DOCS_MCP_EMBEDDING_MODEL="gemini:gemini-embedding-001" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-#### Google Vertex AI
+Gemini models produce vectors that can be shortened. With an explicit [vector dimension](#vector-dimension) below the model's own, the server keeps the first part of each vector.
 
-For enterprise GCP deployments.
+### Google Vertex AI
 
 ```bash
 GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/gcp-service-account.json" \
@@ -98,9 +90,7 @@ DOCS_MCP_EMBEDDING_MODEL="vertex:text-embedding-004" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-#### AWS Bedrock
-
-Use Amazon Titan or other Bedrock-hosted models.
+### AWS Bedrock
 
 ```bash
 AWS_ACCESS_KEY_ID="your-aws-access-key-id" \
@@ -110,9 +100,9 @@ DOCS_MCP_EMBEDDING_MODEL="aws:amazon.titan-embed-text-v1" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-#### Azure OpenAI
+With a named AWS profile, set `AWS_PROFILE` instead of the two keys. The model name is the full Bedrock model ID, colons included, such as `aws:amazon.titan-embed-text-v2:0`.
 
-Connect to your private Azure OpenAI deployment.
+### Azure OpenAI
 
 ```bash
 AZURE_OPENAI_API_KEY="your-azure-openai-api-key" \
@@ -123,18 +113,24 @@ DOCS_MCP_EMBEDDING_MODEL="microsoft:text-embedding-ada-002" \
 npx @arabold/docs-mcp-server@latest
 ```
 
-## Changing the Embedding Model
+The deployment named in `AZURE_OPENAI_API_DEPLOYMENT_NAME` answers the requests. After `microsoft:`, give the model that deployment runs: the server uses the name to look up the vector dimension and to detect a model change.
 
-When you change the embedding model or vector dimension after initial setup, existing embedding vectors become semantically incompatible with the new configuration. The server detects this automatically by tracking the active model identity in a metadata table.
+## Vector Dimension
 
-### What Happens on Model Change
+Every vector in the database has the same length, the vector dimension. By default the server uses the model's own dimension. It knows the dimension of common models, such as 1536 for `text-embedding-3-small`. For any other model, it sends one test embedding at startup, within `embeddings.initTimeoutMs`, and stores the result in the database so later starts skip the test.
 
-**Interactive mode (TTY connected):** The server displays a warning and prompts for confirmation before proceeding. Rejecting the prompt aborts startup with no changes made.
+To fix the dimension instead, set `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` in the environment. The value must be a positive integer. Shorter vectors are padded with zeros to that length. A model whose vectors are longer fails to start, except Gemini, whose vectors are shortened.
+
+## Changing the Model
+
+Vectors from different models, or of different dimensions, cannot be compared. The database records the model and dimension in use, and the server checks them at every start.
+
+When they changed, a server started in a terminal (the default command or `mcp`) asks for confirmation:
 
 ```
 ⚠️  Embedding model change detected:
-   Previous: openai:text-embedding-3-small (1536 dimensions)
-   Current:  openai:text-embedding-ada-002 (1536 dimensions)
+   Previous: text-embedding-3-small (1536 dimensions)
+   Current:  text-embedding-3-large (3072 dimensions)
 
    All existing embedding vectors will be invalidated.
    Libraries must be re-scraped to restore vector search.
@@ -143,15 +139,12 @@ When you change the embedding model or vector dimension after initial setup, exi
    Proceed with model change? (y/N)
 ```
 
-**Non-interactive mode (MCP/stdio, CI/CD):** The server fails startup entirely with a descriptive error message. To resolve the change, start the server interactively once to confirm the migration.
+Answering anything but `y` stops startup and changes nothing.
 
-### After Confirming a Model Change
+A server without a terminal, as under an MCP client or in a container, fails to start with an error that describes the change, and so does every other command, such as `worker`, `web` or `scrape`. Start the server (`docs-mcp-server` or `docs-mcp-server mcp`) once in a terminal with the new model to confirm the change. For Docker, run the image's default command once with `-it` on the same volumes.
 
-- All stored embedding vectors are set to NULL
-- The vector search index (`documents_vec`) is recreated empty with the new dimension
-- Full-text search continues working for all existing documents
-- Libraries must be re-scraped to regenerate embeddings with the new model
+After you confirm:
 
-### Vector Dimension Override
-
-The vector dimension defaults to the model's native dimension (e.g., 1536 for `text-embedding-3-small`). For unknown OpenAI-compatible models, the server detects the native dimension with a startup probe on first successful initialization, stores that detected size in database metadata, and reuses it on later startups for the same model without probing again. You can override it with `embeddings.vectorDimension` in the config file or `DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION` as an environment variable. The value must be a positive integer (minimum 1).
+- the server deletes all stored vectors and recreates the vector index with the new dimension;
+- full-text search keeps working for all documents;
+- vector search returns results for a library again once you scrape it again, for example with `scrape --replace`. A `refresh` skips unchanged pages and leaves them without vectors.

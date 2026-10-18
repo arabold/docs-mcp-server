@@ -1,163 +1,78 @@
 # Infrastructure Security
 
-## Overview
+The server fetches remote URLs and reads local files on request. That gives it three security surfaces, each with its own controls:
 
-The Docs MCP Server intentionally fetches remote URLs and local files. That capability is useful for documentation indexing, but it also creates trust-boundary decisions for deployments that are shared, internet-exposed, or connected to sensitive internal networks.
+1. Inbound requests to the MCP endpoint, the web UI and the API, guarded by host and origin checks and by authentication on the MCP endpoint.
+2. Outbound requests the scraper makes, over plain HTTP or in a browser, governed by `scraper.security.network`.
+3. Local files the scraper reads through `file://` URLs, governed by `scraper.security.fileAccess`.
 
-This document describes the security model for scraper-driven access and the deployment controls that matter most in practice.
+Authentication decides who may call MCP tools. It does not limit where the scraper connects or which files it reads. [Configuration](../setup/configuration.md#scraper-security-scrapersecurity) lists every scraper security setting with its default.
 
-## Trust Boundaries
+## Deployment Checklist
 
-The server has three independent security surfaces:
+For a deployment that other people or other machines can reach:
 
-1. Inbound access to MCP, web, and API endpoints.
-2. Outbound network access performed by URL fetching and browser-based scraping.
-3. Local file access performed by direct `file://` fetches and local crawling.
+- Enable [authentication](./authentication.md) on the MCP endpoint.
+- Put the web UI and the API behind a reverse proxy's sign-in, or keep them on a private network. Authentication does not cover them. See [Protecting the Web UI and API](./reverse-proxy.md#protecting-the-web-ui-and-api).
+- Keep a separate worker and the coordinators' `--server-url` link on a private network. That link has no authentication.
+- Terminate TLS at a reverse proxy. The server itself speaks plain HTTP.
+- Leave `allowPrivateNetworks` off. Name the internal hosts or ranges the scraper needs in `allowedHosts` or `allowedCidrs`.
+- Limit file access to a directory that holds only documentation, or turn it off.
+- Use valid certificates rather than `allowInvalidTls`.
 
-OAuth2 protects inbound MCP and HTTP usage. Scraper security settings protect outbound access and local file reads. These concerns are related but separate.
+## Inbound Requests
 
-## Deployment Hardening
+Every request and WebSocket upgrade passes a host check. The server refuses (`403`) a `Host` header that names a host it doesn't know, which stops DNS rebinding: a page on an attacker's domain that resolves to this server still names that domain as its host. [Host Names the Server Answers To](../setup/configuration.md#host-names-the-server-answers-to) lists the names it accepts.
 
-Use the following defaults for any shared or remotely reachable deployment:
+The MCP endpoint also checks the browser `Origin` header. It accepts loopback origins, the public URL's origin and the origins in `server.allowedOrigins`, and refuses others with `403`. A request without an `Origin` header comes from a client that is not a browser and passes. The server answers CORS preflights from allowed origins itself. [Browser-Based MCP Clients](./reverse-proxy.md#browser-based-mcp-clients) shows how to allow a hosted client.
 
-- Enable authentication for exposed MCP and web endpoints.
-- Keep the server behind TLS termination.
-- Restrict worker and internal API networking at the infrastructure layer.
-- Leave `scraper.security.network.allowPrivateNetworks` disabled unless you have an explicit internal use case.
-- Keep `scraper.security.fileAccess.mode` at `allowedRoots` or `disabled` unless the host is fully trusted.
-- Do not rely on broad local home-directory access for service accounts or containers.
+The API at `/api` and its WebSocket apply the same origin check when the server binds a loopback address, where no proxy stands between the server and a local browser. On other binds they rely on the reverse proxy or the private network in front of the server.
 
-## Outbound Network Access Policy
+[What Authentication Protects](./authentication.md#what-authentication-protects) lists each surface and how to protect the ones authentication does not cover. `createHostPolicy` and `createOriginPolicy` in [src/app/originPolicy.ts](../../src/app/originPolicy.ts) implement both checks.
 
-By default, scraper-driven HTTP and browser requests may reach public internet targets but may not reach private or special-use network targets.
+## Outbound Network Access
 
-Blocked by default:
+`scraper.security.network` applies to every request the scraper makes: plain HTTP fetches, browser navigations, and the requests a page makes while it renders in the browser. The target of each redirect is checked again as a new request, so a host that passed does not vouch for the host it redirects to.
 
-- Loopback addresses
-- RFC1918 private IPv4 ranges
-- Link-local ranges
-- Other special-use IPv4 and IPv6 ranges covered by the shared policy
+In `open` mode, the default, the scraper reaches public addresses and no private or special-use ones: loopback, the RFC 1918 private ranges, link-local, shared address space, multicast, and the other reserved IPv4 and IPv6 ranges listed in [src/utils/accessPolicy.ts](../../src/utils/accessPolicy.ts). `allowPrivateNetworks: true` opens all of them at once. `allowedHosts` and `allowedCidrs` open single hosts and ranges instead.
 
-Allowed by default:
+In `allowlist` mode, the scraper reaches only what `allowedHosts` and `allowedCidrs` name. `allowPrivateNetworks` has no effect there.
 
-- Public internet HTTP and HTTPS targets
+A request is decided by its target:
 
-Override options:
+- An IP address is checked by address alone. `allowedHosts` never matches it, so allowing a host name does not allow its IP. In `open` mode the address passes unless it is special-use and outside `allowedCidrs`. In `allowlist` mode it must lie inside `allowedCidrs`.
+- A host name that matches `allowedHosts` passes, together with its DNS answers, even when they point to private addresses. Listing a host trusts that name and its DNS.
+- Any other host name is resolved first. In `open` mode, every special-use address among the answers must lie inside `allowedCidrs`. In `allowlist` mode, every answer must.
 
-- `mode: allowlist`: switch to a strict outbound allowlist. Only `allowedHosts` and `allowedCidrs` are reachable; everything else is denied. `allowPrivateNetworks` is ignored in this mode.
-- `allowedHosts`: host patterns to permit. Entries may be literal hostnames, minimatch globs (`*.example.com`, `docs.*`), or regular expressions wrapped in `/.../`. Matching is case-insensitive and runs against the bare hostname only.
-- `allowedCidrs`: address-bound exceptions for resolved or direct IP targets.
-- `allowPrivateNetworks: true` (open mode only): broad opt-in for private and special-use network access.
+`allowedHosts` entries are literal host names, globs such as `*.example.com` or `docs.*`, or regular expressions wrapped in `/.../`. They match the bare host name, which is compared in lower case. `*.example.com` matches subdomains but not `example.com` itself, so list both when both are needed. A regular expression matches anywhere in the name unless it is anchored, as in `/^docs\d+\.example\.com$/`.
 
-Important semantics:
+## TLS Verification
 
-- `allowedHosts` does not allow direct IP access to the same service.
-- `allowedCidrs` allows by resolved or direct address, not by hostname label alone.
-- `allowedHosts` is authoritative for the named host. If you allowlist `docs.internal.example`, requests to that hostname remain allowed even when it resolves to a private or special-use address. This is an explicit trust decision in that hostname and its DNS answers.
-- For hostnames that are **not** in `allowedHosts`, DNS answers are evaluated strictly: in `open` mode any unresolved mix that includes a blocked special-use address is rejected unless each blocked address is also covered by `allowedCidrs`; in `allowlist` mode every resolved address must fall inside `allowedCidrs`.
-- Glob patterns like `*.example.com` match any subdomain but do not match the bare apex `example.com`. List both if you want both.
-- Redirect targets are revalidated independently — a request that matched `allowedHosts` for its original target does not authorize a redirect to a different host.
-- Browser subrequests use the same policy as non-browser HTTP fetches.
+The scraper verifies HTTPS certificates. `allowInvalidTls: true` turns verification off for every HTTPS request the network policy already allows, in plain fetches and in the browser. It never makes another target reachable. Because it applies to every host, it trusts any certificate the network path presents.
 
-## TLS Verification Policy
+## Local File Access
 
-HTTPS certificate validation stays enabled by default.
+`scraper.security.fileAccess.mode` is one of:
 
-`allowInvalidTls: true` is a broad override that allows invalid or self-signed certificates for HTTPS requests that are already permitted by the network policy.
+- `allowedRoots`, the default: the scraper reads files only inside the directories in `allowedRoots`, which defaults to `$DOCUMENTS`.
+- `disabled`: the scraper reads no `file://` URL a user asks for.
+- `unrestricted`: no directory limit.
 
-Important semantics:
+In every mode:
 
-- It does not bypass `allowedHosts`, `allowedCidrs`, or private-network restrictions.
-- It applies broadly, so treat it as an environment-level trust decision.
-- If you need narrower trust, prefer proper certificates or a future custom-certificate workflow rather than enabling broad invalid TLS trust.
+- A path with a symlink anywhere along it is refused. With `followSymlinks: true`, the resolved path must still lie inside an allowed root.
+- A file or directory whose name starts with a dot is refused when it lies below the allowed root, and so is a hidden entry inside an archive. A root may itself sit under a hidden directory, such as `~/.config/docs`. In `unrestricted` mode the whole path is checked. `includeHidden: true` lifts this rule.
+- A file inside an archive (`.zip`, `.tar`, `.gz`, `.tgz`) is checked by the path of the archive file.
 
-## Local File Access Policy
+Roots are absolute paths or tokens. `$HOME` grants the whole home directory, and only the hidden-file rule keeps directories such as `.ssh` and `.aws` out. `$CWD` grants the working directory. `$DOCUMENTS`, `$DOWNLOADS` and `$DESKTOP` stand for `Documents`, `Downloads` and `Desktop` in the home directory and grant nothing when that folder does not exist. Containers and headless hosts often have none of them, so the default blocks all local files there: set `allowedRoots` to the directory to index, such as `/srv/docs`. An empty `allowedRoots` list blocks all local files. The server logs a warning for each root that does not resolve.
 
-Local file access defaults to `allowedRoots` mode with `$DOCUMENTS` as the only configured root.
+A refused path gets an error that names the requested URL and the rule that blocked it, and links to the configuration documentation. The error reaches MCP clients and the web UI, so it leaves out the configured roots and what they resolve to; those go to the server log instead.
 
-That default is a convenience for single-user local workflows, not a recommendation for hosted or remotely reachable deployments. If the server is shared, containerized, or exposed beyond one trusted workstation, prefer an application-specific directory such as `/srv/docs` or disable `file://` access entirely.
+When a web scrape accepts a remote archive, it downloads the archive to a temporary file and reads it through the local file path. That file and its members are readable without a configured root. The exception covers only the downloaded archive, and only after its URL passed the network policy.
 
-Modes:
+## Example
 
-- `disabled`: all user-requested `file://` access is blocked
-- `allowedRoots`: only configured roots are allowed
-- `unrestricted`: local file access is fully trusted
-
-Allowed-root entries may be literal absolute paths or one of these tokens:
-
-- `$HOME` — the user's home directory. Broad: includes dotfiles such as `.ssh`, `.aws`, `.config`. Use intentionally.
-- `$DOCUMENTS` — the platform's documents directory. The default root.
-- `$DOWNLOADS` — the platform's downloads directory.
-- `$DESKTOP` — the platform's desktop directory.
-- `$CWD` — the process working directory.
-
-Traversal defaults:
-
-- Hidden files and hidden directories are blocked by default
-- Symlinks are blocked by default
-- Archive-member paths are validated against the real archive file, not the synthetic combined virtual path
-
-Important semantics:
-
-- `allowedRoots: []` in `allowedRoots` mode means no user-requested local file access is allowed.
-- `$DOCUMENTS`, `$DOWNLOADS`, and `$DESKTOP` are convenience tokens — they probe for `<home>/<Folder>` and grant no access if the directory is missing on the current platform or account. Each unresolved root is warned about, and an allowlist that grants nothing is reported as such, so a policy that blocks everything is never silent.
-- Rejections name the rule that blocked the path and link to the configuration documentation. Filesystem paths are logged rather than included in the error, since the error reaches MCP clients and the web UI; unresolvable configured paths are counted rather than named, because a missing path still describes an intended layout. Root tokens such as `$DOCUMENTS` are named in the error, since they are runtime state rather than host detail.
-- `$HOME` and `$CWD` resolve to a concrete path even when unusual; `$HOME` in particular exposes dotfile-bearing directories.
-- Hidden paths remain blocked even when explicitly requested unless `includeHidden` is enabled.
-
-## Archive Workflows
-
-Supported web archive scraping downloads an accepted remote archive to a temporary file and then processes it through the local file path.
-
-That handoff remains allowed without requiring the temp directory to be added to user-configured roots. The exception is intentionally narrow:
-
-- It applies only after the original network URL passes the network policy.
-- It applies only to the downloaded archive artifact and its virtual members.
-- Unrelated temp files remain subject to the normal local file policy.
-
-## Example Configurations
-
-Conservative shared deployment:
-
-```yaml
-scraper:
-  security:
-    network:
-      mode: open
-      allowPrivateNetworks: false
-      allowedHosts: []
-      allowedCidrs: []
-      allowInvalidTls: false
-    fileAccess:
-      mode: allowedRoots
-      allowedRoots:
-        - $DOCUMENTS
-      followSymlinks: false
-      includeHidden: false
-```
-
-Selective internal docs deployment:
-
-```yaml
-scraper:
-  security:
-    network:
-      mode: open
-      allowPrivateNetworks: false
-      allowedHosts:
-        - "*.internal.example"
-      allowedCidrs:
-        - 10.42.0.0/16
-      allowInvalidTls: true
-    fileAccess:
-      mode: allowedRoots
-      allowedRoots:
-        - /srv/docs
-      followSymlinks: false
-      includeHidden: false
-```
-
-Strict outbound allowlist for a hosted MCP deployment:
+A hosted MCP deployment that indexes a fixed set of public sites and no local files:
 
 ```yaml
 scraper:
@@ -167,35 +82,8 @@ scraper:
       allowedHosts:
         - docs.python.org
         - "*.rust-lang.org"
-      allowedCidrs: []
-      allowInvalidTls: false
     fileAccess:
       mode: disabled
-      allowedRoots: []
-      followSymlinks: false
-      includeHidden: false
 ```
 
-Fully trusted local workstation:
-
-```yaml
-scraper:
-  security:
-    network:
-      mode: open
-      allowPrivateNetworks: true
-      allowInvalidTls: false
-    fileAccess:
-      mode: unrestricted
-      allowedRoots: []
-      followSymlinks: true
-      includeHidden: true
-```
-
-## Operational Guidance
-
-- Start with the defaults and add the smallest explicit exception that satisfies the use case.
-- Prefer `allowedHosts` and `allowedCidrs` over `allowPrivateNetworks: true`.
-- Prefer valid certificates over `allowInvalidTls: true`.
-- Prefer narrow `allowedRoots` over `unrestricted` file access.
-- Review these settings when moving from local development to shared infrastructure.
+[Security Examples](../setup/configuration.md#security-examples) has more configurations.

@@ -1,121 +1,31 @@
-# Grounded Docs: Your AI's Up-to-Date Documentation Expert
+# Grounded Docs MCP Server
 
-**Docs MCP Server** solves the problem of AI hallucinations and outdated knowledge by providing a personal, always-current documentation index for your AI coding assistant. It fetches official docs from websites, GitHub, npm, PyPI, and local files, allowing your AI to query the exact version you are using.
+Grounded Docs gives your AI coding assistant a documentation index that matches the library versions you use. It fetches documentation from websites, GitHub repositories, npm, PyPI and local folders, and serves search over the Model Context Protocol (MCP), a command line and a web UI. Your assistant answers from that documentation instead of from what it remembers.
 
-![Docs MCP Server Web Interface](docs/docs-mcp-server.png)
+It is an open-source alternative to Context7, Nia and Ref.Tools.
 
-## ✨ Why Grounded Docs MCP Server?
+![Docs MCP Server web interface](docs/docs-mcp-server.png)
 
-The open-source alternative to **Context7**, **Nia**, and **Ref.Tools**.
+## Features
 
--   ✅ **Up-to-Date Context:** Fetches documentation directly from official sources on demand.
--   🎯 **Version-Specific:** Queries target the exact library versions in your project.
--   💡 **Reduces Hallucinations:** Grounds LLMs in real documentation.
--   🔒 **Private & Local:** Runs entirely on your machine; your code never leaves your network.
--   🧩 **Broad Compatibility:** Works with any MCP-compatible client (Claude, Cline, etc.).
--   📁 **Multiple Sources:** Index websites, GitHub repositories, local folders, and zip archives.
--   📄 **Rich File Support:** Processes HTML, Markdown, PDF, Office documents (Word, Excel, PowerPoint), OpenDocument, RTF, EPUB, Jupyter Notebooks, and [90+ source code languages](docs/concepts/supported-formats.md).
+- Indexes websites, GitHub repositories, npm and PyPI packages, local folders and archives (ZIP, TAR).
+- Reads HTML, Markdown, PDF, Office and OpenDocument files, EPUB, Jupyter notebooks, source code and more. See [Supported Formats](docs/concepts/supported-formats.md).
+- Stores each library version separately, so a search targets the version your project uses.
+- Combines full-text search with optional vector search through OpenAI, Ollama, Gemini, Vertex AI, AWS Bedrock, Azure OpenAI or any OpenAI-compatible server.
+- Runs on your machine and keeps its index in a local SQLite database. Document text goes only to the embedding provider you configure; with a local one, such as Ollama, it stays on your machine. Usage telemetry is on by default; [Telemetry](docs/infrastructure/telemetry.md) lists what it sends and how to turn it off.
+- Works with any MCP client, over stdio or Streamable HTTP.
 
----
+## Quick Start
 
-## 📄 Supported Formats
+You need Node.js 22 or later, or Docker. [Installation](docs/setup/installation.md) covers both in detail, along with Docker Compose and running the server inside your AI client.
 
-| Category | Formats |
-|----------|---------|
-| **Documents** | PDF, Word (.docx/.doc), Excel (.xlsx/.xls), PowerPoint (.pptx/.ppt), OpenDocument (.odt/.ods/.odp), RTF, EPUB, FictionBook, Jupyter Notebooks |
-| **Archives** | ZIP, TAR, gzipped TAR (contents are extracted and processed individually) |
-| **Web** | HTML, XHTML |
-| **Markup** | Markdown, MDX, reStructuredText, AsciiDoc, Org Mode, Textile, R Markdown |
-| **Source Code** | TypeScript, JavaScript, Python, Go, Rust, C/C++, Java, Kotlin, Ruby, PHP, Swift, C#, and [many more](docs/concepts/supported-formats.md#source-code) |
-| **Data** | JSON, YAML, TOML, CSV, XML, SQL, GraphQL, Protocol Buffers |
-| **Config** | Dockerfile, Makefile, Terraform/HCL, INI, dotenv, Bazel |
-
-See **[Supported Formats](docs/concepts/supported-formats.md)** for the complete reference including MIME types and processing details.
-
----
-
-## 🚀 Quick Start
-
-### CLI First
-
-For agents and scripts, the CLI is usually the simplest way to use Grounded Docs.
-
-**1. Index documentation** (requires Node.js 22+):
-
-```bash
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
-```
-
-Scraping a library version that already exists fails rather than overwriting it. Re-index it with `--replace`, or update it in place with `refresh`:
-
-```bash
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react --replace
-```
-
-For hash-routed SPA docs sites, enable hash preservation explicitly:
-
-```bash
-npx @arabold/docs-mcp-server@latest scrape my-spa https://docs.example.com/#/guide --preserve-hashes
-```
-
-**2. Query the index:**
-
-```bash
-npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
-```
-
-**3. Fetch a single page as Markdown:**
-
-```bash
-npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
-```
-
-### Output Behavior
-
-- Structured commands default to clean JSON on stdout in non-interactive runs.
-- Use `--output json|yaml|toon` to pick a structured format.
-- Plain-text commands such as `fetch-url` keep their text payload on stdout.
-- Diagnostics go through the shared logger and are kept off stdout in non-interactive runs.
-- Use `--quiet` to suppress non-error diagnostics or `--verbose` to enable debug output.
-
-### Agent Skills
-
-The [`skills/`](skills/) directory contains [Agent Skills](https://agentskills.io) that teach AI coding assistants how to use the CLI — covering documentation search, index management, and URL fetching.
-
-### MCP Server
-
-If you want a long-running MCP endpoint for Claude, Cline, Copilot, Gemini CLI, or other MCP clients:
-
-**1. Start the server:**
+### 1. Start the server
 
 ```bash
 npx @arabold/docs-mcp-server@latest
 ```
 
-**2. Open the Web UI** at **[http://localhost:6280](http://localhost:6280)** to add documentation.
-
-**3. Connect your AI client** by adding this to your MCP settings (e.g., `claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "docs-mcp-server": {
-      "type": "http",
-      "url": "http://localhost:6280/mcp"
-    }
-  }
-}
-```
-
-The HTTP endpoint speaks MCP over Streamable HTTP, for protocol revision 2026-07-28 as well as earlier revisions. See **[Connecting Clients](docs/guides/mcp-clients.md)** for VS Code (Cline, Roo) and other setup options, and **[Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md)** to serve it under a path such as `https://example.com/docs`.
-
-`scrape_docs` also accepts `preserveHashes: true` for documentation sites that use hash-based client-side routing.
-Use it only for hash-routed SPAs; normal sites typically use hash fragments for in-page anchors.
-
-`scrape_docs` rejects a library version that already exists (including one still queued or that failed); pass `replace: true` to rebuild it, or use `refresh_version` to update it in place.
-
-<details>
-<summary>Alternative: Run with Docker</summary>
+Or with Docker:
 
 ```bash
 docker run --rm \
@@ -125,57 +35,89 @@ docker run --rm \
   ghcr.io/arabold/docs-mcp-server:latest
 ```
 
-The Docker image defaults to HTTP on `0.0.0.0:6280`, serving the Web UI, API, and MCP endpoint. For stdio clients, use `docker run --rm -i ghcr.io/arabold/docs-mcp-server:latest --protocol stdio`. See [Installation](docs/setup/installation.md#option-2-docker) for configuration overrides.
+### 2. Add documentation
 
-</details>
+Open the web UI at [http://localhost:6280](http://localhost:6280) and choose **Add library**.
 
-### 🧠 Configure Embedding Model (Recommended)
+### 3. Connect your AI client
 
-Using an embedding model is **optional** but dramatically improves search quality by enabling semantic vector search.
+Add the server's MCP endpoint, `http://localhost:6280/mcp`, to your client. Most clients accept an entry like this:
 
-**Example: Enable OpenAI Embeddings**
+```json
+{
+  "mcpServers": {
+    "docs-mcp-server": {
+      "url": "http://localhost:6280/mcp"
+    }
+  }
+}
+```
+
+[Connecting MCP Clients](docs/guides/mcp-clients.md) has the exact settings for Claude Code, Claude Desktop, Zed and other clients, how a client can start the server itself over stdio, and the list of MCP tools.
+
+### 4. Turn on vector search (optional)
+
+Without an embedding model, search uses full-text matching. Vector search also finds passages by meaning. To use OpenAI, set `OPENAI_API_KEY`:
 
 ```bash
 OPENAI_API_KEY="sk-proj-..." npx @arabold/docs-mcp-server@latest
 ```
 
-See **[Embedding Models](docs/guides/embedding-models.md)** for configuring **Ollama**, **Gemini**, **Azure**, and others.
+With Docker, add `-e OPENAI_API_KEY="sk-proj-..."`. [Embedding Models](docs/guides/embedding-models.md) covers Ollama, Gemini, Azure OpenAI and other providers.
 
----
+## Command Line
 
-## 📚 Documentation
+The CLI indexes and searches without a running server, which suits scripts and coding agents. It shares its database with a server on the same machine.
 
-### Getting Started
--   **[Installation](docs/setup/installation.md)**: Detailed setup guides for Docker, Node.js (npx), and Embedded mode.
--   **[Connecting Clients](docs/guides/mcp-clients.md)**: How to connect Claude, VS Code (Cline/Roo), and other MCP clients.
--   **[Basic Usage](docs/guides/basic-usage.md)**: Using the Web UI, CLI, and scraping local files.
--   **[Configuration](docs/setup/configuration.md)**: Full reference for config files and environment variables.
--   **[Supported Formats](docs/concepts/supported-formats.md)**: Complete file format and MIME type reference.
--   **[Embedding Models](docs/guides/embedding-models.md)**: Configure OpenAI, Ollama, Gemini, and other providers.
--   **[Search Quality Benchmark](docs/guides/benchmarking.md)**: Measure retrieval quality with IR metrics + LLM-judged scores; prerequisites, how to run, how to interpret results.
+```bash
+# Index documentation
+npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
 
-### Hash-Routed SPAs
--   Use `--preserve-hashes`, MCP `preserveHashes`, or the Web UI "Preserve Hash Routes" checkbox only for docs sites that route with URLs like `#/guide`.
--   When enabled with `scrapeMode=fetch`, the scraper automatically upgrades the job to Playwright because plain fetch cannot evaluate client-side hash routes.
--   Refresh reuses the stored `preserveHashes` setting by default, and CLI/Web refresh entrypoints can override it explicitly.
+# Search it
+npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
 
-### Markdown-Optimized Web Scraping
--   Web scrapes and refreshes automatically probe for `llms.txt` at the documentation subpath and site root before normal crawling. When found, the curated links become additional crawl seeds, and pages discovered this way prefer `.md` URL variants such as `/guide/index.html.md` or `/page.html.md` before falling back to the original page.
--   Web requests send `Accept: text/markdown, text/html;q=0.9, */*;q=0.8` by default. Servers that support Markdown content negotiation, including Cloudflare Markdown for Agents, can return Markdown directly so the scraper bypasses HTML-to-Markdown conversion for cleaner output.
--   This behavior is automatic and requires no configuration. Custom `Accept` headers are preserved when provided.
+# Fetch one page as Markdown without indexing it
+npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+```
 
-### Key Concepts & Architecture
--   **[Deployment Modes](docs/infrastructure/deployment-modes.md)**: Standalone vs. Distributed (Docker Compose).
--   **[Authentication](docs/infrastructure/authentication.md)**: Securing your server with OAuth2/OIDC.
--   **[Security](docs/infrastructure/security.md)**: Trust boundaries, deployment hardening, and outbound access controls.
--   **[Telemetry](docs/infrastructure/telemetry.md)**: Privacy-first usage data collection.
--   **[Architecture](ARCHITECTURE.md)**: Deep dive into the system design.
+`scrape` refuses a library version that already exists. Pass `--replace` to rebuild it, or run `refresh` to update it in place. The [`skills/`](skills/) directory has Agent Skills that teach coding agents these commands. [Basic Usage](docs/guides/basic-usage.md) covers every command, output formats and local files.
 
----
+## Web Scraping
 
-## 🤝 Contributing
+- Before it crawls a website, a scrape or refresh looks for an `llms.txt` file in the start URL's directory and at the site root. The links listed there become extra starting points, and for those pages the scraper first tries the Markdown version of the URL, such as `/guide/index.html.md` or `/page.html.md`.
+- Requests ask for Markdown first (`Accept: text/markdown, text/html;q=0.9, */*;q=0.8`), so a server that supports content negotiation can return Markdown instead of HTML. A custom `Accept` header replaces this one.
+- For documentation sites that route with hash URLs, such as `https://docs.example.com/#/guide`, turn on hash routes for the scrape. See [Hash Route Behavior](docs/setup/configuration.md#hash-route-behavior).
 
-We welcome contributions! Please see **[CONTRIBUTING.md](CONTRIBUTING.md)** for development guidelines and setup instructions.
+## Documentation
+
+Setup:
+
+- [Installation](docs/setup/installation.md): npx, Docker, Docker Compose and the embedded server.
+- [Configuration](docs/setup/configuration.md): config file, environment variables and every setting.
+- [Embedding Models](docs/guides/embedding-models.md): providers, models and changing the model.
+
+Usage:
+
+- [Basic Usage](docs/guides/basic-usage.md): the web UI, the CLI and local files.
+- [Connecting MCP Clients](docs/guides/mcp-clients.md): client settings and MCP tools.
+- [Supported Formats](docs/concepts/supported-formats.md): file formats and how each is processed.
+- [Search Quality Benchmark](docs/guides/benchmarking.md): measure retrieval quality.
+
+Deployment:
+
+- [Deployment Modes](docs/infrastructure/deployment-modes.md): one process, or a worker with separate MCP and web services.
+- [Reverse Proxy Deployment](docs/infrastructure/reverse-proxy.md): serve the server under a path such as `https://example.com/docs`.
+- [Authentication](docs/infrastructure/authentication.md): protect the MCP endpoint with OAuth2/OIDC.
+- [Security](docs/infrastructure/security.md): trust boundaries and limits on what the scraper may reach.
+- [Telemetry](docs/infrastructure/telemetry.md): the usage events the server sends, and how to turn them off.
+
+Internals:
+
+- [Architecture](ARCHITECTURE.md): system design for contributors.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 
