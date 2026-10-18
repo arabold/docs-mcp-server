@@ -129,3 +129,8 @@ Quick orientation:
 
 Still no Tailwind, no third-party component library, and no chart library —
 charts are hand-rolled SVG (`AreaChart` in `components/`).
+
+## Conditional rendering
+
+Render optional markup with a ternary, `cond ? <Bar /> : null`, not
+`cond && <Bar />`. With `&&`, a falsy number such as `0` renders as text.

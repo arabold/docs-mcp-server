@@ -17,19 +17,19 @@ The project uses a unified testing configuration in `vite.config.ts` that handle
 npm test
 
 # Run only unit tests
-npm test:unit
+npm run test:unit
 
 # Run only e2e tests
-npm test:e2e
+npm run test:e2e
 
 # Run live website tests (requires internet, slower)
-npm test:live
+npm run test:live
 
 # Run tests in watch mode
-npm test:watch
+npm run test:watch
 
 # Run tests with coverage
-npm test:coverage
+npm run test:coverage
 ```
 
 ## Mock Server
@@ -99,7 +99,7 @@ Tests in `test/*-live-e2e.test.ts` are excluded from the default test run becaus
 - May be rate-limited or blocked
 - Can fail due to external factors
 
-Run them manually when needed with `npm test:live`.
+Run them manually when needed with `npm run test:live`.
 
 ## Type Checking
 

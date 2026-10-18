@@ -24,6 +24,18 @@ import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
 import { applyGlobalCliOutputMode, registerGlobalOutputOptions } from "./output";
 
+/**
+ * A command line that does not parse, such as an unknown option or a missing
+ * argument. The CLI has already printed the help and the reason when it throws
+ * this.
+ */
+export class CliUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
+  }
+}
+
 /** Every command the CLI registers. */
 export const COMMAND_FACTORIES: ReadonlyArray<(cli: Argv) => void> = [
   createCompactCommand,
@@ -105,7 +117,13 @@ export function createCli(argv: string[]): Argv {
         throw new Error("Arguments verbose and quiet are mutually exclusive");
       }
 
-      // 1. Load Config & Resolve Paths
+      // 1. Setup Logging, first, so --verbose also covers a failure below
+      applyGlobalCliOutputMode({
+        verbose: argv.verbose as boolean,
+        quiet: argv.quiet as boolean,
+      });
+
+      // 2. Load Config & Resolve Paths
       const rawStorePath = (argv.storePath as string) || process.env.DOCS_MCP_STORE_PATH;
       const resolvedStorePath = resolveStorePath(rawStorePath);
 
@@ -121,12 +139,6 @@ export function createCli(argv: string[]): Argv {
       if (argv.telemetry === undefined) {
         argv.telemetry = appConfig.app.telemetryEnabled;
       }
-
-      // 2. Setup Logging
-      applyGlobalCliOutputMode({
-        verbose: argv.verbose as boolean,
-        quiet: argv.quiet as boolean,
-      });
 
       // 3. Init Telemetry
       initTelemetry({
@@ -173,7 +185,15 @@ export function createCli(argv: string[]): Argv {
     // We might need to move the `CLI_COMMAND` tracking into `main.ts` or inside `createDefaultAction`.
 
     .alias("help", "h")
-    .showHelpOnFail(true);
+    // yargs reports both a command line it cannot parse and an error a command
+    // throws here. Only the first earns the help text; the second goes on to
+    // runCli, which reports it once and shuts down.
+    .fail((message, error, instance) => {
+      if (error) throw error;
+      instance.showHelp("error");
+      console.error(`\n${message}`);
+      throw new CliUsageError(message);
+    });
 
   for (const registerCommand of COMMAND_FACTORIES) {
     registerCommand(cli);
