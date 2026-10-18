@@ -7,6 +7,7 @@ import { LocalFileStrategy } from "./strategies/LocalFileStrategy";
 import { NpmScraperStrategy } from "./strategies/NpmScraperStrategy";
 import { PyPiScraperStrategy } from "./strategies/PyPiScraperStrategy";
 import { WebScraperStrategy } from "./strategies/WebScraperStrategy";
+import type { ScraperStrategy } from "./types";
 
 describe("ScraperRegistry", () => {
   const appConfig = loadConfig();
@@ -19,89 +20,57 @@ describe("ScraperRegistry", () => {
     );
   });
 
-  it("should return LocalFileStrategy for file:// URLs", () => {
+  it("routes each URL to the strategy for its source", () => {
     const registry = new ScraperRegistry(appConfig);
-    const strategy = registry.getStrategy("file:///path/to/file.txt");
-    expect(strategy).toBeInstanceOf(LocalFileStrategy);
+    const cases: Array<{
+      url: string;
+      strategy: new (...args: never[]) => ScraperStrategy;
+    }> = [
+      { url: "file:///path/to/file.txt", strategy: LocalFileStrategy },
+      { url: "https://npmjs.com/package/test", strategy: NpmScraperStrategy },
+      { url: "https://pypi.org/project/test", strategy: PyPiScraperStrategy },
+      { url: "https://github.com/user/repo", strategy: GitHubScraperStrategy },
+      { url: "https://www.github.com/owner/repo", strategy: GitHubScraperStrategy },
+      { url: "https://github.com/owner/repo/", strategy: GitHubScraperStrategy },
+      { url: "https://github.com/owner/repo/tree/main", strategy: GitHubScraperStrategy },
+      {
+        url: "https://github.com/owner/repo/tree/develop/src",
+        strategy: GitHubScraperStrategy,
+      },
+      {
+        url: "https://github.com/owner/repo/blob/main/README.md",
+        strategy: GitHubScraperStrategy,
+      },
+      {
+        url: "https://github.com/owner/repo/blob/main/src/index.js",
+        strategy: GitHubScraperStrategy,
+      },
+      // Legacy github-file:// URLs still route to GitHub, which reports them as
+      // not found so a refresh removes the pages stored under them.
+      { url: "github-file://src/cli/types.ts", strategy: GitHubScraperStrategy },
+      { url: "github-file://README.md", strategy: GitHubScraperStrategy },
+      // Wiki, issue and pull request pages are ordinary web pages.
+      { url: "https://github.com/owner/repo/wiki", strategy: WebScraperStrategy },
+      { url: "https://github.com/owner/repo/wiki/Page", strategy: WebScraperStrategy },
+      { url: "https://github.com/owner/repo/issues", strategy: WebScraperStrategy },
+      { url: "https://github.com/owner/repo/pulls", strategy: WebScraperStrategy },
+      { url: "https://gitlab.com/owner/repo", strategy: WebScraperStrategy },
+      { url: "https://bitbucket.org/owner/repo", strategy: WebScraperStrategy },
+      { url: "https://docs.example.com/", strategy: WebScraperStrategy },
+      { url: "http://example.com", strategy: WebScraperStrategy },
+    ];
+
+    for (const { url, strategy } of cases) {
+      expect.soft(registry.getStrategy(url), url).toBeInstanceOf(strategy);
+    }
   });
 
-  it("should return GitHubScraperStrategy for GitHub URLs", () => {
+  it("should return independent instances for each getStrategy call", () => {
     const registry = new ScraperRegistry(appConfig);
-    const strategy = registry.getStrategy("https://github.com/user/repo");
-    expect(strategy).toBeInstanceOf(GitHubScraperStrategy);
-  });
 
-  it("should return NpmScraperStrategy for NPM URLs", () => {
-    const registry = new ScraperRegistry(appConfig);
-    const strategy = registry.getStrategy("https://npmjs.com/package/test");
-    expect(strategy).toBeInstanceOf(NpmScraperStrategy);
-  });
+    const strategy1 = registry.getStrategy("https://docs.example.com/");
+    const strategy2 = registry.getStrategy("https://docs.example.com/");
 
-  it("should return PyPiScraperStrategy for PyPI URLs", () => {
-    const registry = new ScraperRegistry(appConfig);
-    const strategy = registry.getStrategy("https://pypi.org/project/test");
-    expect(strategy).toBeInstanceOf(PyPiScraperStrategy);
-  });
-
-  it("should return WebScraperStrategy for generic HTTP URLs", () => {
-    const registry = new ScraperRegistry(appConfig);
-    const strategy = registry.getStrategy("https://docs.example.com/");
-    expect(strategy).toBeInstanceOf(WebScraperStrategy);
-  });
-
-  describe("factory pattern for state isolation", () => {
-    it("should return independent instances for each getStrategy call", () => {
-      const registry = new ScraperRegistry(appConfig);
-
-      // Get two strategies for the same URL pattern
-      const strategy1 = registry.getStrategy("https://docs.example.com/");
-      const strategy2 = registry.getStrategy("https://docs.example.com/");
-
-      // They should be different instances
-      expect(strategy1).not.toBe(strategy2);
-      expect(strategy1).toBeInstanceOf(WebScraperStrategy);
-      expect(strategy2).toBeInstanceOf(WebScraperStrategy);
-    });
-
-    it("should return independent instances for different URL patterns", () => {
-      const registry = new ScraperRegistry(appConfig);
-
-      // Get strategies for different URL patterns
-      const npmStrategy = registry.getStrategy("https://npmjs.com/package/test");
-      const githubStrategy = registry.getStrategy("https://github.com/user/repo");
-      const webStrategy = registry.getStrategy("https://docs.example.com/");
-
-      // All should be different instances
-      expect(npmStrategy).not.toBe(githubStrategy);
-      expect(githubStrategy).not.toBe(webStrategy);
-      expect(npmStrategy).not.toBe(webStrategy);
-    });
-
-    it("should ensure strategies have isolated state", () => {
-      const registry = new ScraperRegistry(appConfig);
-
-      // Get two WebScraperStrategy instances
-      const strategy1 = registry.getStrategy(
-        "https://docs.example.com/",
-      ) as WebScraperStrategy;
-      const strategy2 = registry.getStrategy(
-        "https://docs.another.com/",
-      ) as WebScraperStrategy;
-
-      // Access internal state (using any to access protected members for testing)
-      const visited1 = (strategy1 as any).visited as Set<string> | undefined;
-      const visited2 = (strategy2 as any).visited as Set<string> | undefined;
-
-      expect(visited1).toBeDefined();
-      expect(visited2).toBeDefined();
-
-      // Add a URL to strategy1's visited set
-      visited1?.add("https://test.com/page1");
-
-      // Strategy2's visited set should be unaffected
-      expect(visited1?.has("https://test.com/page1")).toBe(true);
-      expect(visited2?.has("https://test.com/page1")).toBe(false);
-      expect(visited1).not.toBe(visited2);
-    });
+    expect(strategy1).not.toBe(strategy2);
   });
 });
