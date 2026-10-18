@@ -40,11 +40,17 @@ describe("DocumentRetrieverService", () => {
   async function addPage(
     url: string,
     chunks: SeedChunk[],
-    options: { version?: string; contentType?: string; sourceContentType?: string } = {},
+    options: {
+      version?: string;
+      contentType?: string;
+      sourceContentType?: string;
+      contentUrl?: string;
+    } = {},
   ): Promise<void> {
     const contentType = options.contentType ?? "text/markdown";
     await store.addDocuments(LIBRARY, options.version ?? VERSION, 1, {
       url,
+      contentUrl: options.contentUrl,
       title: "Page",
       sourceContentType: options.sourceContentType ?? contentType,
       contentType,
@@ -134,6 +140,23 @@ describe("DocumentRetrieverService", () => {
       url: "https://example.com/converted",
       mimeType: "text/markdown",
       sourceMimeType: "text/html",
+    });
+  });
+
+  it("reports where the content was fetched from when it differs from the page URL", async () => {
+    await addPage(
+      "https://example.com/guide",
+      [{ content: "Zebra guide", path: ["Guide"] }],
+      {
+        contentUrl: "https://example.com/guide.md",
+      },
+    );
+
+    const [result] = await service.search(LIBRARY, VERSION, "zebra");
+
+    expect(result).toMatchObject({
+      url: "https://example.com/guide",
+      contentUrl: "https://example.com/guide.md",
     });
   });
 

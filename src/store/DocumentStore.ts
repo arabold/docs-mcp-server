@@ -67,6 +67,7 @@ interface RawSearchResult extends DbChunk {
   title?: string | null;
   source_content_type?: string | null;
   content_type?: string | null;
+  content_url?: string | null;
   // Search scoring fields
   vec_score?: number;
   fts_score?: number;
@@ -2649,6 +2650,7 @@ export class DocumentStore {
             p.title as title,
             p.source_content_type as source_content_type,
             p.content_type as content_type,
+            p.content_url as content_url,
             COALESCE(1 / (1 + v.vec_distance), 0) as vec_score,
             COALESCE(-MIN(f.fts_score, 0), 0) as fts_score
           FROM candidates c
@@ -2706,6 +2708,7 @@ export class DocumentStore {
             p.title as title,
             p.source_content_type as source_content_type,
             p.content_type as content_type,
+            p.content_url as content_url,
             bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
           FROM documents_fts f
           JOIN documents d ON f.rowid = d.id
