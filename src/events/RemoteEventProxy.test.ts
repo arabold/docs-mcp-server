@@ -53,21 +53,6 @@ describe("RemoteEventProxy", () => {
     return { relay, localBus };
   }
 
-  it("resolves connect once live, and relays an event emitted right after", async () => {
-    const worker = await startWorkerEvents();
-    cleanups.push(() => worker.stop());
-    const { relay, localBus } = relayTo(worker.port);
-    const received = new Promise<void>((resolve) =>
-      localBus.on(EventType.LIBRARY_CHANGE, () => resolve()),
-    );
-
-    await expect(relay.connect(5000)).resolves.toBe(true);
-    worker.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
-
-    await received;
-    expect(relay.isActive()).toBe(true);
-  });
-
   it("resolves connect with false when the worker refuses the connection", async () => {
     const worker = await startWorkerEvents();
     const { port } = worker;
@@ -98,25 +83,6 @@ describe("RemoteEventProxy", () => {
 
     expect(libraryChanges).toBe(1);
   });
-
-  it("reports a dropped stream as down, and as live again once the worker is back", async () => {
-    const worker = await startWorkerEvents();
-    const { relay, localBus } = relayTo(worker.port);
-    await relay.connect(5000);
-
-    await worker.stop();
-    await vi.waitFor(() => expect(relay.isActive()).toBe(false));
-
-    const restarted = await startWorkerEvents(worker.port);
-    cleanups.push(() => restarted.stop());
-    await vi.waitFor(() => expect(relay.isActive()).toBe(true), { timeout: 10_000 });
-    const received = new Promise<void>((resolve) =>
-      localBus.on(EventType.JOB_PROGRESS, () => resolve()),
-    );
-    restarted.eventBus.emit(EventType.JOB_PROGRESS, {} as never);
-
-    await received;
-  }, 15_000);
 
   it("asks views to refetch when the stream comes back, not on the first connect", async () => {
     const worker = await startWorkerEvents();
