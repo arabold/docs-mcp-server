@@ -90,7 +90,7 @@ A coordinator exits at startup when the worker doesn't answer, so it waits for t
 
 ## Interrupted Jobs
 
-A job that stops with its process, for example in a crash, leaves its version queued or running in the store. A `worker` runs such jobs again when it starts, unless it gets `--no-resume`. The default command marks them failed with "Job interrupted" unless it gets `--resume`. Coordinators with `--server-url` leave them to the worker. [Interrupted Jobs](../concepts/pipeline-architecture.md#interrupted-jobs) lists what every command does with them.
+A job that stops with its process, for example in a crash, leaves its version queued or running in the store. A `worker` runs such jobs again when it starts, unless it gets `--no-resume`. The default command marks them failed with "Job interrupted" unless it gets `--resume`. Coordinators with `--server-url` leave them to the worker. Every process that runs jobs marks them alive in the store, so a server acts only on jobs no live process runs: `web` started beside an embedded server or a worker leaves their jobs running, and a job that crashed moments before a server starts is handled about a minute later. [Interrupted Jobs](../concepts/pipeline-architecture.md#interrupted-jobs) lists what every command does with them.
 
 ## Scaling
 

@@ -142,7 +142,7 @@ Every entry point opens its services with `openBackend()` (`src/services/backend
 
 - `serverUrl` specified: a remote backend. Its API client's HTTP calls and its event WebSocket use the same worker URL, path included, so a worker behind a path-prefixed reverse proxy works.
 - `jobs: false`: documents only, for read-only commands and the CLI `remove`; no pipeline, and no WebSocket to a worker. A remote store removes a version through the worker's `removeDocs`, which cancels the worker's job for it first.
-- `jobs: { interruptedJobs }`: a started PipelineManager locally, with a policy for the jobs an earlier run left unfinished; the worker's pipeline remotely. Server commands host the store and recover or fail those jobs; `scrape`, `refresh` and read-only servers run only their own job, or none, and leave the rest to the server. See [Interrupted Jobs](docs/concepts/pipeline-architecture.md#interrupted-jobs).
+- `jobs: { interruptedJobs }`: a started PipelineManager locally, with a policy for the jobs an earlier run left unfinished; the worker's pipeline remotely. Server commands host the store and recover or fail those jobs, but only the ones no live process marks alive; `scrape`, `refresh` and read-only servers run only their own job, or none, and leave the rest to the server. See [Interrupted Jobs](docs/concepts/pipeline-architecture.md#interrupted-jobs).
 
 ### Servers and Protocols
 
