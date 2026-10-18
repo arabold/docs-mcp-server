@@ -41,6 +41,8 @@
     "evaluate:search": "vite-node tests/search-eval/run.ts --measure",
     "evaluate:search:baseline": "vite-node tests/search-eval/run.ts --baseline",
     "evaluate:search:preflight": "vite-node tests/search-eval/cli/preflight.ts",
+    "evaluate:accuracy": "vitest run --config vite.config.accuracy.ts",
+    "evaluate:accuracy:baseline": "vitest run --config vite.config.accuracy.ts --mode baseline",
     "test:live": "vitest run --config vite.config.live.ts test/html-pipeline-live-e2e.test.ts",
     "test:auth:clerk": "npm run build && vite-node test/clerk-auth-live.ts --",
     "lint": "biome check .",

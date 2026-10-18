@@ -12,6 +12,12 @@ benchmark is built and how to extend it (providers, metrics, dataset), see
 requirements it implements are in
 [openspec/specs/search-evaluation/spec.md](../../openspec/specs/search-evaluation/spec.md).
 
+To measure whether search ranks the exact passage that answers a query, on a
+fixed corpus and without an LLM judge, use the search accuracy benchmark
+instead: `npm run evaluate:accuracy`, described in
+[tests/search-accuracy/README.md](../../tests/search-accuracy/README.md). It
+also compares full-text, vector and hybrid search on the same index.
+
 ## What It Measures
 
 The benchmark measures retrieval only: it scores the chunks a query returns,

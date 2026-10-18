@@ -58,6 +58,18 @@ Results SHALL be sorted by descending RRF score so the most relevant results app
 - **WHEN** a chunk appears in vector search (rank 3) but not in FTS
 - **THEN** the chunk's RRF score SHALL be computed using only the vector component, with the FTS component contributing 0
 
+### Requirement: Deterministic Tie Order
+Results with equal scores SHALL be ordered by page URL in code-point order, then by the chunk's position on its page. This applies to the vector ranking, the full-text ranking and which full-text candidates are kept, the RRF order, and the FTS-only fallback. Full-text candidates are first cut to a bounded window by score alone, so only a tie larger than that window at the cut-off can still fall to storage order.
+
+#### Scenario: Equal scores on two pages
+- **GIVEN** chunks on `https://example.com/ba` and `https://example.com/ab` that score the same, stored in that order
+- **WHEN** a search returns both
+- **THEN** the chunk from `https://example.com/ab` comes first
+
+#### Scenario: Re-indexing does not reorder ties
+- **WHEN** the same pages are indexed again in a different order or at a different speed
+- **THEN** search returns results that tie in the same order as before
+
 ### Requirement: FTS-Only Fallback
 When vector search is disabled (no embedding model configured, missing credentials, or initialization failure), the system SHALL use only FTS5 BM25 search. Results SHALL be scored directly by the negated BM25 score (converted to a positive value) and ranked in descending order. No vector similarity computation SHALL occur.
 

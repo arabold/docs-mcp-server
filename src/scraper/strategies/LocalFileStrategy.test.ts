@@ -130,6 +130,62 @@ describe("LocalFileStrategy", () => {
     expect(storedCalls(progressCallback)).toHaveLength(3);
   });
 
+  it("should list directory entries in code-point order whatever order readdir returns", async () => {
+    const strategy = new LocalFileStrategy(appConfig);
+    const options: ScraperOptions = {
+      url: "file:///testdir",
+      library: "test",
+      version: "1.0",
+    };
+    vol.fromJSON(
+      {
+        "/testdir/b.md": "# B",
+        "/testdir/_c.md": "# C",
+        "/testdir/\u{1F600}.md": "# Emoji",
+        "/testdir/a.md": "# a",
+        "/testdir/ａ.md": "# Fullwidth a",
+        "/testdir/A.md": "# A",
+        "/testdir/10.md": "# 10",
+        "/testdir/9.md": "# 9",
+      },
+      "/",
+    );
+    // memfs lists names sorted, so reverse them to stand in for a platform
+    // whose readdir returns another order, such as Windows.
+    const readdir = vol.promises.readdir.bind(vol.promises);
+    const readdirSpy = vi
+      .spyOn(vol.promises, "readdir")
+      .mockImplementation(async (dir, opts) =>
+        (await readdir(dir, opts)).slice().reverse(),
+      );
+
+    try {
+      const result = await strategy.processItem(
+        { url: "file:///testdir", depth: 0 },
+        options,
+      );
+
+      // Unlike a locale or case-insensitive comparison, code-point order puts
+      // upper case before "_" and "_" before lower case. Unlike UTF-16
+      // code-unit order, it puts U+FF41 before the emoji U+1F600.
+      const names = result.links?.map((link) =>
+        decodeURIComponent(link.slice("file:///testdir/".length)),
+      );
+      expect(names).toEqual([
+        "10.md",
+        "9.md",
+        "A.md",
+        "_c.md",
+        "a.md",
+        "b.md",
+        "ａ.md",
+        "\u{1F600}.md",
+      ]);
+    } finally {
+      readdirSpy.mockRestore();
+    }
+  });
+
   it("should process different file types correctly", async () => {
     const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {

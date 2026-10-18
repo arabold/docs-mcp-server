@@ -15,6 +15,7 @@ import {
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
 import { loadConfig, markVectorDimensionSource } from "../utils/config";
+import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
 import {
@@ -659,6 +660,49 @@ describe("DocumentStore - With Embeddings", () => {
       );
     });
 
+    it("returns chunk positions, so search groups nearby chunks of a page", async () => {
+      const page = createScrapeResult("Hooks", "https://example.com/hooks", "unused");
+      page.chunks = ["First", "Second", "Third"].map((word, index) => ({
+        types: ["text"],
+        content: `${word} note about hooks.`,
+        section: { level: 0, path: [`part ${index}`] },
+      }));
+      await store.addDocuments("grouping", "1.0.0", 1, page);
+
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "grouping",
+        "1.0.0",
+        "hooks",
+        10,
+      );
+
+      expect(results).toHaveLength(1);
+    });
+
+    it("orders results that score the same by URL, not by when they were stored", async () => {
+      // Anagram URLs give both pages the same mock embedding and the same bm25 score
+      for (const url of ["https://example.com/ba", "https://example.com/ab"]) {
+        await store.addDocuments(
+          "ties",
+          "1.0.0",
+          1,
+          createScrapeResult("Same Title", url, "identical tie content", ["same"]),
+        );
+      }
+
+      const results = await store.findByContent(
+        "ties",
+        "1.0.0",
+        "identical tie content",
+        10,
+      );
+
+      expect(results.map((result) => result.url)).toEqual([
+        "https://example.com/ab",
+        "https://example.com/ba",
+      ]);
+    });
+
     it("should perform hybrid search combining vector and FTS", async () => {
       const results = await store.findByContent(
         "searchtest",
@@ -800,6 +844,72 @@ describe("DocumentStore - With Embeddings", () => {
 
       expect(result.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
       expectVersionFilteredFullTextPlan(plan);
+    });
+
+    it("scores a chunk found by one search method with that method's RRF term alone", async () => {
+      // Each method returns as many candidates as the limit, so with a limit
+      // of 3 the vector search misses the farthest page.
+      await store.shutdown();
+      store = new DocumentStore(":memory:", {
+        ...appConfig,
+        search: {
+          ...appConfig.search,
+          overfetchFactor: 1,
+          vectorMultiplier: 1,
+          weightVec: 1,
+          weightFts: 1,
+        },
+      });
+      await store.initialize();
+
+      // Vector distance from the query grows with the angle: a, b, d, then c.
+      const angles: Record<string, number> = {
+        "https://example.com/a": 0,
+        "https://example.com/b": 10,
+        "https://example.com/d": 20,
+        "https://example.com/c": 80,
+      };
+      const direction = (degrees: number) => {
+        const vector = new Array(mockEmbeddingDimension.value).fill(0);
+        vector[0] = Math.cos((degrees * Math.PI) / 180);
+        vector[1] = Math.sin((degrees * Math.PI) / 180);
+        return vector;
+      };
+      const embeddings = embeddingsOf(store);
+      vi.mocked(embeddings.embedQuery).mockImplementation(async () => direction(0));
+      vi.mocked(embeddings.embedDocuments).mockImplementation(async (texts) =>
+        texts.map((text) => {
+          const url = Object.keys(angles).find((u) => text.includes(`<url>${u}</url>`));
+          return direction(url ? angles[url] : 90);
+        }),
+      );
+
+      // Only a and c contain the query word; c ranks first in full-text search.
+      const pages = [
+        ["A", "a", "A needle hidden somewhere in a long description of the haystack"],
+        ["B", "b", "A haystack described without the word"],
+        ["C", "c", "needle needle"],
+        ["D", "d", "Another haystack described without the word"],
+      ];
+      for (const [title, path, content] of pages) {
+        await store.addDocuments(
+          "rrflib",
+          "1.0.0",
+          1,
+          createScrapeResult(title, `https://example.com/${path}`, content),
+        );
+      }
+
+      const results = await store.findByContent("rrflib", "1.0.0", "needle", 3);
+
+      expect(
+        results.map((r) => ({ url: r.url, vec_rank: r.vec_rank, fts_rank: r.fts_rank })),
+      ).toEqual([
+        { url: "https://example.com/a", vec_rank: 1, fts_rank: 2 },
+        { url: "https://example.com/c", vec_rank: undefined, fts_rank: 1 },
+        { url: "https://example.com/b", vec_rank: 2, fts_rank: undefined },
+      ]);
+      expect(results.map((r) => r.score)).toEqual([1 / 61 + 1 / 62, 1 / 61, 1 / 62]);
     });
   });
 
@@ -1301,6 +1411,86 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
           ["TypeScript", "Intro"],
         ),
       );
+    });
+
+    it("returns chunk positions, so search groups nearby chunks of a page", async () => {
+      const page = createScrapeResult("Hooks", "https://example.com/hooks", "unused");
+      page.chunks = ["First", "Second", "Third"].map((word, index) => ({
+        types: ["text"],
+        content: `${word} note about hooks.`,
+        section: { level: 0, path: [`part ${index}`] },
+      }));
+      await store.addDocuments("grouping", "1.0.0", 1, page);
+
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "grouping",
+        "1.0.0",
+        "hooks",
+        10,
+      );
+
+      expect(results).toHaveLength(1);
+    });
+
+    it("orders results that score the same by URL, not by when they were stored", async () => {
+      // Anagram URLs give both pages the same mock embedding and the same bm25 score
+      for (const url of ["https://example.com/ba", "https://example.com/ab"]) {
+        await store.addDocuments(
+          "ties",
+          "1.0.0",
+          1,
+          createScrapeResult("Same Title", url, "identical tie content", ["same"]),
+        );
+      }
+
+      const results = await store.findByContent(
+        "ties",
+        "1.0.0",
+        "identical tie content",
+        10,
+      );
+
+      expect(results.map((result) => result.url)).toEqual([
+        "https://example.com/ab",
+        "https://example.com/ba",
+      ]);
+    });
+
+    it("assembles grouped code matches with their enclosing class", async () => {
+      const lines: [string, string[]][] = [
+        ["class UserService {", ["UserService"]],
+        ["  getUser(id) { return lookupRecord(id); }", ["UserService", "getUser"]],
+        ["  createUser(data) { return db.create(data); }", ["UserService", "createUser"]],
+        ["  deleteUser(id) { return lookupRecord(id); }", ["UserService", "deleteUser"]],
+        ["}", ["UserService"]],
+      ];
+      const page = {
+        ...createScrapeResult("UserService.ts", "https://example.com/UserService.ts", ""),
+        sourceContentType: "text/typescript",
+        contentType: "text/typescript",
+        chunks: lines.map(([content, path]) => ({
+          types: ["code" as const],
+          content,
+          section: { level: path.length, path },
+        })),
+      };
+      await store.addDocuments("code", "1.0.0", 1, page);
+
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "code",
+        "1.0.0",
+        "lookupRecord",
+        10,
+      );
+
+      // The class's closing brace comes from its container chunk, which assembly
+      // finds through the matches' common ancestor in their metadata paths
+      expect(results.map((result) => result.content)).toEqual([
+        "class UserService {" +
+          "  getUser(id) { return lookupRecord(id); }" +
+          "  deleteUser(id) { return lookupRecord(id); }" +
+          "}",
+      ]);
     });
 
     it("should perform FTS-only search", async () => {
