@@ -2,7 +2,8 @@
 
 This directory holds the system-wide E2E suites and the shared code they run on.
 Unit and integration tests live next to the code they cover under `src/`, and
-the search benchmark's own tests live under `tests/search-eval/`.
+the search benchmarks' own tests live under `tests/search-eval/` and
+`tests/search-accuracy/`.
 
 The testing conventions (which level to test at, where a test file goes) are in
 [AGENTS.md](../AGENTS.md#tests), and each suite's `describe` blocks say what
@@ -21,6 +22,7 @@ work.
 | `npm run test:coverage` | The `npm test` set with coverage. Install `@vitest/coverage-v8` first; it is not a dev dependency. |
 | `npm run test:live` | The live HTML pipeline suite against real documentation sites |
 | `npm run test:docker` | The production Docker image suite (needs a Docker daemon) |
+| `npm run evaluate:accuracy` | The search accuracy benchmark ([tests/search-accuracy/README.md](../tests/search-accuracy/README.md)); not part of `npm test` |
 
 `npm run test:e2e` runs `npm run build` first and then the same set as
 `npm test`: its `test` filter matches every test file path, not only this
@@ -45,6 +47,10 @@ Set `ENABLE_TEST_LOGS=1` to see it.
 
 `npm run test:live` uses `vite.config.live.ts` instead. It drops
 `setup-e2e.ts`, so the live suite reaches the real network.
+
+`npm run evaluate:accuracy` uses `vite.config.accuracy.ts`, which also drops
+`setup-e2e.ts` (the benchmark downloads its corpus and calls the embedding
+provider) and prints its output even when it passes.
 
 ## Network Isolation
 
