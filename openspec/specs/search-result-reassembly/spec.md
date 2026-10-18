@@ -99,9 +99,9 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 
 **Single match in a document:**
 1. Find the nearest **structural ancestor** by walking up the parent chain looking for a chunk whose `metadata.types` array includes `"structural"`.
-2. If no structural ancestor is found, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk.
+2. If no structural ancestor is found in source code, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk. For JSON, the system SHALL NOT promote to the top level, which is the whole document; it SHALL use the object or array the match opens (a key whose value is an object or array), otherwise the object or array that contains the match.
 3. Walk the promoted ancestor to the root, collecting the full parent chain (limited by `assembly.maxParentChainDepth`, default 10).
-4. Find the **full subtree** of the promoted ancestor: the ancestor and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. The subtree SHALL include the ancestor's closing chunk, which carries the ancestor's own path.
+4. Find the **full subtree** of the promoted ancestor: the ancestor, the chunks right before it that carry the same path (such as a JSON key and its bracket), and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. The subtree SHALL include the ancestor's closing chunk, which carries the ancestor's own path.
 5. For each ancestor on the parent chain, add its **opening and closing chunks** (the chunks with its own path before its first and after its last nested member) but none of its other members.
 6. A match with an empty path (code at the page root) SHALL be returned on its own.
 
@@ -134,6 +134,16 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 #### Scenario: Match in code at the page root
 - **WHEN** a search matches a chunk with an empty path, such as a top-level statement
 - **THEN** the system SHALL return that chunk alone
+
+#### Scenario: Match on a JSON value
+- **WHEN** a search matches `"timeout": 30` inside the `server` object of a JSON document
+- **THEN** the system SHALL return the `server` key and the whole `server` object, inside the document's outer braces
+- **AND** SHALL NOT include the document's other properties
+
+#### Scenario: Match on a JSON key that opens an object
+- **WHEN** a search matches the `"server":` key whose value is an object
+- **THEN** the system SHALL return that key and its whole object
+- **AND** SHALL NOT include the document's other properties
 
 #### Scenario: Multiple matches in same code file
 - **WHEN** a search matches two chunks in different functions within the same class

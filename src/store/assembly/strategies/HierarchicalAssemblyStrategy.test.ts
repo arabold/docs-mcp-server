@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { JsonDocumentSplitter } from "../../../splitter/JsonDocumentSplitter";
 import { type AppConfig, loadConfig } from "../../../utils/config";
 import { DocumentStore } from "../../DocumentStore";
 import type { DbChunkMetadata, DbPageChunk } from "../../types";
@@ -309,6 +310,74 @@ describe("HierarchicalAssemblyStrategy", () => {
       );
 
       expect(strategy.assembleContent(result)).toBe("console.log(start);\n");
+    });
+
+    describe("JSON matches", () => {
+      const config = {
+        name: "demo",
+        server: { host: "localhost", timeout: 30 },
+        users: [{ name: "Alice" }],
+      };
+
+      /** Stores the config as the JSON splitter chunks it and returns the chunk holding `text`. */
+      async function storeConfigAndFind(text: string): Promise<DbPageChunk> {
+        const splitter = new JsonDocumentSplitter(appConfig.splitter, {
+          preserveFormatting: true,
+        });
+        await documentStore.addDocuments("test-json", "1.0", 0, {
+          url: "config.json",
+          title: "config.json",
+          sourceContentType: "application/json",
+          contentType: "application/json",
+          textContent: "",
+          chunks: await splitter.splitText(JSON.stringify(config, null, 2)),
+          links: [],
+          errors: [],
+        });
+        const chunks = await documentStore.findChunksByUrl(
+          "test-json",
+          "1.0",
+          "config.json",
+        );
+        const match = chunks.find((chunk) => chunk.content.includes(text));
+        if (!match) throw new Error(`No chunk contains ${text}`);
+        return match;
+      }
+
+      it("returns the object that contains the match instead of the whole document", async () => {
+        const timeout = await storeConfigAndFind('"timeout"');
+
+        const result = await strategy.selectChunks(
+          "test-json",
+          "1.0",
+          [timeout],
+          documentStore,
+        );
+
+        const assembled = strategy.assembleContent(result);
+        expect(assembled).toContain('"server": ');
+        expect(assembled).toContain('"host": "localhost"');
+        expect(assembled).toContain('"timeout": 30');
+        expect(assembled).not.toContain("demo");
+        expect(assembled).not.toContain("Alice");
+      });
+
+      it("returns the object a matched key opens", async () => {
+        const server = await storeConfigAndFind('"server"');
+
+        const result = await strategy.selectChunks(
+          "test-json",
+          "1.0",
+          [server],
+          documentStore,
+        );
+
+        const assembled = strategy.assembleContent(result);
+        expect(assembled).toContain('"host": "localhost"');
+        expect(assembled).toContain('"timeout": 30');
+        expect(assembled).not.toContain("demo");
+        expect(assembled).not.toContain("Alice");
+      });
     });
 
     it("should handle hierarchical gaps in parent chain", async () => {

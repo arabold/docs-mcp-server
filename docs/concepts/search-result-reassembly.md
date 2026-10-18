@@ -40,15 +40,15 @@ For each match, `MarkdownAssemblyStrategy` collects the match, its parent, up to
 
 `HierarchicalAssemblyStrategy` returns the structure that contains the match rather than a fixed window.
 
-A single match in a page brings its nearest ancestor typed `structural` (a class, interface, enum or namespace), that ancestor's chain of parents, and the ancestor's subtree. When there is no structural ancestor, as for a top-level function or anything in JSON, the first chunk of the top-level element named by the match's first path segment takes its place. A match at the page root comes back on its own.
+A single match in a page brings its nearest ancestor typed `structural` (a class, interface, enum or namespace), that ancestor's chain of parents, and the ancestor's subtree. When source code has no structural ancestor, as for a top-level function, the first chunk of the top-level element named by the match's first path segment takes its place. JSON has no structural chunks, and its top-level element is the whole document, so a JSON match brings the object or array it opens (a key whose value is an object or array), otherwise the one that contains it. A match at the page root comes back on its own.
 
-The subtree is the ancestor and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. It therefore ends with the ancestor's closing line, which carries the ancestor's own path. Each enclosing scope on the chain of parents adds its opening and closing lines but none of its other members, so the passage is balanced without pulling in the rest of the page.
+The subtree is the ancestor, the chunks right before it that carry the same path (such as a JSON key and its bracket), and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. It therefore ends with the ancestor's closing line, which carries the ancestor's own path. Each enclosing scope on the chain of parents adds its opening and closing lines but none of its other members, so the passage is balanced without pulling in the rest of the page.
 
 Several matches in one page bring every chunk at their longest common path, such as a class's opening and closing lines, and the subtree of each match. When the matches share no path, each brings its chain of parents instead.
 
 A parent chain skips missing levels: when no chunk has the parent path, the walk tries shorter prefixes. `assembly.maxParentChainDepth` bounds the walk. If a lookup fails, the strategy falls back to each match with its parent and a few children.
 
-The chunks are concatenated without a separator. Source code chunks carry their own line breaks, so adjacent chunks join back into the original lines. JSON chunks carry their own commas and brackets, so a complete selection joins into compact JSON.
+The chunks are concatenated without a separator. Source code chunks carry their own line breaks, so adjacent chunks join back into the original lines. JSON chunks carry their own commas and brackets, so a complete selection joins into compact JSON. A comma that separated the selection from a left-out sibling stays in place.
 
 ## Scores and order
 

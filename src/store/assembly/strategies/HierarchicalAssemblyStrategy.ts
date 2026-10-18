@@ -73,45 +73,11 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
           // Single match: reconstruct complete structural subtree containing the match
           const matched = documentChunks[0];
 
-          // Find nearest structural ancestor (class / interface / enum / namespace, etc.)
-          const structuralAncestor =
-            (await this.findStructuralAncestor(
-              library,
-              version,
-              matched,
-              documentStore,
-            )) ?? matched;
-
-          // If no structural ancestor was found (e.g. we matched a deeply nested anonymous or inner function),
-          // attempt to promote to the top-level container represented by the first path element.
-          // Example: path ['applyMigrations','overallTransaction','overallTransaction','<anonymous_arrow>']
-          // We want to reconstruct the whole top-level function 'applyMigrations', not just the arrow body.
-          let promotedAncestor = structuralAncestor;
-          try {
-            const path = (matched.metadata.path as string[]) || [];
-            if (promotedAncestor === matched && path.length > 0) {
-              const topLevelPath = [path[0]];
-              const containerIds = await this.findContainerChunks(
-                library,
-                version,
-                matched,
-                topLevelPath,
-                documentStore,
-              );
-              if (containerIds.length > 0) {
-                const topChunks = await documentStore.findChunksByIds(library, version, [
-                  containerIds[0],
-                ]);
-                if (topChunks.length > 0) {
-                  promotedAncestor = topChunks[0];
-                }
-              }
-            }
-          } catch (e) {
-            logger.warn(
-              `Top-level function promotion failed for chunk ${matched.id}: ${e}`,
-            );
-          }
+          // The container to reconstruct: the JSON object or array holding the match,
+          // or for code its structural ancestor (class / namespace, etc.)
+          const promotedAncestor = MimeTypeUtils.isJson(matched.content_type ?? "")
+            ? await this.findJsonContainer(library, version, matched, documentStore)
+            : await this.findCodeContainer(library, version, matched, documentStore);
 
           // IMPORTANT: Always include the original matched chunk first
           allChunkIds.add(matched.id);
@@ -138,15 +104,15 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
             allChunkIds.add(id);
           }
 
-          // Close the scopes that enclose the subtree, without their other members
-          const closingIds = await this.findClosingChunks(
+          // Open and close the scopes that enclose the subtree, without their other members
+          const boundaryIds = await this.findScopeBoundaryChunks(
             library,
             version,
             promotedAncestor.url,
             ancestorParentChain.filter((id) => id !== promotedAncestor.id),
             documentStore,
           );
-          for (const id of closingIds) {
+          for (const id of boundaryIds) {
             allChunkIds.add(id);
           }
         } else {
@@ -198,6 +164,86 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     }
     // Production/default: simple concatenation leveraging splitter guarantees.
     return chunks.map((chunk) => chunk.content).join("");
+  }
+
+  /**
+   * Finds the code container to reconstruct for a single match: its nearest structural
+   * ancestor, otherwise the top-level container named by the first path element, otherwise
+   * the match itself.
+   */
+  private async findCodeContainer(
+    library: string,
+    version: string,
+    matched: DbPageChunk,
+    documentStore: DocumentStore,
+  ): Promise<DbPageChunk> {
+    // Find nearest structural ancestor (class / interface / enum / namespace, etc.)
+    const structuralAncestor = await this.findStructuralAncestor(
+      library,
+      version,
+      matched,
+      documentStore,
+    );
+    if (structuralAncestor && structuralAncestor !== matched) {
+      return structuralAncestor;
+    }
+
+    // If no structural ancestor was found (e.g. we matched a deeply nested anonymous or inner function),
+    // or the match is structural itself,
+    // attempt to promote to the top-level container represented by the first path element.
+    // Example: path ['applyMigrations','overallTransaction','overallTransaction','<anonymous_arrow>']
+    // We want to reconstruct the whole top-level function 'applyMigrations', not just the arrow body.
+    try {
+      const path = (matched.metadata.path as string[]) || [];
+      if (path.length > 0) {
+        const topLevelPath = [path[0]];
+        const containerIds = await this.findContainerChunks(
+          library,
+          version,
+          matched,
+          topLevelPath,
+          documentStore,
+        );
+        if (containerIds.length > 0) {
+          const topChunks = await documentStore.findChunksByIds(library, version, [
+            containerIds[0],
+          ]);
+          if (topChunks.length > 0) {
+            return topChunks[0];
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`Top-level function promotion failed for chunk ${matched.id}: ${e}`);
+    }
+
+    return matched;
+  }
+
+  /**
+   * Finds the JSON object or array to reconstruct for a single match: the one the match
+   * opens (a key or bracket followed by nested members), otherwise the one that contains
+   * it. Unlike code, a match is not promoted to the top level, which in JSON is the
+   * whole document.
+   */
+  private async findJsonContainer(
+    library: string,
+    version: string,
+    matched: DbPageChunk,
+    documentStore: DocumentStore,
+  ): Promise<DbPageChunk> {
+    const pageChunks = await documentStore.findChunksByUrl(library, version, matched.url);
+    const ownContainer = this.collectContainer(pageChunks, matched.id);
+    const depth = ownContainer[0]?.metadata.path?.length ?? 0;
+    const opensContainer = ownContainer.some(
+      (chunk) => (chunk.metadata.path?.length ?? 0) > depth,
+    );
+    if (opensContainer) {
+      return matched;
+    }
+
+    const parent = await documentStore.findParentChunk(library, version, matched.id);
+    return parent ?? matched;
   }
 
   /**
@@ -565,11 +611,12 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   }
 
   /**
-   * Finds the chunks that close each of the given containers: the chunks at the end
-   * of a container that repeat its path after its last nested member, such as a
-   * namespace's closing brace. Containers without a closing chunk add nothing.
+   * Finds the chunks that open and close each of the given containers: the chunks
+   * that carry the container's own path before its first nested member (a class
+   * declaration, or a JSON key and its bracket) and after its last one (a closing
+   * brace). Containers without nested members add nothing.
    */
-  private async findClosingChunks(
+  private async findScopeBoundaryChunks(
     library: string,
     version: string,
     url: string,
@@ -581,52 +628,66 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     }
 
     const pageChunks = await documentStore.findChunksByUrl(library, version, url);
-    const closingIds: string[] = [];
+    const boundaryIds: string[] = [];
     for (const containerId of containerIds) {
       const container = this.collectContainer(pageChunks, containerId);
       const depth = container[0]?.metadata.path?.length ?? 0;
-      // Step back over the trailing chunks that repeat the container's path
-      let closingStart = container.length;
-      while (
-        closingStart > 0 &&
-        (container[closingStart - 1].metadata.path?.length ?? 0) === depth
-      ) {
-        closingStart--;
+      const isNested = (chunk: DbPageChunk) => (chunk.metadata.path?.length ?? 0) > depth;
+      const firstNested = container.findIndex(isNested);
+      // Without nested members there is nothing to open or close
+      if (firstNested === -1) continue;
+      let lastNested = container.length - 1;
+      while (!isNested(container[lastNested])) {
+        lastNested--;
       }
-      // Without nested members there is nothing to close
-      if (closingStart === 0) continue;
-      for (const chunk of container.slice(closingStart)) {
-        closingIds.push(chunk.id);
+      for (const chunk of container.slice(0, firstNested)) {
+        boundaryIds.push(chunk.id);
+      }
+      for (const chunk of container.slice(lastNested + 1)) {
+        boundaryIds.push(chunk.id);
       }
     }
-    return closingIds;
+    return boundaryIds;
   }
 
   /**
-   * Collects the container that starts at the given chunk: the chunk itself and the
-   * chunks right after it whose path starts with its path. The run ends at the first
-   * chunk outside the container, so it holds the nested members and the closing chunk,
-   * which repeats the container's path, but no unrelated code. A chunk with an empty
-   * path is global code and contains nothing else.
+   * Collects the container that the given chunk belongs to. The container opens with
+   * the chunk and the chunks right before it that carry the same path (such as a JSON
+   * key and its bracket), and holds the chunks right after it whose path starts with
+   * that path. The run ends at the first chunk outside the container, so it holds the
+   * nested members and the closing chunk, which repeats the container's path, but no
+   * unrelated code. A chunk with an empty path is global code and contains nothing else.
    *
    * @param pageChunks All chunks of one page, in document order.
-   * @param rootId ID of the chunk that opens the container.
+   * @param rootId ID of a chunk that opens the container.
    * @returns The container's chunks in document order, or an empty array if the page
    *   has no chunk with that ID.
    */
   private collectContainer(pageChunks: DbPageChunk[], rootId: string): DbPageChunk[] {
-    const start = pageChunks.findIndex((chunk) => chunk.id === rootId);
-    if (start === -1) {
+    const rootIndex = pageChunks.findIndex((chunk) => chunk.id === rootId);
+    if (rootIndex === -1) {
       return [];
     }
 
-    const rootPath = pageChunks[start].metadata.path ?? [];
-    const container = [pageChunks[start]];
+    const rootPath = pageChunks[rootIndex].metadata.path ?? [];
     if (rootPath.length === 0) {
-      return container;
+      return [pageChunks[rootIndex]];
     }
 
-    for (const chunk of pageChunks.slice(start + 1)) {
+    const hasRootPath = (chunk: DbPageChunk) => {
+      const path = chunk.metadata.path ?? [];
+      return (
+        path.length === rootPath.length &&
+        rootPath.every((segment, index) => segment === path[index])
+      );
+    };
+    let start = rootIndex;
+    while (start > 0 && hasRootPath(pageChunks[start - 1])) {
+      start--;
+    }
+
+    const container = pageChunks.slice(start, rootIndex + 1);
+    for (const chunk of pageChunks.slice(rootIndex + 1)) {
       const path = chunk.metadata.path ?? [];
       const isInside =
         path.length >= rootPath.length &&
