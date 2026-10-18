@@ -136,7 +136,7 @@ Line 6 with multiple blank lines above`,
         [
           // The fence contains a blank line, so a naive paragraph split would cut inside it.
           "fence straddling a paragraph boundary",
-          200,
+          70,
           [
             "Intro paragraph that takes up some space here in the document.",
             "",
@@ -150,8 +150,10 @@ Line 6 with multiple blank lines above`,
           ].join("\n"),
         ],
         [
+          // Only the second fence has a blank line inside, so the split has to track
+          // it after the first fence has closed.
           "several fences separated by prose",
-          200,
+          60,
           [
             "Para A.",
             "",
@@ -163,6 +165,7 @@ Line 6 with multiple blank lines above`,
             "",
             "```python",
             "def f():",
+            "",
             "    return 1",
             "```",
             "",
@@ -171,7 +174,7 @@ Line 6 with multiple blank lines above`,
         ],
         [
           "tilde fence with a blank line inside",
-          150,
+          60,
           [
             "Intro.",
             "",
