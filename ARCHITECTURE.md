@@ -26,7 +26,8 @@ Outside Docker, protocol selection is automatic - stdio transport for AI tools (
 
 - Node.js 22.x, TypeScript, Vite build system
 - Vitest for testing
-- HTMX, AlpineJS, TailwindCSS for web interface
+- React, React Router, tRPC and TanStack Query for the web interface, styled with plain CSS
+- Fastify for HTTP, tRPC for the application API and its WebSocket event stream
 - LangChain.js for embeddings, Playwright for scraping
 - SQLite with schema migrations
 
@@ -77,7 +78,7 @@ src/
 ├── tools/                           # Business logic implementations
 ├── types/                           # Shared TypeScript interfaces
 ├── utils/                           # Common utilities
-└── web/                             # Web interface implementation
+└── web/client/                      # React web UI (see CONVENTIONS.md there)
 ```
 
 ## System Architecture
@@ -211,7 +212,7 @@ Every entry point opens its services with `openBackend()` (`src/services/backend
 
 ### Tools Layer
 
-Business logic resides in the tools layer to enable code reuse across interfaces. Tools operate on shared pipeline and storage services, eliminating interface-specific implementations. CLI commands, MCP endpoints, and web routes all delegate to the same tool implementations.
+Business logic resides in the tools layer to enable code reuse across interfaces. Tools operate on shared pipeline and storage services, eliminating interface-specific implementations. CLI commands and MCP endpoints delegate to the same tool implementations; the application API that the web UI calls exposes the same pipeline and storage services.
 
 The tools layer includes:
 
@@ -301,11 +302,46 @@ DocumentManagementService handles CRUD operations and version resolution. Docume
 
 ### Web Interface
 
-Server-side rendered application using Fastify with JSX components. HTMX provides dynamic updates without client-side JavaScript frameworks. AlpineJS handles client-side interactivity within components.
+The web interface is a React single-page application in `src/web/client/`. React Router handles client-side routes, and a typed tRPC client with TanStack Query (React Query) fetches and caches data. Styling is plain CSS: design tokens and themes in `styles/theme.css`, component classes in `styles/components.css`. `vite.config.web.ts` builds the app into `public/` (`npm run build:web`) with relative asset URLs, so one build works at the server root and under any public URL path.
 
-Routes delegate to tools layer for data operations. Components poll for job status updates every 3 seconds, displaying progress bars and status changes in real-time.
+```mermaid
+graph LR
+    subgraph "Browser"
+        APP[React App]
+        TRPC_C[tRPC Client]
+        APP --> TRPC_C
+    end
 
-HTMX and AlpineJS integration uses custom events to decouple component interactions from global HTMX state.
+    subgraph "AppServer"
+        STATIC[Static Files and SPA Shell]
+        HTTP[tRPC over HTTP at /api]
+        WS[tRPC over WebSocket at /api]
+        ROUTER[AppRouter]
+        EB[EventBus]
+
+        HTTP & WS --> ROUTER
+        EB -.->|Events| WS
+    end
+
+    STATIC -->|index.html and assets| APP
+    TRPC_C ==>|Queries and Mutations| HTTP
+    WS -.->|events.subscribe| TRPC_C
+    ROUTER --> BACKEND[Local Pipeline or Remote Worker]
+```
+
+`AppServer` serves the app when the web interface is enabled (the default command and `web`):
+
+- **Static files**: `@fastify/static` serves `public/`, which holds the hashed build assets and the favicons.
+- **SPA shell**: `/`, `/index.html` and every other unmatched `GET` or `HEAD` request get `index.html` with a `<base href>` for the public URL's path, so deep links and page reloads open the app. Unmatched paths under `/api`, `/mcp`, `/assets`, `/.well-known`, `/sse` and `/messages` get a JSON `404`.
+- **API**: the merged tRPC router (`AppRouter` in `src/services/appRouter.ts`) at `/api`. Queries and mutations use HTTP; the `events.subscribe` subscription uses a WebSocket on the same path. The `worker` command serves the API without the web interface.
+
+The browser builds its links with `createApiLinks()` from `src/services/apiClient.ts`, the same function coordinators use to reach a remote worker, and imports `AppRouter` as a type only, so no server code enters the browser bundle. The app shell holds one event subscription for job and library events and invalidates the affected queries, so every view refetches as jobs run and the corpus changes.
+
+With `--server-url`, the web server's `/api` answers through its remote backend: `DocumentManagementClient` and `PipelineClient` forward calls to the worker, and `RemoteEventProxy` relays the worker's events onto the local `EventBus` that the subscription reads. The browser talks only to the web server.
+
+Every request and WebSocket upgrade passes the host check (see [MCP Protocol Integration](#mcp-protocol-integration)). On a loopback bind, the API and its WebSocket also refuse foreign browser origins. Upgrades are accepted only at `/api`, and at the root for coordinators of earlier releases. Authentication covers the MCP endpoint only, never the web interface or the API.
+
+See [Web Client Conventions](src/web/client/CONVENTIONS.md) for the client's directory layout, adding pages and routes, data hooks, and the shared component library.
 
 ### MCP Protocol Integration
 

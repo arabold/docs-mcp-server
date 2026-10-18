@@ -260,7 +260,7 @@ Real-time progress updates through:
 
 - Callback-based progress notifications
 - Database persistence of progress state
-- Web UI polling for status display
+- Events streamed to the web UI over the API's WebSocket
 - Log-based progress tracking
 
 ### Error Tracking

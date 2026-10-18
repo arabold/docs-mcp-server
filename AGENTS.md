@@ -4,7 +4,7 @@
 ## Repository Context
 
 - **Repository**: `arabold/docs-mcp-server`
-- **Core Stack**: Node.js 22.x, TypeScript, Vite, AlpineJS, TailwindCSS, SQLite (better-sqlite3)
+- **Core Stack**: Node.js 22.x, TypeScript, Vite, Fastify, tRPC, React, SQLite (better-sqlite3)
   - **Node Version**: Always use **Node.js v22** for local development and builds, even if `package.json` allows older versions. If `nvm` is installed, run `nvm use 22` before local commands.
 - **Tooling**: Biome (lint/format), Vitest (test), Husky (pre-commit)
 - **Critical Documentation**:
@@ -70,10 +70,11 @@ Strictly enforced by `commitlint`. Commits will fail if format is incorrect.
 - **Response**: Return standard HTTP codes (e.g., 500) for API errors.
 - **Safety**: Sanitize binary content from error logs.
 
-### Web UI (AlpineJS + HTMX)
-- **Components**: AlpineJS with TSX (`kitajs`).
+### Web UI (React + tRPC)
+- **Conventions**: Read `src/web/client/CONVENTIONS.md` before changing the client.
+- **Components**: React function components; reuse the shared ones in `src/web/client/components/`.
 - **Conditionals**: Use ternary `foo ? <Bar/> : null` (avoid `foo && <Bar/>`).
-- **Styling**: TailwindCSS utility classes.
+- **Styling**: CSS classes from `src/web/client/styles/theme.css` and `components.css`.
 
 ## Documentation Guidelines
 

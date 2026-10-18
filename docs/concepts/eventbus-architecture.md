@@ -4,7 +4,7 @@ This document describes the event-driven architecture used for real-time communi
 
 ## Overview
 
-The core of the system is the `EventBusService`, an in-memory pub/sub service. It allows different parts of the application, such as the job processing pipeline, to emit events without being directly coupled to the components that consume them, like the Server-Sent Events (SSE) endpoint for the web UI.
+The core of the system is the `EventBusService`, an in-memory pub/sub service. It allows different parts of the application, such as the job processing pipeline, to emit events without being directly coupled to the components that consume them, like the `events.subscribe` subscription the web UI holds over WebSocket.
 
 This architecture achieves two primary goals:
 
@@ -17,7 +17,7 @@ This architecture achieves two primary goals:
 | :----------------- | :------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PipelineManager`  | `src/pipeline/`            | Manages the lifecycle of scraping and indexing jobs. It is the primary **producer** of job-related events, emitting directly to the `EventBusService`. |
 | `EventBusService`  | `src/events/`              | The central pub/sub bus that receives all events and distributes them to registered listeners.                                                         |
-| **SSE Route**      | `src/web/routes/events.ts` | A **consumer** that listens to the event bus and forwards events to connected web UI clients over SSE.                                                 |
+| **Events Router**  | `src/events/trpc/`         | A **consumer** that listens to the event bus and streams events to `events.subscribe` subscribers over the API's WebSocket: the web UI and the `RemoteEventProxy` of coordinators. |
 | `RemoteEventProxy` | `src/events/`              | Subscribes to a remote worker's events through the backend's API client and re-emits them on the local event bus. Every remote backend with a pipeline has one. |
 | **CLI Commands**   | `src/cli/commands/`        | `scrape` and `refresh` show status and progress for the job they submitted, local or remote, through `JobOutputFollower` (`src/cli/`).                 |
 
@@ -29,22 +29,23 @@ The following diagram illustrates the flow of an event when the worker is runnin
 sequenceDiagram
     participant PipelineManager
     participant EventBusService
-    participant SSERoute as "SSE Route"
+    participant EventsRouter as "Events Router"
     participant WebUI as "Web UI Client"
     participant CLI as "CLI Command"
 
     PipelineManager->>EventBusService: Emits JOB_STATUS_CHANGE event
-    EventBusService->>SSERoute: Notifies listener of event
+    EventBusService->>EventsRouter: Notifies listener of event
     EventBusService->>CLI: Notifies listener of event
-    SSERoute->>WebUI: Sends SSE message
+    EventsRouter->>WebUI: Sends event over WebSocket
+    WebUI->>WebUI: Refetches affected queries
     CLI->>CLI: Updates ora spinner
 ```
 
 1.  The `PipelineManager` updates the status of a job and directly emits a `JOB_STATUS_CHANGE` event to the `EventBusService`.
 2.  The `EventBusService` forwards the event to all its registered listeners:
-    - The SSE Route (for web UI updates)
+    - The events router (for web UI updates)
     - CLI commands (for terminal progress indicators)
-3.  The SSE Route formats the event data and sends it to all connected web UI clients.
+3.  The events router sends the event to every `events.subscribe` subscriber whose filter includes it. The web UI invalidates the affected queries (jobs, libraries, system health), which refetch over HTTP.
 4.  CLI commands update their progress indicators (e.g., `ora` spinner).
 
 ## External Worker Event Flow
