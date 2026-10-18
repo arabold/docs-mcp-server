@@ -2,19 +2,21 @@ import { describe, expect, it } from "vitest";
 import { escapeHtml, formatBytes } from "./string";
 
 describe("formatBytes", () => {
-  it("formats zero and invalid values as 0 B", () => {
-    expect(formatBytes(0)).toBe("0 B");
-    expect(formatBytes(-1)).toBe("0 B");
-    expect(formatBytes(Number.NaN)).toBe("0 B");
-  });
+  it("formats a byte count with a unit, and invalid counts as 0 B", () => {
+    const cases: Array<[bytes: number, expected: string]> = [
+      [0, "0 B"],
+      [-1, "0 B"],
+      [Number.NaN, "0 B"],
+      // Under 1 KB without a decimal
+      [512, "512 B"],
+      // Larger sizes with one decimal place
+      [1536, "1.5 KB"],
+      [1024 * 1024, "1.0 MB"],
+    ];
 
-  it("formats byte counts under 1 KB without a decimal", () => {
-    expect(formatBytes(512)).toBe("512 B");
-  });
-
-  it("formats larger sizes with one decimal place", () => {
-    expect(formatBytes(1536)).toBe("1.5 KB");
-    expect(formatBytes(1024 * 1024)).toBe("1.0 MB");
+    for (const [bytes, expected] of cases) {
+      expect.soft(formatBytes(bytes), String(bytes)).toBe(expected);
+    }
   });
 });
 
