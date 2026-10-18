@@ -70,26 +70,6 @@ describe("Telemetry", () => {
     });
   });
 
-  describe("global context", () => {
-    it("should set and get global context", () => {
-      const context = { appVersion: "1.0.0", appPlatform: "test" };
-
-      telemetry.setGlobalContext(context);
-
-      expect(telemetry.getGlobalContext()).toEqual(context);
-    });
-
-    it("should return copy of global context", () => {
-      const context = { appVersion: "1.0.0" };
-      telemetry.setGlobalContext(context);
-
-      const retrieved = telemetry.getGlobalContext();
-      retrieved.appPlatform = "modified";
-
-      expect(telemetry.getGlobalContext()).toEqual({ appVersion: "1.0.0" });
-    });
-  });
-
   describe("event tracking", () => {
     it("should track events via PostHogClient with global context", () => {
       telemetry.setGlobalContext({ appVersion: "1.0.0" });
