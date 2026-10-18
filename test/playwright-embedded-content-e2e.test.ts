@@ -26,13 +26,19 @@ const PAGES: Record<string, string> = {
     <p>Outro paragraph</p>
   </body></html>`,
   "/frame-one.html": "<html><body><p>Frame one text</p></body></html>",
-  // The loader keeps this iframe busy for a moment, so it finishes after the
-  // first one, as a slower embed on a real page would.
+  // The loader keeps this iframe busy until the first iframe is inlined, so it
+  // always finishes second, as a slower embed on a real page would. Inlining
+  // the first iframe shifts the position of every iframe after it.
   "/frame-three.html": `<html><body>
-    <div class="loading"></div>
+    <div class="loading">Loading…</div>
     <p>Frame three text</p>
     <script>
-      setTimeout(() => document.querySelector(".loading").remove(), 500);
+      const timer = setInterval(() => {
+        if (!parent.document.querySelector('iframe[src="/frame-one.html"]')) {
+          document.querySelector(".loading").remove();
+          clearInterval(timer);
+        }
+      }, 10);
     </script>
   </body></html>`,
   "/shadow.html": `<html><body>
