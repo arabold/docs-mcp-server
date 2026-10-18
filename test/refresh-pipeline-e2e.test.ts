@@ -295,5 +295,48 @@ describe("Refresh pipeline E2E", () => {
       expect(blocked.requests).toEqual([]);
       expect(await h.storedUrls()).toEqual([]);
     });
+
+    describe.each([ScrapeMode.Fetch, ScrapeMode.Playwright])("in %s mode", (scrapeMode) => {
+      // Another host on the allowed site's domain. A link can only reach a
+      // different host with scope "domain", and the address has to be a name
+      // for that, so the policy looks it up in DNS: `.example` names do not
+      // resolve, and an unresolved name is refused.
+      const internal = mockSite("http://internal.allowed.example");
+
+      it("does not follow a redirect to an address off the allowlist", async () => {
+        allowed
+          .page("/", hubPage(["/moved"]))
+          .redirect("/moved", blocked.url("/latest/meta-data/"));
+
+        const job = await h.scrape({
+          url: allowed.url("/"),
+          maxDepth: 1,
+          ignoreErrors: true,
+          scrapeMode,
+        });
+
+        expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+        expect(h.outcomeOf(allowed.url("/moved"))).toBe(PageOutcome.Failed);
+        expect(blocked.requests).toEqual([]);
+        expect(await h.storedUrls()).toEqual([allowed.url("/")]);
+      });
+
+      it("does not follow a link to a host off the allowlist", async () => {
+        allowed.page("/", hubPage([internal.url("/admin")]));
+
+        const job = await h.scrape({
+          url: allowed.url("/"),
+          maxDepth: 1,
+          scope: "domain",
+          ignoreErrors: true,
+          scrapeMode,
+        });
+
+        expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+        expect(h.outcomeOf(internal.url("/admin"))).toBe(PageOutcome.Failed);
+        expect(internal.requests).toEqual([]);
+        expect(await h.storedUrls()).toEqual([allowed.url("/")]);
+      });
+    });
   });
 });

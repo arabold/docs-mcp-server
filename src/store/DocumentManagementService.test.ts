@@ -1,1643 +1,796 @@
-import path from "node:path";
-import { createFsFromVolume, vol } from "memfs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventBusService } from "../events";
+import type { AppConfig } from "../utils/config";
+import { loadConfig } from "../utils/config";
+import { DocumentManagementService } from "./DocumentManagementService";
+import { DocumentStore } from "./DocumentStore";
 import {
   AmbiguousPageInStoreError,
   LibraryNotFoundInStoreError,
   PageNotFoundInStoreError,
   VersionNotFoundInStoreError,
 } from "./errors";
+import { VersionStatus } from "./types";
 
-vi.mock("node:fs", () => ({
-  default: createFsFromVolume(vol),
-  existsSync: vi.fn(vol.existsSync),
-}));
-vi.mock("../utils/paths", () => ({
-  getProjectRoot: vi.fn(() => "/docs-mcp-server"),
-}));
-
-// Mock env-paths using mockImplementation
-const mockEnvPaths = {
-  data: "/mock/env/path/data",
-  config: "/mock/env/path/config",
-};
-const mockEnvPathsFn = vi.fn().mockReturnValue(mockEnvPaths);
-
-vi.mock("env-paths", () => ({
-  default: vi.fn(() => ({
-    data: "/mock/env/path/data",
-    config: "/mock/env/path/config",
-  })),
-}));
-
-import envPaths from "env-paths";
-
-// Assign the actual implementation to the mocked function
-vi.mocked(envPaths).mockImplementation(mockEnvPathsFn);
-
-// Define the instance methods mock
-const mockStore = {
-  initialize: vi.fn(),
-  shutdown: vi.fn(),
-  queryUniqueVersions: vi.fn(),
-  checkDocumentExists: vi.fn(),
-  queryLibraryVersions: vi.fn().mockResolvedValue(new Map<string, any[]>()),
-  addDocuments: vi.fn(),
-  deletePages: vi.fn(),
-  compact: vi.fn().mockResolvedValue({
-    skipped: false,
-    vacuumed: true,
-    beforeBytes: 100,
-    afterBytes: 50,
-    reclaimedBytes: 50,
-  }),
-  removeVersion: vi.fn().mockResolvedValue({
-    documentsDeleted: 1,
-    versionDeleted: true,
-    libraryDeleted: false,
-  }),
-  // Status tracking methods
-  updateVersionStatus: vi.fn(),
-  updateVersionProgress: vi.fn(),
-  getVersionsByStatus: vi.fn(),
-  // Scraper options methods
-  storeScraperOptions: vi.fn(),
-  getScraperOptions: vi.fn(),
-  findVersionsBySourceUrl: vi.fn(),
-  resolveVersionId: vi.fn(),
-  // Library management methods
-  getLibrary: vi.fn(),
-  deleteLibrary: vi.fn(),
-  // Page reading methods
-  findPageUrls: vi.fn(),
-  findPageUrlsBySuffix: vi.fn(),
-  listPages: vi.fn(),
-  findChunksByUrl: vi.fn(),
-  // Chunk explorer methods
-  listVersionChunks: vi.fn(),
-  getVersionStats: vi.fn(),
-};
-
-// Mock the DocumentStore module
-vi.mock("./DocumentStore", () => {
-  // Create the mock constructor *inside* the factory function
-  const MockDocumentStore = vi.fn(function () {
-    return mockStore;
-  });
-  return { DocumentStore: MockDocumentStore };
-});
-
-import { EventBusService } from "../events";
-import { loadConfig } from "../utils/config";
-import { getProjectRoot } from "../utils/paths";
-// Import the mocked constructor AFTER vi.mock
-import { DocumentManagementService } from "./DocumentManagementService";
-
-// Mock DocumentRetrieverService (keep existing structure)
-const mockRetriever = vi.hoisted(() => ({
-  search: vi.fn(),
-}));
-
-vi.mock("./DocumentRetrieverService", () => ({
-  DocumentRetrieverService: vi.fn().mockImplementation(function () {
-    return mockRetriever;
-  }),
-}));
-
-// --- END MOCKS ---
-
-const appConfig = loadConfig();
-
+/**
+ * Integration tests for the document management service, run against a real
+ * in-memory SQLite store in full-text-only mode.
+ */
 describe("DocumentManagementService", () => {
-  let docService: DocumentManagementService; // For general tests
-  const projectRoot = getProjectRoot();
+  let appConfig: AppConfig;
+  let docService: DocumentManagementService;
 
-  // Define expected paths consistently using the calculated actual root
-  // Note: getProjectRoot() called here will now run *after* fs is mocked,
-  // so it needs the dummy package.json created in beforeEach.
-  const _expectedOldDbPath = path.join(projectRoot, ".store", "documents.db");
-  const _expectedStandardDbPath = path.join(mockEnvPaths.data, "documents.db");
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vol.reset(); // Reset memfs
-
-    // Ensure store path is defined for local DocumentManagementService instances
-    appConfig.app.storePath = "/test/store/path";
-
-    // --- Create dummy package.json in memfs for getProjectRoot() ---
-    // Ensure the calculated project root directory exists in memfs
-    vol.mkdirSync(projectRoot, { recursive: true });
-    // Create a dummy package.json file there
-    vol.writeFileSync(path.join(projectRoot, "package.json"), "{}");
-    // -------------------------------------------------------------
-
-    // Ensure envPaths mock is reset/set for general tests
-    mockEnvPathsFn.mockReturnValue(mockEnvPaths);
-
-    // Set OPENAI_API_KEY for tests to enable default embedding behavior
-    process.env.OPENAI_API_KEY = "test-api-key";
-
-    // Initialize the main service instance used by most tests
-    // This will now use memfs for its internal fs calls
-    const eventBus = new EventBusService();
-    docService = new DocumentManagementService(eventBus, appConfig);
+  beforeEach(async () => {
+    appConfig = loadConfig();
+    appConfig.app.storePath = ":memory:";
+    appConfig.app.embeddingModel = ""; // FTS-only: no external credentials required
+    docService = new DocumentManagementService(new EventBusService(), appConfig);
+    await docService.initialize();
   });
 
   afterEach(async () => {
-    // Shutdown the main service instance
-    await docService?.shutdown();
+    vi.restoreAllMocks();
+    await docService.shutdown();
   });
 
-  // --- getActiveEmbeddingConfig Tests ---
-  describe("getActiveEmbeddingConfig", () => {
-    it("should delegate to the underlying store", async () => {
-      const mockConfig = {
-        provider: "openai" as const,
-        model: "text-embedding-3-small",
-        dimensions: 1536,
-        modelSpec: "openai:text-embedding-3-small",
-      };
-      (mockStore as any).getActiveEmbeddingConfig = vi.fn().mockReturnValue(mockConfig);
-
-      await docService.initialize();
-      const config = docService.getActiveEmbeddingConfig();
-
-      expect((mockStore as any).getActiveEmbeddingConfig).toHaveBeenCalled();
-      expect(config).toEqual(mockConfig);
+  /** Stores one page with one chunk per entry in `chunks`. */
+  async function addPage(
+    library: string,
+    version: string,
+    url: string,
+    chunks = ["content"],
+    contentType = "text/markdown",
+  ): Promise<void> {
+    await docService.addScrapeResult(library, version, 1, {
+      url,
+      title: "Page Title",
+      sourceContentType: contentType,
+      contentType,
+      textContent: "",
+      links: [],
+      errors: [],
+      chunks: chunks.map((content, index) => ({
+        types: ["text"],
+        content,
+        section: { level: 1, path: [`section${index}`] },
+      })),
     });
+  }
 
-    it("should return null when store returns null", async () => {
-      (mockStore as any).getActiveEmbeddingConfig = vi.fn().mockReturnValue(null);
+  /** Creates the given version labels for a library, without documents. */
+  async function addVersions(library: string, labels: string[]): Promise<void> {
+    for (const version of labels) {
+      await docService.ensureVersion({ library, version });
+    }
+  }
 
-      await docService.initialize();
-      const config = docService.getActiveEmbeddingConfig();
-
-      expect((mockStore as any).getActiveEmbeddingConfig).toHaveBeenCalled();
-      expect(config).toBeNull();
-    });
-  });
-
-  // --- ensureVersion tests ---
   describe("ensureVersion", () => {
-    it("creates library and version when both absent", async () => {
-      mockStore.resolveVersionId.mockResolvedValue(10);
-      const id = await docService.ensureVersion({ library: "React", version: "18.2.0" });
-      expect(id).toBe(10);
-      // The name reaches the store as submitted, so a new library keeps its casing
-      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("React", "18.2.0");
-    });
-
-    it("handles unversioned refs (empty version string)", async () => {
-      mockStore.resolveVersionId.mockResolvedValue(20);
-      const id = await docService.ensureVersion({ library: "Lodash", version: "" });
-      expect(id).toBe(20);
-      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("Lodash", "");
-    });
-
-    it("passes the library and version through for the store to normalize", async () => {
-      mockStore.resolveVersionId.mockResolvedValue(30);
-      const id = await docService.ensureVersion({
-        library: "  Express  ",
-        version: "  ",
-      });
-      expect(id).toBe(30);
-      // The store normalizes both halves; this layer passes them through
-      expect(mockStore.resolveVersionId).toHaveBeenCalledWith("  Express  ", "  ");
-    });
-
     it("reuses single unversioned version across multiple ensureVersion calls (regression)", async () => {
-      // simulate same returned id each time
-      mockStore.resolveVersionId
-        .mockResolvedValueOnce(10)
-        .mockResolvedValueOnce(10)
-        .mockResolvedValueOnce(10);
       const a = await docService.ensureVersion({ library: "TestLib", version: "" });
       const b = await docService.ensureVersion({ library: "TestLib", version: "" });
       const c = await docService.ensureVersion({ library: "TestLib", version: "" });
-      expect(a).toBe(10);
-      expect(b).toBe(10);
-      expect(c).toBe(10);
-      expect(mockStore.resolveVersionId).toHaveBeenCalledTimes(3);
+
+      expect(b).toBe(a);
+      expect(c).toBe(a);
+      const [library] = await docService.listLibraries();
+      expect(library.versions.map((v) => v.ref.version)).toEqual([""]);
     });
   });
 
   describe("listVersionChunks", () => {
-    it("normalizes the library/version ref and applies a default limit", async () => {
-      const storeResult = { chunks: [], total: 0 };
-      mockStore.listVersionChunks.mockResolvedValue(storeResult);
+    it("reads chunks through a padded, differently cased library and version", async () => {
+      await addPage("React", "18.2.0", "https://react.dev/hooks", ["Alpha", "Beta"]);
 
       const result = await docService.listVersionChunks({
-        library: "  React  ",
-        version: "18.2.0",
+        library: "  REACT  ",
+        version: " 18.2.0 ",
       });
 
-      expect(result).toBe(storeResult);
-      expect(mockStore.listVersionChunks).toHaveBeenCalledWith("react", "18.2.0", {
-        limit: 50,
-        offset: undefined,
-        filter: undefined,
-      });
-    });
-
-    it("normalizes unversioned refs to an empty string and forwards pagination/filter", async () => {
-      mockStore.listVersionChunks.mockResolvedValue({ chunks: [], total: 0 });
-
-      await docService.listVersionChunks(
-        { library: "Lodash", version: "" },
-        { limit: 10, offset: 20, filter: "TODO" },
-      );
-
-      expect(mockStore.listVersionChunks).toHaveBeenCalledWith("lodash", "", {
-        limit: 10,
-        offset: 20,
-        filter: "TODO",
-      });
+      expect(result.chunks.map((c) => c.content)).toEqual(["Alpha", "Beta"]);
     });
   });
 
   describe("getVersionStats", () => {
-    it("normalizes the library/version ref before delegating to the store", async () => {
-      const stats = {
-        pageCount: 2,
-        chunkCount: 4,
-        avgChunksPerPage: 2,
-        avgTokensPerChunk: null,
-        embeddedChunkCount: 4,
-      };
-      mockStore.getVersionStats.mockResolvedValue(stats);
+    it("reads the unversioned documentation for a blank version label", async () => {
+      await addPage("Express", "", "https://expressjs.com/guide", ["Alpha", "Beta"]);
 
-      const result = await docService.getVersionStats({
+      const stats = await docService.getVersionStats({
         library: "  Express  ",
         version: "  ",
       });
 
-      expect(result).toBe(stats);
-      expect(mockStore.getVersionStats).toHaveBeenCalledWith("express", "");
+      expect(stats).toMatchObject({ pageCount: 1, chunkCount: 2 });
     });
   });
 
-  // --- END: Constructor Path Logic Tests ---
+  describe("shutdown", () => {
+    it("shuts down a service that was never initialized", async () => {
+      const service = new DocumentManagementService(new EventBusService(), appConfig);
 
-  // --- Existing Tests (Rely on global docService and mocks) ---
-  // Grouped existing tests for clarity
-  describe("Initialization and Shutdown", () => {
-    it("should initialize correctly", async () => {
-      // Uses global docService initialized in beforeEach
-      await docService.initialize();
-      expect(mockStore.initialize).toHaveBeenCalled();
-    });
-
-    it("should shutdown correctly", async () => {
-      // Uses global docService initialized in beforeEach
-      await docService.shutdown();
-      expect(mockStore.shutdown).toHaveBeenCalled();
+      await expect(service.shutdown()).resolves.toBeUndefined();
     });
   });
 
-  describe("Core Functionality", () => {
-    // Uses global docService initialized in beforeEach
+  describe("exists", () => {
+    it("treats a missing version as the unversioned documentation", async () => {
+      await addPage("test-lib", "", "https://x.dev/page");
 
-    it("should handle empty store existence check", async () => {
-      mockStore.checkDocumentExists.mockResolvedValue(false); // Use mockStoreInstance
-      const exists = await docService.exists("test-lib", "1.0.0");
-      expect(exists).toBe(false);
-      expect(mockStore.checkDocumentExists).toHaveBeenCalledWith("test-lib", "1.0.0");
+      expect(await docService.exists("test-lib", null)).toBe(true);
+      expect(await docService.exists("test-lib", undefined)).toBe(true);
+    });
+  });
+
+  describe("removeAllDocuments", () => {
+    it("removes the documents of one version and keeps the others", async () => {
+      await addPage("test-lib", "1.0.0", "https://x.dev/v1");
+      await addPage("test-lib", "2.0.0", "https://x.dev/v2");
+
+      await docService.removeAllDocuments("test-lib", "1.0.0");
+
+      expect(await docService.exists("test-lib", "1.0.0")).toBe(false);
+      expect(await docService.exists("test-lib", "2.0.0")).toBe(true);
     });
 
-    it("should remove all documents for a specific library and version", async () => {
-      const library = "test-lib";
-      const version = "1.0.0";
+    it("removes the unversioned documents when no version is given", async () => {
+      await addPage("test-lib", "", "https://x.dev/unversioned");
+      await addPage("test-lib", "1.0.0", "https://x.dev/v1");
 
-      await docService.removeAllDocuments(library, version);
-      expect(mockStore.deletePages).toHaveBeenCalledWith(library, version); // Fix: Use mockStoreInstance
-      expect(mockStore.compact).toHaveBeenCalledWith({ force: false, vacuum: false });
-    });
+      await docService.removeAllDocuments("test-lib", null);
 
-    it("should handle removing documents with null/undefined/empty version", async () => {
-      const library = "test-lib";
-      await docService.removeAllDocuments(library, null);
-      expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
-      await docService.removeAllDocuments(library, undefined);
-      expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
-      await docService.removeAllDocuments(library, "");
-      expect(mockStore.deletePages).toHaveBeenCalledWith(library, ""); // Fix: Use mockStoreInstance
-    });
-
-    it("should trim as well as lowercase a version on every normalized path", async () => {
-      // normalizeVersion used to lowercase but not trim, so " 1.0.0 " reached the
-      // store as its own row. All six call sites now share the write contract.
-      mockStore.checkDocumentExists.mockResolvedValue(true);
-      await docService.exists("test-lib", " 1.0.0 ");
-      expect(mockStore.checkDocumentExists).toHaveBeenCalledWith("test-lib", "1.0.0");
-
-      await docService.removeAllDocuments("test-lib", " LATEST ");
-      expect(mockStore.deletePages).toHaveBeenCalledWith("test-lib", "latest");
+      expect(await docService.exists("test-lib", "")).toBe(false);
+      expect(await docService.exists("test-lib", "1.0.0")).toBe(true);
     });
 
     it("should still remove documents when compaction fails", async () => {
-      mockStore.compact.mockRejectedValueOnce(new Error("checkpoint busy"));
+      await addPage("test-lib", "1.0.0", "https://x.dev/v1");
+      vi.spyOn(DocumentStore.prototype, "compact").mockRejectedValueOnce(
+        new Error("checkpoint busy"),
+      );
 
       await expect(
         docService.removeAllDocuments("test-lib", "1.0.0"),
       ).resolves.toBeUndefined();
-      expect(mockStore.deletePages).toHaveBeenCalledWith("test-lib", "1.0.0");
+      expect(await docService.exists("test-lib", "1.0.0")).toBe(false);
+    });
+  });
+
+  describe("listVersions", () => {
+    it("should sort versions newest first and opaque tags after them", async () => {
+      await addVersions("test-lib", ["1.9.0", "stable", "1.10.0", "2.0.0-beta", "next"]);
+
+      const versions = await docService.listVersions("test-lib");
+
+      expect(versions).toEqual(["2.0.0-beta", "1.10.0", "1.9.0", "next", "stable"]);
     });
 
-    it("should compact the store", async () => {
-      const compactResult = {
-        skipped: false,
-        vacuumed: true,
-        beforeBytes: 200,
-        afterBytes: 80,
-        reclaimedBytes: 120,
-      };
-      mockStore.compact.mockResolvedValueOnce(compactResult);
+    it("should exclude the empty label, which represents unversioned content", async () => {
+      await addVersions("test-lib", ["1.0.0", "", "2.0.0"]);
 
-      await expect(docService.compact({ force: true })).resolves.toEqual(compactResult);
-      expect(mockStore.compact).toHaveBeenCalledWith({ force: true });
+      const versions = await docService.listVersions("test-lib");
+
+      expect(versions).toEqual(["2.0.0", "1.0.0"]);
     });
-    describe("listVersions", () => {
-      it("should return an empty array if the library has no documents", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue([]);
-        const versions = await docService.listVersions("nonexistent-lib");
-        expect(versions).toEqual([]);
+  });
+
+  describe("findBestVersion", () => {
+    const library = "test-lib";
+
+    /** Stores a page of unversioned documentation for the library. */
+    const addUnversionedPage = () => addPage(library, "", "https://x.dev/unversioned");
+
+    // --- Literal Label Resolution -------------------------------------------
+
+    describe("literal label resolution", () => {
+      it("should resolve an opaque tag by its own name", async () => {
+        // Regression for issue #475: a library indexed as "latest" was
+        // unreachable over MCP because tags never reached the resolver.
+        await addVersions(library, ["latest"]);
+
+        const result = await docService.findBestVersion(library, "latest");
+        expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
       });
 
-      it("should return an array of versions sorted descending (latest first)", async () => {
-        const library = "test-lib";
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0", "1.2.0"]);
+      it("should match literally regardless of case and surrounding whitespace", async () => {
+        await addVersions(library, ["stable"]);
 
-        const versions = await docService.listVersions(library);
-        expect(versions).toEqual(["1.2.0", "1.1.0", "1.0.0"]);
-        expect(mockStore.queryUniqueVersions).toHaveBeenCalledWith(library);
+        const result = await docService.findBestVersion(library, " STABLE ");
+        expect(result).toEqual({ bestMatch: "stable", hasUnversioned: false });
       });
 
-      it("should exclude the empty label, which represents unversioned content", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "", "2.0.0"]);
+      it("should resolve a partial version to itself when its full form also exists", async () => {
+        await addVersions(library, ["1.20", "1.20.0"]);
 
-        const versions = await docService.listVersions("test-lib");
-        expect(versions).toEqual(["2.0.0", "1.0.0"]);
+        const result = await docService.findBestVersion(library, "1.20");
+        expect(result).toEqual({ bestMatch: "1.20", hasUnversioned: false });
       });
 
-      it("should include partial versions, sorted by value", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "5", "2.0.0"]);
+      it("should resolve a full version to itself when its partial form also exists", async () => {
+        await addVersions(library, ["1.20", "1.20.0"]);
 
-        const versions = await docService.listVersions("test-lib");
-        // "1.20" and "5" are real partial versions and must not be dropped just
-        // because they aren't full X.Y.Z, nor sorted as text.
-        expect(versions).toEqual(["5", "2.0.0", "1.20"]);
+        const result = await docService.findBestVersion(library, "1.20.0");
+        expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
       });
 
-      it("should keep opaque tags, sorted after versions", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue([
-          "stable",
-          "1.0.0",
-          "next",
-          "2.0.0",
-        ]);
+      it("should resolve a prerelease by its own name without the release taking its place", async () => {
+        await addVersions(library, ["2.0.0", "2.0.0-beta"]);
 
-        const versions = await docService.listVersions("test-lib");
-        // Dropping tags here is what made documentation indexed as "latest" or
-        // "stable" permanently unreachable.
-        expect(versions).toEqual(["2.0.0", "1.0.0", "next", "stable"]);
+        const result = await docService.findBestVersion(library, "2.0.0-beta");
+        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
       });
 
-      it("should keep prerelease labels distinct from their release", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta", "1.20", "2.0.0"]);
+      it("should resolve a stored label that looks like a range by its own name", async () => {
+        await addVersions(library, ["1.x", "1.0.0"]);
 
-        const versions = await docService.listVersions("test-lib");
-        // Normalizing partials must not strip prerelease tags.
-        expect(versions).toEqual(["2.0.0", "2.0.0-beta", "1.20"]);
-      });
-
-      it("should sort semantic versions newest first, not lexicographically", async () => {
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.9.0", "1.10.0", "2.0.0"]);
-
-        const versions = await docService.listVersions("test-lib");
-        expect(versions).toEqual(["2.0.0", "1.10.0", "1.9.0"]);
+        const result = await docService.findBestVersion(library, "1.x");
+        expect(result).toEqual({ bestMatch: "1.x", hasUnversioned: false });
       });
     });
 
-    describe("findBestVersion", () => {
-      const library = "test-lib";
+    // --- Semantic Version Resolution ----------------------------------------
 
-      beforeEach(() => {
-        mockStore.checkDocumentExists.mockResolvedValue(false);
-        // vi.clearAllMocks() clears calls but keeps implementations, so reset
-        // the shared default here rather than leaking one test's library list
-        // into the next.
-        mockStore.queryLibraryVersions.mockResolvedValue(new Map());
-        // A library with stored labels exists; errors name it as stored.
-        mockStore.getLibrary.mockResolvedValue({
-          id: 1,
-          name: library,
-          displayName: library,
+    describe("semantic version resolution", () => {
+      it("should select a prerelease when it is the only version indexed", async () => {
+        await addVersions(library, ["2.0.0-beta"]);
+
+        await expect(docService.findBestVersion(library)).resolves.toEqual({
+          bestMatch: "2.0.0-beta",
+          hasUnversioned: false,
+        });
+        await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
+          bestMatch: "2.0.0-beta",
+          hasUnversioned: false,
         });
       });
 
-      // --- Literal Label Resolution -------------------------------------------
+      it("should let the newest version win even when it is a prerelease", async () => {
+        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
 
-      describe("literal label resolution", () => {
-        it("should resolve an opaque tag by its own name", async () => {
-          // Regression for issue #475: a library indexed as "latest" was
-          // unreachable over MCP because tags never reached the resolver.
-          mockStore.queryUniqueVersions.mockResolvedValue(["latest"]);
-
-          const result = await docService.findBestVersion(library, "latest");
-          expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
+        await expect(docService.findBestVersion(library)).resolves.toEqual({
+          bestMatch: "2.0.0-beta",
+          hasUnversioned: false,
         });
-
-        it("should match literally regardless of case and surrounding whitespace", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["stable"]);
-
-          const result = await docService.findBestVersion(library, " STABLE ");
-          expect(result).toEqual({ bestMatch: "stable", hasUnversioned: false });
-        });
-
-        it("should resolve a partial version to itself when its full form also exists", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
-
-          const result = await docService.findBestVersion(library, "1.20");
-          expect(result).toEqual({ bestMatch: "1.20", hasUnversioned: false });
-        });
-
-        it("should resolve a full version to itself when its partial form also exists", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
-
-          const result = await docService.findBestVersion(library, "1.20.0");
-          expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
-        });
-
-        it("should resolve a prerelease by its own name without the release taking its place", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0", "2.0.0-beta"]);
-
-          const result = await docService.findBestVersion(library, "2.0.0-beta");
-          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-        });
-
-        it("should resolve a stored label that looks like a range by its own name", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.x", "1.0.0"]);
-
-          const result = await docService.findBestVersion(library, "1.x");
-          expect(result).toEqual({ bestMatch: "1.x", hasUnversioned: false });
+        await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
+          bestMatch: "2.0.0-beta",
+          hasUnversioned: false,
         });
       });
 
-      // --- Semantic Version Resolution ----------------------------------------
+      it("should let a released version supersede its own prerelease", async () => {
+        await addVersions(library, ["1.0.0", "2.0.0-beta", "2.0.0"]);
 
-      describe("semantic version resolution", () => {
-        it("should select a prerelease when it is the only version indexed", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta"]);
+        const result = await docService.findBestVersion(library, "latest");
+        expect(result).toEqual({ bestMatch: "2.0.0", hasUnversioned: false });
+      });
 
-          await expect(docService.findBestVersion(library)).resolves.toEqual({
-            bestMatch: "2.0.0-beta",
-            hasUnversioned: false,
-          });
-          await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-            bestMatch: "2.0.0-beta",
-            hasUnversioned: false,
-          });
+      it("should prefer a prerelease of the requested version over an older major", async () => {
+        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
+
+        const result = await docService.findBestVersion(library, "2.0.0");
+        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+      });
+
+      it("should select a prerelease within an X-range", async () => {
+        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
+
+        const result = await docService.findBestVersion(library, "2.x");
+        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+      });
+
+      it("should select a prerelease for a major-only request", async () => {
+        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
+
+        const result = await docService.findBestVersion(library, "2");
+        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+      });
+
+      it("should fall back below the request and may select a prerelease", async () => {
+        await addVersions(library, ["1.0.0", "2.0.0-beta"]);
+
+        const result = await docService.findBestVersion(library, "3.0.0");
+        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
+      });
+
+      it("should not select a newer prerelease for an older request", async () => {
+        await addVersions(library, ["1.0.0", "1.0.1-beta"]);
+
+        const result = await docService.findBestVersion(library, "1.0.0");
+        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
+      });
+
+      it("should order prereleases of the same version among themselves", async () => {
+        await addVersions(library, ["2.0.0-rc.1", "2.0.0-rc.2"]);
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "2.0.0-rc.2", hasUnversioned: false });
+      });
+
+      it("should not match when nothing sits at or below the request", async () => {
+        await addVersions(library, ["2.0.0-beta"]);
+        await addUnversionedPage();
+
+        const result = await docService.findBestVersion(library, "1.20");
+        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+      });
+
+      it("should match partial stored versions", async () => {
+        await addVersions(library, ["1.20", "5"]);
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "5", hasUnversioned: false });
+      });
+
+      it("should exclude opaque tags from semantic matching", async () => {
+        await addVersions(library, ["1.0.0", "stable-2024", "node18"]);
+
+        // "stable-2024" must not be read as 2024.0.0, nor "node18" as 18.0.0.
+        const result = await docService.findBestVersion(library, "latest");
+        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
+      });
+
+      it("should prefer the strict label when a partial and its full version tie", async () => {
+        await addVersions(library, ["1.20", "1.20.0"]);
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
+      });
+
+      it("should return best match and hasUnversioned=false when only semver exists", async () => {
+        await addVersions(library, ["1.0.0", "1.1.0", "2.0.0"]);
+
+        const result = await docService.findBestVersion(library, "1.5.0");
+        expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: false });
+      });
+
+      it("should return the latest match for 'latest' and for no target", async () => {
+        await addVersions(library, ["1.0.0", "2.0.0", "3.0.0"]);
+
+        await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
+          bestMatch: "3.0.0",
+          hasUnversioned: false,
         });
-
-        it("should let the newest version win even when it is a prerelease", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
-
-          await expect(docService.findBestVersion(library)).resolves.toEqual({
-            bestMatch: "2.0.0-beta",
-            hasUnversioned: false,
-          });
-          await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-            bestMatch: "2.0.0-beta",
-            hasUnversioned: false,
-          });
-        });
-
-        it("should let a released version supersede its own prerelease", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue([
-            "1.0.0",
-            "2.0.0-beta",
-            "2.0.0",
-          ]);
-
-          const result = await docService.findBestVersion(library, "latest");
-          expect(result).toEqual({ bestMatch: "2.0.0", hasUnversioned: false });
-        });
-
-        it("should prefer a prerelease of the requested version over an older major", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
-
-          const result = await docService.findBestVersion(library, "2.0.0");
-          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-        });
-
-        it("should select a prerelease within an X-range", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
-
-          const result = await docService.findBestVersion(library, "2.x");
-          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-        });
-
-        it("should select a prerelease for a major-only request", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
-
-          const result = await docService.findBestVersion(library, "2");
-          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-        });
-
-        it("should fall back below the request and may select a prerelease", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0-beta"]);
-
-          const result = await docService.findBestVersion(library, "3.0.0");
-          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: false });
-        });
-
-        it("should not select a newer prerelease for an older request", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.0.1-beta"]);
-
-          const result = await docService.findBestVersion(library, "1.0.0");
-          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
-        });
-
-        it("should order prereleases of the same version among themselves", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-rc.1", "2.0.0-rc.2"]);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: "2.0.0-rc.2", hasUnversioned: false });
-        });
-
-        it("should not match when nothing sits at or below the request", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library, "1.20");
-          expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
-        });
-
-        it("should match partial stored versions", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "5"]);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: "5", hasUnversioned: false });
-        });
-
-        it("should exclude opaque tags from semantic matching", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue([
-            "1.0.0",
-            "stable-2024",
-            "node18",
-          ]);
-
-          // "stable-2024" must not be read as 2024.0.0, nor "node18" as 18.0.0.
-          const result = await docService.findBestVersion(library, "latest");
-          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
-        });
-
-        it("should prefer the strict label when a partial and its full version tie", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.20", "1.20.0"]);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: "1.20.0", hasUnversioned: false });
-        });
-
-        it("should return best match and hasUnversioned=false when only semver exists", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0", "2.0.0"]);
-
-          const result = await docService.findBestVersion(library, "1.5.0");
-          expect(result).toEqual({ bestMatch: "1.1.0", hasUnversioned: false });
-          expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
-        });
-
-        it("should return the latest match for 'latest' and for no target", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "2.0.0", "3.0.0"]);
-
-          await expect(docService.findBestVersion(library, "latest")).resolves.toEqual({
-            bestMatch: "3.0.0",
-            hasUnversioned: false,
-          });
-          await expect(docService.findBestVersion(library)).resolves.toEqual({
-            bestMatch: "3.0.0",
-            hasUnversioned: false,
-          });
-        });
-
-        it("should honour an X-range request", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library, "1.0.x");
-          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
-        });
-
-        it("should fall back to the latest available when the target is higher", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "1.1.0"]);
-
-          await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
-            bestMatch: "1.1.0",
-            hasUnversioned: false,
-          });
-
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-          await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
-            bestMatch: "1.1.0",
-            hasUnversioned: true,
-          });
+        await expect(docService.findBestVersion(library)).resolves.toEqual({
+          bestMatch: "3.0.0",
+          hasUnversioned: false,
         });
       });
 
-      // --- Tag-Only Library Resolution ----------------------------------------
+      it("should honour an X-range request", async () => {
+        await addVersions(library, ["1.0.0", "1.1.0"]);
+        await addUnversionedPage();
 
-      describe("tag-only library resolution", () => {
-        it("should resolve a single tag without an explicit request", async () => {
-          // Regression for issue #475: search_docs with no version argument.
-          mockStore.queryUniqueVersions.mockResolvedValue(["latest"]);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
-        });
-
-        it("should refuse to rank multiple tags", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["stable", "next"]);
-          mockStore.queryLibraryVersions.mockResolvedValue(
-            new Map([[library, [{ version: "stable" }, { version: "next" }]]]) as never,
-          );
-
-          const error = (await docService
-            .findBestVersion(library)
-            .catch((e) => e)) as VersionNotFoundInStoreError;
-          expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
-          expect(error.availableVersions).toEqual(["stable", "next"]);
-        });
-
-        it("should fall through to unversioned when tags are ambiguous", async () => {
-          // Ambiguous tags mean no tag resolves, but erroring while the library
-          // holds usable unversioned documentation would be worse than handing
-          // it back. find_version still reports that no version matched.
-          mockStore.queryUniqueVersions.mockResolvedValue(["stable", "next"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
-        });
-
-        it("should not let a single tag outrank a semantic version", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "stable"]);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
-        });
+        const result = await docService.findBestVersion(library, "1.0.x");
+        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
       });
 
-      // --- Unversioned Documentation Resolution -------------------------------
+      it("should fall back to the latest available when the target is higher", async () => {
+        await addVersions(library, ["1.0.0", "1.1.0"]);
 
-      describe("unversioned documentation", () => {
-        it("should report unversioned availability alongside a match", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library, "1.0.0");
-          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+        await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
+          bestMatch: "1.1.0",
+          hasUnversioned: false,
         });
 
-        it("should use unversioned documentation when nothing resolves", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue([]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          await expect(docService.findBestVersion(library)).resolves.toEqual({
-            bestMatch: null,
-            hasUnversioned: true,
-          });
-          await expect(docService.findBestVersion(library, "9.9.9")).resolves.toEqual({
-            bestMatch: null,
-            hasUnversioned: true,
-          });
-        });
-
-        it("should not silently skip a prerelease in favour of unversioned", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["2.0.0-beta"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: true });
-        });
-
-        it("should not make unversioned the resolver's default just because it lists first", async () => {
-          // The canonical listing order puts unversioned first, which the web UI
-          // uses as its default selection. Resolution answers a different
-          // question and picks the newest semantic version.
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library);
-          expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
-        });
-
-        it("should not silently skip a tag in favour of unversioned", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["latest"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library, "latest");
-          expect(result).toEqual({ bestMatch: "latest", hasUnversioned: true });
-        });
-      });
-
-      // --- Resolution Failure Reporting ---------------------------------------
-
-      describe("resolution failure reporting", () => {
-        it("should list tags among the available labels", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0", "stable"]);
-          mockStore.checkDocumentExists.mockResolvedValue(false);
-          mockStore.queryLibraryVersions.mockResolvedValue(
-            new Map([[library, [{ version: "1.0.0" }, { version: "stable" }]]]) as never,
-          );
-
-          // Nothing at or below 0.0.1, and "stable" cannot be ranked.
-          const error = (await docService
-            .findBestVersion(library, "0.0.1")
-            .catch((e) => e)) as VersionNotFoundInStoreError;
-          expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
-          expect(error.availableVersions).toEqual(["1.0.0", "stable"]);
-        });
-
-        it("should raise LibraryNotFoundInStoreError when the library is unknown", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue([]);
-          mockStore.checkDocumentExists.mockResolvedValue(false);
-
-          await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
-            LibraryNotFoundInStoreError,
-          );
-          await expect(docService.findBestVersion(library)).rejects.toThrow(
-            LibraryNotFoundInStoreError,
-          );
-
-          const error = (await docService
-            .findBestVersion(library)
-            .catch((e) => e)) as LibraryNotFoundInStoreError;
-          expect(error.library).toBe(library);
-          expect(error.similarLibraries).toEqual([]);
-        });
-
-        it("should report unversioned availability for an unparseable request", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
-          mockStore.checkDocumentExists.mockResolvedValue(true);
-
-          const result = await docService.findBestVersion(library, "not a version!");
-          expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
-        });
-
-        it("should throw for an unparseable request when only versions exist", async () => {
-          mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
-          mockStore.checkDocumentExists.mockResolvedValue(false);
-
-          await expect(
-            docService.findBestVersion(library, "not a version!"),
-          ).rejects.toThrow(VersionNotFoundInStoreError);
+        await addUnversionedPage();
+        await expect(docService.findBestVersion(library, "3.0.0")).resolves.toEqual({
+          bestMatch: "1.1.0",
+          hasUnversioned: true,
         });
       });
     });
 
-    describe("listLibraries", () => {
-      it("should list libraries with enriched version metadata", async () => {
-        const mockLibraryMap = new Map([
-          [
-            "lib1",
-            [
-              {
-                version: "1.0.0",
-                versionId: 101,
-                status: "completed",
-                progressPages: 10,
-                progressMaxPages: 10,
-                sourceUrl: null,
-                documentCount: 10,
-                uniqueUrlCount: 5,
-                indexedAt: "2024-01-01T00:00:00.000Z",
-              },
-              {
-                version: "1.1.0",
-                versionId: 102,
-                status: "completed",
-                progressPages: 15,
-                progressMaxPages: 15,
-                sourceUrl: null,
-                documentCount: 15,
-                uniqueUrlCount: 7,
-                indexedAt: "2024-02-01T00:00:00.000Z",
-              },
-            ],
-          ],
-          [
-            "lib2",
-            [
-              {
-                version: "2.0.0",
-                versionId: 201,
-                status: "completed",
-                progressPages: 20,
-                progressMaxPages: 20,
-                sourceUrl: null,
-                documentCount: 20,
-                uniqueUrlCount: 10,
-                indexedAt: "2024-03-01T00:00:00.000Z",
-              },
-            ],
-          ],
-          [
-            "unversioned-only",
-            [
-              {
-                version: "",
-                versionId: 300,
-                status: "completed",
-                progressPages: 1,
-                progressMaxPages: 1,
-                sourceUrl: null,
-                documentCount: 1,
-                uniqueUrlCount: 1,
-                indexedAt: "2024-04-01T00:00:00.000Z",
-              },
-            ],
-          ],
-          [
-            "mixed-versions",
-            [
-              {
-                version: "",
-                versionId: 400,
-                status: "completed",
-                progressPages: 2,
-                progressMaxPages: 2,
-                sourceUrl: null,
-                documentCount: 2,
-                uniqueUrlCount: 1,
-                indexedAt: "2024-04-03T00:00:00.000Z",
-              },
-              {
-                version: "1.0.0",
-                versionId: 401,
-                status: "completed",
-                progressPages: 5,
-                progressMaxPages: 5,
-                sourceUrl: null,
-                documentCount: 5,
-                uniqueUrlCount: 2,
-                indexedAt: "2024-04-02T00:00:00.000Z",
-              },
-            ],
-          ],
-        ] as any);
-        mockStore.queryLibraryVersions.mockResolvedValue(mockLibraryMap as any);
+    // --- Tag-Only Library Resolution ----------------------------------------
 
-        const result = await docService.listLibraries();
-        expect(
-          result.map((r) => ({
-            library: r.library,
-            versions: r.versions.map((v) => ({
-              ref: v.ref,
-              status: v.status,
-              counts: v.counts,
-              indexedAt: v.indexedAt,
-            })),
-          })),
-        ).toEqual([
-          {
-            library: "lib1",
-            // Order comes from the store, which sorts in queryLibraryVersions.
-            versions: [
-              {
-                ref: { library: "lib1", version: "1.0.0" },
-                status: "completed",
-                counts: { documents: 10, uniqueUrls: 5 },
-                indexedAt: "2024-01-01T00:00:00.000Z",
-              },
-              {
-                ref: { library: "lib1", version: "1.1.0" },
-                status: "completed",
-                counts: { documents: 15, uniqueUrls: 7 },
-                indexedAt: "2024-02-01T00:00:00.000Z",
-              },
-            ],
-          },
-          {
-            library: "lib2",
-            versions: [
-              {
-                ref: { library: "lib2", version: "2.0.0" },
-                status: "completed",
-                counts: { documents: 20, uniqueUrls: 10 },
-                indexedAt: "2024-03-01T00:00:00.000Z",
-              },
-            ],
-          },
-          {
-            library: "unversioned-only",
-            versions: [
-              {
-                ref: { library: "unversioned-only", version: "" },
-                status: "completed",
-                counts: { documents: 1, uniqueUrls: 1 },
-                indexedAt: "2024-04-01T00:00:00.000Z",
-              },
-            ],
-          },
-          {
-            library: "mixed-versions",
-            versions: [
-              {
-                ref: { library: "mixed-versions", version: "" },
-                status: "completed",
-                counts: { documents: 2, uniqueUrls: 1 },
-                indexedAt: "2024-04-03T00:00:00.000Z",
-              },
-              {
-                ref: { library: "mixed-versions", version: "1.0.0" },
-                status: "completed",
-                counts: { documents: 5, uniqueUrls: 2 },
-                indexedAt: "2024-04-02T00:00:00.000Z",
-              },
-            ],
-          },
-        ]);
-        expect(mockStore.queryLibraryVersions).toHaveBeenCalledTimes(1);
+    describe("tag-only library resolution", () => {
+      it("should resolve a single tag without an explicit request", async () => {
+        // Regression for issue #475: search_docs with no version argument.
+        await addVersions(library, ["latest"]);
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "latest", hasUnversioned: false });
       });
 
-      it("should return an empty array if there are no libraries", async () => {
-        // Mock returns an empty map of the correct type
-        mockStore.queryLibraryVersions.mockResolvedValue(
-          new Map<
-            string,
-            Array<{
-              version: string;
-              documentCount: number;
-              uniqueUrlCount: number;
-              indexedAt: string | null;
-            }>
-          >(),
-        );
-        const result = await docService.listLibraries();
-        expect(result).toEqual([]);
-        expect(mockStore.queryLibraryVersions).toHaveBeenCalledTimes(1);
-      });
-
-      // Test case where store returns a library that only had an unversioned entry
-      // (which is now included, not filtered by the store)
-      it("should correctly handle libraries with only unversioned entries", async () => {
-        const mockLibraryMap = new Map([
-          [
-            "lib-unversioned",
-            [
-              {
-                version: "",
-                versionId: 999,
-                status: "completed",
-                progressPages: 0,
-                progressMaxPages: 0,
-                sourceUrl: null,
-                documentCount: 3,
-                uniqueUrlCount: 2,
-                indexedAt: "2024-04-04T00:00:00.000Z",
-              },
-            ],
-          ],
-        ] as any);
-        mockStore.queryLibraryVersions.mockResolvedValue(mockLibraryMap as any);
-
-        const result = await docService.listLibraries();
-        expect(result).toEqual([
-          {
-            library: "lib-unversioned",
-            versions: [
-              {
-                id: 999,
-                ref: { library: "lib-unversioned", version: "" },
-                status: "completed",
-                counts: { documents: 3, uniqueUrls: 2 },
-                indexedAt: "2024-04-04T00:00:00.000Z",
-                sourceUrl: undefined,
-              },
-            ],
-          },
-        ]);
-        expect(result[0].versions[0].progress).toBeUndefined();
-        expect(mockStore.queryLibraryVersions).toHaveBeenCalledTimes(1);
-      });
-    });
-
-    // Tests for handling optional version parameter (null/undefined/"")
-    describe("Optional Version Handling", () => {
-      const library = "opt-lib";
-      const query = "optional";
-
-      it("exists should normalize version to empty string", async () => {
-        await docService.exists(library, null);
-        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
-        await docService.exists(library, undefined);
-        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
-        await docService.exists(library, "");
-        expect(mockStore.checkDocumentExists).toHaveBeenCalledWith(library, "");
-      });
-
-      it("searchStore should normalize version to empty string", async () => {
-        // Call without explicit limit, should use default limit of 5
-        await docService.searchStore(library, null, query);
-        expect(mockRetriever.search).toHaveBeenCalledWith(library, "", query, 5);
-
-        // Call with explicit limit
-        await docService.searchStore(library, undefined, query, 7);
-        expect(mockRetriever.search).toHaveBeenCalledWith(library, "", query, 7);
-
-        // Call with another explicit limit
-        await docService.searchStore(library, "", query, 10);
-        expect(mockRetriever.search).toHaveBeenCalledWith(library, "", query, 10);
-      });
-    });
-
-    describe("validateLibraryExists", () => {
-      const library = "test-lib";
-      const existingLibraries = [
-        { library: "test-lib", versions: [{ version: "1.0.0", indexed: true }] },
-        { library: "another-lib", versions: [{ version: "2.0.0", indexed: true }] },
-        { library: "react", versions: [] },
-      ];
-
-      it("should resolve successfully if versioned documents exist", async () => {
-        mockStore.getLibrary.mockResolvedValue({
-          id: 1,
-          name: library.toLowerCase(),
-          displayName: library,
-        });
-
-        await expect(docService.validateLibraryExists(library)).resolves.toBeUndefined();
-        expect(mockStore.getLibrary).toHaveBeenCalledWith(library);
-      });
-
-      it("should resolve successfully if only unversioned documents exist", async () => {
-        mockStore.getLibrary.mockResolvedValue({
-          id: 1,
-          name: library.toLowerCase(),
-          displayName: library,
-        });
-
-        await expect(docService.validateLibraryExists(library)).resolves.toBeUndefined();
-        expect(mockStore.getLibrary).toHaveBeenCalledWith(library);
-      });
-
-      it("should throw LibraryNotFoundInStoreError if library does not exist (no suggestions)", async () => {
-        const nonExistentLibrary = "non-existent-lib";
-        mockStore.getLibrary.mockResolvedValue(null);
-        mockStore.queryLibraryVersions.mockResolvedValue(new Map());
-
-        await expect(
-          docService.validateLibraryExists(nonExistentLibrary),
-        ).rejects.toThrow(LibraryNotFoundInStoreError);
+      it("should refuse to rank multiple tags", async () => {
+        await addVersions(library, ["stable", "next"]);
 
         const error = (await docService
-          .validateLibraryExists(nonExistentLibrary)
-          .catch((e) => e)) as LibraryNotFoundInStoreError;
-        expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
-        expect(error.library).toBe(nonExistentLibrary);
-        expect(error.similarLibraries).toEqual([]);
-        expect(mockStore.queryLibraryVersions).toHaveBeenCalled();
+          .findBestVersion(library)
+          .catch((e) => e)) as VersionNotFoundInStoreError;
+        expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
+        expect(error.availableVersions).toEqual(["next", "stable"]);
       });
 
-      it("should throw LibraryNotFoundInStoreError with suggestions if library does not exist", async () => {
-        const misspelledLibrary = "reac";
-        mockStore.getLibrary.mockResolvedValue(null);
-        const mockLibraryMap = new Map<
-          string,
-          Array<{
-            version: string;
-            documentCount: number;
-            uniqueUrlCount: number;
-            indexedAt: string | null;
-          }>
-        >(
-          existingLibraries.map((l) => [
-            l.library,
-            l.versions.map((v) => ({
-              version: v.version,
-              documentCount: 0,
-              uniqueUrlCount: 0,
-              indexedAt: null,
-            })),
-          ]),
-        );
-        mockStore.queryLibraryVersions.mockResolvedValue(mockLibraryMap);
+      it("should fall through to unversioned when tags are ambiguous", async () => {
+        // Ambiguous tags mean no tag resolves, but erroring while the library
+        // holds usable unversioned documentation would be worse than handing
+        // it back. find_version still reports that no version matched.
+        await addVersions(library, ["stable", "next"]);
+        await addUnversionedPage();
 
-        await expect(docService.validateLibraryExists(misspelledLibrary)).rejects.toThrow(
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+      });
+
+      it("should not let a single tag outrank a semantic version", async () => {
+        await addVersions(library, ["1.0.0", "stable"]);
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: false });
+      });
+    });
+
+    // --- Unversioned Documentation Resolution -------------------------------
+
+    describe("unversioned documentation", () => {
+      it("should report unversioned availability alongside a match", async () => {
+        await addVersions(library, ["1.0.0"]);
+        await addUnversionedPage();
+
+        const result = await docService.findBestVersion(library, "1.0.0");
+        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+      });
+
+      it("should use unversioned documentation when nothing resolves", async () => {
+        await addUnversionedPage();
+
+        await expect(docService.findBestVersion(library)).resolves.toEqual({
+          bestMatch: null,
+          hasUnversioned: true,
+        });
+        await expect(docService.findBestVersion(library, "9.9.9")).resolves.toEqual({
+          bestMatch: null,
+          hasUnversioned: true,
+        });
+      });
+
+      it("should not silently skip a prerelease in favour of unversioned", async () => {
+        await addVersions(library, ["2.0.0-beta"]);
+        await addUnversionedPage();
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "2.0.0-beta", hasUnversioned: true });
+      });
+
+      it("should not make unversioned the resolver's default just because it lists first", async () => {
+        // The canonical listing order puts unversioned first, which the web UI
+        // uses as its default selection. Resolution answers a different
+        // question and picks the newest semantic version.
+        await addVersions(library, ["1.0.0"]);
+        await addUnversionedPage();
+
+        const result = await docService.findBestVersion(library);
+        expect(result).toEqual({ bestMatch: "1.0.0", hasUnversioned: true });
+      });
+
+      it("should not silently skip a tag in favour of unversioned", async () => {
+        await addVersions(library, ["latest"]);
+        await addUnversionedPage();
+
+        const result = await docService.findBestVersion(library, "latest");
+        expect(result).toEqual({ bestMatch: "latest", hasUnversioned: true });
+      });
+    });
+
+    // --- Resolution Failure Reporting ---------------------------------------
+
+    describe("resolution failure reporting", () => {
+      it("should list tags among the available labels", async () => {
+        await addVersions(library, ["1.0.0", "stable"]);
+
+        // Nothing at or below 0.0.1, and "stable" cannot be ranked.
+        const error = (await docService
+          .findBestVersion(library, "0.0.1")
+          .catch((e) => e)) as VersionNotFoundInStoreError;
+        expect(error).toBeInstanceOf(VersionNotFoundInStoreError);
+        expect(error.availableVersions).toEqual(["1.0.0", "stable"]);
+      });
+
+      it("should raise LibraryNotFoundInStoreError when the library is unknown", async () => {
+        await expect(docService.findBestVersion(library, "1.0.0")).rejects.toThrow(
           LibraryNotFoundInStoreError,
         );
 
         const error = (await docService
-          .validateLibraryExists(misspelledLibrary)
+          .findBestVersion(library)
           .catch((e) => e)) as LibraryNotFoundInStoreError;
         expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
-        expect(error.library).toBe(misspelledLibrary);
-        expect(error.similarLibraries).toEqual(["react"]);
-        expect(mockStore.queryLibraryVersions).toHaveBeenCalled();
+        expect(error.library).toBe(library);
+        expect(error.similarLibraries).toEqual([]);
       });
 
-      it("should handle case insensitivity", async () => {
-        const libraryUpper = "TEST-LIB";
-        mockStore.getLibrary.mockResolvedValue({
-          id: 1,
-          name: libraryUpper.toLowerCase(),
-          displayName: libraryUpper,
-        });
+      it("should report unversioned availability for an unparseable request", async () => {
+        await addVersions(library, ["1.0.0"]);
+        await addUnversionedPage();
+
+        const result = await docService.findBestVersion(library, "not a version!");
+        expect(result).toEqual({ bestMatch: null, hasUnversioned: true });
+      });
+
+      it("should throw for an unparseable request when only versions exist", async () => {
+        await addVersions(library, ["1.0.0"]);
 
         await expect(
-          docService.validateLibraryExists(libraryUpper),
-        ).resolves.toBeUndefined();
+          docService.findBestVersion(library, "not a version!"),
+        ).rejects.toThrow(VersionNotFoundInStoreError);
+      });
+    });
+  });
 
-        expect(mockStore.getLibrary).toHaveBeenCalledWith(libraryUpper);
+  describe("listLibraries", () => {
+    it("counts each version's chunks and distinct pages", async () => {
+      await addPage("count-lib", "1.0.0", "https://x.dev/a", ["one", "two"]);
+      await addPage("count-lib", "1.0.0", "https://x.dev/b", ["three"]);
+
+      const [library] = await docService.listLibraries();
+
+      expect(library.versions[0].counts).toEqual({ documents: 3, uniqueUrls: 2 });
+    });
+
+    it("includes progress only for versions that are not completed", async () => {
+      const completed = await docService.ensureVersion({
+        library: "lib",
+        version: "1.0.0",
+      });
+      await docService.updateVersionProgress(completed, 5, 5);
+      await docService.updateVersionStatus(completed, VersionStatus.COMPLETED);
+      const running = await docService.ensureVersion({
+        library: "lib",
+        version: "1.1.0",
+      });
+      await docService.updateVersionProgress(running, 2, 10);
+      await docService.updateVersionStatus(running, VersionStatus.RUNNING);
+
+      const [library] = await docService.listLibraries();
+      const byVersion = Object.fromEntries(
+        library.versions.map((v) => [v.ref.version, v]),
+      );
+
+      expect(byVersion["1.0.0"]).toMatchObject({ status: "completed" });
+      expect(byVersion["1.0.0"].progress).toBeUndefined();
+      expect(byVersion["1.1.0"]).toMatchObject({
+        status: "running",
+        progress: { pages: 2, maxPages: 10 },
       });
     });
 
-    describe("Pipeline Integration Methods", () => {
-      it("should delegate status tracking to store", async () => {
-        const versionId = 123;
-        const status = "queued";
-        const errorMessage = "Test error";
+    it("reports whether a version was scraped with URL hashes preserved", async () => {
+      const preserving = await docService.ensureVersion({
+        library: "lib",
+        version: "1.0.0",
+      });
+      await docService.storeScraperOptions(preserving, {
+        url: "https://x.dev",
+        library: "lib",
+        version: "1.0.0",
+        preserveHashes: true,
+      });
+      await docService.ensureVersion({ library: "lib", version: "2.0.0" });
 
-        // Test updateVersionStatus
-        await docService.updateVersionStatus(versionId, status as any, errorMessage);
-        expect(mockStore.updateVersionStatus).toHaveBeenCalledWith(
-          versionId,
-          status,
-          errorMessage,
-        );
+      const [library] = await docService.listLibraries();
+      const byVersion = Object.fromEntries(
+        library.versions.map((v) => [v.ref.version, v]),
+      );
 
-        // Test updateVersionProgress
-        await docService.updateVersionProgress(versionId, 5, 10);
-        expect(mockStore.updateVersionProgress).toHaveBeenCalledWith(
-          versionId,
-          5,
-          10,
-          null,
-        );
+      expect(byVersion["1.0.0"].preserveHashes).toBe(true);
+      expect(byVersion["2.0.0"].preserveHashes).toBeUndefined();
+    });
 
-        // Test getVersionsByStatus
-        mockStore.getVersionsByStatus.mockResolvedValue([]);
-        await docService.getVersionsByStatus(["queued"] as any);
-        expect(mockStore.getVersionsByStatus).toHaveBeenCalledWith(["queued"]);
+    it("should correctly handle libraries with only unversioned entries", async () => {
+      await addPage("lib-unversioned", "", "https://x.dev/page");
 
-        // Test getVersionsByStatus (legacy running replacement)
-        mockStore.getVersionsByStatus.mockResolvedValue([]);
-        await docService.getVersionsByStatus(["running"] as any);
-        expect(mockStore.getVersionsByStatus).toHaveBeenCalledWith(["running"]);
+      const result = await docService.listLibraries();
 
-        // Test getVersionsByStatus (legacy active replacement)
-        mockStore.getVersionsByStatus.mockResolvedValue([]);
-        await docService.getVersionsByStatus(["queued", "running", "updating"] as any);
-        expect(mockStore.getVersionsByStatus).toHaveBeenCalledWith([
-          "queued",
-          "running",
-          "updating",
+      expect(result).toMatchObject([
+        {
+          library: "lib-unversioned",
+          versions: [{ ref: { library: "lib-unversioned", version: "" } }],
+        },
+      ]);
+    });
+  });
+
+  describe("searchStore", () => {
+    it("returns at most five results by default", async () => {
+      for (let i = 0; i < 6; i++) {
+        await addPage("search-lib", "1.0.0", `https://x.dev/page${i}`, [
+          `Zebra page ${i}`,
         ]);
-      });
+      }
 
-      it("should delegate scraper options storage to store", async () => {
-        const versionId = 456;
-        const scraperOptions = {
-          url: "https://example.com",
-          library: "testlib",
-          version: "1.0.0",
-          maxDepth: 3,
-          maxPages: 100,
-        };
+      const results = await docService.searchStore("search-lib", "1.0.0", "zebra");
 
-        // Test storeScraperOptions
-        await docService.storeScraperOptions(versionId, scraperOptions);
-        expect(mockStore.storeScraperOptions).toHaveBeenCalledWith(
-          versionId,
-          scraperOptions,
-        );
+      expect(results).toHaveLength(5);
+    });
+  });
 
-        // Test getScraperOptions
-        mockStore.getScraperOptions.mockResolvedValue(null);
-        await docService.getScraperOptions(versionId);
-        expect(mockStore.getScraperOptions).toHaveBeenCalledWith(versionId);
+  describe("validateLibraryExists", () => {
+    it("should handle case insensitivity", async () => {
+      await addPage("test-lib", "1.0.0", "https://x.dev/page");
 
-        // Test findVersionsBySourceUrl
-        const sourceUrl = "https://docs.example.com";
-        mockStore.findVersionsBySourceUrl.mockResolvedValue([]);
-        await docService.findVersionsBySourceUrl(sourceUrl);
-        expect(mockStore.findVersionsBySourceUrl).toHaveBeenCalledWith(sourceUrl);
-      });
-
-      it("should ensure library and version creation", async () => {
-        const library = "NewLib";
-        const version = "2.0.0";
-        const expectedVersionId = 789;
-
-        // Mock the store method
-        mockStore.resolveVersionId.mockResolvedValue(expectedVersionId);
-
-        const result = await docService.ensureLibraryAndVersion(library, version);
-
-        // The store computes the lookup key and keeps the display name
-        expect(mockStore.resolveVersionId).toHaveBeenCalledWith("NewLib", "2.0.0");
-        expect(result).toBe(expectedVersionId);
-      });
-
-      it("should handle version normalization in scraper methods", async () => {
-        const versionId = 999;
-        mockStore.getScraperOptions
-          .mockResolvedValueOnce({ sourceUrl: "https://a", options: {} as any })
-          .mockResolvedValueOnce({ sourceUrl: "https://b", options: {} as any });
-
-        const result1 = await docService.getScraperOptions(versionId);
-        const result2 = await docService.getScraperOptions(versionId);
-
-        expect(result1?.sourceUrl).toEqual("https://a");
-        expect(result2?.sourceUrl).toEqual("https://b");
-        expect(mockStore.getScraperOptions).toHaveBeenCalledTimes(2);
-      });
+      await expect(docService.validateLibraryExists("TEST-LIB")).resolves.toBeUndefined();
     });
 
-    describe("getScraperOptions (service wrapper)", () => {
-      it("should return stored object then null on subsequent call (combined happy/null path)", async () => {
-        const versionId = 42;
-        const stored = {
-          sourceUrl: "https://docs.example.com",
-          options: { maxDepth: 5 },
-        };
-        mockStore.getScraperOptions
-          .mockResolvedValueOnce(stored)
-          .mockResolvedValueOnce(null);
+    it("should throw LibraryNotFoundInStoreError if library does not exist (no suggestions)", async () => {
+      const error = (await docService
+        .validateLibraryExists("non-existent-lib")
+        .catch((e) => e)) as LibraryNotFoundInStoreError;
 
-        const first = await docService.getScraperOptions(versionId);
-        const second = await docService.getScraperOptions(versionId);
-        expect(first).toEqual(stored);
-        expect(second).toBeNull();
-        expect(mockStore.getScraperOptions).toHaveBeenNthCalledWith(1, versionId);
-        expect(mockStore.getScraperOptions).toHaveBeenNthCalledWith(2, versionId);
-      });
+      expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
+      expect(error.library).toBe("non-existent-lib");
+      expect(error.similarLibraries).toEqual([]);
     });
 
-    describe("listLibraries (enriched summaries)", () => {
-      it("returns empty array when no libraries", async () => {
-        mockStore.queryLibraryVersions.mockResolvedValue(new Map());
-        mockStore.getVersionsByStatus.mockResolvedValue([]);
-        const result = await docService.listLibraries();
-        expect(result).toEqual([]);
-      });
+    it("should throw LibraryNotFoundInStoreError with suggestions if library does not exist", async () => {
+      await addVersions("test-lib", ["1.0.0"]);
+      await addVersions("another-lib", ["2.0.0"]);
+      await addVersions("react", [""]);
 
-      it("passes through multiple statuses and progress fields for enriched rows", async () => {
-        const enrichedMap = new Map<string, any[]>([
-          [
-            "libStatus",
-            [
-              {
-                version: "1.0.0",
-                versionId: 11,
-                status: "completed",
-                progressPages: 10,
-                progressMaxPages: 10,
-                sourceUrl: "https://ex/libStatus/1.0.0",
-                documentCount: 50,
-                uniqueUrlCount: 45,
-                indexedAt: "2024-02-01T00:00:00.000Z",
-              },
-              {
-                version: "1.1.0",
-                versionId: 12,
-                status: "failed",
-                progressPages: 3,
-                progressMaxPages: 8,
-                sourceUrl: "https://ex/libStatus/1.1.0",
-                documentCount: 12,
-                uniqueUrlCount: 10,
-                indexedAt: null,
-              },
-              {
-                version: "2.0.0",
-                versionId: 13,
-                status: "cancelled",
-                progressPages: 5,
-                progressMaxPages: 20,
-                sourceUrl: null,
-                documentCount: 0,
-                uniqueUrlCount: 0,
-                indexedAt: null,
-              },
-              {
-                version: "",
-                versionId: 14,
-                status: "not_indexed",
-                progressPages: 0,
-                progressMaxPages: 0,
-                sourceUrl: null,
-                documentCount: 0,
-                uniqueUrlCount: 0,
-                indexedAt: null,
-              },
-            ],
-          ],
-        ]);
-        mockStore.queryLibraryVersions.mockResolvedValue(enrichedMap);
-        mockStore.getScraperOptions.mockResolvedValue({
-          sourceUrl: "https://ex/libStatus/1.0.0",
-          options: { preserveHashes: true },
-        });
+      const error = (await docService
+        .validateLibraryExists("reac")
+        .catch((e) => e)) as LibraryNotFoundInStoreError;
 
-        const result = await docService.listLibraries();
-        const lib = result.find((r) => r.library === "libStatus");
-        expect(lib).toBeTruthy();
-        const byVer = Object.fromEntries(
-          lib!.versions.map((v) => [v.ref.version || "__unver__", v]),
-        );
-        expect(byVer["1.0.0"]).toMatchObject({
-          status: "completed",
-          preserveHashes: true,
-          // progress omitted for completed
-        });
-        expect(byVer["1.1.0"]).toMatchObject({
-          status: "failed",
-          progress: { pages: 3, maxPages: 8 },
-        });
-        expect(byVer["2.0.0"]).toMatchObject({
-          status: "cancelled",
-          progress: { pages: 5, maxPages: 20 },
-        });
-        expect(byVer.__unver__).toMatchObject({
-          status: "not_indexed",
-          progress: { pages: 0, maxPages: 0 },
-        });
-        // Explicitly ensure progress is undefined for completed version
-        expect(byVer["1.0.0"].progress).toBeUndefined();
-      });
+      expect(error).toBeInstanceOf(LibraryNotFoundInStoreError);
+      expect(error.library).toBe("reac");
+      expect(error.similarLibraries).toEqual(["react"]);
+    });
+  });
 
-      it("omits progress for completed versions but includes for active ones", async () => {
-        const enrichedMap = new Map<string, any[]>([
-          [
-            "libActive",
-            [
-              {
-                version: "1.0.0",
-                versionId: 21,
-                status: "completed",
-                progressPages: 5,
-                progressMaxPages: 5,
-                sourceUrl: null,
-                documentCount: 10,
-                uniqueUrlCount: 9,
-                indexedAt: "2024-05-01T00:00:00.000Z",
-              },
-              {
-                version: "1.1.0",
-                versionId: 22,
-                status: "running",
-                progressPages: 2,
-                progressMaxPages: 10,
-                sourceUrl: null,
-                documentCount: 4,
-                uniqueUrlCount: 4,
-                indexedAt: null,
-              },
-              {
-                version: "1.2.0",
-                versionId: 23,
-                status: "queued",
-                progressPages: 0,
-                progressMaxPages: 10,
-                sourceUrl: null,
-                documentCount: 0,
-                uniqueUrlCount: 0,
-                indexedAt: null,
-              },
-            ],
-          ],
-        ]);
-        mockStore.queryLibraryVersions.mockResolvedValue(enrichedMap);
-        mockStore.getScraperOptions.mockResolvedValue(null);
-        const result = await docService.listLibraries();
-        const lib = result.find((r) => r.library === "libActive");
-        expect(lib).toBeTruthy();
-        const byVer = Object.fromEntries(lib!.versions.map((v) => [v.ref.version, v]));
-        expect(byVer["1.0.0"].progress).toBeUndefined();
-        expect(byVer["1.1.0"].progress).toEqual({ pages: 2, maxPages: 10 });
-        expect(byVer["1.2.0"].progress).toEqual({ pages: 0, maxPages: 10 });
-      });
+  describe("page reading", () => {
+    const library = "pages-lib";
+
+    const addPageToRead = (
+      url: string,
+      chunks = ["content"],
+      contentType = "text/markdown",
+    ) => addPage(library, "1.0.0", url, chunks, contentType);
+
+    it("reads a page stored with a percent-encoded URL when given that exact URL", async () => {
+      await addPageToRead("https://x.dev/docs/My%20Page");
+
+      const result = await docService.getPageContent(
+        library,
+        "1.0.0",
+        "https://x.dev/docs/My%20Page",
+      );
+
+      expect(result.url).toBe("https://x.dev/docs/My%20Page");
     });
 
-    describe("page reading", () => {
-      const library = "pages-lib";
-      let pages: Array<{ url: string; contentType: string; chunks: string[] }>;
+    it("reads a percent-encoded page from a path with a literal space", async () => {
+      await addPageToRead("https://x.dev/docs/My%20Page");
 
-      beforeEach(() => {
-        pages = [];
-        mockStore.getLibrary.mockResolvedValue({
-          id: 1,
-          name: library,
-          displayName: library,
-        });
-        mockStore.checkDocumentExists.mockResolvedValue(false);
-        mockStore.queryUniqueVersions.mockResolvedValue(["1.0.0"]);
-        // A fake that honors the store's lookup contracts over the `pages` list above.
-        mockStore.findPageUrls.mockImplementation(
-          async (_lib: string, _ver: string, candidates: string[]) =>
-            pages.filter((p) => candidates.includes(p.url)).map((p) => p.url),
-        );
-        mockStore.findPageUrlsBySuffix.mockImplementation(
-          async (_lib: string, _ver: string, suffixes: string[], limit: number) =>
-            pages
-              .filter((p) => suffixes.some((s) => p.url.replace(/\/+$/, "").endsWith(s)))
-              .map((p) => p.url)
-              .slice(0, limit),
-        );
-        mockStore.listPages.mockImplementation(
-          async (
-            _lib: string,
-            _ver: string,
-            options: { contains?: string; limit?: number; offset?: number },
-          ) => {
-            const offset = options.offset ?? 0;
-            const matching = pages.filter(
-              (p) => !options.contains || p.url.includes(options.contains),
-            );
-            return {
-              total: matching.length,
-              pages: matching
-                .slice(offset, options.limit ? offset + options.limit : undefined)
-                .map((p) => ({ url: p.url, title: null, depth: 1 })),
-            };
-          },
-        );
-        mockStore.findChunksByUrl.mockImplementation(
-          async (_lib: string, _ver: string, url: string) => {
-            const page = pages.find((p) => p.url === url);
-            return (page?.chunks ?? []).map((content, i) => ({
-              id: `${i}`,
-              url,
-              title: "Page Title",
-              content,
-              content_type: page?.contentType,
-              sort_order: i,
-              metadata: {},
-            }));
-          },
-        );
-      });
+      const result = await docService.getPageContent(library, "1.0.0", "/docs/My Page");
 
-      const addPage = (
-        url: string,
-        chunks = ["content"],
-        contentType = "text/markdown",
-      ) => pages.push({ url, contentType, chunks });
-
-      it("reads a page stored with a percent-encoded URL when given that exact URL", async () => {
-        addPage("https://x.dev/docs/My%20Page");
-
-        const result = await docService.getPageContent(
-          library,
-          "1.0.0",
-          "https://x.dev/docs/My%20Page",
-        );
-
-        expect(result.url).toBe("https://x.dev/docs/My%20Page");
-      });
-
-      it("reads a percent-encoded page from a path with a literal space", async () => {
-        addPage("https://x.dev/docs/My%20Page");
-
-        const result = await docService.getPageContent(library, "1.0.0", "/docs/My Page");
-
-        expect(result.url).toBe("https://x.dev/docs/My%20Page");
-      });
-
-      it("reads a page from a URL with a trailing slash", async () => {
-        addPage("https://x.dev/docs/guide");
-
-        const result = await docService.getPageContent(
-          library,
-          "1.0.0",
-          "https://x.dev/docs/guide/",
-        );
-
-        expect(result.url).toBe("https://x.dev/docs/guide");
-      });
-
-      it("rejects a path that matches several pages and lists every match", async () => {
-        addPage("https://x.dev/v1/api");
-        addPage("https://x.dev/v2/api");
-
-        const read = docService.getPageContent(library, "1.0.0", "/api");
-
-        await expect(read).rejects.toThrow(AmbiguousPageInStoreError);
-        await expect(read).rejects.toThrow(
-          /https:\/\/x\.dev\/v1\/api.*https:\/\/x\.dev\/v2\/api/,
-        );
-      });
-
-      it("resolves a hash-only route to its hash-routed page", async () => {
-        addPage("https://x.dev/app#/guide");
-
-        const result = await docService.getPageContent(library, "1.0.0", "#/guide");
-
-        expect(result.url).toBe("https://x.dev/app#/guide");
-      });
-
-      it("prefers the hash-routed page over the page without the fragment", async () => {
-        addPage("https://x.dev/app");
-        addPage("https://x.dev/app#/guide");
-
-        const result = await docService.getPageContent(library, "1.0.0", "/app#/guide");
-
-        expect(result.url).toBe("https://x.dev/app#/guide");
-      });
-
-      it("falls back to the page without its anchor", async () => {
-        addPage("https://x.dev/docs/page");
-
-        const result = await docService.getPageContent(
-          library,
-          "1.0.0",
-          "https://x.dev/docs/page#install",
-        );
-
-        expect(result.url).toBe("https://x.dev/docs/page");
-      });
-
-      it("suggests pages containing the last path segment when nothing matches", async () => {
-        addPage("https://x.dev/docs/hooks/useState");
-
-        const read = docService.getPageContent(library, "1.0.0", "/reference/useState");
-
-        await expect(read).rejects.toThrow(PageNotFoundInStoreError);
-        await expect(read).rejects.toThrow("https://x.dev/docs/hooks/useState");
-      });
-
-      it("joins source code chunks without separators", async () => {
-        addPage(
-          "https://x.dev/src/a.ts",
-          ["function a() {\n", "  return 1;\n", "}\n"],
-          "text/x-typescript",
-        );
-
-        const result = await docService.getPageContent(library, "1.0.0", "/src/a.ts");
-
-        expect(result.content).toBe("function a() {\n  return 1;\n}\n");
-      });
-
-      it("returns whole chunks up to maxChars and the chunk to continue from", async () => {
-        addPage("https://x.dev/long", ["a".repeat(10), "b".repeat(10), "c".repeat(10)]);
-
-        const result = await docService.getPageContent(library, "1.0.0", "/long", {
-          maxChars: 25,
-        });
-
-        expect(result.content).toBe(`${"a".repeat(10)}\n\n${"b".repeat(10)}`);
-        expect(result.nextChunk).toBe(2);
-        expect(result.totalChunks).toBe(3);
-      });
-
-      it("continues from startChunk to the end of the page", async () => {
-        addPage("https://x.dev/long", ["a".repeat(10), "b".repeat(10), "c".repeat(10)]);
-
-        const result = await docService.getPageContent(library, "1.0.0", "/long", {
-          startChunk: 2,
-          maxChars: 25,
-        });
-
-        expect(result.content).toBe("c".repeat(10));
-        expect(result.nextChunk).toBeNull();
-      });
-
-      it("returns a single chunk longer than maxChars rather than nothing", async () => {
-        addPage("https://x.dev/long", ["a".repeat(50), "b"]);
-
-        const result = await docService.getPageContent(library, "1.0.0", "/long", {
-          maxChars: 10,
-        });
-
-        expect(result.content).toBe("a".repeat(50));
-        expect(result.nextChunk).toBe(1);
-      });
-
-      it("lists pages of the resolved version and reports that more follow", async () => {
-        addPage("https://x.dev/a");
-        addPage("https://x.dev/b");
-        addPage("https://x.dev/c");
-
-        const result = await docService.listPages(library, undefined, { limit: 2 });
-
-        expect(result.version).toBe("1.0.0");
-        expect(result.total).toBe(3);
-        expect(result.pages).toHaveLength(2);
-        expect(result.hasMore).toBe(true);
-      });
+      expect(result.url).toBe("https://x.dev/docs/My%20Page");
     });
 
-    describe("cleanup", () => {
-      it("should shutdown without errors", async () => {
-        const eventBus = new EventBusService();
-        const service = new DocumentManagementService(eventBus, appConfig);
+    it("reads a page from a URL with a trailing slash", async () => {
+      await addPageToRead("https://x.dev/docs/guide");
 
-        // Should complete shutdown without errors
-        await expect(service.shutdown()).resolves.not.toThrow();
-        expect(mockStore.shutdown).toHaveBeenCalledOnce();
-      });
+      const result = await docService.getPageContent(
+        library,
+        "1.0.0",
+        "https://x.dev/docs/guide/",
+      );
+
+      expect(result.url).toBe("https://x.dev/docs/guide");
     });
-  }); // Closing brace for describe("Core Functionality", ...)
-}); // Closing brace for the main describe block
+
+    it("rejects a path that matches several pages and lists every match", async () => {
+      await addPageToRead("https://x.dev/v1/api");
+      await addPageToRead("https://x.dev/v2/api");
+
+      const read = docService.getPageContent(library, "1.0.0", "/api");
+
+      await expect(read).rejects.toThrow(AmbiguousPageInStoreError);
+      await expect(read).rejects.toThrow(
+        /https:\/\/x\.dev\/v1\/api.*https:\/\/x\.dev\/v2\/api/,
+      );
+    });
+
+    it("resolves a hash-only route to its hash-routed page", async () => {
+      await addPageToRead("https://x.dev/app#/guide");
+
+      const result = await docService.getPageContent(library, "1.0.0", "#/guide");
+
+      expect(result.url).toBe("https://x.dev/app#/guide");
+    });
+
+    it("prefers the hash-routed page over the page without the fragment", async () => {
+      await addPageToRead("https://x.dev/app");
+      await addPageToRead("https://x.dev/app#/guide");
+
+      const result = await docService.getPageContent(library, "1.0.0", "/app#/guide");
+
+      expect(result.url).toBe("https://x.dev/app#/guide");
+    });
+
+    it("falls back to the page without its anchor", async () => {
+      await addPageToRead("https://x.dev/docs/page");
+
+      const result = await docService.getPageContent(
+        library,
+        "1.0.0",
+        "https://x.dev/docs/page#install",
+      );
+
+      expect(result.url).toBe("https://x.dev/docs/page");
+    });
+
+    it("suggests pages containing the last path segment when nothing matches", async () => {
+      await addPageToRead("https://x.dev/docs/hooks/useState");
+
+      const read = docService.getPageContent(library, "1.0.0", "/reference/useState");
+
+      await expect(read).rejects.toThrow(PageNotFoundInStoreError);
+      await expect(read).rejects.toThrow("https://x.dev/docs/hooks/useState");
+    });
+
+    it("joins source code chunks without separators", async () => {
+      await addPageToRead(
+        "https://x.dev/src/a.ts",
+        ["function a() {\n", "  return 1;\n", "}\n"],
+        "text/x-typescript",
+      );
+
+      const result = await docService.getPageContent(library, "1.0.0", "/src/a.ts");
+
+      expect(result.content).toBe("function a() {\n  return 1;\n}\n");
+    });
+
+    it("returns whole chunks up to maxChars and the chunk to continue from", async () => {
+      await addPageToRead("https://x.dev/long", [
+        "a".repeat(10),
+        "b".repeat(10),
+        "c".repeat(10),
+      ]);
+
+      const result = await docService.getPageContent(library, "1.0.0", "/long", {
+        maxChars: 25,
+      });
+
+      expect(result.content).toBe(`${"a".repeat(10)}\n\n${"b".repeat(10)}`);
+      expect(result.nextChunk).toBe(2);
+      expect(result.totalChunks).toBe(3);
+    });
+
+    it("continues from startChunk to the end of the page", async () => {
+      await addPageToRead("https://x.dev/long", [
+        "a".repeat(10),
+        "b".repeat(10),
+        "c".repeat(10),
+      ]);
+
+      const result = await docService.getPageContent(library, "1.0.0", "/long", {
+        startChunk: 2,
+        maxChars: 25,
+      });
+
+      expect(result.content).toBe("c".repeat(10));
+      expect(result.nextChunk).toBeNull();
+    });
+
+    it("returns a single chunk longer than maxChars rather than nothing", async () => {
+      await addPageToRead("https://x.dev/long", ["a".repeat(50), "b"]);
+
+      const result = await docService.getPageContent(library, "1.0.0", "/long", {
+        maxChars: 10,
+      });
+
+      expect(result.content).toBe("a".repeat(50));
+      expect(result.nextChunk).toBe(1);
+    });
+
+    it("lists pages of the resolved version and reports that more follow", async () => {
+      await addPageToRead("https://x.dev/a");
+      await addPageToRead("https://x.dev/b");
+      await addPageToRead("https://x.dev/c");
+
+      const result = await docService.listPages(library, undefined, { limit: 2 });
+
+      expect(result.version).toBe("1.0.0");
+      expect(result.total).toBe(3);
+      expect(result.pages).toHaveLength(2);
+      expect(result.hasMore).toBe(true);
+    });
+  });
+});

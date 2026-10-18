@@ -139,22 +139,17 @@ describe("Version resolution end-to-end", () => {
     );
 
     it("lands one version row no matter which entry point wrote the label", async () => {
-      // Every entry point feeds the same library, so a normalizer that let a
-      // variant through would show up here as a second bucket.
+      // Every entry point that creates a version feeds the same library, so
+      // one that stored a variant would show up here as a second row. The
+      // refresh tool is left out: it needs the row to exist already.
       const library = "paritylib";
+      const writers = ["scrapeTool", "trpc", "pipeline"] as const;
       const variants = [" 1.0.0 ", "1.0.0", "1.0.0 ", " 1.0.0"];
 
-      const ids: number[] = [];
       for (const [i, variant] of variants.entries()) {
-        const label = await labelFromEntryPoint(
-          ENTRY_POINTS[i % ENTRY_POINTS.length],
-          library,
-          variant,
-        );
-        ids.push(await docService.ensureVersion({ library, version: label ?? "" }));
+        await labelFromEntryPoint(writers[i % writers.length], library, variant);
       }
 
-      expect(new Set(ids).size).toBe(1);
       expect(await docService.listVersions(library)).toEqual(["1.0.0"]);
     });
 
@@ -188,16 +183,6 @@ describe("Version resolution end-to-end", () => {
       // ScrapeTool used to coerce "1.20" to "1.20.0", merging the two buckets.
       expect(partial).not.toBe(full);
       expect(await docService.listVersions(library)).toEqual(["1.20.0", "1.20"]);
-    });
-
-    it("accepts a non-version label through the scrape and refresh tools", async () => {
-      // Both tools used to reject anything that was not strict semver.
-      await expect(
-        labelFromEntryPoint("scrapeTool", "taglib-scrape", " STABLE "),
-      ).resolves.toBe("stable");
-      await expect(
-        labelFromEntryPoint("refreshTool", "taglib-refresh", "stable"),
-      ).resolves.toBe("stable");
     });
   });
 

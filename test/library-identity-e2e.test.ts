@@ -5,7 +5,9 @@
  *
  * Every case runs against a real SQLite store (FTS-only), with a pipeline that
  * is never started: jobs stay QUEUED, so each case observes exactly what an
- * entry point accepted or rejected without scraping anything.
+ * entry point accepted or rejected without scraping anything. The last suite
+ * crawls a mock site with a running pipeline, to show what an accepted append
+ * or replacement does to the pages a version holds.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -21,6 +23,7 @@ import { createMcpServerFactory } from "../src/mcp/mcpServer";
 import type { McpServerTools } from "../src/mcp/tools";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { pipelineRouter } from "../src/pipeline/trpc/router";
+import { PipelineJobStatus } from "../src/pipeline/types";
 import type { ScraperOptions, ScrapeResult } from "../src/scraper/types";
 import { applyMigrations } from "../src/store/applyMigrations";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
@@ -40,6 +43,8 @@ import { RemoveTool } from "../src/tools/RemoveTool";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
 import { type AppConfig, loadConfig } from "../src/utils/config";
+import { hubPage, leafPage, mockSite } from "./mock-site";
+import { usePipelineHarness } from "./pipeline-harness";
 import { restorePre017Libraries, writeTestConfig } from "./test-helpers";
 
 const DOCS_URL = "https://example.com/docs";
@@ -258,7 +263,7 @@ describe("Library identity end-to-end", () => {
       ]);
     });
 
-    it("accepts replacement of an existing version and of a missing one", async () => {
+    it("replacing an existing version or a missing one is accepted", async () => {
       await seedIndexed("React", "19.0.0");
 
       await expect(scrape("React", "19.0.0", { replace: true })).resolves.toHaveProperty("jobId");
@@ -269,7 +274,7 @@ describe("Library identity end-to-end", () => {
       expect(libraries.find((l) => l.name === "React")?.versions).toHaveLength(1);
     });
 
-    it("accepts appending to an existing version", async () => {
+    it("appending to an existing version is accepted", async () => {
       await seedIndexed("React", "19.0.0");
 
       await expect(
@@ -457,5 +462,42 @@ describe("Library identity end-to-end", () => {
     } finally {
       rmSync(legacyDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("Overwriting a crawled version", () => {
+  const site = mockSite("http://overwrite.example.com");
+  const h = usePipelineHarness({ library: "overwrite-lib", version: "1.0.0" });
+
+  /** Serves a hub that links to each of `paths`, each a leaf page. */
+  function serve(paths: string[]) {
+    site.reset().page("/", hubPage(paths));
+    for (const path of paths) site.page(path, leafPage(path));
+  }
+
+  beforeEach(async () => {
+    serve(["/old", "/kept"]);
+    const first = await h.scrape({ url: site.url("/") });
+    expect(first.status).toBe(PipelineJobStatus.COMPLETED);
+    // The site moves on: /old is gone, /new appears
+    serve(["/kept", "/new"]);
+  });
+
+  it("keeps the pages the new crawl did not reach when it appends", async () => {
+    const job = await h.scrape({ url: site.url("/"), clean: false });
+
+    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+    expect(await h.storedUrls()).toEqual(
+      ["/", "/kept", "/new", "/old"].map((path) => site.url(path)).sort(),
+    );
+  });
+
+  it("drops the pages the new crawl did not reach when it replaces", async () => {
+    const job = await h.scrape({ url: site.url("/") }, { onExisting: "replace" });
+
+    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+    expect(await h.storedUrls()).toEqual(
+      ["/", "/kept", "/new"].map((path) => site.url(path)).sort(),
+    );
   });
 });

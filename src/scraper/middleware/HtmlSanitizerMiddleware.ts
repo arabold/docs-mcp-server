@@ -14,6 +14,14 @@ import type { ContentProcessorMiddleware, MiddlewareContext } from "./types";
 const MAIN_CONTENT_MIN_TEXT_RATIO = 0.5;
 
 /**
+ * Elements whose text a reader never sees: script source, style rules, and
+ * `<noscript>` fallbacks, which the parser keeps as raw markup text. They are
+ * removed before the safety net captures the body, so its measure and the
+ * body it restores never contain them.
+ */
+const NON_TEXT_SELECTOR = "script, style, noscript";
+
+/**
  * Length of an element's text as a reader would see it, with runs of
  * whitespace collapsed to a single space.
  *
@@ -51,14 +59,12 @@ export interface HtmlSanitizerOptions {
  *    the declared region is left untouched.
  */
 export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
-  // Default selectors to remove
+  // Default selectors to remove. Script, style and noscript are not listed:
+  // `NON_TEXT_SELECTOR` removes them before this list runs.
   private readonly defaultSelectorsToRemove = [
     "aside",
     "nav",
     "footer",
-    "script",
-    "style",
-    "noscript",
     "svg",
     "link",
     "meta",
@@ -285,6 +291,13 @@ export class HtmlSanitizerMiddleware implements ContentProcessorMiddleware {
     }
 
     try {
+      // Remove what is never readable before the safety net captures the
+      // body. Cheerio's `.text()` counts script source, so with scripts still
+      // in, a page with no visible text (an empty container that a script
+      // fills in the browser) passes as having content, and the restore below
+      // would bring the script back to be indexed as the page's text.
+      $(NON_TEXT_SELECTOR).remove();
+
       // Capture the body content before sanitization for safety net
       const bodyBeforeSanitization = $("body").html() || "";
       const textLengthBefore = $("body").text().trim().length;

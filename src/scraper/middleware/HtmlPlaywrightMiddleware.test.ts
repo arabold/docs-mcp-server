@@ -80,6 +80,12 @@ function fakeBrowser(page: FakePage) {
   page.context.mockReturnValue(browserContext);
   const browser = {
     newContext: vi.fn().mockResolvedValue(browserContext),
+    // The CDP session ManagedBrowser checks redirects in.
+    newBrowserCDPSession: vi.fn().mockResolvedValue({
+      on: vi.fn(),
+      send: vi.fn().mockResolvedValue({}),
+      detach: vi.fn().mockResolvedValue(undefined),
+    }),
     isConnected: vi.fn().mockReturnValue(true),
     on: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),

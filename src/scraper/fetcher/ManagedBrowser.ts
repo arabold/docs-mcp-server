@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { type Browser, chromium, type LaunchOptions } from "playwright";
+import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
 import { withTimeout } from "../../utils/timeout";
@@ -18,14 +19,22 @@ const browserPids = new WeakMap<Browser, number>();
  * The browser is launched on first use and launched again after it exits;
  * callers that ask at the same time share one launch. Closing is safe to
  * repeat and does not stop later use: the next `get()` launches a new one.
+ *
+ * Every browser it hands out checks the redirects Chromium follows against the
+ * scraper's access policy (see `blockDisallowedRedirects`).
  */
 export class ManagedBrowser {
   private browser: Browser | null = null;
   private launching: Promise<Browser> | null = null;
   private readonly closeTimeoutMs: number;
+  private readonly accessPolicy: ScraperAccessPolicy;
 
+  /**
+   * @param scraperConfig - Scraper settings (close timeout, network policy).
+   */
   constructor(scraperConfig: AppConfig["scraper"]) {
     this.closeTimeoutMs = scraperConfig.pageTimeoutMs;
+    this.accessPolicy = new ScraperAccessPolicy(scraperConfig.security);
   }
 
   /**
@@ -96,8 +105,61 @@ export class ManagedBrowser {
       logger.debug("Launching browser...");
     }
 
-    this.browser = await ManagedBrowser.launch();
-    return this.browser;
+    const browser = await ManagedBrowser.launch();
+    try {
+      await this.blockDisallowedRedirects(browser);
+    } catch (error) {
+      // Without the guard, a redirect could reach a blocked address.
+      await this.retire(browser, "redirect guard failed");
+      throw error;
+    }
+    this.browser = browser;
+    return browser;
+  }
+
+  /**
+   * Blocks the redirects the access policy denies, in every page, frame and
+   * worker of the browser.
+   *
+   * Playwright's request routing only sees the first request of a redirect
+   * chain: Chromium follows redirects itself, so an allowed URL could
+   * otherwise send a page, a script or a form post on to a private address.
+   * A Fetch session on the browser target pauses every hop, including those of
+   * cross-site iframes that run in their own process, so the hops are checked
+   * there. First requests are left to the routes of the browser's users.
+   *
+   * @param browser - The browser to guard, before any page opens in it.
+   */
+  private async blockDisallowedRedirects(browser: Browser): Promise<void> {
+    const session = await browser.newBrowserCDPSession();
+    session.on("Fetch.requestPaused", (event) => {
+      const resolve = async () => {
+        const blocked =
+          event.redirectedRequestId !== undefined &&
+          !(await this.isRequestAllowed(event.request.url));
+        if (!blocked) {
+          await session.send("Fetch.continueRequest", { requestId: event.requestId });
+          return;
+        }
+        logger.debug(`Blocked redirect to ${event.request.url}`);
+        await session.send("Fetch.failRequest", {
+          requestId: event.requestId,
+          errorReason: "BlockedByClient",
+        });
+      };
+      // The request's page may close while it is paused.
+      resolve().catch(() => undefined);
+    });
+    await session.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
+  }
+
+  private async isRequestAllowed(url: string): Promise<boolean> {
+    try {
+      await this.accessPolicy.assertNetworkUrlAllowed(url);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

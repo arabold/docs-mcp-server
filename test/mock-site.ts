@@ -233,8 +233,8 @@ export function leafPage(title: string, body = `Body text for ${title}.`): strin
 /**
  * Valid HTML that yields no extractable text: empty, but not broken.
  *
- * It carries no `<title>`: a title is extractable content, and a page with one
- * is stored rather than recorded as empty.
+ * A `<title>` would not change that: the title is kept as the page's metadata,
+ * not as its text.
  *
  * @returns The HTML document.
  */
