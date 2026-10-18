@@ -22,6 +22,8 @@ const PAGES: Record<string, string> = {
     <iframe src="/frame-one.html"></iframe>
     <p>Between paragraph</p>
     <iframe src="about:blank"></iframe>
+    <iframe src="data:text/html,<p>Data URL frame text</p>"></iframe>
+    <iframe src="javascript:'<p>Script URL frame text</p>'"></iframe>
     <iframe src="/frame-three.html"></iframe>
     <p>Outro paragraph</p>
   </body></html>`,
@@ -141,6 +143,9 @@ describe("Embedded content in a real browser", () => {
     const found = positions(content, texts);
     expect(found).not.toContain(-1);
     expect(found).toEqual([...found].sort((a, b) => a - b));
+    // data: and javascript: iframes are skipped, not inlined.
+    expect(content).not.toContain("Data URL frame text");
+    expect(content).not.toContain("Script URL frame text");
   });
 
   it("includes the content of an open shadow root", async () => {
