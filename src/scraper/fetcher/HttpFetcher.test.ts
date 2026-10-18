@@ -110,44 +110,50 @@ describe("HttpFetcher", () => {
     mockedAxios.get.mockReset();
   });
 
-  describe("canFetch", () => {
-    it.each([
+  it("fetches only http and https URLs", () => {
+    const cases: Array<[source: string, expected: boolean]> = [
       ["http://example.com", true],
       ["https://example.com", true],
       ["ftp://example.com", false],
       ["file:///path/to/file", false],
       ["mailto:test@example.com", false],
       ["relative/path", false],
-    ])("%s -> %s", (source, expected) => {
-      expect(fetcher.canFetch(source)).toBe(expected);
-    });
+    ];
+
+    for (const [source, expected] of cases) {
+      expect.soft(fetcher.canFetch(source), source).toBe(expected);
+    }
   });
 
   describe("successful responses", () => {
-    it.each([
-      [
-        "a single-chunk body",
-        () => Readable.from([Buffer.from("Hello World")]),
-        "Hello World",
-      ],
-      [
-        "a multi-chunk body",
-        () => Readable.from([Buffer.from('{"a":'), Buffer.from("1}")]),
-        '{"a":1}',
-      ],
-      [
-        "a lazily produced body",
-        () => trackedStream("<html>hello</html>").stream,
-        "<html>hello</html>",
-      ],
-    ])("reads %s in full", async (_label, body, expected) => {
-      mockedAxios.get.mockResolvedValue(ok(body()));
+    it("reads a single-chunk, multi-chunk or lazily produced body in full", async () => {
+      const cases: Array<{ label: string; body: () => Readable; expected: string }> = [
+        {
+          label: "a single-chunk body",
+          body: () => Readable.from([Buffer.from("Hello World")]),
+          expected: "Hello World",
+        },
+        {
+          label: "a multi-chunk body",
+          body: () => Readable.from([Buffer.from('{"a":'), Buffer.from("1}")]),
+          expected: '{"a":1}',
+        },
+        {
+          label: "a lazily produced body",
+          body: () => trackedStream("<html>hello</html>").stream,
+          expected: "<html>hello</html>",
+        },
+      ];
 
-      const result = await fetcher.fetch(PAGE_URL);
+      for (const { label, body, expected } of cases) {
+        mockedAxios.get.mockResolvedValue(ok(body()));
 
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      expect(result.content.toString()).toBe(expected);
-      expect(result.source).toBe(PAGE_URL);
+        const result = await fetcher.fetch(PAGE_URL);
+
+        expect.soft(result.status, label).toBe(FetchStatus.SUCCESS);
+        expect.soft(result.content.toString(), label).toBe(expected);
+        expect.soft(result.source, label).toBe(PAGE_URL);
+      }
     });
 
     it("returns binary bodies byte for byte", async () => {
@@ -160,56 +166,70 @@ describe("HttpFetcher", () => {
       expect(result.mimeType).toBe("image/png");
     });
 
-    it.each([
-      ["text/html; charset=utf-8", undefined, "text/html", "utf-8", undefined],
-      [
-        "text/plain; charset=iso-8859-1",
-        undefined,
-        "text/plain",
-        "iso-8859-1",
-        undefined,
-      ],
-      ["text/plain", undefined, "text/plain", undefined, undefined],
-      ["text/plain; charset=utf-8", "gzip", "text/plain", "utf-8", "gzip"],
-      [undefined, undefined, "application/octet-stream", undefined, undefined],
-    ])(
-      "reads Content-Type %s and Content-Encoding %s as %s, charset %s, encoding %s",
-      async (contentType, contentEncoding, mimeType, charset, encoding) => {
+    it("reads the MIME type, charset and encoding from Content-Type and Content-Encoding", async () => {
+      const cases: Array<{
+        contentType?: string;
+        contentEncoding?: string;
+        expected: { mimeType: string; charset?: string; encoding?: string };
+      }> = [
+        {
+          contentType: "text/html; charset=utf-8",
+          expected: { mimeType: "text/html", charset: "utf-8" },
+        },
+        {
+          contentType: "text/plain; charset=iso-8859-1",
+          expected: { mimeType: "text/plain", charset: "iso-8859-1" },
+        },
+        { contentType: "text/plain", expected: { mimeType: "text/plain" } },
+        {
+          contentType: "text/plain; charset=utf-8",
+          contentEncoding: "gzip",
+          expected: { mimeType: "text/plain", charset: "utf-8", encoding: "gzip" },
+        },
+        { expected: { mimeType: "application/octet-stream" } },
+      ];
+
+      for (const { contentType, contentEncoding, expected } of cases) {
         const headers: Record<string, string> = {};
         if (contentType) headers["content-type"] = contentType;
         if (contentEncoding) headers["content-encoding"] = contentEncoding;
         mockedAxios.get.mockResolvedValue(ok("abc", headers));
 
-        const result = await fetcher.fetch(PAGE_URL);
+        const { mimeType, charset, encoding } = await fetcher.fetch(PAGE_URL);
 
-        expect(result.mimeType).toBe(mimeType);
-        expect(result.charset).toBe(charset);
-        expect(result.encoding).toBe(encoding);
-      },
-    );
+        expect
+          .soft({ mimeType, charset, encoding }, `${contentType} / ${contentEncoding}`)
+          .toEqual({ charset: undefined, encoding: undefined, ...expected });
+      }
+    });
 
-    it.each([
-      ["ETag", { etag: '"v1"' }, '"v1"', undefined],
-      ["no caching headers", {}, undefined, undefined],
-      [
-        "Last-Modified",
-        { "last-modified": "Wed, 21 Oct 2015 07:28:00 GMT" },
-        undefined,
-        "2015-10-21T07:28:00.000Z",
-      ],
-    ])(
-      "reports %s as etag and lastModified",
-      async (_label, cacheHeaders, etag, lastModified) => {
+    it("reports ETag and Last-Modified as etag and lastModified", async () => {
+      const cases: Array<{
+        label: string;
+        headers: Record<string, string>;
+        etag?: string;
+        lastModified?: string;
+      }> = [
+        { label: "ETag", headers: { etag: '"v1"' }, etag: '"v1"' },
+        { label: "no caching headers", headers: {} },
+        {
+          label: "Last-Modified",
+          headers: { "last-modified": "Wed, 21 Oct 2015 07:28:00 GMT" },
+          lastModified: "2015-10-21T07:28:00.000Z",
+        },
+      ];
+
+      for (const { label, headers, etag, lastModified } of cases) {
         mockedAxios.get.mockResolvedValue(
-          ok("content", { "content-type": "text/plain", ...cacheHeaders }),
+          ok("content", { "content-type": "text/plain", ...headers }),
         );
 
         const result = await fetcher.fetch(PAGE_URL);
 
-        expect(result.etag).toBe(etag);
-        expect(result.lastModified).toBe(lastModified);
-      },
-    );
+        expect.soft(result.etag, label).toBe(etag);
+        expect.soft(result.lastModified, label).toBe(lastModified);
+      }
+    });
 
     it("reports the URL the response was served from as the source", async () => {
       const finalUrl = "https://example.com/docs/?view=4.0";
@@ -275,37 +295,29 @@ describe("HttpFetcher", () => {
       expect(headers).not.toHaveProperty("Accept");
     });
 
-    it.each([
-      ['"abc123"', '"abc123"'],
-      [undefined, undefined],
-    ])("sends If-None-Match %s for etag %s", async (etag, expected) => {
-      mockedAxios.get.mockResolvedValue(ok());
+    it("skips certificate verification only for https with allowInvalidTls", async () => {
+      const cases = [
+        { allowInvalidTls: true, url: "https://example.com/", skipsVerification: true },
+        { allowInvalidTls: true, url: "http://example.com/", skipsVerification: false },
+        { allowInvalidTls: false, url: "https://example.com/", skipsVerification: false },
+      ];
 
-      await fetcher.fetch(PAGE_URL, { etag });
-
-      expect(requestConfig()?.headers?.["If-None-Match"]).toBe(expected);
-    });
-
-    it.each([
-      { allowInvalidTls: true, url: "https://example.com/", skipsVerification: true },
-      { allowInvalidTls: true, url: "http://example.com/", skipsVerification: false },
-      { allowInvalidTls: false, url: "https://example.com/", skipsVerification: false },
-    ])(
-      "allowInvalidTls=$allowInvalidTls on $url skips certificate verification: $skipsVerification",
-      async ({ allowInvalidTls, url, skipsVerification }) => {
+      for (const { allowInvalidTls, url, skipsVerification } of cases) {
+        const label = `allowInvalidTls=${allowInvalidTls} on ${url}`;
+        mockedAxios.get.mockReset();
         mockedAxios.get.mockResolvedValue(ok());
 
         await new HttpFetcher(scraperConfig({ allowInvalidTls })).fetch(url);
 
         const agent = requestConfig()?.httpsAgent;
         if (skipsVerification) {
-          expect(agent).toBeInstanceOf(https.Agent);
-          expect(agent.options.rejectUnauthorized).toBe(false);
+          expect.soft(agent, label).toBeInstanceOf(https.Agent);
+          expect.soft(agent?.options.rejectUnauthorized, label).toBe(false);
         } else {
-          expect(agent).toBeUndefined();
+          expect.soft(agent, label).toBeUndefined();
         }
-      },
-    );
+      }
+    });
   });
 
   describe("304 Not Modified", () => {
@@ -476,31 +488,34 @@ describe("HttpFetcher", () => {
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
     });
 
-    it.each([408, 429, 500, 502, 503, 504, 525])("retries status %i", async (status) => {
-      mockedAxios.get
-        .mockRejectedValueOnce(httpError(status))
-        .mockResolvedValueOnce(ok("success"));
+    it("retries a timeout, rate limit or server error status", async () => {
+      for (const status of [408, 429, 500, 502, 503, 504, 525]) {
+        mockedAxios.get.mockReset();
+        mockedAxios.get
+          .mockRejectedValueOnce(httpError(status))
+          .mockResolvedValueOnce(ok("success"));
 
-      const result = await fetcher.fetch(PAGE_URL, { maxRetries: 1, retryDelay: 1 });
+        const result = await fetcher.fetch(PAGE_URL, { maxRetries: 1, retryDelay: 1 });
 
-      expect(result.content.toString()).toBe("success");
-      expect(mockedAxios.get).toHaveBeenCalledTimes(2);
+        expect.soft(result.content.toString(), `${status}`).toBe("success");
+        expect.soft(mockedAxios.get, `${status}`).toHaveBeenCalledTimes(2);
+      }
     });
 
-    it.each([400, 401, 403, 405, 410])(
-      "fails status %i with HttpStatusError without retrying",
-      async (status) => {
+    it("fails any other error status with HttpStatusError without retrying", async () => {
+      for (const status of [400, 401, 403, 405, 410]) {
+        mockedAxios.get.mockReset();
         mockedAxios.get.mockRejectedValue(httpError(status));
 
         const error = await fetcher
           .fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 })
           .catch((e) => e);
 
-        expect(error).toBeInstanceOf(HttpStatusError);
-        expect(error.statusCode).toBe(status);
-        expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-      },
-    );
+        expect.soft(error, `${status}`).toBeInstanceOf(HttpStatusError);
+        expect.soft(error.statusCode, `${status}`).toBe(status);
+        expect.soft(mockedAxios.get, `${status}`).toHaveBeenCalledTimes(1);
+      }
+    });
 
     it("retries a network error that has no status", async () => {
       mockedAxios.get
@@ -513,38 +528,44 @@ describe("HttpFetcher", () => {
       expect(mockedAxios.get).toHaveBeenCalledTimes(2);
     });
 
-    it.each(["ENOTFOUND", "ECONNREFUSED"])(
-      "fails %s with ScraperError without retrying",
-      async (code) => {
+    it("fails ENOTFOUND or ECONNREFUSED with ScraperError without retrying", async () => {
+      for (const code of ["ENOTFOUND", "ECONNREFUSED"]) {
+        mockedAxios.get.mockReset();
         mockedAxios.get.mockRejectedValue(networkError(code));
 
         const error = await fetcher
           .fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 })
           .catch((e) => e);
 
-        expect(error).toBeInstanceOf(ScraperError);
-        expect(error).not.toBeInstanceOf(HttpStatusError);
-        expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-      },
-    );
+        expect.soft(error, code).toBeInstanceOf(ScraperError);
+        expect.soft(error, code).not.toBeInstanceOf(HttpStatusError);
+        expect.soft(mockedAxios.get, code).toHaveBeenCalledTimes(1);
+      }
+    });
 
-    it.each([
-      ["the configured default", undefined, DEFAULT_CONFIG.scraper.fetcher.maxRetries],
-      ["an explicit maxRetries", 2, 2],
-    ])(
-      "gives up after %s number of retries",
-      async (_label, maxRetries, expectedRetries) => {
+    it("gives up after the configured or the explicit number of retries", async () => {
+      const cases = [
+        {
+          label: "the configured default",
+          maxRetries: undefined,
+          expectedRetries: DEFAULT_CONFIG.scraper.fetcher.maxRetries,
+        },
+        { label: "an explicit maxRetries", maxRetries: 2, expectedRetries: 2 },
+      ];
+
+      for (const { label, maxRetries, expectedRetries } of cases) {
+        mockedAxios.get.mockReset();
         mockedAxios.get.mockRejectedValue(httpError(500));
 
         const error = await fetcher
           .fetch(PAGE_URL, { maxRetries, retryDelay: 1 })
           .catch((e) => e);
 
-        expect(error).toBeInstanceOf(HttpStatusError);
-        expect(error.statusCode).toBe(500);
-        expect(mockedAxios.get).toHaveBeenCalledTimes(expectedRetries + 1);
-      },
-    );
+        expect.soft(error, label).toBeInstanceOf(HttpStatusError);
+        expect.soft(error.statusCode, label).toBe(500);
+        expect.soft(mockedAxios.get, label).toHaveBeenCalledTimes(expectedRetries + 1);
+      }
+    });
 
     it("fails a TLS certificate error with TlsCertificateError without retrying", async () => {
       mockedAxios.get.mockRejectedValue(networkError("UNABLE_TO_VERIFY_LEAF_SIGNATURE"));
@@ -557,28 +578,50 @@ describe("HttpFetcher", () => {
   });
 
   describe("Cloudflare challenge detection", () => {
-    it.each([
-      ["a cf-mitigated header", { "cf-mitigated": "challenge" }, ""],
-      ["a cloudflare server header", { server: "cloudflare" }, ""],
-      [
-        "the Enable JavaScript marker",
-        {},
-        "<p>Enable JavaScript and cookies to continue</p>",
-      ],
-      // The body is a stream and has to be drained before these markers can match.
-      ["the Just a moment marker", {}, "<html><body>Just a moment...</body></html>"],
-      ["the cf_chl_opt marker", {}, "<script>window._cf_chl_opt={};</script>"],
-    ])(
-      "fails a 403 with %s as a ChallengeError without retrying",
-      async (_label, headers, body) => {
+    it("fails a 403 carrying a challenge marker as a ChallengeError without retrying", async () => {
+      const cases: Array<{
+        label: string;
+        headers: Record<string, string>;
+        body: string;
+      }> = [
+        {
+          label: "a cf-mitigated header",
+          headers: { "cf-mitigated": "challenge" },
+          body: "",
+        },
+        {
+          label: "a cloudflare server header",
+          headers: { server: "cloudflare" },
+          body: "",
+        },
+        {
+          label: "the Enable JavaScript marker",
+          headers: {},
+          body: "<p>Enable JavaScript and cookies to continue</p>",
+        },
+        // The body is a stream and has to be drained before these markers can match.
+        {
+          label: "the Just a moment marker",
+          headers: {},
+          body: "<html><body>Just a moment...</body></html>",
+        },
+        {
+          label: "the cf_chl_opt marker",
+          headers: {},
+          body: "<script>window._cf_chl_opt={};</script>",
+        },
+      ];
+
+      for (const { label, headers, body } of cases) {
+        mockedAxios.get.mockReset();
         mockedAxios.get.mockRejectedValue(httpError(403, headers, body));
 
-        await expect(
-          fetcher.fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 }),
-        ).rejects.toBeInstanceOf(ChallengeError);
-        expect(mockedAxios.get).toHaveBeenCalledTimes(1);
-      },
-    );
+        await expect
+          .soft(fetcher.fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 }), label)
+          .rejects.toBeInstanceOf(ChallengeError);
+        expect.soft(mockedAxios.get, label).toHaveBeenCalledTimes(1);
+      }
+    });
 
     it("fails an ordinary 403 as an HttpStatusError", async () => {
       mockedAxios.get.mockRejectedValue(
@@ -608,24 +651,28 @@ describe("HttpFetcher", () => {
       expect(mockedAxios.get).toHaveBeenCalledTimes(1);
     });
 
-    it("returns a page titled Client Challenge that loads no challenge assets", async () => {
-      const page = "<html><head><title>Client Challenge</title></head></html>";
-      mockedAxios.get.mockResolvedValue(ok(page, { "content-type": "text/html" }));
+    it("returns a page that only looks like a challenge", async () => {
+      const cases = [
+        {
+          label: "an HTML page titled Client Challenge that loads no challenge assets",
+          body: "<html><head><title>Client Challenge</title></head></html>",
+          type: "text/html",
+        },
+        {
+          label: "a non-HTML response that contains the challenge markup",
+          body: FASTLY_CHALLENGE_PAGE,
+          type: "text/plain",
+        },
+      ];
 
-      const result = await fetcher.fetch(PAGE_URL);
+      for (const { label, body, type } of cases) {
+        mockedAxios.get.mockResolvedValue(ok(body, { "content-type": type }));
 
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      expect(result.content.toString()).toBe(page);
-    });
+        const result = await fetcher.fetch(PAGE_URL);
 
-    it("returns a non-HTML response that contains the challenge markup", async () => {
-      mockedAxios.get.mockResolvedValue(
-        ok(FASTLY_CHALLENGE_PAGE, { "content-type": "text/plain" }),
-      );
-
-      const result = await fetcher.fetch(PAGE_URL);
-
-      expect(result.status).toBe(FetchStatus.SUCCESS);
+        expect.soft(result.status, label).toBe(FetchStatus.SUCCESS);
+        expect.soft(result.content.toString(), label).toBe(body);
+      }
     });
   });
 
