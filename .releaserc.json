@@ -2,7 +2,7 @@
   "branches": ["main"],
   "plugins": [
     "@semantic-release/commit-analyzer",
-    "@semantic-release/release-notes-generator",
+    "./scripts/release/ai-release-notes.mjs",
     [
       "@semantic-release/changelog",
       {
