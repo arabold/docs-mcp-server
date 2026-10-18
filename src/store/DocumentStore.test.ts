@@ -121,21 +121,23 @@ function createScrapeResult(
 }
 
 /**
- * Runs `action` and returns the query plan of the first statement it ran whose
- * SQL contains `sqlFragment`, bound to the same parameters.
+ * Runs `action` and returns its result together with the query plan of the
+ * first statement it ran whose SQL contains `sqlFragment`, bound to the same
+ * parameters. Throws when no such statement ran.
  */
-async function queryPlanOf(
+async function queryPlanOf<T>(
   store: DocumentStore,
   sqlFragment: string,
-  action: () => Promise<unknown>,
-): Promise<string[]> {
+  action: () => Promise<T>,
+): Promise<{ result: T; plan: string[] }> {
   // @ts-expect-error Accessing private property for testing
   const db: DatabaseType = store.db;
   const statementPrototype: Statement = Object.getPrototypeOf(db.prepare("SELECT 1"));
   const all = vi.spyOn(statementPrototype, "all");
+  let result: T;
   let captured: { source: string; params: unknown[] } | undefined;
   try {
-    await action();
+    result = await action();
     const statements = all.mock.contexts as Statement[];
     const call = statements.findIndex((statement) =>
       statement.source.includes(sqlFragment),
@@ -151,8 +153,8 @@ async function queryPlanOf(
   }
   const plan = db
     .prepare(`EXPLAIN QUERY PLAN ${captured.source}`)
-    .all(...captured.params);
-  return (plan as { detail: string }[]).map((row) => row.detail);
+    .all(...captured.params) as { detail: string }[];
+  return { result, plan: plan.map((row) => row.detail) };
 }
 
 /**
@@ -396,16 +398,40 @@ describe("DocumentStore - With Embeddings", () => {
       expect(history.since <= history.until).toBe(true);
     });
 
-    it("counts activity from the created_at indexes instead of scanning the tables", async () => {
-      const plan = await queryPlanOf(store, "WITH RECURSIVE calendar", () =>
+    it("counts a page's chunks on the day the page was first indexed", async () => {
+      const page = ["Page", "https://example.com/page"] as const;
+      await store.addDocuments(
+        "activitylib",
+        "1.0.0",
+        1,
+        createScrapeResult(...page, "v1"),
+      );
+      // @ts-expect-error Accessing private property for testing
+      store.db.prepare("UPDATE pages SET created_at = datetime('now', '-3 days')").run();
+      // A refresh keeps the page row but replaces its chunks.
+      await store.addDocuments(
+        "activitylib",
+        "1.0.0",
+        1,
+        createScrapeResult(...page, "v2"),
+      );
+
+      const history = await store.getActivityHistory(7);
+
+      expect(history.days.at(-4)).toMatchObject({ pages: 1, chunks: 1 });
+      expect(history.days.at(-1)).toMatchObject({ pages: 0, chunks: 0 });
+    });
+
+    it("counts activity through indexes instead of scanning pages or documents", async () => {
+      const { plan } = await queryPlanOf(store, "WITH RECURSIVE calendar", () =>
         store.getActivityHistory(90),
       );
 
       expect(plan).toContain(
-        "SEARCH pages USING COVERING INDEX idx_pages_created_at (created_at>?)",
+        "SEARCH p USING COVERING INDEX idx_pages_created_at (created_at>?)",
       );
       expect(plan).toContain(
-        "SEARCH documents USING COVERING INDEX idx_documents_created_at (created_at>?)",
+        "SEARCH c USING COVERING INDEX idx_documents_page_id (page_id=?)",
       );
     });
 
@@ -806,19 +832,14 @@ describe("DocumentStore - With Embeddings", () => {
           ),
         );
 
-        let results: Awaited<ReturnType<DocumentStore["findByContent"]>> = [];
-        const plan = await queryPlanOf(store, "documents_fts MATCH", async () => {
-          results = await store.findByContent(
-            "searchtest",
-            "1.0.0",
-            "JavaScript programming",
-            10,
-          );
-        });
+        // Capturing the hybrid query's own CTE proves the hybrid path ran.
+        const { result, plan } = await queryPlanOf(
+          store,
+          "fts_scores AS MATERIALIZED",
+          () => store.findByContent("searchtest", "1.0.0", "JavaScript programming", 10),
+        );
 
-        expect(results.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
-        expect(results[0].vec_rank).toBeDefined();
-        expect(results[0].fts_rank).toBeDefined();
+        expect(result.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
         expectVersionFilteredFullTextPlan(plan);
       } finally {
         vi.unstubAllEnvs();
@@ -1416,12 +1437,11 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
         ),
       );
 
-      let results: Awaited<ReturnType<DocumentStore["findByContent"]>> = [];
-      const plan = await queryPlanOf(store, "documents_fts MATCH", async () => {
-        results = await store.findByContent("testlib", "1.0.0", "React hooks", 5);
-      });
+      const { result, plan } = await queryPlanOf(store, "documents_fts MATCH", () =>
+        store.findByContent("testlib", "1.0.0", "React hooks", 5),
+      );
 
-      expect(results.map((r) => r.url)).toEqual(["https://example.com/react-hooks"]);
+      expect(result.map((r) => r.url)).toEqual(["https://example.com/react-hooks"]);
       expectVersionFilteredFullTextPlan(plan);
     });
 

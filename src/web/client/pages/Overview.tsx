@@ -193,7 +193,7 @@ const CHART_NUM_STYLE = { fontFamily: "var(--mono)", color: "var(--text)" } as c
 
 /**
  * "Indexing activity" card: pages indexed per day over the trailing window,
- * derived from the `created_at` timestamps stored on pages and chunks. Renders
+ * derived from the `created_at` timestamps stored on pages. Renders
  * an honest empty state only when nothing has been indexed in the window.
  */
 function ActivityCard() {

@@ -83,9 +83,12 @@ interface RankedResult extends RawSearchResult {
  *
  * The id list comes from the covering indexes on `pages(version_id)` and
  * `documents(page_id)`, so a full-text hit in another library is dropped
- * without reading its row. The unary `+` keeps SQLite from handing the `IN`
- * list to FTS5 as a rowid constraint, which would rerun the whole match once
- * per id (the plan shows `INDEX 0:=M4` instead of `0:M4`).
+ * without reading its row. Joining documents and pages per hit instead costs
+ * a lookup for every match in the store (#550).
+ *
+ * The unary `+` keeps SQLite from handing the `IN` list to FTS5 as a rowid
+ * constraint, which would rerun the whole match once per id (the plan shows
+ * `INDEX 0:=M4` instead of `0:M4`).
  */
 const VERSION_FTS_FILTER = `+f.rowid IN (
   SELECT vd.id FROM pages vp JOIN documents vd ON vd.page_id = vp.id
@@ -2579,9 +2582,7 @@ export class DocumentStore {
             ORDER BY dv.distance
           ),
           fts_scores AS MATERIALIZED (
-            -- Filters by version before reading any row: a join to documents
-            -- and pages here would cost a lookup per match across every
-            -- library (#550).
+            -- No join here; see VERSION_FTS_FILTER.
             SELECT
               f.rowid as id,
               bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
@@ -3078,14 +3079,15 @@ export class DocumentStore {
 
   /**
    * Returns per-day indexing activity over the trailing `days`-day window,
-   * derived from the `created_at` timestamps already stored on pages and
-   * chunks. Days with no activity are zero-filled so the returned series is
-   * contiguous.
+   * derived from the `created_at` timestamps already stored on pages. Days
+   * with no activity are zero-filled so the returned series is contiguous.
    *
    * Rows are grouped by UTC calendar day to match SQLite's `date('now')`.
-   * `created_at` reflects first insertion, so a refresh that only updates
-   * existing pages does not inflate the counts (it is genuinely new content,
-   * not re-touched content, that registers as activity).
+   * A page's `created_at` reflects first insertion, and its chunks count on
+   * that same day, so a refresh that re-chunks an existing page does not
+   * inflate the counts (it is genuinely new content, not re-touched content,
+   * that registers as activity). The window is read through the
+   * `pages(created_at)` and `documents(page_id)` indexes.
    *
    * @param days - Window length in days; clamped to 1..366.
    */
@@ -3102,21 +3104,18 @@ export class DocumentStore {
          )
          SELECT
            calendar.day AS date,
-           COALESCE(pg.cnt, 0) AS pages,
-           COALESCE(ch.cnt, 0) AS chunks
+           COALESCE(activity.pages, 0) AS pages,
+           COALESCE(activity.chunks, 0) AS chunks
          FROM calendar
          LEFT JOIN (
-           SELECT date(created_at) AS d, COUNT(*) AS cnt
-           FROM pages
-           WHERE created_at >= date('now', '-' || (@days - 1) || ' days')
-           GROUP BY d
-         ) pg ON pg.d = calendar.day
-         LEFT JOIN (
-           SELECT date(created_at) AS d, COUNT(*) AS cnt
-           FROM documents
-           WHERE created_at >= date('now', '-' || (@days - 1) || ' days')
-           GROUP BY d
-         ) ch ON ch.d = calendar.day
+           SELECT
+             date(p.created_at) AS day,
+             COUNT(*) AS pages,
+             SUM((SELECT COUNT(*) FROM documents c WHERE c.page_id = p.id)) AS chunks
+           FROM pages p
+           WHERE p.created_at >= date('now', '-' || (@days - 1) || ' days')
+           GROUP BY day
+         ) activity ON activity.day = calendar.day
          ORDER BY calendar.day`,
       );
       const rows = stmt.all({ days: windowDays }) as Array<{

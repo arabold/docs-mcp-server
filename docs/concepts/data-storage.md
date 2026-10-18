@@ -185,7 +185,7 @@ Sequential SQL migrations in `db/migrations/`:
     during the migration); removes library records without versions and re-keys names stored with
     surrounding whitespace
 19. `018-store-embeddings-as-blobs.sql` - Float32 blob embeddings and a full-text update trigger limited to indexed columns
-20. `019-add-created-at-indexes.sql` - Indexes on `pages.created_at` and `documents.created_at` for the dashboard's activity chart
+20. `019-add-pages-created-at-index.sql` - Index on `pages.created_at` for the dashboard's activity chart
 
 **Code Reference:** All migration files in `db/migrations/` directory
 
