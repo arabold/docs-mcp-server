@@ -25,7 +25,7 @@ import {
 import { VersionStatus } from "../store/types";
 import { type AppConfig, loadConfig } from "../utils/config";
 import { PipelineStateError } from "./errors";
-import { PipelineManager } from "./PipelineManager";
+import { interruptedAfterMs, PipelineManager } from "./PipelineManager";
 import { type InterruptedJobs, type PipelineJob, PipelineJobStatus } from "./types";
 
 const SOURCE_URL = "https://example.com/docs";
@@ -33,6 +33,13 @@ const SOURCE_URL = "https://example.com/docs";
 /** Moves the clock an hour ahead, so everything written so far looks abandoned. */
 function anHourLater() {
   vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 60 * 60_000 });
+}
+
+/** Fakes the clock and the timers the manager schedules. */
+function fakeTimers() {
+  vi.useFakeTimers({
+    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
 }
 
 function scrapeOptions(
@@ -1000,14 +1007,8 @@ describe("PipelineManager", () => {
     }
 
     /** How long a version must go unwritten to count as interrupted. */
-    function interruptedAfterMs() {
-      return 4 * appConfig.scraper.jobHeartbeatMs + 1000;
-    }
-
-    function fakeTimers() {
-      vi.useFakeTimers({
-        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-      });
+    function bound() {
+      return interruptedAfterMs(appConfig.scraper.jobHeartbeatMs);
     }
 
     it("re-enqueues them when set to recover them", async () => {
@@ -1088,7 +1089,7 @@ describe("PipelineManager", () => {
       manager = createManager({ interruptedJobs: "fail" });
 
       await manager.start();
-      await vi.advanceTimersByTimeAsync(interruptedAfterMs());
+      await vi.advanceTimersByTimeAsync(bound());
 
       expect(await store.getVersionById(versionId)).toMatchObject({
         status: VersionStatus.FAILED,
@@ -1103,13 +1104,21 @@ describe("PipelineManager", () => {
 
       await manager.start();
       await manager.stop();
-      await vi.advanceTimersByTimeAsync(interruptedAfterMs());
+      await vi.advanceTimersByTimeAsync(bound());
 
       expect((await store.getVersionById(versionId))?.status).toBe(VersionStatus.RUNNING);
     });
   });
 
   describe("heartbeat", () => {
+    let markAlive: MockInstance<DocumentManagementService["markVersionsAlive"]>;
+
+    beforeEach(async () => {
+      markAlive = vi.spyOn(store, "markVersionsAlive");
+      fakeTimers();
+      await manager.start();
+    });
+
     /** Starts a job that runs until the test ends, and returns its version. */
     async function startHeldJob(): Promise<number | undefined> {
       holdScrapes();
@@ -1119,9 +1128,6 @@ describe("PipelineManager", () => {
     }
 
     it("marks the versions of its unfinished jobs alive on every interval", async () => {
-      const markAlive = vi.spyOn(store, "markVersionsAlive");
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-      await manager.start();
       const versionId = await startHeldJob();
 
       await vi.advanceTimersByTimeAsync(2 * appConfig.scraper.jobHeartbeatMs);
@@ -1130,9 +1136,6 @@ describe("PipelineManager", () => {
     });
 
     it("stops marking jobs alive once stopped", async () => {
-      const markAlive = vi.spyOn(store, "markVersionsAlive");
-      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-      await manager.start();
       await startHeldJob();
 
       await manager.stop();

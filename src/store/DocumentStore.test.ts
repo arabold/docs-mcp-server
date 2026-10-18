@@ -951,26 +951,28 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("marks only queued and running versions alive", async () => {
-      const ids: Partial<Record<VersionStatus, number>> = {};
-      for (const status of [
-        VersionStatus.QUEUED,
-        VersionStatus.RUNNING,
-        VersionStatus.COMPLETED,
-      ]) {
-        ids[status] = await store.resolveVersionId("alivelib", status);
-        await store.updateVersionStatus(ids[status] ?? 0, status);
-      }
+      const backdated = "2000-01-01 00:00:00";
+      const seed = async (status: VersionStatus) => {
+        const versionId = await store.resolveVersionId("alivelib", status);
+        await store.updateVersionStatus(versionId, status);
+        return versionId;
+      };
+      const queued = await seed(VersionStatus.QUEUED);
+      const running = await seed(VersionStatus.RUNNING);
+      const completed = await seed(VersionStatus.COMPLETED);
+      // @ts-expect-error Accessing private property for testing
+      const db: DatabaseType = store.db;
       // Without the trigger, which sets updated_at on every update, the rows can be backdated
-      store.db.exec("DROP TRIGGER versions_updated_at");
-      store.db.prepare("UPDATE versions SET updated_at = '2000-01-01 00:00:00'").run();
+      db.exec("DROP TRIGGER versions_updated_at");
+      db.prepare("UPDATE versions SET updated_at = ?").run(backdated);
 
-      await store.markVersionsAlive(Object.values(ids));
+      await store.markVersionsAlive([queued, running, completed]);
 
-      const updatedAt = async (status: VersionStatus) =>
-        (await store.getVersionById(ids[status] ?? 0))?.updated_at;
-      expect(await updatedAt(VersionStatus.QUEUED)).not.toBe("2000-01-01 00:00:00");
-      expect(await updatedAt(VersionStatus.RUNNING)).not.toBe("2000-01-01 00:00:00");
-      expect(await updatedAt(VersionStatus.COMPLETED)).toBe("2000-01-01 00:00:00");
+      const updatedAt = async (versionId: number) =>
+        (await store.getVersionById(versionId))?.updated_at;
+      expect(await updatedAt(queued)).not.toBe(backdated);
+      expect(await updatedAt(running)).not.toBe(backdated);
+      expect(await updatedAt(completed)).toBe(backdated);
     });
 
     it("should store and retrieve scraper options", async () => {
