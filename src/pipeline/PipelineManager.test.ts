@@ -30,6 +30,11 @@ import { type InterruptedJobs, type PipelineJob, PipelineJobStatus } from "./typ
 
 const SOURCE_URL = "https://example.com/docs";
 
+/** Moves the clock an hour ahead, so everything written so far looks abandoned. */
+function anHourLater() {
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 60 * 60_000 });
+}
+
 function scrapeOptions(
   library: string,
   version = "1.0",
@@ -221,6 +226,7 @@ describe("PipelineManager", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await manager.stop();
     // Settle whatever a test left queued or held, so no job writes to the store
     // after it closes.
@@ -681,10 +687,17 @@ describe("PipelineManager", () => {
       expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
     });
 
-    // start() reads every QUEUED/RUNNING version as interrupted, including those
-    // of jobs still queued in memory: set to recover, it re-enqueues them,
-    // cancelling the original job; set to fail, it marks their version failed.
-    it.todo("keeps jobs enqueued before start() out of interrupted-job recovery");
+    it("keeps jobs enqueued before start() out of interrupted-job recovery", async () => {
+      manager = createManager({ interruptedJobs: "recover" });
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      anHourLater();
+
+      await manager.start();
+      await manager.waitForJobCompletion(jobId);
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
+      expect(await manager.getJobs()).toHaveLength(1);
+    });
 
     it("can be stopped when it is not running", async () => {
       await expect(manager.stop()).resolves.toBeUndefined();
@@ -978,10 +991,23 @@ describe("PipelineManager", () => {
   });
 
   describe("interrupted jobs on start", () => {
+    /** Seeds a RUNNING and a QUEUED version that no process has written for an hour. */
     async function seedInterrupted() {
       const runningId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
       const queuedId = await seedVersion("lib-b", "2.0", VersionStatus.QUEUED);
+      anHourLater();
       return { runningId, queuedId };
+    }
+
+    /** How long a version must go unwritten to count as interrupted. */
+    function interruptedAfterMs() {
+      return 4 * appConfig.scraper.jobHeartbeatMs + 1000;
+    }
+
+    function fakeTimers() {
+      vi.useFakeTimers({
+        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+      });
     }
 
     it("re-enqueues them when set to recover them", async () => {
@@ -1005,6 +1031,7 @@ describe("PipelineManager", () => {
       const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING, {
         options: null,
       });
+      anHourLater();
       manager = createManager({ interruptedJobs: "recover" });
 
       await manager.start();
@@ -1044,6 +1071,74 @@ describe("PipelineManager", () => {
         status: VersionStatus.QUEUED,
       });
       expect(await manager.getJobs()).toEqual([]);
+    });
+
+    it("leaves a version written within the bound while it starts", async () => {
+      const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
+      manager = createManager({ interruptedJobs: "fail" });
+
+      await manager.start();
+
+      expect((await store.getVersionById(versionId))?.status).toBe(VersionStatus.RUNNING);
+    });
+
+    it("fails a version written within the bound once it stays unwritten past it", async () => {
+      const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
+      fakeTimers();
+      manager = createManager({ interruptedJobs: "fail" });
+
+      await manager.start();
+      await vi.advanceTimersByTimeAsync(interruptedAfterMs());
+
+      expect(await store.getVersionById(versionId)).toMatchObject({
+        status: VersionStatus.FAILED,
+        error_message: "Job interrupted",
+      });
+    });
+
+    it("stops deciding on recently written versions once stopped", async () => {
+      const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
+      fakeTimers();
+      manager = createManager({ interruptedJobs: "fail" });
+
+      await manager.start();
+      await manager.stop();
+      await vi.advanceTimersByTimeAsync(interruptedAfterMs());
+
+      expect((await store.getVersionById(versionId))?.status).toBe(VersionStatus.RUNNING);
+    });
+  });
+
+  describe("heartbeat", () => {
+    /** Starts a job that runs until the test ends, and returns its version. */
+    async function startHeldJob(): Promise<number | undefined> {
+      holdScrapes();
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
+      return (await manager.getJob(jobId))?.versionId;
+    }
+
+    it("marks the versions of its unfinished jobs alive on every interval", async () => {
+      const markAlive = vi.spyOn(store, "markVersionsAlive");
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      await manager.start();
+      const versionId = await startHeldJob();
+
+      await vi.advanceTimersByTimeAsync(2 * appConfig.scraper.jobHeartbeatMs);
+
+      expect(markAlive.mock.calls).toEqual([[[versionId]], [[versionId]]]);
+    });
+
+    it("stops marking jobs alive once stopped", async () => {
+      const markAlive = vi.spyOn(store, "markVersionsAlive");
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      await manager.start();
+      await startHeldJob();
+
+      await manager.stop();
+      await vi.advanceTimersByTimeAsync(2 * appConfig.scraper.jobHeartbeatMs);
+
+      expect(markAlive).not.toHaveBeenCalled();
     });
   });
 });

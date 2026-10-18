@@ -221,6 +221,7 @@ export class DocumentStore {
     updateVersionStatus: Database.Statement<[string, string | null, number]>;
     updateVersionProgress: Database.Statement<[number, number, number | null, number]>;
     getVersionsByStatus: Database.Statement<string[]>;
+    markVersionsAlive: Database.Statement<[string]>;
     // Scraper options statements
     updateVersionScraperOptions: Database.Statement<[string, string, number]>;
     getVersionWithOptions: Database.Statement<[number]>;
@@ -520,6 +521,10 @@ export class DocumentStore {
       ),
       getVersionsByStatus: this.db.prepare<[string]>(
         "SELECT v.*, l.display_name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.status IN (SELECT value FROM json_each(?))",
+      ),
+      markVersionsAlive: this.db.prepare<[string]>(
+        `UPDATE versions SET updated_at = CURRENT_TIMESTAMP
+         WHERE id IN (SELECT value FROM json_each(?)) AND status IN ('queued', 'running')`,
       ),
       // Scraper options statements
       updateVersionScraperOptions: this.db.prepare<[string, string, number]>(
@@ -1529,6 +1534,21 @@ export class DocumentStore {
       return rows;
     } catch (error) {
       throw new StoreError(`Failed to get versions by status: ${error}`);
+    }
+  }
+
+  /**
+   * Marks the jobs of versions alive for other processes on the store, by
+   * setting their `updated_at` to now. Versions no longer QUEUED or RUNNING are
+   * left unchanged.
+   * @param versionIds The versions whose jobs are alive
+   * @throws {StoreError} When the write fails
+   */
+  async markVersionsAlive(versionIds: number[]): Promise<void> {
+    try {
+      this.statements.markVersionsAlive.run(JSON.stringify(versionIds));
+    } catch (error) {
+      throw new StoreError(`Failed to mark versions alive: ${error}`);
     }
   }
 

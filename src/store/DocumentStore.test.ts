@@ -950,6 +950,29 @@ describe("DocumentStore - With Embeddings", () => {
       expect(queuedVersions[0].status).toBe(VersionStatus.QUEUED);
     });
 
+    it("marks only queued and running versions alive", async () => {
+      const ids: Partial<Record<VersionStatus, number>> = {};
+      for (const status of [
+        VersionStatus.QUEUED,
+        VersionStatus.RUNNING,
+        VersionStatus.COMPLETED,
+      ]) {
+        ids[status] = await store.resolveVersionId("alivelib", status);
+        await store.updateVersionStatus(ids[status] ?? 0, status);
+      }
+      // Without the trigger, which sets updated_at on every update, the rows can be backdated
+      store.db.exec("DROP TRIGGER versions_updated_at");
+      store.db.prepare("UPDATE versions SET updated_at = '2000-01-01 00:00:00'").run();
+
+      await store.markVersionsAlive(Object.values(ids));
+
+      const updatedAt = async (status: VersionStatus) =>
+        (await store.getVersionById(ids[status] ?? 0))?.updated_at;
+      expect(await updatedAt(VersionStatus.QUEUED)).not.toBe("2000-01-01 00:00:00");
+      expect(await updatedAt(VersionStatus.RUNNING)).not.toBe("2000-01-01 00:00:00");
+      expect(await updatedAt(VersionStatus.COMPLETED)).toBe("2000-01-01 00:00:00");
+    });
+
     it("should store and retrieve scraper options", async () => {
       const versionId = await store.resolveVersionId("optionslib", "1.0.0");
 

@@ -187,6 +187,16 @@ export class DocumentManagementService {
   }
 
   /**
+   * Marks the jobs of QUEUED or RUNNING versions alive for other processes on
+   * the store.
+   * @param versionIds The versions whose jobs are alive
+   * @throws {StoreError} When the write fails
+   */
+  async markVersionsAlive(versionIds: number[]): Promise<void> {
+    return this.store.markVersionsAlive(versionIds);
+  }
+
+  /**
    * Updates the status of a version.
    */
   async updateVersionStatus(

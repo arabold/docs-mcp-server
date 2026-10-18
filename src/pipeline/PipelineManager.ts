@@ -16,6 +16,7 @@ import { ScrapeMode } from "../scraper/types";
 import type { DocumentManagementService } from "../store";
 import { formatVersionLabel } from "../store/errors";
 import {
+  type DbVersionWithLibrary,
   libraryNamesMatch,
   normalizeLibraryName,
   normalizeVersionLabel,
@@ -37,6 +38,26 @@ const FINISHED_JOB_STATUSES: ReadonlySet<PipelineJobStatus> = new Set([
 ]);
 
 /**
+ * How many heartbeats a job may miss before its version counts as interrupted.
+ * Several, so a process whose event loop is busy for a while keeps its jobs.
+ */
+const HEARTBEATS_BEFORE_INTERRUPTED = 4;
+
+/** `versions.updated_at` has whole seconds, so a write can read up to this much older. */
+const UPDATED_AT_RESOLUTION_MS = 1000;
+
+/**
+ * How long ago a version was last written, from its `updated_at` (UTC, whole
+ * seconds); infinite when it has none.
+ */
+function silenceOf(version: DbVersionWithLibrary, now: number): number {
+  const lastWrite = version.updated_at
+    ? Date.parse(`${version.updated_at.replace(" ", "T")}Z`)
+    : Number.NaN;
+  return Number.isNaN(lastWrite) ? Number.POSITIVE_INFINITY : now - lastWrite;
+}
+
+/**
  * Manages a queue of document processing jobs, controlling concurrency and tracking progress.
  */
 export class PipelineManager implements IPipeline {
@@ -52,6 +73,10 @@ export class PipelineManager implements IPipeline {
   private interruptedJobs: InterruptedJobs;
   private eventBus: EventBusService;
   private appConfig: AppConfig;
+  /** Marks this manager's unfinished jobs alive while it runs. */
+  private heartbeatTimer: NodeJS.Timeout | undefined;
+  /** Decides on versions that were alive at start, once they could be silent. */
+  private recheckTimer: NodeJS.Timeout | undefined;
 
   constructor(
     store: DocumentManagementService,
@@ -127,11 +152,15 @@ export class PipelineManager implements IPipeline {
       `PipelineManager started with concurrency ${this.concurrency}, interrupted jobs: ${this.interruptedJobs}.`,
     );
 
-    if (this.interruptedJobs === "recover") {
-      await this.recoverPendingJobs();
-    } else if (this.interruptedJobs === "fail") {
-      // Mark any interrupted jobs as failed so users can manually retry
-      await this.markInterruptedJobsAsFailed();
+    // Other processes on the store can tell this manager's jobs from interrupted ones
+    this.heartbeatTimer = setInterval(
+      () => void this.markJobsAlive(),
+      this.appConfig.scraper.jobHeartbeatMs,
+    );
+    this.heartbeatTimer.unref();
+
+    if (this.interruptedJobs !== "leave") {
+      await this.handleInterruptedJobs();
     }
 
     this._processQueue().catch((error) => {
@@ -139,80 +168,142 @@ export class PipelineManager implements IPipeline {
     }); // Start processing any existing jobs
   }
 
+  /** The jobs that have not ended and may still write to their version. */
+  private unfinishedJobs(): InternalPipelineJob[] {
+    return Array.from(this.jobMap.values()).filter(
+      (job) => !FINISHED_JOB_STATUSES.has(job.status),
+    );
+  }
+
+  /** How long a version may go without a write before it counts as interrupted. */
+  private get interruptedAfterMs(): number {
+    return (
+      HEARTBEATS_BEFORE_INTERRUPTED * this.appConfig.scraper.jobHeartbeatMs +
+      UPDATED_AT_RESOLUTION_MS
+    );
+  }
+
   /**
-   * Recovers pending jobs from the database after server restart.
-   * Uses enqueueRefreshJob() to properly continue interrupted jobs,
-   * leveraging existing pages and ETags when available.
+   * Marks the versions of this manager's unfinished jobs alive, so a server
+   * starting on the same store leaves them alone. Logs a failed write.
    */
-  async recoverPendingJobs(): Promise<void> {
+  private async markJobsAlive(): Promise<void> {
+    const versionIds = this.unfinishedJobs().map((job) => job.versionId);
+    if (versionIds.length === 0) return;
     try {
-      // Find all interrupted jobs (RUNNING + QUEUED)
-      const interruptedVersions = await this.store.getVersionsByStatus([
-        VersionStatus.RUNNING,
-        VersionStatus.QUEUED,
-      ]);
-
-      if (interruptedVersions.length === 0) {
-        logger.debug("No pending jobs to recover from database");
-        return;
-      }
-
-      logger.info(
-        `📥 Recovering ${interruptedVersions.length} pending job(s) from database`,
-      );
-
-      for (const version of interruptedVersions) {
-        const versionLabel = `${version.library_name}@${version.name || "latest"}`;
-        try {
-          // Use enqueueRefreshJob for recovery - it handles:
-          // - Completed versions: incremental refresh with ETags
-          // - Incomplete versions: falls back to enqueueJobWithStoredOptions()
-          await this.enqueueRefreshJob(version.library_name, version.name);
-          logger.info(`🔄 Recovering job: ${versionLabel}`);
-        } catch (error) {
-          // If recovery fails (e.g., no stored options), mark as failed
-          const errorMessage = `Recovery failed: ${error instanceof Error ? error.message : String(error)}`;
-          await this.store.updateVersionStatus(
-            version.id,
-            VersionStatus.FAILED,
-            errorMessage,
-          );
-          logger.warn(`⚠️  Failed to recover job ${versionLabel}: ${error}`);
-        }
-      }
+      await this.store.markVersionsAlive(versionIds);
     } catch (error) {
-      logger.error(`❌ Failed to recover pending jobs: ${error}`);
+      logger.warn(`⚠️  Failed to mark running jobs alive: ${error}`);
     }
   }
 
   /**
-   * Marks all interrupted jobs (RUNNING/QUEUED) as FAILED.
-   * Called at startup when interrupted jobs are set to fail, so users can retry them via the UI.
+   * Recovers or fails the versions an earlier run left RUNNING or QUEUED. A
+   * version written recently may belong to a job another live process runs,
+   * which marks it alive on every heartbeat: it is checked again once it could
+   * have gone silent, and left to that process if it has not.
+   *
+   * @param watched Only these versions, when checking again; they are not
+   *   checked a third time.
    */
-  async markInterruptedJobsAsFailed(): Promise<void> {
+  private async handleInterruptedJobs(watched?: ReadonlySet<number>): Promise<void> {
     try {
-      const interruptedVersions = await this.store.getVersionsByStatus([
-        VersionStatus.RUNNING,
-        VersionStatus.QUEUED,
-      ]);
+      const ownVersionIds = new Set(this.unfinishedJobs().map((job) => job.versionId));
+      const versions = (
+        await this.store.getVersionsByStatus([
+          VersionStatus.RUNNING,
+          VersionStatus.QUEUED,
+        ])
+      ).filter(
+        (version) =>
+          !ownVersionIds.has(version.id) &&
+          (watched === undefined || watched.has(version.id)),
+      );
+      const now = Date.now();
+      const isSilent = (version: DbVersionWithLibrary) =>
+        silenceOf(version, now) >= this.interruptedAfterMs;
+      const alive = versions.filter((version) => !isSilent(version));
 
-      if (interruptedVersions.length === 0) {
-        logger.debug("No interrupted jobs to mark as failed");
-        return;
+      if (this.interruptedJobs === "recover") {
+        await this.recoverPendingJobs(versions.filter(isSilent));
+      } else {
+        await this.markInterruptedJobsAsFailed(versions.filter(isSilent));
       }
 
-      for (const version of interruptedVersions) {
+      if (alive.length === 0) return;
+      if (watched) {
+        for (const version of alive) {
+          logger.debug(
+            `Leaving ${formatVersionLabel(version.library_name, version.name)} to the process that runs it`,
+          );
+        }
+        return;
+      }
+      logger.debug(
+        `Checking ${alive.length} recently written job(s) again in ${this.interruptedAfterMs} ms`,
+      );
+      const aliveIds = new Set(alive.map((version) => version.id));
+      this.recheckTimer = setTimeout(() => {
+        this.recheckTimer = undefined;
+        void this.handleInterruptedJobs(aliveIds);
+      }, this.interruptedAfterMs);
+      this.recheckTimer.unref();
+    } catch (error) {
+      logger.error(`❌ Failed to handle interrupted jobs: ${error}`);
+    }
+  }
+
+  /**
+   * Recovers interrupted jobs. Uses enqueueRefreshJob() to properly continue
+   * them, leveraging existing pages and ETags when available.
+   */
+  private async recoverPendingJobs(versions: DbVersionWithLibrary[]): Promise<void> {
+    if (versions.length === 0) {
+      logger.debug("No pending jobs to recover from database");
+      return;
+    }
+
+    logger.info(`📥 Recovering ${versions.length} pending job(s) from database`);
+
+    for (const version of versions) {
+      const versionLabel = `${version.library_name}@${version.name || "latest"}`;
+      try {
+        // Use enqueueRefreshJob for recovery - it handles:
+        // - Completed versions: incremental refresh with ETags
+        // - Incomplete versions: falls back to enqueueJobWithStoredOptions()
+        await this.enqueueRefreshJob(version.library_name, version.name);
+        logger.info(`🔄 Recovering job: ${versionLabel}`);
+      } catch (error) {
+        // If recovery fails (e.g., no stored options), mark as failed
+        const errorMessage = `Recovery failed: ${error instanceof Error ? error.message : String(error)}`;
         await this.store.updateVersionStatus(
           version.id,
           VersionStatus.FAILED,
-          "Job interrupted",
+          errorMessage,
         );
-        logger.info(
-          `❌ Marked interrupted job as failed: ${version.library_name}@${version.name || "latest"}`,
-        );
+        logger.warn(`⚠️  Failed to recover job ${versionLabel}: ${error}`);
       }
-    } catch (error) {
-      logger.error(`❌ Failed to mark interrupted jobs as failed: ${error}`);
+    }
+  }
+
+  /** Marks interrupted jobs FAILED, so users can retry them via the UI. */
+  private async markInterruptedJobsAsFailed(
+    versions: DbVersionWithLibrary[],
+  ): Promise<void> {
+    if (versions.length === 0) {
+      logger.debug("No interrupted jobs to mark as failed");
+      return;
+    }
+
+    for (const version of versions) {
+      await this.store.updateVersionStatus(
+        version.id,
+        VersionStatus.FAILED,
+        "Job interrupted",
+      );
+      logger.info(
+        `❌ Marked interrupted job as failed: ${version.library_name}@${version.name || "latest"}`,
+      );
     }
   }
 
@@ -227,6 +318,9 @@ export class PipelineManager implements IPipeline {
       return;
     }
     this.isRunning = false;
+    clearInterval(this.heartbeatTimer);
+    clearTimeout(this.recheckTimer);
+    this.recheckTimer = undefined;
     logger.debug("PipelineManager stopping. No new jobs will be started.");
 
     // Note: Strategy cleanup now happens per-scrape in ScraperService.scrape()

@@ -409,6 +409,23 @@ describe("Configuration Loading", () => {
       expect(config.server.host).toBe("file-host");
       expect(config.server.heartbeatMs).toBe(15000);
     });
+
+    it("loads scraper.jobHeartbeatMs from DOCS_MCP_SCRAPER_JOB_HEARTBEAT_MS", () => {
+      process.env.DOCS_MCP_SCRAPER_JOB_HEARTBEAT_MS = "250";
+
+      const config = loadConfig({}, { configPath: path.join(tmpDir, "absent.yaml") });
+
+      expect(config.scraper.jobHeartbeatMs).toBe(250);
+    });
+
+    it("falls back to the default for a scraper.jobHeartbeatMs that is not positive", () => {
+      const configPath = path.join(tmpDir, "job-heartbeat.yaml");
+      fs.writeFileSync(configPath, "scraper:\n  jobHeartbeatMs: 0\n");
+
+      const config = loadConfig({}, { configPath });
+
+      expect(config.scraper.jobHeartbeatMs).toBe(15_000);
+    });
   });
 
   describe("Unit Logic & Edge Cases", () => {
