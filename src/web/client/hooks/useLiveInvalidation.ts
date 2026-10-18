@@ -4,9 +4,10 @@
  * Mounted once in the app shell so every view stays current without a manual
  * refresh, regardless of which page is open: job events refresh the job list
  * (Jobs queue, Overview active jobs, sidebar active-job badge), while
- * `LIBRARY_CHANGE` — emitted when a scrape completes or a version is removed —
- * refreshes the library list and the system-health snapshot whose totals
- * depend on the corpus (Overview KPIs, Libraries table, sidebar counts/footer).
+ * `LIBRARY_CHANGE` — emitted when a job changes status or a version is removed —
+ * refreshes the library list, the system-health snapshot whose totals depend
+ * on the corpus (Overview KPIs, Libraries table, sidebar counts/footer), and
+ * the Overview activity chart.
  *
  * Job and library invalidations are debounced independently because
  * `JOB_PROGRESS` fires once per scraped page and would otherwise trigger a
@@ -47,6 +48,7 @@ export function useLiveInvalidation(): void {
           libraryTimer.current = null;
           utils.listLibraries.invalidate();
           utils.getSystemHealth.invalidate();
+          utils.getActivityHistory.invalidate();
         }, DEBOUNCE_MS);
         return;
       }

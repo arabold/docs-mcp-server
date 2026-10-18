@@ -165,7 +165,7 @@ async function queryPlanOf<T>(
 function expectVersionFilteredFullTextPlan(plan: string[]): void {
   expect(plan).toContainEqual(expect.stringMatching(/^SCAN f VIRTUAL TABLE INDEX 0:M\d/));
   expect(plan).toContain(
-    "SEARCH vd USING COVERING INDEX idx_documents_page_id (page_id=?)",
+    "SEARCH vd USING COVERING INDEX idx_documents_sort_order (page_id=?)",
   );
 }
 
@@ -431,7 +431,7 @@ describe("DocumentStore - With Embeddings", () => {
         "SEARCH p USING COVERING INDEX idx_pages_created_at (created_at>?)",
       );
       expect(plan).toContain(
-        "SEARCH c USING COVERING INDEX idx_documents_page_id (page_id=?)",
+        "SEARCH c USING COVERING INDEX idx_documents_sort_order (page_id=?)",
       );
     });
 

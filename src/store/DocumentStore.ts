@@ -81,10 +81,10 @@ interface RankedResult extends RawSearchResult {
 /**
  * Limits a `documents_fts f` scan to one version's chunks. Binds the version id.
  *
- * The id list comes from the covering indexes on `pages(version_id)` and
- * `documents(page_id)`, so a full-text hit in another library is dropped
- * without reading its row. Joining documents and pages per hit instead costs
- * a lookup for every match in the store (#550).
+ * The id list comes from the covering indexes on `pages(version_id, url)` and
+ * `documents(page_id, sort_order)`, so a full-text hit in another library is
+ * dropped without reading its row. Joining documents and pages per hit
+ * instead costs a lookup for every match in the store (#550).
  *
  * The unary `+` keeps SQLite from handing the `IN` list to FTS5 as a rowid
  * constraint, which would rerun the whole match once per id (the plan shows
@@ -3087,7 +3087,7 @@ export class DocumentStore {
    * that same day, so a refresh that re-chunks an existing page does not
    * inflate the counts (it is genuinely new content, not re-touched content,
    * that registers as activity). The window is read through the
-   * `pages(created_at)` and `documents(page_id)` indexes.
+   * `pages(created_at)` and `documents(page_id, sort_order)` indexes.
    *
    * @param days - Window length in days; clamped to 1..366.
    */
