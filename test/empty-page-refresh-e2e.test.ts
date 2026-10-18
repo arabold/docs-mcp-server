@@ -52,6 +52,16 @@ describe("Empty page and extraction failure refresh handling E2E", () => {
     expect(await h.search("kumquat")).toEqual([]);
   });
 
+  it("records a page with a title but no body text as empty", async () => {
+    // The title is the page's metadata, not its text, so it cannot make a
+    // page with nothing in its body count as content.
+    site.page("/article", `<html><head><title>${PHRASE}</title></head><body></body></html>`);
+    expect((await h.scrape()).status).toBe(PipelineJobStatus.COMPLETED);
+
+    expect(h.outcomeOf(ARTICLE)).toBe(PageOutcome.Empty);
+    expect(await h.contentOf(ARTICLE)).toBe("");
+  });
+
   it("keeps the page through an extraction failure and retries it next refresh", async () => {
     site.page("/article", leafPage("Article", `${PHRASE}.`), { etag: '"article-v1"' });
     expect((await h.scrape()).status).toBe(PipelineJobStatus.COMPLETED);
