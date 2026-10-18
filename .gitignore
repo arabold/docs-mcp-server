@@ -11,3 +11,5 @@ public/index.html
 .tsbuildinfo
 .claude/worktrees/
 .opencode/package-lock.json
+.cache/search-accuracy/
+tests/search-accuracy/results/

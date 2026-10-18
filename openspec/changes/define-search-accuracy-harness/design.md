@@ -102,6 +102,8 @@ tests/search-accuracy/
 + baseline.json            # snapshot + per mode/level aggregates and first ranks
 + README.md                # how to run, read and extend; how to add queries
 + accuracy.eval.ts         # the benchmark: fetch, index, validate, score, compare
++ index-corpus.ts          # benchmark config and indexing through PipelineManager
++ paths.ts                 # checked-in file paths and cache locations
 + corpus.ts                # manifest loading, sparse git checkout into the cache
 + golden.ts                # golden set loading and schema checks
 + golden.test.ts           # runs in npm test
@@ -116,7 +118,7 @@ tests/search-accuracy/
 + vite.config.accuracy.ts  # includes only accuracy.eval.ts; no MSW; long timeout
 ~ package.json             # evaluate:accuracy and evaluate:accuracy:baseline scripts
 ~ .gitignore               # .cache/search-accuracy/ and tests/search-accuracy/results/
-~ AGENTS.md                # test inventory row for the benchmark
+~ test/README.md           # how to run the benchmark and what its config drops
 ~ docs/guides/benchmarking.md  # points to the accuracy benchmark
 ```
 
@@ -175,7 +177,7 @@ accuracy.eval.ts
   vi.mock(EmbeddingFactory)              # createEmbeddingModel → CachingEmbeddings(real client)
   loadGoldenSet()                         # fails fast before any download
   ensureCorpus()                          # git sparse checkout per missing revision
-  indexCorpus()                           # unless DOCS_ACCURACY_REUSE_INDEX=1
+  indexCorpus()                           # index-corpus.ts; unless DOCS_ACCURACY_REUSE_INDEX=1
     DocumentManagementService(config with storePath = index.sqlite)
     PipelineManager.enqueueScrapeJob(file://<checkout>/<root>)  # one job per library
     waitForJobCompletion()                # a failed job fails the run
