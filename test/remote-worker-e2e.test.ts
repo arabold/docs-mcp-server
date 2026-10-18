@@ -76,11 +76,14 @@ describe("Web server in front of a remote worker", () => {
     rmSync(storePath, { recursive: true, force: true });
   });
 
-  it("serves no MCP endpoint, which belongs to the mcp command", async () => {
-    const response = await fetch(new URL("/mcp", coordinatorApiUrl));
+  it("serves the web UI but no MCP endpoint, which belongs to the mcp command", async () => {
+    const shell = await fetch(new URL("/", coordinatorApiUrl));
+    const mcp = await fetch(new URL("/mcp", coordinatorApiUrl));
 
-    expect(response.status).toBe(404);
-    expect(response.headers.get("content-type") ?? "").not.toContain("text/html");
+    expect(shell.status).toBe(200);
+    expect(shell.headers.get("content-type") ?? "").toContain("text/html");
+    expect(mcp.status).toBe(404);
+    expect(mcp.headers.get("content-type") ?? "").not.toContain("text/html");
   });
 
   it("reports the worker connection truthfully and catches up after it returns", async () => {
