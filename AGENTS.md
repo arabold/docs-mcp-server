@@ -22,7 +22,7 @@ Read `README.md` for setup and configuration, and `ARCHITECTURE.md` before chang
 
 ## Code
 
-- No `any` and no non-null assertions (`!`). Biome does not flag them.
+- No `any` unless absolutely necessary, and no non-null assertions (`!`). Biome does not flag either.
 - Every exported function and class has TSDoc: a summary first, then params and returns.
 - Catch errors at API and CLI boundaries. The API answers with standard HTTP status codes.
 - Logging: `console.*` for CLI results, `logger.info` for state changes, `logger.debug` for flow details. Prefix info, warning and error messages with an emoji (`❌` for errors); debug messages have none. Keep binary content out of error logs.

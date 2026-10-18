@@ -150,7 +150,7 @@ describe("CLI failure reporting", () => {
           .mockRejectedValue(new Error("Library nolib not found in store.")),
       },
       close: vi.fn(),
-    } as any);
+    } as unknown as Awaited<ReturnType<typeof openBackend>>);
 
     await expect(createCli([]).parseAsync(["remove", "nolib"])).rejects.toThrow(
       "Library nolib not found in store.",

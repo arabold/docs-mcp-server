@@ -21,14 +21,22 @@ vi.mock("./index", async (importOriginal) => ({
 
 describe("runCli", () => {
   let exitSpy: MockInstance<typeof process.exit>;
+  let sigintListeners = process.listeners("SIGINT");
 
   beforeEach(() => {
     vi.clearAllMocks();
     exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    sigintListeners = process.listeners("SIGINT");
   });
 
   afterEach(() => {
     exitSpy.mockRestore();
+    // runCli installs its own SIGINT handler; leave the worker's handlers as they were
+    for (const listener of process.listeners("SIGINT")) {
+      if (!sigintListeners.includes(listener)) {
+        process.removeListener("SIGINT", listener);
+      }
+    }
   });
 
   function failWith(error: Error): void {

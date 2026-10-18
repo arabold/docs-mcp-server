@@ -113,18 +113,14 @@ export async function runCli(): Promise<void> {
 
     await cli.parse();
   } catch (error) {
-    if (error instanceof CliUsageError) {
-      // The help and the reason are already printed
-    } else {
-      if (
+    // A usage error has its help and reason printed already
+    if (!(error instanceof CliUsageError)) {
+      // Embedding configuration errors have properly formatted messages
+      const preformatted =
         error instanceof ModelConfigurationError ||
-        error instanceof UnsupportedProviderError
-      ) {
-        // These errors already have properly formatted messages
-        reportCliError(error.message);
-      } else {
-        reportCliError(`❌ ${error instanceof Error ? error.message : String(error)}`);
-      }
+        error instanceof UnsupportedProviderError;
+      const message = error instanceof Error ? error.message : String(error);
+      reportCliError(preformatted ? message : `❌ ${message}`);
       if (error instanceof Error && error.stack) {
         logger.debug(error.stack);
       }

@@ -106,9 +106,25 @@ describe("CLI E2E", () => {
   });
 
   it("exits with 1 when a command reports its own failure", async () => {
-    const { code, stderr } = await runCli(["config", "get", "no.such.key"]);
-    expect(stderr).toContain("Invalid config path 'no.such.key'");
-    expect(code).toBe(1);
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-exit-code-"));
+    const configPath = writeTestConfig(storePath);
+
+    try {
+      const { code, stderr } = await runCli([
+        "config",
+        "get",
+        "no.such.key",
+        "--store-path",
+        storePath,
+        "--config",
+        configPath,
+      ]);
+
+      expect(stderr).toContain("Invalid config path 'no.such.key'");
+      expect(code).toBe(1);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
   });
 
   it("refuses to scrape an existing version unless --replace is given", async () => {
