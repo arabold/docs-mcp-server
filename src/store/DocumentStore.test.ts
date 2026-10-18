@@ -963,7 +963,7 @@ describe("DocumentStore - With Embeddings", () => {
       // @ts-expect-error Accessing private property for testing
       const db: DatabaseType = store.db;
       // Without the trigger, which sets updated_at on every update, the rows can be backdated
-      db.exec("DROP TRIGGER IF EXISTS versions_updated_at");
+      db.exec("DROP TRIGGER versions_updated_at");
       db.prepare("UPDATE versions SET updated_at = ?").run(backdated);
     }
 
@@ -982,37 +982,26 @@ describe("DocumentStore - With Embeddings", () => {
       expect(await updatedAt(completed)).toBe(backdated);
     });
 
-    it("fails an interrupted version it claims", async () => {
+    it("claims an interrupted version by marking it written now", async () => {
       const running = await seedStatus(VersionStatus.RUNNING);
       backdateVersions();
 
-      const claimed = await store.claimInterruptedVersion(
-        running,
-        backdated,
-        "Job interrupted",
-      );
+      const claimed = await store.claimInterruptedVersion(running, backdated);
 
       expect(claimed).toBe(true);
       expect(await store.getVersionById(running)).toMatchObject({
-        status: VersionStatus.FAILED,
-        error_message: "Job interrupted",
+        status: VersionStatus.RUNNING,
+        updated_at: expect.not.stringMatching(backdated),
       });
     });
 
-    it("refuses a claim once another process has claimed the version", async () => {
+    it("refuses a second claim on the same read", async () => {
       const running = await seedStatus(VersionStatus.RUNNING);
       backdateVersions();
-      // Another process read the same version and claimed it to recover it
+      // Another process read the same version and claimed it first
       await store.claimInterruptedVersion(running, backdated);
 
-      const claimed = await store.claimInterruptedVersion(
-        running,
-        backdated,
-        "Job interrupted",
-      );
-
-      expect(claimed).toBe(false);
-      expect((await store.getVersionById(running))?.status).toBe(VersionStatus.RUNNING);
+      expect(await store.claimInterruptedVersion(running, backdated)).toBe(false);
     });
 
     it("should store and retrieve scraper options", async () => {

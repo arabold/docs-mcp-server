@@ -4,7 +4,7 @@
  * Mounted once in the app shell so every view stays current without a manual
  * refresh, regardless of which page is open: job events refresh the job list
  * (Jobs queue, Overview active jobs, sidebar active-job badge), while
- * `LIBRARY_CHANGE` — emitted when a job changes status or a version is removed —
+ * `LIBRARY_CHANGE` — emitted when a version's status or content changes —
  * refreshes the library list, the system-health snapshot whose totals depend
  * on the corpus (Overview KPIs, Libraries table, sidebar counts/footer), and
  * the Overview activity chart.

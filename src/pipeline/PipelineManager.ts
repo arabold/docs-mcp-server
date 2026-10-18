@@ -45,6 +45,11 @@ const FINISHED_JOB_STATUSES: ReadonlySet<PipelineJobStatus> = new Set([
  */
 const HEARTBEATS_BEFORE_INTERRUPTED = 4;
 
+/** A version's label for logs, such as `react@18.0` or `react@latest`. */
+function labelOf(version: DbVersionWithLibrary): string {
+  return formatVersionLabel(version.library_name, version.name ?? "");
+}
+
 /**
  * How long a RUNNING or QUEUED version may go unwritten before it counts as
  * interrupted.
@@ -222,14 +227,21 @@ export class PipelineManager implements IPipeline {
         );
       }
 
-      if (this.interruptedJobs === "recover") {
-        await this.recoverPendingJobs(interrupted);
-      } else {
-        await this.markInterruptedJobsAsFailed(interrupted);
+      // An interrupted read is older than a second, so a claim changes updated_at
+      // and another process acting on the same read finds nothing to claim
+      const claimed: DbVersionWithLibrary[] = [];
+      for (const version of interrupted) {
+        if (await this.store.claimInterruptedVersion(version.id, version.updated_at)) {
+          claimed.push(version);
+        } else {
+          logger.debug(`Leaving ${labelOf(version)}: another process took it over`);
+        }
       }
-      if (interrupted.length > 0) {
-        // Views refetch on this; failing a version emits no job event
-        this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+
+      if (this.interruptedJobs === "recover") {
+        await this.recoverPendingJobs(claimed);
+      } else {
+        await this.markInterruptedJobsAsFailed(claimed);
       }
       return recentlyWritten;
     } catch (error) {
@@ -251,9 +263,7 @@ export class PipelineManager implements IPipeline {
     const ids = new Set(versions.map((version) => version.id));
     this.recheckTimer = setTimeout(async () => {
       for (const version of await this.handleInterruptedJobs(ids)) {
-        logger.debug(
-          `Leaving ${formatVersionLabel(version.library_name, version.name ?? "")} to the process that runs it`,
-        );
+        logger.debug(`Leaving ${labelOf(version)} to the process that runs it`);
       }
     }, bound).unref();
   }
@@ -268,11 +278,7 @@ export class PipelineManager implements IPipeline {
     logger.info(`📥 Recovering ${versions.length} pending job(s) from database`);
 
     for (const version of versions) {
-      const versionLabel = formatVersionLabel(version.library_name, version.name ?? "");
-      if (!(await this.store.claimInterruptedVersion(version.id, version.updated_at))) {
-        logger.debug(`Leaving ${versionLabel}: another process took it over`);
-        continue;
-      }
+      const versionLabel = labelOf(version);
       try {
         // Use enqueueRefreshJob for recovery - it handles:
         // - Completed versions: incremental refresh with ETags
@@ -297,18 +303,12 @@ export class PipelineManager implements IPipeline {
     versions: DbVersionWithLibrary[],
   ): Promise<void> {
     for (const version of versions) {
-      const versionLabel = formatVersionLabel(version.library_name, version.name ?? "");
-      if (
-        !(await this.store.claimInterruptedVersion(
-          version.id,
-          version.updated_at,
-          "Job interrupted",
-        ))
-      ) {
-        logger.debug(`Leaving ${versionLabel}: another process took it over`);
-        continue;
-      }
-      logger.info(`❌ Marked interrupted job as failed: ${versionLabel}`);
+      await this.store.updateVersionStatus(
+        version.id,
+        VersionStatus.FAILED,
+        "Job interrupted",
+      );
+      logger.info(`❌ Marked interrupted job as failed: ${labelOf(version)}`);
     }
   }
 
@@ -984,8 +984,8 @@ export class PipelineManager implements IPipeline {
     // Emit events to EventBusService
     const publicJob = this.toPublicJob(job);
 
+    // The store's status write has already emitted LIBRARY_CHANGE
     this.eventBus.emit(EventType.JOB_STATUS_CHANGE, publicJob);
-    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
 
     // Logging
     logger.debug(`Job ${job.id} status changed to: ${job.status}`);

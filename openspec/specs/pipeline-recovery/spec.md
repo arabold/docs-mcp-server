@@ -130,4 +130,3 @@ A server that starts set to recover or mark failed interrupted jobs SHALL act on
 - **GIVEN** a version is RUNNING and no process has shown it alive for an hour
 - **WHEN** a worker with job recovery and `web` start on the store at the same time
 - **THEN** only one of them SHALL act on the version: the worker recovers it or `web` marks it FAILED
-- **AND** a job the worker recovered SHALL NOT be marked FAILED

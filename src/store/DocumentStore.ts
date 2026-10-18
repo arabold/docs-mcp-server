@@ -58,7 +58,7 @@ import {
   normalizeVersionLabel,
   normalizeVersionName,
   type VersionScraperOptions,
-  VersionStatus,
+  type VersionStatus,
 } from "./types";
 
 interface RawSearchResult extends DbChunk {
@@ -253,8 +253,7 @@ export class DocumentStore {
     updateVersionProgress: Database.Statement<[number, number, number | null, number]>;
     getVersionsByStatus: Database.Statement<string[]>;
     markVersionsAlive: Database.Statement<[string]>;
-    failVersionIfUnwritten: Database.Statement<[string, string, number, string | null]>;
-    touchVersionIfUnwritten: Database.Statement<[number, string | null]>;
+    claimInterruptedVersion: Database.Statement<[number, string | null]>;
     // Scraper options statements
     updateVersionScraperOptions: Database.Statement<[string, string, number]>;
     getVersionWithOptions: Database.Statement<[number]>;
@@ -559,11 +558,7 @@ export class DocumentStore {
         `UPDATE versions SET updated_at = CURRENT_TIMESTAMP
          WHERE id IN (SELECT value FROM json_each(?)) AND status IN ('queued', 'running')`,
       ),
-      failVersionIfUnwritten: this.db.prepare<[string, string, number, string | null]>(
-        `UPDATE versions SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND status IN ('queued', 'running') AND updated_at IS ?`,
-      ),
-      touchVersionIfUnwritten: this.db.prepare<[number, string | null]>(
+      claimInterruptedVersion: this.db.prepare<[number, string | null]>(
         `UPDATE versions SET updated_at = CURRENT_TIMESTAMP
          WHERE id = ? AND status IN ('queued', 'running') AND updated_at IS ?`,
       ),
@@ -1599,34 +1594,23 @@ export class DocumentStore {
 
   /**
    * Claims a version an earlier run left QUEUED or RUNNING, provided nothing
-   * has written it since its `updated_at` was read, so that of several
-   * processes acting on the same read only one succeeds. With `failure`, marks
-   * the version FAILED with that message; without, sets its `updated_at` to
-   * now, which keeps other processes off it while the caller recovers it. The
-   * read must be older than a second, the resolution of `updated_at`, for the
-   * claim to change it.
+   * has written it since its `updated_at` was read, by setting `updated_at` to
+   * now. Of several processes acting on the same read only one succeeds, and
+   * the others treat the version as recently written. The read must be older
+   * than a second, the resolution of `updated_at`, for the claim to change it.
    * @param versionId The version to claim
    * @param updatedAt The `updated_at` the caller read
-   * @param failure The error message to fail the version with
    * @returns Whether the claim succeeded
    * @throws {StoreError} When the write fails
    */
   async claimInterruptedVersion(
     versionId: number,
     updatedAt: string | null,
-    failure?: string,
   ): Promise<boolean> {
     try {
-      const result =
-        failure === undefined
-          ? this.statements.touchVersionIfUnwritten.run(versionId, updatedAt)
-          : this.statements.failVersionIfUnwritten.run(
-              VersionStatus.FAILED,
-              failure,
-              versionId,
-              updatedAt,
-            );
-      return result.changes > 0;
+      return (
+        this.statements.claimInterruptedVersion.run(versionId, updatedAt).changes > 0
+      );
     } catch (error) {
       throw new StoreError(`Failed to claim interrupted version: ${error}`);
     }
