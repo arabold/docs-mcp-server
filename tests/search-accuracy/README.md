@@ -10,7 +10,7 @@ It complements the [search quality benchmark](../../docs/guides/benchmarking.md)
 which labels whole pages, scores the store you have indexed and adds LLM-judged
 rubrics. This one labels passages, brings its own corpus, needs no LLM judge and
 runs offline after the first run. The requirements are in
-[openspec/changes/define-search-accuracy-harness/specs/search-accuracy/spec.md](../../openspec/changes/define-search-accuracy-harness/specs/search-accuracy/spec.md).
+[openspec/specs/search-accuracy/spec.md](../../openspec/specs/search-accuracy/spec.md).
 
 ## Running it
 
