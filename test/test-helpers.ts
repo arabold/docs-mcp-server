@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import http, { createServer, type IncomingMessage, type Server } from "node:http";
 import net, { type AddressInfo } from "node:net";
 import path from "node:path";
@@ -49,7 +50,12 @@ export async function withStore<T>(
 /**
  * Returns the command and arguments to run the CLI.
  * Prefers the built 'dist/index.js' if available for faster execution.
- * Falls back to 'npx vite-node src/index.ts' for development.
+ * Falls back to vite-node on 'src/index.ts' for development, as in CI, which
+ * tests before it builds.
+ *
+ * Either way the command is this Node running the CLI itself, never a wrapper
+ * such as npx: a test that kills the process must reach the CLI, and npx cannot
+ * pass on SIGKILL, so the CLI behind it would keep running.
  */
 export function getCliCommand(): { cmd: string; args: string[] } {
   const projectRoot = path.resolve(import.meta.dirname, "..");
@@ -57,12 +63,16 @@ export function getCliCommand(): { cmd: string; args: string[] } {
 
   // Check if dist/index.js exists
   if (fs.existsSync(distEntry)) {
-    return { cmd: "node", args: [distEntry] };
+    return { cmd: process.execPath, args: [distEntry] };
   }
 
-  // Fallback to vite-node
   const srcEntry = path.join(projectRoot, "src", "index.ts");
-  return { cmd: "npx", args: ["vite-node", srcEntry] };
+  const viteNodePackage = createRequire(import.meta.url).resolve("vite-node/package.json");
+  const { bin } = JSON.parse(fs.readFileSync(viteNodePackage, "utf8")) as {
+    bin: Record<string, string>;
+  };
+  const viteNodeCli = path.join(path.dirname(viteNodePackage), bin["vite-node"]);
+  return { cmd: process.execPath, args: [viteNodeCli, srcEntry] };
 }
 
 /**
