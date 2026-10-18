@@ -48,10 +48,11 @@ export async function withStore<T>(
 }
 
 /**
- * Environment for a spawned CLI that has to stay on full-text search. Without
- * it, an `OPENAI_API_KEY` from the shell or `.env` makes `loadConfig()` pick an
- * embedding model despite the test config, and the child calls the real
- * service. Empty strings also keep dotenv from filling the values in.
+ * Environment that keeps a spawned CLI on full-text search. The test config's
+ * `embeddingModel: ""` alone does not: whenever `OPENAI_API_KEY` is set,
+ * `loadConfig()` picks the default embedding model, and the child calls the
+ * real service. `runCli()` and `startCliServer()` add it, so a key exported
+ * in the developer's shell stays out; `vite.config.ts` keeps `.env` out.
  */
 export const FTS_ONLY_ENV = { OPENAI_API_KEY: "", DOCS_MCP_EMBEDDING_MODEL: "" } as const;
 
@@ -81,26 +82,32 @@ export function getCliCommand(): { cmd: string; args: string[] } {
     bin: Record<string, string>;
   };
   const viteNodeCli = path.join(path.dirname(viteNodePackage), bin["vite-node"]);
-  return { cmd: process.execPath, args: [viteNodeCli, srcEntry] };
+  // The root locates vite.config.ts, whose build-time constants the sources
+  // need, when the CLI runs in another working directory.
+  return { cmd: process.execPath, args: [viteNodeCli, "--root", projectRoot, srcEntry] };
 }
 
 /**
- * Runs the CLI to the end, the way a user runs a command.
+ * Runs the CLI to the end, the way a user runs a command, on full-text search
+ * only (see {@link FTS_ONLY_ENV}).
  *
  * @param args CLI arguments, e.g. `["list", "--store-path", dir]`.
  * @param timeoutMs Kill the process after this long and report exit code 1.
+ * @param options.cwd The working directory; the checkout by default.
+ * @param options.env Extra environment variables; `undefined` removes one.
  * @returns The exit code and everything the process printed.
  */
 export function runCli(
   args: string[],
   timeoutMs?: number,
+  options: { cwd?: string; env?: Record<string, string | undefined> } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const { cmd, args: cliArgs } = getCliCommand();
     const proc = spawn(cmd, [...cliArgs, ...args], {
-      cwd: path.resolve(import.meta.dirname, ".."),
+      cwd: options.cwd ?? path.resolve(import.meta.dirname, ".."),
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, VITEST_WORKER_ID: undefined },
+      env: { ...process.env, VITEST_WORKER_ID: undefined, ...FTS_ONLY_ENV, ...options.env },
       timeout: timeoutMs,
       killSignal: "SIGKILL",
     });
@@ -118,9 +125,10 @@ export function runCli(
 }
 
 /**
- * Spawns a long-running CLI command (a server or worker) and waits until it
- * logs that it is available. Output is collected across chunks, so a ready
- * line split between two reads still counts.
+ * Spawns a long-running CLI command (a server or worker) on full-text search
+ * only (see {@link FTS_ONLY_ENV}) and waits until it logs that it is available.
+ * Output is collected across chunks, so a ready line split between two reads
+ * still counts.
  *
  * @param args CLI arguments, e.g. `["worker", "--port", "6280"]`.
  * @param env Extra environment variables; `undefined` removes one.
@@ -136,7 +144,7 @@ export async function startCliServer(
   const child = spawn(cmd, [...cliArgs, ...args], {
     cwd: path.resolve(import.meta.dirname, ".."),
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, VITEST_WORKER_ID: undefined, ...env },
+    env: { ...process.env, VITEST_WORKER_ID: undefined, ...FTS_ONLY_ENV, ...env },
   });
 
   const url = await new Promise<string>((resolve, reject) => {
@@ -223,7 +231,7 @@ async function startLocalServer(
       configPath,
       ...extraArgs,
     ],
-    { LOG_LEVEL: "info", ...FTS_ONLY_ENV },
+    { LOG_LEVEL: "info" },
   );
 }
 
@@ -328,7 +336,8 @@ export async function startRunningSlowJob(
 
 /**
  * Writes an explicit config for a spawned CLI or server, so a test does not
- * depend on the machine's own configuration: FTS-only (no embedding calls), no
+ * depend on the machine's own configuration: no embedding model (which holds
+ * only while `OPENAI_API_KEY` is unset; see {@link FTS_ONLY_ENV}), no
  * telemetry, and unrestricted `file://` access to fixtures, including hidden
  * path segments, since the checkout may itself sit under a hidden folder (e.g. a
  * worktree).

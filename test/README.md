@@ -45,6 +45,14 @@ Set `ENABLE_TEST_LOGS=1` to see it.
   `localStorage` stand-in.
 - `test/setup-e2e.ts` starts the MSW mock server described below.
 
+The `env` block of `vite.config.ts` keeps the developer's own files away from
+tests and the CLIs they spawn: `DOCS_MCP_CONFIG` names a config file and
+`DOTENV_CONFIG_PATH` a `.env` file, neither of which exists. Suites that need
+real credentials from `.env` load it with dotenv's `config()`, which ignores
+`DOTENV_CONFIG_PATH`. `runCli()` and `startCliServer()` also clear
+`OPENAI_API_KEY`, since the test config's empty `embeddingModel` falls back to
+the default model whenever a key is set.
+
 `npm run test:live` uses `vite.config.live.ts` instead. It drops
 `setup-e2e.ts`, so the live suite reaches the real network.
 

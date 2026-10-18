@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -13,6 +14,7 @@ import {
   createTcpProxy,
   getFreePort,
   HTML_FIXTURE_URL,
+  listenOnFreePort,
   runCli,
   startRunningSlowJob,
   startSlowSite,
@@ -200,6 +202,61 @@ describe("CLI E2E", () => {
     expect(`${result.stdout}${result.stderr}`).toContain(
       `Failed to connect to server at ${deadUrl}`,
     );
+  }, 60_000);
+
+  it("searches without embeddings when its working directory has a .env with an OpenAI key", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "cli-e2e-dotenv-"));
+    const configPath = writeTestConfig(dir);
+    // Stands in for OpenAI: a spawned CLI is outside MSW's reach
+    const embeddingRequests: string[] = [];
+    const openAi = createServer((request, response) => {
+      embeddingRequests.push(`${request.method} ${request.url}`);
+      response.writeHead(401).end();
+    });
+    const openAiPort = await listenOnFreePort(openAi);
+    writeFileSync(
+      path.join(dir, ".env"),
+      `OPENAI_API_KEY=sk-from-dotenv\nOPENAI_API_BASE=http://127.0.0.1:${openAiPort}/v1\n`,
+    );
+
+    try {
+      await withStore(
+        dir,
+        (store) =>
+          store.addScrapeResult("Dotenv", "", 1, {
+            url: "https://example.com/docs/flux",
+            title: "Flux",
+            sourceContentType: "text/markdown",
+            contentType: "text/markdown",
+            textContent: "The flux capacitor needs 1.21 gigawatts.",
+            links: [],
+            errors: [],
+            chunks: [
+              {
+                types: ["text"],
+                content: "The flux capacitor needs 1.21 gigawatts.",
+                section: { level: 1, path: ["Flux"] },
+              },
+            ],
+          }),
+        { configPath },
+      );
+
+      // runCli sets the key empty, which dotenv never overwrites. Without it,
+      // only the test environment keeps the CLI from reading `.env`.
+      const result = await runCli(
+        ["search", "Dotenv", "gigawatts", "--store-path", dir, "--config", configPath],
+        40_000,
+        { cwd: dir, env: { OPENAI_API_KEY: undefined } },
+      );
+
+      expect(embeddingRequests).toEqual([]);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("1.21 gigawatts");
+    } finally {
+      await new Promise<void>((resolve) => openAi.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 60_000);
 
   describe("against a worker", () => {
