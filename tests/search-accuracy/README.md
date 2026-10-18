@@ -137,9 +137,5 @@ chunks and is marked `status: draft` until a person has reviewed it.
 ## Limitations
 
 - The corpus is Markdown source, so HTML extraction is not measured.
-- The crawler reads directories in the order the file system returns, which
-  differs between macOS and Linux. Search breaks some score ties by that order,
-  so two operating systems can rank a few queries differently. Runs on one
-  machine repeat exactly.
 - The embedding cache wraps the provider's client. A Gemini model that relies on
   truncating its vectors to the store's dimension is not supported yet.
