@@ -35,11 +35,23 @@ docker run --rm \
   ghcr.io/arabold/docs-mcp-server:latest
 ```
 
-### 2. Add documentation
+### 2. Turn on vector search (optional)
+
+Without an embedding model, search uses full-text matching. Vector search also finds passages by meaning. To use OpenAI, start the server with `OPENAI_API_KEY` set:
+
+```bash
+OPENAI_API_KEY="sk-proj-..." npx @arabold/docs-mcp-server@latest
+```
+
+With Docker, add `-e OPENAI_API_KEY="sk-proj-..."`. [Embedding Models](docs/guides/embedding-models.md) covers Ollama, Gemini, Azure OpenAI and other providers.
+
+Do this before you add documentation. Embeddings are computed when a page is indexed, so documentation indexed without a model gets no vectors until you scrape it again with `--replace`.
+
+### 3. Add documentation
 
 Open the web UI at [http://localhost:6280](http://localhost:6280) and choose **Add library**.
 
-### 3. Connect your AI client
+### 4. Connect your AI client
 
 Add the server's MCP endpoint, `http://localhost:6280/mcp`, to your client. Most clients accept an entry like this:
 
@@ -54,16 +66,6 @@ Add the server's MCP endpoint, `http://localhost:6280/mcp`, to your client. Most
 ```
 
 [Connecting MCP Clients](docs/guides/mcp-clients.md) has the exact settings for Claude Code, Claude Desktop, Zed and other clients, how a client can start the server itself over stdio, and the list of MCP tools.
-
-### 4. Turn on vector search (optional)
-
-Without an embedding model, search uses full-text matching. Vector search also finds passages by meaning. To use OpenAI, set `OPENAI_API_KEY`:
-
-```bash
-OPENAI_API_KEY="sk-proj-..." npx @arabold/docs-mcp-server@latest
-```
-
-With Docker, add `-e OPENAI_API_KEY="sk-proj-..."`. [Embedding Models](docs/guides/embedding-models.md) covers Ollama, Gemini, Azure OpenAI and other providers.
 
 ## Command Line
 

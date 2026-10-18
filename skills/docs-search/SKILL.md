@@ -86,7 +86,7 @@ Example:
 npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --version 18.x --limit 3 --output yaml
 ```
 
-The output is a list with one entry per matching page:
+The output is a list of passages. Matches close together in a page share one passage, and matches far apart in the same page come back as separate entries, so a `url` can appear more than once. Each entry has:
 
 - `url`: the page's URL
 - `content`: the matching passage with surrounding context, as Markdown or text

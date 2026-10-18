@@ -76,7 +76,7 @@ Without `--version`, the search uses the newest version. `--version` takes an ex
 npx @arabold/docs-mcp-server@latest search react "server components" --version 19.x --limit 3
 ```
 
-Each result is one page: its `url`, the matching passage with surrounding context as `content`, and a relevance `score`.
+Each result is one passage: its page's `url`, the matching text with surrounding context as `content`, and a relevance `score`. Matches far apart in one page come back as separate results, so a `url` can appear more than once.
 
 ### Fetch a Single Page
 

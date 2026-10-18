@@ -60,7 +60,7 @@ The scraper verifies HTTPS certificates. `allowInvalidTls: true` turns verificat
 
 In every mode:
 
-- A path with a symlink anywhere along it is refused. With `followSymlinks: true`, the resolved path must still lie inside an allowed root.
+- A path with a symlink anywhere along it is refused. `followSymlinks: true` follows symlinks instead. In `allowedRoots` mode the resolved path must still lie inside an allowed root; in `unrestricted` mode a symlink may resolve anywhere.
 - A file or directory whose name starts with a dot is refused when it lies below the allowed root, and so is a hidden entry inside an archive. A root may itself sit under a hidden directory, such as `~/.config/docs`. In `unrestricted` mode the whole path is checked. `includeHidden: true` lifts this rule.
 - A file inside an archive (`.zip`, `.tar`, `.gz`, `.tgz`) is checked by the path of the archive file.
 
