@@ -1,387 +1,115 @@
 # Content Processing
 
-## Overview
+Content processing turns a documentation source into chunks ready to embed. A scraper strategy walks the source, a fetcher retrieves each item, a content pipeline turns the raw bytes into text and chunks, and the pipeline worker stores the result.
 
-The content processing system transforms raw content from various sources into searchable document chunks through a modular strategy-pipeline-splitter architecture. The system handles web pages, local files, and package registries, processing different content types with specialized pipelines that preserve document structure while optimizing chunk sizes for embedding generation.
+[ARCHITECTURE.md](../../ARCHITECTURE.md#content-processing) gives the overview. It also covers the [browser lifecycle](../../ARCHITECTURE.md#browser-lifecycle), the [sub-resource blocklist](../../ARCHITECTURE.md#sub-resource-blocklist), [unprocessable-content filtering](../../ARCHITECTURE.md#unprocessable-content-filtering), `llms.txt` probing and the `Accept` header. This document describes how the parts fit together and why they are divided the way they are. [Supported Formats](supported-formats.md) lists which formats each pipeline reads.
 
-## Strategy Pattern Architecture
-
-The content processing system uses the Strategy pattern to handle different content sources:
+## Flow
 
 ```mermaid
-classDiagram
-    class ScraperStrategy {
-        <<interface>>
-        +canHandle(url) boolean
-        +scrape(options, callback, signal) Promise~void~
-        +cleanup() Promise~void~
-    }
-    
-    class BaseScraperStrategy {
-        <<abstract>>
-        #visited Set~string~
-        #queue QueueItem[]
-        +scrape(options, callback, signal) Promise~void~
-        #processItem(item) Promise~ProcessItemResult~*
-    }
-    
-    class WebScraperStrategy {
-        +canHandle(url) boolean
-        #processItem(item) Promise~ProcessItemResult~
-    }
-    
-    class LocalFileStrategy {
-        +canHandle(url) boolean
-        #processItem(item) Promise~ProcessItemResult~
-    }
-    
-    class NpmScraperStrategy {
-        +canHandle(url) boolean
-        #processItem(item) Promise~ProcessItemResult~
-    }
-    
-    class PyPiScraperStrategy {
-        +canHandle(url) boolean
-        #processItem(item) Promise~ProcessItemResult~
-    }
-    
-    class GitHubScraperStrategy {
-        +canHandle(url) boolean
-        #processItem(item) Promise~ProcessItemResult~
-    }
-    
-    ScraperStrategy <|.. BaseScraperStrategy : implements
-    BaseScraperStrategy <|-- WebScraperStrategy : extends
-    BaseScraperStrategy <|-- LocalFileStrategy : extends
-    BaseScraperStrategy <|-- NpmScraperStrategy : extends
-    BaseScraperStrategy <|-- PyPiScraperStrategy : extends
-    BaseScraperStrategy <|-- GitHubScraperStrategy : extends
+graph LR
+    WORKER[PipelineWorker] -->|scrape| SVC[ScraperService]
+    SVC --> REG[ScraperRegistry]
+    REG -->|new strategy per scrape| STRAT[Scraper strategy]
+    STRAT -->|queue item| FETCH[Fetcher]
+    FETCH -->|RawContent| SEL{Pipeline selection}
+    SEL -->|first match| PIPE[Content pipeline]
+    PIPE -->|text, chunks, links| STRAT
+    STRAT -->|progress event| WORKER
+    WORKER --> DMS[DocumentManagementService]
+    DMS -->|embed and write| STORE[DocumentStore]
 ```
 
-**Code Reference:**
-- `src/scraper/types.ts` - ScraperStrategy interface definition
-- `src/scraper/strategies/BaseScraperStrategy.ts` - Abstract base implementation
-- `src/scraper/strategies/*.ts` - Concrete strategy implementations
+The links a pipeline finds go back to the strategy, which decides which of them to queue.
 
-## Architecture Components
+## Scraper strategies
 
-### Scraper Strategies
+`ScraperRegistry` ([src/scraper/ScraperRegistry.ts](../../src/scraper/ScraperRegistry.ts)) picks a strategy from the URL and creates a new instance for every scrape, so parallel jobs share no crawl state. `ScraperService` runs the strategy and cleans it up when the scrape ends.
 
-Handle different content sources and coordinate the overall scraping process:
+`BaseScraperStrategy` owns the crawl: the queue, deduplication, scope and pattern checks, concurrency, the page limit, progress counters and the failure-rate abort. A subclass implements `processItem`, which turns one queue item into a result.
 
-- **WebScraperStrategy**: HTTP/HTTPS URLs with JavaScript rendering support
-- **LocalFileStrategy**: Local filesystem access with directory traversal
-- **NpmScraperStrategy**: npm registry package documentation
-- **PyPiScraperStrategy**: PyPI package documentation
-- **GitHubScraperStrategy**: GitHub repository documentation
+- `WebScraperStrategy` crawls HTTP and HTTPS sites. When the start URL is an archive, it downloads the archive and hands it to `LocalFileStrategy`.
+- `LocalFileStrategy` walks `file://` directories and opens archives it meets as containers of more files.
+- `GitHubScraperStrategy` lists a repository's files through the GitHub API, keeps the ones its extension filter accepts, and fetches each from `raw.githubusercontent.com`. `GitHubRepoProcessor` handles repository files and `GitHubWikiProcessor` handles wiki pages.
+- `NpmScraperStrategy` and `PyPiScraperStrategy` wrap a `WebScraperStrategy` that also strips query strings from package-page URLs.
 
-Each strategy manages URL discovery, scope filtering, and progress tracking while delegating content processing to pipelines.
+Every strategy builds its pipelines with `PipelineFactory.createStandardPipelines()` and selects among them the same way, so a format reads the same whatever its source. `FetchUrlTool` uses the same pipelines to convert a single URL.
 
-### Content Fetchers
+## Fetchers
 
-Abstract content retrieval across different sources:
+A fetcher returns `RawContent`: the bytes, the MIME type and charset, and the `ETag` and `Last-Modified` values a refresh sends back (see [Refresh Architecture](refresh-architecture.md)).
 
-- **HttpFetcher**: Web content with Playwright support, retry logic, and error handling
-- **FileFetcher**: Local filesystem access with MIME type detection and encoding resolution
+- `HttpFetcher` makes plain HTTP requests with retries. It follows redirects itself so it can check every hop against the access policy.
+- `BrowserFetcher` loads the page in Chromium.
+- `AutoDetectFetcher` routes by URL scheme and falls back from `HttpFetcher` to `BrowserFetcher` when a request meets a challenge, a TLS certificate failure, or a 403 or 429 response. `WebScraperStrategy` uses it.
+- `FileFetcher` reads local files and takes the MIME type from the file extension.
 
-### Processing Pipelines
+## Content pipelines
 
-Transform raw content using middleware chains and content-type-specific logic:
+A pipeline ([src/scraper/pipelines/](../../src/scraper/pipelines/)) does two jobs: it converts raw content into text, and it splits that text into chunks. Splitting lives in the pipeline so each content type can use the splitter that understands its structure.
 
-- **HtmlPipeline**: Converts HTML to clean markdown via middleware, then applies semantic splitting
-- **MarkdownPipeline**: Processes markdown with metadata extraction and semantic splitting
-- **JsonPipeline**: Validates JSON structure and applies hierarchical splitting
-- **DocumentPipeline**: Extracts text from binary documents (PDF, Office, EPUB, RTF, etc.) via Xberg, converting to markdown
-- **SourceCodePipeline**: Handles programming languages with language detection and line-based splitting
-- **TextPipeline**: Fallback for generic text content with basic processing
+The strategy tries the pipelines in a fixed order and uses the first whose `canProcess()` accepts the item's MIME type. Content that no pipeline accepts is skipped. The same `canProcess()` methods decide what a web crawl downloads at all, so support for a format is declared in one place.
 
-### Middleware System
+The HTML and Markdown pipelines preprocess content with a middleware chain (`BasePipeline.executeMiddlewareStack`). Each middleware reads and updates a shared `MiddlewareContext` (content, title, links, errors) and calls the next one. An error that a middleware throws goes into the context's `errors` instead of stopping the pipeline, and the pipeline splits whatever content is left. `WebScraperStrategy` treats a run that produced errors and no text as a failed extraction, not an empty page, so the stored page survives it (see [Scrape progress counters](../../ARCHITECTURE.md#scrape-progress-counters)).
 
-Transform content through ordered middleware chains within pipelines:
+### HTML
 
-**HTML Processing** uses the most extensive middleware pipeline, executed in a specific order to ensure correctness and efficiency:
-
-- **Dynamic Content Rendering**: (Optional) Uses Playwright to render JavaScript-heavy pages when needed
-- **DOM Parsing**: Converts the raw HTML string into a manipulable DOM object using Cheerio
-- **Metadata Extraction**: Extracts the document title from `<title>` or `<h1>` tags in the full DOM
-- **Link Discovery**: Gathers all links from the complete page for the crawler to potentially follow
-- **Content Sanitization**: Removes large, irrelevant sections like navigation, footers, ads, and boilerplate, then narrows to the page's declared main-content region (`<main>` or `role="main"`) when that region holds most of the remaining text — this catches site-specific promo banners and sponsor blocks that no selector list can enumerate
-- **URL Normalization**: Cleans the _remaining_ content by converting relative image/link URLs to absolute ones and removing non-functional links (anchors, `javascript:`, etc.) while preserving their text content
-- **Markdown Conversion**: Converts the final, cleaned, and normalized HTML into Markdown format
-
-**Markdown Processing** applies lighter middleware:
-
-- Front matter and metadata extraction
-- Link processing and resolution
-
-**JSON and Source Code** use minimal middleware to preserve structural integrity.
-
-### Document Splitters
-
-Segment content into semantic chunks while preserving document structure:
-
-- **SemanticMarkdownSplitter**: Hierarchy-aware splitting based on heading structure
-- **JsonDocumentSplitter**: Property-based hierarchical splitting for JSON files
-- **TreesitterSourceCodeSplitter**: Semantic boundary detection for source code
-- **TextDocumentSplitter**: Line-based fallback for unsupported content
-
-### Size Optimization
-
-**GreedySplitter** provides universal size optimization across all content types:
-
-- Merges small chunks until reaching minimum size thresholds
-- Respects semantic boundaries from content-specific splitters
-- Handles oversized content while preserving document structure
-- Ensures optimal chunk sizes for embedding generation
-
-Chunk sizes are controlled by three character-based thresholds:
-
-| Setting | Role |
-|:--------|:-----|
-| `minChunkSize` | Floor for merging -- chunks below this are combined with neighbors |
-| `preferredChunkSize` | Soft target -- the optimizer splits when merging would exceed this |
-| `maxChunkSize` | Hard ceiling -- no chunk body will exceed this value |
-
-All sizes are measured in **characters** (`string.length`), not tokens. Before embedding,
-a metadata header (page title, URL, section path) is prepended to each chunk, so the total
-text sent to the embedding model is slightly larger than the chunk body. The actual token
-count depends on the embedding model's tokenizer.
-
-## Content Processing Flow
+`HtmlPipeline` decodes the bytes with the charset the page's `<meta>` tag declares, or else the one in the response header, runs the middleware chain below, and splits the resulting Markdown.
 
 ```mermaid
-graph TD
-    subgraph "Content Sources"
-        A1[Web URLs]
-        A2[Local Files]
-        A3[Package Registries]
-    end
-
-    subgraph "Strategy Layer"
-        B1[WebScraperStrategy]
-        B2[LocalFileStrategy]
-        B3[Package Strategies]
-    end
-
-    subgraph "Fetching Layer"
-        C1[HttpFetcher]
-        C2[FileFetcher]
-    end
-
-    subgraph "Pipeline Selection"
-        D[PipelineFactory]
-        E1[HtmlPipeline]
-        E2[MarkdownPipeline]
-        E3[JsonPipeline]
-        E4[SourceCodePipeline]
-        E5[TextPipeline]
-        E6[DocumentPipeline]
-    end
-
-    subgraph "Two-Phase Splitting"
-        F1[Semantic Splitters]
-        F2[GreedySplitter]
-    end
-
-    subgraph "Output"
-        G[ContentChunk Array]
-        H[Embedding Generation]
-        I[Database Storage]
-    end
-
-    A1 --> B1
-    A2 --> B2
-    A3 --> B3
-
-    B1 --> C1
-    B2 --> C2
-    B3 --> C1
-
-    C1 --> D
-    C2 --> D
-
-    D --> E1
-    D --> E2
-    D --> E3
-    D --> E4
-    D --> E5
-    D --> E6
-
-    E1 --> F1
-    E2 --> F1
-    E3 --> F1
-    E4 --> F1
-    E5 --> F1
-    E6 --> F1
-
-    F1 --> F2
-    F2 --> G
-    G --> H
-    H --> I
-
-    style A1 fill:#e1f5fe
-    style A2 fill:#e1f5fe
-    style A3 fill:#e1f5fe
-    style G fill:#f3e5f5
-    style I fill:#e8f5e8
+graph LR
+    R[HtmlPlaywrightMiddleware, playwright and auto modes only] --> P[HtmlCheerioParserMiddleware]
+    P --> M[HtmlMetadataExtractorMiddleware]
+    M --> L[HtmlLinkExtractorMiddleware]
+    L --> X[HtmlSanitizerMiddleware or HtmlDefuddleMiddleware]
+    X --> N[HtmlNormalizationMiddleware]
+    N --> MD[HtmlToMarkdownMiddleware]
+    MD --> S[GreedySplitter over SemanticMarkdownSplitter]
 ```
 
-## Content-Type-Specific Processing
+- Rendering comes first and runs only in the `playwright` and `auto` scrape modes. GitHub repository files always use `fetch` mode, since a raw file's scripts and styles are not served next to it. GitHub wiki pages use `fetch` mode too.
+- The title and the links come from the whole page, before extraction. The title is the `<title>` text, or the first `<h1>` when that is empty. Links in navigation and sidebars still reach the crawler, even though extraction removes their text from the indexed content.
+- Extraction removes page chrome. `scraper.htmlExtractor` selects the extractor. The default, `cheerio`, runs `HtmlSanitizerMiddleware`: it removes known chrome by selector, plus any `excludeSelectors` from the scrape options, and then narrows the page to its `<main>` or `role="main"` region when that region holds most of the remaining text. This catches site-specific promo banners and sponsor blocks that no selector list can name. `defuddle` runs `HtmlDefuddleMiddleware`, which the pipeline imports only on first use, so the default path never loads Defuddle and its dependencies.
+- Normalization works on what remains. It makes relative link and image URLs absolute, and unwraps fragment-only and non-HTTP links (`javascript:`, `mailto:`) to their text.
+- `HtmlToMarkdownMiddleware` converts the cleaned DOM to Markdown with Turndown, so HTML pages and Markdown files share one splitter.
 
-Different content types require specialized processing approaches while following the same overall pattern:
+### Markdown
 
-```mermaid
-graph TD
-    subgraph "HTML Processing"
-        A1[Raw HTML] --> B1[Playwright Rendering]
-        B1 --> C1[DOM Parsing]
-        C1 --> D1[Metadata & Link Extraction]
-        D1 --> E1[Content Sanitization]
-        E1 --> F1[URL Normalization]
-        F1 --> G1[HTML to Markdown]
-        G1 --> H1[SemanticMarkdownSplitter]
-    end
+`MarkdownPipeline` takes the title from the front matter `title` field, or else from the first `#` heading. It collects inline and reference-style link targets for the crawler and splits the text with the same splitters as HTML. A site that serves Markdown, through content negotiation or a `.md` variant, skips the HTML chain entirely.
 
-    subgraph "JSON Processing"
-        A2[Raw JSON] --> B2[Structure Validation]
-        B2 --> C2[JsonDocumentSplitter]
-    end
+### Documents
 
-    subgraph "Source Code Processing"
-        A3[Raw Source Code] --> B3[Language Detection]
-        B3 --> C3[TreesitterSourceCodeSplitter]
-    end
+`DocumentPipeline` passes PDF, Office, OpenDocument, RTF, EPUB, FictionBook and Jupyter files to [Xberg](https://github.com/xberg-io/xberg), which renders them as Markdown. From there they split like Markdown. [Supported Formats](supported-formats.md#documents) covers the size limit and the title.
 
-    subgraph "Markdown Processing"
-        A4[Raw Markdown] --> B4[Metadata Extraction]
-        B4 --> C4[SemanticMarkdownSplitter]
-    end
+### JSON
 
-    subgraph "Document Processing"
-        A5[Raw Document] --> B5[Xberg Extraction]
-        B5 --> C5[Markdown Conversion]
-        C5 --> D5[SemanticMarkdownSplitter]
-    end
+`JsonPipeline` runs no middleware. It takes the title from a top-level `title`, `name`, `displayName` or `label` string. `JsonDocumentSplitter` emits a chunk for each structural piece of the document, such as an opening brace, a property or an array element, with a path built from the keys. The pieces are designed so that, joined in order, they form valid JSON again. A value nested deeper than `splitter.json.maxNestingDepth` stays one serialized chunk at its path instead of being broken down further. A document that would yield more than `splitter.json.maxChunks` chunks falls back to plain text splitting, and content that does not parse becomes a single chunk.
 
-    H1 --> G[GreedySplitter]
-    C2 --> G
-    C3 --> G
-    C4 --> G
-    D5 --> G
-    G --> H[ContentChunk Array]
+### Source code
 
-    style A1 fill:#ffebee
-    style A2 fill:#fff3e0
-    style A3 fill:#f3e5f5
-    style A4 fill:#e8f5e8
-    style A5 fill:#fff9c4
-    style H fill:#e1f5fe
-```
+`SourceCodePipeline` runs no middleware and splits with `TreesitterSourceCodeSplitter`. [Source Code Splitter](source-code-splitter.md) describes it.
 
-**Key Processing Differences:**
+### Plain text
 
-- **HTML**: Multi-stage middleware pipeline for web content cleaning and conversion
-- **JSON**: Structural validation with hierarchical object/array splitting
-- **Source Code**: Tree-sitter semantic boundary detection with language-specific parsing
-- **Markdown**: Direct semantic splitting with metadata preservation
-- **Documents**: Binary extraction via Xberg with Markdown output and table-aware content handling
+`TextPipeline` is the fallback for any other `text/*` content, and refuses content that contains a null byte. `TextDocumentSplitter` cuts the text at paragraphs, then lines, then words.
 
-All content types converge on GreedySplitter for universal size optimization while preserving content-specific semantic boundaries.
+## Two-phase splitting
 
-For the full list of supported file formats and MIME types, see [Supported Formats](supported-formats.md).
+Splitting has two phases. The first follows the structure of the content type: headings for Markdown, keys for JSON, declarations for source code, paragraphs and lines for plain text. `SemanticMarkdownSplitter` also keeps code blocks, tables and lists whole where it can, and splits them with type-aware splitters where it cannot. Every chunk carries a section `level` and `path`; [Splitter Hierarchy](splitter-hierarchy.md) describes them, including how merging combines paths.
 
-## Two-Phase Splitting Architecture
+The second phase, `GreedySplitter`, merges small neighboring chunks toward `splitter.preferredChunkSize`, never merges past `splitter.maxChunkSize`, and keeps a break before an H1 or H2 section once the current chunk reaches `splitter.minChunkSize`. [Configuration](../setup/configuration.md#splitter-splitter) describes the three settings.
 
-### Phase 1: Semantic Splitting
+| Pipeline | First phase | Second phase |
+|:---------|:------------|:-------------|
+| `HtmlPipeline`, `MarkdownPipeline`, `DocumentPipeline` | `SemanticMarkdownSplitter` | `GreedySplitter` |
+| `TextPipeline` | `TextDocumentSplitter` | `GreedySplitter` |
+| `JsonPipeline` | `JsonDocumentSplitter` | none |
+| `SourceCodePipeline` | `TreesitterSourceCodeSplitter` | none |
 
-Content-type-specific splitters preserve document structure:
+JSON and source code skip the second phase on purpose. Their chunks are structural units that `HierarchicalAssemblyStrategy` puts back together at search time, for example the whole class around a matched method, and merging neighbors would blur those units. [Search Result Reassembly](search-result-reassembly.md) describes how.
 
-**SemanticMarkdownSplitter** (HTML, Markdown):
+The splitters cut anything larger than `maxChunkSize`, with two exceptions. `TextContentSplitter` never cuts inside a fenced code block and accepts an oversize chunk instead, as the fence-balance note in [ARCHITECTURE.md](../../ARCHITECTURE.md#content-processing) describes. JSON that does not parse stays one chunk.
 
-- Analyzes heading hierarchy (H1-H6)
-- Creates hierarchical paths like `["Guide", "Installation", "Setup"]`
-- Preserves code blocks, tables, and list structures
-- Maintains parent-child relationships
+## Storage
 
-**JsonDocumentSplitter** (JSON):
-
-- Object and property-level splitting
-- Hierarchical path construction
-- Concatenation-friendly chunk design
-- Structural context preservation
-
-**TextDocumentSplitter** (Source Code, Text):
-
-- Line-based splitting with context
-- Simple hierarchical structure
-- Language-aware processing
-- Temporary until syntax-aware implementation
-
-### Phase 2: Size Optimization
-
-**GreedySplitter** applies universal optimization:
-
-- **Greedy Concatenation**: Merges small chunks until minimum size
-- **Boundary Respect**: Preserves major section breaks (H1/H2 headings)
-- **Metadata Merging**: Combines chunk metadata intelligently
-- **Context Preservation**: Maintains hierarchical relationships
-
-## Chunk Structure and Relationships
-
-### Hierarchical Structure
-
-Chunks maintain hierarchical relationships through path-based organization, enabling context-aware search and retrieval:
-
-- **Parent**: Path with one fewer element
-- **Children**: Paths extending current by one level
-- **Siblings**: Same path length with shared parent
-- **Context**: Related chunks automatically included in search results
-
-### Search Context Retrieval
-
-When returning search results, the system provides comprehensive context:
-
-- The matching chunk itself
-- Parent chunks for broader context
-- Previous and following siblings for navigation
-- Direct child chunks for deeper exploration
-
-This approach ensures users receive coherent, contextual results regardless of content type.
-
-## Error Handling and Quality Control
-
-### Content Filtering
-
-Automatic filtering of low-quality content:
-
-- Navigation menus and sidebars
-- Advertisement content and widgets
-- Boilerplate text and templates
-- Duplicate content detection
-- Minimum content length thresholds
-
-### Error Recovery
-
-Graceful handling of processing errors:
-
-- **Recoverable Errors**: Retry with backoff
-- **Content Errors**: Skip and continue processing
-- **Fatal Errors**: Stop with detailed error information
-- **Warning Conditions**: Log and continue
-
-### Progress Tracking
-
-Real-time processing feedback:
-
-- Page-level progress updates
-- Processing rate metrics
-- Error count and classification
-- Memory usage monitoring
-
-## System Integration
-
-The content processing system integrates with downstream components through standardized interfaces:
-
-- **Embedding Generation**: Consistent chunk formatting enables seamless vector generation across all content types
-- **Database Storage**: Hierarchical paths and metadata support efficient indexing and retrieval
-- **Search System**: Context-aware results leverage chunk relationships for comprehensive response generation
+The worker passes each result to `DocumentManagementService.addScrapeResult`, and `DocumentStore.addDocuments` embeds and writes the chunks. Before embedding, the store puts a short header with the page title, URL and section path in front of each chunk's text. The header does not count against `maxChunkSize`. [Data Storage](data-storage.md) covers the schema, and [Search Result Reassembly](search-result-reassembly.md) covers how stored chunks become search results.

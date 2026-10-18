@@ -12,7 +12,7 @@ This follows the [MCP authorization specification](https://modelcontextprotocol.
 
 | Surface | Protected by authentication | How to protect it |
 |---|---|---|
-| MCP endpoint (`/mcp`) over HTTP | **Yes** | Bearer token, as described here |
+| MCP endpoint (`/mcp`) over HTTP | Yes | Bearer token, as described here |
 | Deprecated SSE transport (`/sse`, `/messages`) | Not served | Only available while authentication is off |
 | MCP over stdio | No | The host that launches the process is the trust boundary. Enabling auth logs a warning. |
 | Web UI | No | A reverse proxy with its own sign-in (OAuth2-Proxy, Authelia, Traefik forward-auth, Cloudflare Access), or a private network |
@@ -34,26 +34,28 @@ sequenceDiagram
     Client->>Server: MCP request without a token
     Server-->>Client: 401 + WWW-Authenticate: Bearer resource_metadata="…"
     Client->>Server: GET protected resource metadata
-    Server-->>Client: resource = <public URL>/mcp, authorization_servers = [issuer]
+    Server-->>Client: resource = public URL + /mcp, authorization_servers = [issuer]
     Client->>Provider: Discover, register, sign the user in (PKCE)
-    Provider-->>Client: Access token with aud = <public URL>/mcp
-    Client->>Server: MCP request with Authorization: Bearer <token>
+    Provider-->>Client: Access token with aud = public URL + /mcp
+    Client->>Server: MCP request with Authorization: Bearer token
     Server-->>Client: MCP response
 ```
 
-1. **Challenge.** A request without a valid token gets `401` with `WWW-Authenticate: Bearer resource_metadata="<public URL>/.well-known/oauth-protected-resource/mcp"`. When the request carried a token that was rejected, the challenge also carries `error="invalid_token"`.
-2. **Metadata.** The protected resource metadata (RFC 9728) names the MCP endpoint's public URL as `resource` and the configured issuer as the only authorization server. Its `resource_name` is the server's title, or its name when there is no title, so clients that show it at sign-in use the same name as everywhere else. It is served at the URL in the challenge and at the RFC 9728 well-known location, and it is readable from any origin.
-3. **Sign-in.** The client talks to the provider directly. It asks for a token for the `resource` it just learned, per RFC 8707.
-4. **Requests.** The client sends `Authorization: Bearer <token>` on every request.
+1. A request without a valid token gets `401` with `WWW-Authenticate: Bearer resource_metadata="<public URL>/.well-known/oauth-protected-resource/mcp"`. When the request carried a token that was rejected, the challenge also carries `error="invalid_token"`.
+2. The protected resource metadata (RFC 9728) names the MCP endpoint's public URL as `resource` and the configured issuer as the only authorization server. Its `resource_name` is the server's title, or its name when there is no title, so clients that show it at sign-in use the same name as everywhere else. It is served at the URL in the challenge and at the RFC 9728 well-known location, and it is readable from any origin.
+3. The client talks to the provider directly. It asks for a token for the `resource` it just learned, per RFC 8707.
+4. The client sends `Authorization: Bearer <token>` on every request.
 
 ## Configuration
 
 | Setting | CLI | Environment | Required | Description |
 |---|---|---|---|---|
 | `auth.enabled` | `--auth-enabled` | `DOCS_MCP_AUTH_ENABLED` | – | Turns authentication on for the MCP endpoint. |
-| `auth.issuerUrl` | `--auth-issuer-url` | `DOCS_MCP_AUTH_ISSUER_URL` | yes | The provider's issuer identifier. It must match the `issuer` the provider publishes exactly, including any trailing slash. |
+| `auth.issuerUrl` | `--auth-issuer-url` | `DOCS_MCP_AUTH_ISSUER_URL` | yes | The provider's issuer identifier, an `https` URL. It must match the `issuer` the provider publishes exactly, including any trailing slash. |
 | `server.publicUrl` | `--public-url` | `DOCS_MCP_SERVER_PUBLIC_URL` | yes | The URL clients use to reach the server, e.g. `https://docs.example.com` or `https://example.com/docs`. |
-| `auth.audience` | `--auth-audience` | `DOCS_MCP_AUTH_AUDIENCE` | no | The audience tokens must carry. It defaults to `<public URL>/mcp`. |
+| `auth.audience` | `--auth-audience` | `DOCS_MCP_AUTH_AUDIENCE` | no | The audience tokens must carry, an absolute URL or a URN. It defaults to `<public URL>/mcp`. |
+
+The `--auth-*` flags exist on the commands that serve MCP: the default command and `mcp`. The environment variables and the configuration file apply to every command.
 
 The advertised `resource` and the expected audience both derive from `server.publicUrl`. The server never guesses them from its bind address or from the request's `Host` header. That is why a public URL is required, and startup fails with an error naming the missing setting.
 
@@ -66,22 +68,16 @@ npx @arabold/docs-mcp-server@latest \
 
 Tokens must then carry `aud` = `https://docs.example.com/mcp`.
 
-At startup the server discovers the provider's metadata in the order MCP clients use:
-
-1. RFC 8414 with path insertion;
-2. OpenID Connect Discovery with path insertion;
-3. OpenID Connect Discovery with the path appended.
-
-Startup fails when no document answers, when the published `issuer` differs from `auth.issuerUrl`, or when the metadata has no `jwks_uri`.
+At startup the server fetches the provider's metadata from the same well-known locations MCP clients try, RFC 8414 first and then OpenID Connect Discovery. Startup fails when no document answers, when the published `issuer` differs from `auth.issuerUrl`, or when the metadata has no `jwks_uri`. The error lists the URLs it tried.
 
 ## Identity Provider Requirements
 
 Whatever provider you use, it needs to:
 
-- **Issue JWT access tokens** signed with keys published in its `jwks_uri`. The server rejects opaque tokens.
-- **Put this server in `aud`.** Ideally the provider sets `aud` from the RFC 8707 `resource` parameter the client sends, which is `<public URL>/mcp`. A provider that issues a fixed audience works too: set `auth.audience` to that value. The override must name an API or resource identifier, never a client ID, or the provider's ID tokens would be accepted as access tokens.
-- **Let MCP clients register themselves**, through Client ID Metadata Documents (preferred in MCP 2026-07-28) or Dynamic Client Registration (RFC 7591).
-- **Support PKCE with S256.**
+- Issue JWT access tokens signed with keys published in its `jwks_uri`. The server rejects opaque tokens.
+- Put this server in `aud`. Ideally the provider sets `aud` from the RFC 8707 `resource` parameter the client sends, which is `<public URL>/mcp`. A provider that issues a fixed audience works too: set `auth.audience` to that value. The override must name an API or resource identifier, never a client ID, or the provider's ID tokens would be accepted as access tokens.
+- Let MCP clients register themselves, through Client ID Metadata Documents (preferred in MCP 2026-07-28) or Dynamic Client Registration (RFC 7591).
+- Support PKCE with S256.
 
 ### Clerk
 
@@ -121,6 +117,8 @@ Access is binary: any valid token for this server grants every MCP tool.
 
 **Startup fails with "no public URL is configured".** Set `server.publicUrl` (or `--public-url`) to the URL clients use.
 
+**Startup fails with "Auth configuration validation failed".** `auth.issuerUrl` must be an `https` URL, and `auth.audience`, when set, an absolute URL or a URN.
+
 **Startup fails because `auth.issuerUrl` "does not match the issuer the authorization server publishes".** Copy the `issuer` value from the provider's metadata exactly. A trailing slash counts.
 
 **Clients get `401` with `error="invalid_token"`.** Decode the token (for example at [jwt.io](https://jwt.io)) and compare:
@@ -136,7 +134,6 @@ With Clerk, a missing `aud` or an opaque token means the settings above aren't e
 
 ## Security Considerations
 
-- Serve the MCP endpoint over HTTPS in production, typically through TLS termination at a reverse proxy.
-- The MCP endpoint rejects browser requests from origins other than loopback, the public URL's origin, and `server.allowedOrigins`. List hosted browser-based MCP clients there.
-- Every request whose `Host` header names an unknown host is refused with `403`, which stops DNS rebinding. The server answers to IP addresses, `localhost`, single-label names such as Docker service names, the public URL's host, and the hosts of `server.allowedOrigins`.
-- Authentication controls who may call MCP tools. It does not restrict where scraping may connect: outbound requests follow `scraper.security`. See [Infrastructure Security](./security.md).
+Serve the MCP endpoint over HTTPS, through TLS termination at a reverse proxy: the server itself speaks plain HTTP, and bearer tokens travel in every request.
+
+The [host and origin checks](./security.md#inbound-requests) apply whether authentication is on or off. Authentication controls who may call MCP tools, not where the scraper connects or which files it reads; [Infrastructure Security](./security.md) covers those limits.

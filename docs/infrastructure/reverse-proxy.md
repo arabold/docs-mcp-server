@@ -14,7 +14,9 @@ Every URL the server advertises derives from it: the MCP endpoint in startup out
 
 The server answers every route both with the path prefix and without it. So it works whether the proxy strips `/docs` before forwarding (the common nginx and Traefik setup) or passes it through. The path's first segment must not be one of the server's own routes (`mcp`, `api`, `assets`, `.well-known`, `sse`, `messages`, `oauth`) or a root file such as `favicon.ico`.
 
-Open the web UI under the path, e.g. `https://example.com/docs/`. With a base path configured, the UI doesn't load at unprefixed URLs.
+Open the web UI under the path, e.g. `https://example.com/docs/`. The page carries a `<base href>` for the path, so the UI's requests stay under it.
+
+The server reads nothing from `X-Forwarded-*` headers. Every URL it advertises comes from `server.publicUrl`.
 
 ## What the Proxy Must Pass Through
 
@@ -45,7 +47,6 @@ server {
         proxy_pass http://127.0.0.1:6280/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_buffering off;
@@ -98,7 +99,7 @@ Exclude the MCP endpoint and its metadata from that sign-in (`/docs/mcp`, `/docs
 
 ## Browser-Based MCP Clients
 
-The MCP endpoint accepts browser requests from loopback origins, from the public URL's origin, and from origins listed in `server.allowedOrigins`. A hosted browser-based client, such as a web app calling the server directly, must be listed there:
+The MCP endpoint accepts browser requests from loopback origins and from the public URL's origin (see [Inbound Requests](./security.md#inbound-requests)). A hosted browser-based client, such as a web app calling the server directly, must be listed in `server.allowedOrigins`:
 
 ```bash
 DOCS_MCP_SERVER_ALLOWED_ORIGINS='["https://inspector.example.com"]'

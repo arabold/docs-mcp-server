@@ -1,412 +1,387 @@
 # Search Quality Benchmark
 
-`docs-mcp-server` ships with a retrieval-quality benchmark that measures how well
-`SearchTool` returns relevant chunks for natural-language queries. It is the
-authoritative way to detect regressions when changing the embedding model,
-chunking strategy, or ranking logic, and to compare this server against alternative
-retrieval techniques.
+`docs-mcp-server` ships with a retrieval-quality benchmark. It measures how well
+`SearchTool` returns relevant chunks for natural-language queries, so you can
+detect regressions after changing the embedding model, the chunking, the
+scraper, or the ranking, and compare this server against other retrieval
+services.
 
-This guide is the operator-facing entry point. For the detailed spec see
-[openspec/changes/define-search-benchmark/specs/search-evaluation/spec.md](../../openspec/changes/define-search-benchmark/specs/search-evaluation/spec.md);
-for developer internals (file layout, how to add a metric) see
-[tests/search-eval/README.md](../../tests/search-eval/README.md).
+This guide covers running the benchmark and reading its results. For how the
+benchmark is built and how to extend it (providers, metrics, dataset), see
+[tests/search-eval/README.md](../../tests/search-eval/README.md). The
+requirements it implements are in
+[openspec/specs/search-evaluation/spec.md](../../openspec/specs/search-evaluation/spec.md).
 
-## What it measures
+## What It Measures
 
-**Headline (deterministic, gate regressions):**
+The benchmark measures retrieval only: it scores the chunks a query returns,
+not an answer generated from them.
 
-| Metric | Question it answers |
-|---|---|
-| MRR | How high in the result list is the *first* relevant doc? |
-| Recall@{3,5,10} | What fraction of the relevant docs did we find in the top-k? |
-| nDCG@{5,10} | Did we rank the most relevant docs above the less-relevant ones? |
-| Hit@{1,3,5} | Did we return *any* relevant doc in the top-k? |
-
-**Observational (reported, do not gate):**
+Headline metrics are deterministic and gate regressions:
 
 | Metric | Question it answers |
 |---|---|
-| Structural pass-rates | Are code blocks balanced? Is every chunk non-empty and URL'd? |
-| Chunk coherence (LLM-judged) | Is each chunk a self-contained readable unit? |
-| Content faithfulness (LLM-judged) | Do chunks faithfully reflect their source page? |
-| Answerability (LLM-judged) | Could a downstream LLM answer the query from these chunks alone? |
+| MRR | How high in the result list is the first relevant page? |
+| Recall@{3,5,10} | What fraction of the relevant pages appear in the top k? |
+| nDCG@{5,10} | Are the most relevant pages ranked above the less relevant ones? |
+| Hit@{1,3,5} | Does any relevant page appear in the top k? |
 
-Scope is **retrieval-only**. End-to-end RAG generation (running an LLM over the
-retrieved chunks and judging the answer) is intentionally out of scope.
+Each query asks for 5 results by default, so the @10 metrics equal the @5 ones
+unless you raise `DOCS_EVAL_TOP_K`.
+
+Observational metrics are reported but never fail a run:
+
+| Metric | Question it answers |
+|---|---|
+| Structural pass rates | Are code fences balanced? Does every chunk have content and a URL? |
+| Chunk coherence (LLM-judged) | Is each chunk a self-contained, readable unit? |
+| Content faithfulness (LLM-judged) | Do the chunks reflect their source page faithfully? |
+| Answerability (LLM-judged) | Could an LLM answer the query from these chunks alone? |
 
 ## Prerequisites
 
-### 1. An LLM judge API key
+### Node 22
 
-The benchmark uses an LLM to score the three observational rubrics. The default
-judge is `openai:gpt-5.4-mini`, so an `OPENAI_API_KEY` in `.env` is the
-zero-configuration path. To use a different provider, set `DOCS_EVAL_JUDGE` to
-one of the allowed identifiers in [tests/search-eval/judges.ts](../../tests/search-eval/judges.ts):
+The store uses `better-sqlite3`, whose native binary matches the Node version
+that installed it. Run the benchmark on Node 22, like the rest of the project.
 
-- OpenAI: `openai:gpt-5.4-mini` (default), `openai:gpt-5`
-- Anthropic: `anthropic:claude-sonnet-4-6`, `anthropic:claude-opus-4-7`
-- Google: `google:gemini-3-flash-preview`, `google:gemini-3.1-flash-lite`
+### API Keys
 
-Deprecated models (e.g. `gpt-4o-mini`) are rejected at startup.
+An LLM judge scores the three observational rubrics. The default judge is
+`openai:gpt-5.4-mini`, so `OPENAI_API_KEY` in the repository's `.env` file is
+all a default run needs. The local search provider also embeds each query with
+the store's embedding model; with the default model (`text-embedding-3-small`)
+the same key covers that.
 
-### 2. The five benchmark libraries must be indexed locally
+To use another judge, set `DOCS_EVAL_JUDGE` to an identifier from the allowlist
+in [tests/search-eval/judges.ts](../../tests/search-eval/judges.ts) and provide
+that provider's key (`ANTHROPIC_API_KEY` or `GOOGLE_API_KEY`). The run stops at
+startup when the judge is unknown or marked deprecated.
 
-The shipped dataset ([tests/search-eval/dataset.yaml](../../tests/search-eval/dataset.yaml))
-references 60 queries across five libraries. **Every one of those libraries must be
-present in your local store before the benchmark runs**, or preflight will fail
-with the exact missing list.
+### The Five Benchmark Libraries
 
-Run all five scrape commands once on the machine where you'll run the benchmark.
-Every command excludes 2-letter language-prefix paths so translation mirrors
-don't balloon the index — the dataset's qrels only reference English pages.
+The dataset ([tests/search-eval/dataset.yaml](../../tests/search-eval/dataset.yaml))
+has 59 queries across five libraries: `react`, `python`, `fastapi`, `vite` and
+`tailwindcss`. All five must be indexed in your local store before a run. The
+preflight check lists any that are missing.
+
+These are the commands the CI workflow uses. Run them once on the machine that
+runs the benchmark:
 
 ```bash
-# React (react.dev has /es/, /zh-hans/, /ja/, etc.)
 npx @arabold/docs-mcp-server@latest scrape react https://react.dev \
   --exclude-pattern '/^https:\/\/react\.dev\/[a-z]{2}(-[a-z]+)?\//' \
   --max-pages 300
 
-# Python stdlib (docs.python.org has /zh-cn/, /ja/, /fr/, /es/, /ko/, etc.)
 npx @arabold/docs-mcp-server@latest scrape python https://docs.python.org/3/ \
   --exclude-pattern '/^https:\/\/docs\.python\.org\/3\/[a-z]{2}(-[a-z]+)?\//' \
   --max-pages 500
 
-# FastAPI (heavy i18n — /es/, /zh/, /zh-hant/, /em/, ~15 languages)
 npx @arabold/docs-mcp-server@latest scrape fastapi https://fastapi.tiangolo.com/ \
   --exclude-pattern '/^https:\/\/fastapi\.tiangolo\.com\/[a-z]{2}(-[a-z]+)?\//' \
   --max-pages 200
 
-# Vite (English-only, but cap pages to be safe)
 npx @arabold/docs-mcp-server@latest scrape vite https://vitejs.dev/guide/ \
   --max-pages 200
 
-# TailwindCSS
 npx @arabold/docs-mcp-server@latest scrape tailwindcss https://tailwindcss.com/docs \
   --max-pages 300
 ```
 
-> **Why exclude language prefixes?** FastAPI's docs site, for example, hosts the
-> full doc tree in ~15 languages under `/es/`, `/zh/`, `/zh-hant/`, etc. A naive
-> scrape pulls ~1300 pages where only ~100 are actually relevant to the
-> benchmark. The regex excludes any URL whose first path segment is a 2-letter
-> code (optionally with a suffix like `-hant`). English content lives at the
-> root and is preserved.
+The exclude patterns skip URLs whose first path segment is a language code
+(`/es/`, `/zh-hant/`), because the dataset's relevant pages are all English
+and translated copies would multiply the index. `--max-pages` is a safety
+limit; each library's English pages fit within it.
 
-`--max-pages` is a safety belt; the English doc tree for each library fits well
-within these caps. You can drop or raise it if you want maximal coverage.
-
-> **Subset run.** If you only want a quick sanity check, point `DOCS_EVAL_DATASET`
-> at a custom dataset file that uses fewer libraries — the schema is identical.
-
-### 3. Node 22
-
-The store uses `better-sqlite3` with a pinned native binary. Always run the
-benchmark on Node 22 even if the rest of your toolchain is newer.
+These commands index with the published release. The benchmark always searches
+with the code in your checkout, so ranking changes need no re-index. To measure
+a change to scraping or splitting, index with your checkout instead: run
+`npm run build`, then the same commands as `npm run cli -- scrape ...` with
+`--replace` added, which rebuilds a library that is already indexed.
 
 ## Running
 
 ```bash
-# Measurement run: compute metrics, compare against baseline.json, exit non-zero on regression.
+# Check that every library in the dataset is indexed.
+npm run evaluate:search:preflight
+
+# Measure: compare against the checked-in baseline, exit 1 on a regression.
 npm run evaluate:search
 
-# Baseline-refresh: same run, but write the result to baseline.json and exit zero.
-# Use this after intentional improvements, or for the very first run.
+# Record: same run, then write the result as the new baseline and exit 0.
 npm run evaluate:search:baseline
-
-# Preflight only: confirm all required libraries are indexed.
-npm run evaluate:search:preflight
 ```
 
-Both modes produce, under `tests/search-eval/results/` (gitignored):
+A first run on a new machine usually goes like this:
 
-| File | Purpose |
+1. `npm run evaluate:search:preflight` to confirm the libraries are indexed.
+2. A smoke run over five queries (about a minute) to check keys, provider,
+   judge and report end to end:
+
+   ```bash
+   DOCS_EVAL_DATASET=tests/search-eval/dataset.smoke.yaml \
+     npm run evaluate:search:baseline
+   ```
+
+   It writes its own baseline file, `tests/search-eval/dataset.smoke.baseline.json`
+   (untracked), so the checked-in baseline stays as it is.
+3. `npm run evaluate:search` to measure against the checked-in baseline.
+
+With the local provider, each query takes about 10 to 15 seconds, so the full
+dataset takes 10 to 15 minutes. Every query starts a new provider process that
+opens the store, and parallel processes block each other on the SQLite write
+lock, so queries run one at a time by default.
+
+Each run writes these files to `tests/search-eval/results/` (ignored by git):
+
+| File | Contents |
 |---|---|
-| `summary.json` | Machine-readable summary for CI consumption |
-| `promptfoo-raw.json` | Raw per-query promptfoo output |
+| `summary.json` | Aggregated metrics, the run's configuration, and the regression verdict |
+| `promptfoo-raw.json` | Raw per-query output from promptfoo |
 | `cross-judge.json` | Cross-judge agreement, when `DOCS_EVAL_CROSS_JUDGE` is set |
-| `dataset.flat.yaml` | Generated flat view of the dataset (don't edit) |
+| `dataset.flat.yaml` | The dataset in the flat form promptfoo reads; regenerated on every run |
 
-`baseline.json` lives in `tests/search-eval/baseline.json` and **is checked in**.
-Its history is the audit trail for benchmark drift over time.
+## Reading the Output
 
-## First run
+The report printed at the end of a run has these sections:
 
-The repository ships with a populated `tests/search-eval/baseline.json` (recorded
-against the default dataset / judge / embedding model). Your first run should be:
+- A header with the judge, embedding model, top k, and dataset (with its review
+  status and query count).
+- Headline IR metrics: MRR, Recall@5, nDCG@5 and Hit@3, each with the baseline
+  value and the relative change, followed by the other five IR metrics on one
+  line.
+- A per-intent breakdown (`api-lookup`, `conceptual`, `comparison`,
+  `troubleshooting`) of MRR, Recall@5, nDCG@5 and Hit@3.
+- Structural pass rates and the mean of each LLM-judged score.
+- Cross-judge agreement, when a cross-judge is set.
+- A verdict.
 
-```bash
-# 1. Confirm libraries are indexed.
-npm run evaluate:search:preflight
+The verdict is one of four:
 
-# 2. Smoke-test the pipeline with 5 queries (~1 minute) — sanity check the
-#    provider, assertions, judge, aggregator, and comparator. This writes to
-#    `dataset.smoke.baseline.json`, NOT to the main baseline, so you can run it
-#    safely without disturbing the checked-in reference numbers.
-DOCS_EVAL_DATASET=tests/search-eval/dataset.smoke.yaml \
-  npm run evaluate:search:baseline
+| Verdict | Meaning | Exit code of `evaluate:search` |
+|---|---|---|
+| `No regressions. N improved, M stable.` | Every gated metric is within tolerance of the baseline | 0 |
+| `Regressions:` followed by a list | At least one gated metric dropped past its tolerance | 1 |
+| `Baseline config differs from current run` | The baseline was recorded under a different configuration (see below), so the run is not compared | 0 |
+| `No baseline found` | No baseline file exists for this dataset and provider yet | 0 |
 
-# 3. Measure against the checked-in baseline. Exits non-zero on regression.
-npm run evaluate:search
-```
+All nine IR metrics are gated against the baseline with a tolerance of 5%
+relative change. The per-intent MRR, Recall@5, nDCG@5 and Hit@3 are gated with
+10%. The tolerances are `DEFAULT_TOLERANCES` in
+[tests/search-eval/types.ts](../../tests/search-eval/types.ts).
 
-### When to refresh the baseline
+The run also prints a warning while the dataset's `status` is `draft`; the
+dataset section of the [developer README](../../tests/search-eval/README.md#changing-the-dataset)
+explains the review that changes it.
 
-`npm run evaluate:search:baseline` overwrites `tests/search-eval/baseline.json`.
-Refresh it when:
+## Refreshing the Baseline
 
-- you've intentionally changed something that should shift retrieval (new
-  embedding model, chunking config, scraper logic);
-- you've reviewed the dataset and want the new numbers to be the new reference;
-- a re-scrape or re-index moved scores in a direction you want to keep.
+`npm run evaluate:search:baseline` overwrites `tests/search-eval/baseline.json`,
+which is checked in; its git history is the record of how retrieval quality
+moved over time. Refresh it when:
 
-The comparator refuses to gate against a baseline recorded under materially
-different config (different `datasetFile`, `embeddingModel`, `judge`, `topK`,
-or `provider`). It prints the incompatibility list and exits zero — re-record
-the baseline if this run is the new reference.
+- you changed something that should move retrieval (embedding model, chunking,
+  scraper, ranking) and want the new numbers as the reference;
+- you changed the dataset;
+- a re-index moved the scores and you want to keep the new state.
 
-## Compare against another retrieval service
+The comparator only gates against a baseline recorded with the same provider,
+dataset file, query count, embedding model, judge, and top k. When any of
+these differ, it prints the differences and exits 0; record a new baseline if
+the new configuration is the reference.
 
-The benchmark supports running the same dataset, same judge, same metrics
-against alternative retrieval providers — see how `docs-mcp-server` stacks
-up against the alternatives. Out of the box, `local` (the in-repo
-`SearchTool`) and `context7` ([Context7](https://context7.com/)) are
-supported. Adding another provider is one entry in `tests/search-eval/run.ts`
-plus a small exec-provider script.
-
-```bash
-# Record a baseline for the local provider (default — same as the canonical
-# `npm run evaluate:search:baseline`).
-npm run evaluate:search:baseline
-
-# Record a baseline against Context7. Writes to a separate file so the
-# canonical local baseline is untouched.
-DOCS_EVAL_PROVIDER=context7 DOCS_EVAL_NO_CACHE=1 \
-  npm run evaluate:search:baseline
-# → tests/search-eval/baseline.context7.json
-
-# Side-by-side report (IR / per-intent / LLM-judged / structural).
-npx vite-node tests/search-eval/cli/compare-providers.ts \
-  tests/search-eval/baseline.json \
-  tests/search-eval/baseline.context7.json
-```
-
-The Context7 provider hits Context7's public `/v2/context` endpoint. It works
-anonymously for short runs; set `CONTEXT7_API_KEY` in your environment for
-sustained or CI use.
-
-The comparator refuses to gate one provider's run against another's baseline
-(it'd produce false regressions/improvements). For cross-provider comparison
-always use the dedicated CLI above — it prints both sides and a coarse
-"wins per metric" tally without pretending the deltas are regressions.
-
-> **Asymmetry to know about.** Our IR metrics (MRR, Recall@k, nDCG@k, Hit@k)
-> match by URL string against the dataset's qrels. For most libraries Context7
-> returns per-page source URLs that match our qrels directly. TailwindCSS is
-> the exception — Context7 attributes Tailwind chunks to GitHub source paths;
-> the provider normalises these back to `tailwindcss.com/docs/...` URLs so the
-> comparison is fair. Some Context7 info-snippets carry only a library-level
-> `llms.txt` placeholder URL; the provider drops those rather than letting
-> them poison IR metrics with always-wrong URLs.
-
-### Performance note
-
-Each query cold-starts a fresh `vite-node` process and re-initialises the
-docService (which writes through `better-sqlite3` for schema migrations).
-Running multiple provider processes in parallel deadlocks on the SQLite write
-lock, so the default concurrency is **1**. Expect roughly 10–15 seconds per
-query — the full 60-query baseline takes 10–15 minutes.
-
-You can raise concurrency once we move to a long-running provider that
-initialises the store once per run:
-
-```bash
-DOCS_EVAL_CONCURRENCY=4 npm run evaluate:search:baseline   # don't do this yet
-```
-
-## Reading the output
-
-A run prints to stdout in roughly this shape:
-
-```
-=== docs-mcp-server search benchmark ===
-judge=openai:gpt-5.4-mini  embedding=...  top_k=5  dataset=...  ts=...
-
-─ Headline IR metrics (deterministic) ─
-MRR         0.612  (baseline 0.605, +1.2% ▲)
-Recall@5    0.844  (baseline 0.851, -0.8% ·)
-nDCG@5      0.701  (baseline 0.704, -0.4% ·)
-Hit@3       0.917  (baseline 0.900, +1.9% ▲)
-
-─ Per-intent breakdown ─
-api-lookup       n=19  MRR=0.78 R@5=0.91 nDCG@5=0.82 Hit@3=0.95
-conceptual       n=15  MRR=0.55 R@5=0.78 nDCG@5=0.62 Hit@3=0.87
-comparison       n=12  MRR=0.41 R@5=0.71 nDCG@5=0.55 Hit@3=0.83
-troubleshooting  n=14  MRR=0.59 R@5=0.85 nDCG@5=0.70 Hit@3=0.93
-
-─ Structural checks (deterministic, pass rate) ─
-code_block_balance: 96.7%
-non_empty_content:  100.0%
-url_presence:       100.0%
-
-─ LLM-judged (observational, not gating) ─
-chunk_coherence        mean=3.85  n=60
-content_faithfulness   mean=4.12  n=60
-answerability          mean=3.40  n=60
-
-✅ No regressions. 2 improved, 7 stable.
-```
-
-A regression run exits with code 1 and prints the offending metrics with relative
-deltas. Tolerances default to 5% relative on headline metrics, 10% relative on
-per-intent breakdowns; adjust via `tolerances` in the comparator if you need
-something different.
-
-## Customizing
-
-| What | How |
-|---|---|
-| Use a different judge | `DOCS_EVAL_JUDGE=anthropic:claude-sonnet-4-6 npm run evaluate:search` |
-| Enable cross-judge sampling | `DOCS_EVAL_CROSS_JUDGE=google:gemini-3.1-flash-lite DOCS_EVAL_CROSS_JUDGE_N=10 npm run evaluate:search` |
-| Run a subset dataset | `DOCS_EVAL_DATASET=path/to/your.yaml npm run evaluate:search` |
-| Bust promptfoo's cache after a re-index | `DOCS_EVAL_NO_CACHE=1 npm run evaluate:search:baseline` |
-| Add a query | Append an entry to `tests/search-eval/dataset.yaml`, then refresh the baseline |
-| Add a library | Append entries, scrape the library, also update `.github/workflows/eval.yml` |
-
-> **About `DOCS_EVAL_NO_CACHE`.** Promptfoo caches by `(provider id, prompt, vars)`. If you re-scrape or re-index a library, the provider returns different chunks but promptfoo doesn't know — it serves stale cached output. Set `DOCS_EVAL_NO_CACHE=1` once after a re-index to force fresh provider calls + fresh judge calls. Default stays cached so subsequent measurement runs are fast and cheap.
-
-The dataset currently ships with `status: draft` because the entries were
-authored without per-entry community review. The `notes:` block at the top of
-`dataset.yaml` contains a review checklist; once you've worked through it, change
-`status: draft` → `status: reviewed`.
-
-## CI
-
-`.github/workflows/eval.yml` runs the benchmark on `workflow_dispatch` (manual)
-and a weekly schedule (Mondays 07:00 UTC). The workflow scrapes the five
-libraries into a cached store on the first run, then re-uses the cache on
-subsequent runs. The benchmark is **deliberately not gated on PRs** — variance
-and judge cost make per-PR gating premature. Regressions caught by the scheduled
-run are visible in the workflow summary and uploaded as an artifact.
-
-## Comparing HTML extractors (Cheerio vs. Defuddle)
-
-The HTML pipeline supports two content extractors:
-
-- `cheerio` (default): the built-in `HtmlSanitizerMiddleware` with a hand-curated selector blocklist. This is the extractor the `html-content-extraction` spec describes, and the behaviour the benchmark measures against.
-- `defuddle`: [Defuddle](https://github.com/kepano/defuddle), which scores DOM nodes and extracts the main article content. Kept as an evaluation arm for the comparison below; it is not held to the extraction guarantees the default carries.
-
-Select the extractor with the `DOCS_MCP_SCRAPER_HTML_EXTRACTOR` env var (or
-`scraper.htmlExtractor` in `config.yaml`). Both produce a Cheerio DOM that flows
-through the same downstream middleware (normalisation, markdown conversion,
-splitting), so the chunking and embedding behaviour stay identical — only the
-boilerplate-stripping logic changes.
-
-To run a head-to-head benchmark:
-
-```bash
-# 1. Lock in the baseline with the current Cheerio sanitiser.
-DOCS_MCP_SCRAPER_HTML_EXTRACTOR=cheerio \
-  npx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi  # if previously indexed
-# …re-scrape all five libraries (see Prerequisites above)…
-DOCS_MCP_SCRAPER_HTML_EXTRACTOR=cheerio \
-  DOCS_EVAL_DATASET=tests/search-eval/dataset.yaml \
-  npm run evaluate:search:baseline
-
-# 2. Re-index with Defuddle.
-DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle \
-  npx @arabold/docs-mcp-server@latest remove react tailwindcss vite python fastapi
-# …re-scrape all five libraries with the same commands…
-DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle \
-  DOCS_EVAL_NO_CACHE=1 \
-  npm run evaluate:search
-```
-
-The measurement run diffs the Defuddle results against the Cheerio baseline and
-fails on regression. Inspect `tests/search-eval/results/summary.json` for the
-absolute numbers and `compare`'s console report for the per-metric deltas.
-
-> **Why re-index between runs.** The extractor change happens during scraping,
-> so the choice is baked into the stored chunks. Switching the env var without
-> a fresh scrape compares the new code against old data.
-
-## Reference benchmark runs
-
-A historical record of the headline numbers for each configuration we've
-benchmarked, against the 59-query dataset shipped in
-[`tests/search-eval/dataset.yaml`](../../tests/search-eval/dataset.yaml). All
-runs use `openai:gpt-5.4-mini` as judge at `temperature: 0` and
-`text-embedding-3-small` for embeddings; comparisons are apples-to-apples
-across the table.
-
-| Metric                       | Cheerio (default) ¹ | Defuddle ² | Context7 (external) ³ |
-|------------------------------|---------------------|------------|-----------------------|
-| **Structural** (deterministic)                                                                  |
-| code_block_balance           | **1.000**           | 0.983      | 1.000                 |
-| non_empty_content            | 1.000               | 1.000      | 1.000                 |
-| url_presence                 | 1.000               | 1.000      | 1.000                 |
-| **Headline IR** (deterministic)                                                                 |
-| MRR                          | **0.747**           | 0.718      | 0.733                 |
-| Recall@3                     | 0.647               | 0.621      | **0.709**             |
-| Recall@5                     | **0.732**           | 0.689      | 0.726                 |
-| nDCG@5                       | 0.699               | 0.665      | **0.704**             |
-| Hit@3                        | **0.831**           | 0.780      | **0.831**             |
-| Hit@5                        | **0.881**           | 0.814      | 0.847                 |
-| **Per-intent MRR**                                                                              |
-| api-lookup (n=18)            | **0.861**           | 0.806      | 0.824                 |
-| conceptual (n=15)            | 0.794               | **0.806**  | 0.767                 |
-| comparison (n=12)            | 0.646               | **0.736**  | 0.563                 |
-| troubleshooting (n=14)       | 0.637               | 0.494      | **0.726**             |
-| **LLM-judged** (observational, not gating)                                                      |
-| chunk_coherence              | 3.53                | 3.39       | **4.80**              |
-| content_faithfulness         | 3.20                | 3.19       | **4.24**              |
-| answerability                | 4.49                | 4.49       | 4.49                  |
-
-¹ Default Cheerio extractor, recorded baseline at
-  [`tests/search-eval/baseline.json`](../../tests/search-eval/baseline.json).
-  This is what the comparator gates against. `code_block_balance` is 100% —
-  fence-aware splitting in `TextContentSplitter` plus verbatim info-string
-  preservation in `CodeContentSplitter` keep every chunk's fences balanced
-  including VitePress/Shiki sequences like `` ```js{15-18} twoslash
-  [server.js] ``.
-
-² Defuddle extractor selected via `DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle`,
-  all five libraries re-scraped through Defuddle on 2026-05-18 (1,155 indexed
-  pages total). On this dataset Defuddle is a clear **regression** against
-  the Cheerio default: headline IR metrics drop 4–6% relative, and
-  `troubleshooting`-intent queries are hit hardest (MRR -22%, nDCG@5 -22%,
-  Hit@3 -20%). `comparison`-intent queries improve (MRR +14%) — Defuddle's
-  main-content pruning helps when the relevant content is the article body.
-  Structural `code_block_balance` slips slightly to 98.3% as Defuddle
-  occasionally collapses VitePress info-string sequences differently than the
-  hand-curated Cheerio sanitiser does. **Recommendation:** keep `cheerio` as
-  the default; Defuddle is worth revisiting per-site when the content is
-  primarily article-shaped and the side-content is noise. See
-  [Comparing HTML extractors](#comparing-html-extractors-cheerio-vs-defuddle).
-
-³ External retrieval service [Context7](https://context7.com) measured via
-  the alternate provider in
-  [`tests/search-eval/baseline.context7.json`](../../tests/search-eval/baseline.context7.json).
-  Included for comparison only; chunking, embedding, and ranking are not
-  under our control. Context7 trades a small MRR deficit (-1.9%) for
-  noticeably higher Recall@3 (+9.6%) and LLM-judged coherence
-  (4.80 vs 3.53) — a hint that chunk semantic boundaries are the next
-  improvement worth chasing locally.
-
-### How to update this table
-
-After any change that materially affects retrieval (chunker, embedding model,
-ranking, scraper), refresh the local baseline and add or revise a column:
+Promptfoo caches provider output and judge scores by provider, prompt and
+query. After a re-scrape or re-index, set `DOCS_EVAL_NO_CACHE=1` for one run,
+or promptfoo returns the results it cached before the re-index:
 
 ```bash
 DOCS_EVAL_NO_CACHE=1 npm run evaluate:search:baseline
 ```
 
-Then update the relevant column above with the new headline + structural + LLM
-means and add a numbered footnote explaining what changed.
+## Settings
+
+The benchmark reads these environment variables:
+
+| Variable | Effect |
+|---|---|
+| `DOCS_EVAL_JUDGE` | Judge model, from the allowlist in `judges.ts`. Default `openai:gpt-5.4-mini`. |
+| `DOCS_EVAL_CROSS_JUDGE` | A second judge from a different provider, which re-scores a fixed sample of queries to estimate judge variance. A judge from the same provider stops the cross-judge step, and the run continues without it. |
+| `DOCS_EVAL_CROSS_JUDGE_N` | Cross-judge sample size. Default 10. |
+| `DOCS_EVAL_DATASET` | Path to another dataset file. No library may account for more than half its queries, so a subset needs at least two libraries. |
+| `DOCS_EVAL_PROVIDER` | `local` (default) or `context7`. See below. |
+| `DOCS_EVAL_TOP_K` | Results per query, 1 to 100. Default 5. |
+| `DOCS_EVAL_NO_CACHE` | `1` bypasses promptfoo's cache for this run. |
+| `DOCS_EVAL_CONCURRENCY` | How many queries promptfoo runs at once. Default 1; keep it at 1 for the local provider. |
+| `DOCS_EVAL_EMBEDDING_MODEL` | The embedding model recorded in the run's configuration, in place of the configured one. It does not change the model the search uses. |
+
+For example, a run with a different judge and a cross-judge sample:
+
+```bash
+DOCS_EVAL_JUDGE=anthropic:claude-sonnet-4-6 \
+DOCS_EVAL_CROSS_JUDGE=google:gemini-3.1-flash-lite \
+DOCS_EVAL_CROSS_JUDGE_N=10 \
+  npm run evaluate:search
+```
+
+`npm run evaluate:search:preflight` checks `dataset.yaml` unless you pass
+another dataset path after `--`. A full run checks the dataset it runs.
+
+To add queries or a library to the dataset, follow
+[Changing the dataset](../../tests/search-eval/README.md#changing-the-dataset)
+in the developer README.
+
+## Compare Against Another Retrieval Service
+
+The benchmark can run the same dataset, judge and metrics against another
+retrieval service. Two providers exist: `local` (this server's `SearchTool`)
+and `context7` ([Context7](https://context7.com/)). Each provider records its
+own baseline file.
+
+```bash
+# Record a Context7 baseline. Writes tests/search-eval/baseline.context7.json.
+DOCS_EVAL_PROVIDER=context7 DOCS_EVAL_NO_CACHE=1 \
+  npm run evaluate:search:baseline
+
+# Side-by-side report of two baselines: IR, per-intent, LLM-judged, structural.
+npx vite-node tests/search-eval/cli/compare-providers.ts \
+  tests/search-eval/baseline.json \
+  tests/search-eval/baseline.context7.json
+```
+
+The Context7 provider calls Context7's public `/v2/context` endpoint and needs
+no local store, so the run skips preflight. It works without a key for short
+runs; set `CONTEXT7_API_KEY` for sustained or CI use. The provider rewrites the
+URLs Context7 returns into the form the dataset uses, so both sides are matched
+the same way.
+
+Use the comparison CLI for cross-provider results. It prints both sides and a
+count of metrics each side wins, without treating the differences as
+regressions.
+
+## Comparing HTML Extractors
+
+The HTML pipeline has two content extractors:
+
+- `cheerio` (default): `HtmlSanitizerMiddleware` with a hand-curated selector
+  blocklist. This is the extractor the `html-content-extraction` spec
+  describes, and the behavior the benchmark measures against.
+- `defuddle`: [Defuddle](https://github.com/kepano/defuddle), which scores DOM
+  nodes and keeps the main article content. It exists as an evaluation arm for
+  this comparison and is not held to the extraction guarantees of the default.
+
+`DOCS_MCP_SCRAPER_HTML_EXTRACTOR` (or `scraper.htmlExtractor` in `config.yaml`)
+selects the extractor. Both hand the same kind of DOM to the rest of the
+pipeline, so only the boilerplate removal differs.
+
+The extractor runs while scraping, so each arm needs its own index:
+
+```bash
+npm run build
+
+# 1. Index all five libraries with Cheerio and record a baseline.
+DOCS_MCP_SCRAPER_HTML_EXTRACTOR=cheerio npm run cli -- scrape react https://react.dev \
+  --exclude-pattern '/^https:\/\/react\.dev\/[a-z]{2}(-[a-z]+)?\//' \
+  --max-pages 300 --replace
+# ...the other four libraries the same way (see Prerequisites)...
+DOCS_EVAL_NO_CACHE=1 npm run evaluate:search:baseline
+
+# 2. Index all five again with Defuddle and measure against that baseline.
+DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle npm run cli -- scrape react https://react.dev \
+  --exclude-pattern '/^https:\/\/react\.dev\/[a-z]{2}(-[a-z]+)?\//' \
+  --max-pages 300 --replace
+# ...the other four libraries the same way...
+DOCS_EVAL_NO_CACHE=1 npm run evaluate:search
+```
+
+Step 1 overwrites the checked-in `baseline.json`. Restore it with
+`git restore tests/search-eval/baseline.json` unless the new baseline is meant
+to be committed. The measurement run reports Defuddle's deltas against the
+Cheerio baseline; `tests/search-eval/results/summary.json` holds the absolute
+numbers.
+
+## CI
+
+[`.github/workflows/eval.yml`](../../.github/workflows/eval.yml) runs
+`npm run evaluate:search` on manual dispatch and every Monday at 07:00 UTC. It
+never runs on pull requests, because judge cost and variance make per-PR
+gating premature.
+
+- Manual runs take a judge, an optional cross-judge, and a cross-judge sample
+  size as inputs. The workflow reads `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and
+  `GOOGLE_API_KEY` from repository secrets.
+- The workflow caches the store. On a cache miss it scrapes the five libraries
+  with the published release, using the commands in
+  [Prerequisites](#the-five-benchmark-libraries). The cache key includes a hash
+  of `dataset.yaml`, so a dataset change triggers a fresh scrape; bump the `v1`
+  in the key to force one otherwise.
+- A regression fails the job. The job summary shows the metrics from
+  `summary.json`, and the result files are uploaded as an artifact either way.
+
+## Reference Benchmark Runs
+
+Headline numbers for each configuration benchmarked so far, against the
+59-query dataset. All runs use `openai:gpt-5.4-mini` as judge and
+`text-embedding-3-small` for embeddings. Bold marks the best value in each row.
+
+| Metric | Cheerio (default) ¹ | Defuddle ² | Context7 (external) ³ |
+|---|---|---|---|
+| **Structural** (deterministic) | | | |
+| code_block_balance | **1.000** | 0.983 | **1.000** |
+| non_empty_content | 1.000 | 1.000 | 1.000 |
+| url_presence | 1.000 | 1.000 | 1.000 |
+| **Headline IR** (deterministic) | | | |
+| MRR | **0.747** | 0.718 | 0.695 |
+| Recall@3 | 0.647 | 0.621 | **0.695** |
+| Recall@5 | **0.732** | 0.689 | 0.729 |
+| nDCG@5 | **0.699** | 0.665 | 0.673 |
+| Hit@3 | **0.831** | 0.780 | **0.831** |
+| Hit@5 | **0.881** | 0.814 | 0.864 |
+| **Per-intent MRR** | | | |
+| api-lookup (n=18) | **0.861** | 0.806 | 0.708 |
+| conceptual (n=15) | 0.794 | **0.806** | 0.789 |
+| comparison (n=12) | 0.646 | **0.736** | 0.694 |
+| troubleshooting (n=14) | **0.637** | 0.494 | 0.577 |
+| **LLM-judged** (observational) | | | |
+| chunk_coherence | 3.53 | 3.39 | **4.83** |
+| content_faithfulness | 3.20 | 3.19 | **4.07** |
+| answerability | 4.49 | 4.49 | **4.53** |
+
+¹ The default Cheerio extractor: the checked-in
+[`tests/search-eval/baseline.json`](../../tests/search-eval/baseline.json),
+recorded on 2026-05-19, which the comparator gates against.
+
+² The Defuddle extractor (`DOCS_MCP_SCRAPER_HTML_EXTRACTOR=defuddle`), with all
+five libraries scraped through Defuddle on 2026-05-18 (1,155 pages). On this
+dataset Defuddle is a regression against Cheerio: headline IR metrics drop 4 to
+6% relative, and troubleshooting queries drop most (MRR -22%, nDCG@5 -22%,
+Hit@3 -20%). Comparison queries improve (MRR +14%), where the relevant content
+is the article body that Defuddle keeps. Code fence balance slips to 98.3%.
+Cheerio stays the default; Defuddle may be worth revisiting for sites whose
+content is mostly articles with noisy side content.
+
+³ [Context7](https://context7.com), measured through the `context7` provider:
+the checked-in
+[`tests/search-eval/baseline.context7.json`](../../tests/search-eval/baseline.context7.json),
+recorded on 2026-09-20. Its chunking, embedding and ranking are outside this
+project's control. Context7 ranks lower (MRR -7.0%, Hit@1 0.559 against
+0.678) but finds more relevant pages in the top three (Recall@3 +7.4%), and its
+chunks score much higher on coherence (4.83 against 3.53) and faithfulness
+(4.07 against 3.20). That points at chunk boundaries as the next thing worth
+improving locally.
+
+### Updating This Table
+
+After a change that moves retrieval (chunking, embedding model, ranking,
+scraper), refresh the baseline with `DOCS_EVAL_NO_CACHE=1 npm run
+evaluate:search:baseline`. Then update the matching column with the new
+headline, structural and LLM-judged values, and add or revise its footnote to
+say what changed and when.
 
 ## Related
 
-- [tests/search-eval/README.md](../../tests/search-eval/README.md) — file layout
-  and how to add metrics
-- [openspec/changes/define-search-benchmark/](../../openspec/changes/define-search-benchmark/)
-  — proposal, design, full spec
+- [tests/search-eval/README.md](../../tests/search-eval/README.md): how the
+  benchmark is built, and how to add providers, metrics and queries.
+- [openspec/specs/search-evaluation/spec.md](../../openspec/specs/search-evaluation/spec.md):
+  the benchmark's requirements.
+- [openspec/changes/archive/2026-05-19-define-search-benchmark/](../../openspec/changes/archive/2026-05-19-define-search-benchmark/):
+  the original proposal and design.

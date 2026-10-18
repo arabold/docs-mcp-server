@@ -1,239 +1,69 @@
 # Search Result Reassembly
 
-## Overview
+A search matches individual chunks, but one chunk is often too small to answer a question. `DocumentRetrieverService` ([src/store/DocumentRetrieverService.ts](../../src/store/DocumentRetrieverService.ts)) turns the matches into readable passages. It groups them by page, splits each page's matches into nearby clusters, and lets an assembly strategy chosen by content type add the surrounding chunks and join them. Each cluster becomes one result.
 
-The search result reassembly system reconstructs coherent document sections from individual chunks stored in the database. When a search query matches specific chunks, the system automatically expands the context by including related chunks (parents, siblings, children) and reassembles them in their original document order.
+How the store finds and ranks the matches is described in [Data Storage](data-storage.md#search). The parent, sibling and child relationships used below are defined in [Splitter Hierarchy](splitter-hierarchy.md#relationships).
 
-## Pipeline Architecture
-
-The reassembly pipeline processes initial search matches through four stages:
-
-### Stage 1: Grouping and Clustering
-
-Initial search results (from hybrid or FTS-only search) are organized before any context expansion:
-
-1. **Groups by URL**: Combines chunks from the same document/URL
-2. **Clusters by distance**: Within each URL group, splits chunks into clusters when the `sort_order` gap between consecutive chunks exceeds `maxChunkDistance` (default 3). Each cluster produces a separate search result.
-
-### Stage 2: Context Expansion
-
-For each cluster, the system selects a content-type-aware strategy (see [Content-Agnostic Assembly](content-agnostic-assembly.md)) that determines how to expand context:
-
-**Markdown/HTML/text content** (MarkdownAssemblyStrategy):
-
-1. **Parent Chunks**: Broader context at higher levels in the document hierarchy
-2. **Preceding Siblings**: Content that appears before the matched chunk at the same hierarchical level
-3. **Child Chunks**: More detailed content at deeper levels within the matched section
-4. **Subsequent Siblings**: Content that appears after the matched chunk at the same hierarchical level
-5. **Deduplicates**: Removes duplicate chunk IDs from overlapping context searches
-6. **Orders by sort_order**: Retrieves chunks from database ordered by their original document position
-
-**Source code/JSON content** (HierarchicalAssemblyStrategy):
-
-1. Reconstructs complete structural subtrees containing the matched chunks
-2. Uses structural ancestor detection and parent chain walking
-
-### Stage 3: Content Assembly
-
-Assembles expanded chunks into coherent text using strategy-specific joining:
-
-- **Prose content**: Joined with double newlines (`\n\n`)
-- **Structured content**: Direct concatenation (no separator), relying on splitter concatenation guarantees
-
-### Stage 4: Scoring and Ordering
-
-1. **Preserves metadata**: Each assembled result retains the highest relevance score from its constituent chunks
-2. **Sorts by score**: Final results across all URLs/clusters sorted descending by score
-
-## Hierarchical Relationship Detection
-
-### Path-Based Hierarchy
-
-The system uses the `path` and `level` properties from chunk metadata to determine relationships. For example, a chunk with path `["Guide", "Installation", "Setup"]` at level 3.
-
-### Relationship Detection Rules
-
-- **Parent Detection**: A chunk with path `["A", "B"]` is the parent of chunk with path `["A", "B", "C"]`
-- **Child Detection**: Chunks with paths that extend the current chunk's path by exactly one element
-- **Sibling Detection**: Chunks with the same path length and same parent path prefix
-
-## Context Expansion Flow
+## Flow
 
 ```mermaid
 graph TD
-    A[Search Result Chunk] --> B{Find Related Chunks}
-
-    B --> C[Parent Lookup]
-    B --> D[Preceding Siblings]
-    B --> E[Child Chunks]
-    B --> F[Subsequent Siblings]
-
-    C --> G["Parent path = child.path.slice(0, -1)<br/>Before current in sort_order"]
-    D --> H["Same path<br/>Before current in sort_order<br/>Limit: 1"]
-    E --> I["Path extends current by 1 element<br/>After current in sort_order<br/>Limit: 3"]
-    F --> J["Same path<br/>After current in sort_order<br/>Limit: 2"]
-
-    G --> K[Collect All Chunk IDs]
-    H --> K
-    I --> K
-    J --> K
-
-    K --> L[Group by URL]
-    L --> M[Deduplicate IDs]
-    M --> N[Fetch by IDs<br/>Ordered by sort_order]
-    N --> CL[Cluster by Distance]
-    CL --> O[Join with double newlines]
-    O --> P[Final Reassembled Result]
-
-    style A fill:#e1f5fe
-    style P fill:#e8f5e8
-    style K fill:#fff3e0
+    HITS["Matched chunks from DocumentStore.findByContent"] --> GROUP[Group by page URL]
+    GROUP --> CLUSTER[Split each page into clusters by sort_order gap]
+    CLUSTER --> TYPE{Page content type}
+    TYPE -->|Source code or JSON| HIER["HierarchicalAssemblyStrategy: enclosing structure"]
+    TYPE -->|Anything else| MD["MarkdownAssemblyStrategy: nearby chunks"]
+    HIER --> CONCAT[Concatenate without separator]
+    MD --> BLANK[Join with blank lines]
+    CONCAT --> RESULT["One result per cluster, scored by its best match"]
+    BLANK --> RESULT
+    RESULT --> SORT[Sort all results by score]
 ```
 
-## Context Expansion Limits
+## Grouping and clustering
 
-The system applies reasonable limits to prevent excessive context expansion:
+Matches are grouped by page URL. Within a page they are ordered by position (`sort_order`) and split wherever two neighbours are more than `assembly.maxChunkDistance` positions apart. Matches close together share one passage. Matches far apart in a long page come back as separate results rather than one passage that spans the page.
 
-- **Preceding Sibling Limit**: 1 chunk
-- **Subsequent Sibling Limit**: 2 chunks
-- **Child Limit**: 3 chunks
-- **Parent Limit**: 1 chunk (by definition)
+The number of results can therefore differ from the search limit. The limit applies to matched chunks; grouping merges them and clustering splits them again.
 
-These limits balance comprehensive context with performance and relevance.
+## Choosing a strategy
 
-## Processing Overview
+`createContentAssemblyStrategy` ([src/store/assembly/ContentAssemblyStrategyFactory.ts](../../src/store/assembly/ContentAssemblyStrategyFactory.ts)) picks the strategy from the page's stored content type. `HierarchicalAssemblyStrategy` takes source code and JSON, as `MimeTypeUtils.isSourceCode` and `MimeTypeUtils.isJson` classify them. `MarkdownAssemblyStrategy` takes everything else, including pages without a content type.
 
-The reassembly process follows these key steps:
+The split follows how the content was chunked. Prose is merged into readable chunks that share their section's path, so a few neighbours give enough context. Code and JSON keep one chunk per structure, so the strategy can rebuild the structure a match sits in.
 
-1. **Initial Search**: Vector similarity and full-text search find chunks matching the query
-2. **Context Expansion**: For each result, find related chunks using hierarchical relationships
-3. **URL Grouping**: Combine chunks from the same document and deduplicate chunk IDs
-4. **Ordered Retrieval**: Fetch all related chunks ordered by their original document position (`sort_order`)
-5. **Distance Clustering**: Split chunks into separate groups if they are too far apart (controlled by `maxChunkDistance`)
-6. **Content Assembly**: Join chunk content with double newlines and preserve highest relevance scores
+### Markdown strategy
 
-## Reassembly Examples
+For each match, `MarkdownAssemblyStrategy` collects the match, its parent, up to `assembly.precedingSiblingsLimit` siblings before it, up to `assembly.childLimit` children, and up to `assembly.subsequentSiblingsLimit` siblings after it. It fetches the union once, in document order, and joins the chunks with a blank line, which keeps paragraphs, lists and headings apart.
 
-### Example 1: Simple Hierarchical Expansion
+### Hierarchical strategy
 
-**Initial Search Result**:
+`HierarchicalAssemblyStrategy` returns the structure that contains the match rather than a fixed window.
 
-- Chunk: "Installation steps"
-- Path: `["Guide", "Installation", "Steps"]`
-- Level: 3
+A single match in a page brings its nearest ancestor typed `structural` (a class, interface, enum or namespace), that ancestor's chain of parents, and the ancestor's subtree. When there is no structural ancestor, as for a top-level function or anything in JSON, the first chunk of the top-level element named by the match's first path segment takes its place.
 
-**Context Expansion**:
+Several matches in one page bring every chunk at their longest common path, such as a class's opening and closing lines, and the subtree of each match. When the matches share no path, each brings its chain of parents instead.
 
-- **Parent**: "Installation overview" (`["Guide", "Installation"]`, level 2)
-- **Preceding Sibling**: "Prerequisites" (`["Guide", "Installation", "Prerequisites"]`, level 3)
-- **Child**: "Step 1 details" (`["Guide", "Installation", "Steps", "Step1"]`, level 4)
-- **Subsequent Sibling**: "Configuration" (`["Guide", "Installation", "Configuration"]`, level 3)
+A parent chain skips missing levels: when no chunk has the parent path, the walk tries shorter prefixes. `assembly.maxParentChainDepth` bounds the walk. If a lookup fails, the strategy falls back to each match with its parent and a few children.
 
-**Final Assembly** (ordered by sort_order):
+The chunks are concatenated without a separator. Source code chunks carry their own line breaks, so adjacent chunks join back into the original lines. JSON chunks carry their own commas and brackets, so a complete selection joins into compact JSON.
 
-```
-Installation overview
+## Scores and order
 
-Prerequisites
+Each result keeps the highest score among its matched chunks; chunks added as context do not change it. All results are then sorted by score, so a strong match that clustering separated from weaker ones on the same page still comes first.
 
-Installation steps
+A result also carries the page URL, the URL its content was retrieved from when that differs, and the page's processed and source content types.
 
-Step 1 details
+## Reading a page
 
-Configuration
-```
+The `read_page` tool (`ReadPageTool`, backed by `DocumentManagementService.getPageContent`) joins a run of consecutive chunks of one page with the same strategy, so a page reads the same way as a search result. It adds no context. It returns whole chunks up to a character budget and the position to continue from.
 
-### Example 2: Multiple Search Results from Same Document
+## Adding a strategy
 
-**Initial Search Results**:
+Search and `read_page` never join chunks themselves; they hand a page's chunks to its strategy. Supporting a new kind of content therefore means adding a strategy, not changing the search path. A strategy implements `ContentAssemblyStrategy` ([src/store/assembly/types.ts](../../src/store/assembly/types.ts)): `canHandle` claims content types, `selectChunks` picks the chunks that belong in the passage around the matches, and `assembleContent` joins chunks that are already in document order.
 
-- Chunk A: "API authentication" (score: 0.9)
-- Chunk C: "Error handling" (score: 0.7)
+The factory asks each strategy in turn and uses the first that accepts the content type. `MarkdownAssemblyStrategy` accepts every type, so it stays last and a new strategy goes before it. A strategy can only select along the relationships its content's splitter records, so check which splitter produces the chunks and what level and path it assigns before claiming a content type; see [Splitter Hierarchy](splitter-hierarchy.md).
 
-**Context Expansion**:
+## Configuration and requirements
 
-- Both chunks expand to include their hierarchical context
-- All related chunk IDs are collected and deduplicated
-
-**Final Assembly**:
-
-- Single result combining all unique chunks from the document
-- Ordered by sort_order (not search relevance order)
-- Score: 0.9 (highest from the group)
-
-### Example 3: Cross-Document Results
-
-**Initial Search Results**:
-
-- Document A: "API reference" (score: 0.8)
-- Document B: "Tutorial examples" (score: 0.9)
-
-**Final Assembly**:
-
-- Two separate results (one per URL)
-- Each with its own hierarchical context expansion
-- Maintained separate scoring and metadata
-
-## Database Optimization
-
-### Sort Order Importance
-
-The `sort_order` field is crucial for reassembly:
-
-- **Maintains Document Structure**: Preserves the original order of content as it appeared in the source
-- **Enables Coherent Reading**: Reassembled content flows naturally from general to specific
-- **Supports Navigation**: Users can understand the logical progression of information
-
-The database uses appropriate indexes on URL, path, and sort_order fields to enable efficient retrieval of related chunks.
-
-## Quality Characteristics
-
-### Content Coherence
-
-- **Hierarchical Flow**: Content progresses logically from general to specific topics
-- **Contextual Completeness**: Users receive sufficient context to understand the matched content
-- **Natural Reading**: Assembled content reads as coherent sections, not disconnected fragments
-
-### Performance Optimization
-
-- **Batch Retrieval**: All related chunks fetched in single database call
-- **Limited Expansion**: Reasonable limits prevent excessive context bloat
-- **Efficient Queries**: Database queries leverage path structure and sort order for fast retrieval
-
-### Search Relevance
-
-- **Score Preservation**: Highest relevance score maintained for each document group
-- **Context Weighting**: Primary search matches drive overall relevance, context provides support
-- **Metadata Consistency**: MIME type and URL information preserved accurately
-
-## Error Handling
-
-### Missing Relationships
-
-- **Orphaned Chunks**: Chunks without parents still return valid results with available context
-- **Broken Hierarchies**: Malformed paths degrade gracefully to available relationships
-- **Empty Context**: Chunks with no related content still return as single-chunk results
-
-### Database Consistency
-
-- **Transaction Safety**: Context expansion uses consistent database snapshots
-- **Missing Chunks**: Individual missing chunks don't break overall reassembly
-- **Schema Evolution**: Path format changes handled through migration scripts
-
-## Future Enhancements
-
-### Code Block Merging
-
-Planned enhancement for source code content:
-
-- **Syntax-Aware Joining**: Merge code chunks at appropriate syntactic boundaries
-- **Comment Preservation**: Maintain code comments and documentation strings
-- **Import Resolution**: Include necessary import statements in reassembled code
-
-### Adaptive Context Limits
-
-Potential improvements for context expansion:
-
-- **Content-Type Aware Limits**: Different limits for code vs. documentation
-- **User Preference Integration**: Configurable context expansion preferences
-- **Query-Specific Tuning**: Adjust context based on query type and intent
+The `assembly` settings are listed under Assembly in [Configuration](../setup/configuration.md). The requirements, with examples, are in the [search-result-reassembly spec](../../openspec/specs/search-result-reassembly/spec.md).
