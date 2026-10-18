@@ -112,19 +112,30 @@ describe("dataRouter - chunk explorer procedures", () => {
     });
 
     it("defaults limit to 50 when omitted", async () => {
+      await docService.addScrapeResult("router-test-lib", "1.0.0", 1, {
+        url: "https://example.com/page3",
+        title: "Page 3",
+        sourceContentType: "text/html",
+        contentType: "text/html",
+        textContent: "irrelevant",
+        links: [],
+        errors: [],
+        chunks: buildChunks(Array.from({ length: 48 }, (_, i) => `Filler chunk ${i}`)),
+      });
+
       const result = await caller.listVersionChunks({
         library: "router-test-lib",
         version: "1.0.0",
       });
 
-      expect(result.total).toBe(3);
-      expect(result.chunks).toHaveLength(3);
+      expect(result.total).toBe(51);
+      expect(result.chunks).toHaveLength(50);
     });
 
     it("rejects an empty library name via zod validation", async () => {
       await expect(
         caller.listVersionChunks({ library: "", version: "1.0.0" }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
   });
 
@@ -199,16 +210,16 @@ describe("dataRouter - chunk explorer procedures", () => {
     it("rejects empty library or pathOrUrl via zod validation", async () => {
       await expect(
         caller.getPageContent({ library: "", pathOrUrl: "/page1" }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
       await expect(
         caller.getPageContent({ library: "router-test-lib", pathOrUrl: "" }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
 
     it("rejects a whitespace-only pathOrUrl instead of passing it on as empty", async () => {
       await expect(
         caller.getPageContent({ library: "router-test-lib", pathOrUrl: "   " }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     });
   });
 

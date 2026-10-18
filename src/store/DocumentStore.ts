@@ -92,6 +92,7 @@ interface RawSearchResult extends DbChunk {
   title?: string | null;
   source_content_type?: string | null;
   content_type?: string | null;
+  content_url?: string | null;
   // Search scoring fields, null when that search method did not return the chunk
   vec_score?: number | null;
   fts_score?: number | null;
@@ -2687,6 +2688,7 @@ export class DocumentStore {
             p.title as title,
             p.source_content_type as source_content_type,
             p.content_type as content_type,
+            p.content_url as content_url,
             -- NULL when the method did not return the chunk, so it gets no
             -- rank from that method (see assignRanks).
             1 / (1 + v.vec_distance) as vec_score,
@@ -2748,6 +2750,7 @@ export class DocumentStore {
             p.title as title,
             p.source_content_type as source_content_type,
             p.content_type as content_type,
+            p.content_url as content_url,
             bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
           FROM documents_fts f
           JOIN documents d ON f.rowid = d.id
