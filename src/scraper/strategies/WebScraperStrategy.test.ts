@@ -97,16 +97,6 @@ beforeEach(() => {
 });
 
 describe("WebScraperStrategy", () => {
-  it("handles only http and https URLs", () => {
-    const strategy = new WebScraperStrategy(config);
-
-    expect(strategy.canHandle("https://example.com")).toBe(true);
-    expect(strategy.canHandle("http://example.com")).toBe(true);
-    expect(strategy.canHandle("file:///path/to/file.txt")).toBe(false);
-    expect(strategy.canHandle("invalid://example.com")).toBe(false);
-    expect(strategy.canHandle("any_string")).toBe(false);
-  });
-
   it("sends followRedirects and the custom headers with every page request", async () => {
     serve({ [ROOT]: html("Root", ["/child"]), [`${ROOT}child`]: html("Child") });
     const headers = { Authorization: "Bearer test-token", "X-Test-Header": "test-value" };

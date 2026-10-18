@@ -29,52 +29,6 @@ describe("GitHubScraperStrategy", () => {
     strategy = new GitHubScraperStrategy(appConfig);
   });
 
-  describe("canHandle", () => {
-    it("should handle base GitHub repository URLs", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo")).toBe(true);
-      expect(strategy.canHandle("https://www.github.com/owner/repo")).toBe(true);
-      expect(strategy.canHandle("https://github.com/owner/repo/")).toBe(true);
-    });
-
-    it("should handle tree URLs with branch", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo/tree/main")).toBe(true);
-      expect(strategy.canHandle("https://github.com/owner/repo/tree/develop/src")).toBe(
-        true,
-      );
-    });
-
-    it("should handle blob URLs with file paths", () => {
-      expect(
-        strategy.canHandle("https://github.com/owner/repo/blob/main/README.md"),
-      ).toBe(true);
-      expect(
-        strategy.canHandle("https://github.com/owner/repo/blob/main/src/index.js"),
-      ).toBe(true);
-    });
-
-    it("should not handle non-GitHub URLs", () => {
-      expect(strategy.canHandle("https://gitlab.com/owner/repo")).toBe(false);
-      expect(strategy.canHandle("https://bitbucket.org/owner/repo")).toBe(false);
-      expect(strategy.canHandle("https://example.com")).toBe(false);
-    });
-
-    it("should handle legacy github-file:// URLs", () => {
-      expect(strategy.canHandle("github-file://src/cli/types.ts")).toBe(true);
-      expect(strategy.canHandle("github-file://README.md")).toBe(true);
-      expect(strategy.canHandle("github-file://src/index.js")).toBe(true);
-    });
-
-    it("should not handle GitHub wiki URLs", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo/wiki")).toBe(false);
-      expect(strategy.canHandle("https://github.com/owner/repo/wiki/Page")).toBe(false);
-    });
-
-    it("should not handle other GitHub paths", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo/issues")).toBe(false);
-      expect(strategy.canHandle("https://github.com/owner/repo/pulls")).toBe(false);
-    });
-  });
-
   describe("parseGitHubUrl", () => {
     it("should parse basic repository URL", () => {
       const result = (strategy as any).parseGitHubUrl("https://github.com/owner/repo");

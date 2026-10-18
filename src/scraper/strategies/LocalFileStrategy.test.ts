@@ -43,12 +43,6 @@ describe("LocalFileStrategy", () => {
     vol.reset();
   });
 
-  it("should handle file:// URLs", () => {
-    const strategy = new LocalFileStrategy(appConfig);
-    expect(strategy.canHandle("file:///path/to/file.txt")).toBe(true);
-    expect(strategy.canHandle("https://example.com")).toBe(false);
-  });
-
   it("should process a single file", async () => {
     const strategy = new LocalFileStrategy(appConfig);
     const options: ScraperOptions = {

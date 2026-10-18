@@ -266,46 +266,6 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     this.repoProcessor = new GitHubRepoProcessor(config);
   }
 
-  canHandle(url: string): boolean {
-    // Handle legacy github-file:// protocol URLs (no longer supported)
-    // These will be processed and marked as NOT_FOUND to trigger cleanup
-    if (url.startsWith("github-file://")) {
-      return true;
-    }
-
-    try {
-      const parsedUrl = new URL(url);
-      const { hostname, pathname } = parsedUrl;
-
-      // Handle GitHub repository URLs
-      if (!["github.com", "www.github.com"].includes(hostname)) {
-        return false;
-      }
-
-      // Handle base repository URLs (owner/repo)
-      const baseMatch = pathname.match(/^\/([^/]+)\/([^/]+)\/?$/);
-      if (baseMatch) {
-        return true;
-      }
-
-      // Handle tree URLs (owner/repo/tree/branch/...)
-      const treeMatch = pathname.match(/^\/([^/]+)\/([^/]+)\/tree\//);
-      if (treeMatch) {
-        return true;
-      }
-
-      // Handle blob URLs (owner/repo/blob/branch/...)
-      const blobMatch = pathname.match(/^\/([^/]+)\/([^/]+)\/blob\//);
-      if (blobMatch) {
-        return true;
-      }
-
-      return false;
-    } catch {
-      return false;
-    }
-  }
-
   /**
    * Parses a GitHub URL to extract repository information.
    */

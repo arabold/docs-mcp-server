@@ -40,7 +40,6 @@ export enum ScrapeMode {
  * Strategy interface for implementing different scraping behaviors
  */
 export interface ScraperStrategy {
-  canHandle(url: string): boolean;
   scrape(
     options: ScraperOptions,
     progressCallback: ProgressCallback<ScraperProgressEvent>,

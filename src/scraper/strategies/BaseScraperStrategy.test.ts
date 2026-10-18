@@ -51,10 +51,6 @@ class TestScraperStrategy extends BaseScraperStrategy {
     super(config);
   }
 
-  canHandle(): boolean {
-    return true;
-  }
-
   protected override canonicalizeStoredUrl(url: string, options: ScraperOptions): string {
     return this.canonicalize
       ? this.canonicalize(url)
