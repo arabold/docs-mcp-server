@@ -299,8 +299,10 @@ describe("HTML Pipeline Website Tests", () => {
       expect(result.toLowerCase()).toContain("a model is the single, definitive source of information about your data");
     }, 60000);
 
-    it("should extract content from PyPI package pages", async () => {
-      const url = "https://pypi.org/project/requests/";
+    // PyPI answers every page with a Fastly bot challenge that headless
+    // Chromium cannot pass, so the package README comes from pkg.go.dev.
+    it("should extract the README from Go package pages", async () => {
+      const url = "https://pkg.go.dev/github.com/spf13/cobra";
       
       const result = await fetchUrlTool.execute({
         url,
@@ -309,8 +311,8 @@ describe("HTML Pipeline Website Tests", () => {
       });
 
       expect(result).toBeTruthy();
-      // Verify specific PyPI requests content
-      expect(result.toLowerCase()).toContain("requests allows you to send http/1.1 requests extremely easily");
+      // Verify specific cobra README content
+      expect(result.toLowerCase()).toContain("cobra is a library for creating powerful modern cli applications");
     }, 60000);
   });
 });
