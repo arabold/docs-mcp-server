@@ -10,6 +10,8 @@
  */
 
 import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import {
   Client,
@@ -18,22 +20,61 @@ import {
 } from "@modelcontextprotocol/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  FTS_ONLY_ENV,
   getFreePort,
   launchChromium,
   requestWithHost,
   startCliServer,
   stopChildProcess,
   tryWebSocket,
+  withStore,
+  writeTestConfig,
 } from "./test-helpers";
 
+/** The library seeded into the server's store, and a phrase only its page contains. */
+const SEEDED_LIBRARY = "http-e2e-lib";
+const SEEDED_PHRASE = "The flux capacitor needs exactly 1.21 gigawatts.";
+
+/** Writes one page of {@link SEEDED_LIBRARY} into the store at `storePath`. */
+async function seedStore(storePath: string, configPath: string): Promise<void> {
+  await withStore(
+    storePath,
+    (store) =>
+      store.addScrapeResult(SEEDED_LIBRARY, "1.0.0", 1, {
+        url: "https://example.com/docs/flux",
+        title: "Flux",
+        sourceContentType: "text/markdown",
+        contentType: "text/markdown",
+        textContent: SEEDED_PHRASE,
+        links: [],
+        errors: [],
+        chunks: [
+          { types: ["text"], content: "# Flux", section: { level: 1, path: ["Flux"] } },
+          { types: ["text"], content: SEEDED_PHRASE, section: { level: 1, path: ["Flux"] } },
+        ],
+      }),
+    { configPath },
+  );
+}
+
 /** Spawns the server and resolves with its advertised base URL once it is ready. */
-function startServer(port: number): Promise<{ process: ChildProcess; url: string }> {
-  const projectRoot = path.resolve(import.meta.dirname, "..");
+function startServer(
+  port: number,
+  storePath: string,
+  configPath: string,
+): Promise<{ process: ChildProcess; url: string }> {
   return startCliServer(["--protocol", "http", "--port", String(port)], {
-    DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-http"),
+    DOCS_MCP_STORE_PATH: storePath,
+    DOCS_MCP_CONFIG: configPath,
     DOCS_MCP_TELEMETRY: "false",
+    ...FTS_ONLY_ENV,
     LOG_LEVEL: "info",
   });
+}
+
+/** The text of a tool result, its parts joined. */
+function textOf(result: Awaited<ReturnType<Client["callTool"]>>): string {
+  return (result.content as Array<{ text: string }>).map((part) => part.text).join("\n");
 }
 
 async function connectClient(baseUrl: string): Promise<Client> {
@@ -48,14 +89,19 @@ async function connectClient(baseUrl: string): Promise<Client> {
 describe("MCP HTTP server E2E", () => {
   let server: { process: ChildProcess; url: string } | undefined;
   let baseUrl = "";
+  let storeDir = "";
 
   beforeAll(async () => {
-    server = await startServer(await getFreePort());
+    storeDir = mkdtempSync(path.join(tmpdir(), "mcp-http-e2e-"));
+    const configPath = writeTestConfig(storeDir);
+    await seedStore(storeDir, configPath);
+    server = await startServer(await getFreePort(), storeDir, configPath);
     baseUrl = server.url;
   }, 60000);
 
   afterAll(async () => {
     await stopChildProcess(server?.process);
+    rmSync(storeDir, { recursive: true, force: true });
   });
 
   it.each([
@@ -98,9 +144,10 @@ describe("MCP HTTP server E2E", () => {
 
       const search = await client.callTool({
         name: "search_docs",
-        arguments: { library: "no-such-library", query: "anything" },
+        arguments: { library: SEEDED_LIBRARY, query: "flux capacitor" },
       });
-      expect(search.content).toBeDefined();
+      expect(search.isError, textOf(search)).toBeFalsy();
+      expect(textOf(search)).toContain(SEEDED_PHRASE);
     } finally {
       await client.close();
     }
@@ -116,7 +163,9 @@ describe("MCP HTTP server E2E", () => {
       expect(resource).toBeDefined();
 
       const read = await client.readResource({ uri: resource?.uri ?? "docs://libraries" });
-      expect(Array.isArray(read.contents)).toBe(true);
+      expect(read.contents.map((content) => ("text" in content ? content.text : ""))).toContain(
+        SEEDED_LIBRARY,
+      );
     } finally {
       await client.close();
     }
