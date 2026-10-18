@@ -2,8 +2,8 @@
  * End-to-end tests for GitHub private repository scraping.
  *
  * These tests verify that authentication works correctly for private repos.
- * They require GITHUB_TOKEN to be set in the environment (via .env file).
- * If no token is available, tests are skipped gracefully to avoid CI failures.
+ * They require GITHUB_TOKEN (or GH_TOKEN) in the environment or the .env file;
+ * without one the suite is reported as skipped.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -14,7 +14,7 @@ import { config } from "dotenv";
 import { type Backend, openBackend } from "../src/services/backend";
 import { EventBusService } from "../src/events";
 import { loadConfig } from "../src/utils/config";
-import { ScrapeTool } from "../src/tools/ScrapeTool";
+import { type ScrapeExecuteResult, ScrapeTool } from "../src/tools/ScrapeTool";
 import { SearchTool } from "../src/tools/SearchTool";
 import { allowLiveNetwork } from "./mock-server";
 
@@ -26,66 +26,36 @@ const PRIVATE_REPO_URL = "https://github.com/arabold/private-test-repo";
 const PRIVATE_REPO_LIBRARY = "private-test-repo";
 const PRIVATE_REPO_VERSION = "1.0.0";
 
-describe("GitHub Private Repository E2E Tests", () => {
-  let docService: Backend["docService"];
-  let scrapeTool: ScrapeTool;
-  let searchTool: SearchTool;
-  // biome-ignore lint/suspicious/noExplicitAny: E2E test setup requires flexible typing
-  let pipeline: any;
-  let backend: Backend | undefined;
-  let tempDir: string;
-  const appConfig = loadConfig();
+const hasAuth = !!(process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
 
-  const hasAuth = !!(process.env.GITHUB_TOKEN || process.env.GH_TOKEN);
+describe.skipIf(!hasAuth)("GitHub Private Repository E2E Tests", () => {
+  let backend: Backend | undefined;
+  let searchTool: SearchTool;
+  let scrapeResult: ScrapeExecuteResult;
+  let tempDir: string | undefined;
   let releaseNetwork = (): void => {};
 
+  // Scrape the private repository once; the tests check the outcome
   beforeAll(async () => {
-    if (!hasAuth) {
-      console.log(
-        "⚠️  Skipping private repo tests - GITHUB_TOKEN not found in environment",
-      );
-      return;
-    }
-
     // These tests read a real private repository on GitHub.
     releaseNetwork = allowLiveNetwork();
 
     // Create temporary directory for test database
     tempDir = mkdtempSync(path.join(tmpdir(), "github-private-repo-e2e-test-"));
 
+    const appConfig = loadConfig();
     appConfig.app.storePath = tempDir;
     appConfig.app.embeddingModel = "";
 
     // Initialize services
     const eventBus = new EventBusService();
     backend = await openBackend({ appConfig, eventBus, jobs: { interruptedJobs: "fail" } });
-    docService = backend.docService;
-    pipeline = backend.pipeline;
-
-    scrapeTool = new ScrapeTool(pipeline, appConfig.scraper);
-    searchTool = new SearchTool(docService);
-  }, 30000);
-
-  afterAll(async () => {
-    releaseNetwork();
-    await backend?.close();
-    if (tempDir) {
-      try {
-        rmSync(tempDir, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-  });
-
-  it("should successfully scrape a private GitHub repository with auth", async () => {
-    if (!hasAuth) {
-      console.log("⚠️  Skipping test - no GitHub auth available");
-      return;
+    searchTool = new SearchTool(backend.docService);
+    if (!backend.pipeline) {
+      throw new Error("The backend opened without a pipeline");
     }
 
-    // Scrape the private repository and wait for completion
-    const result = await scrapeTool.execute({
+    scrapeResult = await new ScrapeTool(backend.pipeline, appConfig.scraper).execute({
       library: PRIVATE_REPO_LIBRARY,
       version: PRIVATE_REPO_VERSION,
       url: PRIVATE_REPO_URL,
@@ -95,18 +65,23 @@ describe("GitHub Private Repository E2E Tests", () => {
       },
       waitForCompletion: true,
     });
+  }, 90000);
 
+  afterAll(async () => {
+    releaseNetwork();
+    await backend?.close();
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("should successfully scrape a private GitHub repository with auth", () => {
     // Verify scrape completed successfully (returns pagesScraped)
-    expect(result).toHaveProperty("pagesScraped");
-    expect((result as { pagesScraped: number }).pagesScraped).toBeGreaterThan(0);
-  }, 60000);
+    expect(scrapeResult).toHaveProperty("pagesScraped");
+    expect((scrapeResult as { pagesScraped: number }).pagesScraped).toBeGreaterThan(0);
+  });
 
   it("should be able to search content from the private repository", async () => {
-    if (!hasAuth) {
-      console.log("⚠️  Skipping test - no GitHub auth available");
-      return;
-    }
-
     // Search for content in the scraped private repo
     const result = await searchTool.execute({
       library: PRIVATE_REPO_LIBRARY,

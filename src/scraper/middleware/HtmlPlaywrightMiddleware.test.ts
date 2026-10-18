@@ -48,10 +48,8 @@ function htmlContext(
   };
 }
 
-/** A main page whose `$$` finds the given iframes and framesets. */
-function fakePage(
-  options: { url?: string; iframes?: unknown[]; framesets?: unknown[] } = {},
-) {
+/** A main page whose `$$` finds the given iframes. */
+function fakePage(options: { url?: string; iframes?: unknown[] } = {}) {
   return {
     route: vi.fn().mockResolvedValue(undefined),
     unroute: vi.fn().mockResolvedValue(undefined),
@@ -63,7 +61,6 @@ function fakePage(
     close: vi.fn().mockResolvedValue(undefined),
     $$: vi.fn(async (selector: string) => {
       if (selector === "iframe") return options.iframes ?? [];
-      if (selector === "frameset") return options.framesets ?? [];
       return [];
     }),
     addInitScript: vi.fn().mockResolvedValue(undefined),
@@ -142,14 +139,9 @@ function fakeIframe(src: string | null, body?: string | Error) {
   return {
     getAttribute: vi.fn().mockResolvedValue(src),
     contentFrame: vi.fn().mockResolvedValue(frame),
+    // Replaces the iframe with its content in the page.
+    evaluate: vi.fn().mockResolvedValue(undefined),
   };
-}
-
-/** The arguments of each iframe replacement the middleware made in the page. */
-function iframeReplacements(page: FakePage) {
-  return page.evaluate.mock.calls
-    .map((call) => call[1])
-    .filter((arg): arg is [number, string] => Array.isArray(arg));
 }
 
 describe("HtmlPlaywrightMiddleware", () => {
@@ -292,24 +284,6 @@ describe("HtmlPlaywrightMiddleware", () => {
         body: FETCHED_HTML,
       });
       expect(route.fetch).not.toHaveBeenCalled();
-    });
-
-    it("appends shadow DOM content to the rendered body", async () => {
-      const page = fakePage();
-      page.content.mockResolvedValue("<html><body><p>Light</p></body></html>");
-      page.evaluate.mockImplementation(async (script: unknown) =>
-        String(script).includes("shadowExtractor")
-          ? [{ shadowContent: "<p>Shadow</p>", hostTagName: "DOC-CARD" }]
-          : [],
-      );
-      launch(fakeBrowser(page).browser);
-      const context = htmlContext();
-
-      await middleware.process(context, next);
-
-      expect(context.content).toMatch(
-        /<p>Light<\/p>[\s\S]*<p>Shadow<\/p>[\s\S]*<\/body>/,
-      );
     });
 
     it("reuses the browser across renders", async () => {
@@ -735,9 +709,8 @@ describe("HtmlPlaywrightMiddleware", () => {
     });
   });
 
-  // The DOM edits themselves run inside page.evaluate in Chromium, so these
-  // tests cover which content the middleware hands to the page, not the
-  // resulting DOM.
+  // test/playwright-embedded-content-e2e.test.ts inlines iframes in Chromium;
+  // these tests cover the iframes the middleware leaves alone.
   describe("iframes", () => {
     it.each([
       ["no src", null],
@@ -753,28 +726,7 @@ describe("HtmlPlaywrightMiddleware", () => {
       await middleware.process(htmlContext(), next);
 
       expect(iframe.contentFrame).not.toHaveBeenCalled();
-      expect(iframeReplacements(page)).toEqual([]);
-    });
-
-    it("inlines the body of each loadable iframe at its position", async () => {
-      const page = fakePage({
-        iframes: [
-          fakeIframe("https://example.com/frame-1", "<p>Content 1</p>"),
-          fakeIframe("about:blank", "<p>Skipped</p>"),
-          fakeIframe("http://example.com/frame-3", "<p>Content 3</p>"),
-        ],
-      });
-      launch(fakeBrowser(page).browser);
-
-      await middleware.process(htmlContext(), next);
-
-      expect(iframeReplacements(page)).toEqual(
-        expect.arrayContaining([
-          [0, "<p>Content 1</p>"],
-          [2, "<p>Content 3</p>"],
-        ]),
-      );
-      expect(iframeReplacements(page)).toHaveLength(2);
+      expect(iframe.evaluate).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -782,63 +734,16 @@ describe("HtmlPlaywrightMiddleware", () => {
       ["cannot be read", new Error("Access denied")],
       ["has an empty body", "   "],
     ])("leaves an iframe that %s in place without an error", async (_label, body) => {
-      const page = fakePage({ iframes: [fakeIframe("https://example.com/frame", body)] });
+      const iframe = fakeIframe("https://example.com/frame", body);
+      const page = fakePage({ iframes: [iframe] });
       launch(fakeBrowser(page).browser);
       const context = htmlContext();
 
       await middleware.process(context, next);
 
-      expect(iframeReplacements(page)).toEqual([]);
+      expect(iframe.evaluate).not.toHaveBeenCalled();
       expect(context.errors).toEqual([]);
       expect(context.content).toBe(RENDERED_HTML);
-    });
-  });
-
-  describe("framesets", () => {
-    it("replaces a frameset with the content of its frames, in order", async () => {
-      // Unique to this test: frame content is cached by URL across instances.
-      const source = "https://example.com/frameset-docs/";
-      const page = fakePage({ url: source, framesets: [{}] });
-      page.evaluate.mockImplementation(async (script: unknown) =>
-        String(script).includes('querySelectorAll("frame")')
-          ? [
-              { src: "nav.html", name: "navigation" },
-              { src: "main.html", name: "content" },
-            ]
-          : [],
-      );
-      const frameBodies: Record<string, string> = {
-        [`${source}nav.html`]: "<nav>Navigation</nav>",
-        [`${source}main.html`]: "<main>Main</main>",
-      };
-      const framePages = {
-        newPage: vi.fn(async () => {
-          let url = "";
-          return {
-            route: vi.fn().mockResolvedValue(undefined),
-            unroute: vi.fn().mockResolvedValue(undefined),
-            goto: vi.fn(async (target: string) => {
-              url = target;
-            }),
-            waitForSelector: vi.fn().mockResolvedValue(null),
-            isVisible: vi.fn().mockResolvedValue(false),
-            $eval: vi.fn(async () => frameBodies[url] ?? ""),
-            close: vi.fn().mockResolvedValue(undefined),
-          };
-        }),
-      };
-      launch(fakeBrowser(page).browser);
-      page.context.mockReturnValue(framePages);
-
-      await middleware.process(htmlContext(source), next);
-
-      expect(framePages.newPage).toHaveBeenCalledTimes(2);
-      const merged = page.evaluate.mock.calls
-        .map((call) => call[1])
-        .find((arg): arg is string => typeof arg === "string");
-      expect(merged).toMatch(
-        /Frame 1 \(navigation\): nav\.html[\s\S]*<nav>Navigation<\/nav>[\s\S]*Frame 2 \(content\): main\.html[\s\S]*<main>Main<\/main>/,
-      );
     });
   });
 });
