@@ -10,6 +10,7 @@ import {
 import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
 import { CliUsageError, createCli } from "./index";
+import { reportCliError } from "./output";
 
 // Module-level variables are now in ./services.ts
 import {
@@ -114,14 +115,16 @@ export async function runCli(): Promise<void> {
   } catch (error) {
     if (error instanceof CliUsageError) {
       // The help and the reason are already printed
-    } else if (
-      error instanceof ModelConfigurationError ||
-      error instanceof UnsupportedProviderError
-    ) {
-      // These errors already have properly formatted messages
-      logger.error(error.message);
     } else {
-      logger.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
+      if (
+        error instanceof ModelConfigurationError ||
+        error instanceof UnsupportedProviderError
+      ) {
+        // These errors already have properly formatted messages
+        reportCliError(error.message);
+      } else {
+        reportCliError(`❌ ${error instanceof Error ? error.message : String(error)}`);
+      }
       if (error instanceof Error && error.stack) {
         logger.debug(error.stack);
       }

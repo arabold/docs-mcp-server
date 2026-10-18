@@ -117,7 +117,13 @@ export function createCli(argv: string[]): Argv {
         throw new Error("Arguments verbose and quiet are mutually exclusive");
       }
 
-      // 1. Load Config & Resolve Paths
+      // 1. Setup Logging, first, so --verbose also covers a failure below
+      applyGlobalCliOutputMode({
+        verbose: argv.verbose as boolean,
+        quiet: argv.quiet as boolean,
+      });
+
+      // 2. Load Config & Resolve Paths
       const rawStorePath = (argv.storePath as string) || process.env.DOCS_MCP_STORE_PATH;
       const resolvedStorePath = resolveStorePath(rawStorePath);
 
@@ -133,12 +139,6 @@ export function createCli(argv: string[]): Argv {
       if (argv.telemetry === undefined) {
         argv.telemetry = appConfig.app.telemetryEnabled;
       }
-
-      // 2. Setup Logging
-      applyGlobalCliOutputMode({
-        verbose: argv.verbose as boolean,
-        quiet: argv.quiet as boolean,
-      });
 
       // 3. Init Telemetry
       initTelemetry({
