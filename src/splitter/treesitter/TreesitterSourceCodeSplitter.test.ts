@@ -19,21 +19,6 @@ describe("TreesitterSourceCodeSplitter", () => {
     splitter = new TreesitterSourceCodeSplitter(mockConfig);
   });
 
-  describe("initialization", () => {
-    it("should initialize with default options", () => {
-      expect(splitter).toBeDefined();
-    });
-
-    it("should accept custom options", () => {
-      const customSplitter = new TreesitterSourceCodeSplitter({
-        ...mockConfig,
-        maxChunkSize: 100,
-        treeSitterSizeLimit: 30000,
-      });
-      expect(customSplitter).toBeDefined();
-    });
-  });
-
   describe("supported content types", () => {
     it("should support JavaScript MIME types", () => {
       expect(splitter.isSupportedContentType("text/javascript")).toBe(true);
@@ -67,62 +52,60 @@ describe("TreesitterSourceCodeSplitter", () => {
   });
 
   describe("text splitting", () => {
-    it("should handle empty content", async () => {
-      const chunks = await splitter.splitText("");
-      expect(chunks).toHaveLength(0);
+    it("returns no chunks for empty or whitespace-only content", async () => {
+      const cases: Array<[label: string, content: string]> = [
+        ["empty", ""],
+        ["whitespace only", "   \n  \t  \n  "],
+      ];
+
+      for (const [label, content] of cases) {
+        expect.soft(await splitter.splitText(content), label).toEqual([]);
+      }
     });
 
-    it("should handle whitespace-only content", async () => {
-      const chunks = await splitter.splitText("   \n  \t  \n  ");
-      expect(chunks).toHaveLength(0);
-    });
+    it("picks a tree-sitter parser by content type and falls back to size-based splitting", async () => {
+      const javascript = 'function hello() {\n  return "world";\n}\n';
+      const python = 'def hello():\n    return "world"\n';
+      // A parsed file yields a chunk for the `hello` declaration; the fallback keeps the
+      // whole file in one root-level chunk. Fallback rows use JavaScript, which the
+      // TypeScript parser would split if the content type reached it.
+      const parsed = [{ level: 1, path: ["hello"] }];
+      const fallback = [{ level: 0, path: [] }];
+      const cases: Array<
+        [contentType: string | undefined, code: string, expected: typeof parsed]
+      > = [
+        ["text/javascript", javascript, parsed],
+        ["application/javascript", javascript, parsed],
+        ["text/jsx", javascript, parsed],
+        ["application/jsx", javascript, parsed],
+        ["text/x-jsx", javascript, parsed],
+        ["text/x-typescript", javascript, parsed],
+        ["text/x-tsx", javascript, parsed],
+        // MIME lookups ignore case.
+        ["TEXT/JAVASCRIPT", javascript, parsed],
+        // Not registered, but named after the language.
+        ["application/x-javascript", javascript, parsed],
+        ["text/python", python, parsed],
+        ["text/x-python", python, parsed],
+        ["application/python", python, parsed],
+        ["application/x-python", python, parsed],
+        ["TEXT/PYTHON", python, parsed],
+        // A content type ending in a file extension picks the parser by extension.
+        ["foo.py", python, parsed],
+        ["text/ruby", javascript, fallback],
+        ["text/plain", javascript, fallback],
+        [undefined, javascript, fallback],
+      ];
 
-    it("should split JavaScript code", async () => {
-      const code = `
-        function hello() {
-          return "world";
-        }
-        
-        const arrow = () => {
-          console.log("arrow function");
-        };
-      `;
-
-      const chunks = await splitter.splitText(code, "text/javascript");
-      expect(chunks.length).toBeGreaterThan(0);
-      expect(chunks[0].types).toContain("code");
-    });
-
-    it("should split Python code", async () => {
-      const pythonCode = `
-def hello():
-    return "world"
-
-class Calculator:
-    def add(self, a, b):
-        return a + b
-      `;
-
-      const chunks = await splitter.splitText(pythonCode, "text/python");
-      expect(chunks.length).toBeGreaterThan(0);
-      expect(chunks[0].types).toContain("code");
-
-      // Should have semantic boundaries for function and class
-      const pathStrings = chunks.map((chunk) => chunk.section.path.join(" > "));
-      expect(pathStrings.some((path) => path.includes("hello"))).toBe(true);
-      expect(pathStrings.some((path) => path.includes("Calculator"))).toBe(true);
-    });
-
-    it("should fall back to TextSplitter for unsupported content", async () => {
-      const rubyCode = `
-def hello
-  return "world"
-end
-      `;
-
-      const chunks = await splitter.splitText(rubyCode, "text/ruby");
-      expect(chunks.length).toBeGreaterThan(0);
-      expect(chunks[0].types).toContain("code");
+      for (const [contentType, code, expected] of cases) {
+        const chunks = await splitter.splitText(code, contentType);
+        expect
+          .soft(
+            chunks.map((c) => ({ level: c.section.level, path: c.section.path })),
+            String(contentType),
+          )
+          .toEqual(expected);
+      }
     });
 
     it("should handle parse errors gracefully", async () => {
@@ -178,49 +161,6 @@ end
       expect(funcChunk?.content).toContain("function calculateSum");
       expect(funcChunk?.content).toContain("return a + b");
     });
-
-    it("should preserve hierarchical structure with class methods", async () => {
-      const code = `
-        class MathUtils {
-          add(a, b) {
-            return a + b;
-          }
-
-          subtract(a, b) {
-            return a - b;
-          }
-        }
-      `;
-
-      const chunks = await splitter.splitText(code, "text/javascript");
-
-      // Should create semantic chunks
-      expect(chunks.length).toBeGreaterThan(0);
-
-      // Should have class in the hierarchy
-      const classChunk = chunks.find((chunk) =>
-        chunk.section.path.some((p) => p.includes("MathUtils")),
-      );
-      expect(classChunk).toBeDefined();
-
-      // With the new granular parser, we get separate chunks for class and methods
-      // The class chunk should contain the class declaration (but not necessarily the full body)
-      expect(classChunk?.content).toContain("class MathUtils");
-
-      // Should have method chunks at level 2
-      const methodChunks = chunks.filter(
-        (chunk) =>
-          chunk.section.path.length === 2 &&
-          chunk.section.path[0] === "MathUtils" &&
-          (chunk.section.path[1] === "add" || chunk.section.path[1] === "subtract"),
-      );
-      expect(methodChunks.length).toBeGreaterThan(0);
-
-      // Each method should be in its own chunk
-      const addMethod = methodChunks.find((chunk) => chunk.section.path[1] === "add");
-      expect(addMethod).toBeDefined();
-      expect(addMethod?.content).toContain("add(a, b)");
-    });
   });
 
   describe("hierarchical structure", () => {
@@ -271,18 +211,18 @@ end
         expect(chunk.section.level).toBe(1); // Class is level 1
         expect(chunk.section.path).toEqual(["UserService"]);
       });
+      // The class chunk holds the declaration; each method gets its own chunk.
+      expect(classChunks[0].content).toContain("class UserService");
 
-      expect(constructorChunk).toBeDefined();
-      expect(constructorChunk!.section.level).toBe(2); // Method is level 2
-      expect(constructorChunk!.section.path).toEqual(["UserService", "constructor"]);
+      expect(constructorChunk?.section.level).toBe(2); // Method is level 2
+      expect(constructorChunk?.section.path).toEqual(["UserService", "constructor"]);
 
-      expect(methodChunk).toBeDefined();
-      expect(methodChunk!.section.level).toBe(2); // Method is level 2
-      expect(methodChunk!.section.path).toEqual(["UserService", "getUser"]);
+      expect(methodChunk?.section.level).toBe(2); // Method is level 2
+      expect(methodChunk?.section.path).toEqual(["UserService", "getUser"]);
+      expect(methodChunk?.content).toContain("getUser(id)");
 
-      expect(globalFunctionChunk).toBeDefined();
-      expect(globalFunctionChunk!.section.level).toBe(1); // Global function is level 1
-      expect(globalFunctionChunk!.section.path).toEqual(["globalFunction"]);
+      expect(globalFunctionChunk?.section.level).toBe(1); // Global function is level 1
+      expect(globalFunctionChunk?.section.path).toEqual(["globalFunction"]);
     });
 
     it("should handle inline documentation with functions and methods", async () => {

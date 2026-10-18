@@ -49,57 +49,6 @@ describe("LanguageParserRegistry", () => {
     });
   });
 
-  describe("parser lookup", () => {
-    it("should find parser by language name", () => {
-      const parser = registry.getParser("javascript");
-      expect(parser).toBeDefined();
-      expect(parser?.name).toBe("javascript");
-    });
-
-    it("should find Python parser by language name", () => {
-      const parser = registry.getParser("python");
-      expect(parser).toBeDefined();
-      expect(parser?.name).toBe("python");
-    });
-
-    it("should find parser by file extension", () => {
-      const parser = registry.getParserByExtension(".js");
-      expect(parser).toBeDefined();
-      expect(parser?.name).toBe("javascript");
-    });
-
-    it("should find Python parser by file extension", () => {
-      const parser = registry.getParserByExtension(".py");
-      expect(parser).toBeDefined();
-      expect(parser?.name).toBe("python");
-    });
-
-    it("should find parser by MIME type", () => {
-      const parser = registry.getParserByMimeType("text/javascript");
-      expect(parser).toBeDefined();
-      expect(parser?.name).toBe("javascript");
-    });
-
-    it("should find Python parser by MIME type", () => {
-      const parser = registry.getParserByMimeType("text/python");
-      expect(parser).toBeDefined();
-      expect(parser?.name).toBe("python");
-    });
-
-    it("should handle case insensitive lookups", () => {
-      expect(registry.getParserByExtension(".JS")).toBeDefined();
-      expect(registry.getParserByMimeType("TEXT/JAVASCRIPT")).toBeDefined();
-      expect(registry.getParserByExtension(".PY")).toBeDefined();
-      expect(registry.getParserByMimeType("TEXT/PYTHON")).toBeDefined();
-    });
-
-    it("should return undefined for unsupported languages", () => {
-      expect(registry.getParser("ruby")).toBeUndefined();
-      expect(registry.getParserByExtension(".rb")).toBeUndefined();
-      expect(registry.getParserByMimeType("text/ruby")).toBeUndefined();
-    });
-  });
-
   describe("supported checks", () => {
     it("should correctly identify supported languages", () => {
       expect(registry.isLanguageSupported("javascript")).toBe(true);
