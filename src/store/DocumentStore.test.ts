@@ -1,8 +1,17 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Embeddings } from "@langchain/core/embeddings";
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockedFunction,
+  vi,
+} from "vitest";
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
 import { loadConfig, markVectorDimensionSource } from "../utils/config";
@@ -121,6 +130,19 @@ function createScrapeResult(
 }
 
 /**
+ * Returns the store's embedding model, and fails the test when embeddings are
+ * disabled so that an embedding test cannot pass without exercising them.
+ */
+function embeddingsOf(store: DocumentStore): Embeddings {
+  // @ts-expect-error Accessing private property for testing
+  const embeddings: Embeddings | null = store.embeddings;
+  if (!embeddings) {
+    throw new Error("Embeddings are not enabled for this store");
+  }
+  return embeddings;
+}
+
+/**
  * Runs `action` and returns its result together with the query plan of the
  * first statement it ran whose SQL contains `sqlFragment`, bound to the same
  * parameters. Throws when no such statement ran.
@@ -178,6 +200,8 @@ describe("DocumentStore - With Embeddings", () => {
 
   beforeEach(async () => {
     mockEmbeddingDimension.value = 1536;
+    // The provider only needs a key to be present; the embedding model is mocked
+    vi.stubEnv("OPENAI_API_KEY", "test-key");
     // Create explicit embedding configuration for tests
     const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
       "openai:text-embedding-3-small",
@@ -195,51 +219,36 @@ describe("DocumentStore - With Embeddings", () => {
     if (store) {
       await store.shutdown();
     }
+    vi.unstubAllEnvs();
   });
 
   describe("Document Storage and Retrieval", () => {
     it("stores each embedding as a float32 blob identical to its indexed vector", async () => {
-      const originalApiKey = process.env.OPENAI_API_KEY;
-      try {
-        process.env.OPENAI_API_KEY = "test-key-for-blob-storage";
-        await store.shutdown();
-        const cfg = loadConfig();
-        cfg.app.embeddingModel = "openai:text-embedding-3-small";
-        store = new DocumentStore(":memory:", cfg);
-        await store.initialize();
+      await store.addDocuments(
+        "bloblib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Blob Storage",
+          "https://example.com/blob-storage",
+          "Embeddings are stored in their binary form",
+        ),
+      );
 
-        await store.addDocuments(
-          "bloblib",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "Blob Storage",
-            "https://example.com/blob-storage",
-            "Embeddings are stored in their binary form",
-          ),
-        );
+      // @ts-expect-error Accessing private property for testing
+      const db = store.db;
+      const rows = db
+        .prepare(`
+          SELECT typeof(d.embedding) AS type, length(d.embedding) AS bytes,
+                 (SELECT dv.embedding FROM documents_vec dv WHERE dv.rowid = d.id)
+                   = d.embedding AS matchesIndex
+          FROM documents d
+        `)
+        .all() as Array<{ type: string; bytes: number; matchesIndex: number }>;
 
-        // @ts-expect-error Accessing private property for testing
-        const db = store.db;
-        const rows = db
-          .prepare(`
-            SELECT typeof(d.embedding) AS type, length(d.embedding) AS bytes,
-                   (SELECT dv.embedding FROM documents_vec dv WHERE dv.rowid = d.id)
-                     = d.embedding AS matchesIndex
-            FROM documents d
-          `)
-          .all() as Array<{ type: string; bytes: number; matchesIndex: number }>;
-
-        expect(rows.length).toBeGreaterThan(0);
-        for (const row of rows) {
-          expect(row).toEqual({ type: "blob", bytes: 1536 * 4, matchesIndex: 1 });
-        }
-      } finally {
-        if (originalApiKey === undefined) {
-          delete process.env.OPENAI_API_KEY;
-        } else {
-          process.env.OPENAI_API_KEY = originalApiKey;
-        }
+      expect(rows.length).toBeGreaterThan(0);
+      for (const row of rows) {
+        expect(row).toEqual({ type: "blob", bytes: 1536 * 4, matchesIndex: 1 });
       }
     });
 
@@ -670,12 +679,11 @@ describe("DocumentStore - With Embeddings", () => {
       );
 
       // At least some results should be hybrid matches
-      if (hybridResults.length > 0) {
-        for (const result of hybridResults) {
-          expect(result.vec_rank).toBeGreaterThan(0);
-          expect(result.fts_rank).toBeGreaterThan(0);
-          expect(result.score).toBeGreaterThan(0);
-        }
+      expect(hybridResults.length).toBeGreaterThan(0);
+      for (const result of hybridResults) {
+        expect(result.vec_rank).toBeGreaterThan(0);
+        expect(result.fts_rank).toBeGreaterThan(0);
+        expect(result.score).toBeGreaterThan(0);
       }
 
       // All results should have valid scores
@@ -704,13 +712,9 @@ describe("DocumentStore - With Embeddings", () => {
 
       expect(programmingResults.length).toBeGreaterThan(0);
 
-      // At least some results should have vector ranks (semantic/embedding matching)
-      // If no vector results, it might be because embeddings were disabled in this test run
+      // The vector search should contribute ranked results (semantic/embedding matching)
       const vectorResults = results.filter((r) => r.vec_rank !== undefined);
-      const ftsResults = results.filter((r) => r.fts_rank !== undefined);
-
-      // Either we have vector results (hybrid search) or FTS results (fallback)
-      expect(vectorResults.length > 0 || ftsResults.length > 0).toBe(true);
+      expect(vectorResults.length).toBeGreaterThan(0);
 
       // All results should have valid scores
       for (const result of results) {
@@ -719,155 +723,96 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should use partition-filtered vector search for hybrid results", async () => {
-      const originalApiKey = process.env.OPENAI_API_KEY;
-      try {
-        process.env.OPENAI_API_KEY = "test-key-for-partition-search";
-        await store.shutdown();
+      // @ts-expect-error Accessing private property for testing
+      const db = store.db;
+      const ddl = db
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+        )
+        .get() as { sql: string };
+      expect(ddl.sql).toContain("library_id INTEGER partition key");
+      expect(ddl.sql).toContain("version_id INTEGER partition key");
 
-        const cfg = loadConfig();
-        const embeddingConfig = EmbeddingConfig.parseEmbeddingConfig(
-          "openai:text-embedding-3-small",
-        );
-        cfg.app.embeddingModel = embeddingConfig.modelSpec;
-        store = new DocumentStore(":memory:", cfg);
-        await store.initialize();
+      const results = await store.findByContent(
+        "searchtest",
+        "1.0.0",
+        "application building",
+        10,
+      );
+      const vector = await embeddingsOf(store).embedQuery("application building");
 
-        await store.addDocuments(
-          "searchtest",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "JavaScript Programming Guide",
-            "https://example.com/js-guide",
-            "JavaScript programming tutorial with code examples and functions",
-            ["programming", "javascript"],
-          ),
-        );
-        await store.addDocuments(
-          "searchtest",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "JavaScript Frameworks",
-            "https://example.com/js-frameworks",
-            "Advanced JavaScript frameworks like React and Vue for building applications",
-            ["programming", "javascript", "frameworks"],
-          ),
-        );
+      expect(results.length).toBeGreaterThan(0);
 
-        // @ts-expect-error Accessing private property for testing
-        const db = store.db;
-        const ddl = db
-          .prepare(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_vec'",
+      const vectorResults = db
+        .prepare(`
+          SELECT dv.rowid, dv.distance
+          FROM documents_vec dv
+          WHERE dv.library_id = (
+            SELECT id FROM libraries WHERE name = ?
           )
-          .get() as { sql: string };
-        expect(ddl.sql).toContain("library_id INTEGER partition key");
-        expect(ddl.sql).toContain("version_id INTEGER partition key");
-
-        const results = await store.findByContent(
-          "searchtest",
-          "1.0.0",
-          "application building",
-          10,
-        );
-        // @ts-expect-error Accessing private property for testing
-        const vector = await store.embeddings.embedQuery("application building");
-
-        expect(results.length).toBeGreaterThan(0);
-
-        const vectorResults = db
-          .prepare(`
-            SELECT dv.rowid, dv.distance
-            FROM documents_vec dv
-            WHERE dv.library_id = (
-              SELECT id FROM libraries WHERE name = ?
+            AND dv.version_id = (
+              SELECT v.id
+              FROM versions v
+              JOIN libraries l ON v.library_id = l.id
+              WHERE l.name = ? AND v.name = ?
             )
-              AND dv.version_id = (
-                SELECT v.id
-                FROM versions v
-                JOIN libraries l ON v.library_id = l.id
-                WHERE l.name = ? AND v.name = ?
-              )
-              AND dv.embedding MATCH ?
-              AND dv.k = ?
-            ORDER BY dv.distance
-          `)
-          .all("searchtest", "searchtest", "1.0.0", JSON.stringify(vector), 10);
-        expect(vectorResults.length).toBeGreaterThan(0);
-      } finally {
-        if (originalApiKey === undefined) {
-          delete process.env.OPENAI_API_KEY;
-        } else {
-          process.env.OPENAI_API_KEY = originalApiKey;
-        }
-      }
+            AND dv.embedding MATCH ?
+            AND dv.k = ?
+          ORDER BY dv.distance
+        `)
+        .all("searchtest", "searchtest", "1.0.0", JSON.stringify(vector), 10);
+      expect(vectorResults.length).toBeGreaterThan(0);
     });
 
     it("filters full-text hits by version before reading other libraries' rows", async () => {
-      vi.stubEnv("OPENAI_API_KEY", "test-key-for-fts-filter");
-      try {
-        await store.shutdown();
-        store = new DocumentStore(":memory:", appConfig);
-        await store.initialize();
+      // A fresh store keeps this suite's shared documents out of the result
+      await store.shutdown();
+      store = new DocumentStore(":memory:", appConfig);
+      await store.initialize();
 
-        await store.addDocuments(
-          "searchtest",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "JavaScript Programming Guide",
-            "https://example.com/js-guide",
-            "JavaScript programming tutorial with code examples and functions",
-          ),
-        );
-        await store.addDocuments(
-          "otherlib",
-          "1.0.0",
-          1,
-          createScrapeResult(
-            "Other JavaScript Guide",
-            "https://other.example.com/js-guide",
-            "JavaScript programming tutorial from another library",
-          ),
-        );
+      await store.addDocuments(
+        "searchtest",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "JavaScript Programming Guide",
+          "https://example.com/js-guide",
+          "JavaScript programming tutorial with code examples and functions",
+        ),
+      );
+      await store.addDocuments(
+        "otherlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Other JavaScript Guide",
+          "https://other.example.com/js-guide",
+          "JavaScript programming tutorial from another library",
+        ),
+      );
 
-        // Capturing the hybrid query's own CTE proves the hybrid path ran.
-        const { result, plan } = await queryPlanOf(
-          store,
-          "fts_scores AS MATERIALIZED",
-          () => store.findByContent("searchtest", "1.0.0", "JavaScript programming", 10),
-        );
+      // Capturing the hybrid query's own CTE proves the hybrid path ran.
+      const { result, plan } = await queryPlanOf(
+        store,
+        "fts_scores AS MATERIALIZED",
+        () => store.findByContent("searchtest", "1.0.0", "JavaScript programming", 10),
+      );
 
-        expect(result.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
-        expectVersionFilteredFullTextPlan(plan);
-      } finally {
-        vi.unstubAllEnvs();
-      }
+      expect(result.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
+      expectVersionFilteredFullTextPlan(plan);
     });
   });
 
   describe("Embedding Batch Processing", () => {
-    let mockEmbedDocuments: ReturnType<typeof vi.fn>;
+    let mockEmbedDocuments: MockedFunction<Embeddings["embedDocuments"]>;
 
     beforeEach(() => {
       mockEmbeddingDimension.value = 1536;
-      // Get reference to the mocked embedDocuments function if embeddings are enabled
-      // @ts-expect-error Accessing private property for testing
-      if (store.embeddings?.embedDocuments) {
-        // @ts-expect-error Accessing private property for testing
-        mockEmbedDocuments = vi.mocked(store.embeddings.embedDocuments);
-        mockEmbedDocuments.mockClear();
-      }
+      mockEmbedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+      mockEmbedDocuments.mockClear();
     });
 
     it("should successfully embed and store large batches of documents", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       // Add multiple large documents to verify batching works correctly
       const docCount = 5;
       const contentSize = 15000; // 15KB each - ensures batching behavior
@@ -898,12 +843,6 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should include proper document headers in embedding text", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       await store.addDocuments(
         "testlib",
         "1.0.0",
@@ -976,27 +915,16 @@ describe("DocumentStore - With Embeddings", () => {
   });
 
   describe("Embedding Retry Logic", () => {
-    let mockEmbedDocuments: ReturnType<typeof vi.fn>;
+    let mockEmbedDocuments: MockedFunction<Embeddings["embedDocuments"]>;
     let callCount: number;
 
-    beforeEach(async () => {
+    beforeEach(() => {
       callCount = 0;
-      // Get reference to the mocked embedDocuments function
-      // @ts-expect-error Accessing private property for testing
-      if (store.embeddings?.embedDocuments) {
-        // @ts-expect-error Accessing private property for testing
-        mockEmbedDocuments = vi.mocked(store.embeddings.embedDocuments);
-        mockEmbedDocuments.mockClear();
-      }
+      mockEmbedDocuments = vi.mocked(embeddingsOf(store).embedDocuments);
+      mockEmbedDocuments.mockClear();
     });
 
     it("should successfully handle normal embedding without errors", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       await store.addDocuments(
         "normaltest",
         "1.0.0",
@@ -1014,12 +942,6 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should retry and split batch when size error occurs", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       // Mock embedDocuments to fail first time with size error, then succeed on splits
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
         callCount++;
@@ -1061,12 +983,6 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should truncate single oversized text when size error occurs", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       // Mock embedDocuments to fail first time with size error for single large text
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
         callCount++;
@@ -1097,16 +1013,14 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should truncate an oversized single text after splitting a batch", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
+      const maxTextLength = 800;
+      const singleTexts: string[] = [];
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
-        callCount++;
+        if (texts.length === 1) {
+          singleTexts.push(texts[0]);
+        }
 
-        if (texts.length > 1 || texts[0].includes("oversized")) {
+        if (texts.length > 1 || texts[0].length > maxTextLength) {
           throw new Error("maximum context length exceeded");
         }
 
@@ -1130,17 +1044,16 @@ describe("DocumentStore - With Embeddings", () => {
 
       await store.addDocuments("splittruncatetest", "1.0.0", 1, result);
 
-      expect(callCount).toBeGreaterThan(2);
+      const oversizedAttempts = singleTexts.filter((text) => text.includes("oversized"));
+      expect(oversizedAttempts).toHaveLength(2);
+      const [original, retried] = oversizedAttempts;
+      expect(original.length).toBeGreaterThan(maxTextLength);
+      expect(retried.length).toBeLessThan(original.length);
+      expect(original.startsWith(retried)).toBe(true);
       expect(await store.checkDocumentExists("splittruncatetest", "1.0.0")).toBe(true);
     });
 
     it("should detect various size error messages", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       const sizeErrorMessages = [
         "maximum context length exceeded",
         "input is too long",
@@ -1183,12 +1096,6 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should wrap non-size embedding errors without retry", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       // Mock embedDocuments to fail with non-size error
       mockEmbedDocuments.mockRejectedValue(
         new Error("Network error: connection refused"),
@@ -1220,12 +1127,6 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should include embedding context when provider response fails", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       mockEmbedDocuments.mockRejectedValue(
         new TypeError("Cannot read properties of undefined (reading '0')"),
       );
@@ -1257,12 +1158,6 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should handle nested retry for multiple batch splits", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       // Mock to fail multiple times, requiring nested splits
       mockEmbedDocuments.mockImplementation(async (texts: string[]) => {
         callCount++;
@@ -1297,12 +1192,6 @@ describe("DocumentStore - With Embeddings", () => {
     });
 
     it("should fail after retry if truncated text still too large", async () => {
-      // Skip if embeddings are disabled
-      // @ts-expect-error Accessing private property for testing
-      if (!store.embeddings) {
-        return;
-      }
-
       // Mock embedDocuments to always fail with size error (even after truncation)
       mockEmbedDocuments.mockRejectedValue(
         new Error("maximum context length exceeded - even after truncation"),
