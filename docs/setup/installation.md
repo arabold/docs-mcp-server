@@ -1,26 +1,37 @@
 # Installation
 
-This guide covers the various ways to install and run the Docs MCP Server.
+The server runs with Node.js or Docker. Either way it runs as one of two things:
 
-## 🚀 Quick Start (Recommended)
+- an HTTP server with the web UI, the API and the MCP endpoint, which any number of clients connect to;
+- an MCP server on stdio that an AI client starts itself (see [Embedded Server](#embedded-server)).
 
-The easiest way to get started is using the standalone server, which includes both the MCP endpoints and the web interface in a single process.
+## Quick Start
 
 ### Option 1: Node.js (npx)
 
-If you have Node.js 22.x installed (recommended for local development), you can run the server directly with a single command. Use `nvm use 22` and run `npm rebuild` if you recently changed Node versions:
+Requires Node.js 22 or later.
 
 ```bash
 npx @arabold/docs-mcp-server@latest
 ```
 
-This runs the server on port 6280 by default. Open **[http://localhost:6280](http://localhost:6280)** to access the web interface.
+Started from a terminal, this runs the HTTP server on port 6280:
 
-**Optional:** Prefix with `OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
+- Web UI: `http://localhost:6280`
+- MCP endpoint: `http://localhost:6280/mcp`
+
+The server listens on `127.0.0.1` only. [Configuration](configuration.md) covers the host, the port and every other setting.
+
+On its first start, the server installs Playwright's Chromium, which it uses for pages that need JavaScript. To use a Chromium you already have, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to its executable.
+
+To get a `docs-mcp-server` command instead of calling npx each time, install the package globally:
+
+```bash
+npm install -g @arabold/docs-mcp-server
+docs-mcp-server
+```
 
 ### Option 2: Docker
-
-Running via Docker ensures you have all dependencies without polluting your host system.
 
 ```bash
 docker run --rm \
@@ -30,11 +41,23 @@ docker run --rm \
   ghcr.io/arabold/docs-mcp-server:latest
 ```
 
-**Server defaults:** The Docker image starts the unified HTTP server on `0.0.0.0:6280`, with the Web UI, API, and MCP endpoint enabled. These defaults remain active when you supply unrelated options such as `--verbose`. The Node.js CLI retains TTY-based protocol auto-detection.
+The web UI and the MCP endpoint are at the same addresses as with npx. The image runs on `linux/amd64` and `linux/arm64`. Besides `latest`, each release has a tag for its version (such as `3.2.1`), its minor version (`v3.2`) and its major version (`v3`).
 
-**Overrides:** Set `DOCS_MCP_SERVER_PROTOCOL`, `DOCS_MCP_SERVER_HOST`, or `DOCS_MCP_SERVER_PORTS_DEFAULT` with Docker's `-e` option, or pass `--protocol`, `--host`, and `--port` after the image name. Supported aliases also work: `DOCS_MCP_PROTOCOL` for protocol, `DOCS_MCP_HOST` or `HOST` for host, and `DOCS_MCP_PORT` or `PORT` for port. CLI flags take precedence over generic environment variables, which take precedence over aliases and config-file values. The image supplies the lower-precedence `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0` defaults, so use runtime environment variables or CLI flags to change those settings. Adjust the container port in `-p` when changing the server port.
+**Volumes:** `/data` holds the database and `/config` holds `docs-mcp-server/config.yaml`. Keep both on volumes so they survive restarts.
 
-**Stdio clients:** Select stdio explicitly and keep stdin open with `-i` (without `-t`):
+**Server defaults:** The image starts the HTTP server on `0.0.0.0:6280` with the web UI, API and MCP endpoint, including when you pass other options such as `--verbose`. It sets these environment variables:
+
+| Variable | Value | Effect |
+|:---------|:------|:-------|
+| `DOCS_MCP_PROTOCOL` | `http` | Serve HTTP even without a terminal |
+| `HOST` | `0.0.0.0` | Listen on all interfaces |
+| `PORT` | `6280` | Server port |
+| `DOCS_MCP_STORE_PATH` | `/data` | Data directory |
+| `XDG_CONFIG_HOME` | `/config` | Config directory |
+
+**Overrides:** Pass `--protocol`, `--host` or `--port` after the image name, or set `DOCS_MCP_SERVER_PROTOCOL`, `DOCS_MCP_SERVER_HOST` or `DOCS_MCP_SERVER_PORTS_DEFAULT` with `-e`. Both win over the image's variables, and the image's variables win over `config.yaml`, so change the protocol, host and port with flags or `-e`. The alias variables `DOCS_MCP_HOST` and `DOCS_MCP_PORT` also work. [Precedence](configuration.md#precedence) lists the full order. When you change the port, change the container port in `-p` to match.
+
+**Stdio clients:** Select stdio and keep stdin open with `-i` (without `-t`):
 
 ```bash
 docker run --rm -i \
@@ -43,138 +66,89 @@ docker run --rm -i \
   ghcr.io/arabold/docs-mcp-server:latest --protocol stdio
 ```
 
-`-e DOCS_MCP_SERVER_PROTOCOL=stdio` also selects stdio. Set it to `auto` to restore TTY-based protocol selection used by earlier images.
+`-e DOCS_MCP_SERVER_PROTOCOL=stdio` has the same effect. `-e DOCS_MCP_SERVER_PROTOCOL=auto` selects stdio when the container has no terminal and HTTP otherwise.
 
-**Configuration:** The server writes its configuration to `/config/docs-mcp-server/config.yaml`. Mounting the `/config` volume ensures your settings persist across restarts.
+**Local folders:** A container reads only the folders you mount into it, and the image has no `Documents` folder for the default allowed root. Mount the folder and set `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS` to its path inside the container. [Basic Usage](../guides/basic-usage.md#docker) shows the command.
 
-**Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). The named volumes in the example above (`docs-mcp-data`, `docs-mcp-config`) inherit this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make sure it is writable by uid 1000 — either `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
+**Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). Named volumes, such as `docs-mcp-data` and `docs-mcp-config` above, take this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make it writable by uid 1000: run `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.
 
-**Optional:** Add `-e OPENAI_API_KEY="your-openai-api-key"` to enable vector search for improved results.
+### Vector Search
 
-### Configure Your Client
-
-Once the server is running (on port 6280), you need to tell your AI client where to find it.
-
-**Example: Cursor**
-
-Add this to your MCP settings:
-
-```json
-{
-  "mcpServers": {
-    "docs-mcp-server": {
-      "type": "streamableHttp",
-      "url": "http://localhost:6280/mcp"
-    }
-  }
-}
-```
-
-See **[Connecting MCP Clients](../guides/mcp-clients.md)** for instructions for **Claude**, **Cline**, **Zed**, and others.
-
-**Optional:** To improve search quality, see **[Embedding Models](../guides/embedding-models.md)** to configure OpenAI, Ollama, or other providers.
-
----
-
-## 🔌 Embedded Server
-
-You can run the MCP server directly embedded in your AI assistant without a separate process or web interface. This provides MCP integration only.
-
-Add this to your MCP settings (VS Code, Claude Desktop, etc.):
-
-```json
-{
-  "mcpServers": {
-    "docs-mcp-server": {
-      "command": "npx",
-      "args": ["@arabold/docs-mcp-server@latest"],
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-}
-```
-
-**With Vector Search (API Key):**
-
-```json
-{
-  "mcpServers": {
-    "docs-mcp-server": {
-      "command": "npx",
-      "args": ["@arabold/docs-mcp-server@latest"],
-      "env": {
-        "OPENAI_API_KEY": "sk-proj-..."
-      },
-      "disabled": false,
-      "autoApprove": []
-    }
-  }
-}
-```
-
-**Note:** When running in embedded mode, you lose access to the Web Interface unless you launch it separately (see [Basic Usage](../guides/basic-usage.md)).
-
----
-
-## 💻 CLI Usage
-
-For agents and scripts, the CLI is the simplest way to use Grounded Docs — no running server required.
+Without an embedding model, search uses full-text matching. Vector search also finds passages by meaning. To turn it on with OpenAI, set `OPENAI_API_KEY`:
 
 ```bash
-# Index documentation
-npx @arabold/docs-mcp-server@latest scrape react https://react.dev/reference/react
-
-# Query the index
-npx @arabold/docs-mcp-server@latest search react "useEffect cleanup" --output yaml
-
-# Fetch a single page as Markdown
-npx @arabold/docs-mcp-server@latest fetch-url https://react.dev/reference/react/useEffect
+OPENAI_API_KEY="sk-proj-..." npx @arabold/docs-mcp-server@latest
 ```
 
-The server and CLI share the same local database. Start the server without arguments to run the MCP endpoint and web interface, then use the CLI in parallel to query from an agent or script.
+With Docker, add `-e OPENAI_API_KEY="sk-proj-..."`. [Embedding Models](../guides/embedding-models.md) covers Ollama, Gemini, Azure OpenAI and other providers.
 
-See **[Basic Usage](../guides/basic-usage.md#-cli-usage)** for the full command reference and output formats.
+### Connect a Client
 
----
-
-## 🤖 Agent Skills
-
-The repository includes ready-made [Agent Skills](https://agentskills.io) in the [`skills/`](https://github.com/arabold/docs-mcp-server/tree/main/skills) directory. These are structured instruction files (`SKILL.md`) that teach AI coding agents how to use the CLI — covering documentation search, index management, and URL fetching.
-
-To install them, copy the skill folders into the appropriate location for your agent. Consult your agent's documentation for the correct path — for example, [Claude Code](https://code.claude.com/docs/en/skills), [Gemini CLI](https://geminicli.com/docs/cli/skills/), or [Cursor](https://cursor.com/docs/context/skills).
-
-See **[Basic Usage](../guides/basic-usage.md#agent-skills)** for the full list of bundled skills and **[agentskills.io](https://agentskills.io)** for the specification and all compatible agents.
+Point MCP clients that connect over HTTP at `http://localhost:6280/mcp`. [Connecting MCP Clients](../guides/mcp-clients.md) has the settings for Claude Code, Claude Desktop, Zed and other clients.
 
 ---
 
-## 🐳 Advanced: Docker Compose (Scaling)
+## Embedded Server
 
-For production deployments or when you need to scale processing, use Docker Compose to run separate services. The system selects either a local in-process worker or a remote worker client based on the configuration.
+An MCP client can start the server itself and talk to it over stdio. The server then runs only while the client runs, and serves no web UI. Add this to the client's MCP settings:
 
-1.  **Clone the repository:**
+```json
+{
+  "mcpServers": {
+    "docs-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@arabold/docs-mcp-server@latest"],
+      "env": {
+        "OPENAI_API_KEY": "sk-proj-..."
+      }
+    }
+  }
+}
+```
+
+Leave out `env` to run with full-text search only. The server selects stdio because the client connects through pipes rather than a terminal; add `"--protocol", "stdio"` to `args` to select it explicitly.
+
+The embedded server, the CLI and a server you start yourself all use the same data directory, so they see the same documentation. To manage it in a browser, start the web UI separately (see [Basic Usage](../guides/basic-usage.md)).
+
+---
+
+## Docker Compose
+
+The repository's `docker-compose.yml` runs the server as three containers from the same image:
+
+| Service | Command | Port | Role |
+|:--------|:--------|:-----|:-----|
+| `worker` | `worker` | 8080 | Runs the scrape jobs and owns the database (`docs-mcp-data` volume). |
+| `mcp` | `mcp --server-url http://worker:8080/api` | 6280 | MCP endpoint at `http://localhost:6280/mcp`. |
+| `web` | `web --server-url http://worker:8080/api` | 6281 | Web UI at `http://localhost:6281`. |
+
+1. Clone the repository:
 
     ```bash
     git clone https://github.com/arabold/docs-mcp-server.git
     cd docs-mcp-server
     ```
 
-2.  **Set your environment variables:**
+2. Create a `.env` file in the repository root. All three services read their environment from it, and Compose requires the file to exist. Put your embedding provider credentials in it, or leave it empty for full-text search only:
 
     ```bash
-    export OPENAI_API_KEY="your-key-here"
+    echo 'OPENAI_API_KEY=sk-proj-...' > .env
     ```
 
-3.  **Start all services:**
+    `.env.example` lists the variables you can set. Copy only the lines you need: its placeholder credentials would make the server try providers you have not set up.
+
+3. Start the services:
 
     ```bash
     docker compose up -d
     ```
 
-### Service Architecture
+[Deployment Modes](../infrastructure/deployment-modes.md) explains how the worker and the coordinators work together and how to scale them.
 
--   **Worker** (port 8080): Handles documentation processing jobs.
--   **MCP Server** (port 6280): Provides the `/mcp` endpoint for AI tools.
--   **Web Interface** (port 6281): Browser-based management interface.
+---
 
-See [Deployment Modes](../infrastructure/deployment-modes.md) for more architectural details.
+## Next Steps
+
+- [Basic Usage](../guides/basic-usage.md): add documentation in the web UI, use the CLI and the bundled Agent Skills.
+- [Configuration](configuration.md): config file, environment variables and every setting.
+- [Embedding Models](../guides/embedding-models.md): set up vector search.

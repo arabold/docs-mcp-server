@@ -104,6 +104,37 @@ interface EmbeddingBatchContext {
 }
 
 /**
+ * English stop words that full-text search does not look up on their own.
+ *
+ * FTS5 has no stop words, so a word like "the" or "to" matches most chunks of
+ * every library. Looking it up as its own OR term reads its whole doclist across
+ * the store twice (once to match, once for bm25's row counts), yet it barely
+ * moves the ranking: bm25 gives a term found in more than half the rows a weight
+ * of 1e-6. These words still count inside the exact full-query phrase and inside
+ * phrases the user put in quotes.
+ *
+ * This is the default English stop word list of Apache Lucene
+ * (`EnglishAnalyzer.ENGLISH_STOP_WORDS_SET`, also Elasticsearch's `_english_`).
+ * Longer lists such as Snowball's also drop "how", "what", "I" and "do". Those
+ * are in far fewer chunks, so they still carry real bm25 weight and dropping
+ * them reorders results. Entries are compared after lower-casing the query word
+ * and trimming punctuation from it.
+ */
+const FTS_STOP_WORDS: ReadonlySet<string> = new Set(
+  (
+    "a an and are as at be but by for if in into is it no not of on or such " +
+    "that the their then there these they this to was will with"
+  ).split(" "),
+);
+
+/** Whether a word from an unquoted part of a search query is in `FTS_STOP_WORDS`. */
+function isFtsStopWord(word: string): boolean {
+  return FTS_STOP_WORDS.has(
+    word.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""),
+  );
+}
+
+/**
  * Whether a competing representation should be turned away.
  *
  * A page reachable as both a published Markdown file and an HTML page produces
@@ -954,14 +985,22 @@ export class DocumentStore {
    * - Individual terms: `"term1" OR "term2" OR "phrase"`
    * - Combined: `"full query" OR "term1" OR "term2"`
    *
+   * Unquoted words in `FTS_STOP_WORDS` ("the", "to", "is", ...) are left out of
+   * the individual terms. They stay in the exact match and in quoted phrases. A
+   * query with nothing but stop words and punctuation keeps every word as a term.
+   *
    * Examples:
    * - `foo bar` -> `"foo bar" OR "foo" OR "bar"`
    * - `"hello world"` -> `"hello world"`
    * - `test "exact phrase" word` -> `"test exact phrase word" OR "test" OR "exact phrase" OR "word"`
+   * - `how to use the hooks` -> `"how to use the hooks" OR "how" OR "use" OR "hooks"`
+   * - `"is it" in the docs` -> `"is it in the docs" OR "is it" OR "docs"`
+   * - `is it in the` -> `"is it in the" OR "is" OR "it" OR "in" OR "the"`
+   * - `is it in the ?` -> `"is it in the ?" OR "is" OR "it" OR "in" OR "the" OR "?"`
    */
   private escapeFtsQuery(query: string): string {
     // Tokenize the query using a simple quote-toggle state machine
-    const tokens: string[] = [];
+    const tokens: { text: string; quoted: boolean }[] = [];
     let currentToken = "";
     let inQuote = false;
 
@@ -969,26 +1008,16 @@ export class DocumentStore {
       const char = query[i];
 
       if (char === '"') {
-        // Toggle quote mode
-        if (inQuote) {
-          // Closing quote: save the current phrase token
-          if (currentToken.length > 0) {
-            tokens.push(currentToken);
-            currentToken = "";
-          }
-          inQuote = false;
-        } else {
-          // Opening quote: save any accumulated word token first
-          if (currentToken.length > 0) {
-            tokens.push(currentToken);
-            currentToken = "";
-          }
-          inQuote = true;
+        // Save the accumulated token: a phrase on a closing quote, a word on an opening one
+        if (currentToken.length > 0) {
+          tokens.push({ text: currentToken, quoted: inQuote });
+          currentToken = "";
         }
+        inQuote = !inQuote;
       } else if (char === " " && !inQuote) {
         // Whitespace outside quotes: token separator
         if (currentToken.length > 0) {
-          tokens.push(currentToken);
+          tokens.push({ text: currentToken, quoted: false });
           currentToken = "";
         }
       } else {
@@ -997,9 +1026,9 @@ export class DocumentStore {
       }
     }
 
-    // Save any remaining token
+    // Save any remaining token (an unclosed quote still counts as a phrase)
     if (currentToken.length > 0) {
-      tokens.push(currentToken);
+      tokens.push({ text: currentToken, quoted: inQuote });
     }
 
     // Handle empty query or only whitespace
@@ -1008,20 +1037,26 @@ export class DocumentStore {
     }
 
     // Escape and quote each token for FTS5 safety
-    const escapedTokens = tokens.map((token) => {
-      const escaped = token.replace(/"/g, '""');
-      return `"${escaped}"`;
-    });
+    const quote = (text: string) => `"${text.replace(/"/g, '""')}"`;
 
     // If single token, just return it
-    if (escapedTokens.length === 1) {
-      return escapedTokens[0];
+    if (tokens.length === 1) {
+      return quote(tokens[0].text);
     }
 
     // Build query: (Exact match of semantic content) OR (Terms ORed together)
     // Join tokens with space to match the semantic phrase, not the syntactic quotes
-    const exactMatch = `"${tokens.join(" ").replace(/"/g, '""')}"`;
-    const termsQuery = escapedTokens.join(" OR ");
+    const exactMatch = quote(tokens.map((token) => token.text).join(" "));
+    const keptTokens = tokens.filter(
+      (token) => token.quoted || !isFtsStopWord(token.text),
+    );
+    // FTS5 ignores tokens without letters or digits (`?`, `/`), so they don't
+    // count as something left to search for
+    const hasSearchableTerm = keptTokens.some((token) =>
+      /[\p{L}\p{N}]/u.test(token.text),
+    );
+    const termTokens = hasSearchableTerm ? keptTokens : tokens;
+    const termsQuery = termTokens.map((token) => quote(token.text)).join(" OR ");
 
     return `${exactMatch} OR ${termsQuery}`;
   }

@@ -1,455 +1,91 @@
 # Data Storage
 
-## Overview
+All indexed documentation lives in one SQLite database file, `documents.db`, opened with better-sqlite3 and the sqlite-vec extension. `DocumentStore` ([src/store/DocumentStore.ts](../../src/store/DocumentStore.ts)) owns the SQL. `DocumentManagementService` ([src/store/DocumentManagementService.ts](../../src/store/DocumentManagementService.ts)) wraps it for the rest of the application: version resolution, page reads, removal, and the events that tell views the stored documentation changed.
 
-The storage system uses SQLite with a normalized schema design for efficient document storage, retrieval, and version management. The schema supports page-level metadata tracking, ETag-based change detection, hierarchical document chunking, and embedding model identity tracking.
+The schema is defined by the migrations in [db/migrations/](../../db/migrations/). Read them for tables, columns, indexes and triggers.
 
-## Database Schema
+## Location
 
-The database consists of four core tables with normalized relationships, plus a metadata table for system-level configuration tracking:
+`resolveStorePath` ([src/utils/paths.ts](../../src/utils/paths.ts)) picks the directory. The `--store-path` option or `DOCS_MCP_STORE_PATH` wins when set. Otherwise a `.store/` directory in the project root is used if it already holds a database, which is the legacy location. Otherwise the store goes to the operating system's data directory for `docs-mcp-server`, for example `~/Library/Application Support/docs-mcp-server/` on macOS.
+
+## Data model
 
 ```mermaid
 erDiagram
-    libraries ||--o{ versions : has
+    libraries ||--|{ versions : has
     versions ||--o{ pages : contains
-    pages ||--o{ documents : has_chunks
-    
-    libraries {
-        int id PK
-        text name UK
-        text display_name
-        datetime created_at
-    }
-    
-    versions {
-        int id PK
-        int library_id FK
-        text name
-        text status
-        int progress_pages
-        int progress_max_pages
-        text error_message
-        datetime started_at
-        datetime created_at
-        datetime updated_at
-        text source_url
-        json scraper_options
-    }
-    
-    pages {
-        int id PK
-        int version_id FK
-        text url UK
-        text title
-        text etag
-        text last_modified
-        text content_type
-        int depth
-        datetime created_at
-        datetime updated_at
-    }
-    
-    documents {
-        int id PK
-        int page_id FK
-        text content
-        json metadata
-        int sort_order
-        blob embedding
-        datetime created_at
-    }
-
-    metadata {
-        text key PK
-        text value
-    }
+    pages ||--o{ documents : "split into"
+    documents ||--|| documents_fts : "indexed in"
+    documents ||--o| documents_vec : "embedded in"
 ```
 
-### Libraries Table
+A library has versions, a version has pages, and a page has chunks, stored in the `documents` table. Two search indexes follow the chunks. A separate key-value table, `metadata`, records the embedding model.
 
-Core library metadata and organization.
+### Libraries and versions
 
-**Schema:**
-- `id` (INTEGER PRIMARY KEY AUTOINCREMENT): Identifier; ids of deleted libraries are never reused
-- `name` (TEXT NOT NULL UNIQUE): Lookup key — the name trimmed and lowercased (`normalizeLibraryName()`).
-  Every lookup compares against it, so `React`, `react` and ` REACT ` reach the same library.
-- `display_name` (TEXT NOT NULL): The name as entered, trimmed only (`Next.js Docs`). Set when the
-  library is created and never changed by later writes; shown wherever a library is presented.
-- `created_at` (DATETIME): Creation timestamp
+A library's `name` is its lookup key: the name as entered, trimmed and lowercased, so `React` and ` react ` reach the same library. `display_name` keeps the name as first entered, trimmed only, and is what users see. Names are opaque; no character in them carries meaning. A library exists only while it has a version. Creating a library inserts its first version in the same transaction, and removing its last version removes the library.
 
-**Purpose:** Library identity. A library record exists only while it holds at least one version:
-creating a library inserts its first version in the same transaction, and removing its last version
-removes the library. Names are opaque — no character in a name carries meaning.
-
-**Code Reference:** `src/store/types.ts` - Type definitions used throughout DocumentManagementService
-
-### Versions Table
-
-Version tracking with comprehensive status and configuration.
-
-**Schema:**
-- `id` (INTEGER PRIMARY KEY): Auto-increment identifier
-- `library_id` (INTEGER FK): References libraries(id)
-- `name` (TEXT): Version name (NULL for unversioned content)
-- `status` (TEXT): Version indexing status (not_indexed, queued, running, completed, failed, cancelled, updating)
-- `progress_pages` (INTEGER): Current page count during indexing
-- `progress_max_pages` (INTEGER): Maximum pages to index
-- `error_message` (TEXT): Error details if indexing fails
-- `started_at` (DATETIME): When indexing job started
-- `created_at` (DATETIME): Creation timestamp
-- `updated_at` (DATETIME): Last update timestamp
-- `source_url` (TEXT): Original scraping URL
-- `scraper_options` (JSON): Stored scraper configuration for reproducibility
-
-**Purpose:** Job state management, progress tracking, and scraper configuration persistence.
-
-**Code Reference:** `src/store/types.ts` lines 184-201 (DbVersion interface)
+Version labels are trimmed and lowercased too (`normalizeVersionLabel` in [src/store/types.ts](../../src/store/types.ts)). The empty label holds unversioned documentation. Labels are otherwise kept as given, so `stable` is as valid as `1.2.0`. Matching a requested version to a stored label is `DocumentManagementService.findBestVersion`'s job; the [version-resolution spec](../../openspec/specs/version-resolution/spec.md) has the rules.
 
-### Pages Table
+`DocumentStore.claimVersion` creates or claims a library and version in one transaction and applies the caller's policy for an existing target (`ExistingTargetPolicy`): fail when the version exists, fail when the library exists (the web UI's "Add library"), or replace.
 
-Page-level metadata for each unique URL within a version.
+A version row is also the durable record of its indexing job. [Pipeline Architecture](pipeline-architecture.md#jobs-and-versions) describes how the pipeline keeps it current.
 
-**Schema:**
-- `id` (INTEGER PRIMARY KEY): Auto-increment identifier
-- `version_id` (INTEGER FK): References versions(id)
-- `url` (TEXT): Page URL (unique per version)
-- `title` (TEXT): Page title extracted from content
-- `etag` (TEXT): HTTP ETag for change detection
-- `last_modified` (TEXT): HTTP Last-Modified header
-- `source_content_type` (TEXT): Original MIME type of the fetched resource before processing
-- `content_type` (TEXT): MIME type of the stored chunk content after processing
-- `depth` (INTEGER): Crawl depth from source URL (0 = root page)
-- `created_at` (DATETIME): Creation timestamp
-- `updated_at` (DATETIME): Last update timestamp
+### Pages
 
-**Purpose:** Page-level metadata tracking, original-versus-processed content type tracking, ETag-based refresh support, and depth tracking for scoping.
+There is one page row per URL per version. It holds what a refresh needs to ask whether the page changed: ETag, Last-Modified and crawl depth. It records the content type before and after processing (`source_content_type` and `content_type`), so a PDF stored as Markdown keeps both. When the content came from a different location than the URL the page is recorded under, `content_url` names that location. [Refresh Architecture](refresh-architecture.md) covers how a refresh uses these fields.
 
-**Code Reference:** 
-- `db/migrations/009-add-pages-table.sql` - Initial pages table creation
-- `db/migrations/010-add-depth-to-pages.sql` - Depth column addition
-- `src/store/types.ts` lines 9-20 (DbPage interface)
+### Chunks
 
-### Documents Table
+A chunk row holds the chunk's text, its position in the page (`sort_order`, starting at 0), JSON metadata with its `level`, `path` and `types`, and its embedding as a float32 blob. [Splitter Hierarchy](splitter-hierarchy.md) explains the metadata.
 
-Document chunks with embeddings and hierarchical metadata.
+## Writing a page
 
-**Schema:**
-- `id` (INTEGER PRIMARY KEY): Auto-increment identifier
-- `page_id` (INTEGER FK): References pages(id)
-- `content` (TEXT): Chunk content text
-- `metadata` (JSON): Chunk-specific metadata (level, path, types)
-- `sort_order` (INTEGER): Ordering within page
-- `embedding` (BLOB): Vector embedding as binary data
-- `created_at` (DATETIME): Creation timestamp
+`DocumentStore.addDocuments` writes one page at a time. When vector search is enabled, it computes the embeddings first, outside any transaction, so slow provider calls never hold the write lock. Each chunk is embedded together with a short header naming the page title, URL and section path, which gives the vector context the chunk text lacks. One transaction then writes the page row, validators included, and replaces the page's previous chunks with the new ones, so a stored ETag always describes the stored content.
 
-**Purpose:** Content storage with vector embeddings, hierarchical metadata, and search optimization.
+A page that exists but yields no text is recorded without chunks (`addEmptyPage`), which clears what it held before.
 
-**Code Reference:** `src/store/types.ts` lines 39-48 (DbChunk interface)
+## Search indexes
 
-### Metadata Table
+Triggers on `documents` keep both indexes in step with the chunks, so code that writes chunks never touches the indexes directly.
 
-Key-value store for system-level configuration tracking, independent of library/version data.
+- `documents_fts` is an FTS5 table over chunk text, page title, page URL and section path, using the Porter stemmer over the `unicode61` tokenizer. It keeps its own copy of the text.
+- `documents_vec` is a sqlite-vec table with each chunk's embedding. It is partitioned by library and version, so a nearest-neighbour query reads only the version being searched.
 
-**Schema:**
-- `key` (TEXT PRIMARY KEY): Configuration key name
-- `value` (TEXT NOT NULL): Configuration value
+The vector table's dimension is fixed when the table is created. On startup `DocumentStore.ensureVectorTable` rebuilds the table when the dimension or the partition columns differ from what the store needs. It keeps vectors of the right dimension and fills in the rest from the embeddings stored with the chunks.
 
-**Purpose:** Tracks the active embedding model identity (`embedding_model` and `embedding_dimension` keys) to detect incompatible configuration changes between server restarts. When a model or dimension change is detected, the server prompts the user to confirm vector invalidation before proceeding.
+## Search
 
-**Code Reference:** `db/migrations/013-create-metadata-table.sql`, `src/store/DocumentStore.ts` - `getEmbeddingMetadata()`, `setEmbeddingMetadata()`, `checkEmbeddingModelChange()`
+`DocumentStore.findByContent` finds the chunks that match a query within one library version. With vector search enabled, it runs a full-text query and a nearest-neighbour query and fuses the two rankings with Reciprocal Rank Fusion. Both sides fetch more candidates than requested (`search.overfetchFactor`, with `search.vectorMultiplier` widening the vector side), and `search.weightVec` and `search.weightFts` weight the two rankings. Without vector search, BM25 ranks the full-text matches alone. The full-text query matches the whole input as a phrase or any of its terms, and quoted text stays one term. The full-text index covers every library, so each match is checked against the version's chunk IDs, read from indexes, before any row is read; a common word therefore costs no lookups in other libraries.
 
-## Schema Evolution
+Chunks typed `structural`, the opening lines of a class or similar declaration, are never returned as matches. They appear only as context around other matches. [Search Result Reassembly](search-result-reassembly.md) describes how matches become results, and the [hybrid-search spec](../../openspec/specs/hybrid-search/spec.md) has the ranking requirements.
 
-### Migration System
+## Embedding model identity
 
-Sequential SQL migrations in `db/migrations/`:
+Vectors from different models cannot be compared, so the `metadata` table records the embedding model and dimension the stored vectors were made with. Unless `embeddings.vectorDimension` is set explicitly, the dimension is the model's own: a known value, or the length of a probe vector on first use, and the stored value on later starts. Vectors shorter than the table's dimension are padded with zeros.
 
-1. `000-initial-schema.sql` - Base schema with documents, FTS, and vector tables
-2. `001-add-indexed-at-column.sql` - Indexing timestamp tracking
-3. `002-normalize-library-table.sql` - Library and version normalization
-4. `003-normalize-vector-table.sql` - Vector storage optimization
-5. `004-complete-normalization.sql` - Remove redundant columns, finalize schema
-6. `005-add-status-tracking.sql` - Job status and progress tracking
-7. `006-add-scraper-options.sql` - Configuration persistence for reproducibility
-8. `007-dedupe-unversioned-versions.sql` - Enforce unique unversioned content
-9. `008-case-insensitive-names.sql` - Case-insensitive library name handling
-10. `009-add-pages-table.sql` - Page-level metadata normalization
-11. `010-add-depth-to-pages.sql` - Crawl depth tracking for refresh operations
-12. `011-add-vector-triggers.sql` - FTS and vector table trigger maintenance
-13. `012-add-source-content-type.sql` - Source content type tracking on pages
-14. `013-create-metadata-table.sql` - Key-value metadata table for embedding model tracking
-15. `014-rebuild-vector-partition-keys.sql` - Partition the vector table by library and version
-16. `015-add-progress-pages-indexed.sql` - Indexed page count in version progress
-17. `016-add-content-url-to-pages.sql` - Retrieval location when it differs from the page URL
-18. `017-add-library-display-name.sql` - Case-preserving `display_name` (required, filled in from `name`
-    during the migration); removes library records without versions and re-keys names stored with
-    surrounding whitespace
-19. `018-store-embeddings-as-blobs.sql` - Float32 blob embeddings and a full-text update trigger limited to indexed columns
-20. `019-tune-indexes.sql` - Index on `pages.created_at` for the dashboard's activity chart; drops indexes that a wider index covers or no query uses
+On startup `DocumentStore.checkEmbeddingModelChange` compares the configured model and dimension with the stored ones, and on a mismatch the store refuses to open. The default command and `mcp` first ask for confirmation when they run in an interactive terminal (`handleEmbeddingModelChange` in [src/cli/utils.ts](../../src/cli/utils.ts)). Confirming clears every stored vector and recreates the vector table. Full-text search keeps working, and a library has vectors again once it is scraped again.
 
-**Code Reference:** All migration files in `db/migrations/` directory
+[Embedding Models](../guides/embedding-models.md) covers providers and model names. The [embedding-model-change-safety spec](../../openspec/specs/embedding-model-change-safety/spec.md) has the requirements.
 
-### Migration Application
+## Migrations
 
-Automatic migration execution on startup:
+`applyMigrations` ([src/store/applyMigrations.ts](../../src/store/applyMigrations.ts)) runs on every start. It applies the files in `db/migrations/` that `_schema_migrations` does not list yet, in file-name order, inside one IMMEDIATE transaction, and retries while another process holds the database. A file can divide itself into labelled steps with `-- @migration-step <label>` lines, and each step is logged with its duration. After applying migrations it runs `VACUUM`.
 
-- Check current schema version against available migrations
-- Apply pending migrations sequentially
-- Validate schema integrity after each migration
-- Handle migration failures with detailed error messages
-- Trigger-based FTS index maintenance
+Migrations only go forward. Returning to an older release means restoring a backup taken before the upgrade.
 
-## Data Location
+Migrations run with SQLite's rollback journal, never with `journal_mode = OFF`. Destructive migrations drop and recreate tables and virtual tables, and if a later step fails, the rollback must restore the database as it was. Tuning that keeps rollback intact, such as cache size, memory mapping and `synchronous = NORMAL`, is applied during migrations. Afterwards the store switches to WAL mode with a bounded WAL file, a busy timeout and foreign keys.
 
-### Storage Directory Resolution
+Validate large or destructive migrations against a copy of important local databases before running them against the live store. Take the copy with SQLite's backup API or an application-level copy so it is consistent. Run the new version against the copy and check table counts and search results before migrating high-value data. The [database-migrations spec](../../openspec/specs/database-migrations/spec.md) has the requirements.
 
-Database location determined by priority:
+## Concurrent access
 
-1. Project-local `.store` directory (development)
-2. OS-specific application data directory (production)
-3. Temporary directory as fallback
+Several processes can open the same database, for example a server and a local CLI `scrape`. WAL mode lets readers continue while one connection writes. Writes are serialized; a writer that finds the database locked waits up to the busy timeout. Operations that read and then write, such as claiming or removing a version, run in IMMEDIATE transactions that take the write lock before they read.
 
-### Default Storage Location
+## Disk space
 
-On macOS: `~/Library/Application Support/docs-mcp-server/`
+SQLite does not shrink the database file when rows are deleted. Deleted rows become free pages, and in WAL mode the deletes are first written to `documents.db-wal`, so the files on disk can grow after a removal.
 
-**Code Reference:** `src/utils/paths.ts` - `resolveStorePath()` function
+After a bulk delete (`removeVersion` and `removeAllDocuments`) the store runs a passive WAL checkpoint. It never waits on readers or writers, so search stays available. It does not shrink `documents.db`. Deleting a single page during a refresh does not checkpoint.
 
-## Document Management
-
-### DocumentManagementService
-
-Handles document lifecycle operations with normalized schema access.
-
-**Core Operations:**
-
-- Document chunk insertion via pages table
-- Version management and cleanup
-- Library organization with case-insensitive handling
-- Page-level metadata management
-- Duplicate detection using unique constraints
-
-**Version Resolution:**
-
-- Exact version name matching
-- Semantic version range queries
-- Latest version fallback logic
-- Unversioned content handling (NULL version name)
-
-**Code Reference:** `src/store/DocumentManagementService.ts`
-
-### Document Storage Flow
-
-1. Claim the library and version in one transaction: create them when missing, or reject the
-   request when it would overwrite an existing version without an explicit replace (or, for "Add
-   library", when the library already exists)
-2. Store the job configuration on the version record
-3. Create page records for each unique URL
-4. Process and store document chunks linked to pages
-5. Generate and store embeddings as binary BLOB
-6. Update version status and progress
-
-## Embedding Management
-
-### Vector Storage
-
-Each embedding is stored as a float32 blob in `documents.embedding`, 4 bytes per dimension:
-
-- 1536-dimensional vectors by default (configurable via `embeddings.vectorDimension`)
-- Triggers on `documents` copy the blob into the `documents_vec` sqlite-vec table, which serves KNN search
-- When `documents_vec` is rebuilt, vectors missing from it are backfilled from `documents.embedding`
-- NULL for documents without embeddings
-
-**Code Reference:** `src/store/types.ts` line 4 (EMBEDDINGS_VECTOR_DIMENSION constant)
-
-### EmbeddingFactory
-
-Centralized embedding generation supporting multiple providers.
-
-**Supported Providers:**
-
-- **OpenAI:** text-embedding-3-small (default), text-embedding-3-large, custom endpoints
-- **Google:** Gemini embedding models, Vertex AI with service account auth
-- **Azure:** Azure OpenAI service with custom deployments
-- **AWS:** Bedrock embedding models with IAM authentication
-
-**Code Reference:** `src/store/embeddings/EmbeddingFactory.ts`
-
-## Search Implementation
-
-### DocumentRetrieverService
-
-Handles search and retrieval operations with hybrid ranking.
-
-**Search Methods:**
-
-- Vector similarity search using sqlite-vec extension
-- Full-text search using FTS5 virtual table
-- Hybrid search with Reciprocal Rank Fusion (RRF)
-- Context-aware result assembly
-
-**Search Architecture:**
-
-1. Query embeddings generated for vector search
-2. FTS5 query for keyword matching
-3. Results combined using RRF algorithm
-4. Chunks assembled with hierarchical context
-5. Results ranked by combined score
-
-**Code Reference:** `src/store/DocumentRetrieverService.ts`
-
-### FTS Implementation
-
-Full-text search using SQLite FTS5:
-
-- Porter stemmer for English language
-- Unicode61 tokenizer for international support
-- Trigger-based index maintenance (automatic updates)
-- External content mode (FTS references documents table)
-
-**Indexed Fields:** content, title, url, path (from metadata)
-
-## Data Consistency
-
-### Write-Through Architecture
-
-Immediate persistence of state changes via database transactions:
-
-- Job status updates to versions table
-- Progress tracking during indexing
-- Configuration changes with full audit trail
-- Error information for debugging
-
-### Transaction Management
-
-Database transactions ensure consistency:
-
-- Atomic page and document insertions
-- Version state transitions with validation
-- Batch operations for performance
-- Automatic rollback on errors
-
-### Migration Safety
-
-Schema migrations run inside an IMMEDIATE transaction with rollback-capable
-SQLite journaling enabled. The migration runner does not use `journal_mode =
-OFF` during migration execution because destructive migrations may need to drop
-and recreate tables or virtual tables, and rollback must preserve the
-pre-migration database if a later step fails.
-
-The runner still applies rollback-safe tuning for large migrations, including
-cache, memory mapping, temporary storage, and `synchronous = NORMAL` settings.
-After migrations finish, it configures production settings such as WAL mode,
-bounded WAL checkpointing, busy timeout, foreign keys, and normal synchronous
-durability.
-
-Large or destructive migrations should be validated against a copy of important
-local databases before running them against the live store. Use SQLite's backup
-API or an application-level export/copy workflow so the copy is consistent, then
-run the new version against that copy and verify expected table counts and
-search behavior before migrating high-value data.
-
-### Concurrent Access
-
-Safe concurrent database access:
-
-- Better-sqlite3 with synchronous API
-- Transaction-based locking
-- Read operations don't block each other
-- Write operations serialize automatically
-
-**Code Reference:** `src/store/` - All service classes use transaction blocks
-
-## Performance Considerations
-
-### Index Strategy
-
-Database indexes optimize query performance:
-
-- Primary keys on all tables (automatic)
-- Foreign key indexes for join performance
-- FTS5 indexes for text search
-- Composite indexes for common query patterns (library_id + status)
-
-**Code Reference:** Index creation statements in migration files
-
-### Query Optimization
-
-Efficient query patterns throughout the codebase:
-
-- Prepared statements for repeated queries
-- Batch operations for bulk inserts
-- JOIN queries to minimize round trips
-- Query result pagination for large result sets
-
-### Storage Efficiency
-
-Space-efficient data storage:
-
-- Binary embedding storage (BLOB format)
-- JSON metadata for flexible chunk properties
-- Normalized schema eliminates redundant data
-- SQLite VACUUM operations for space reclamation
-
-## Backup and Recovery
-
-### Data Export
-
-Export functionality through DocumentManagementService:
-
-- Complete database export via SQLite backup API
-- Library-specific export using filtered queries
-- Version-specific export for portability
-- Metadata preservation in JSON format
-
-### Data Import
-
-Import from external sources:
-
-- Database restoration from backups
-- Configuration-based re-indexing
-- Duplicate detection during import (unique constraints)
-- Automatic migration application
-
-### Disaster Recovery
-
-Recovery mechanisms:
-
-- Database integrity checks on startup
-- Transaction log for crash recovery (SQLite WAL mode)
-- Schema validation after migration
-- Automatic repair for corrupted indexes
-
-## Monitoring and Maintenance
-
-### Database Health
-
-Health monitoring capabilities:
-
-- Storage space utilization tracking
-- Query performance metrics via logging
-- Connection status monitoring
-- Error rate tracking in version records
-
-### Maintenance Operations
-
-SQLite does not shrink the database file when documents are deleted. Deleted rows become free pages, and WAL mode records those deletes in `documents.db-wal`, so the on-disk size can grow even after a remove.
-
-After bulk deletes (`removeVersion` and `removeAllDocuments`) the store runs `wal_checkpoint(PASSIVE)`. That never waits on readers or writers, so search stays available. It truncates WAL frames when nothing else is using the file. It does not shrink `documents.db`.
-
-`VACUUM` takes an exclusive lock and blocks readers. Run `docs-mcp-server compact` (or `compact` against a remote worker with `--server-url`) when the store is idle to rewrite the file and reclaim free pages. The compact command stores SQLite temporary data on disk instead of in process memory, so it keeps RSS low but needs enough free disk space for SQLite's temporary copy of the database. In-memory databases skip compaction. Single-page deletes during refresh do not checkpoint or vacuum.
-
-Other regular maintenance:
-
-- Index rebuilding via REINDEX
-- Orphaned record cleanup via foreign key constraints
-- Performance analysis using EXPLAIN QUERY PLAN
-
-### Diagnostics
-
-Debugging and diagnostic capabilities:
-
-- Query execution analysis
-- Storage space breakdown by table
-- Relationship integrity checks via PRAGMA foreign_key_check
-- Performance bottleneck identification
+The `compact` command, also available against a remote worker with `--server-url`, reclaims the space. It first merges the full-text index, because FTS5 keeps deleted text in its index until a merge drops it. It then rewrites the file with `VACUUM`. `VACUUM` takes an exclusive lock and blocks readers, so run `compact` while the store is idle. SQLite's temporary copy of the database goes to disk rather than memory, which keeps memory use low but needs enough free disk space for that copy. In-memory databases skip compaction.

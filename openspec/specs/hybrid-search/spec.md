@@ -81,6 +81,7 @@ The system SHALL construct FTS5 queries from user input using a quote-aware toke
 - **Unquoted terms**: `foo bar` produces `"foo bar" OR "foo" OR "bar"` -- both a phrase match and individual term matches are attempted.
 - **Quoted phrases**: `"exact phrase"` preserves the exact phrase match in the FTS query.
 - **Mixed input**: `test "exact phrase" word` produces `"test exact phrase word" OR "test" OR "exact phrase" OR "word"`.
+- **Stop words**: unquoted English stop words (Lucene's default list: "the", "to", "is", ...) are not added as individual terms. They stay in the full phrase and in quoted phrases. When no other term with a letter or digit is left (`is it in the`, `is it in the ?`), all words are kept as individual terms.
 
 This dual approach (phrase + individual terms) ensures both exact and partial matches are returned. The output is an unparenthesized OR chain; all tokens are individually quoted for FTS5 safety.
 
@@ -97,6 +98,14 @@ This dual approach (phrase + individual terms) ensures both exact and partial ma
 #### Scenario: Mixed query with quotes
 - **WHEN** the search query is `testing "react hooks" guide`
 - **THEN** the FTS query SHALL combine full phrase, individual terms, and the preserved quoted phrase
+
+#### Scenario: Stop words are not individual terms
+- **WHEN** the search query is `how to use the hooks`
+- **THEN** the FTS query SHALL be `"how to use the hooks" OR "how" OR "use" OR "hooks"`
+
+#### Scenario: Query made only of stop words
+- **WHEN** the search query is `is it in the` or `is it in the ?`
+- **THEN** the FTS query SHALL keep every word as an individual term
 
 ### Requirement: Overfetch Strategy
 The system SHALL overfetch results from both search methods beyond the requested `limit` to improve recall before RRF ranking:

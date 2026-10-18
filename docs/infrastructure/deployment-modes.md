@@ -1,125 +1,31 @@
 # Deployment Modes
 
-## Overview
+The server runs as one process that does everything, or as a worker that runs jobs and holds the store, with coordinators in front of it that serve the web UI and MCP. [ARCHITECTURE.md](../../ARCHITECTURE.md#system-architecture) describes how the components work together in each mode. This page covers what to run.
 
-The system supports two deployment patterns with automatic protocol detection for seamless integration with different environments.
+## Commands
 
-## Standalone Server Mode
+| Command | Serves | Port setting (default) | Jobs run |
+|---|---|---|---|
+| none (default) | Web UI, API (`/api`) and MCP (`/mcp`) over HTTP, or MCP over stdio | `server.ports.default` (6280) | In the process |
+| `mcp` | MCP (`/mcp`) over HTTP, or MCP over stdio | `server.ports.mcp` (6280) | In the process, or on a worker with `--server-url` |
+| `web` | Web UI and API | `server.ports.web` (6281) | In the process, or on a worker with `--server-url` |
+| `worker` | API only | `server.ports.worker` (8080) | In the process |
 
-Single process containing all services on one port (default: 6280). This mode combines:
+`--port`, `DOCS_MCP_PORT` and `PORT` set the port of whichever command runs, and `DOCS_MCP_WEB_PORT` sets the `web` port ahead of the other two variables. The Docker image sets `PORT=6280`, so a `worker` container listens on 6280 unless it is given `--port`. Each of these commands binds `server.host`, which defaults to `127.0.0.1`; the Docker image sets `0.0.0.0`. See [Configuration](../setup/configuration.md) for how settings combine.
 
-- MCP server accessible via the `/mcp` endpoint (Streamable HTTP, protocol revision 2026-07-28)
-- Web interface for job management
-- Embedded worker for document processing
-- API (tRPC over HTTP) for programmatic access
+## Protocol Selection
 
-### Use Cases
+The default command and `mcp` choose their MCP transport from `--protocol` (`server.protocol`, `DOCS_MCP_PROTOCOL`):
 
-- Development environments
-- Single-container deployments
-- Simple production setups
-- Local documentation indexing
+- `stdio` serves MCP on stdin and stdout and opens no port. AI clients that launch the server as a subprocess use it.
+- `http` serves the HTTP endpoints in the table above.
+- `auto`, the default, selects stdio when neither stdin nor stdout is a terminal, and HTTP otherwise.
 
-### Service Configuration
+The Docker image sets `DOCS_MCP_PROTOCOL=http`, so a container serves HTTP without a terminal. [Installation](../setup/installation.md#option-2-docker) shows how to run the image over stdio and how to override its defaults.
 
-Services can be selectively enabled via AppServerConfig:
+## Single Process
 
-- `enableMcpServer`: MCP protocol endpoint
-- `enableWebInterface`: Web UI and management API
-- `enableApiServer`: HTTP API for pipeline and data operations (served at `/api`)
-
-Jobs run in the server's own process unless it is started with `--server-url`; the backend the server serves (see `openBackend()`) decides this.
-
-## Distributed Mode
-
-Separate coordinator and worker processes for scaling. The coordinator handles interfaces while the worker processes jobs.
-
-### Architecture
-
-- **Coordinator**: Runs MCP server, web interface, and API; stateless, so multiple replicas can run at once
-- **Worker**: A single process that executes document processing jobs and owns the SQLite-backed document store
-- **Communication**: Coordinators use the API (tRPC over HTTP) to talk to the worker
-
-### Use Cases
-
-- High-volume processing
-- Container orchestration (Kubernetes, Docker Swarm)
-- Scaling coordinator (web/MCP) replicas independently of the worker
-- Resource isolation
-
-### Worker Management
-
-The worker may expose a simple `/health` or container-level healthcheck for monitoring. Coordinators communicate with the worker via Pipeline RPC.
-
-### Upgrading
-
-Upgrade the worker together with, or before, its coordinators. The worker owns the document store and applies database migrations, and newer coordinators may send request options an older worker does not know. An older worker ignores them silently: for example, it would overwrite an existing library version that a newer coordinator asked it to protect.
-
-## Protocol Auto-Detection
-
-Outside Docker, the system automatically selects communication protocol based on execution environment. The Docker image defaults to HTTP regardless of TTY status; runtime environment variables or CLI flags can select another protocol.
-
-### Detection Logic
-
-```
-if (!process.stdin.isTTY && !process.stdout.isTTY) {
-  return "stdio";  // AI tools, CI/CD
-} else {
-  return "http";   // Interactive terminals
-}
-```
-
-### Stdio Mode
-
-- Direct MCP communication via stdin/stdout
-- Used by VS Code, Claude Desktop, other AI tools
-- No HTTP server required
-- Minimal resource usage
-
-### HTTP Mode
-
-- Streamable HTTP transport for MCP at `/mcp` (protocol revision 2026-07-28)
-- Full web interface available
-- API accessible at `/api`
-- Suitable for browser access
-
-### Manual Override
-
-Protocol can be explicitly set via `--protocol stdio|http` flag, bypassing auto-detection.
-
-## Configuration
-
-Deployment mode, ports, and embedding settings are resolved through the shared configuration loader (defaults → `docs-mcp.config.yaml` or `DOCS_MCP_CONFIG` → legacy envs → generic env `DOCS_MCP_<KEY>` → CLI flags for the current run). Override with YAML or env keys such as `DOCS_MCP_PROTOCOL`, `DOCS_MCP_PORT`, and `DOCS_MCP_EMBEDDING_MODEL`; use CLI flags like `--protocol`, `--port`, `--server-url`, or `--resume` when you need per-invocation changes.
-
-## Job Recovery
-
-Job recovery behavior depends on deployment mode:
-
-### Standalone Server
-
-- Embedded worker recovers pending jobs from database
-- Enabled by default for persistent job processing
-- Prevents job loss during server restarts
-
-### Distributed Mode
-
-- The worker handles its own job recovery
-- Coordinators do not recover jobs to avoid conflicts
-- The worker maintains its own job state, independent of any coordinator
-
-### CLI Commands
-
-- No job recovery to prevent conflicts
-- Immediate execution model
-- Safe for concurrent CLI usage
-
-## Container Deployment
-
-Behind a reverse proxy, set `--public-url` (or `DOCS_MCP_SERVER_PUBLIC_URL`) to the URL clients use, including any path such as `https://example.com/docs`. See [Reverse Proxy Deployment](./reverse-proxy.md).
-
-The server answers to IP addresses, `localhost` and single-label names such as a Compose service name. If clients reach the container under a dotted name, such as `nas.local`, set the public URL to it. See [Host Names the Server Answers To](../setup/configuration.md#host-names-the-server-answers-to).
-
-### Single Container
+The default command serves the web UI, the API and MCP from one process, which also runs every job and holds the store. It suits local use and single-container deployments:
 
 ```bash
 docker run --rm \
@@ -129,42 +35,73 @@ docker run --rm \
   ghcr.io/arabold/docs-mcp-server:latest
 ```
 
-The image starts the unified HTTP server on `0.0.0.0:6280` with the Web UI, API, and MCP endpoint enabled. Its `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0` environment defaults remain active with unrelated arguments such as `--verbose`. Override them with runtime environment variables or CLI flags; image environment values take precedence over config-file values. Both supported aliases and generic environment overrides remain available.
+Behind a reverse proxy, set `--public-url` (`DOCS_MCP_SERVER_PUBLIC_URL`) to the URL clients use, including any path, such as `https://example.com/docs`. See [Reverse Proxy Deployment](./reverse-proxy.md).
 
-Docker stdio clients use `docker run --rm -i ghcr.io/arabold/docs-mcp-server:latest --protocol stdio`, keeping stdin open without allocating a TTY. `DOCS_MCP_SERVER_PROTOCOL=auto` restores TTY-based protocol selection. See [Installation](../setup/installation.md#option-2-docker) for the complete override and persistence options.
+The server answers to IP addresses, `localhost` and single-label names such as a Compose service name. When clients reach it under a dotted name, such as `nas.local`, set the public URL to that name. See [Host Names the Server Answers To](../setup/configuration.md#host-names-the-server-answers-to).
 
-### Multi-Container (Docker Compose)
+## Separate Worker
+
+One `worker` process owns the store and runs every job. It needs the embedding settings and API keys; coordinators need neither. At startup it logs the URL to give coordinators, such as `Worker available at http://127.0.0.1:8080/api`.
+
+Coordinators are `web` and `mcp` processes started with `--server-url` pointing at that URL. They keep no state: document reads, searches and job requests go to the worker over HTTP, and job events come back over a WebSocket at the same URL. Most CLI commands (`scrape`, `refresh`, `search`, `list`, `find-version`, `remove`, `compact`) also take `--server-url` and then work against the worker instead of a local store.
+
+The worker URL may include a path when a reverse proxy serves the worker under one, such as `https://example.com/docs/api`. The proxy must pass WebSocket upgrades on that path. Without the event stream, the web UI gets no live updates and CLI commands that wait for a job poll the worker for its state instead.
+
+The worker checks the `Host` header like every other process. Coordinators that reach it under a dotted name, such as `worker.internal`, need that name in the worker's `--public-url` or `server.allowedOrigins`.
+
+The link between coordinators and the worker has no authentication. Keep the worker on a private network and don't publish its port. See [Infrastructure Security](./security.md).
+
+A Docker Compose setup with one worker and both coordinators:
 
 ```yaml
 services:
-  coordinator:
-    image: ghcr.io/arabold/docs-mcp-server:latest
-    ports: ["6280:6280"]
-  command: ["mcp", "--server-url", "http://worker:8080/api"]
-
   worker:
     image: ghcr.io/arabold/docs-mcp-server:latest
-    ports: ["8080:8080"]
     command: ["worker", "--port", "8080"]
+    env_file: [.env] # embedding provider settings and keys
+    volumes:
+      - docs-mcp-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/ping').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 5s
+      retries: 10
+
+  mcp:
+    image: ghcr.io/arabold/docs-mcp-server:latest
+    command: ["mcp", "--port", "6280", "--server-url", "http://worker:8080/api"]
+    ports: ["6280:6280"]
+    depends_on:
+      worker:
+        condition: service_healthy
+
+  web:
+    image: ghcr.io/arabold/docs-mcp-server:latest
+    command: ["web", "--port", "6281", "--server-url", "http://worker:8080/api"]
+    ports: ["6281:6281"]
+    depends_on:
+      worker:
+        condition: service_healthy
+
+volumes:
+  docs-mcp-data:
 ```
 
-The worker URL may include a path when a reverse proxy serves the worker under one, such as `https://example.com/docs/api`. The coordinator's API calls and its event WebSocket both use that URL.
+A coordinator exits at startup when the worker doesn't answer, so it waits for the worker's health check. The repository's `docker-compose.yml` is a fuller version of this setup.
+
+## Interrupted Jobs
+
+A job that stops with its process, for example in a crash, leaves its version queued or running in the store. A `worker` runs such jobs again when it starts, unless it gets `--no-resume`. The default command marks them failed with "Job interrupted" unless it gets `--resume`. Coordinators with `--server-url` leave them to the worker. [Interrupted Jobs](../concepts/pipeline-architecture.md#interrupted-jobs) lists what every command does with them.
 
 ## Scaling
 
-### Coordinators Scale Horizontally
+Coordinators scale horizontally. Run as many `web` and `mcp` replicas as needed, behind a load balancer or DNS, each with `--server-url` pointing at the same worker.
 
-Coordinator (`web`/`mcp`) processes are stateless: both document reads and job dispatch proxy to the worker over tRPC. Run multiple coordinator replicas behind a load balancer (or DNS), each started with `--server-url` pointing at the same worker.
+The worker does not. It keeps the job queue in memory and the documents in SQLite. A second worker would not see the first one's queue, and SQLite's locking works for processes on one host's local filesystem, not for hosts sharing a file over a network volume. Scale the worker vertically instead: give it more CPU and memory, and raise `scraper.maxConcurrency`, which sets how many jobs run at once and how many pages each job fetches at once.
 
-### The Worker Does Not Scale Horizontally
+## Health Checks
 
-The worker owns the in-memory job queue and the SQLite-backed document store. There is no supported way to run multiple worker replicas against shared state today: a second worker has no visibility into jobs queued on the first, and SQLite's WAL-based locking model is designed for concurrent processes on one host's local filesystem, not multiple hosts sharing a file over a network volume. Scale the worker vertically instead.
+`GET /api/ping` answers `200` on every process that serves the API: the default command, `web` and `worker`. The `mcp` command serves no API; check that its port accepts connections. The web UI of a `web` coordinator shows whether its connection to the worker is up.
 
-### Health Checks
+## Upgrading
 
-Expose a lightweight `/health` endpoint or container healthcheck for coordinator and worker monitoring.
-
-### Scaling Strategies
-
-- Horizontal: Add more coordinator (`web`/`mcp`) replicas in front of the one worker
-- Vertical: Increase worker concurrency (`maxConcurrency`) and resource allocation
+Upgrade the worker together with, or before, its coordinators. The worker owns the document store and applies database migrations, and newer coordinators may send request options an older worker does not know. An older worker ignores them silently: for example, it would overwrite an existing library version that a newer coordinator asked it to protect.
