@@ -1,261 +1,128 @@
+/**
+ * Tests for the Telemetry wrapper and the global `telemetry` proxy, with the
+ * real configuration, installation ID and PostHog client. Only the PostHog SDK
+ * is mocked, so the assertions read what would leave the process.
+ */
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { generateInstallationId, TelemetryConfig } from "./TelemetryConfig";
-import {
-  getTelemetryInstance,
-  initTelemetry,
-  Telemetry,
-  TelemetryEvent,
-  telemetry,
-} from "./telemetry";
+import { TelemetryConfig } from "./TelemetryConfig";
+import { initTelemetry, Telemetry, TelemetryEvent, telemetry } from "./telemetry";
 
-// Set the global __POSTHOG_API_KEY__ for testing
-(global as any).__POSTHOG_API_KEY__ = "test-api-key";
-
-// Mock the config module
-vi.mock("./TelemetryConfig", () => ({
-  TelemetryConfig: {
-    getInstance: vi.fn(() => ({
-      isEnabled: vi.fn(() => true),
-    })),
-  },
-  generateInstallationId: vi.fn(() => "test-installation-id"),
+const posthog = vi.hoisted(() => ({
+  capture: vi.fn(),
+  captureException: vi.fn(),
+  shutdown: vi.fn(),
 }));
 
-// Mock PostHogClient
-vi.mock("./postHogClient", () => ({
-  PostHogClient: vi.fn().mockImplementation(function () {
-    return {
-      capture: vi.fn(),
-      captureException: vi.fn(),
-      shutdown: vi.fn().mockResolvedValue(undefined),
-      isEnabled: vi.fn(() => true),
-    };
+vi.mock("posthog-node", () => ({
+  PostHog: vi.fn(function () {
+    return posthog;
   }),
 }));
 
+vi.stubGlobal("__POSTHOG_API_KEY__", "test-api-key");
+
+let storePath: string;
+
+/** The installation ID stored in the test's store path. */
+function installationId(): string {
+  return fs.readFileSync(path.join(storePath, "installation.id"), "utf8");
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  storePath = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-telemetry-"));
+  TelemetryConfig.getInstance().setEnabled(true);
+});
+
+afterEach(() => {
+  TelemetryConfig.getInstance().setEnabled(true);
+  fs.rmSync(storePath, { recursive: true, force: true });
+});
+
 describe("Telemetry", () => {
-  let telemetry: Telemetry;
-  let mockPostHogClient: any;
+  it("sends events with the global context and a timestamp", () => {
+    const instance = Telemetry.create(storePath);
+    instance.setGlobalContext({ appVersion: "1.0.0", appPlatform: "test" });
 
-  beforeEach(() => {
-    vi.clearAllMocks();
+    instance.track(TelemetryEvent.TOOL_USED, { tool: "test" });
 
-    // Reset TelemetryConfig mock to default enabled state
-    const mockConfig = {
-      isEnabled: vi.fn(() => true),
-    };
-    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
-
-    telemetry = Telemetry.create();
-
-    // Get the mocked instance that was created by the constructor
-    mockPostHogClient = (telemetry as any).postHogClient;
-  });
-
-  describe("constructor", () => {
-    it("should initialize with PostHogClient", () => {
-      expect(telemetry).toBeDefined();
-      expect(telemetry.isEnabled()).toBe(true);
-    });
-
-    it("should respect disabled config", () => {
-      // Mock config to return disabled
-      const mockConfig = {
-        isEnabled: vi.fn(() => false),
-      };
-      vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
-
-      const disabledTelemetry = Telemetry.create();
-      expect(disabledTelemetry.isEnabled()).toBe(false);
+    expect(posthog.capture).toHaveBeenCalledWith({
+      distinctId: installationId(),
+      event: TelemetryEvent.TOOL_USED,
+      properties: {
+        $app_version: "1.0.0",
+        app_platform: "test",
+        tool: "test",
+        timestamp: expect.any(String),
+      },
     });
   });
 
-  describe("event tracking", () => {
-    it("should track events via PostHogClient with global context", () => {
-      telemetry.setGlobalContext({ appVersion: "1.0.0" });
+  it("sends exceptions with the global context, without URLs or paths", () => {
+    const instance = Telemetry.create(storePath);
+    instance.setGlobalContext({ appVersion: "1.0.0" });
 
-      telemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
-
-      expect(mockPostHogClient.capture).toHaveBeenCalledWith(
-        "test-installation-id",
-        TelemetryEvent.TOOL_USED,
-        {
-          appVersion: "1.0.0",
-          tool: "test",
-          timestamp: expect.any(String),
-        },
-      );
-    });
-
-    it("should include timestamp in all events", () => {
-      telemetry.track(TelemetryEvent.APP_STARTED, {});
-
-      expect(mockPostHogClient.capture).toHaveBeenCalledWith(
-        "test-installation-id",
-        TelemetryEvent.APP_STARTED,
-        expect.objectContaining({
-          timestamp: expect.any(String),
-        }),
-      );
-    });
-
-    describe("disabled telemetry behavior", () => {
-      let mockConfig: any;
-      let disabledTelemetry: Telemetry;
-
-      beforeEach(() => {
-        // Mock config to return disabled
-        mockConfig = {
-          isEnabled: vi.fn(() => false),
-        };
-        vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig);
-        disabledTelemetry = Telemetry.create();
-      });
-
-      it("should return false for isEnabled when disabled", () => {
-        expect(disabledTelemetry.isEnabled()).toBe(false);
-      });
-
-      it("should not track events when disabled", () => {
-        disabledTelemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
-        expect(mockPostHogClient.capture).not.toHaveBeenCalled();
-      });
-
-      it("should not capture exceptions when disabled", () => {
-        const error = new Error("Test error");
-        disabledTelemetry.captureException(error);
-        expect(mockPostHogClient.captureException).not.toHaveBeenCalled();
-      });
-    });
-  });
-
-  describe("exception tracking", () => {
-    it("should capture exceptions via PostHogClient with global context", () => {
-      const error = new Error("Test error");
-      telemetry.setGlobalContext({ appVersion: "1.0.0" });
-
-      telemetry.captureException(error, { context: "test" });
-
-      expect(mockPostHogClient.captureException).toHaveBeenCalledWith(
-        "test-installation-id",
-        expect.objectContaining({ name: "Error", message: "Test error" }),
-        {
-          appVersion: "1.0.0",
-          context: "test",
-          timestamp: expect.any(String),
-        },
-      );
-    });
-
-    it("should send exceptions without URLs or paths", () => {
-      const error = new Error(
+    instance.captureException(
+      new Error(
         "Failed to fetch https://intranet.example.com/secret into /Users/john/docs",
-      );
+      ),
+      { context: "test" },
+    );
 
-      telemetry.captureException(error);
-
-      const sent = mockPostHogClient.captureException.mock.calls[0][1] as Error;
-      expect(sent.message).toBe("Failed to fetch [url] into [path]");
-      expect(sent.stack).not.toContain("intranet.example.com");
-      expect(sent.stack).not.toContain("/Users/");
-    });
+    expect(posthog.captureException).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Error",
+        message: "Failed to fetch [url] into [path]",
+      }),
+      installationId(),
+      { $app_version: "1.0.0", context: "test", timestamp: expect.any(String) },
+    );
+    const sent = posthog.captureException.mock.calls[0]?.[0] as Error;
+    expect(sent.stack).not.toContain("intranet.example.com");
+    expect(sent.stack).not.toContain("/Users/");
   });
 
-  describe("shutdown", () => {
-    it("should shutdown PostHogClient", async () => {
-      await telemetry.shutdown();
+  it("sends nothing when the user turned telemetry off", () => {
+    TelemetryConfig.getInstance().setEnabled(false);
+    const instance = Telemetry.create(storePath);
 
-      expect(mockPostHogClient.shutdown).toHaveBeenCalled();
-    });
-  });
+    instance.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+    instance.captureException(new Error("Test error"));
 
-  describe("isEnabled", () => {
-    it("should return enabled state", () => {
-      expect(telemetry.isEnabled()).toBe(true);
-    });
+    expect(instance.isEnabled()).toBe(false);
+    expect(posthog.capture).not.toHaveBeenCalled();
+    expect(posthog.captureException).not.toHaveBeenCalled();
   });
 });
 
 /**
- * Tests for the telemetry proxy and initTelemetry() behavior.
- * These tests verify that the global `telemetry` proxy correctly reflects
- * configuration changes made via initTelemetry().
- *
- * This specifically tests the fix for GitHub issue #306 where disabling
- * telemetry via DOCS_MCP_TELEMETRY=false was not working because the proxy
- * was caching a stale enabled instance.
+ * The global `telemetry` proxy must follow initTelemetry(). GitHub issue #306:
+ * DOCS_MCP_TELEMETRY=false did not disable telemetry, because the proxy kept a
+ * stale enabled instance.
  */
 describe("telemetry proxy", () => {
-  // We need to reset module state between tests to ensure isolation.
-  // The telemetryInstance is module-level state that persists.
+  it("sends nothing after initTelemetry({ enabled: false }), even when it was enabled before", () => {
+    initTelemetry({ enabled: true, storePath });
+    expect(telemetry.isEnabled()).toBe(true);
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    // Reset the telemetry instance by calling initTelemetry with enabled: true
-    // to restore default state for other tests
-    const mockConfig = {
-      isEnabled: vi.fn(() => true),
-      setEnabled: vi.fn(),
-    };
-    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
-    initTelemetry({ enabled: true });
-  });
-
-  it("should reflect disabled state after initTelemetry({ enabled: false })", () => {
-    // First, configure mock to return enabled = false when checked
-    const mockConfig = {
-      isEnabled: vi.fn(() => false),
-      setEnabled: vi.fn(),
-    };
-    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
-
-    // Call initTelemetry to create a new disabled instance
-    initTelemetry({ enabled: false });
-
-    // The proxy should now reflect the disabled state
-    expect(telemetry.isEnabled()).toBe(false);
-    expect(mockConfig.setEnabled).toHaveBeenCalledWith(false);
-  });
-
-  it("should identify events by the installation ID in the store path", () => {
-    vi.mocked(TelemetryConfig.getInstance).mockReturnValue({
-      isEnabled: vi.fn(() => true),
-      setEnabled: vi.fn(),
-    } as any);
-    vi.mocked(generateInstallationId).mockImplementationOnce((storePath?: string) =>
-      storePath ? `id-from-${storePath}` : "id-from-default-dir",
-    );
-
-    initTelemetry({ enabled: true, storePath: "/data" });
+    initTelemetry({ enabled: false, storePath });
     telemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
 
-    const instance = getTelemetryInstance() as any;
-    expect(instance.postHogClient.capture).toHaveBeenCalledWith(
-      "id-from-/data",
-      TelemetryEvent.TOOL_USED,
-      expect.any(Object),
-    );
+    expect(telemetry.isEnabled()).toBe(false);
+    expect(posthog.capture).not.toHaveBeenCalled();
   });
 
-  it("should not track events when disabled via initTelemetry", () => {
-    // First, configure mock to return enabled = false
-    const mockConfig = {
-      isEnabled: vi.fn(() => false),
-      setEnabled: vi.fn(),
-    };
-    vi.mocked(TelemetryConfig.getInstance).mockReturnValue(mockConfig as any);
+  it("identifies events by the installation ID in the store path", () => {
+    initTelemetry({ enabled: true, storePath });
 
-    // Call initTelemetry to create a new disabled instance
-    initTelemetry({ enabled: false });
-
-    // Access the telemetry proxy and try to track - should not throw
-    // and should not actually track anything
     telemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
 
-    // If we got here without errors, the proxy is working correctly
-    expect(telemetry.isEnabled()).toBe(false);
+    expect(posthog.capture).toHaveBeenCalledWith(
+      expect.objectContaining({ distinctId: installationId() }),
+    );
   });
 });
