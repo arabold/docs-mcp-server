@@ -497,13 +497,13 @@ export interface ActivityDay {
   date: string;
   /** Pages first indexed on this day. */
   pages: number;
-  /** Chunks first stored on this day. */
+  /** Chunks of the pages first indexed on this day. */
   chunks: number;
 }
 
 /**
  * Per-day indexing activity over a trailing window, derived from the
- * `created_at` timestamps already stored on pages and chunks. Days with no
+ * `created_at` timestamps already stored on pages. Days with no
  * activity are present with zero counts, so the series is contiguous and safe
  * to chart directly.
  */
