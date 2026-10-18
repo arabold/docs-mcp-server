@@ -679,6 +679,30 @@ describe("DocumentStore - With Embeddings", () => {
       expect(results).toHaveLength(1);
     });
 
+    it("orders results that score the same by URL, not by when they were stored", async () => {
+      // Anagram URLs give both pages the same mock embedding and the same bm25 score
+      for (const url of ["https://example.com/ba", "https://example.com/ab"]) {
+        await store.addDocuments(
+          "ties",
+          "1.0.0",
+          1,
+          createScrapeResult("Same Title", url, "identical tie content", ["same"]),
+        );
+      }
+
+      const results = await store.findByContent(
+        "ties",
+        "1.0.0",
+        "identical tie content",
+        10,
+      );
+
+      expect(results.map((result) => result.url)).toEqual([
+        "https://example.com/ab",
+        "https://example.com/ba",
+      ]);
+    });
+
     it("should perform hybrid search combining vector and FTS", async () => {
       const results = await store.findByContent(
         "searchtest",
@@ -1340,6 +1364,30 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       );
 
       expect(results).toHaveLength(1);
+    });
+
+    it("orders results that score the same by URL, not by when they were stored", async () => {
+      // Anagram URLs give both pages the same mock embedding and the same bm25 score
+      for (const url of ["https://example.com/ba", "https://example.com/ab"]) {
+        await store.addDocuments(
+          "ties",
+          "1.0.0",
+          1,
+          createScrapeResult("Same Title", url, "identical tie content", ["same"]),
+        );
+      }
+
+      const results = await store.findByContent(
+        "ties",
+        "1.0.0",
+        "identical tie content",
+        10,
+      );
+
+      expect(results.map((result) => result.url)).toEqual([
+        "https://example.com/ab",
+        "https://example.com/ba",
+      ]);
     });
 
     it("should perform FTS-only search", async () => {

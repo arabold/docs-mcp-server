@@ -61,6 +61,31 @@ import {
   type VersionStatus,
 } from "./types";
 
+/**
+ * How many full-text candidates are sorted by score alone before the
+ * deterministic tie-break, as a multiple of the candidates kept. Sorting every
+ * match by URL would read each match's page; sorting a window this size reads
+ * a few dozen, and only a tie spanning more rows than the window at the
+ * cut-off could still fall back to storage order.
+ */
+const FTS_TIE_WINDOW_FACTOR = 2;
+
+/**
+ * Orders search results that score the same: by page URL, then by position on
+ * the page. Without it, ties fall to storage order, which depends on when and
+ * how fast each page was indexed.
+ */
+function compareTies(
+  a: { url?: string; sort_order?: number },
+  b: { url?: string; sort_order?: number },
+): number {
+  // Code-point order, as SQLite's default BINARY collation sorts them
+  const urlA = a.url ?? "";
+  const urlB = b.url ?? "";
+  if (urlA !== urlB) return urlA < urlB ? -1 : 1;
+  return (a.sort_order ?? 0) - (b.sort_order ?? 0);
+}
+
 interface RawSearchResult extends DbChunk {
   // Page fields joined from pages table
   url?: string;
@@ -289,7 +314,7 @@ export class DocumentStore {
     // Sort by vector scores and assign ranks
     results
       .filter((r) => r.vec_score !== undefined)
-      .sort((a, b) => (b.vec_score ?? 0) - (a.vec_score ?? 0))
+      .sort((a, b) => (b.vec_score ?? 0) - (a.vec_score ?? 0) || compareTies(a, b))
       .forEach((result, index) => {
         vecRanks.set(Number(result.id), index + 1);
       });
@@ -297,7 +322,7 @@ export class DocumentStore {
     // Sort by BM25 scores and assign ranks
     results
       .filter((r) => r.fts_score !== undefined)
-      .sort((a, b) => (b.fts_score ?? 0) - (a.fts_score ?? 0))
+      .sort((a, b) => (b.fts_score ?? 0) - (a.fts_score ?? 0) || compareTies(a, b))
       .forEach((result, index) => {
         ftsRanks.set(Number(result.id), index + 1);
       });
@@ -2616,7 +2641,7 @@ export class DocumentStore {
               AND dv.k = ?
             ORDER BY dv.distance
           ),
-          fts_scores AS MATERIALIZED (
+          fts_window AS MATERIALIZED (
             -- No join here; see VERSION_FTS_FILTER.
             SELECT
               f.rowid as id,
@@ -2625,6 +2650,16 @@ export class DocumentStore {
             WHERE ${VERSION_FTS_FILTER}
               AND documents_fts MATCH ?
             ORDER BY fts_score
+            LIMIT ?
+          ),
+          fts_scores AS MATERIALIZED (
+            -- Ties at the cut-off go by URL and chunk position, not storage
+            -- order; see FTS_TIE_WINDOW_FACTOR.
+            SELECT w.id, w.fts_score
+            FROM fts_window w
+            JOIN documents d ON d.id = w.id
+            JOIN pages p ON p.id = d.page_id
+            ORDER BY w.fts_score, p.url, d.sort_order
             LIMIT ?
           ),
           candidates AS (
@@ -2670,6 +2705,7 @@ export class DocumentStore {
           vectorSearchK,
           versionId,
           ftsQuery,
+          overfetchLimit * FTS_TIE_WINDOW_FACTOR,
           overfetchLimit,
         ) as RawSearchResult[];
 
@@ -2678,7 +2714,7 @@ export class DocumentStore {
 
         // Sort by RRF score and take top results (truncate to original limit)
         const topResults = rankedResults
-          .sort((a, b) => b.rrf_score - a.rrf_score)
+          .sort((a, b) => b.rrf_score - a.rrf_score || compareTies(a, b))
           .slice(0, limit);
 
         return topResults.map((row) => {
@@ -2718,7 +2754,7 @@ export class DocumentStore {
               SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
               WHERE je.value = 'structural'
             )
-          ORDER BY fts_score
+          ORDER BY fts_score, p.url, d.sort_order
           LIMIT ?
         `);
 
