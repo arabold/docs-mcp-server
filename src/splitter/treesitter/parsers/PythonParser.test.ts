@@ -321,31 +321,4 @@ class TestClass${functionCount}:
       expect(boundary.endByte).toBeLessThanOrEqual(largeCode.length);
     }
   });
-
-  describe("structural nodes extraction", () => {
-    it("should extract structural nodes for compatibility", () => {
-      const code = `
-import os
-
-class Calculator:
-    def add(self, a, b):
-        return a + b
-
-def standalone_function():
-    return "hello"
-      `;
-
-      const result = parser.parse(code);
-      const nodes = parser.extractStructuralNodes(result.tree, code);
-
-      expect(nodes.length).toBeGreaterThan(0);
-
-      // Should include import, class, and functions
-      const nodeNames = nodes.map((n) => n.name);
-      expect(nodeNames).toContain("import os");
-      expect(nodeNames).toContain("Calculator");
-      expect(nodeNames).toContain("add");
-      expect(nodeNames).toContain("standalone_function");
-    });
-  });
 });

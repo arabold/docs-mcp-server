@@ -9,7 +9,6 @@
  *  - Boundary classification (structural vs content)
  *  - Name extraction accuracy
  *  - Documentation merging (startLine adjustment to doc block)
- *  - Modifiers capture
  *  - Resilience to malformed code (partial extraction)
  *  - No emission of nested local helpers (those are not structural at parser boundary level)
  *
@@ -21,7 +20,6 @@
 
 import { describe, expect, it } from "vitest";
 import { TypeScriptParser } from "./TypeScriptParser";
-import { StructuralNodeType } from "./types";
 
 const parser = new TypeScriptParser(30000);
 
@@ -177,30 +175,6 @@ class Wrapper {
     // Local helpers should NOT appear
     expect(byName.get("inner")).toBeUndefined();
     expect(byName.get("localArrow")).toBeUndefined();
-  });
-
-  it("extracts modifiers & structural nodes via extractStructuralNodes()", () => {
-    const code = `
-export abstract class Service {
-  private static instance: Service | null = null;
-  protected value = 0;
-  constructor() {}
-  public async run(): Promise<void> {}
-}
-    `.trim();
-
-    const parseResult = parser.parse(code);
-    const nodes = parser.extractStructuralNodes(parseResult.tree);
-    expect(nodes.length).toBeGreaterThan(0);
-
-    const classNode = nodes.find((n) => n.type === StructuralNodeType.CLASS_DECLARATION);
-    expect(classNode?.name).toBe("Service");
-    expect(classNode?.modifiers).toContain("export");
-    expect(classNode?.modifiers).toContain("abstract");
-
-    // Ensure method appears
-    const runNode = nodes.find((n) => n.name === "run");
-    expect(runNode?.type).toBe(StructuralNodeType.METHOD_DEFINITION);
   });
 
   it("partial extraction on malformed code (error resilience)", () => {

@@ -5,7 +5,6 @@
  *  - Single, unified parser for .ts/.tsx/.js/.jsx (+ mjs/cjs/mts/cts)
  *  - Direct boundary extraction aligned with canonical ruleset
  *  - Minimal, predictable logic (no complex multi-phase traversals)
- *  - Retain legacy extractStructuralNodes() for existing tests
  *
  * This replaces the previous inheritance-heavy BaseLanguageParser design.
  */
@@ -13,8 +12,7 @@
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import TypeScript from "tree-sitter-typescript";
 import { defaults } from "../../../utils/config";
-import type { CodeBoundary, LanguageParser, ParseResult, StructuralNode } from "./types";
-import { StructuralNodeType } from "./types";
+import type { CodeBoundary, LanguageParser, ParseResult } from "./types";
 
 /**
  * Helper: language selection (TS vs TSX).
@@ -50,21 +48,6 @@ const CONTENT_DECL_TYPES = new Set([
   "arrow_function",
   // Only emit arrow-function variables via their variable_declarator to avoid duplicates
   "variable_declarator",
-]);
-
-/**
- * Tokens considered modifiers (merged into name for static methods if needed).
- */
-const MODIFIER_TOKENS = new Set([
-  "export",
-  "default",
-  "public",
-  "private",
-  "protected",
-  "readonly",
-  "abstract",
-  "async",
-  "static",
 ]);
 
 /**
@@ -263,35 +246,6 @@ function extractName(node: SyntaxNode): string {
 }
 
 /**
- * Modifier extraction (scan children + backward tokens).
- */
-function extractModifiers(node: SyntaxNode): string[] {
-  const mods = new Set<string>();
-  for (const c of node.children) {
-    if (MODIFIER_TOKENS.has(c.type)) mods.add(c.type);
-  }
-  // Look at preceding siblings for leading modifiers (export/default)
-  let prev = node.previousSibling;
-  while (prev) {
-    if (prev.type === "comment") {
-      prev = prev.previousSibling;
-      continue;
-    }
-    if (/^\s*$/.test(prev.text)) {
-      prev = prev.previousSibling;
-      continue;
-    }
-    if (MODIFIER_TOKENS.has(prev.type)) {
-      mods.add(prev.type);
-      prev = prev.previousSibling;
-      continue;
-    }
-    break;
-  }
-  return Array.from(mods);
-}
-
-/**
  * Boundary classification mapping.
  */
 function classifyBoundaryKind(node: SyntaxNode): {
@@ -447,54 +401,6 @@ export class TypeScriptParser implements LanguageParser {
   }
 
   /**
-   * Legacy structural node extraction (used by existing tests).
-   * Produces a flat list (no parent/child linking beyond simple push).
-   */
-  extractStructuralNodes(tree: Tree, source?: string): StructuralNode[] {
-    const src = source ?? tree.rootNode.text;
-    const out: StructuralNode[] = [];
-    const structuralTypes = new Set<string>([
-      ...STRUCTURAL_DECL_TYPES,
-      ...CONTENT_DECL_TYPES,
-    ]);
-
-    const visit = (node: SyntaxNode): void => {
-      if (structuralTypes.has(node.type)) {
-        if (this.shouldSkipStructuralNode(node)) {
-          for (const child of node.children) visit(child);
-          return;
-        }
-
-        const name = extractName(node);
-        const modifiers = extractModifiers(node);
-        const { startLine, startByte } = findDocumentationStart(node, src);
-        const endLine = node.endPosition.row + 1;
-        const structuralNode: StructuralNode = {
-          type: this.classifyStructuralNode(node),
-          name,
-          startLine,
-          endLine,
-          startByte,
-          endByte: node.endIndex,
-          children: [],
-          text: this.getNodeText(node, src),
-          indentLevel: 0,
-          modifiers,
-          documentation: undefined,
-        };
-        out.push(structuralNode);
-        // Continue into children (we keep nested declarations; suppression handled separately)
-        for (const child of node.children) visit(child);
-        return;
-      }
-      for (const child of node.children) visit(child);
-    };
-
-    visit(tree.rootNode);
-    return this.deduplicate(out);
-  }
-
-  /**
    * Boundary extraction: produces CodeBoundary[] directly from AST.
    */
   extractBoundaries(tree: Tree, source: string): CodeBoundary[] {
@@ -618,56 +524,5 @@ export class TypeScriptParser implements LanguageParser {
       ancestor = ancestor.parent;
     }
     return false;
-  }
-
-  private classifyStructuralNode(node: SyntaxNode): StructuralNodeType {
-    switch (node.type) {
-      case "function_declaration":
-        return StructuralNodeType.FUNCTION_DECLARATION;
-      case "arrow_function":
-        return StructuralNodeType.ARROW_FUNCTION;
-      case "method_definition":
-      case "method_signature":
-      case "abstract_method_signature":
-        return StructuralNodeType.METHOD_DEFINITION;
-      case "constructor":
-        return StructuralNodeType.CONSTRUCTOR;
-      case "class_declaration":
-      case "abstract_class_declaration":
-        return StructuralNodeType.CLASS_DECLARATION;
-      case "interface_declaration":
-        return StructuralNodeType.INTERFACE_DECLARATION;
-      case "type_alias_declaration":
-        return StructuralNodeType.TYPE_ALIAS_DECLARATION;
-      case "enum_declaration":
-        return StructuralNodeType.ENUM_DECLARATION;
-      case "namespace_declaration":
-      case "module_declaration":
-      case "internal_module":
-        return StructuralNodeType.NAMESPACE_DECLARATION;
-      case "import_statement":
-        return StructuralNodeType.IMPORT_STATEMENT;
-      case "export_statement":
-        return StructuralNodeType.EXPORT_STATEMENT;
-      case "variable_declaration":
-      case "lexical_declaration":
-      case "variable_declarator":
-        return StructuralNodeType.VARIABLE_DECLARATION;
-      default:
-        return StructuralNodeType.VARIABLE_DECLARATION;
-    }
-  }
-
-  private deduplicate(nodes: StructuralNode[]): StructuralNode[] {
-    const seen = new Set<string>();
-    const out: StructuralNode[] = [];
-    for (const n of nodes) {
-      const key = `${n.startByte}:${n.endByte}:${n.type}:${n.name}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(n);
-    }
-    out.sort((a, b) => a.startByte - b.startByte);
-    return out;
   }
 }

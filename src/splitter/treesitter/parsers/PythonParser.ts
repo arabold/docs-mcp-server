@@ -11,8 +11,7 @@
 import Parser, { type SyntaxNode, type Tree } from "tree-sitter";
 import Python from "tree-sitter-python";
 import { defaults } from "../../../utils/config";
-import type { CodeBoundary, LanguageParser, ParseResult, StructuralNode } from "./types";
-import { StructuralNodeType } from "./types";
+import type { CodeBoundary, LanguageParser, ParseResult } from "./types";
 
 /**
  * Sets of node types we care about for Python.
@@ -280,53 +279,6 @@ export class PythonParser implements LanguageParser {
   }
 
   /**
-   * Legacy structural node extraction (used by existing tests).
-   * Produces a flat list (no parent/child linking beyond simple push).
-   */
-  extractStructuralNodes(tree: Tree, source?: string): StructuralNode[] {
-    const src = source ?? tree.rootNode.text;
-    const out: StructuralNode[] = [];
-    const structuralTypes = new Set<string>([
-      ...STRUCTURAL_DECL_TYPES,
-      ...CONTENT_DECL_TYPES,
-    ]);
-
-    const visit = (node: SyntaxNode): void => {
-      if (structuralTypes.has(node.type)) {
-        if (this.shouldSkipStructuralNode(node)) {
-          for (const child of node.children) visit(child);
-          return;
-        }
-
-        const name = extractName(node);
-        const { startLine, startByte } = findDocumentationStart(node, src);
-        const endLine = node.endPosition.row + 1;
-        const structuralNode: StructuralNode = {
-          type: this.classifyStructuralNode(node),
-          name,
-          startLine,
-          endLine,
-          startByte,
-          endByte: node.endIndex,
-          children: [],
-          text: this.getNodeText(node, src),
-          indentLevel: 0,
-          modifiers: [],
-          documentation: undefined,
-        };
-        out.push(structuralNode);
-        // Continue into children (we keep nested declarations; suppression handled separately)
-        for (const child of node.children) visit(child);
-        return;
-      }
-      for (const child of node.children) visit(child);
-    };
-
-    visit(tree.rootNode);
-    return this.deduplicate(out);
-  }
-
-  /**
    * Boundary extraction: produces CodeBoundary[] directly from AST.
    */
   extractBoundaries(tree: Tree, source: string): CodeBoundary[] {
@@ -391,33 +343,5 @@ export class PythonParser implements LanguageParser {
   private shouldSkipStructuralNode(_node: SyntaxNode): boolean {
     // Currently no wrapper types to skip in Python
     return false;
-  }
-
-  private classifyStructuralNode(node: SyntaxNode): StructuralNodeType {
-    switch (node.type) {
-      case "function_definition":
-      case "async_function_definition":
-        return StructuralNodeType.FUNCTION_DECLARATION;
-      case "class_definition":
-        return StructuralNodeType.CLASS_DECLARATION;
-      case "import_statement":
-      case "import_from_statement":
-        return StructuralNodeType.IMPORT_STATEMENT;
-      default:
-        return StructuralNodeType.VARIABLE_DECLARATION;
-    }
-  }
-
-  private deduplicate(nodes: StructuralNode[]): StructuralNode[] {
-    const seen = new Set<string>();
-    const out: StructuralNode[] = [];
-    for (const n of nodes) {
-      const key = `${n.startByte}:${n.endByte}:${n.type}:${n.name}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(n);
-    }
-    out.sort((a, b) => a.startByte - b.startByte);
-    return out;
   }
 }

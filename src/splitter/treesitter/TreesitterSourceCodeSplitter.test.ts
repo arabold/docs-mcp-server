@@ -19,38 +19,6 @@ describe("TreesitterSourceCodeSplitter", () => {
     splitter = new TreesitterSourceCodeSplitter(mockConfig);
   });
 
-  describe("supported content types", () => {
-    it("should support JavaScript MIME types", () => {
-      expect(splitter.isSupportedContentType("text/javascript")).toBe(true);
-      expect(splitter.isSupportedContentType("application/javascript")).toBe(true);
-    });
-
-    it("should support JSX MIME types", () => {
-      expect(splitter.isSupportedContentType("text/jsx")).toBe(true);
-      expect(splitter.isSupportedContentType("application/jsx")).toBe(true);
-    });
-
-    it("should support Python MIME types", () => {
-      expect(splitter.isSupportedContentType("text/python")).toBe(true);
-      expect(splitter.isSupportedContentType("text/x-python")).toBe(true);
-      expect(splitter.isSupportedContentType("application/python")).toBe(true);
-      expect(splitter.isSupportedContentType("application/x-python")).toBe(true);
-    });
-
-    it("should not support unsupported types", () => {
-      expect(splitter.isSupportedContentType("text/ruby")).toBe(false);
-      expect(splitter.isSupportedContentType("text/plain")).toBe(false);
-    });
-
-    it("should handle content type patterns", () => {
-      // Note: These test the pattern matching in getParserForContent
-      // Currently only supports exact MIME types, not file extensions in content type
-      expect(splitter.isSupportedContentType("text/javascript")).toBe(true);
-      expect(splitter.isSupportedContentType("application/jsx")).toBe(true);
-      expect(splitter.isSupportedContentType("text/python")).toBe(true);
-    });
-  });
-
   describe("text splitting", () => {
     it("returns no chunks for empty or whitespace-only content", async () => {
       const cases: Array<[label: string, content: string]> = [
@@ -675,28 +643,6 @@ processor = DataProcessor(CONFIG_FILE)`;
       const codeChunks = chunks.filter((c) => c.types.includes("code"));
       expect(structuralChunks.length).toBeGreaterThan(0); // imports + class
       expect(codeChunks.length).toBeGreaterThan(0); // functions + methods
-    });
-  });
-
-  describe("language support", () => {
-    it("should return list of supported languages", () => {
-      const languages = splitter.getSupportedLanguages();
-      expect(languages).toContain("javascript");
-      expect(Array.isArray(languages)).toBe(true);
-    });
-
-    it("should return list of supported extensions", () => {
-      const extensions = splitter.getSupportedExtensions();
-      expect(extensions).toContain(".js");
-      expect(extensions).toContain(".jsx");
-      expect(Array.isArray(extensions)).toBe(true);
-    });
-
-    it("should return list of supported MIME types", () => {
-      const mimeTypes = splitter.getSupportedMimeTypes();
-      expect(mimeTypes).toContain("text/javascript");
-      expect(mimeTypes).toContain("application/javascript");
-      expect(Array.isArray(mimeTypes)).toBe(true);
     });
   });
 });

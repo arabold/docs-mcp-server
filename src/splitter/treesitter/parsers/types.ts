@@ -4,63 +4,10 @@
 
 import type { SyntaxNode, Tree } from "tree-sitter";
 
-/**
- * Universal tree-sitter parser size limit.
- * Set to 30,000 characters to be safely under the observed 32,767 limit.
- */
-
-export enum StructuralNodeType {
-  // Function declarations
-  FUNCTION_DECLARATION = "function_declaration",
-  ARROW_FUNCTION = "arrow_function",
-  METHOD_DEFINITION = "method_definition",
-  CONSTRUCTOR = "constructor",
-
-  // Class and object structures
-  CLASS_DECLARATION = "class_declaration",
-  OBJECT_EXPRESSION = "object_expression",
-
-  // TypeScript specific
-  INTERFACE_DECLARATION = "interface_declaration",
-  TYPE_ALIAS_DECLARATION = "type_alias_declaration",
-  NAMESPACE_DECLARATION = "namespace_declaration",
-  ENUM_DECLARATION = "enum_declaration",
-
-  // JSX specific
-  JSX_ELEMENT = "jsx_element",
-  JSX_FRAGMENT = "jsx_fragment",
-  JSX_EXPRESSION = "jsx_expression",
-
-  // Module level
-  VARIABLE_DECLARATION = "variable_declaration", // for const/let functions
-  EXPORT_STATEMENT = "export_statement",
-  IMPORT_STATEMENT = "import_statement",
-
-  // Control structures (for content sections)
-  IF_STATEMENT = "if_statement",
-  FOR_STATEMENT = "for_statement",
-  WHILE_STATEMENT = "while_statement",
-  SWITCH_STATEMENT = "switch_statement",
-}
-
 export interface ParseResult {
   tree: Tree;
   hasErrors: boolean;
   errorNodes: SyntaxNode[];
-}
-
-export interface StructuralNode {
-  type: StructuralNodeType;
-  name: string;
-  startLine: number;
-  endLine: number;
-  startByte: number;
-  endByte: number;
-  children: StructuralNode[];
-  text: string;
-  indentLevel: number;
-  modifiers: string[];
-  documentation?: string[]; // JSDoc/TSDoc and preceding comments
 }
 
 export interface LineRange {
@@ -111,7 +58,6 @@ export interface LanguageParser {
   readonly mimeTypes: string[];
 
   parse(source: string): ParseResult;
-  extractStructuralNodes(tree: Tree, source?: string): StructuralNode[];
   getNodeText(node: SyntaxNode, source: string): string;
   getNodeLines(node: SyntaxNode, source: string): LineRange;
 
