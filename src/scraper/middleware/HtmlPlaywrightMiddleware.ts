@@ -1,4 +1,5 @@
 import type {
+  APIResponse,
   Browser,
   BrowserContext,
   ElementHandle,
@@ -44,6 +45,13 @@ interface CachedResource {
   body: string;
   contentType: string;
 }
+
+/**
+ * Most redirects a sub-resource fetch follows. Matches Playwright's own default
+ * (20): the renderer follows redirects itself only to check every hop against
+ * the access policy, not to change the allowed depth.
+ */
+const MAX_SUBRESOURCE_REDIRECTS = 20;
 
 /** The Playwright objects a render opens, held where the caller can close them. */
 interface RenderHandles {
@@ -812,7 +820,13 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
     }
 
     try {
-      const response = await route.fetch({ headers });
+      const response = await this.fetchFollowingAllowedRedirects(route, headers);
+      if (response === null) {
+        await this.abortRoute(route, reqUrl, "redirect policy abort", "blockedbyclient");
+        return;
+      }
+      // Cached under the URL the page asked for, which is what the next page
+      // looks up; every hop to this response passed the access policy.
       await this.cacheResponseIfEligible(reqUrl, resourceType, response);
       await this.fulfillRoute(route, reqUrl, { response }, "fulfill");
     } catch (error) {
@@ -823,6 +837,56 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       const errorMessage = this.formatRouteError(error);
       logger.debug(`Network error fetching ${resourceType} ${reqUrl}: ${errorMessage}`);
       await this.abortRoute(route, reqUrl, "abort after error", "failed");
+    }
+  }
+
+  /**
+   * Fetches a routed request in Node, following its redirects one hop at a time
+   * so that the access policy checks each target before it is requested.
+   *
+   * `route.fetch` would follow the redirects unchecked, and Chromium follows a
+   * redirect it is handed without Playwright routing the next request, so no
+   * 3xx response may leave this method.
+   *
+   * @param route - The intercepted request.
+   * @param headers - The headers to send with the first hop.
+   * @returns The final response, or null when the policy denies a redirect target.
+   */
+  private async fetchFollowingAllowedRedirects(
+    route: Route,
+    headers: Record<string, string>,
+  ): Promise<APIResponse | null> {
+    let url = route.request().url();
+    let hopHeaders = headers;
+
+    for (let redirectCount = 0; ; redirectCount++) {
+      const response = await route.fetch({ url, headers: hopHeaders, maxRedirects: 0 });
+      const status = response.status();
+      const location = response.headers().location;
+      if (status < 300 || status >= 400 || !location) {
+        return response;
+      }
+      await response.dispose();
+
+      if (redirectCount >= MAX_SUBRESOURCE_REDIRECTS) {
+        throw new Error(`Too many redirects while fetching ${route.request().url()}`);
+      }
+
+      const redirectUrl = new URL(location, url).href;
+      if (!(await this.isRequestAllowed(redirectUrl))) {
+        logger.debug(`Blocked redirect from ${url} to ${redirectUrl}`);
+        return null;
+      }
+      // Playwright's rule when it follows redirects itself: credentials do not
+      // follow a redirect to another origin.
+      if (new URL(redirectUrl).origin !== new URL(url).origin) {
+        hopHeaders = Object.fromEntries(
+          Object.entries(hopHeaders).filter(
+            ([name]) => name.toLowerCase() !== "authorization",
+          ),
+        );
+      }
+      url = redirectUrl;
     }
   }
 
@@ -848,9 +912,16 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   private async fetchFrameContent(parentPage: Page, frameUrl: string): Promise<string> {
     // Resolve relative URLs against the parent page URL
     const resolvedUrl = new URL(frameUrl, parentPage.url()).href;
+    // The route handler caches the frame's raw document under its URL; this
+    // entry holds the body the frame rendered.
+    const cacheKey = `frame:${resolvedUrl}`;
 
-    // Check cache first
-    const cached = HtmlPlaywrightMiddleware.resourceCache.get(resolvedUrl);
+    // The cache is shared by every instance, so the policy is checked first.
+    if (!(await this.isRequestAllowed(resolvedUrl))) {
+      return "";
+    }
+
+    const cached = HtmlPlaywrightMiddleware.resourceCache.get(cacheKey);
     if (cached !== undefined) {
       logger.debug(`✓ Cache hit for frame: ${resolvedUrl}`);
       return cached.body;
@@ -860,10 +931,6 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
     let framePage: Page | null = null;
     try {
-      if (!(await this.isRequestAllowed(resolvedUrl))) {
-        return "";
-      }
-
       // Create a new page in the same browser context for consistency
       framePage = await parentPage.context().newPage();
 
@@ -896,7 +963,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       const contentSizeBytes = Buffer.byteLength(content, "utf8");
       if (contentSizeBytes <= this.config.fetcher.maxCacheItemSizeBytes) {
         // Frame content is always HTML
-        HtmlPlaywrightMiddleware.resourceCache.set(resolvedUrl, {
+        HtmlPlaywrightMiddleware.resourceCache.set(cacheKey, {
           body: content,
           contentType: "text/html",
         });
