@@ -6,6 +6,7 @@ import {
   compareWithBaseline,
   type RunResult,
   type RunSnapshot,
+  serializeBaseline,
 } from "./baseline";
 import type { Level, Metrics, Mode, QueryScore } from "./evaluate";
 import type { GoldenQuery } from "./golden";
@@ -154,6 +155,17 @@ describe("compareWithBaseline", () => {
   });
 });
 
+describe("serializeBaseline", () => {
+  it("writes valid JSON with one line per query", () => {
+    const baseline = baselineOf(run({ fts: [1, 2, null, 1] }));
+
+    const text = serializeBaseline(baseline);
+
+    expect(JSON.parse(text)).toEqual(baseline);
+    expect(text).toContain('"react-1": {"ranks":[2,2],"chunk":[0.5,0,1,1,1,1,0.6309]');
+  });
+});
+
 describe("buildBaseline", () => {
   it("keeps modes the refresh did not score while the configuration is unchanged", () => {
     const previous = baselineOf(run({ fts: [1, 1, 1, 1], hybrid: [2, 2, 2, 2] }));
@@ -164,7 +176,7 @@ describe("buildBaseline", () => {
     );
 
     expect(refreshed.queries.hybrid).toEqual(previous.queries.hybrid);
-    expect(refreshed.queries.fts?.store["react-1"].chunkRank).toBe(2);
+    expect(refreshed.queries.fts?.store["react-1"].ranks).toEqual([2, 2]);
     expect(refreshed.snapshot.embeddingModel).toBe(SNAPSHOT.embeddingModel);
   });
 });

@@ -4,7 +4,7 @@
  * Both sides are reduced to their sequence of words, so Markdown syntax,
  * punctuation, case and line breaks do not decide whether a result holds a
  * passage. Link targets are dropped first, so a passage may quote a link by
- * its text alone.
+ * its text alone, with or without the link syntax.
  */
 
 /** How a text holds a passage: all of it, at least half of it (cut by the splitter), or not. */
@@ -17,9 +17,10 @@ export type PassageMatch = "whole" | "split" | null;
  * @returns The words of the text, in order.
  */
 export function normalizeWords(text: string): string[] {
+  // Brackets may be escaped (`\[text\]\[target\]`), as converted HTML often has them
   const withoutLinkTargets = text
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1");
+    .replace(/!?\\?\[([^\]]*?)\\?\]\([^)]*\)/g, "$1")
+    .replace(/\\?\[([^\]]*?)\\?\]\\?\[[^\]]*?\\?\]/g, "$1");
   return withoutLinkTargets.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
 }
 

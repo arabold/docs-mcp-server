@@ -16,6 +16,7 @@ import {
   type Level,
   METRIC_KEYS,
   type MetricKey,
+  type Metrics,
   MODES,
   type Mode,
   type ModeOutcome,
@@ -55,8 +56,40 @@ export interface RunResult {
   embeddingRequests: number;
 }
 
-/** A query's scores as the baseline keeps them. */
-export type BaselineQuery = Omit<QueryScore, "queryId">;
+/**
+ * A query's scores as the baseline keeps them, on one line each: the
+ * chunk-level and page-level first ranks, then each side's metrics in
+ * {@link METRIC_KEYS} order.
+ */
+export interface BaselineQuery {
+  ranks: [number | null, number | null];
+  chunk: number[];
+  page: number[];
+}
+
+const round = (value: number) => Math.round(value * 10000) / 10000;
+
+function toBaselineQuery(score: QueryScore): BaselineQuery {
+  return {
+    ranks: [score.chunkRank, score.pageRank],
+    chunk: METRIC_KEYS.map((key) => round(score.chunk[key])),
+    page: METRIC_KEYS.map((key) => round(score.page[key])),
+  };
+}
+
+function fromBaselineQuery(queryId: string, entry: BaselineQuery): QueryScore {
+  const metrics = (values: number[]) =>
+    Object.fromEntries(
+      METRIC_KEYS.map((key, index) => [key, values[index] ?? 0]),
+    ) as Metrics;
+  return {
+    queryId,
+    chunkRank: entry.ranks[0],
+    pageRank: entry.ranks[1],
+    chunk: metrics(entry.chunk),
+    page: metrics(entry.page),
+  };
+}
 
 /** The checked-in baseline. */
 export interface Baseline {
@@ -195,10 +228,9 @@ export function compareWithBaseline(
         });
         continue;
       }
-      const baselineScores = run.queries.map((query, index) => ({
-        queryId: query.id,
-        ...(before[index] as BaselineQuery),
-      }));
+      const baselineScores = run.queries.map((query, index) =>
+        fromBaselineQuery(query.id, before[index] as BaselineQuery),
+      );
       const baselineAggregate = average(baselineScores);
       const currentAggregate = average(levels[level]);
       summaries[level] = baselineAggregate;
@@ -219,7 +251,7 @@ export function compareWithBaseline(
         }
       }
       for (const score of levels[level]) {
-        const previous = recorded[level][score.queryId]?.chunkRank ?? null;
+        const previous = recorded[level][score.queryId]?.ranks[0] ?? null;
         if (previous !== score.chunkRank) {
           comparison.rankChanges.push({
             mode,
@@ -264,10 +296,7 @@ export function buildBaseline(run: RunResult, previous: Baseline | null): Baseli
         );
         (baseline.queries[mode] as Record<Level, Record<string, BaselineQuery>>)[level] =
           Object.fromEntries(
-            outcome.levels[level].map(({ queryId, ...score }) => [
-              queryId,
-              roundScore(score),
-            ]),
+            outcome.levels[level].map((score) => [score.queryId, toBaselineQuery(score)]),
           );
       }
     } else if (keepPrevious && previous?.queries[mode]) {
@@ -282,21 +311,37 @@ export function buildBaseline(run: RunResult, previous: Baseline | null): Baseli
   return baseline;
 }
 
-const round = (value: number) => Math.round(value * 10000) / 10000;
-
-function roundScore(score: BaselineQuery): BaselineQuery {
-  return {
-    chunkRank: score.chunkRank,
-    pageRank: score.pageRank,
-    chunk: roundMetrics(score.chunk),
-    page: roundMetrics(score.page),
-  };
+/**
+ * Writes the baseline as JSON with one line per query, so a refresh shows as
+ * one changed line per query whose scores moved.
+ *
+ * @param baseline The baseline to write.
+ */
+export function serializeBaseline(baseline: Baseline): string {
+  const modes = MODES.flatMap((mode) => {
+    const levels = baseline.queries[mode];
+    if (!levels) return [];
+    const levelBlocks = LEVELS.map((level) => {
+      const entries = Object.entries(levels[level]).map(
+        ([queryId, entry]) =>
+          `        ${JSON.stringify(queryId)}: ${JSON.stringify(entry)}`,
+      );
+      return `      ${JSON.stringify(level)}: {\n${entries.join(",\n")}\n      }`;
+    });
+    return [`    ${JSON.stringify(mode)}: {\n${levelBlocks.join(",\n")}\n    }`];
+  });
+  const head = JSON.stringify(
+    { snapshot: baseline.snapshot, summary: baseline.summary },
+    null,
+    2,
+  );
+  return `${head.slice(0, -2)},\n  "queries": {\n${modes.join(",\n")}\n  }\n}\n`;
 }
 
-function roundMetrics(metrics: QueryScore["chunk"]): QueryScore["chunk"] {
+function roundMetrics(metrics: Metrics): Metrics {
   return Object.fromEntries(
     METRIC_KEYS.map((key) => [key, round(metrics[key])]),
-  ) as QueryScore["chunk"];
+  ) as Metrics;
 }
 
 function roundAggregate(value: Aggregate): Aggregate {
@@ -317,8 +362,13 @@ const fmtDelta = (current: number, previous: number | undefined) => {
  *
  * @param run The finished run.
  * @param comparison Its comparison with the baseline.
+ * @param baselineWritten Where a refresh wrote the baseline; replaces the verdict.
  */
-export function renderSummary(run: RunResult, comparison: Comparison): string {
+export function renderSummary(
+  run: RunResult,
+  comparison: Comparison,
+  baselineWritten?: string,
+): string {
   const lines = [
     "| Mode | Level | Chunk MRR | Chunk Hit@1 | Chunk Hit@5 | Chunk nDCG@10 | Chunk misses | Page MRR | Page Hit@5 | Page nDCG@10 |",
     "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
@@ -339,7 +389,11 @@ export function renderSummary(run: RunResult, comparison: Comparison): string {
     }
   }
 
-  lines.push("");
+  lines.push("", `Texts sent to the embedding provider: ${run.embeddingRequests}.`);
+  if (baselineWritten) {
+    lines.push(`Baseline written to ${baselineWritten}.`);
+    return lines.join("\n");
+  }
   switch (comparison.status) {
     case "no-baseline":
       lines.push(

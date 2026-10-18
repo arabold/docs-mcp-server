@@ -23,6 +23,7 @@ import {
   readBaseline,
   renderReport,
   renderSummary,
+  serializeBaseline,
 } from "./baseline";
 import { ensureCorpus, loadCorpusManifest } from "./corpus";
 import { sharedEmbeddingCacheStats } from "./embedding-cache";
@@ -137,13 +138,8 @@ describe("search accuracy", () => {
     );
 
     if (refreshBaseline) {
-      writeFileSync(
-        BASELINE_PATH,
-        `${JSON.stringify(buildBaseline(run, previous), null, 2)}\n`,
-      );
-      print(
-        `\n${renderSummary(run, comparison)}\n\nBaseline written to ${BASELINE_PATH}`,
-      );
+      writeFileSync(BASELINE_PATH, serializeBaseline(buildBaseline(run, previous)));
+      print(`\n${renderSummary(run, comparison, BASELINE_PATH)}`);
       return;
     }
 

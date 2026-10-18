@@ -36,6 +36,14 @@ describe("matchPassage", () => {
 });
 
 describe("normalizeWords", () => {
+  it("drops the targets of escaped reference links", () => {
+    expect(
+      normalizeWords(
+        "Use \\[`computed_field`\\]\\[pydantic.fields.computed_field\\] here",
+      ),
+    ).toEqual(["use", "computed", "field", "here"]);
+  });
+
   it("keeps link and image text but drops their targets", () => {
     expect(normalizeWords("See ![diagram](a.png) and [the docs][ref].")).toEqual([
       "see",
