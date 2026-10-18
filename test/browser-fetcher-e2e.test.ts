@@ -72,6 +72,25 @@ describe("BrowserFetcher in a real browser", () => {
     }
   });
 
+  it("runs the page's scripts even when the request headers name connection-level values", async () => {
+    const config = loadConfig().scraper;
+    config.security.network.allowPrivateNetworks = true;
+    const fetcher = new BrowserFetcher(config);
+
+    try {
+      // Generated Firefox fingerprints carry TE; Chromium fails a navigation
+      // that asks for it.
+      const result = await fetcher.fetch(`${baseUrl}/`, {
+        headers: { TE: "trailers" },
+      });
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.content.toString()).toContain('data-ran="yes"');
+    } finally {
+      await fetcher.close();
+    }
+  });
+
   it("fetches a file the browser would download through the request API", async () => {
     const config = loadConfig().scraper;
     config.security.network.allowPrivateNetworks = true;
