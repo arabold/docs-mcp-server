@@ -66,7 +66,7 @@ The system SHALL support overriding any configuration setting via environment va
 
 ### Requirement: Environment Variable Precedence
 
-The system SHALL apply configuration overrides in a defined priority order.
+The system SHALL resolve every configuration setting from these layers, highest priority first: an option passed on the command line, then environment variables, then the configuration file, then the built-in default. A command-line option the user did not pass SHALL NOT count as a command-line value: it SHALL leave the setting to the lower layers. This SHALL hold for every setting that a command-line option maps to, on every command that exposes the option.
 
 #### Scenario: Auto-Generated Env Var Takes Precedence Over Explicit Alias
 
@@ -80,6 +80,38 @@ The system SHALL apply configuration overrides in a defined priority order.
 - **AND** `--storePath=/cli/path` is passed
 - **WHEN** the configuration is loaded
 - **THEN** `app.storePath` SHALL be `/cli/path`
+
+#### Scenario: Omitted flag leaves the environment value in effect
+
+- **GIVEN** `DOCS_MCP_AUTH_ENABLED=true` is set
+- **WHEN** the `mcp` command starts without `--auth-enabled`
+- **THEN** `auth.enabled` SHALL be `true`
+
+#### Scenario: Omitted flag leaves the config file value in effect
+
+- **GIVEN** the configuration file sets `app.readOnly` to `true`
+- **AND** no environment variable sets it
+- **WHEN** the `server` command starts without `--read-only`
+- **THEN** `app.readOnly` SHALL be `true`
+
+#### Scenario: Transport protocol comes from configuration when the flag is omitted
+
+- **GIVEN** `DOCS_MCP_PROTOCOL=http` is set
+- **AND** the process runs without a terminal attached
+- **WHEN** the `mcp` command starts without `--protocol`
+- **THEN** the server SHALL serve MCP over HTTP rather than stdio
+
+#### Scenario: Explicitly passed negation overrides the environment
+
+- **GIVEN** `DOCS_MCP_READ_ONLY=true` is set
+- **WHEN** the `server` command starts with `--no-read-only`
+- **THEN** `app.readOnly` SHALL be `false`
+
+#### Scenario: Built-in defaults apply when no layer sets a value
+
+- **GIVEN** no command-line option, environment variable, or configuration file entry sets `auth.enabled`, `app.readOnly`, or `server.protocol`
+- **WHEN** the `server` command starts
+- **THEN** `auth.enabled` SHALL be `false`, `app.readOnly` SHALL be `false`, and `server.protocol` SHALL be `auto`
 
 ### Requirement: Bootstrap Environment Normalization
 
@@ -387,16 +419,17 @@ The Zod schema SHALL validate that `vectorDimension` is a positive integer (`>= 
 - **THEN** the system SHALL reject the configuration with an error message
 
 ### Requirement: Server Public Origin Configuration
-The configuration system SHALL expose an optional `server.publicOrigin` setting that defines the absolute HTTP(S) origin used for externally advertised server URLs.
+The configuration system SHALL keep accepting the deprecated `server.publicOrigin` setting as the public URL of a server that is not hosted under a path. The setting SHALL keep its existing validation, and its use SHALL produce a deprecation warning that names `server.publicUrl`. When `server.publicUrl` is also set, `server.publicUrl` SHALL take effect, and the warning SHALL state that `server.publicOrigin` is ignored.
 
 #### Scenario: Public origin absent by default
 - **WHEN** no public origin is configured
 - **THEN** the loaded configuration MUST leave `server.publicOrigin` unset
-- **AND** generated URLs MUST use the bind-derived origin fallback
+- **AND** generated URLs MUST use `server.publicUrl` when it is set, or the bind-derived origin fallback when it is not
 
 #### Scenario: Public origin from config file
 - **WHEN** a configuration file sets `server.publicOrigin` to `https://docs.example.com`
 - **THEN** the loaded configuration MUST set `server.publicOrigin` to `https://docs.example.com`
+- **AND** advertised URLs MUST use `https://docs.example.com` as the public URL
 
 #### Scenario: Public origin from environment variable
 - **WHEN** the environment variable `DOCS_MCP_SERVER_PUBLIC_ORIGIN` is set to `https://docs.example.com`
@@ -414,6 +447,16 @@ The configuration system SHALL expose an optional `server.publicOrigin` setting 
 #### Scenario: Trailing slash is normalized
 - **WHEN** `server.publicOrigin` is configured as `https://docs.example.com/`
 - **THEN** the loaded configuration or URL-generation path MUST use `https://docs.example.com` as the canonical origin
+
+#### Scenario: Deprecation warning
+- **WHEN** `server.publicOrigin` is set and `server.publicUrl` is not
+- **THEN** startup output MUST include a deprecation warning naming `server.publicUrl`
+
+#### Scenario: Both settings present
+- **WHEN** a configuration file sets `server.publicOrigin` to `https://old.example.com`
+- **AND** `--public-url https://example.com/docs` is passed
+- **THEN** advertised URLs MUST use `https://example.com/docs`
+- **AND** startup output MUST warn that `server.publicOrigin` is ignored
 
 ### Requirement: Server Identity Configuration
 The configuration system SHALL expose `server.name`, `server.title`, `server.instructions`, and `server.instructionsFile` settings that define how the MCP server identifies itself and what instructions it sends to clients during initialization.
@@ -485,3 +528,107 @@ When neither `server.instructions` nor `server.instructionsFile` is configured, 
 - **WHEN** no instructions are configured
 - **THEN** the loaded configuration MUST leave `server.instructions` unset
 - **AND** the automatically updated default configuration file MUST NOT contain the built-in instructions
+
+### Requirement: Docker Server Defaults
+
+The Docker image SHALL default to an HTTP server reachable through a published container port, with the Web UI, API, and MCP endpoint enabled. Supplying options unrelated to transport or binding SHALL preserve these defaults. Runtime environment variables and CLI arguments SHALL override the Docker defaults using the existing configuration precedence. Explicit subcommands SHALL retain their behavior, and non-container startup SHALL retain protocol auto-detection and loopback binding by default.
+
+#### Scenario: No-argument Docker startup
+
+- **WHEN** the Docker image is started without application arguments and its default port is published
+- **THEN** the container SHALL remain running and serve the Web UI, API, and MCP endpoint on port `6280`
+
+#### Scenario: Unrelated option preserves HTTP startup
+
+- **WHEN** the Docker image is started with only `--verbose` and its default port is published
+- **THEN** it SHALL serve the same HTTP endpoints as a no-argument launch
+
+#### Scenario: Runtime environment selects stdio
+
+- **WHEN** a Docker launch selects `stdio` through the server protocol environment override and keeps stdin open
+- **THEN** the container SHALL serve MCP over stdio instead of starting an HTTP server
+
+#### Scenario: CLI protocol overrides the image default
+
+- **WHEN** a Docker launch supplies `--protocol stdio` and keeps stdin open
+- **THEN** the container SHALL serve MCP over stdio instead of starting an HTTP server
+
+#### Scenario: Runtime environment changes the server binding
+
+- **WHEN** a Docker launch sets the server host and default port through runtime environment overrides
+- **THEN** the server SHALL use the configured host and port instead of the image defaults
+
+#### Scenario: Explicit subcommand remains a CLI operation
+
+- **WHEN** the Docker image is started with an explicit `scrape` subcommand
+- **THEN** it SHALL execute that operation and exit according to the command result rather than launching the default HTTP server
+
+#### Scenario: Non-container defaults remain unchanged
+
+- **WHEN** the application is started outside Docker without protocol or host overrides
+- **THEN** it SHALL retain TTY-based protocol auto-detection and default loopback binding
+
+### Requirement: Server Public URL Configuration
+The configuration system SHALL expose an optional `server.publicUrl` setting: the absolute HTTP(S) URL at which clients reach the server, optionally including a path. It SHALL be settable from the configuration file, from the environment variable `DOCS_MCP_SERVER_PUBLIC_URL`, and with the `--public-url` flag on every long-running server command.
+
+The configuration system SHALL reject, with a clear validation error, a value that:
+
+- carries credentials, a query string, or a fragment;
+- uses a protocol other than `http` or `https`;
+- has a path with an empty segment (`//`);
+- has a path whose first segment names a route or file the server itself serves at its root, such as `mcp`, `api`, `assets` or `favicon.ico`, or `oauth`, where the removed OAuth proxy endpoints answered.
+
+A trailing slash SHALL be ignored.
+
+#### Scenario: Public URL absent by default
+- **WHEN** neither `server.publicUrl` nor `server.publicOrigin` is configured
+- **THEN** the loaded configuration MUST leave both unset
+- **AND** generated URLs MUST use the bind-derived origin fallback
+
+#### Scenario: Public URL with a path
+- **WHEN** a configuration file sets `server.publicUrl` to `https://example.com/docs`
+- **THEN** the loaded configuration MUST set `server.publicUrl` to `https://example.com/docs`
+
+#### Scenario: Public URL from environment variable
+- **WHEN** the environment variable `DOCS_MCP_SERVER_PUBLIC_URL` is set to `https://example.com/docs`
+- **THEN** the loaded configuration MUST set `server.publicUrl` to `https://example.com/docs`
+
+#### Scenario: Public URL from CLI flag
+- **WHEN** a long-running server command is invoked with `--public-url https://example.com/docs`
+- **THEN** the loaded configuration MUST set `server.publicUrl` to `https://example.com/docs`
+
+#### Scenario: Trailing slash is ignored
+- **WHEN** `server.publicUrl` is configured as `https://example.com/docs/`
+- **THEN** the canonical public URL MUST be `https://example.com/docs`
+
+#### Scenario: Invalid public URL
+- **WHEN** `server.publicUrl` is configured as `https://example.com/docs?x=1`
+- **THEN** configuration loading MUST reject the value with a clear validation error
+
+#### Scenario: Path collides with a server route
+- **WHEN** `server.publicUrl` is configured as `https://example.com/mcp`
+- **THEN** configuration loading MUST reject the value with an error explaining that the path's first segment collides with a route the server serves
+
+#### Scenario: Path collides with the removed OAuth endpoints
+- **WHEN** `server.publicUrl` is configured as `https://example.com/oauth`
+- **THEN** configuration loading MUST reject the value, so a probe of `/oauth/authorize` still gets HTTP 404 rather than the web UI
+
+#### Scenario: Path collides with a root file
+- **WHEN** `server.publicUrl` is configured as `https://example.com/favicon.ico`
+- **THEN** configuration loading MUST reject the value with an error explaining that the path's first segment collides with a file the server serves
+
+#### Scenario: Path with an empty segment
+- **WHEN** `server.publicUrl` is configured as `https://example.com//docs`
+- **THEN** configuration loading MUST reject the value, because the web UI would resolve `//docs/` as another host
+- **AND** it MUST reject `https://example.com/docs//` too, since only a single trailing slash is ignored
+
+### Requirement: Allowed Browser Origins Configuration
+The configuration system SHALL expose an optional `server.allowedOrigins` setting: a list of browser origins, beyond loopback and the public URL's origin, that may call the MCP endpoint. The hosts of these origins are also accepted in the `Host` header. It SHALL default to an empty list. It SHALL be settable from the configuration file and from the environment variable `DOCS_MCP_SERVER_ALLOWED_ORIGINS` as a JSON array. Each entry SHALL be an origin (`scheme://host` with an optional port and no path). Configuration loading SHALL reject any other value with a clear validation error. A trailing slash on an entry SHALL be ignored.
+
+#### Scenario: Allowed origins from environment variable
+- **WHEN** `DOCS_MCP_SERVER_ALLOWED_ORIGINS` is set to `["https://inspector.example.com"]`
+- **THEN** the loaded configuration MUST set `server.allowedOrigins` to `["https://inspector.example.com"]`
+
+#### Scenario: Entry that is not an origin
+- **WHEN** `server.allowedOrigins` contains `https://inspector.example.com/app`
+- **THEN** configuration loading MUST reject the value with a clear validation error

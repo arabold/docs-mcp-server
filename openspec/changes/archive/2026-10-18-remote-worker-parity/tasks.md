@@ -2,7 +2,7 @@
 
 ## 1. Issue #530: remote waits never return (PR #537)
 
-- [ ] 1.1 Merge PR #537 (`fix/530-remote-job-wait`) into `main` and start this change from the result. Verify `git log origin/main --oneline` contains `fix(pipeline): poll the worker while waiting for a remote job` and `npx vitest run test/cli-e2e.test.ts` passes on `main`.
+- [x] 1.1 Merge PR #537 (`fix/530-remote-job-wait`) into `main` and start this change from the result. Verify `git log origin/main --oneline` contains `fix(pipeline): poll the worker while waiting for a remote job` and `npx vitest run test/cli-e2e.test.ts` passes on `main`.
 - [x] 1.2 Keep the #530 regression covered through the rework: `returns from scrape --server-url once the worker finishes the job` in `test/cli-e2e.test.ts` and the `waitForJobCompletion` unit tests must pass at the end of every section below. Verify by running both after each section.
 
 ## 2. One API client, shared with the web UI (no behavior change)
@@ -64,4 +64,4 @@
 - [x] 10.2 Run `npm run lint`, `rm -f .tsbuildinfo && npm run typecheck`, `npm run build` and `npm test` on Node 22. Verify all pass.
 - [x] 10.3 Manually run, against a local worker: `scrape` and `refresh` with `--server-url` in a terminal; `list --server-url`; `remove --server-url` on a version with a running job; `mcp --protocol stdio --server-url` calling `remove_docs` on a version with a running job; and a `web --server-url` UI delete during a scrape. Verify the CLI shows progress for its own job, `list` works, all three removals cancel the job and leave the version unlisted, and the MCP stdio server's stdout carries only protocol messages.
 - [x] 10.4 Run `openspec validate remote-worker-parity --strict`. Verify it reports no issues.
-- [ ] 10.5 Draft a comment for #530 and one for #532 that name the fixing pull requests, and ask the maintainer before posting them and closing the issues. Verify both issues are closed with a comment.
+- [x] 10.5 Draft a comment for #530 and one for #532 that name the fixing pull requests, and ask the maintainer before posting them and closing the issues. Verify both issues are closed with a comment.
