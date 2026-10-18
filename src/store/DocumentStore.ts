@@ -67,9 +67,9 @@ interface RawSearchResult extends DbChunk {
   title?: string | null;
   source_content_type?: string | null;
   content_type?: string | null;
-  // Search scoring fields
-  vec_score?: number;
-  fts_score?: number;
+  // Search scoring fields, null when that search method did not return the chunk
+  vec_score?: number | null;
+  fts_score?: number | null;
 }
 
 interface RankedResult extends RawSearchResult {
@@ -279,7 +279,9 @@ export class DocumentStore {
   }
 
   /**
-   * Assigns ranks to search results based on their scores
+   * Assigns ranks to search results based on their scores. A result gets a
+   * rank only from the search methods that returned it, so a chunk found by
+   * one method scores that method's RRF term alone.
    */
   private assignRanks(results: RawSearchResult[]): RankedResult[] {
     // Create maps to store ranks
@@ -288,7 +290,7 @@ export class DocumentStore {
 
     // Sort by vector scores and assign ranks
     results
-      .filter((r) => r.vec_score !== undefined)
+      .filter((r) => r.vec_score != null)
       .sort((a, b) => (b.vec_score ?? 0) - (a.vec_score ?? 0))
       .forEach((result, index) => {
         vecRanks.set(Number(result.id), index + 1);
@@ -296,7 +298,7 @@ export class DocumentStore {
 
     // Sort by BM25 scores and assign ranks
     results
-      .filter((r) => r.fts_score !== undefined)
+      .filter((r) => r.fts_score != null)
       .sort((a, b) => (b.fts_score ?? 0) - (a.fts_score ?? 0))
       .forEach((result, index) => {
         ftsRanks.set(Number(result.id), index + 1);
@@ -2649,8 +2651,10 @@ export class DocumentStore {
             p.title as title,
             p.source_content_type as source_content_type,
             p.content_type as content_type,
-            COALESCE(1 / (1 + v.vec_distance), 0) as vec_score,
-            COALESCE(-MIN(f.fts_score, 0), 0) as fts_score
+            -- NULL when the method did not return the chunk, so it gets no
+            -- rank from that method (see assignRanks).
+            1 / (1 + v.vec_distance) as vec_score,
+            -MIN(f.fts_score, 0) as fts_score
           FROM candidates c
           JOIN documents d ON d.id = c.id
           JOIN pages p ON d.page_id = p.id
