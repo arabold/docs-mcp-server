@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Database as DatabaseType, Statement } from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
@@ -117,6 +118,53 @@ function createScrapeResult(
     etag: options?.etag,
     lastModified: options?.lastModified,
   } satisfies ScrapeResult;
+}
+
+/**
+ * Runs `action` and returns the query plan of the first statement it ran whose
+ * SQL contains `sqlFragment`, bound to the same parameters.
+ */
+async function queryPlanOf(
+  store: DocumentStore,
+  sqlFragment: string,
+  action: () => Promise<unknown>,
+): Promise<string[]> {
+  // @ts-expect-error Accessing private property for testing
+  const db: DatabaseType = store.db;
+  const statementPrototype: Statement = Object.getPrototypeOf(db.prepare("SELECT 1"));
+  const all = vi.spyOn(statementPrototype, "all");
+  let captured: { source: string; params: unknown[] } | undefined;
+  try {
+    await action();
+    const statements = all.mock.contexts as Statement[];
+    const call = statements.findIndex((statement) =>
+      statement.source.includes(sqlFragment),
+    );
+    if (call >= 0) {
+      captured = { source: statements[call].source, params: all.mock.calls[call] };
+    }
+  } finally {
+    all.mockRestore();
+  }
+  if (!captured) {
+    throw new Error(`No statement containing "${sqlFragment}" ran`);
+  }
+  const plan = db
+    .prepare(`EXPLAIN QUERY PLAN ${captured.source}`)
+    .all(...captured.params);
+  return (plan as { detail: string }[]).map((row) => row.detail);
+}
+
+/**
+ * Asserts that a full-text plan filters by version from the covering indexes
+ * before it reads any document, and that the match runs once rather than once
+ * per chunk id (`0:=M` means SQLite handed the id list to FTS5).
+ */
+function expectVersionFilteredFullTextPlan(plan: string[]): void {
+  expect(plan).toContainEqual(expect.stringMatching(/^SCAN f VIRTUAL TABLE INDEX 0:M\d/));
+  expect(plan).toContain(
+    "SEARCH vd USING COVERING INDEX idx_documents_page_id (page_id=?)",
+  );
 }
 
 /**
@@ -346,6 +394,19 @@ describe("DocumentStore - With Embeddings", () => {
       });
       // Window bounds are present and correctly ordered.
       expect(history.since <= history.until).toBe(true);
+    });
+
+    it("counts activity from the created_at indexes instead of scanning the tables", async () => {
+      const plan = await queryPlanOf(store, "WITH RECURSIVE calendar", () =>
+        store.getActivityHistory(90),
+      );
+
+      expect(plan).toContain(
+        "SEARCH pages USING COVERING INDEX idx_pages_created_at (created_at>?)",
+      );
+      expect(plan).toContain(
+        "SEARCH documents USING COVERING INDEX idx_documents_created_at (created_at>?)",
+      );
     });
 
     it("clamps the activity window and zero-fills empty stores", async () => {
@@ -714,6 +775,53 @@ describe("DocumentStore - With Embeddings", () => {
         } else {
           process.env.OPENAI_API_KEY = originalApiKey;
         }
+      }
+    });
+
+    it("filters full-text hits by version before reading other libraries' rows", async () => {
+      vi.stubEnv("OPENAI_API_KEY", "test-key-for-fts-filter");
+      try {
+        await store.shutdown();
+        store = new DocumentStore(":memory:", appConfig);
+        await store.initialize();
+
+        await store.addDocuments(
+          "searchtest",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "JavaScript Programming Guide",
+            "https://example.com/js-guide",
+            "JavaScript programming tutorial with code examples and functions",
+          ),
+        );
+        await store.addDocuments(
+          "otherlib",
+          "1.0.0",
+          1,
+          createScrapeResult(
+            "Other JavaScript Guide",
+            "https://other.example.com/js-guide",
+            "JavaScript programming tutorial from another library",
+          ),
+        );
+
+        let results: Awaited<ReturnType<DocumentStore["findByContent"]>> = [];
+        const plan = await queryPlanOf(store, "documents_fts MATCH", async () => {
+          results = await store.findByContent(
+            "searchtest",
+            "1.0.0",
+            "JavaScript programming",
+            10,
+          );
+        });
+
+        expect(results.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
+        expect(results[0].vec_rank).toBeDefined();
+        expect(results[0].fts_rank).toBeDefined();
+        expectVersionFilteredFullTextPlan(plan);
+      } finally {
+        vi.unstubAllEnvs();
       }
     });
   });
@@ -1294,6 +1402,27 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       expect(results[0]).toHaveProperty("fts_rank");
       // Should NOT have vector rank since vectorization is disabled
       expect((results[0] as any).vec_rank).toBeUndefined();
+    });
+
+    it("filters full-text hits by version before reading other libraries' rows", async () => {
+      await store.addDocuments(
+        "otherlib",
+        "1.0.0",
+        1,
+        createScrapeResult(
+          "Other Hooks Guide",
+          "https://other.example.com/react-hooks",
+          "React hooks from another library.",
+        ),
+      );
+
+      let results: Awaited<ReturnType<DocumentStore["findByContent"]>> = [];
+      const plan = await queryPlanOf(store, "documents_fts MATCH", async () => {
+        results = await store.findByContent("testlib", "1.0.0", "React hooks", 5);
+      });
+
+      expect(results.map((r) => r.url)).toEqual(["https://example.com/react-hooks"]);
+      expectVersionFilteredFullTextPlan(plan);
     });
 
     it("should handle various search queries correctly", async () => {

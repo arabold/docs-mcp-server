@@ -78,6 +78,20 @@ interface RankedResult extends RawSearchResult {
   rrf_score: number;
 }
 
+/**
+ * Limits a `documents_fts f` scan to one version's chunks. Binds the version id.
+ *
+ * The id list comes from the covering indexes on `pages(version_id)` and
+ * `documents(page_id)`, so a full-text hit in another library is dropped
+ * without reading its row. The unary `+` keeps SQLite from handing the `IN`
+ * list to FTS5 as a rowid constraint, which would rerun the whole match once
+ * per id (the plan shows `INDEX 0:=M4` instead of `0:M4`).
+ */
+const VERSION_FTS_FILTER = `+f.rowid IN (
+  SELECT vd.id FROM pages vp JOIN documents vd ON vd.page_id = vp.id
+  WHERE vp.version_id = ?
+)`;
+
 interface EmbeddingBatchContext {
   url: string;
   batchIndex: number;
@@ -2565,13 +2579,14 @@ export class DocumentStore {
             ORDER BY dv.distance
           ),
           fts_scores AS MATERIALIZED (
+            -- Filters by version before reading any row: a join to documents
+            -- and pages here would cost a lookup per match across every
+            -- library (#550).
             SELECT
               f.rowid as id,
               bm25(documents_fts, 10.0, 1.0, 5.0, 1.0) as fts_score
             FROM documents_fts f
-            JOIN documents d ON f.rowid = d.id
-            JOIN pages p ON d.page_id = p.id
-            WHERE p.version_id = ?
+            WHERE ${VERSION_FTS_FILTER}
               AND documents_fts MATCH ?
             ORDER BY fts_score
             LIMIT ?
@@ -2659,7 +2674,7 @@ export class DocumentStore {
           FROM documents_fts f
           JOIN documents d ON f.rowid = d.id
           JOIN pages p ON d.page_id = p.id
-          WHERE p.version_id = ?
+          WHERE ${VERSION_FTS_FILTER}
             AND documents_fts MATCH ?
             AND NOT EXISTS (
               SELECT 1 FROM json_each(json_extract(d.metadata, '$.types')) je
