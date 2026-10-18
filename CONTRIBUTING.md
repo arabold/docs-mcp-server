@@ -2,7 +2,7 @@
 
 Contributions are welcome. For questions or suggestions, open an issue.
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md) for the system design. [AGENTS.md](AGENTS.md) holds the command reference and the conventions for code style, logging, tests and commit messages; they apply to human contributors too.
+Read [ARCHITECTURE.md](ARCHITECTURE.md) for the system design. [AGENTS.md](AGENTS.md) holds the rules for the environment, checks, commits, code, tests and documentation; they apply to human contributors too.
 
 ## Setup
 
@@ -27,7 +27,7 @@ CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests, the build and the D
 
 ## Commit Messages
 
-Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), checked by `commitlint` with the settings in `commitlint.config.js`. See [AGENTS.md](AGENTS.md#commit-messages) for the allowed types and subject rules. Releases are cut with semantic-release, which derives the version from these commit types.
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/), checked by `commitlint` with the settings in `commitlint.config.js`. See [AGENTS.md](AGENTS.md#git) for the subject rules. Releases are cut with semantic-release, which derives the version from these commit types.
 
 ## Pull Requests
 

@@ -1,156 +1,44 @@
-
 # Agent Instructions for docs-mcp-server
 
-## Repository Context
+Read `README.md` for setup and configuration, and `ARCHITECTURE.md` before changing how services interact. For everything else, the code and the comments next to it are the reference.
 
-- **Repository**: `arabold/docs-mcp-server`
-- **Core Stack**: Node.js 22.x, TypeScript, Vite, Fastify, tRPC, React, SQLite (better-sqlite3)
-  - **Node Version**: Always use **Node.js v22** for local development and builds, even though `package.json` (`engines: >=22`) also allows newer ones. If `nvm` is installed, run `nvm use 22` before local commands.
-- **Tooling**: Biome (lint/format), Vitest (test), Husky (pre-commit)
-- **Critical Documentation**:
-  - 📖 **Read `README.md`** first for project structure, setup, and configuration details.
-  - 🏗️ **Read `ARCHITECTURE.md`** before making changes to understand system design and service interactions.
+## Environment
 
-## Development Workflow
+- Use Node.js 22 (`nvm use 22`), even though `package.json` allows newer versions. `better-sqlite3` ships a binary pinned to the Node ABI, so do not raise the engine floor.
+- Use `npm ci` to get `node_modules`. Use `npm install` only to change dependencies on purpose.
+- Run occasional tools such as `promptfoo` through `npx -y <pkg>@<version>` in a `package.json` script instead of adding a dependency.
 
-### Key Commands
+## Checks
 
-| Task | Command | Description |
-|------|---------|-------------|
-| **Setup** | `npm install` | Install dependencies |
-| **Build** | `npm run build` | Build both server and web assets |
-| **Lint** | `npm run lint` | Check code issues with Biome |
-| **Fix** | `npm run lint:fix` | Auto-fix lint issues (add `-- --unsafe` if needed) |
-| **Typecheck** | `npm run typecheck` | Run TypeScript compiler checks |
-| **Format** | `npm run format` | Format code with Biome |
-| **Test All** | `npm test` | Run all tests with Vitest |
-| **Test Single** | `npx vitest run <path>` | Run a specific test file (e.g., `src/utils/foo.test.ts`) |
+- Run `npm run lint`, `npm run typecheck` and `npm test` before you push. The Husky hooks only run Biome on staged files and commitlint on the message; never bypass them.
+- `tsconfig.json` is incremental. Delete `.tsbuildinfo` before a typecheck you rely on, or a warm cache can hide errors that CI catches.
+- Run one test file with `npx vitest run <path>`.
 
-### Git Workflow
+## Git
 
-- **Branching**: `<type>/<issue>-<desc>` (e.g., `feat/123-add-cache`)
-- **Pre-commit**: Husky runs `lint-staged` (Biome check and format on staged files) before each commit and `commitlint` on the message. **Never** bypass. CI (`.github/workflows/ci.yml`) runs lint, typecheck, tests, the build and the Docker E2E suite on pushes and pull requests to `main`.
-- **Security**: **NEVER** commit secrets, credentials, or sensitive data (e.g., `.env`).
+- Branches: `<type>/<issue>-<desc>`, e.g. `feat/123-add-cache`.
+- Commits follow Conventional Commits, enforced by commitlint: `<type>(<scope>): <subject>`, with the subject in lower case, no trailing period, and the header under 100 characters.
+- Never commit secrets or `.env` files.
 
-### Dependency Hygiene
+## Code
 
-- Use `npm ci` (not `npm install`) when you just need `node_modules`; it installs from the lockfile without mutating it. Reserve `npm install` for intentional dependency changes.
-- Keep Node 22 — `better-sqlite3` ships a Node-ABI-pinned native binary. Do not bump the engine floor to v24+.
-- For occasional CLI tools that aren't part of the runtime (e.g. `promptfoo` for search evals), invoke them via `npx -y <pkg>@<version>` from `package.json` scripts rather than declaring them as dependencies — keeps the dep tree and lockfile clean.
-- npm 10 does not record `libc` in `package-lock.json`, so `npm ci` on Linux installs **both** the glibc and musl builds of every prebuilt native package (`@xberg-io/xberg`, `@biomejs/cli`, `lightningcss`, …). The `Dockerfile` prunes the musl copies after `npm ci`. If the lockfile is ever regenerated from scratch with npm 11+, the `libc` fields appear and that prune becomes redundant.
+- No `any` unless absolutely necessary, and no non-null assertions (`!`). Biome does not flag either.
+- Every exported function and class has TSDoc: a summary first, then params and returns.
+- Catch errors at API and CLI boundaries. The API answers with standard HTTP status codes.
+- Logging: `console.*` for CLI results, `logger.info` for state changes, `logger.debug` for flow details. Prefix info, warning and error messages with an emoji (`❌` for errors); debug messages have none. Keep binary content out of error logs.
+- The web UI follows `src/web/client/CONVENTIONS.md`.
 
-### Commit Messages
+## Tests
 
-Strictly enforced by `commitlint`. Commits will fail if format is incorrect.
+- Test observable behavior, not internal state. Prefer E2E, then integration tests; write unit tests for complex logic only. Use `vi.mock()` sparingly.
+- `src/foo.ts` is tested in `src/foo.test.ts`, unit and integration tests together. Do not add `*.integration.test.ts` or `*.spec.ts` files.
+- System-wide E2E suites live in `test/*-e2e.test.ts`. `test/README.md` describes the mock server, the crawl harness and the worker helpers.
+- Each test checks one behavior. Unit tests take under 100 ms.
+- `npm test` skips the live and Docker suites: run them with `npm run test:live` and `npm run test:docker`. After changing authentication or discovery, run the manual Clerk check (`npm run test:auth:clerk -- --app <app_id>`).
+- Reuse the fixtures in `test/fixtures/`.
 
-- **Format**: `<type>(<scope>): <subject>` (Scope is optional but recommended)
-- **Types**: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`
-- **Subject Rules**:
-  - Must be **lower case**
-  - Must **NOT** end with a period
-  - Keep header under 100 characters
-- **Body/Footer**:
-  - Separate from header with a blank line
-  - No line length limit (configured in `commitlint.config.js`)
+## Documentation
 
-## Code Style & Conventions
-
-### TypeScript
-- **Strictness**: No `any` (unless absolutely necessary), no non-null assertions (`!`).
-- **Imports**: All imports at top. Auto-sorted by Biome.
-- **Naming**:
-  - Classes/Interfaces/Types: `PascalCase`
-  - Variables/Functions/Methods: `camelCase`
-  - Constants: `UPPER_SNAKE_CASE` (global) or `camelCase` (local)
-- **TSDoc**: Mandatory for all exported functions/classes. Summary first, then params/returns.
-
-### Error Handling
-- **Boundaries**: Use `try/catch` at API/CLI boundaries.
-- **Logging**: Log errors via `logger.error` with `❌` prefix.
-- **Response**: Return standard HTTP codes (e.g., 500) for API errors.
-- **Safety**: Sanitize binary content from error logs.
-
-### Web UI (React + tRPC)
-- **Conventions**: Read `src/web/client/CONVENTIONS.md` before changing the client.
-- **Components**: React function components; reuse the shared ones in `src/web/client/components/`.
-- **Conditionals**: Use ternary `foo ? <Bar/> : null` (avoid `foo && <Bar/>`).
-- **Styling**: CSS classes from `src/web/client/styles/theme.css` and `components.css`.
-
-## Documentation Guidelines
-
-### File Targets
-- `README.md`: User-facing (install, config, usage).
-- `ARCHITECTURE.md`: Developer-facing (concepts, system design).
-- `docs/*.md`: Deep dives into specific subsystems.
-
-### Writing Principles
-- **Tone**: Declarative, present tense.
-- **Focus**: "What it does", not "what it doesn't do".
-- **Diagrams**: Mermaid for workflows/state. No markdown formatting in diagram titles.
-
-## Logging Strategy
-
-- **User Output**: `console.*` (CLI results).
-- **App Events**: `logger.info` (meaningful state changes).
-- **Debugging**: `logger.debug` (granular flow, disabled by default).
-- **Formats**: Prefix meaningful logs with emojis (e.g., `🔗`, `❌`, `✅`). **Never** use emojis in `debug` logs.
-
-## Testing Approach
-
-### Philosophy
-- **Behavior-Driven**: Test observable contracts, not internal state.
-- **Levels**: E2E (highest value) > Integration > Unit (complex logic only).
-- **Files**:
-  - **Single File Policy**: `src/foo.ts` -> `src/foo.test.ts`. Combine unit and integration tests in one file.
-  - **No Fragmentation**: Do NOT create separate `*.integration.test.ts` or `*.spec.ts` files.
-  - **E2E**: Place system-wide end-to-end tests in `test/*-e2e.test.ts`.
-
-### Best Practices
-- **Environment**: Node 22. Use `test/setup-env.ts` for polyfills.
-- **Isolation**: Each test should check **one** behavior.
-- **Performance**: Keep unit tests <100ms.
-- **Mocks**: Use `vi.mock()` sparingly; prefer real dependencies where feasible.
-
-### Test Inventory
-
-Unit + integration tests live next to the code they cover (`src/foo.ts` ↔ `src/foo.test.ts`) — the single-file policy above. The table below catalogues the system-wide E2E suites under `test/`. Run a single suite with `npx vitest run test/<file>`.
-
-| Suite | Covers | Requirements | In default `npm test`? |
-|---|---|---|---|
-| `cli-e2e.test.ts` | CLI smoke: help, version, unknown-arg handling; `scrape` refuses an existing version without `--replace`; local `scrape` and `refresh` leave a version another process is running alone; `--server-url` without a worker fails with the URL to check. Against a spawned worker: `scrape --server-url` returns once the job finishes and prints the same progress lines as a local run, fails with the reason the worker reports, shows only its own job while the worker runs another, finishes with one warning when a proxy blocks the event WebSocket, and `remove --server-url` cancels a running job before removing its version. `list`, `search`, `find-version`, `refresh` and `remove` run once against the worker and once locally, with the same output, and `compact` compacts the store it runs on in either mode (FTS-only, `file://` fixture, slow local site) | none | yes |
-| `remote-worker-e2e.test.ts` | A `web --server-url` coordinator reaching a spawned worker through a TCP proxy: health reports the worker connection as up, down while the proxy drops it, and up again; once the connection returns the coordinator asks views to refetch (`JOB_LIST_CHANGE`) and relays live job updates again; removing a version through the coordinator cancels the worker's job | none | yes |
-| `job-recovery-e2e.test.ts` | A worker killed with SIGKILL during a scrape, then restarted on the same store: with job recovery (the worker's default) it scrapes the version again to the end; with `--no-resume` it marks the version failed with "Job interrupted"; a local `scrape` that runs in between leaves the crashed job for the next worker to finish | none (slow local site) | yes |
-| `mcp-stdio-e2e.test.ts` | MCP server over stdio: spawn, protocol handshake, basic tools; `scrape_docs` rejects an existing version and names `replace: true`; `mcp --read-only` and the default command with `--read-only` leave a version another process is running alone; `mcp --server-url` scrapes, searches and removes through a spawned worker | none | yes |
-| `mcp-http-e2e.test.ts` | MCP over Streamable HTTP (protocol 2026-07-28): client connect, tools/resources, handshake-era client on the same endpoint, deprecated `/sse` transport with auth off, 405/404 surface, the web UI shell and a deep link in a browser, API/WebSocket origin checks, host checks against DNS rebinding | Chromium (Playwright) | yes |
-| `auth-e2e.test.ts` | Resource-server auth against a local issuer: challenge, protected resource metadata, token acceptance/rejection, `/sse` not served; optional live-provider discovery | none (live block needs `DOCS_MCP_AUTH_ISSUER_URL`) | yes |
-| `base-path-e2e.test.ts` | Serving under `/docs` behind a strip-prefix and a forward-prefix proxy: shell, assets, API, WebSocket, MCP, metadata, the deprecated `/sse` endpoint event without auth; Playwright drives the web UI and a cross-origin client | Chromium (Playwright) | yes |
-| `telemetry-e2e.test.ts` | `DOCS_MCP_TELEMETRY` env var controls PostHog init | none (parses debug logs) | yes |
-| `fetch-url-tool-e2e.test.ts` | `FetchUrlTool` per content type (HTML → Markdown; JSON, XML, text/plain verbatim, text/plain markup not rendered), redirects, custom headers, and its errors | none (MSW-mocked endpoints) | yes |
-| `html-pipeline-live-e2e.test.ts` | HTML pipeline against real documentation sites (anti-scrape, JS-heavy) | network; Playwright Chromium; slow & flaky | **no** — `npm run test:live` (uses `vite.config.live.ts`) |
-| `browser-fetcher-e2e.test.ts` | `BrowserFetcher` against a real Chromium: a page's external scripts load and run even when the request headers name `Sec-Fetch-*` values; a file the browser would download is fetched through the request API | Playwright Chromium | yes |
-| `browser-restart-e2e.test.ts` | `BrowserFetcher` against a real Chromium killed with SIGKILL: later pages get a new browser, the page it died loading is retried, concurrent pages share one launch, a page whose shared browser another user retires is retried; a browser whose close times out is killed | Playwright Chromium; skips on Windows | yes |
-| `shared-browser-e2e.test.ts` | A web crawl that needs both the browser fetcher (plain request refused with 403) and Playwright rendering runs one Chromium process, counted on every request; a crawl that fails while browser pages are still loading leaves no Chromium running after cleanup | Playwright Chromium; skips on Windows | yes |
-| `refresh-pipeline-e2e.test.ts` | Website refresh: `304` keeps a page, `404` deletes it, `200` replaces it, new links are crawled, stored scrape options are reused; crawl errors (broken link, root `404`, stalled page past the fetch timeout), redirects, allowlist network policy | none (mock site) | yes |
-| `local-file-refresh-e2e.test.ts` | `file://` refresh of a real temp directory: new, modified, deleted and unchanged files, detected by modification time | none | yes |
-| `scrape-progress-e2e.test.ts` | Progress counter semantics during scrapes, refreshes and cancellation: the `pagesScraped`/`totalPages` invariant, `maxPages` bounding indexed pages, counters persisted to the job record and read back through `GetJobInfoTool` | none (mock site) | yes |
-| `unprocessable-content-e2e.test.ts` | Queue-time and fetch-time unprocessable-content gates: no request for filtered links, skips store nothing and keep a stored page on refresh, skips stay out of `abortOnFailureRate` while genuine failures past it abort the crawl | none (mock site) | yes |
-| `empty-page-refresh-e2e.test.ts` | Empty page vs. extraction failure across refreshes: etag stored when genuinely empty, withheld when the pipeline errored, retried on the next refresh | none (mock site) | yes |
-| `markdown-identity-e2e.test.ts` | Markdown variant pages are recorded under the canonical URL, a site reachable as both `.md` and HTML indexes once as Markdown in either crawl order, a `.md` URL serving HTML keeps its own identity, and a refresh asks the location the content came from | mock site; Chromium (Playwright) for the hash-route crawl | yes |
-| `version-resolution-e2e.test.ts` | Version label normalization and resolution against a real SQLite store: write-path parity across entry points, tag/semver/prerelease resolution, listing order | none | yes |
-| `library-identity-e2e.test.ts` | Library identity against a real SQLite store: display names, case-insensitive reach, opaque names, overwrite rules (reject/replace/append/refresh), "Add library" conflicts, padded legacy names after the upgrade; the CLI `remove` removes the version, and the library with its last version (#532), and fails for a library that is not indexed | none | yes |
-| `archive-integration.test.ts` | `LocalFileStrategy` archive (zip) traversal and extraction | none (builds its zip with `archiver`) | yes |
-| `local-file-pdf-e2e.test.ts` | PDF in a `file://` directory is indexed alongside `.txt`/`.md` (regression for issue #394) | Xberg native deps | yes |
-| `vector-search-e2e.test.ts` | Full pipeline: scrape → split → embed → index → search. One vector per chunk in `documents_vec`, phrase and keyword-free queries, `exactMatch`, unknown-library suggestions | MSW-mocked OpenAI (deterministic trigram vectors) | yes |
-| `github-private-repo-e2e.test.ts` | Auth flow for private GitHub repo scraping | `GITHUB_TOKEN` or `GH_TOKEN`, network; tests return early without one | yes (passes without running if no token) |
-| `docker-e2e.test.ts` | Production image: non-root user, Chromium present, Playwright scrape, Xberg PDF, bind-mounted docs folder recursively indexed via `file:///`; HTTP serving (UI shell, assets, SPA fallback, system health, MCP) from no-argument, `--verbose` and `web` startup; stdio MCP selected by environment or `--protocol`; server protocol, host and port from environment aliases | Docker daemon (skips without one); network; `DOCKER_IMAGE_TAG` to reuse a prebuilt image | **no** — `npm run test:docker` |
-
-Notes:
-- The "live" and "docker" suites are excluded from `npm test` / `npm run test:e2e` because they need external network or a Docker daemon. CI runs `docker-e2e.test.ts` in a dedicated `docker-test` job.
-- The live suite is excluded in `vite.config.ts` so a bare `vitest` (and watch mode) never hits real sites. `--exclude` only *adds* globs and `mergeConfig` concatenates them, so nothing on the CLI can undo that — `npm run test:live` therefore points at `vite.config.live.ts`, which replaces the exclude list and drops the MSW mock-server setup that would otherwise intercept the real requests.
-- Suites that "skip gracefully" check for their required env at startup and short-circuit when it's missing — safe to leave in the default run.
-- `test/clerk-auth-live.ts` is a manual, interactive check of MCP authentication against a real Clerk development instance: `npm run test:auth:clerk -- --app <app_id>`. It needs the Clerk CLI (logged in) and one browser sign-in, reads the issuer and checks the OAuth settings through `clerk api` (`--fix-settings` turns missing ones on), serves the built CLI under `/docs` behind a prefix-stripping proxy, and deletes the OAuth client it registers (`--keep-client` keeps it). Run it after changes to the auth or discovery surface.
-- `test/global-setup.ts` builds the web UI (`npm run build:web`) when `public/index.html` is missing or older than `src/web/client/**` and `vite.config.web.ts`, because several E2E suites load the UI shell.
-- `vite.config.ts` points `DOCS_MCP_CONFIG` at a missing file, so `loadConfig()` in tests returns the built-in defaults and never touches the developer's own `config.yaml`. Tests of the default config path delete that variable first.
-- `test/mock-server.ts` ends with a catch-all handler: a request that no handler claims fails at once as a network error, and `test/setup-e2e.ts` refuses WebSocket connections the same way, so no test reaches the real network by accident. Loopback passes through. An opt-in live suite (GitHub, live identity provider) calls `allowLiveNetwork()` in `beforeAll` once its credentials are set.
-- The crawl suites describe the website they crawl with `mockSite(origin)` from `test/mock-site.ts`, served through the global MSW server: pages answer `304` to their own ETag, every request is logged, and a request for a path with no route fails the test (except `llms.txt`, which answers `404`). They run real jobs through `usePipelineHarness(...)` from `test/pipeline-harness.ts`, which builds a fresh pipeline over an in-memory store for each test.
-- Fixtures (sample PDF, docx, xlsx, archive, etc.) live in `test/fixtures/`. Reuse them rather than generating new files on the fly.
+- `README.md` is for users, `ARCHITECTURE.md` for developers, and `docs/` for deep dives into subsystems.
+- Write declaratively and in the present tense, about what the code does.
+- Use Mermaid for workflows and state, with no Markdown formatting in diagram titles.

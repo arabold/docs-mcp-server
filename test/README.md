@@ -5,10 +5,9 @@ Unit and integration tests live next to the code they cover under `src/`, and
 the search benchmark's own tests live under `tests/search-eval/`.
 
 The testing conventions (which level to test at, where a test file goes) are in
-[AGENTS.md: Testing Approach](../AGENTS.md#testing-approach). The list of
-suites, with what each covers and what it needs, is in
-[AGENTS.md: Test Inventory](../AGENTS.md#test-inventory). This file explains
-how to run the tests and how the shared harnesses work.
+[AGENTS.md](../AGENTS.md#tests), and each suite's `describe` blocks say what
+it covers. This file explains how to run the tests and how the shared harnesses
+work.
 
 ## Running Tests
 

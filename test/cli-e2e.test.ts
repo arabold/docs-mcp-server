@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -57,6 +57,74 @@ describe("CLI E2E", () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/Unknown argument/i);
     expect(stderr).toContain("unknown-flag");
+  });
+
+  it("reports a failing command without the help or a stack trace", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-failure-"));
+    const configPath = writeTestConfig(storePath);
+
+    try {
+      const { code, stderr } = await runCli([
+        "remove",
+        "nolib",
+        "--store-path",
+        storePath,
+        "--config",
+        configPath,
+      ]);
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("❌ Failed to remove nolib: Library nolib not found in store.");
+      expect(stderr).not.toContain("Options:");
+      expect(stderr).not.toMatch(/^\s+at /m);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+  });
+
+  it("shows the stack of a startup configuration error with --verbose", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-verbose-"));
+    const configPath = path.join(storePath, "config.yaml");
+    writeFileSync(configPath, 'server:\n  publicUrl: "https://example.com/docs//"\n');
+
+    try {
+      const { code, stderr } = await runCli([
+        "list",
+        "--verbose",
+        "--store-path",
+        storePath,
+        "--config",
+        configPath,
+      ]);
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("❌ Invalid configuration for server.publicUrl");
+      expect(stderr).toMatch(/^\s+at loadConfig /m);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+  });
+
+  it("exits with 1 when a command reports its own failure", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-exit-code-"));
+    const configPath = writeTestConfig(storePath);
+
+    try {
+      const { code, stderr } = await runCli([
+        "config",
+        "get",
+        "no.such.key",
+        "--store-path",
+        storePath,
+        "--config",
+        configPath,
+      ]);
+
+      expect(stderr).toContain("Invalid config path 'no.such.key'");
+      expect(code).toBe(1);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
   });
 
   it("refuses to scrape an existing version unless --replace is given", async () => {

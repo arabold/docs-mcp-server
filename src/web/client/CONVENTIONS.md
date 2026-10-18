@@ -111,3 +111,8 @@ it to `components/` instead of styling it inside the page.
 
 `pages/Libraries.tsx` is a compact example of a page built from the shared
 components.
+
+## Conditional Rendering
+
+Render optional markup with a ternary, `cond ? <Bar /> : null`, not
+`cond && <Bar />`. With `&&`, a falsy number such as `0` renders as text.
