@@ -999,6 +999,60 @@ describe("DocumentStore - With Embeddings", () => {
       expect(queuedVersions[0].status).toBe(VersionStatus.QUEUED);
     });
 
+    const backdated = "2000-01-01 00:00:00";
+
+    async function seedStatus(status: VersionStatus): Promise<number> {
+      const versionId = await store.resolveVersionId("statuslib", status);
+      await store.updateVersionStatus(versionId, status);
+      return versionId;
+    }
+
+    /** Sets every version's updated_at to `backdated`, as a long-silent run leaves it. */
+    function backdateVersions() {
+      // @ts-expect-error Accessing private property for testing
+      const db: DatabaseType = store.db;
+      // Without the trigger, which sets updated_at on every update, the rows can be backdated
+      db.exec("DROP TRIGGER versions_updated_at");
+      db.prepare("UPDATE versions SET updated_at = ?").run(backdated);
+    }
+
+    it("marks only queued and running versions alive", async () => {
+      const queued = await seedStatus(VersionStatus.QUEUED);
+      const running = await seedStatus(VersionStatus.RUNNING);
+      const completed = await seedStatus(VersionStatus.COMPLETED);
+      backdateVersions();
+
+      await store.markVersionsAlive([queued, running, completed]);
+
+      const updatedAt = async (versionId: number) =>
+        (await store.getVersionById(versionId))?.updated_at;
+      expect(await updatedAt(queued)).not.toBe(backdated);
+      expect(await updatedAt(running)).not.toBe(backdated);
+      expect(await updatedAt(completed)).toBe(backdated);
+    });
+
+    it("claims an interrupted version by marking it written now", async () => {
+      const running = await seedStatus(VersionStatus.RUNNING);
+      backdateVersions();
+
+      const claimed = await store.claimInterruptedVersion(running, backdated);
+
+      expect(claimed).toBe(true);
+      expect(await store.getVersionById(running)).toMatchObject({
+        status: VersionStatus.RUNNING,
+        updated_at: expect.not.stringMatching(backdated),
+      });
+    });
+
+    it("refuses a second claim on the same read", async () => {
+      const running = await seedStatus(VersionStatus.RUNNING);
+      backdateVersions();
+      // Another process read the same version and claimed it first
+      await store.claimInterruptedVersion(running, backdated);
+
+      expect(await store.claimInterruptedVersion(running, backdated)).toBe(false);
+    });
+
     it("should store and retrieve scraper options", async () => {
       const versionId = await store.resolveVersionId("optionslib", "1.0.0");
 

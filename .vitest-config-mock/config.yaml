@@ -25,6 +25,7 @@ scraper:
   maxPages: 1000
   maxDepth: 3
   maxConcurrency: 3
+  jobHeartbeatMs: 15000
   abortOnFailureRate: 0.5
   preserveHashes: false
   skipKnownTrackers: true

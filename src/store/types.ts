@@ -342,6 +342,27 @@ export interface DbVersionWithLibrary extends DbVersion {
 }
 
 /**
+ * `versions.updated_at` holds whole seconds (SQLite's `CURRENT_TIMESTAMP`), so
+ * a write can read up to this much older than it happened.
+ */
+export const UPDATED_AT_RESOLUTION_MS = 1000;
+
+/**
+ * How long ago a version was last written, from its `updated_at` (UTC).
+ *
+ * @param version The version as read from the store.
+ * @param now The current time, in milliseconds since the epoch.
+ * @returns Milliseconds since the write, or `Infinity` when the version has no
+ *   readable `updated_at`.
+ */
+export function msSinceWritten(version: DbVersion, now: number): number {
+  const writtenAt = version.updated_at
+    ? Date.parse(`${version.updated_at.replace(" ", "T")}Z`)
+    : Number.NaN;
+  return Number.isNaN(writtenAt) ? Number.POSITIVE_INFINITY : now - writtenAt;
+}
+
+/**
  * Helper function to convert NULL version name to empty string for API compatibility.
  * Database stores NULL for unversioned content, but APIs expect empty string.
  */

@@ -187,14 +187,37 @@ export class DocumentManagementService {
   }
 
   /**
-   * Updates the status of a version.
+   * Marks the jobs of QUEUED or RUNNING versions alive for other processes on
+   * the store.
+   * @param versionIds The versions whose jobs are alive
+   * @throws {StoreError} When the write fails
+   */
+  async markVersionsAlive(versionIds: number[]): Promise<void> {
+    return this.store.markVersionsAlive(versionIds);
+  }
+
+  /**
+   * Claims a version an earlier run left QUEUED or RUNNING, if nothing has
+   * written it since `updatedAt` was read; see {@link DocumentStore.claimInterruptedVersion}.
+   * @returns Whether the claim succeeded
+   */
+  async claimInterruptedVersion(
+    versionId: number,
+    updatedAt: string | null,
+  ): Promise<boolean> {
+    return this.store.claimInterruptedVersion(versionId, updatedAt);
+  }
+
+  /**
+   * Updates the status of a version, and tells views the library list changed.
    */
   async updateVersionStatus(
     versionId: number,
     status: VersionStatus,
     errorMessage?: string,
   ): Promise<void> {
-    return this.store.updateVersionStatus(versionId, status, errorMessage);
+    await this.store.updateVersionStatus(versionId, status, errorMessage);
+    this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
   }
 
   /**

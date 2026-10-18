@@ -278,6 +278,8 @@ export class DocumentStore {
     updateVersionStatus: Database.Statement<[string, string | null, number]>;
     updateVersionProgress: Database.Statement<[number, number, number | null, number]>;
     getVersionsByStatus: Database.Statement<string[]>;
+    markVersionsAlive: Database.Statement<[string]>;
+    claimInterruptedVersion: Database.Statement<[number, string | null]>;
     // Scraper options statements
     updateVersionScraperOptions: Database.Statement<[string, string, number]>;
     getVersionWithOptions: Database.Statement<[number]>;
@@ -579,6 +581,14 @@ export class DocumentStore {
       ),
       getVersionsByStatus: this.db.prepare<[string]>(
         "SELECT v.*, l.display_name as library_name FROM versions v JOIN libraries l ON v.library_id = l.id WHERE v.status IN (SELECT value FROM json_each(?))",
+      ),
+      markVersionsAlive: this.db.prepare<[string]>(
+        `UPDATE versions SET updated_at = CURRENT_TIMESTAMP
+         WHERE id IN (SELECT value FROM json_each(?)) AND status IN ('queued', 'running')`,
+      ),
+      claimInterruptedVersion: this.db.prepare<[number, string | null]>(
+        `UPDATE versions SET updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND status IN ('queued', 'running') AND updated_at IS ?`,
       ),
       // Scraper options statements
       updateVersionScraperOptions: this.db.prepare<[string, string, number]>(
@@ -1592,6 +1602,45 @@ export class DocumentStore {
       return rows;
     } catch (error) {
       throw new StoreError(`Failed to get versions by status: ${error}`);
+    }
+  }
+
+  /**
+   * Marks the jobs of versions alive for other processes on the store, by
+   * setting their `updated_at` to now. Versions no longer QUEUED or RUNNING are
+   * left unchanged.
+   * @param versionIds The versions whose jobs are alive
+   * @throws {StoreError} When the write fails
+   */
+  async markVersionsAlive(versionIds: number[]): Promise<void> {
+    try {
+      this.statements.markVersionsAlive.run(JSON.stringify(versionIds));
+    } catch (error) {
+      throw new StoreError(`Failed to mark versions alive: ${error}`);
+    }
+  }
+
+  /**
+   * Claims a version an earlier run left QUEUED or RUNNING, provided nothing
+   * has written it since its `updated_at` was read, by setting `updated_at` to
+   * now. Of several processes acting on the same read only one succeeds, and
+   * the others treat the version as recently written. The read must be older
+   * than a second, the resolution of `updated_at`, for the claim to change it.
+   * @param versionId The version to claim
+   * @param updatedAt The `updated_at` the caller read
+   * @returns Whether the claim succeeded
+   * @throws {StoreError} When the write fails
+   */
+  async claimInterruptedVersion(
+    versionId: number,
+    updatedAt: string | null,
+  ): Promise<boolean> {
+    try {
+      return (
+        this.statements.claimInterruptedVersion.run(versionId, updatedAt).changes > 0
+      );
+    } catch (error) {
+      throw new StoreError(`Failed to claim interrupted version: ${error}`);
     }
   }
 

@@ -152,6 +152,10 @@ export const DEFAULT_CONFIG = {
     maxPages: 1000,
     maxDepth: 3,
     maxConcurrency: 3,
+    // How often a pipeline marks its unfinished jobs alive in the store. A
+    // server starting on the same store treats a job as interrupted only after
+    // four intervals without a mark.
+    jobHeartbeatMs: 15_000,
     abortOnFailureRate: 0.5,
     preserveHashes: false,
     skipKnownTrackers: true,
@@ -285,6 +289,11 @@ export const AppConfigSchema = z.object({
         .number()
         .int()
         .default(DEFAULT_CONFIG.scraper.maxConcurrency),
+      jobHeartbeatMs: z.coerce
+        .number()
+        .int()
+        .positive()
+        .default(DEFAULT_CONFIG.scraper.jobHeartbeatMs),
       abortOnFailureRate: z.coerce
         .number()
         .min(0)

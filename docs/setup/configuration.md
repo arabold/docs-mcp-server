@@ -242,6 +242,7 @@ Settings for fetching and crawling. The `scrape` command can override `maxPages`
 | `maxPages` | `1000` | Maximum number of pages to crawl per job. |
 | `maxDepth` | `3` | Maximum link depth to traverse. |
 | `maxConcurrency` | `3` | Pages fetched at the same time within a job. It also sets how many jobs run at the same time. |
+| `jobHeartbeatMs` | `15000` | How often a process marks its running and queued jobs alive in the store (ms). A server that starts on the same store treats a job as interrupted only after four intervals without a mark, so use one value for every process on a store. |
 | `abortOnFailureRate` | `0.5` | Share of failed pages, from 0 to 1, above which a crawl stops. The start page does not count, and the check begins once 10 pages have finished. |
 | `preserveHashes` | `false` | Keep hash fragments as part of a page's identity, for documentation sites that route with hash URLs (see [Hash Route Behavior](#hash-route-behavior)). |
 | `skipKnownTrackers` | `true` | While a page renders in the browser, block requests to a built-in list of analytics, session replay, chat widget, captcha and social embed hosts. |

@@ -80,7 +80,11 @@ Within one process, enqueueing a job and removing a version run one at a time fo
 
 ## Interrupted Jobs
 
-A process that exits while jobs run or wait leaves their versions RUNNING or QUEUED in the store. `stop()` does not cancel running jobs, so a shutdown leaves them unfinished too. Several processes can share one store, for example a server and a local `scrape`, and only the process that hosts the store's jobs should act on the jobs another run left behind. `openBackend()` therefore gives each local pipeline an `interruptedJobs` policy ([src/pipeline/types.ts](../../src/pipeline/types.ts)), which `PipelineManager.start()` applies once:
+A process that exits while jobs run or wait leaves their versions RUNNING or QUEUED in the store. `stop()` does not cancel running jobs, so a shutdown leaves them unfinished too. Several processes can share one store, for example a server and a local `scrape`, or `web` beside an embedded stdio server, so a RUNNING or QUEUED version can also belong to a job another live process runs.
+
+Every local pipeline therefore marks the versions of its unfinished jobs alive: from `start()` until `stop()`, it sets their `updated_at` to now every `scraper.jobHeartbeatMs` (15 s by default). Status and progress writes set it too. A version is interrupted once nothing has written it for four intervals plus one second, the resolution of `updated_at`.
+
+Only the process that hosts the store's jobs should act on the jobs another run left behind. `openBackend()` therefore gives each local pipeline an `interruptedJobs` policy ([src/pipeline/types.ts](../../src/pipeline/types.ts)), which `PipelineManager.start()` applies to interrupted versions:
 
 | Policy | Effect | Used by |
 |---|---|---|
@@ -89,6 +93,10 @@ A process that exits while jobs run or wait leaves their versions RUNNING or QUE
 | `leave` | Changes nothing. | `scrape`, `refresh`, and `mcp` or the default command in read-only mode |
 
 `scrape` and `refresh` run only their own job, and a read-only server runs none, so they leave the others to the server. A remote backend takes no policy, because the worker applies its own.
+
+`start()` never treats the manager's own unfinished jobs as interrupted, such as jobs enqueued before it. A version written within the bound may belong to a live process, or to one that crashed moments ago, so `start()` checks it once more when the bound has passed: still unwritten, it gets the policy; written again, it is left to the process that runs it and not checked again. A server restarted right after a crash therefore recovers or fails the crashed job about a minute after it starts. The bound assumes every process on the store uses the same `jobHeartbeatMs`.
+
+Before it fails or recovers a version, the manager claims it with a write that only succeeds while the version is still RUNNING or QUEUED and nothing has written it since it was read, so of two servers that start together only one acts on it.
 
 ## Remote Pipeline
 

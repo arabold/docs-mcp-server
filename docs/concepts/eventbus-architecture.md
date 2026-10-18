@@ -12,7 +12,7 @@ Events are notifications, not state. A consumer that needs the current state rea
 |---|---|---|
 | `JOB_STATUS_CHANGE` | `PipelineManager` | A job changes status. Carries the job. |
 | `JOB_PROGRESS` | `PipelineManager` | A running job reports a page outcome. Carries the job and the progress report. |
-| `LIBRARY_CHANGE` | `PipelineManager`, `DocumentManagementService` | Indexed content may have changed: on every job status change, and when the store writes or deletes a page or removes a version. No payload. |
+| `LIBRARY_CHANGE` | `DocumentManagementService` | Indexed content may have changed: on every version status write, which every job status change makes, and when the store writes or deletes a page or removes a version. No payload. |
 | `JOB_LIST_CHANGE` | `PipelineManager`, `RemoteEventProxy` | Finished jobs were cleared, or the relay from a worker is live again after a drop. No payload. |
 
 ## Consumers

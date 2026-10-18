@@ -181,14 +181,38 @@ export async function startCliServer(
  * @param extraArgs More worker options, for example `["--no-resume"]`.
  * @returns The process and the worker's API URL; stop it with `stopChildProcess`.
  */
-export async function startWorker(
+export function startWorker(
+  storePath: string,
+  configPath: string,
+  extraArgs: string[] = [],
+): Promise<{ process: ChildProcess; url: string }> {
+  return startLocalServer("worker", storePath, configPath, extraArgs);
+}
+
+/**
+ * Starts the web interface (`docs-mcp-server web`) on a free loopback port,
+ * on the store itself rather than a worker, so it runs its own pipeline.
+ *
+ * @param storePath The store directory.
+ * @param configPath The config file to start it with.
+ * @returns The process and the web interface's URL; stop it with `stopChildProcess`.
+ */
+export function startWeb(
+  storePath: string,
+  configPath: string,
+): Promise<{ process: ChildProcess; url: string }> {
+  return startLocalServer("web", storePath, configPath);
+}
+
+async function startLocalServer(
+  command: "worker" | "web",
   storePath: string,
   configPath: string,
   extraArgs: string[] = [],
 ): Promise<{ process: ChildProcess; url: string }> {
   return startCliServer(
     [
-      "worker",
+      command,
       "--host",
       "127.0.0.1",
       "--port",
@@ -274,6 +298,8 @@ export function createTcpProxy(
  * @param siteUrl The slow site's URL.
  * @param library The library to scrape it as.
  * @param version The version, or `null` for unversioned.
+ * @param maxPages Pages after which the job completes; by default far past
+ *   the chain the site serves, so only a cancellation ends the job.
  * @returns The running job's id.
  */
 export async function startRunningSlowJob(
@@ -281,8 +307,8 @@ export async function startRunningSlowJob(
   siteUrl: string,
   library: string,
   version: string | null,
+  maxPages = 100_000,
 ): Promise<string> {
-  // Limits far past the chain the site serves, so only a cancellation ends the job
   const options = {
     url: siteUrl,
     library,
@@ -290,7 +316,7 @@ export async function startRunningSlowJob(
     scrapeMode: ScrapeMode.Fetch,
     maxConcurrency: 1,
     maxDepth: 100_000,
-    maxPages: 100_000,
+    maxPages,
   } as ScraperOptions;
   const { jobId } = await api.enqueueScrapeJob.mutate({ library, version, options });
   await vi.waitFor(
@@ -310,6 +336,8 @@ export async function startRunningSlowJob(
  * @param dir Directory to write `config.yaml` into.
  * @param options.allowPrivateNetworks Let scrapes reach local test servers.
  * @param options.maxConcurrency How many jobs run at once; the default otherwise.
+ * @param options.jobHeartbeatMs How often running jobs are marked alive; the
+ *   default otherwise. A server finds a crashed job after four intervals.
  * @param options.telemetryEnabled Turn telemetry on, for the suite that checks how it is switched off.
  * @returns The config file's path.
  */
@@ -318,6 +346,7 @@ export function writeTestConfig(
   options: {
     allowPrivateNetworks?: boolean;
     maxConcurrency?: number;
+    jobHeartbeatMs?: number;
     telemetryEnabled?: boolean;
   } = {},
 ): string {
@@ -330,6 +359,7 @@ export function writeTestConfig(
       `  telemetryEnabled: ${options.telemetryEnabled ?? false}`,
       "scraper:",
       ...(options.maxConcurrency ? [`  maxConcurrency: ${options.maxConcurrency}`] : []),
+      ...(options.jobHeartbeatMs ? [`  jobHeartbeatMs: ${options.jobHeartbeatMs}`] : []),
       "  security:",
       "    fileAccess:",
       "      mode: unrestricted",

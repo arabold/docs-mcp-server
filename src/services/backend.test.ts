@@ -103,6 +103,7 @@ describe("openBackend", () => {
     });
 
     afterEach(() => {
+      vi.useRealTimers();
       rmSync(storePath, { recursive: true, force: true });
     });
 
@@ -125,6 +126,8 @@ describe("openBackend", () => {
       "runs jobs and leaves an interrupted scrape $status when set to $interruptedJobs it",
       async ({ interruptedJobs, status }) => {
         await seedRunningScrape();
+        // An hour later, so the scrape looks abandoned rather than alive
+        vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 60 * 60_000 });
 
         const backend = await open(localOptions({ jobs: { interruptedJobs } }));
 
