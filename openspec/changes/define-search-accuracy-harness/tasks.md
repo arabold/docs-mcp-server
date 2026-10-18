@@ -37,8 +37,8 @@
 
 ## 8. Integration
 
-- [ ] 8.1 Run the benchmark on `main` and on the stop-word branch of #556 and post the per-mode comparison on that PR; verify both runs use the same snapshot
-- [ ] 8.2 Run `npm run lint`, a cold `npm run typecheck` and `npm test`; verify all pass
+- [x] 8.1 Run the benchmark on `main` and on the stop-word branch of #556 and post the per-mode comparison on that PR; verify both runs use the same snapshot
+- [x] 8.2 Run `npm run lint`, a cold `npm run typecheck` and `npm test`; verify all pass
 
 ## Workflow follow-up
 
