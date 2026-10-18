@@ -58,6 +58,26 @@ describe("sanitizeErrorMessage", () => {
       ),
     ).toBe("ENOENT: no such file or directory, scandir '[path]'");
   });
+
+  it("should remove single-component absolute paths", () => {
+    expect(sanitizeErrorMessage("scandir '/private-docs'")).toBe("scandir '[path]'");
+    expect(sanitizeErrorMessage("cannot open /private-docs")).toBe("cannot open [path]");
+  });
+
+  it("should remove paths with spaces", () => {
+    expect(sanitizeErrorMessage("scandir '/Users/Jane Doe/private-docs'")).toBe(
+      "scandir '[path]'",
+    );
+    expect(sanitizeErrorMessage("open C:\\Users\\Jane Doe\\docs failed")).toBe(
+      "open [path] failed",
+    );
+  });
+
+  it("should keep slashes that are not paths", () => {
+    expect(sanitizeErrorMessage("HTTP/1.1 503 on 2024/10/18, retry and/or wait")).toBe(
+      "HTTP/1.1 503 on 2024/10/18, retry and/or wait",
+    );
+  });
 });
 
 describe("sanitizeErrorForTracking", () => {
@@ -91,6 +111,54 @@ describe("sanitizeErrorForTracking", () => {
         "    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)",
       ].join("\n"),
     );
+  });
+
+  it("should drop query strings and fragments from URL frames", () => {
+    const error = new Error("boom");
+    error.stack = [
+      "Error: boom",
+      "    at eval (https://intranet.example.com/private-module.js?token=secret:3:7)",
+      "    at load (https://intranet.example.com/loader.js#secret:1:2)",
+    ].join("\n");
+
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect(sanitized.stack).toBe(
+      [
+        "Error: boom",
+        "    at eval (private-module.js:3:7)",
+        "    at load (loader.js:1:2)",
+      ].join("\n"),
+    );
+  });
+
+  it("should shorten frames that have a line but no column", () => {
+    const error = new Error("boom");
+    error.stack = "Error: boom\n    at load (/Users/john/private-docs/loader.js:10)";
+
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect(sanitized.stack).toBe("Error: boom\n    at load (loader.js:10)");
+  });
+
+  it("should drop lines that are not stack frames", () => {
+    const error = new Error(
+      "Request failed\n    at https://private.example/docs?token=secret",
+    );
+
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect(sanitized.stack).not.toContain("private.example");
+    expect(sanitized.stack).not.toContain("secret");
+  });
+
+  it("should keep frames without a file location", () => {
+    const error = new Error("boom");
+    error.stack = "Error: boom\n    at async Promise.all (index 0)";
+
+    const sanitized = sanitizeErrorForTracking(error);
+
+    expect(sanitized.stack).toBe("Error: boom\n    at async Promise.all (index 0)");
   });
 
   it("should drop the original message from the stack", () => {

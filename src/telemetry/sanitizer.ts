@@ -52,34 +52,53 @@ export function extractProtocol(urlOrPath: string): string {
  * Examples:
  * - "Failed to fetch https://secret.com/api" -> "Failed to fetch [url]"
  * - "File not found: /home/user/secret.txt" -> "File not found: [path]"
- * - "ENOENT: no such file or directory, scandir '/home/user/docs'" -> "... scandir '[path]'"
+ * - "ENOENT: no such file or directory, scandir '/Users/Jane Doe/docs'" -> "... scandir '[path]'"
  *
  * @param message - The raw error message.
  * @returns The message without URLs, paths or credentials, cut to 200 characters.
  */
 export function sanitizeErrorMessage(message: string): string {
-  return message
-    .replace(/https?:\/\/[^\s]+/gi, "[url]")
-    .replace(/file:\/\/[^\s]+/gi, "[file-url]")
-    .replace(/(?<![\w\]])(?:~|\.{1,2})?\/[^\s'"`<>()]*\/[^\s'"`<>()]*/g, "[path]")
-    .replace(/\/[^\s]*\.[a-z]{2,4}/gi, "[path]")
-    .replace(/[A-Za-z]:\\[^\s]+/g, "[path]")
-    .replace(/Bearer\s+[^\s]+/gi, "Bearer [token]")
-    .replace(/api[_-]?key[=:]\s*[^\s]+/gi, "api_key=[redacted]")
-    .replace(/token[=:]\s*[^\s]+/gi, "token=[redacted]")
-    .substring(0, 200); // Limit length
+  return (
+    message
+      .replace(/https?:\/\/[^\s]+/gi, "[url]")
+      .replace(/file:\/\/[^\s]+/gi, "[file-url]")
+      // Quoted paths first, so the whole path goes even when it has spaces
+      .replace(/(['"`])(?:(?:~|\.{1,2})?\/|[A-Za-z]:[\\/])(?:(?!\1).)*\1/g, "$1[path]$1")
+      // Unquoted absolute paths, continued over a space while the next word
+      // holds a separator, as in "/Users/Jane Doe/docs"
+      .replace(
+        /(?<![\w\]])(?:(?:~|\.{1,2})?\/|[A-Za-z]:[\\/])[^\s'"`<>()]+(?:\s+[^\s'"`<>()\\/]+[\\/][^\s'"`<>()]*)*/g,
+        "[path]",
+      )
+      .replace(/\/[^\s]*\.[a-z]{2,4}/gi, "[path]")
+      .replace(/Bearer\s+[^\s]+/gi, "Bearer [token]")
+      .replace(/api[_-]?key[=:]\s*[^\s]+/gi, "api_key=[redacted]")
+      .replace(/token[=:]\s*[^\s]+/gi, "token=[redacted]")
+      .substring(0, 200) // Limit length
+  );
 }
 
-/** Splits a stack frame into its prefix, location and `:line:column` suffix. */
-const STACK_FRAME = /^(\s*at (?:.*? \()?)(.+?)(:\d+:\d+\)?)$/;
+/**
+ * Splits a stack frame into its prefix, location and `:line` or `:line:column`
+ * suffix. Matches `at fn (location:1:2)` and `at location:1:2`.
+ */
+const STACK_FRAME = /^(\s*at (?:.+? \()?)(.+?)((?::\d+){1,2}\)?)$/;
+
+/** Matches stack frames without a file location, such as `at async Promise.all (index 0)`. */
+const LOCATIONLESS_FRAME = /^\s*at .+ \((?:<anonymous>|native|index \d+)\)$/;
 
 /**
  * Shortens a stack frame location to the path below the last `node_modules`
- * directory, or to the file name, so no user or directory names remain.
+ * directory, or to the file name, so no user or directory names, hosts, query
+ * strings or fragments remain.
  */
 function shortenFrameLocation(location: string): string {
   if (location.startsWith("node:")) return location;
-  const normalized = location.replace(/^file:\/\//, "").replace(/\\/g, "/");
+  if (location.startsWith("data:")) return "data:";
+  const normalized = location
+    .replace(/^[a-z][a-z\d+.-]*:\/\//i, "")
+    .replace(/[?#].*$/, "")
+    .replace(/\\/g, "/");
   const marker = "/node_modules/";
   const nodeModules = normalized.lastIndexOf(marker);
   if (nodeModules !== -1) return normalized.slice(nodeModules + marker.length);
@@ -87,9 +106,23 @@ function shortenFrameLocation(location: string): string {
 }
 
 /**
+ * Returns a stack frame with its location shortened, the frame itself when it
+ * has no location, or null for a line that is not a recognizable frame.
+ */
+function sanitizeStackFrame(line: string): string | null {
+  const match = STACK_FRAME.exec(line);
+  if (match) {
+    const [, prefix, location, suffix] = match;
+    return `${prefix}${shortenFrameLocation(location)}${suffix}`;
+  }
+  return LOCATIONLESS_FRAME.test(line) ? line : null;
+}
+
+/**
  * Creates a copy of an error that is safe to send to error tracking. The message
  * goes through {@link sanitizeErrorMessage}, stack frames keep only the file name
- * (or the package path below `node_modules`), and causes are sanitized the same way.
+ * (or the package path below `node_modules`), lines that are not recognizable
+ * frames are dropped, and causes are sanitized the same way.
  *
  * @param error - The error to sanitize.
  * @returns A new error with the same name and sanitized message, stack and cause.
@@ -104,12 +137,8 @@ export function sanitizeErrorForTracking(error: Error): Error {
   const frames = (error.stack ?? "")
     .split("\n")
     .filter((line) => /^\s*at /.test(line))
-    .map((line) => {
-      const match = STACK_FRAME.exec(line);
-      if (!match) return line;
-      const [, prefix, location, suffix] = match;
-      return `${prefix}${shortenFrameLocation(location)}${suffix}`;
-    });
+    .map(sanitizeStackFrame)
+    .filter((frame): frame is string => frame !== null);
   sanitized.stack = [`${error.name}: ${message}`, ...frames].join("\n");
 
   return sanitized;
