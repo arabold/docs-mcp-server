@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -452,15 +452,29 @@ describe("CLI E2E", () => {
         }
       }, 60_000);
 
-      it("compact compacts the store it runs on", async () => {
+      it("compact reclaims the space a removed version left in the store it runs on", async () => {
+        // A version of its own, so there is space to reclaim whatever ran before
+        await Promise.all(
+          [{ serverUrl: workerUrl }, { storePath: localStore }].map((target) =>
+            seed(target, "Compacted", "1.0"),
+          ),
+        );
+        for (const removed of await runBoth(["remove", "Compacted", "--version", "1.0"], localStore)) {
+          expect(removed.code, removed.stderr).toBe(0);
+        }
+        const dbSizes = () =>
+          [storePath, localStore].map((dir) => statSync(path.join(dir, "documents.db")).size);
+        const before = dbSizes();
+
         const results = await runBoth(["compact"], localStore);
 
         for (const result of results) {
           expect(result.code, result.stderr).toBe(0);
-          expect(result.stdout).toMatch(
-            /^(Compacted store from .+ to .+ \(reclaimed .+\)\.|Store is already compact\.)\n$/,
-          );
+          expect(result.stdout).toMatch(/^Compacted store from .+ to .+ \(reclaimed .+\)\.\n$/);
         }
+        const after = dbSizes();
+        expect(after[0], "the worker's documents.db").toBeLessThan(before[0]);
+        expect(after[1], "the local documents.db").toBeLessThan(before[1]);
       }, 60_000);
     });
   });
