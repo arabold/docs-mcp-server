@@ -918,7 +918,7 @@ type ConfigObject = Record<string, unknown>;
  * Convert camelCase to UPPER_SNAKE_CASE
  * Example: "maxSize" → "MAX_SIZE", "maxNestingDepth" → "MAX_NESTING_DEPTH"
  */
-export function camelToUpperSnake(str: string): string {
+function camelToUpperSnake(str: string): string {
   return str.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase();
 }
 
@@ -926,14 +926,14 @@ export function camelToUpperSnake(str: string): string {
  * Convert config path to environment variable name
  * Example: ["scraper", "document", "maxSize"] → "DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE"
  */
-export function pathToEnvVar(pathArr: string[]): string {
+function pathToEnvVar(pathArr: string[]): string {
   return `DOCS_MCP_${pathArr.map(camelToUpperSnake).join("_")}`;
 }
 
 /**
  * Recursively collect all leaf paths from a config object
  */
-export function collectLeafPaths(obj: object, prefix: string[] = []): string[][] {
+function collectLeafPaths(obj: object, prefix: string[] = []): string[][] {
   const paths: string[][] = [];
   for (const [key, value] of Object.entries(obj)) {
     const currentPath = [...prefix, key];
