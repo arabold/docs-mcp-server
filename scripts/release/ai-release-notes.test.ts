@@ -63,6 +63,8 @@ describe("ai-release-notes", () => {
       "-m",
       "feat(cli): add a thing",
     );
+    // A prerelease cut by hand, which semantic-release looks past.
+    git(repo, "tag", "v1.1.0-beta.1");
     git(repo, "commit", "--allow-empty", "-m", "docs: fix a typo");
   });
 
@@ -127,7 +129,7 @@ describe("ai-release-notes", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "prints Copilot's notes for the commits since the latest tag, with linked references",
+    "prints Copilot's notes since the latest stable release, with linked references",
     () => {
       const bin = fakeCopilot(
         "copilot-writes-notes",
@@ -160,6 +162,18 @@ describe("ai-release-notes", () => {
     [
       "prints something other than release notes",
       fakeAgent(`process.stdout.write("Sorry, I cannot help with that.")`),
+      /did not return release notes/,
+    ],
+    [
+      "prints an error under a heading",
+      fakeAgent(
+        `process.stdout.write("### Error\\n\\nUnable to generate release notes.")`,
+      ),
+      /did not return release notes/,
+    ],
+    [
+      "prints a heading without bullets",
+      fakeAgent(`process.stdout.write("### Features\\n")`),
       /did not return release notes/,
     ],
     [
@@ -215,6 +229,8 @@ describe("ai-release-notes", () => {
   it.each([
     ["is empty", ""],
     ["holds something other than release notes", "Sorry, I cannot help with that."],
+    ["holds an error under a heading", "### Error\n\nUnable to generate release notes."],
+    ["has a heading without bullets", "### Features\n"],
     ["is missing", undefined],
   ])("keeps the conventional notes when the notes file %s", async (name, content) => {
     const notesFile = path.join(workDir, `release-notes-${name.replaceAll(" ", "-")}.md`);

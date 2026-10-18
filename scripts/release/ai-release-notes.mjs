@@ -31,7 +31,15 @@ const PROMPT_FILE = fileURLToPath(
   new URL("../../.github/prompts/release-changelog.prompt.md", import.meta.url),
 );
 
-/** Copilot CLI, reading the prompt on stdin and printing only its answer. */
+/**
+ * Copilot CLI, reading the prompt on stdin and printing only its answer.
+ *
+ * Copilot runs read-only tools such as reading files without asking, so the
+ * command takes all tools away: an allowlist naming no real tool leaves none,
+ * where an empty one does not (checked with Copilot CLI 1.0.98). The deny
+ * rules and the closed temporary directory hold if a later version reads the
+ * allowlist differently.
+ */
 const DEFAULT_AGENT_COMMAND = [
   "copilot",
   "--model",
@@ -40,17 +48,29 @@ const DEFAULT_AGENT_COMMAND = [
   "--no-ask-user",
   "--no-custom-instructions",
   "--disable-builtin-mcps",
+  "--available-tools=none",
+  "--deny-tool=shell",
+  "--deny-tool=write",
+  "--disallow-temp-dir",
   "--no-auto-update",
   "--log-level",
   "error",
 ];
 
+/** The sections the prompt asks for, in its order. */
+const SECTION_HEADINGS = [
+  "breaking changes",
+  "features",
+  "bug fixes",
+  "internal changes",
+];
+
 const AGENT_TIMEOUT_MS = 10 * 60 * 1000;
 
 // The prompt is built from commit messages, which are untrusted. The agent
-// gets no tool permissions, an empty working directory, and only these
-// variables; Copilot CLI signs in with the first token set, in this order. The
-// release workflow runs it in a job whose token cannot push, tag or publish.
+// gets no tools, an empty working directory, and only these variables; Copilot
+// CLI signs in with the first token set, in this order. The release workflow
+// runs it in a job whose token cannot push, tag or publish.
 const AGENT_ENV_VARS = [
   "PATH",
   "HOME",
@@ -87,7 +107,7 @@ export async function generateNotes(pluginConfig, context) {
     return conventionalNotes;
   }
   const notes = (await readFile(notesFile, "utf8").catch(() => "")).trim();
-  if (!notes.startsWith("### ")) {
+  if (!isReleaseNotes(notes)) {
     logger.warn(`Keeping the conventional release notes: ${notesFile} holds none`);
     return conventionalNotes;
   }
@@ -143,7 +163,8 @@ export async function buildReleaseSource({ cwd, from, to = "HEAD" }) {
  *   stdin and prints the notes.
  * @param {Record<string, string | undefined>} [options.env] Environment the
  *   agent's variables are taken from.
- * @returns {Promise<string>} Markdown that starts with a "###" heading.
+ * @returns {Promise<string>} Markdown sections with a "###" heading and
+ *   bullets each.
  * @throws {Error} When the agent fails, times out, or prints something other
  *   than release notes.
  */
@@ -169,7 +190,7 @@ export async function renderReleaseNotes({
     const notes = (
       await runAgent(command, prompt, { cwd: workDir, env: agentEnv })
     ).trim();
-    if (!notes.startsWith("### ")) {
+    if (!isReleaseNotes(notes)) {
       const firstLine = notes.split("\n")[0].slice(0, 200) || "nothing";
       throw new Error(
         `The agent did not return release notes; it began with: ${firstLine}`,
@@ -196,6 +217,27 @@ function linkReferences(markdown, repositoryUrl) {
   }
   const base = `https://github.com/${match[1]}/${match[2]}`;
   return markdown.replace(/(?<![\w&[/])#(\d+)\b/g, `[#$1](${base}/issues/$1)`);
+}
+
+/**
+ * Whether the text is release notes as the prompt asks for them: nothing but
+ * known "###" sections, each with at least one bullet.
+ *
+ * @param {string} markdown
+ */
+function isReleaseNotes(markdown) {
+  const [preamble, ...sections] = markdown.trim().split(/^### /m);
+  return (
+    preamble.trim() === "" &&
+    sections.length > 0 &&
+    sections.every((section) => {
+      const [heading, ...lines] = section.split("\n");
+      return (
+        SECTION_HEADINGS.includes(heading.trim().toLowerCase()) &&
+        lines.some((line) => /^[-*] \S/.test(line))
+      );
+    })
+  );
 }
 
 /**
@@ -281,14 +323,34 @@ function runAgent([executable, ...args], input, { cwd, env }) {
   });
 }
 
+/**
+ * Tag of the latest stable release in the history of HEAD. semantic-release
+ * compares a release on main with it, past any prerelease tagged by hand.
+ *
+ * @param {(...args: string[]) => Promise<string>} git
+ */
+async function latestRelease(git) {
+  const tags = await git(
+    "tag",
+    "--merged",
+    "HEAD",
+    "--list",
+    "v[0-9]*",
+    "--sort=-v:refname",
+  );
+  const tag = tags.split("\n").find((name) => /^v\d+\.\d+\.\d+$/.test(name));
+  if (!tag) {
+    throw new Error("No release tag found; pass the commit to start from.");
+  }
+  return tag;
+}
+
 /** Prints the notes, or their source, for the commits since a release. */
 async function main(args) {
   const cwd = process.cwd();
   const git = async (...gitArgs) =>
     (await execFileAsync("git", gitArgs, { cwd })).stdout.trim();
-  const from =
-    args.find((arg) => !arg.startsWith("--")) ??
-    (await git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"));
+  const from = args.find((arg) => !arg.startsWith("--")) ?? (await latestRelease(git));
   const source = await buildReleaseSource({ cwd, from });
   if (!source) {
     throw new Error(`No commits since ${from}.`);

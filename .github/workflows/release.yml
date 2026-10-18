@@ -33,10 +33,12 @@ jobs:
         with:
           node-version: "22.x"
 
+      # Neither step can fail the job, so a Copilot problem never blocks the
+      # release, which then lists the commits.
       - name: Install Copilot CLI
+        continue-on-error: true
         run: npm install -g @github/copilot@1.0.98
 
-      # A failure here never blocks the release, which then lists the commits.
       - name: Write release notes
         id: notes
         env:
