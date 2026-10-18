@@ -22,6 +22,12 @@ import { FingerprintGenerator } from "./FingerprintGenerator";
 import { ManagedBrowser } from "./ManagedBrowser";
 import { FetchStatus } from "./types";
 
+/** The page Fastly serves in place of the document (pypi.org, trimmed). */
+const FASTLY_CHALLENGE_PAGE = readFileSync(
+  path.join(__dirname, "../../../test/fixtures/fastly-client-challenge.html"),
+  "utf-8",
+);
+
 /**
  * Builds a mocked Playwright page/context/browser tree and makes it the browser
  * every launch returns. `pageOverrides` lets a test replace individual page
@@ -221,6 +227,28 @@ describe("BrowserFetcher", () => {
     expect((error as InstanceType<typeof ScraperError>).isRetryable).toBe(true);
   });
 
+  it("rejects a challenge page the request-API fallback receives with status 200", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({ "content-type": "text/html; charset=utf-8" }),
+      body: vi.fn().mockResolvedValue(Buffer.from(FASTLY_CHALLENGE_PAGE)),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const error = await fetcher
+      .fetch("https://example.com/automation/index.md")
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(ChallengeError);
+    expect(error).toMatchObject({ statusCode: 200, challengeType: "fastly" });
+  });
+
   it("rejects a request-API redirect to a disallowed host before fetching it", async () => {
     const goto = vi
       .fn()
@@ -417,14 +445,7 @@ describe("BrowserFetcher", () => {
     // The challenge fallback sends Fastly-challenged urls here; a page still
     // showing the challenge once the load settles must not be indexed.
     mockBrowser({
-      content: vi
-        .fn()
-        .mockResolvedValue(
-          readFileSync(
-            path.join(__dirname, "../../../test/fixtures/fastly-client-challenge.html"),
-            "utf-8",
-          ),
-        ),
+      content: vi.fn().mockResolvedValue(FASTLY_CHALLENGE_PAGE),
     });
 
     const fetcher = new BrowserFetcher(loadConfig().scraper);

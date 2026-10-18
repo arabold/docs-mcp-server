@@ -389,6 +389,15 @@ export class BrowserFetcher implements ContentFetcher {
     const { mimeType, charset } = MimeTypeUtils.parseContentType(contentType);
     const content = Buffer.from(await response.body());
 
+    // The origin visit above does not clear every challenge, and the request
+    // then gets the challenge page in place of the resource.
+    const challengeType = MimeTypeUtils.isHtml(mimeType)
+      ? detectChallengePage(content)
+      : null;
+    if (challengeType) {
+      throw new ChallengeError(source, response.status(), challengeType);
+    }
+
     return {
       content,
       mimeType,
