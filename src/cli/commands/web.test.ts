@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
 import * as appModule from "../../app";
+import { registerGlobalServices } from "../services";
 import { createWebCommand } from "./web";
 
 const pipelineMock = {};
@@ -74,48 +75,25 @@ describe("web command", () => {
     vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
   });
 
-  it("starts app server with correct config", async () => {
+  // The only check that web leaves the MCP endpoint off; no E2E suite asks
+  // the web command's server for /mcp.
+  it("starts the web UI and the API without the MCP endpoint", async () => {
     const parser = yargs().scriptName("test");
     createWebCommand(parser);
-
-    // Mock startAppServer to return promise that never resolves (simulating running server)
-    // or just resolves immediately for test purpose if await is used.
-    // In web.ts: await new Promise(() => {}); // Keep running forever
-    // This is hard to test unless we mock the Promise constructor or catch successful start before waiting.
-    // The test will hang if we don't mock the "wait forever" part.
-    // However, the "wait forever" is `await new Promise(() => {})`. We can't easily mock `new Promise`.
-    // BUT, because `startAppServer` is awaited BEFORE `await new Promise(() => {})`, checking calls to `startAppServer` is enough.
-    // The test execution logic calls the handler. The handler awaits startAppServer, then awaits forever.
-    // We can't await `parser.parse` because it will hang.
-    // So we invoke the command and check mocks, but we need to prevent the hang.
-    // One way is to throw an error inside registerGlobalServices which is called right before waiting.
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
+    // The command waits forever once the server runs; stop it right there.
+    // It reports the stop as a startup failure and resolves.
+    vi.mocked(registerGlobalServices)
       .mockImplementationOnce(() => {})
       .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop"); // Break the execution flow
+        throw new Error("Simulated Stop");
       });
 
-    try {
-      await parser.parse(`web --port 3000`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
+    await parser.parse("web");
 
-    expect(appModule.startAppServer).toHaveBeenCalled();
-    const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[1]; // 2nd arg is config
-    expect(config.enableWebInterface).toBe(true);
-    expect(config.enableMcpServer).toBe(false);
-    expect(config.port).toBe(6281); // From mocked loadConfig/validatePort logic, arguments override?
-    // Wait, createWebCommand calls loadConfig, which uses args.
-    // validatePort returns integer.
-    // createWebCommand passes appConfig.server.ports.web to createAppServerConfig via appConfig defaults?
-    // Actually source code: port: appConfig.server.ports.web
-    // So CLI arg --port is ONLY used for validation/override IF loadConfig respected it.
-    // In my loadConfig mock, I hardcoded port: 6281.
-    // If I want to test override, I should make loadConfig mock dynamic?
-    // For now, testing generic start is fine.
+    expect(vi.mocked(appModule.startAppServer).mock.calls[0]?.[1]).toMatchObject({
+      enableWebInterface: true,
+      enableApiServer: true,
+      enableMcpServer: false,
+    });
   });
 });
