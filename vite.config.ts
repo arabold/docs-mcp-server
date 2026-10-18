@@ -5,6 +5,10 @@ import path from 'path';
 import fs from 'fs';
 import packageJson from "./package.json";
 
+// A directory named afresh for each test run and never created, so no leftover
+// file can be waiting at a path inside it.
+const missingTestDir = path.join(os.tmpdir(), `docs-mcp-server-tests-${randomUUID()}`);
+
 export default defineConfig({
   plugins: [
     // Plugin to preserve shebang in the built file
@@ -109,16 +113,17 @@ export default defineConfig({
       DOTENV_CONFIG_QUIET: "true",
       // Without an explicit path, loadConfig() reads the developer's own system
       // config.yaml and writes defaults back into it. An explicit path is
-      // read-only, and this one never exists: its directory is named afresh for
-      // each run and never created, so no leftover file can be waiting there.
-      // loadConfig() in tests (and in the CLIs the E2E suites spawn, which
-      // inherit the variable) therefore starts from the built-in defaults unless
-      // a test passes a config of its own.
-      DOCS_MCP_CONFIG: path.join(
-        os.tmpdir(),
-        `docs-mcp-server-tests-${randomUUID()}`,
-        "no-config.yaml",
-      ),
+      // read-only, and this one never exists. loadConfig() in tests (and in the
+      // CLIs the E2E suites spawn, which inherit the variable) therefore starts
+      // from the built-in defaults unless a test passes a config of its own.
+      DOCS_MCP_CONFIG: path.join(missingTestDir, "no-config.yaml"),
+      // `import "dotenv/config"` in the CLI reads `.env` from its working
+      // directory, which for a spawned CLI is the checkout. A developer's
+      // `OPENAI_API_KEY` there would turn embeddings on and send requests to
+      // OpenAI that no MSW handler sees. Pointing dotenv at a file that never
+      // exists keeps every test process and spawned CLI off `.env`. Suites that
+      // need it call dotenv's `config()`, which ignores this variable.
+      DOTENV_CONFIG_PATH: path.join(missingTestDir, "no.env"),
     },
   },
 });

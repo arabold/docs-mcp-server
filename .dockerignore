@@ -7,11 +7,18 @@ Dockerfile
 .github
 .husky
 
-# Already in gitignore but explicitly listed for Docker context
-node_modules
+# Already in gitignore but explicitly listed for Docker context. A pattern
+# without `**/` only matches at the root of the context.
+**/node_modules
 dist
 *.log
-.env*
+**/.env*
+
+# Local agent state: `.claude/worktrees/` holds full checkouts of this
+# repository, node_modules included, and can run to many gigabytes.
+.claude
+# Downloaded benchmark corpus
+.cache
 
 # Other
 .store

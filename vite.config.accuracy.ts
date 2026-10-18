@@ -12,11 +12,15 @@ import baseConfig from "./vite.config";
  * Used by `npm run evaluate:accuracy` and `npm run evaluate:accuracy:baseline`.
  */
 const base = baseConfig as UserConfig;
+// The benchmark reads the provider's credentials from `.env`, which the base
+// config hides from every test run.
+const { DOTENV_CONFIG_PATH: _hiddenDotenv, ...env } = base.test?.env ?? {};
 
 export default {
   ...base,
   test: {
     ...base.test,
+    env,
     include: ["tests/search-accuracy/accuracy.eval.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
     setupFiles: ["test/setup-env.ts"],

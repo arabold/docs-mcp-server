@@ -20,7 +20,6 @@ import {
 } from "@modelcontextprotocol/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  FTS_ONLY_ENV,
   getFreePort,
   launchChromium,
   requestWithHost,
@@ -67,7 +66,6 @@ function startServer(
     DOCS_MCP_STORE_PATH: storePath,
     DOCS_MCP_CONFIG: configPath,
     DOCS_MCP_TELEMETRY: "false",
-    ...FTS_ONLY_ENV,
     LOG_LEVEL: "info",
   });
 }
