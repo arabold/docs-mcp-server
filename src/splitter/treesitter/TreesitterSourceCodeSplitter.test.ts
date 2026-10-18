@@ -60,6 +60,7 @@ describe("TreesitterSourceCodeSplitter", () => {
         ["TEXT/PYTHON", python, parsed],
         // A content type ending in a file extension picks the parser by extension.
         ["foo.py", python, parsed],
+        ["notes.rb", javascript, fallback],
         ["text/ruby", javascript, fallback],
         ["text/plain", javascript, fallback],
         [undefined, javascript, fallback],

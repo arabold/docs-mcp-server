@@ -196,5 +196,8 @@ describe("sortVersionsDescending", () => {
     // semantic matching resolves to.
     expect(sortVersionsDescending(["1.20", "1.20.0"])).toEqual(["1.20.0", "1.20"]);
     expect(sortVersionsDescending(["1.20.0", "1.20"])).toEqual(["1.20.0", "1.20"]);
+    // Equally strict spellings fall back to the label itself.
+    expect(sortVersionsDescending(["v1.20", "1.20"])).toEqual(["1.20", "v1.20"]);
+    expect(sortVersionsDescending(["1.20", "v1.20"])).toEqual(["1.20", "v1.20"]);
   });
 });
