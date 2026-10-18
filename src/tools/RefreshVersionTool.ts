@@ -8,6 +8,8 @@ export interface RefreshVersionToolOptions {
   preserveHashes?: boolean;
   /** If false, returns jobId immediately without waiting. Defaults to true. */
   waitForCompletion?: boolean;
+  /** Called with the job's id once it is enqueued, before any waiting. */
+  onJobEnqueued?: (jobId: string) => void;
 }
 
 export interface RefreshResult {
@@ -30,7 +32,13 @@ export class RefreshVersionTool {
   }
 
   async execute(options: RefreshVersionToolOptions): Promise<RefreshExecuteResult> {
-    const { library, version, preserveHashes, waitForCompletion = true } = options;
+    const {
+      library,
+      version,
+      preserveHashes,
+      waitForCompletion = true,
+      onJobEnqueued,
+    } = options;
 
     // Labels that are not semantic versions, such as "stable", are legitimate.
     const internalVersion = normalizeVersionLabel(version);
@@ -45,6 +53,7 @@ export class RefreshVersionTool {
     const jobId = await pipeline.enqueueRefreshJob(library, refreshVersion, {
       preserveHashes,
     });
+    onJobEnqueued?.(jobId);
 
     // Conditionally wait for completion
     if (waitForCompletion) {

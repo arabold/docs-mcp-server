@@ -6,10 +6,7 @@ import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { DocumentManagementClient, DocumentManagementService } from "../../store";
-import { EmbeddingModelChangedError } from "../../store/errors";
-import type { IDocumentManagement } from "../../store/trpc/interfaces";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
@@ -114,51 +111,26 @@ export function createMcpCommand(cli: Argv) {
 
         const eventBus = getEventBus(argv as CliContext);
 
-        let docService: IDocumentManagement;
-        if (serverUrl) {
-          const client = new DocumentManagementClient(serverUrl);
-          await client.initialize();
-          docService = client;
-        } else {
-          const service = new DocumentManagementService(eventBus, appConfig);
-          try {
-            await service.initialize();
-          } catch (error) {
-            if (error instanceof EmbeddingModelChangedError) {
-              await handleEmbeddingModelChange(error, service);
-            } else {
-              throw error;
-            }
-          }
-          docService = service;
-        }
-        const pipelineOptions: PipelineOptions = {
-          recoverJobs: false, // MCP command doesn't support job recovery
+        const backend = await openBackend({
+          appConfig,
+          eventBus,
           serverUrl,
-          appConfig: appConfig,
-        };
-        const pipeline = serverUrl
-          ? await PipelineFactory.createPipeline(undefined, eventBus, {
-              serverUrl,
-              ...pipelineOptions,
-            })
-          : await PipelineFactory.createPipeline(
-              docService as DocumentManagementService,
-              eventBus,
-              pipelineOptions,
-            );
+          jobs: { recoverJobs: false }, // MCP command doesn't support job recovery
+          onEmbeddingModelChange: handleEmbeddingModelChange,
+        });
+        // Registered first, so shutdown closes it even when a server fails to start
+        registerGlobalServices({ backend });
 
         if (resolvedProtocol === "stdio") {
           logger.debug(`Auto-detected stdio protocol (no TTY)`);
-          await pipeline.start();
-          const mcpTools = await initializeTools(docService, pipeline, appConfig);
+          const mcpTools = await initializeTools(
+            backend.docService,
+            backend.pipeline,
+            appConfig,
+          );
           const mcpServer = await startStdioServer(mcpTools, appConfig);
 
-          registerGlobalServices({
-            mcpStdioServer: mcpServer,
-            docService,
-            pipeline,
-          });
+          registerGlobalServices({ mcpStdioServer: mcpServer });
 
           await new Promise(() => {});
         } else {
@@ -167,9 +139,7 @@ export function createMcpCommand(cli: Argv) {
             enableWebInterface: false,
             enableMcpServer: true,
             enableApiServer: false,
-            enableWorker: !serverUrl,
             port: appConfig.server.ports.mcp,
-            externalWorkerUrl: serverUrl,
             showLogo: argv.logo as boolean,
             startupContext: {
               cliCommand: "mcp",
@@ -177,18 +147,9 @@ export function createMcpCommand(cli: Argv) {
             },
           });
 
-          const appServer = await startAppServer(
-            docService,
-            pipeline,
-            eventBus,
-            config,
-            appConfig,
-          );
+          const appServer = await startAppServer(backend, config, appConfig);
 
-          registerGlobalServices({
-            appServer,
-            docService,
-          });
+          registerGlobalServices({ appServer });
 
           await new Promise(() => {});
         }

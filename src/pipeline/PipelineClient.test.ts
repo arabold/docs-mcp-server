@@ -1,13 +1,28 @@
-import { createWSClient } from "@trpc/client";
 import { TRPCError } from "@trpc/server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { startInProcessServer } from "../../test/in-process-server";
+import { leafPage, mockSite } from "../../test/mock-site";
 import { EventBusService } from "../events/EventBusService";
+import type { RemoteEventProxy } from "../events/RemoteEventProxy";
 import { EventType } from "../events/types";
-import { PipelineClient } from "./PipelineClient";
+import { ScrapeMode } from "../scraper/types";
+import type { ApiClient } from "../services/apiClient";
+import { type JobsBackend, openBackend } from "../services/backend";
+import { loadConfig } from "../utils/config";
+import { logger } from "../utils/logger";
+import { EVENTS_CONNECT_TIMEOUT_MS, PipelineClient } from "./PipelineClient";
 
-// Mock tRPC client factory
+// The worker's API client, as PipelineClient calls it
 const mockClient: any = {
-  ping: { query: vi.fn() },
   enqueueScrapeJob: { mutate: vi.fn() },
   enqueueRefreshJob: { mutate: vi.fn() },
   getJob: { query: vi.fn() },
@@ -16,84 +31,67 @@ const mockClient: any = {
   clearCompletedJobs: { mutate: vi.fn() },
 };
 
-// Mock WebSocket client
-const mockWsClient = {
-  close: vi.fn(),
+// The relay that brings the worker's events to the local bus
+const mockRelay = {
+  connect: vi.fn(),
+  isActive: vi.fn(),
 };
-
-vi.mock("@trpc/client", () => {
-  return {
-    createTRPCProxyClient: () => mockClient,
-    httpBatchLink: vi.fn(),
-    createWSClient: vi.fn(() => mockWsClient),
-    wsLink: vi.fn(),
-    splitLink: vi.fn(),
-  } as any;
-});
 
 describe("PipelineClient", () => {
   let client: PipelineClient;
   let eventBus: EventBusService;
-  const serverUrl = "http://localhost:8080";
-
   beforeEach(() => {
     vi.resetAllMocks();
     // Reset default mock behaviors
-    mockClient.ping.query.mockResolvedValue({ status: "ok" });
     mockClient.enqueueScrapeJob.mutate.mockResolvedValue({ jobId: "job-123" });
     mockClient.enqueueRefreshJob.mutate.mockResolvedValue({ jobId: "job-456" });
     mockClient.getJob.query.mockResolvedValue(undefined);
     mockClient.getJobs.query.mockResolvedValue({ jobs: [] });
     mockClient.cancelJob.mutate.mockResolvedValue({ success: true });
     mockClient.clearCompletedJobs.mutate.mockResolvedValue({ count: 5 });
+    mockRelay.connect.mockResolvedValue(true);
+    mockRelay.isActive.mockReturnValue(false);
     eventBus = new EventBusService();
-    client = new PipelineClient(serverUrl, eventBus);
+    client = new PipelineClient(
+      mockClient as ApiClient,
+      eventBus,
+      mockRelay as unknown as RemoteEventProxy,
+    );
   });
 
-  it("opens the WebSocket at the worker URL, path included", () => {
-    new PipelineClient("https://example.com/docs/api", eventBus);
+  describe("waiting for the worker's events before submitting", () => {
+    it("submits the first job only once the event stream is live", async () => {
+      let goLive: (live: boolean) => void = () => {};
+      mockRelay.connect.mockReturnValueOnce(new Promise((resolve) => (goLive = resolve)));
 
-    expect(createWSClient).toHaveBeenLastCalledWith({
-      url: "wss://example.com/docs/api",
+      const enqueued = client.enqueueScrapeJob("react", null, {} as any);
+      await Promise.resolve();
+      expect(mockClient.enqueueScrapeJob.mutate).not.toHaveBeenCalled();
+
+      goLive(true);
+      await enqueued;
+      expect(mockRelay.connect).toHaveBeenCalledWith(EVENTS_CONNECT_TIMEOUT_MS);
+      expect(mockClient.enqueueScrapeJob.mutate).toHaveBeenCalledTimes(1);
     });
-  });
 
-  describe("start", () => {
-    it("should succeed when external worker is healthy", async () => {
-      await expect(client.start()).resolves.toBeUndefined();
-      expect(mockClient.ping.query).toHaveBeenCalled();
-    });
+    it("warns once and submits anyway when the stream is not live in time", async () => {
+      mockRelay.connect.mockResolvedValue(false);
+      const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
-    it("should fail when external worker is unreachable", async () => {
-      mockClient.ping.query.mockRejectedValueOnce(new Error("Connection refused"));
-      await expect(client.start()).rejects.toThrow(
-        "Failed to connect to external worker",
+      await client.enqueueScrapeJob("react", null, {} as any);
+      await client.enqueueRefreshJob("react", null);
+
+      expect(mockRelay.connect).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain(
+        "Live job updates from the worker are unavailable",
       );
+      expect(mockClient.enqueueRefreshJob.mutate).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
     });
   });
 
   describe("enqueueScrapeJob", () => {
-    it("should delegate job creation to external API", async () => {
-      const mockJobId = "job-123";
-      mockClient.enqueueScrapeJob.mutate.mockResolvedValueOnce({ jobId: mockJobId });
-      const jobId = await client.enqueueScrapeJob("react", "18.0.0", {
-        url: "https://react.dev",
-        library: "react",
-        version: "18.0.0",
-      });
-
-      expect(jobId).toBe(mockJobId);
-      expect(mockClient.enqueueScrapeJob.mutate).toHaveBeenCalledWith({
-        library: "react",
-        version: "18.0.0",
-        options: {
-          url: "https://react.dev",
-          library: "react",
-          version: "18.0.0",
-        },
-      });
-    });
-
     it("should handle API errors gracefully", async () => {
       mockClient.enqueueScrapeJob.mutate.mockRejectedValueOnce(new Error("Bad request"));
 
@@ -239,16 +237,61 @@ describe("PipelineClient", () => {
       await expect(waitPromise).resolves.toBeUndefined();
     });
 
-    it("should give up after five failed lookups in a row", async () => {
+    it("should give up once lookups have failed for 30 seconds", async () => {
       vi.useFakeTimers();
       mockClient.getJob.query.mockRejectedValue(new Error("Connection refused"));
+      let outcome: unknown;
+      client.waitForJobCompletion("job-123").catch((error) => (outcome = error));
 
-      const waitPromise = client.waitForJobCompletion("job-123");
-      const outcome = expect(waitPromise).rejects.toThrow("Connection refused");
-      await vi.advanceTimersByTimeAsync(4000);
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1000);
 
-      await outcome;
-      expect(mockClient.getJob.query).toHaveBeenCalledTimes(5);
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain("Connection refused");
+    });
+
+    it("should give up on a lookup the worker never answers", async () => {
+      vi.useFakeTimers();
+      // Like the real client, the query rejects once its signal aborts
+      mockClient.getJob.query.mockImplementation(
+        (_input: unknown, request?: { signal?: AbortSignal }) =>
+          new Promise((_resolve, reject) =>
+            request?.signal?.addEventListener("abort", () =>
+              reject(new Error("aborted")),
+            ),
+          ),
+      );
+      let outcome: unknown;
+      client.waitForJobCompletion("job-123").catch((error) => (outcome = error));
+
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(outcome).toBeInstanceOf(Error);
+      expect((outcome as Error).message).toContain("the worker did not answer for 30 s");
+    });
+
+    it("should look up every second while the worker's events do not arrive", async () => {
+      vi.useFakeTimers();
+      void client.waitForJobCompletion("job-123");
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(4);
+    });
+
+    it("should look up only every 10 seconds while the worker's events arrive", async () => {
+      vi.useFakeTimers();
+      mockRelay.isActive.mockReturnValue(true);
+      void client.waitForJobCompletion("job-123");
+
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockClient.getJob.query).toHaveBeenCalledTimes(2);
     });
 
     it("should stop asking the worker once an event settles the wait", async () => {
@@ -266,98 +309,84 @@ describe("PipelineClient", () => {
       expect(mockClient.getJob.query).toHaveBeenCalledTimes(1);
     });
 
-    it("should resolve when job completes successfully via event bus", async () => {
-      const jobId = "job-123";
-
-      // Start waiting
-      const waitPromise = client.waitForJobCompletion(jobId);
-
-      // Simulate event bus emitting status change
-      setTimeout(() => {
-        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
-          id: jobId,
-          status: "completed",
-          library: "test",
-          version: null,
-        } as any);
-      }, 10);
-
-      await expect(waitPromise).resolves.toBeUndefined();
-    });
-
-    it("should throw error when job fails via event bus", async () => {
-      const jobId = "job-123";
-
-      // Start waiting
-      const waitPromise = client.waitForJobCompletion(jobId);
-
-      // Simulate event bus emitting failure
-      setTimeout(() => {
-        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
-          id: jobId,
-          status: "failed",
-          library: "test",
-          version: null,
-          error: { message: "Scraping failed" },
-        } as any);
-      }, 10);
-
-      await expect(waitPromise).rejects.toThrow("Scraping failed");
-    });
-
     it("should ignore events for other jobs", async () => {
-      const jobId = "job-123";
+      const waitPromise = client.waitForJobCompletion("job-123");
 
-      // Start waiting
-      const waitPromise = client.waitForJobCompletion(jobId);
-
-      // Emit events for different job (should be ignored)
-      setTimeout(() => {
-        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
-          id: "other-job",
-          status: "completed",
-          library: "test",
-          version: null,
-        } as any);
-      }, 10);
-
-      // Emit event for our job
-      setTimeout(() => {
-        eventBus.emit(EventType.JOB_STATUS_CHANGE, {
-          id: jobId,
-          status: "completed",
-          library: "test",
-          version: null,
-        } as any);
-      }, 20);
+      eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+        ...runningJob,
+        id: "other-job",
+        status: "failed",
+        errorMessage: "Not this one",
+      } as any);
+      eventBus.emit(EventType.JOB_STATUS_CHANGE, {
+        ...runningJob,
+        status: "completed",
+      } as any);
 
       await expect(waitPromise).resolves.toBeUndefined();
     });
   });
+});
 
-  describe("getJob", () => {
-    it("should return undefined for non-existent job", async () => {
-      mockClient.getJob.query.mockResolvedValueOnce(undefined);
+describe("PipelineClient against a worker", () => {
+  const site = mockSite("https://docs.example.com");
+  let worker: Awaited<ReturnType<typeof startInProcessServer>>;
+  let backend: JobsBackend;
 
-      const result = await client.getJob("non-existent");
-      expect(result).toBeUndefined();
+  /** Submits a one-page scrape of the mock site to the worker. */
+  function scrape(library: string): Promise<string> {
+    return backend.pipeline.enqueueScrapeJob(library, null, {
+      url: site.url("/"),
+      library,
+      version: "",
+      maxPages: 1,
+      scrapeMode: ScrapeMode.Fetch,
     });
+  }
 
-    it("should return job data for existing job", async () => {
-      // Mock returns a Date object (simulating superjson deserialization)
-      const mockJob = {
-        id: "job-123",
-        status: "completed",
-        createdAt: new Date("2023-01-01T00:00:00.000Z"),
-        startedAt: null,
-        finishedAt: null,
-        updatedAt: undefined,
-      };
-
-      mockClient.getJob.query.mockResolvedValueOnce(mockJob);
-
-      const result = await client.getJob("job-123");
-      expect(result).toEqual(mockJob);
+  beforeAll(async () => {
+    worker = await startInProcessServer({ enableWebInterface: false });
+    const appConfig = loadConfig();
+    appConfig.app.storePath = "";
+    backend = await openBackend({
+      appConfig,
+      eventBus: new EventBusService(),
+      serverUrl: worker.apiUrl,
+      jobs: { recoverJobs: false },
     });
+  });
+
+  afterAll(async () => {
+    await backend?.close();
+    await worker?.stop();
+  });
+
+  it("settles a wait for a job that finished before the wait began", async () => {
+    site.page("/", leafPage("Finished"));
+    const jobId = await scrape("finished");
+    await backend.pipeline.waitForJobCompletion(jobId);
+
+    await expect(backend.pipeline.waitForJobCompletion(jobId)).resolves.toBeUndefined();
+  });
+
+  it("rejects with the worker's reason when the job fails", async () => {
+    site.notFound("/");
+
+    const jobId = await scrape("failing");
+
+    await expect(backend.pipeline.waitForJobCompletion(jobId)).rejects.toThrow(
+      `Root page not found: ${site.url("/")}`,
+    );
+  });
+
+  it("rejects a wait for a job the worker no longer knows", async () => {
+    site.page("/", leafPage("Cleared"));
+    const jobId = await scrape("cleared");
+    await backend.pipeline.waitForJobCompletion(jobId);
+    await backend.pipeline.clearCompletedJobs();
+
+    await expect(backend.pipeline.waitForJobCompletion(jobId)).rejects.toThrow(
+      `Job not found: ${jobId}`,
+    );
   });
 });

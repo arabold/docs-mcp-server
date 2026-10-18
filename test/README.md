@@ -74,6 +74,22 @@ to `mock-server.ts`:
   refreshes to completion, records their progress events, and reads back what
   the store holds.
 
+### Worker Suites
+
+Suites for a remote worker (`--server-url`) run the worker one of two ways:
+
+- `startInProcessServer(...)` (`test/in-process-server.ts`) runs the whole
+  application in the test process, so its scrapes reach `mockSite()` origins.
+  Integration tests of the remote backend and `PipelineClient` use it.
+- `startWorker(storePath, configPath)` (`test/test-helpers.ts`) spawns a real
+  `worker` process. MSW does not reach into it, so its jobs scrape `file://`
+  fixtures or `startSlowSite()`, a loopback site that answers each page after a
+  delay. `startRunningSlowJob()` submits a scrape of that site that runs until it
+  is cancelled. `createTcpProxy()` sits between a client and the worker: `cut()`
+  drops the connection, `listen()` restores it, and `blockUpgrades` refuses
+  WebSockets like a proxy without WebSocket support. Configs for spawned
+  processes come from `writeTestConfig()`.
+
 ## Live Tests
 
 Tests in `test/*-live-e2e.test.ts` are excluded from the default test run because they:

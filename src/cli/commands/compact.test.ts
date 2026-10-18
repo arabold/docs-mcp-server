@@ -13,10 +13,12 @@ const compactFn = vi.fn(async () => ({
   afterBytes: 1024,
   reclaimedBytes: 1024,
 }));
-vi.mock("../../store", () => ({
-  createDocumentManagement: vi.fn(async () => ({
-    shutdown: vi.fn(),
-    compact: compactFn,
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async () => ({
+    docService: {
+      compact: compactFn,
+    },
+    close: vi.fn(),
   })),
 }));
 vi.mock("../utils", () => ({

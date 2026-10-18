@@ -45,9 +45,12 @@ export function useClearCompletedJobs() {
   return trpc.clearCompletedJobs.useMutation();
 }
 
-/** Removes an indexed library version. */
+/**
+ * Removes an indexed library version, cancelling a running job for it first,
+ * the same way the CLI and the MCP tools remove one.
+ */
 export function useRemoveVersion() {
-  return trpc.removeVersion.useMutation();
+  return trpc.removeDocs.useMutation();
 }
 
 /** Fetches the stored scraper options for a given indexed version. */

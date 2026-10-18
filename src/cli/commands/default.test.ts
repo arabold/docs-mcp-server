@@ -13,10 +13,7 @@ import * as services from "../services";
 import * as utils from "../utils";
 import { createDefaultAction } from "./default";
 
-const pipelineMock = {
-  start: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-};
+const pipelineMock = {};
 
 // Mock startAppServer
 vi.mock("../../app", () => ({
@@ -29,23 +26,15 @@ vi.mock("../../mcp/tools", () => ({
   initializeTools: vi.fn(async () => []),
 }));
 
-vi.mock("../../store", () => ({
-  DocumentManagementService: vi.fn().mockImplementation(function () {
-    return {
-      initialize: vi.fn().mockResolvedValue(undefined),
-      shutdown: vi.fn(),
-    };
-  }),
-}));
-vi.mock("../../store/errors", () => ({
-  EmbeddingModelChangedError: class EmbeddingModelChangedError extends Error {
-    name = "EmbeddingModelChangedError";
-  },
-}));
-vi.mock("../../pipeline", () => ({
-  PipelineFactory: {
-    createPipeline: vi.fn(async () => pipelineMock),
-  },
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async (options: { serverUrl?: string }) => ({
+    workerUrl: options.serverUrl,
+    docService: {},
+    pipeline: pipelineMock,
+    eventBus: {},
+    isWorkerConnected: undefined,
+    close: vi.fn(),
+  })),
 }));
 vi.mock("../../events", () => ({
   getEventBus: vi.fn(() => ({
@@ -66,6 +55,7 @@ vi.mock("../utils", () => ({
   checkAuthForProtocol: vi.fn(),
   createAppServerConfig: vi.fn((config) => config),
   ensurePlaywrightBrowsersInstalled: vi.fn(),
+  handleEmbeddingModelChange: vi.fn(),
   CliContext: {},
   setupLogging: vi.fn(),
   setLogLevel: vi.fn(),
@@ -108,10 +98,11 @@ describe("default command", () => {
     createDefaultAction(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     // Mock resolveProtocol
     const utils = await import("../utils");
@@ -126,7 +117,7 @@ describe("default command", () => {
 
     expect(appModule.startAppServer).toHaveBeenCalled();
     const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[3];
+    const config = callArgs[1];
     expect(config.enableMcpServer).toBe(true);
     expect(config.enableWebInterface).toBe(true);
     expect(config.enableApiServer).toBe(true);
@@ -138,10 +129,11 @@ describe("default command", () => {
     createDefaultAction(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     // Mock resolveProtocol
     const utils = await import("../utils");
@@ -162,10 +154,11 @@ describe("default command", () => {
     createDefaultAction(parser);
 
     const services = await import("../services");
-    // @ts-expect-error
-    services.registerGlobalServices.mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
 
     try {
       await parser.parse(
@@ -241,9 +234,11 @@ describe("server command configuration precedence", () => {
     writeFileSync(configPath, configYaml);
     const parser = yargs().scriptName("test");
     createDefaultAction(parser);
-    vi.mocked(services.registerGlobalServices).mockImplementationOnce(() => {
-      throw new Error("Simulated Stop");
-    });
+    vi.mocked(services.registerGlobalServices)
+      .mockImplementationOnce(() => {})
+      .mockImplementationOnce(() => {
+        throw new Error("Simulated Stop");
+      });
     try {
       await parser.parse(`${args} --config ${configPath}`);
     } catch (error) {
@@ -255,7 +250,7 @@ describe("server command configuration precedence", () => {
 
   function httpAppConfig(): AppConfig {
     expect(appModule.startAppServer).toHaveBeenCalledTimes(1);
-    return vi.mocked(appModule.startAppServer).mock.calls[0][4];
+    return vi.mocked(appModule.startAppServer).mock.calls[0][2];
   }
 
   function stdioAppConfig(): AppConfig {

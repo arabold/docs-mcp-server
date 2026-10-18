@@ -123,11 +123,11 @@ The AppServer tracks application lifecycle events with global context:
 
 Services integrate telemetry through direct analytics usage:
 
-**Worker Service** (`src/services/workerService.ts`)
+**Pipeline Jobs** (`src/telemetry/TelemetryService.ts`)
 
-- Pipeline job progress and completion events with global context
+- Pipeline job start, completion and failure events with global context
+- Reported only by the process that runs the job: a local backend starts the service with its pipeline, and a backend that uses a remote worker starts none, because the worker reports its own jobs
 - Performance metrics for background processing
-- Direct event tracking without session complexity
 
 **MCP Service** (`src/services/mcpService.ts`)
 

@@ -8,9 +8,10 @@ import { createListCommand } from "./list";
 const stdoutWriteMock = vi.fn();
 
 // Mocks
-vi.mock("../../store", () => ({
-  createDocumentManagement: vi.fn(async () => ({
-    shutdown: vi.fn(),
+vi.mock("../../services/backend", () => ({
+  openBackend: vi.fn(async () => ({
+    docService: {},
+    close: vi.fn(),
   })),
 }));
 vi.mock("../../tools", () => ({

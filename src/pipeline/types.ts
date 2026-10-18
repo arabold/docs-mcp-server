@@ -1,8 +1,4 @@
-import type {
-  ScrapeResult,
-  ScraperOptions,
-  ScraperProgressEvent,
-} from "../scraper/types";
+import type { ScraperOptions, ScraperProgressEvent } from "../scraper/types";
 import type { VersionStatus } from "../store/types";
 
 /**
@@ -88,19 +84,4 @@ export interface InternalPipelineJob
   resolveCompletion: () => void;
   /** Rejector function for the completion promise. */
   rejectCompletion: (reason?: unknown) => void;
-}
-
-/**
- * Defines the structure for callback functions used with the PipelineManager.
- * Allows external components to hook into job lifecycle events.
- * All callbacks receive the public PipelineJob representation to maintain
- * clean separation between internal implementation and external API.
- */
-export interface PipelineManagerCallbacks {
-  /** Callback triggered when a job's status changes. */
-  onJobStatusChange?: (job: PipelineJob) => Promise<void>;
-  /** Callback triggered when a job makes progress. */
-  onJobProgress?: (job: PipelineJob, progress: ScraperProgressEvent) => Promise<void>;
-  /** Callback triggered when a job encounters an error during processing (e.g., storing a doc). */
-  onJobError?: (job: PipelineJob, error: Error, page?: ScrapeResult) => Promise<void>;
 }

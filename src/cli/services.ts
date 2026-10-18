@@ -1,22 +1,17 @@
 import type { StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import type { AppServer } from "../app";
-import type { IPipeline } from "../pipeline";
-import type { IDocumentManagement } from "../store/trpc/interfaces";
-import type { TelemetryService } from "../telemetry";
+import type { Backend } from "../services/backend";
 
 // Module-level variables for active services
 let activeAppServer: AppServer | null = null;
 let activeMcpStdioServer: StdioServerHandle | null = null;
-let activeDocService: IDocumentManagement | null = null;
-let activePipelineManager: IPipeline | null = null;
-let activeTelemetryService: TelemetryService | null = null;
+let activeBackend: Backend | null = null;
 
 export interface GlobalServices {
   appServer?: AppServer;
   mcpStdioServer?: StdioServerHandle;
-  docService?: IDocumentManagement;
-  pipeline?: IPipeline;
-  telemetryService?: TelemetryService;
+  /** The backend a long-running server serves; closed after the server stops. */
+  backend?: Backend;
 }
 
 /**
@@ -25,9 +20,7 @@ export interface GlobalServices {
 export function registerGlobalServices(services: GlobalServices): void {
   if (services.appServer) activeAppServer = services.appServer;
   if (services.mcpStdioServer) activeMcpStdioServer = services.mcpStdioServer;
-  if (services.docService) activeDocService = services.docService;
-  if (services.pipeline) activePipelineManager = services.pipeline;
-  if (services.telemetryService) activeTelemetryService = services.telemetryService;
+  if (services.backend) activeBackend = services.backend;
 }
 
 export function getActiveAppServer(): AppServer | null {
@@ -46,26 +39,12 @@ export function setActiveMcpStdioServer(server: StdioServerHandle | null): void 
   activeMcpStdioServer = server;
 }
 
-export function getActiveDocService(): IDocumentManagement | null {
-  return activeDocService;
-}
-
-export function setActiveDocService(service: IDocumentManagement | null): void {
-  activeDocService = service;
-}
-
-export function getActivePipelineManager(): IPipeline | null {
-  return activePipelineManager;
-}
-
-export function setActivePipelineManager(pipeline: IPipeline | null): void {
-  activePipelineManager = pipeline;
-}
-
-export function getActiveTelemetryService(): TelemetryService | null {
-  return activeTelemetryService;
-}
-
-export function setActiveTelemetryService(service: TelemetryService | null): void {
-  activeTelemetryService = service;
+/**
+ * Closes the registered backend, if any, and forgets it. Call it after the
+ * servers that use the backend have stopped.
+ */
+export async function closeActiveBackend(): Promise<void> {
+  const backend = activeBackend;
+  activeBackend = null;
+  await backend?.close();
 }

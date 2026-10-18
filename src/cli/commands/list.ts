@@ -3,7 +3,7 @@
  */
 
 import type { Argv } from "yargs";
-import { createDocumentManagement } from "../../store";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { ListLibrariesTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
@@ -36,12 +36,12 @@ export function createListCommand(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      // List command doesn't need embeddings - explicitly disable for local execution
-      const docService = await createDocumentManagement({
+      const backend = await openBackend({
         eventBus,
         serverUrl,
         appConfig: appConfig,
       });
+      const { docService } = backend;
       try {
         const listLibrariesTool = new ListLibrariesTool(docService);
 
@@ -50,7 +50,7 @@ export function createListCommand(cli: Argv) {
 
         renderStructuredOutput(result.libraries, argv);
       } finally {
-        await docService.shutdown();
+        await backend.close();
       }
     },
   );

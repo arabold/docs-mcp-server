@@ -26,8 +26,10 @@ const t = initTRPC.context<DataTrpcContext>().create({
 });
 
 // Common schemas
-const nonEmpty = z.string().trim().min(1);
-const optionalVersion = z
+/** A required name, trimmed. */
+export const nonEmpty = z.string().trim().min(1);
+/** An optional version label, trimmed; empty means unversioned. */
+export const optionalVersion = z
   .string()
   .optional()
   .nullable()
@@ -169,36 +171,6 @@ export function createDataRouter(trpc: unknown) {
             input.version ?? null,
             input.options,
           );
-        },
-      ),
-
-    removeVersion: tt.procedure
-      .input(z.object({ library: nonEmpty, version: optionalVersion }))
-      .mutation(
-        async ({
-          ctx,
-          input,
-        }: {
-          ctx: DataTrpcContext;
-          input: { library: string; version: string | null | undefined };
-        }) => {
-          await ctx.docService.removeVersion(input.library, input.version ?? null);
-          return { ok: true } as const;
-        },
-      ),
-
-    removeAllDocuments: tt.procedure
-      .input(z.object({ library: nonEmpty, version: optionalVersion }))
-      .mutation(
-        async ({
-          ctx,
-          input,
-        }: {
-          ctx: DataTrpcContext;
-          input: { library: string; version: string | null | undefined };
-        }) => {
-          await ctx.docService.removeAllDocuments(input.library, input.version ?? null);
-          return { ok: true } as const;
         },
       ),
 

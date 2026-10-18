@@ -3,6 +3,8 @@
  *
  * AppServerConfig only controls service composition and runtime wiring.
  * Environment / YAML / default-based settings are sourced from AppConfig.
+ * Whether jobs run in this process or on a worker follows from the backend the
+ * server serves.
  */
 
 export interface AppServerConfig {
@@ -15,18 +17,12 @@ export interface AppServerConfig {
   /** Enable API server (tRPC at /api) for programmatic access */
   enableApiServer: boolean;
 
-  /** Enable embedded worker for job processing */
-  enableWorker: boolean;
-
   /**
    * Port to run the server on.
    *
    * AppConfig contains multiple ports; AppServerConfig selects which one to bind.
    */
   port: number;
-
-  /** URL of external worker server (if using external worker instead of embedded) */
-  externalWorkerUrl?: string;
 
   /** Show ASCII art logo on startup (default: true) */
   showLogo?: boolean;

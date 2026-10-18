@@ -1,138 +1,175 @@
 /**
- * Remote event proxy that subscribes to events from a remote tRPC worker
- * and re-emits them to the local EventBusService.
- *
- * This enables the web UI to receive events from remote workers transparently,
- * without needing to know about the remote worker's location or configuration.
+ * Relays a remote worker's events onto the local {@link EventBusService}, so
+ * code that listens on the bus sees the worker's jobs as it would see jobs it
+ * runs itself.
  */
 
-import {
-  createTRPCClient,
-  createWSClient,
-  httpBatchLink,
-  splitLink,
-  wsLink,
-} from "@trpc/client";
-import superjson from "superjson";
+import type { Unsubscribable } from "@trpc/server/observable";
+import type { ApiClient } from "../services/apiClient";
 import { logger } from "../utils/logger";
-import { toWebSocketUrl } from "../utils/url";
 import type { EventBusService } from "./EventBusService";
-import type { EventType } from "./types";
+import { EventType } from "./types";
+
+/** First delay before subscribing again after the subscription itself ended. */
+const RESUBSCRIBE_BASE_DELAY_MS = 1000;
+
+/** Longest delay between attempts to subscribe again. */
+const RESUBSCRIBE_MAX_DELAY_MS = 30_000;
 
 /**
- * Manages the connection to a remote worker and forwards its events locally.
+ * Keeps one subscription to the worker's `events.subscribe` on a shared API
+ * client and re-emits every event locally.
+ *
+ * A dropped connection is reconnected and resubscribed by the client's
+ * WebSocket; a subscription that ends with an error or is stopped by the worker
+ * is subscribed again here, with backoff. When the stream becomes live again
+ * after having been live, the relay emits `JOB_LIST_CHANGE` and
+ * `LIBRARY_CHANGE` locally, so views refetch what they missed while it was down.
  */
 export class RemoteEventProxy {
-  private trpcClient: ReturnType<typeof createTRPCClient> | null = null;
-  private wsClient: ReturnType<typeof createWSClient> | null = null;
-  private subscription: { unsubscribe: () => void } | null = null;
-  private isConnected = false;
+  private subscription: Unsubscribable | null = null;
+  /** Identifies the current subscription, so callbacks from an ended one are ignored. */
+  private generation = 0;
+  private live = false;
+  private wasLive = false;
+  private stopped = true;
+  private attempts = 0;
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private pending: { promise: Promise<boolean>; settle: (live: boolean) => void } | null =
+    null;
 
+  /**
+   * @param api The worker's API client; it must have been created with subscriptions.
+   * @param eventBus The local bus to re-emit the worker's events on.
+   */
   constructor(
-    private readonly remoteWorkerUrl: string,
-    private readonly localEventBus: EventBusService,
+    private readonly api: ApiClient,
+    private readonly eventBus: EventBusService,
   ) {}
 
   /**
-   * Start subscribing to remote events and forwarding them locally.
+   * Starts the subscription if it is not running and waits until it is live.
+   * Calls made while an earlier call still waits share its result.
+   *
+   * @param timeoutMs How long to wait for the subscription to become live.
+   * @returns `true` once the subscription is live; `false` when the connection
+   *   fails or nothing is live within `timeoutMs`. Never rejects; the relay
+   *   keeps trying in the background.
    */
-  async connect(): Promise<void> {
-    if (this.isConnected) {
-      logger.warn("Remote event proxy already connected");
+  connect(timeoutMs: number): Promise<boolean> {
+    if (this.stopped) {
+      this.stopped = false;
+      this.subscribe();
+    }
+    if (this.live) {
+      return Promise.resolve(true);
+    }
+    if (!this.pending) {
+      let settle: (live: boolean) => void = () => {};
+      const promise = new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => settle(false), timeoutMs);
+        settle = (live) => {
+          clearTimeout(timer);
+          this.pending = null;
+          resolve(live);
+        };
+      });
+      this.pending = { promise, settle };
+    }
+    return this.pending.promise;
+  }
+
+  /** Ends the subscription and stops trying to subscribe again. */
+  disconnect(): void {
+    this.stopped = true;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.endSubscription();
+    this.live = false;
+    this.pending?.settle(false);
+  }
+
+  /** Whether the worker's events currently reach the local bus. */
+  isActive(): boolean {
+    return this.live;
+  }
+
+  private subscribe(): void {
+    const generation = ++this.generation;
+    // disconnect() and resubscribeLater() move the generation on
+    const current = () => generation === this.generation;
+    this.subscription = this.api.events.subscribe.subscribe(undefined, {
+      onStarted: () => {
+        if (current()) this.setLive(true);
+      },
+      onData: (event) => {
+        if (current()) this.eventBus.emit(event.type, event.payload as never);
+      },
+      onConnectionStateChange: (state) => {
+        if (!current() || state.state !== "connecting") return;
+        this.setLive(false);
+        // A refused or failed connection will not turn live soon; stop waiting
+        if (state.error) this.pending?.settle(false);
+      },
+      onError: (error) => {
+        if (!current()) return;
+        logger.debug(`Worker event subscription failed: ${error.message}`);
+        this.resubscribeLater();
+      },
+      onStopped: () => {
+        if (current()) this.resubscribeLater();
+      },
+      onComplete: () => {
+        if (current()) this.resubscribeLater();
+      },
+    });
+  }
+
+  private resubscribeLater(): void {
+    this.setLive(false);
+    this.endSubscription();
+
+    const delay = Math.min(
+      RESUBSCRIBE_BASE_DELAY_MS * 2 ** this.attempts,
+      RESUBSCRIBE_MAX_DELAY_MS,
+    );
+    this.attempts++;
+    // disconnect() clears this timer
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      this.subscribe();
+    }, delay);
+    // A pending retry alone must not keep a finished CLI process alive.
+    this.retryTimer.unref?.();
+  }
+
+  /** Ends the current subscription; its later callbacks are ignored. */
+  private endSubscription(): void {
+    this.generation++;
+    this.subscription?.unsubscribe();
+    this.subscription = null;
+  }
+
+  private setLive(live: boolean): void {
+    if (live === this.live) return;
+    this.live = live;
+    if (!live) {
+      if (this.wasLive) {
+        logger.warn("⚠️  Lost live job updates from the worker; reconnecting");
+      }
       return;
     }
 
-    logger.debug(`Connecting to remote worker at ${this.remoteWorkerUrl}`);
-
-    try {
-      // The WebSocket uses the same URL as HTTP, so it reaches a worker that
-      // a reverse proxy serves under a path.
-      const wsUrl = toWebSocketUrl(this.remoteWorkerUrl);
-
-      // Create WebSocket client for subscriptions
-      this.wsClient = createWSClient({
-        url: wsUrl,
-      });
-
-      // Create tRPC client with split link:
-      // - Subscriptions use WebSocket
-      // - Queries and mutations use HTTP
-      this.trpcClient = createTRPCClient({
-        links: [
-          splitLink({
-            condition: (op) => op.type === "subscription",
-            true: wsLink({ client: this.wsClient, transformer: superjson }),
-            false: httpBatchLink({ url: this.remoteWorkerUrl, transformer: superjson }),
-          }),
-        ],
-      });
-
-      // Subscribe to all events from the remote worker
-      // biome-ignore lint/suspicious/noExplicitAny: tRPC client type is generic
-      this.subscription = (this.trpcClient as any).events.subscribe.subscribe(
-        {}, // Subscribe to all event types
-        {
-          onData: (data: { type: EventType; payload: unknown }) => {
-            logger.debug(`Received remote event: ${data.type}`);
-            // Re-emit the event on the local event bus
-            this.localEventBus.emit(data.type, data.payload as never);
-          },
-          onError: (error: Error) => {
-            logger.error(`❌ Remote event subscription error: ${error}`);
-            this.isConnected = false;
-            this.scheduleReconnect();
-          },
-          onStarted: () => {
-            logger.debug("Remote event subscription started");
-            this.isConnected = true;
-          },
-          onComplete: () => {
-            logger.debug("Remote event subscription completed");
-            this.isConnected = false;
-          },
-        },
-      );
-    } catch (error) {
-      logger.error(`❌ Failed to connect to remote worker: ${error}`);
-      this.scheduleReconnect();
+    this.attempts = 0;
+    this.pending?.settle(true);
+    if (this.wasLive) {
+      logger.info("🔗 Live job updates from the worker are back");
+      // Events sent while the stream was down are lost; have views refetch.
+      this.eventBus.emit(EventType.JOB_LIST_CHANGE, undefined);
+      this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+    } else {
+      logger.debug("Subscribed to the worker's events");
     }
-  }
-
-  /**
-   * Disconnect from the remote worker and stop forwarding events.
-   */
-  disconnect(): void {
-    if (this.subscription) {
-      this.subscription.unsubscribe();
-      this.subscription = null;
-    }
-
-    // Close WebSocket connection
-    if (this.wsClient) {
-      this.wsClient.close();
-      this.wsClient = null;
-    }
-
-    this.isConnected = false;
-    logger.info("🚫 Disconnected from remote worker");
-  }
-
-  /**
-   * Check if the proxy is currently connected to the remote worker.
-   */
-  isActive(): boolean {
-    return this.isConnected;
-  }
-
-  /**
-   * Schedule a reconnection attempt after a delay.
-   */
-  private scheduleReconnect(): void {
-    logger.info("🔄 Scheduling reconnect to remote worker in 5 seconds...");
-    setTimeout(() => {
-      if (!this.isConnected) {
-        this.connect();
-      }
-    }, 5000);
+    this.wasLive = true;
   }
 }

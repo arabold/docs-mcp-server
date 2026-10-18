@@ -1,6 +1,8 @@
 /**
  * TelemetryService listens to events from the EventBusService and tracks them to analytics.
  * This decouples telemetry concerns from the PipelineManager, following the event-driven architecture.
+ * A local backend starts one with its pipeline, so only the process that runs a
+ * job reports it; relayed copies of a remote worker's events are not reported.
  */
 
 import type { EventBusService } from "../events/EventBusService";

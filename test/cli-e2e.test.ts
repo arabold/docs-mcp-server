@@ -2,20 +2,33 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
-import { DocumentManagementService } from "../src/store/DocumentManagementService";
+import { ScrapeMode } from "../src/scraper/types";
+import { createApiClient } from "../src/services/apiClient";
+import { openBackend } from "../src/services/backend";
 import { loadConfig } from "../src/utils/config";
 import {
+  createTcpProxy,
   getCliCommand,
   getFreePort,
-  startCliServer,
+  HTML_FIXTURE_URL,
+  startRunningSlowJob,
+  startSlowSite,
+  startWorker,
   stopChildProcess,
+  withStore,
   writeTestConfig,
 } from "./test-helpers";
 
 describe("CLI E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
+  const fixtureUrl = HTML_FIXTURE_URL;
+
+  /** The status and progress lines a scrape or refresh printed. */
+  function progressLines(output: string): string[] {
+    return output.split("\n").filter((line) => /[🚀📄] (Scraping|Refreshing) /u.test(line));
+  }
 
   /** Run the CLI; with `timeoutMs`, kill it after that long and report exit code 1. */
   async function runCli(
@@ -84,7 +97,6 @@ describe("CLI E2E", () => {
   it("refuses to scrape an existing version unless --replace is given", async () => {
     const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-replace-"));
     const configPath = writeTestConfig(storePath);
-    const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
     const scrapeArgs = [
       "scrape",
       "React",
@@ -97,12 +109,9 @@ describe("CLI E2E", () => {
 
     try {
       // Seed the existing version in-process rather than with a third CLI run.
-      const config = loadConfig({}, { configPath });
-      config.app.storePath = storePath;
-      const docService = new DocumentManagementService(new EventBusService(), config);
-      await docService.initialize();
-      await docService.ensureVersion({ library: "React", version: "" });
-      await docService.shutdown();
+      await withStore(storePath, (store) => store.ensureVersion({ library: "React", version: "" }), {
+        configPath,
+      });
 
       const rejected = await runCli(scrapeArgs);
       expect(rejected.code).not.toBe(0);
@@ -116,42 +125,277 @@ describe("CLI E2E", () => {
     // Two CLI processes; generous for CI runners, which are several times slower
   }, 60000);
 
-  it("returns from scrape --server-url once the worker finishes the job", async () => {
-    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-worker-"));
-    const configPath = writeTestConfig(storePath);
-    const fixtureUrl = `file://${path.join(projectRoot, "test", "fixtures", "html.html")}`;
+  it("fails with the URL to check when no worker answers", async () => {
+    const deadUrl = `http://127.0.0.1:${await getFreePort()}/api`;
+
+    const result = await runCli(["list", "--server-url", deadUrl], 40_000);
+
+    expect(result.code).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain(
+      `Failed to connect to server at ${deadUrl}`,
+    );
+  }, 60_000);
+
+  describe("against a worker", () => {
+    let storePath: string;
+    let configPath: string;
     let worker: ChildProcess | undefined;
+    let workerUrl: string;
 
-    try {
-      const started = await startCliServer(
-        [
-          "worker",
-          "--host",
-          "127.0.0.1",
-          "--port",
-          String(await getFreePort()),
-          "--store-path",
-          storePath,
-          "--config",
-          configPath,
-        ],
-        { LOG_LEVEL: "info" },
-      );
+    beforeAll(async () => {
+      storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-worker-"));
+      // Room for a client's job next to another client's endless one
+      configPath = writeTestConfig(storePath, { allowPrivateNetworks: true, maxConcurrency: 3 });
+      const started = await startWorker(storePath, configPath);
       worker = started.process;
+      workerUrl = started.url;
+    }, 60_000);
 
-      // The cap turns a client that never returns into a failed assertion
-      // instead of a test timeout that leaves the CLI process behind.
-      const result = await runCli(
-        ["scrape", "React", fixtureUrl, "--server-url", started.url, "--config", configPath],
-        40000,
-      );
-
-      expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("Successfully scraped 1 pages");
-    } finally {
+    afterAll(async () => {
       await stopChildProcess(worker);
       rmSync(storePath, { recursive: true, force: true });
+    });
+
+    /** Where a command runs: on the worker at `serverUrl`, or locally on `storePath`. */
+    type Target = { serverUrl: string } | { storePath: string };
+
+    function backendArgs(target: Target): string[] {
+      return "serverUrl" in target
+        ? ["--server-url", target.serverUrl, "--config", configPath]
+        : ["--store-path", target.storePath, "--config", configPath];
     }
-    // Worker startup plus one CLI process; generous for CI runners
-  }, 90000);
+
+    /** Scrapes `url` as `library` on `target`, showing diagnostics. */
+    function scrape(library: string, target: Target = { serverUrl: workerUrl }, url = fixtureUrl) {
+      // --verbose: without a terminal the CLI shows errors only. Fetch mode
+      // starts no browser for the fixture. The cap turns a client that never
+      // returns into a failed assertion instead of a test timeout that leaves
+      // the CLI process behind.
+      return runCli(
+        ["scrape", library, url, ...backendArgs(target), "--scrape-mode", "fetch", "--verbose"],
+        40_000,
+      );
+    }
+
+    it("prints the same progress for a remote scrape as for a local one", async () => {
+      const localStore = mkdtempSync(path.join(tmpdir(), "cli-e2e-local-"));
+      try {
+        const [remote, local] = await Promise.all([
+          scrape("React"),
+          scrape("React", { storePath: localStore }),
+        ]);
+
+        for (const result of [remote, local]) {
+          expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
+          expect(result.stdout).toContain("Successfully scraped 1 pages");
+        }
+        expect(progressLines(`${remote.stdout}${remote.stderr}`)).toEqual([
+          "🚀 Scraping React...",
+          "📄 Scraping React: 1/1 pages",
+        ]);
+        expect(progressLines(`${remote.stdout}${remote.stderr}`)).toEqual(
+          progressLines(`${local.stdout}${local.stderr}`),
+        );
+      } finally {
+        rmSync(localStore, { recursive: true, force: true });
+      }
+    }, 60_000);
+
+    it("fails a remote scrape with the reason the worker reports", async () => {
+      const missingUrl = `file://${path.join(projectRoot, "test", "fixtures", "missing.html")}`;
+
+      const result = await scrape("Missing", { serverUrl: workerUrl }, missingUrl);
+
+      expect(result.code).not.toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain(`Root page not found: ${missingUrl}`);
+    }, 60_000);
+
+    it("removes a version a worker is scraping, cancelling the job first", async () => {
+      const site = await startSlowSite();
+      const { api, close } = createApiClient(workerUrl, { subscriptions: false });
+      try {
+        const jobId = await startRunningSlowJob(api, site.url, "slow", "1.0");
+
+        const result = await runCli(
+          ["remove", "slow", "--version", "1.0", "--server-url", workerUrl, "--config", configPath],
+          40_000,
+        );
+
+        expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
+        expect((await api.getJob.query({ id: jobId }))?.status).toBe("cancelled");
+        const libraries = await api.listLibraries.query();
+        expect(libraries.map((l) => l.library)).not.toContain("slow");
+      } finally {
+        close();
+        await site.close();
+      }
+    }, 60_000);
+
+    it("finishes a remote scrape when the worker's live updates are blocked", async () => {
+      const proxy = createTcpProxy(Number(new URL(workerUrl).port), { blockUpgrades: true });
+      try {
+        const port = await proxy.listen();
+
+        const result = await scrape("Blocked", { serverUrl: `http://127.0.0.1:${port}/api` });
+
+        const output = `${result.stdout}${result.stderr}`;
+        expect(result.code, output).toBe(0);
+        expect(result.stdout).toContain("Successfully scraped 1 pages");
+        expect(output.split("Live job updates from the worker are unavailable")).toHaveLength(2);
+        expect(progressLines(output)).toEqual([]);
+      } finally {
+        await proxy.cut();
+      }
+    }, 60_000);
+
+    it("shows only its own job while the worker runs another client's", async () => {
+      // Fast enough that the other job reports while this client's job runs
+      const site = await startSlowSite(50);
+      const { api, close } = createApiClient(workerUrl, { subscriptions: false });
+      let otherJobId: string | undefined;
+      const pagesOfOther = async () =>
+        (await api.getJob.query({ id: otherJobId ?? "" }))?.progressPages ?? 0;
+      try {
+        otherJobId = await startRunningSlowJob(api, site.url, "Other", null);
+        const pagesBefore = await pagesOfOther();
+
+        const result = await scrape("Mine");
+
+        const output = `${result.stdout}${result.stderr}`;
+        expect(result.code, output).toBe(0);
+        // The other job reported progress all through this client's run
+        expect(await pagesOfOther()).toBeGreaterThan(pagesBefore);
+        expect((await api.getJob.query({ id: otherJobId }))?.status).toBe("running");
+        expect(progressLines(output)).toEqual([
+          "🚀 Scraping Mine...",
+          "📄 Scraping Mine: 1/1 pages",
+        ]);
+      } finally {
+        if (otherJobId) await api.cancelJob.mutate({ id: otherJobId });
+        close();
+        await site.close();
+      }
+    }, 60_000);
+
+    describe("the same remotely as locally", () => {
+      let localStore: string;
+
+      /**
+       * Runs a command against the worker and, at the same time, locally on
+       * `localStorePath`.
+       */
+      function runBoth(args: string[], localStorePath: string) {
+        return Promise.all([
+          runCli([...args, ...backendArgs({ serverUrl: workerUrl })], 40_000),
+          runCli([...args, ...backendArgs({ storePath: localStorePath })], 40_000),
+        ]);
+      }
+
+      /** Scrapes the fixture as `library@version`, on the worker or into a local store. */
+      async function seed(target: Target, library: string, version: string): Promise<void> {
+        const appConfig = loadConfig({}, { configPath });
+        if ("storePath" in target) appConfig.app.storePath = target.storePath;
+        const backend = await openBackend({
+          appConfig,
+          eventBus: new EventBusService(),
+          serverUrl: "serverUrl" in target ? target.serverUrl : undefined,
+          jobs: { recoverJobs: false },
+        });
+        try {
+          const jobId = await backend.pipeline.enqueueScrapeJob(library, version, {
+            url: fixtureUrl,
+            library,
+            version,
+            scrapeMode: ScrapeMode.Fetch,
+          });
+          await backend.pipeline.waitForJobCompletion(jobId);
+        } finally {
+          await backend.close();
+        }
+      }
+
+      beforeAll(async () => {
+        localStore = mkdtempSync(path.join(tmpdir(), "cli-e2e-local-"));
+        await Promise.all(
+          [{ serverUrl: workerUrl }, { storePath: localStore }].map(async (target) => {
+            await seed(target, "Parity", "1.2.0");
+            await seed(target, "Removed", "1.0");
+          }),
+        );
+      }, 60_000);
+
+      afterAll(() => {
+        rmSync(localStore, { recursive: true, force: true });
+      });
+
+      // The local run opens the worker's own store, so both read the same data
+      it.each([
+        { args: ["list"], shows: '"Parity"' },
+        { args: ["search", "Parity", "blacksmith"], shows: "blacksmith" },
+        { args: ["find-version", "Parity", "--version", "1.x"], shows: "1.2.0" },
+      ])("$args.0 prints what a local run prints for the same store", async ({ args, shows }) => {
+        const [remote, local] = await runBoth(args, storePath);
+
+        expect(remote.code, remote.stderr).toBe(0);
+        expect(local.code, local.stderr).toBe(0);
+        expect(remote.stdout).toContain(shows);
+        expect(remote.stdout).toBe(local.stdout);
+      }, 60_000);
+
+      it("refresh shows the same progress and summary", async () => {
+        const [remote, local] = await runBoth(
+          ["refresh", "Parity", "--version", "1.2.0", "--verbose"],
+          localStore,
+        );
+
+        for (const result of [remote, local]) {
+          expect(result.code, `${result.stdout}${result.stderr}`).toBe(0);
+        }
+        const summary = (stdout: string) =>
+          stdout.split("\n").filter((line) => line.startsWith("Successfully refreshed"));
+        expect(summary(remote.stdout)).toEqual(["Successfully refreshed 1 pages"]);
+        expect(summary(remote.stdout)).toEqual(summary(local.stdout));
+        expect(progressLines(`${remote.stdout}${remote.stderr}`)).toEqual([
+          "🚀 Refreshing Parity v1.2.0...",
+          "📄 Refreshing Parity v1.2.0: 1/1 pages",
+        ]);
+        expect(progressLines(`${remote.stdout}${remote.stderr}`)).toEqual(
+          progressLines(`${local.stdout}${local.stderr}`),
+        );
+      }, 60_000);
+
+      it("remove prints the same and removes the version from either store", async () => {
+        const [remote, local] = await runBoth(["remove", "Removed", "--version", "1.0"], localStore);
+
+        expect(remote.code, remote.stderr).toBe(0);
+        expect(local.code, local.stderr).toBe(0);
+        expect(remote.stdout).toContain("Removed");
+        expect(remote.stdout).toBe(local.stdout);
+        const { api, close } = createApiClient(workerUrl, { subscriptions: false });
+        try {
+          for (const libraries of [
+            await api.listLibraries.query(),
+            await withStore(localStore, (store) => store.listLibraries(), { configPath }),
+          ]) {
+            const names = libraries.map((lib) => lib.library);
+            expect(names).toContain("Parity");
+            expect(names).not.toContain("Removed");
+          }
+        } finally {
+          close();
+        }
+      }, 60_000);
+
+      it("compact compacts the store it runs on", async () => {
+        const results = await runBoth(["compact"], localStore);
+
+        for (const result of results) {
+          expect(result.code, result.stderr).toBe(0);
+          expect(result.stdout).toMatch(
+            /^(Compacted store from .+ to .+ \(reclaimed .+\)\.|Store is already compact\.)\n$/,
+          );
+        }
+      }, 60_000);
+    });
+  });
 });

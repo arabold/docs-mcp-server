@@ -56,9 +56,8 @@ src/
 │   ├── tools.ts                     # MCP tool definitions
 │   └── startStdioServer.ts          # Stdio transport setup
 ├── pipeline/                        # Asynchronous job processing
-│   ├── PipelineFactory.ts           # Smart pipeline selection
 │   ├── PipelineManager.ts           # Job queue and worker coordination
-│   ├── PipelineClient.ts            # External worker RPC client (tRPC)
+│   ├── PipelineClient.ts            # Pipeline on a remote worker, over the API client
 │   ├── PipelineWorker.ts            # Individual job execution
 │   └── trpc/                        # tRPC router for pipeline procedures
 ├── scraper/                         # Content acquisition and processing
@@ -67,7 +66,7 @@ src/
 │   ├── pipelines/                   # Content-type-specific processing
 │   ├── strategies/                  # Source-specific scraping strategies
 │   └── utils/                       # Scraping utilities
-├── services/                        # Service registration functions
+├── services/                        # Backend factory, API client, service registration
 ├── splitter/                        # Document chunking and segmentation
 │   ├── GreedySplitter.ts            # Universal size optimization
 │   ├── SemanticMarkdownSplitter.ts  # Structure-aware markdown splitting
@@ -106,7 +105,7 @@ graph TD
         end
 
         subgraph "Pipeline"
-            FACTORY[PipelineFactory]
+            BACKEND[openBackend]
             MANAGER[PipelineManager]
             WORKER[PipelineWorker]
         end
@@ -118,8 +117,8 @@ graph TD
         end
 
         %% Command Flow
-        CLI & WEB & MCP --> FACTORY
-        FACTORY -->|Creates| MANAGER
+        CLI & WEB & MCP --> BACKEND
+        BACKEND -->|Creates and starts| MANAGER
         MANAGER -->|Manages| WORKER
         WORKER --> SCRAPER
         SCRAPER --> SPLITTER
@@ -143,32 +142,23 @@ graph TD
 
 ### Distributed Mode (Hub & Spoke)
 
-In distributed mode, the worker runs as a separate process. Multiple coordinators (Web UI, MCP Server) connect to the shared worker via tRPC. Each coordinator uses `PipelineClient` to send commands over HTTP and receive real-time events via WebSocket. The `RemoteEventProxy` bridges remote events into the local `EventBus`, making the distributed setup transparent to consumers.
+In distributed mode, the worker runs as a separate process. Coordinators (the web server, the MCP server over HTTP or stdio, and CLI commands given `--server-url`) reach the shared worker through the same application API the web UI uses. Each opens a remote backend: one typed API client for the worker URL, with `DocumentManagementClient` and `PipelineClient` calling its procedures over HTTP, and a `RemoteEventProxy` that subscribes to the worker's events over one WebSocket and re-emits them on the local `EventBus`. Consumers use the same interfaces and the same bus as in unified mode.
 
 ```mermaid
 graph TD
-    subgraph "Web Coordinator Process"
-        WEB_UI[Web Interface]
-        WEB_CLIENT[PipelineClient]
-        WEB_PROXY[RemoteEventProxy]
-        WEB_EB[EventBus]
+    subgraph "Coordinator Process"
+        UI[Web Interface, MCP Server or CLI Command]
+        DOCS[DocumentManagementClient]
+        PIPE[PipelineClient]
+        PROXY[RemoteEventProxy]
+        API[API Client]
+        EB[EventBus]
 
-        WEB_UI --> WEB_CLIENT
-        WEB_CLIENT -.->|Remote Events| WEB_PROXY
-        WEB_PROXY -->|Re-emit Locally| WEB_EB
-        WEB_EB -.->|Updates| WEB_UI
-    end
-
-    subgraph "MCP Coordinator Process"
-        MCP_SRV[MCP Server]
-        MCP_CLIENT[PipelineClient]
-        MCP_PROXY[RemoteEventProxy]
-        MCP_EB[EventBus]
-
-        MCP_SRV --> MCP_CLIENT
-        MCP_CLIENT -.->|Remote Events| MCP_PROXY
-        MCP_PROXY -->|Re-emit Locally| MCP_EB
-        MCP_EB -.->|Updates| MCP_SRV
+        UI --> DOCS & PIPE
+        DOCS & PIPE --> API
+        PROXY --> API
+        PROXY -->|Re-emit Locally| EB
+        EB -.->|Updates| UI
     end
 
     subgraph "Worker Process"
@@ -184,19 +174,16 @@ graph TD
     end
 
     %% Network Connections
-    WEB_CLIENT ==>|HTTP: Commands| TRPC
-    TRPC -.->|WebSocket: Events| WEB_CLIENT
-
-    MCP_CLIENT ==>|HTTP: Commands| TRPC
-    TRPC -.->|WebSocket: Events| MCP_CLIENT
+    API ==>|HTTP: Commands| TRPC
+    TRPC -.->|WebSocket: Events| API
 ```
 
 **Key Characteristics:**
 
 - **Hub**: Shared worker process executes all jobs
 - **Spokes**: Independent coordinator processes (Web, MCP, CLI)
-- **Split-Link Communication**: HTTP for commands, WebSocket for events
-- **Event Bridging**: `RemoteEventProxy` makes remote events appear local
+- **Split-Link Communication**: HTTP for commands, WebSocket for events; the links come from `src/services/apiClient.ts`, which the web UI uses too
+- **Event Bridging**: every remote backend that has a pipeline relays the worker's events; a command waits briefly for the stream before its first job, and when the stream returns after a drop, the relay emits `JOB_LIST_CHANGE` and `LIBRARY_CHANGE` so views refetch what they missed
 - **Scalability**: Multiple coordinators can share one worker
 - **Transparency**: Consumers use the same `EventBus` API regardless of mode
 
@@ -212,15 +199,13 @@ The Docker image sets `DOCS_MCP_PROTOCOL=http` and `HOST=0.0.0.0`, so no-argumen
 
 CI builds and runs the production Docker image's E2E suite on native x86-64 and ARM64 Linux runners. Each architecture uses its own build cache. Release builds publish both architectures under the same image tag.
 
-### Pipeline Selection
+### Backend Selection
 
-The PipelineFactory chooses implementation based on configuration:
+Every entry point opens its services with `openBackend()` (`src/services/backend.ts`), which decides local or remote from the worker URL and owns starting and stopping what it creates. Naming clarifies the mode: PipelineManager runs an in-process worker; PipelineClient uses an out-of-process worker.
 
-Naming clarifies the mode: PipelineManager runs an in-process worker; PipelineClient connects to an out-of-process worker via tRPC.
-
-- `serverUrl` specified: PipelineClient for external worker communication. Its tRPC HTTP calls and its event WebSocket use the same worker URL, path included, so a worker behind a path-prefixed reverse proxy works.
-- `recoverJobs: true`: PipelineManager with job recovery from database
-- `recoverJobs: false`: PipelineManager without recovery (CLI commands)
+- `serverUrl` specified: a remote backend. Its API client's HTTP calls and its event WebSocket use the same worker URL, path included, so a worker behind a path-prefixed reverse proxy works.
+- `jobs: false`: documents only, for read-only commands and the CLI `remove`; no pipeline, and no WebSocket to a worker. A remote store removes a version through the worker's `removeDocs`, which cancels the worker's job for it first
+- `jobs: { recoverJobs }`: a started PipelineManager locally, with or without job recovery from the database; the worker's pipeline remotely
 
 ## Core Components
 
@@ -244,13 +229,13 @@ The pipeline system manages asynchronous job processing with persistent state an
 
 **PipelineWorker**: Executes individual jobs, orchestrating content fetching, processing, and storage. Reports progress through callbacks to the manager, which are converted to events.
 
-**PipelineClient**: tRPC client that provides identical interface to PipelineManager for external worker communication. `waitForJobCompletion` settles on the first terminal status it sees: a `JOB_STATUS_CHANGE` event relayed by `RemoteEventProxy`, or the worker's `getJob` state, which it checks right away and then every second. The CLI has no proxy and relies on the lookup.
+**PipelineClient**: Provides the PipelineManager interface for a remote worker by calling the worker's API. Before its first job it waits briefly for the event stream, so a job that starts at once does not lose its first events. `waitForJobCompletion` settles on a relayed `JOB_STATUS_CHANGE` or on the worker's `getJob` state, which it checks right away and then every 10 seconds while events arrive, or every second while they do not.
 
-**RemoteEventProxy**: Bridges events from external workers to the local `EventBus`. Subscribes to the worker's tRPC event stream (WebSocket) and re-emits events locally, making distributed execution transparent to consumers.
+**RemoteEventProxy**: Bridges events from a remote worker to the local `EventBus` through one subscription on the backend's API client. The WebSocket client reconnects dropped connections; the proxy subscribes again when the subscription itself ends. Its live state backs the web server's `worker.connected` health field.
 
 **EventBus**: Central pub/sub service that decouples event producers (PipelineManager) from consumers (CLI, Web UI, MCP). Enables real-time updates without direct coupling between components.
 
-Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED. All state transitions persist to database and emit events, enabling both recovery after restart and real-time monitoring. See [Event Bus Architecture](docs/concepts/eventbus-architecture.md) for detailed event flow diagrams.
+Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED, with a running job passing through CANCELLING until it stops writing. All state transitions persist to database and emit events, enabling both recovery after restart and real-time monitoring. See [Event Bus Architecture](docs/concepts/eventbus-architecture.md) for detailed event flow diagrams.
 
 ### Content Processing
 
@@ -382,7 +367,7 @@ Pipeline jobs serve as single source of truth, containing both runtime state and
 
 ### Functionality-Based Design
 
-Components are selected based on capability requirements rather than deployment context. PipelineFactory chooses implementations based on desired functionality (embedded vs external, recovery vs immediate).
+Components are selected based on capability requirements rather than deployment context. `openBackend()` chooses implementations based on desired functionality (embedded vs external, documents only vs jobs, recovery vs immediate).
 
 ### Protocol Abstraction
 

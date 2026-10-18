@@ -6,9 +6,7 @@ import type { Argv } from "yargs";
 import { startAppServer } from "../../app";
 import { startStdioServer } from "../../mcp/startStdioServer";
 import { initializeTools } from "../../mcp/tools";
-import { PipelineFactory, type PipelineOptions } from "../../pipeline";
-import { DocumentManagementService } from "../../store";
-import { EmbeddingModelChangedError } from "../../store/errors";
+import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
@@ -115,37 +113,25 @@ export function createDefaultAction(cli: Argv) {
 
       const eventBus = getEventBus(argv as CliContext);
 
-      const docService = new DocumentManagementService(eventBus, appConfig);
-      try {
-        await docService.initialize();
-      } catch (error) {
-        if (error instanceof EmbeddingModelChangedError) {
-          await handleEmbeddingModelChange(error, docService);
-        } else {
-          throw error;
-        }
-      }
-      const pipelineOptions: PipelineOptions = {
-        recoverJobs: (argv.resume as boolean) || false,
-        appConfig: appConfig,
-      };
-      const pipeline = await PipelineFactory.createPipeline(
-        docService,
+      const backend = await openBackend({
+        appConfig,
         eventBus,
-        pipelineOptions,
-      );
+        jobs: { recoverJobs: (argv.resume as boolean) || false },
+        onEmbeddingModelChange: handleEmbeddingModelChange,
+      });
+      // Registered first, so shutdown closes it even when a server fails to start
+      registerGlobalServices({ backend });
 
       if (resolvedProtocol === "stdio") {
         logger.debug(`Auto-detected stdio protocol (no TTY)`);
-        await pipeline.start();
-        const mcpTools = await initializeTools(docService, pipeline, appConfig);
+        const mcpTools = await initializeTools(
+          backend.docService,
+          backend.pipeline,
+          appConfig,
+        );
         const mcpServer = await startStdioServer(mcpTools, appConfig);
 
-        registerGlobalServices({
-          mcpStdioServer: mcpServer,
-          docService,
-          pipeline,
-        });
+        registerGlobalServices({ mcpStdioServer: mcpServer });
 
         await new Promise(() => {});
       } else {
@@ -154,7 +140,6 @@ export function createDefaultAction(cli: Argv) {
           enableWebInterface: true,
           enableMcpServer: true,
           enableApiServer: true,
-          enableWorker: true,
           port: appConfig.server.ports.default,
           showLogo: argv.logo as boolean,
           startupContext: {
@@ -163,18 +148,9 @@ export function createDefaultAction(cli: Argv) {
           },
         });
 
-        const appServer = await startAppServer(
-          docService,
-          pipeline,
-          eventBus,
-          config,
-          appConfig,
-        );
+        const appServer = await startAppServer(backend, config, appConfig);
 
-        registerGlobalServices({
-          appServer,
-          docService,
-        });
+        registerGlobalServices({ appServer });
 
         await new Promise(() => {}); // Keep running
       }

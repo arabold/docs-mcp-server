@@ -25,11 +25,11 @@ import type {
   VersionStatus,
 } from "../types";
 
+/**
+ * Document management as tools and routers use it. Opening and closing the
+ * store belongs to whoever created the implementation (see `openBackend`).
+ */
 export interface IDocumentManagement {
-  // Lifecycle
-  initialize(): Promise<void>;
-  shutdown(): Promise<void>;
-
   // Library/version introspection used by tools/UI
   listLibraries(): Promise<LibrarySummary[]>;
   validateLibraryExists(library: string): Promise<void>;
@@ -53,7 +53,6 @@ export interface IDocumentManagement {
     pathOrUrl: string,
     options?: PageContentOptions,
   ): Promise<PageContentResult>;
-  removeAllDocuments(library: string, version?: string | null): Promise<void>;
   removeVersion(library: string, version?: string | null): Promise<void>;
   /**
    * Reclaims unused SQLite pages and truncates the WAL file.

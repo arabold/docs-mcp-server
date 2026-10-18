@@ -52,6 +52,41 @@ function progress(pagesScraped: number, totalPages: number): ScraperProgressEven
   };
 }
 
+/** A promise and the function that resolves it. */
+function deferred() {
+  let resolve: () => void = () => {};
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** A progress event for a page the worker stores. */
+function storedPage(): ScraperProgressEvent {
+  const url = `${SOURCE_URL}/guide`;
+  return {
+    ...progress(1, 1),
+    currentUrl: url,
+    outcome: PageOutcome.Stored,
+    result: {
+      url,
+      title: "Guide",
+      sourceContentType: "text/html",
+      contentType: "text/markdown",
+      textContent: "Install the package first.",
+      links: [],
+      errors: [],
+      chunks: [
+        {
+          types: ["text"],
+          content: "Install the package first.",
+          section: { level: 1, path: ["Guide"] },
+        },
+      ],
+    },
+  };
+}
+
 describe("PipelineManager", () => {
   let appConfig: AppConfig;
   let eventBus: EventBusService;
@@ -86,6 +121,26 @@ describe("PipelineManager", () => {
       });
     });
     return release;
+  }
+
+  /**
+   * Makes the next job store one page and holds that write open until
+   * `release()`, the way a job can still be storing a page when it is
+   * cancelled. Resolves `writing` once the write has started.
+   */
+  function holdPageWrite() {
+    const writing = deferred();
+    const gate = deferred();
+    const write = store.addScrapeResult.bind(store);
+    vi.spyOn(store, "addScrapeResult").mockImplementationOnce(async (...args) => {
+      writing.resolve();
+      await gate.promise;
+      return write(...args);
+    });
+    scrape.mockImplementationOnce(async (_options, onProgress) => {
+      await onProgress(storedPage());
+    });
+    return { writing: writing.promise, release: gate.resolve };
   }
 
   /**
@@ -241,6 +296,138 @@ describe("PipelineManager", () => {
     });
   });
 
+  describe("removeVersion", () => {
+    /** A promise with its resolve function, to hold a store call open. */
+    it("cancels the version's running job and removes the version once it has ended", async () => {
+      holdScrapes();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
+
+      await manager.removeVersion("react", "19.0");
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
+    it("matches the running job however the library and version are padded or cased", async () => {
+      holdScrapes();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob(
+        "react",
+        "19.0",
+        scrapeOptions("react", "19.0"),
+      );
+      await reachStatus(jobId, PipelineJobStatus.RUNNING);
+
+      await manager.removeVersion(" React ", " 19.0 ");
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
+    it("waits for a job already being cancelled before removing its version", async () => {
+      const write = holdPageWrite();
+      await manager.start();
+      const jobId = await manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      await write.writing;
+      await manager.cancelJob(jobId);
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLING);
+
+      const removed = manager.removeVersion("React", "19.0");
+      await new Promise((resolve) => setImmediate(resolve));
+      write.release();
+      await removed;
+      await manager.waitForJobCompletion(jobId);
+
+      // The page stored after the cancel would otherwise bring the version back
+      expect(await store.listLibraries()).toEqual([]);
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+    });
+
+    it("waits for an enqueue in progress, then cancels the job it registered", async () => {
+      const gate = deferred();
+      const claim = store.claimVersion.bind(store);
+      vi.spyOn(store, "claimVersion").mockImplementationOnce(async (...args) => {
+        await gate.promise;
+        return claim(...args);
+      });
+
+      const enqueued = manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      const removed = manager.removeVersion("React", "19.0");
+      gate.resolve();
+      const jobId = await enqueued;
+      await removed;
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
+    it("keeps a refresh in progress from bringing back a version removed meanwhile", async () => {
+      await seedVersion("React", "19.0", VersionStatus.COMPLETED, {
+        pages: [{ url: `${SOURCE_URL}/guide`, depth: 0, etag: null }],
+      });
+      const reading = deferred();
+      const gate = deferred();
+      const readOptions = store.getScraperOptions.bind(store);
+      vi.spyOn(store, "getScraperOptions").mockImplementationOnce(async (...args) => {
+        reading.resolve();
+        await gate.promise;
+        return readOptions(...args);
+      });
+
+      const refreshed = manager.enqueueRefreshJob("React", "19.0");
+      // The refresh has read the version and its pages but registered no job yet
+      await reading.promise;
+      const removed = manager.removeVersion("React", "19.0");
+      await new Promise((resolve) => setImmediate(resolve));
+      gate.resolve();
+      const jobId = await refreshed;
+      await removed;
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await store.listLibraries()).toEqual([]);
+    });
+
+    it("holds an enqueue of the same version until the removal is done", async () => {
+      await seedVersion("React", "19.0", VersionStatus.COMPLETED);
+      const gate = deferred();
+      const remove = store.removeVersion.bind(store);
+      vi.spyOn(store, "removeVersion").mockImplementationOnce(async (...args) => {
+        await gate.promise;
+        return remove(...args);
+      });
+      const claim = vi.spyOn(store, "claimVersion");
+
+      const removed = manager.removeVersion("React", "19.0");
+      const enqueued = manager.enqueueScrapeJob(
+        "React",
+        "19.0",
+        scrapeOptions("React", "19.0"),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(claim).not.toHaveBeenCalled();
+
+      gate.resolve();
+      await removed;
+      // The version is gone, so the default reject-version claim succeeds
+      const jobId = await enqueued;
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.QUEUED);
+    });
+  });
+
   describe("overwrite protection", () => {
     it.each([
       ["queued by an earlier enqueue", false],
@@ -347,6 +534,31 @@ describe("PipelineManager", () => {
 
       expect(await statusOf(firstId)).toBe(PipelineJobStatus.CANCELLED);
       expect(await statusOf(secondId)).toBe(PipelineJobStatus.COMPLETED);
+    });
+
+    it("keeps the superseded job's last page out of the new job's version", async () => {
+      // With room for both, the new job could otherwise start next to the old one
+      manager = createManager({ concurrency: 2 });
+      const write = holdPageWrite();
+      await manager.start();
+      const firstId = await manager.enqueueScrapeJob(
+        "libA",
+        "1.0",
+        scrapeOptions("libA"),
+      );
+      await write.writing;
+
+      const replaced = manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"), {
+        onExisting: "replace",
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      write.release();
+      const secondId = await replaced;
+      await manager.waitForJobCompletion(secondId);
+      await manager.waitForJobCompletion(firstId);
+
+      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
+      expect(await store.getPagesByVersionId(versionId)).toEqual([]);
     });
 
     it("keeps jobs for different versions of a library", async () => {
