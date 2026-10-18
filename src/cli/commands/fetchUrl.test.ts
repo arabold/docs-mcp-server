@@ -2,11 +2,16 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { telemetry } from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
 import { createFetchUrlCommand } from "./fetchUrl";
 
 const stdoutWriteMock = vi.fn();
 
+vi.mock("../../telemetry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../telemetry")>()),
+  telemetry: { track: vi.fn() },
+}));
 vi.mock("../../scraper/fetcher", () => ({
   HttpFetcher: vi.fn().mockImplementation(function () {
     return {};
@@ -72,5 +77,19 @@ describe("fetch-url command", () => {
       }),
     );
     expect(stdoutWriteMock).toHaveBeenCalledWith("# md\n");
+  });
+
+  it("sends only the host of the URL to telemetry", async () => {
+    const parser = yargs().scriptName("test");
+    createFetchUrlCommand(parser);
+
+    await parser.parse("fetch-url https://intranet.example.com/team/secret?q=1");
+
+    const [, properties] = vi.mocked(telemetry.track).mock.calls[0];
+    expect(properties).toMatchObject({
+      url: "intranet.example.com",
+      urlProtocol: "https",
+    });
+    expect(JSON.stringify(properties)).not.toContain("secret");
   });
 });

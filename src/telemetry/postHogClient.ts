@@ -176,11 +176,7 @@ export class PostHogClient {
       // Convert camelCase properties to snake_case for PostHog
       const snakeCaseProperties = convertPropertiesToSnakeCase(enhancedProperties);
 
-      this.client.captureException({
-        error,
-        distinctId,
-        properties: snakeCaseProperties,
-      });
+      this.client.captureException(error, distinctId, snakeCaseProperties);
       logger.debug(`PostHog exception captured: ${error.constructor.name}`);
     } catch (captureError) {
       logger.debug(

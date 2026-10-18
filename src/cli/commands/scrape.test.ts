@@ -2,12 +2,17 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { telemetry } from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import { createScrapeCommand } from "./scrape";
 
 const pipelineMock = {};
 const closeBackend = vi.fn(async () => {});
 
+vi.mock("../../telemetry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../telemetry")>()),
+  telemetry: { track: vi.fn() },
+}));
 vi.mock("../../services/backend", () => ({
   openBackend: vi.fn(async () => ({
     docService: {},
@@ -147,5 +152,23 @@ describe("scrape command", () => {
 
     const execute = vi.mocked(ScrapeTool).mock.results[0]?.value.execute;
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ replace: false }));
+  });
+
+  it("sends only the host of the URL to telemetry", async () => {
+    const parser = yargs().scriptName("test");
+    createScrapeCommand(parser);
+
+    await parser.parse([
+      "scrape",
+      "internal",
+      "https://intranet.example.com/team/secret?q=1",
+    ]);
+
+    const [, properties] = vi.mocked(telemetry.track).mock.calls[0];
+    expect(properties).toMatchObject({
+      url: "intranet.example.com",
+      urlProtocol: "https",
+    });
+    expect(JSON.stringify(properties)).not.toContain("secret");
   });
 });

@@ -216,8 +216,10 @@ describe("PostHogClient property conversion", () => {
 
     client.captureException("test-user", error, properties);
 
-    const capturedCall = mockPostHogInstance.captureException.mock.calls[0][0];
-    const props = capturedCall.properties;
+    const [capturedError, distinctId, props] =
+      mockPostHogInstance.captureException.mock.calls[0];
+    expect(capturedError).toBe(error);
+    expect(distinctId).toBe("test-user");
 
     // Should have PostHog standard properties
     expect(props.$session_id).toBe("error-session");
@@ -237,11 +239,11 @@ describe("PostHogClient property conversion", () => {
 
     client.captureException("test-user", error);
 
-    expect(mockPostHogInstance.captureException).toHaveBeenCalledWith({
+    expect(mockPostHogInstance.captureException).toHaveBeenCalledWith(
       error,
-      distinctId: "test-user",
-      properties: {},
-    });
+      "test-user",
+      {},
+    );
   });
 
   it("should not convert properties when client is disabled", () => {

@@ -2,11 +2,16 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yargs from "yargs";
+import { telemetry } from "../../telemetry";
 import { SearchTool } from "../../tools";
 import { createSearchCommand } from "./search";
 
 const stdoutWriteMock = vi.fn();
 
+vi.mock("../../telemetry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../telemetry")>()),
+  telemetry: { track: vi.fn() },
+}));
 vi.mock("../../services/backend", () => ({
   openBackend: vi.fn(async () => ({ docService: {}, close: vi.fn() })),
 }));
@@ -78,5 +83,16 @@ describe("search command", () => {
     await parser.parse("search react hooks --output yaml");
 
     expect(stdoutWriteMock).toHaveBeenCalledWith("[]\n");
+  });
+
+  it("sends the query length to telemetry instead of the query", async () => {
+    const parser = yargs().scriptName("test");
+    createSearchCommand(parser);
+
+    await parser.parse(["search", "react", "secret roadmap"]);
+
+    const [, properties] = vi.mocked(telemetry.track).mock.calls[0];
+    expect(properties).toMatchObject({ queryLength: 14 });
+    expect(JSON.stringify(properties)).not.toContain("secret");
   });
 });

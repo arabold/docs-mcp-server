@@ -220,6 +220,57 @@ describe("MCP Server Read-Only Mode", () => {
     );
   });
 
+  it("should send only the host of scrape_docs URLs to telemetry", async () => {
+    vi.mocked(telemetry.track).mockClear();
+    const server = createServer(mockConfig);
+    const scrapeTool = (server as any)._registeredTools.scrape_docs;
+
+    await scrapeTool.handler({
+      library: "internal",
+      url: "https://intranet.example.com/team/secret?q=1",
+    });
+
+    const event = vi
+      .mocked(telemetry.track)
+      .mock.calls.find(([, data]) => data?.tool === "scrape_docs");
+    expect(event?.[1]).toMatchObject({
+      url: "intranet.example.com",
+      urlProtocol: "https",
+    });
+    expect(JSON.stringify(event)).not.toContain("secret");
+  });
+
+  it("should send only the host of fetch_url URLs to telemetry", async () => {
+    vi.mocked(telemetry.track).mockClear();
+    const server = createServer(mockConfig);
+    const fetchUrlTool = (server as any)._registeredTools.fetch_url;
+
+    await fetchUrlTool.handler({ url: "https://intranet.example.com/team/secret?q=1" });
+
+    const event = vi
+      .mocked(telemetry.track)
+      .mock.calls.find(([, data]) => data?.tool === "fetch_url");
+    expect(event?.[1]).toMatchObject({
+      url: "intranet.example.com",
+      urlProtocol: "https",
+    });
+    expect(JSON.stringify(event)).not.toContain("secret");
+  });
+
+  it("should send the search_docs query length instead of the query", async () => {
+    vi.mocked(telemetry.track).mockClear();
+    const server = createServer(mockConfig);
+    const searchTool = (server as any)._registeredTools.search_docs;
+
+    await searchTool.handler({ library: "react", query: "secret roadmap" });
+
+    const event = vi
+      .mocked(telemetry.track)
+      .mock.calls.find(([, data]) => data?.tool === "search_docs");
+    expect(event?.[1]).toMatchObject({ queryLength: 14 });
+    expect(JSON.stringify(event)).not.toContain("secret");
+  });
+
   it("should not send list_pages URL filters to telemetry", async () => {
     vi.mocked(telemetry.track).mockClear();
     const server = createServer(mockConfig);

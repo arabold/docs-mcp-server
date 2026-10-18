@@ -70,7 +70,7 @@ export function createSearchCommand(cli: Argv) {
         command: "search",
         library: argv.library,
         version: argv.version,
-        query: argv.query,
+        queryLength: (argv.query as string).length, // Never the query itself
         limit: argv.limit,
         exactMatch: argv.exactMatch,
         useServerUrl: !!argv.serverUrl,
