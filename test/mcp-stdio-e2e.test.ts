@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { Client } from "@modelcontextprotocol/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
 import { VersionStatus } from "../src/store/types";
 import {
@@ -24,8 +24,11 @@ import {
   writeTestConfig,
 } from "./test-helpers";
 
+/** The suite's own store and config, for tests that do not bring their own. */
+const suite = { storePath: "", configPath: "" };
+
 /**
- * A transport that spawns the CLI over stdio with a test store and no telemetry.
+ * A transport that spawns the CLI over stdio with the suite's store and config.
  * @param overrides Environment variables to set.
  * @param cliArgs Arguments for the CLI; none runs the default command.
  */
@@ -44,7 +47,8 @@ function createStdioTransport(
     cwd: projectRoot,
     env: {
       ...env,
-      DOCS_MCP_STORE_PATH: path.join(projectRoot, "test", ".test-store-stdio"),
+      DOCS_MCP_STORE_PATH: suite.storePath,
+      DOCS_MCP_CONFIG: suite.configPath,
       DOCS_MCP_TELEMETRY: "false",
       ...overrides,
     },
@@ -61,6 +65,17 @@ describe("MCP stdio server E2E", () => {
   let transport: StdioClientTransport | null = null;
   let storeDir: string | null = null;
   let worker: ChildProcess | undefined;
+  let suiteDir = "";
+
+  beforeAll(() => {
+    suiteDir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-e2e-"));
+    suite.storePath = suiteDir;
+    suite.configPath = writeTestConfig(suiteDir);
+  });
+
+  afterAll(() => {
+    rmSync(suiteDir, { recursive: true, force: true });
+  });
 
   beforeEach(() => {
     // Reset state before each test
