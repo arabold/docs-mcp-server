@@ -638,7 +638,8 @@ export async function stopChildProcess(
   child: ChildProcess | undefined,
   timeoutMs = 5000,
 ): Promise<void> {
-  if (!child || child.exitCode !== null) {
+  // A child killed by a signal keeps `exitCode` null and sets `signalCode`
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
   await new Promise<void>((resolve) => {
