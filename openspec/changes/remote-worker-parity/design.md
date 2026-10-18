@@ -246,7 +246,11 @@ The CLI `remove`, the MCP `remove_docs` tool and the web UI all remove through `
   client calls it any more.
 
 The cancel and the removal happen in the pipeline that runs the jobs: `IPipeline.removeVersion()`
-cancels a queued or running job for the version, waits until it has ended, and removes the version.
+cancels the version's unfinished jobs, waits until each has ended, and removes the version. That
+includes a job already being cancelled: it can still be storing its last page, and storing a page
+creates its version when the version is gone. A replacing enqueue stops the version's jobs the same
+way before it registers its own, so a superseded job's last page cannot land after the new job has
+cleared the version; the enqueue returns once the old job has stopped.
 `PipelineManager` runs it under a per-version lock that `enqueueScrapeJob()` also takes around its claim
 of the version and the job it registers, so an enqueue racing a removal cannot register its job after the
 removal looked for jobs and then write the deleted version back. A refresh, and a re-index with stored

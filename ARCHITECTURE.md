@@ -235,7 +235,7 @@ The pipeline system manages asynchronous job processing with persistent state an
 
 **EventBus**: Central pub/sub service that decouples event producers (PipelineManager) from consumers (CLI, Web UI, MCP). Enables real-time updates without direct coupling between components.
 
-Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED. All state transitions persist to database and emit events, enabling both recovery after restart and real-time monitoring. See [Event Bus Architecture](docs/concepts/eventbus-architecture.md) for detailed event flow diagrams.
+Job states progress through: QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED, with a running job passing through CANCELLING until it stops writing. All state transitions persist to database and emit events, enabling both recovery after restart and real-time monitoring. See [Event Bus Architecture](docs/concepts/eventbus-architecture.md) for detailed event flow diagrams.
 
 ### Content Processing
 

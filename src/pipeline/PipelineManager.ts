@@ -29,6 +29,13 @@ import type { EnqueueScrapeOptions, IPipeline } from "./trpc/interfaces";
 import type { InternalPipelineJob, PipelineJob } from "./types";
 import { PipelineJobStatus } from "./types";
 
+/** The states of a job that has ended; in any other, it may still write. */
+const FINISHED_JOB_STATUSES: ReadonlySet<PipelineJobStatus> = new Set([
+  PipelineJobStatus.COMPLETED,
+  PipelineJobStatus.CANCELLED,
+  PipelineJobStatus.FAILED,
+]);
+
 /**
  * Manages a queue of document processing jobs, controlling concurrency and tracking progress.
  */
@@ -230,22 +237,30 @@ export class PipelineManager implements IPipeline {
   }
 
   /**
-   * The QUEUED or RUNNING jobs for a library version. The library name and the
-   * version are both matched the way the store buckets them: comparing names
-   * exactly let `Docs` and `docs` run as two jobs against one bucket, where the
-   * second one's clean-before-scrape deleted pages the first had already written.
+   * Cancels a library version's unfinished jobs and waits until each has ended,
+   * including one already being cancelled: it can still be storing its last
+   * page, which would create the version again after a removal.
+   *
+   * The library name and the version are matched the way the store buckets
+   * them: comparing names exactly let `Docs` and `docs` run as two jobs against
+   * one bucket, where the second one's clean-before-scrape deleted pages the
+   * first had already written.
    */
-  private activeJobsFor(
-    library: string,
-    normalizedVersion: string,
-  ): InternalPipelineJob[] {
-    return Array.from(this.jobMap.values()).filter(
+  private async stopJobsFor(library: string, normalizedVersion: string): Promise<void> {
+    const jobs = Array.from(this.jobMap.values()).filter(
       (job) =>
         libraryNamesMatch(job.library, library) &&
         normalizeVersionLabel(job.version) === normalizedVersion &&
-        (job.status === PipelineJobStatus.QUEUED ||
-          job.status === PipelineJobStatus.RUNNING),
+        !FINISHED_JOB_STATUSES.has(job.status),
     );
+    for (const job of jobs) {
+      logger.info(
+        `🚫 Stopping job ${job.id} for ${formatVersionLabel(job.library, normalizedVersion)}`,
+      );
+      await this.cancelJob(job.id);
+      // How the job ended does not matter, only that it no longer writes
+      await this.waitForJobCompletion(job.id).catch(() => {});
+    }
   }
 
   /**
@@ -275,10 +290,9 @@ export class PipelineManager implements IPipeline {
   }
 
   /**
-   * Removes a library version: cancels a queued or running job for it, waits
-   * until that job has ended, then removes the version, and the library with its
-   * last version. A job enqueued for the same version meanwhile is registered
-   * only after the removal is done.
+   * Removes a library version once its jobs have stopped (see
+   * {@link stopJobsFor}), and the library with its last version. A job enqueued
+   * for the same version meanwhile is registered only after the removal is done.
    */
   async removeVersion(
     library: string,
@@ -286,15 +300,7 @@ export class PipelineManager implements IPipeline {
   ): Promise<void> {
     const normalizedVersion = normalizeVersionLabel(version);
     await this.withVersionLock(library, normalizedVersion, async () => {
-      for (const job of this.activeJobsFor(library, normalizedVersion)) {
-        logger.info(
-          `🚫 Aborting job for ${formatVersionLabel(job.library, normalizedVersion)} before removal: ${job.id}`,
-        );
-        await this.cancelJob(job.id);
-        // The job has ended either way; a failure while it stopped does not
-        // keep its version from being removed.
-        await this.waitForJobCompletion(job.id).catch(() => {});
-      }
+      await this.stopJobsFor(library, normalizedVersion);
       await this.store.removeVersion(library, version);
     });
   }
@@ -304,8 +310,8 @@ export class PipelineManager implements IPipeline {
    *
    * The target library and version are claimed first: by default an existing
    * version is rejected rather than cleared (`onExisting: "reject-version"`).
-   * Only a replacing claim goes on to abort an existing QUEUED/RUNNING job for
-   * the same library+version (including unversioned).
+   * Only a claim that succeeds goes on to stop the version's other jobs (see
+   * {@link stopJobsFor}), so none of them writes into it after the new job starts.
    *
    * @throws {LibraryAlreadyExistsError | VersionAlreadyExistsError} When the policy rejects the target.
    * @throws {InvalidLibraryNameError} When a new library's name fails validation.
@@ -342,12 +348,8 @@ export class PipelineManager implements IPipeline {
       options.clean === false && requested === "reject-version" ? "replace" : requested;
     const claimed = await this.store.claimVersion(library, normalizedVersion, policy);
 
-    // Abort any existing QUEUED or RUNNING job for the same library+version
+    await this.stopJobsFor(library, normalizedVersion);
     const label = formatVersionLabel(claimed.library, normalizedVersion);
-    for (const job of this.activeJobsFor(library, normalizedVersion)) {
-      logger.info(`🚫 Aborting duplicate job for ${label}: ${job.id}`);
-      await this.cancelJob(job.id);
-    }
 
     const normalizedOptions = this.normalizeScraperOptions(options);
 
@@ -650,10 +652,13 @@ export class PipelineManager implements IPipeline {
         // The worker is responsible for transitioning to CANCELLED and rejecting
         break;
 
+      case PipelineJobStatus.CANCELLING:
+        logger.debug(`Job ${jobId} is already being cancelled`);
+        break;
+
       case PipelineJobStatus.COMPLETED:
       case PipelineJobStatus.FAILED:
       case PipelineJobStatus.CANCELLED:
-      case PipelineJobStatus.CANCELLING:
         logger.warn(
           `⚠️  Job ${jobId} cannot be cancelled in its current state: ${job.status}`,
         );
@@ -671,18 +676,12 @@ export class PipelineManager implements IPipeline {
    * @returns The number of jobs that were cleared.
    */
   async clearCompletedJobs(): Promise<number> {
-    const completedStatuses = [
-      PipelineJobStatus.COMPLETED,
-      PipelineJobStatus.CANCELLED,
-      PipelineJobStatus.FAILED,
-    ];
-
     let clearedCount = 0;
     const jobsToRemove: string[] = [];
 
     // Find all jobs that can be cleared
     for (const [jobId, job] of this.jobMap.entries()) {
-      if (completedStatuses.includes(job.status)) {
+      if (FINISHED_JOB_STATUSES.has(job.status)) {
         jobsToRemove.push(jobId);
         clearedCount++;
       }

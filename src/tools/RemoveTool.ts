@@ -31,8 +31,8 @@ export class RemoveTool {
 
   /**
    * Executes the tool to remove the specified library version completely.
-   * Aborts any QUEUED/RUNNING job for the same library+version before deleting,
-   * when there is a pipeline to see it.
+   * Stops the version's jobs and waits until they have ended before deleting,
+   * when there is a pipeline to see them.
    * Removes all documents, the version record, and the library if no other versions exist.
    */
   async execute(args: RemoveToolArgs): Promise<{ message: string }> {
