@@ -15,6 +15,7 @@ import {
 import type { ScrapeResult } from "../scraper/types";
 import type { Chunk } from "../splitter/types";
 import { loadConfig, markVectorDimensionSource } from "../utils/config";
+import { DocumentRetrieverService } from "./DocumentRetrieverService";
 import { DocumentStore } from "./DocumentStore";
 import { EmbeddingConfig } from "./embeddings/EmbeddingConfig";
 import {
@@ -659,6 +660,25 @@ describe("DocumentStore - With Embeddings", () => {
       );
     });
 
+    it("returns chunk positions, so search groups nearby chunks of a page", async () => {
+      const page = createScrapeResult("Hooks", "https://example.com/hooks", "unused");
+      page.chunks = ["First", "Second", "Third"].map((word, index) => ({
+        types: ["text"],
+        content: `${word} note about hooks.`,
+        section: { level: 0, path: [`part ${index}`] },
+      }));
+      await store.addDocuments("grouping", "1.0.0", 1, page);
+
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "grouping",
+        "1.0.0",
+        "hooks",
+        10,
+      );
+
+      expect(results).toHaveLength(1);
+    });
+
     it("should perform hybrid search combining vector and FTS", async () => {
       const results = await store.findByContent(
         "searchtest",
@@ -1301,6 +1321,25 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
           ["TypeScript", "Intro"],
         ),
       );
+    });
+
+    it("returns chunk positions, so search groups nearby chunks of a page", async () => {
+      const page = createScrapeResult("Hooks", "https://example.com/hooks", "unused");
+      page.chunks = ["First", "Second", "Third"].map((word, index) => ({
+        types: ["text"],
+        content: `${word} note about hooks.`,
+        section: { level: 0, path: [`part ${index}`] },
+      }));
+      await store.addDocuments("grouping", "1.0.0", 1, page);
+
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "grouping",
+        "1.0.0",
+        "hooks",
+        10,
+      );
+
+      expect(results).toHaveLength(1);
     });
 
     it("should perform FTS-only search", async () => {
