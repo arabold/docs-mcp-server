@@ -50,14 +50,18 @@ export default function setup(): void {
   const srcDir = path.join(projectRoot, "src");
   const clientDir = path.join(srcDir, "web", "client");
 
-  // Tests and the web UI are not part of the CLI bundle
+  // Tests and the web UI are not part of the CLI bundle. Directories count:
+  // deleting or renaming a source changes its directory's time and nothing else.
   const cliSources = [
     path.join(projectRoot, "vite.config.ts"),
+    // The build reads the version and the external dependencies from it
+    path.join(projectRoot, "package.json"),
+    srcDir,
     ...entriesUnder(srcDir).filter(
-      (file) =>
-        !file.startsWith(`${clientDir}${path.sep}`) &&
-        !/\.test\.tsx?$/.test(file) &&
-        statSync(file).isFile(),
+      (entry) =>
+        entry !== clientDir &&
+        !entry.startsWith(`${clientDir}${path.sep}`) &&
+        !/\.test\.tsx?$/.test(entry),
     ),
   ];
   const cliBuiltAt = mtimeOf(path.join(projectRoot, "dist", "index.js"));

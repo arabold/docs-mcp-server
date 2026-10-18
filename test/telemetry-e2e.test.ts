@@ -64,8 +64,10 @@ describe("Telemetry E2E", () => {
           LOG_LEVEL: "debug",
           DOCS_MCP_STORE_PATH: storePath,
           DOCS_MCP_CONFIG: configPaths[configTelemetry],
-          // A value from the shell would decide the outcome instead of the test
-          DOCS_MCP_TELEMETRY: undefined,
+          // Telemetry stays on unless the test turns it off. Removing the
+          // variable would let dotenv restore one from `.env`, which could
+          // turn it off for the flag tests.
+          DOCS_MCP_TELEMETRY: "true",
           // Apply test-specific environment
           ...env,
         },

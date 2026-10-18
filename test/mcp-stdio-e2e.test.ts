@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
 import { VersionStatus } from "../src/store/types";
 import {
+  FTS_ONLY_ENV,
   getCliCommand,
   HTML_FIXTURE_URL,
   startWorker,
@@ -50,6 +51,7 @@ function createStdioTransport(
       DOCS_MCP_STORE_PATH: suite.storePath,
       DOCS_MCP_CONFIG: suite.configPath,
       DOCS_MCP_TELEMETRY: "false",
+      ...FTS_ONLY_ENV,
       ...overrides,
     },
   });
