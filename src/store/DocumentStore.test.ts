@@ -1390,6 +1390,43 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       ]);
     });
 
+    it("assembles grouped code matches with their enclosing class", async () => {
+      const lines: [string, string[]][] = [
+        ["class UserService {", ["UserService"]],
+        ["  getUser(id) { return lookupRecord(id); }", ["UserService", "getUser"]],
+        ["  createUser(data) { return db.create(data); }", ["UserService", "createUser"]],
+        ["  deleteUser(id) { return lookupRecord(id); }", ["UserService", "deleteUser"]],
+        ["}", ["UserService"]],
+      ];
+      const page = {
+        ...createScrapeResult("UserService.ts", "https://example.com/UserService.ts", ""),
+        sourceContentType: "text/typescript",
+        contentType: "text/typescript",
+        chunks: lines.map(([content, path]) => ({
+          types: ["code" as const],
+          content,
+          section: { level: path.length, path },
+        })),
+      };
+      await store.addDocuments("code", "1.0.0", 1, page);
+
+      const results = await new DocumentRetrieverService(store, appConfig).search(
+        "code",
+        "1.0.0",
+        "lookupRecord",
+        10,
+      );
+
+      // The class's closing brace comes from its container chunk, which assembly
+      // finds through the matches' common ancestor in their metadata paths
+      expect(results.map((result) => result.content)).toEqual([
+        "class UserService {" +
+          "  getUser(id) { return lookupRecord(id); }" +
+          "  deleteUser(id) { return lookupRecord(id); }" +
+          "}",
+      ]);
+    });
+
     it("should perform FTS-only search", async () => {
       const results = await store.findByContent("testlib", "1.0.0", "React hooks", 5);
 

@@ -2719,7 +2719,7 @@ export class DocumentStore {
 
         return topResults.map((row) => {
           const result: DbPageChunk = {
-            ...row,
+            ...this.parseMetadata(row),
             url: row.url || "", // Ensure url is never undefined
             title: row.title || null,
             source_content_type: row.source_content_type || null,
@@ -2765,7 +2765,7 @@ export class DocumentStore {
         // Assign FTS ranks based on order (best score = rank 1)
         return rawResults.map((row, index) => {
           const result: DbPageChunk = {
-            ...row,
+            ...this.parseMetadata(row),
             url: row.url || "", // Ensure url is never undefined
             title: row.title || null,
             source_content_type: row.source_content_type || null,
