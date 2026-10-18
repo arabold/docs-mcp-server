@@ -14,6 +14,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { Client } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDefaultInstructions } from "../src/mcp/defaultInstructions";
+import { VersionStatus } from "../src/store/types";
 import {
   getCliCommand,
   HTML_FIXTURE_URL,
@@ -274,6 +275,36 @@ describe("MCP stdio server E2E", () => {
     expect(second.isError).toBe(true);
     expect(textOf(second)).toContain('"Stdio Lib"');
     expect(textOf(second)).toContain("replace: true");
+  }, 30000);
+
+  it.each([
+    { command: "mcp", cliArgs: ["mcp", "--protocol", "stdio", "--read-only"] },
+    // Without a terminal, the default command serves MCP over stdio
+    { command: "the default command", cliArgs: ["--read-only"] },
+  ])("$command leaves a version another process is running alone in read-only mode", async ({
+    cliArgs,
+  }) => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mcp-stdio-read-only-"));
+    storeDir = dir;
+    const statusOfBusy = () =>
+      withStore(dir, async (store) => (await store.listLibraries())[0]?.versions[0]?.status);
+    // A worker on the same store is scraping Busy 1.0
+    await withStore(dir, async (store) => {
+      const versionId = await store.ensureVersion({ library: "Busy", version: "1.0" });
+      await store.updateVersionStatus(versionId, VersionStatus.RUNNING);
+    });
+
+    transport = createStdioTransport(
+      { DOCS_MCP_STORE_PATH: dir, DOCS_MCP_EMBEDDING_MODEL: "" },
+      cliArgs,
+    );
+    client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+    // Connected means the server has opened the store and started up
+    await client.connect(transport);
+    await client.close();
+    client = null;
+
+    expect(await statusOfBusy()).toBe(VersionStatus.RUNNING);
   }, 30000);
 
   it("scrapes, searches and removes through a remote worker", async () => {

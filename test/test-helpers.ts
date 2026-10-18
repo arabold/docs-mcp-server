@@ -76,6 +76,39 @@ export function getCliCommand(): { cmd: string; args: string[] } {
 }
 
 /**
+ * Runs the CLI to the end, the way a user runs a command.
+ *
+ * @param args CLI arguments, e.g. `["list", "--store-path", dir]`.
+ * @param timeoutMs Kill the process after this long and report exit code 1.
+ * @returns The exit code and everything the process printed.
+ */
+export function runCli(
+  args: string[],
+  timeoutMs?: number,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const { cmd, args: cliArgs } = getCliCommand();
+    const proc = spawn(cmd, [...cliArgs, ...args], {
+      cwd: path.resolve(import.meta.dirname, ".."),
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, VITEST_WORKER_ID: undefined },
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+    proc.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+    proc.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+    proc.on("error", reject);
+  });
+}
+
+/**
  * Spawns a long-running CLI command (a server or worker) and waits until it
  * logs that it is available. Output is collected across chunks, so a ready
  * line split between two reads still counts.

@@ -116,7 +116,15 @@ export function createDefaultAction(cli: Argv) {
       const backend = await openBackend({
         appConfig,
         eventBus,
-        jobs: { recoverJobs: (argv.resume as boolean) || false },
+        // A read-only server runs no jobs, so it leaves interrupted ones to the
+        // process that does
+        jobs: {
+          interruptedJobs: appConfig.app.readOnly
+            ? "leave"
+            : argv.resume
+              ? "recover"
+              : "fail",
+        },
         onEmbeddingModelChange: handleEmbeddingModelChange,
       });
       // Registered first, so shutdown closes it even when a server fails to start

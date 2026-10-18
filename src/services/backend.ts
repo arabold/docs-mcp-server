@@ -12,6 +12,7 @@ import { RemoteEventProxy } from "../events/RemoteEventProxy";
 import { EVENTS_CONNECT_TIMEOUT_MS, PipelineClient } from "../pipeline/PipelineClient";
 import { PipelineManager } from "../pipeline/PipelineManager";
 import type { IPipeline } from "../pipeline/trpc/interfaces";
+import type { InterruptedJobs } from "../pipeline/types";
 import { DocumentManagementClient } from "../store/DocumentManagementClient";
 import { DocumentManagementService } from "../store/DocumentManagementService";
 import { EmbeddingModelChangedError } from "../store/errors";
@@ -26,11 +27,12 @@ import { createApiClient, pingApi } from "./apiClient";
  * - `false`: documents only; no pipeline, and no WebSocket to a worker. A local
  *   backend starts no pipeline, so it never interrupts jobs that another
  *   process runs on the same store.
- * - `{ recoverJobs }`: run jobs. Locally a started pipeline that recovers
- *   interrupted jobs or marks them failed; remotely the worker's pipeline (the
- *   worker owns recovery, so `recoverJobs` does not apply).
+ * - `{ interruptedJobs }`: run jobs. Locally a started pipeline that handles
+ *   the jobs an earlier run left unfinished as asked (see {@link InterruptedJobs});
+ *   remotely the worker's pipeline (the worker handles its own, so
+ *   `interruptedJobs` does not apply).
  */
-export type BackendJobs = false | { recoverJobs: boolean };
+export type BackendJobs = false | { interruptedJobs: InterruptedJobs };
 
 /** Options for {@link openBackend}. */
 export interface OpenBackendOptions {
@@ -82,7 +84,7 @@ export interface JobsBackend extends Backend {
  *   open. Whatever was opened before the failure is closed first.
  */
 export function openBackend(
-  options: OpenBackendOptions & { jobs: { recoverJobs: boolean } },
+  options: OpenBackendOptions & { jobs: { interruptedJobs: InterruptedJobs } },
 ): Promise<JobsBackend>;
 export function openBackend(options: OpenBackendOptions): Promise<Backend>;
 export async function openBackend(options: OpenBackendOptions): Promise<Backend> {
@@ -123,7 +125,7 @@ async function openLocal(options: OpenBackendOptions, closer: Closer): Promise<B
     const jobTelemetry = new TelemetryService(eventBus);
     closer.add(() => jobTelemetry.shutdown());
     const manager = new PipelineManager(docService, eventBus, {
-      recoverJobs: jobs.recoverJobs,
+      interruptedJobs: jobs.interruptedJobs,
       appConfig,
     });
     await manager.start();

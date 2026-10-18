@@ -73,7 +73,7 @@ export function createWebCommand(cli: Argv) {
           appConfig,
           eventBus,
           serverUrl,
-          jobs: { recoverJobs: false }, // Web command doesn't support job recovery
+          jobs: { interruptedJobs: "fail" }, // Web command doesn't support job recovery
         });
         // Registered first, so shutdown closes it even when a server fails to start
         registerGlobalServices({ backend });

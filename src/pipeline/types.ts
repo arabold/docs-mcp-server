@@ -14,6 +14,16 @@ export enum PipelineJobStatus {
 }
 
 /**
+ * What a pipeline does when it starts with versions that an earlier run left
+ * RUNNING or QUEUED:
+ * - `recover`: runs them again as refresh jobs.
+ * - `fail`: marks them FAILED, so users can retry them.
+ * - `leave`: changes nothing, for a command that runs only its own job while
+ *   the process that hosts the store handles the rest.
+ */
+export type InterruptedJobs = "recover" | "fail" | "leave";
+
+/**
  * Public interface for pipeline jobs exposed through API boundaries.
  * Contains only serializable fields suitable for JSON transport.
  */

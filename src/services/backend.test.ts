@@ -118,17 +118,23 @@ describe("openBackend", () => {
       },
     );
 
-    it("marks an interrupted scrape failed when it runs jobs without recovering them", async () => {
-      await seedRunningScrape();
+    it.each([
+      { interruptedJobs: "fail", status: VersionStatus.FAILED },
+      { interruptedJobs: "leave", status: VersionStatus.RUNNING },
+    ] as const)(
+      "runs jobs and leaves an interrupted scrape $status when set to $interruptedJobs it",
+      async ({ interruptedJobs, status }) => {
+        await seedRunningScrape();
 
-      const backend = await open(localOptions({ jobs: { recoverJobs: false } }));
+        const backend = await open(localOptions({ jobs: { interruptedJobs } }));
 
-      expect(backend.pipeline).toBeInstanceOf(PipelineManager);
-      expect(await statusOfSeededScrape()).toBe(VersionStatus.FAILED);
-    });
+        expect(backend.pipeline).toBeInstanceOf(PipelineManager);
+        expect(await statusOfSeededScrape()).toBe(status);
+      },
+    );
 
     it("reports the jobs its pipeline runs to telemetry", async () => {
-      const backend = await open(localOptions({ jobs: { recoverJobs: false } }));
+      const backend = await open(localOptions({ jobs: { interruptedJobs: "fail" } }));
 
       backend.eventBus.emit(EventType.JOB_STATUS_CHANGE, runningJob);
 
@@ -166,13 +172,15 @@ describe("openBackend", () => {
       const shutdown = vi.spyOn(DocumentManagementService.prototype, "shutdown");
 
       await expect(
-        openBackend(localOptions({ jobs: { recoverJobs: false } })),
+        openBackend(localOptions({ jobs: { interruptedJobs: "fail" } })),
       ).rejects.toThrow("busy");
       expect(shutdown).toHaveBeenCalledTimes(1);
     });
 
     it("closes the store even when stopping the pipeline fails, and reports that failure", async () => {
-      const backend = await openBackend(localOptions({ jobs: { recoverJobs: false } }));
+      const backend = await openBackend(
+        localOptions({ jobs: { interruptedJobs: "fail" } }),
+      );
       vi.spyOn(PipelineManager.prototype, "stop").mockRejectedValueOnce(
         new Error("stuck"),
       );
@@ -183,7 +191,9 @@ describe("openBackend", () => {
     });
 
     it("closes once however often it is asked", async () => {
-      const backend = await openBackend(localOptions({ jobs: { recoverJobs: false } }));
+      const backend = await openBackend(
+        localOptions({ jobs: { interruptedJobs: "fail" } }),
+      );
       const shutdown = vi.spyOn(DocumentManagementService.prototype, "shutdown");
 
       await Promise.all([backend.close(), backend.close()]);
@@ -237,7 +247,7 @@ describe("openBackend", () => {
     });
 
     it("runs a job on the worker and relays its events to the local bus", async () => {
-      const backend = await open(remoteOptions({ jobs: { recoverJobs: false } }));
+      const backend = await open(remoteOptions({ jobs: { interruptedJobs: "fail" } }));
       const statuses: PipelineJob[] = [];
       backend.eventBus.on(EventType.JOB_STATUS_CHANGE, (job) => statuses.push(job));
 
@@ -250,7 +260,7 @@ describe("openBackend", () => {
     });
 
     it("leaves reporting the worker's jobs to the worker", async () => {
-      const backend = await open(remoteOptions({ jobs: { recoverJobs: false } }));
+      const backend = await open(remoteOptions({ jobs: { interruptedJobs: "fail" } }));
 
       // A relayed event arrives on the local bus like this one
       backend.eventBus.emit(EventType.JOB_STATUS_CHANGE, runningJob);
@@ -260,7 +270,7 @@ describe("openBackend", () => {
 
     it("reads the worker's documents without a pipeline", async () => {
       await scrapeOnWorker(
-        await open(remoteOptions({ jobs: { recoverJobs: false } })),
+        await open(remoteOptions({ jobs: { interruptedJobs: "fail" } })),
         "read",
       );
 

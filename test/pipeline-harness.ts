@@ -136,7 +136,7 @@ export function usePipelineHarness(options: PipelineHarnessOptions): PipelineHar
     const docService = new DocumentManagementService(eventBus, config);
     await docService.initialize();
     const pipelineManager = new PipelineManager(docService, eventBus, {
-      recoverJobs: false,
+      interruptedJobs: "fail",
       appConfig: config,
     });
     await pipelineManager.start();

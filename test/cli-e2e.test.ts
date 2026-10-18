@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,12 +7,13 @@ import { EventBusService } from "../src/events";
 import { ScrapeMode } from "../src/scraper/types";
 import { createApiClient } from "../src/services/apiClient";
 import { openBackend } from "../src/services/backend";
+import { VersionStatus } from "../src/store/types";
 import { loadConfig } from "../src/utils/config";
 import {
   createTcpProxy,
-  getCliCommand,
   getFreePort,
   HTML_FIXTURE_URL,
+  runCli,
   startRunningSlowJob,
   startSlowSite,
   startWorker,
@@ -28,42 +29,6 @@ describe("CLI E2E", () => {
   /** The status and progress lines a scrape or refresh printed. */
   function progressLines(output: string): string[] {
     return output.split("\n").filter((line) => /[🚀📄] (Scraping|Refreshing) /u.test(line));
-  }
-
-  /** Run the CLI; with `timeoutMs`, kill it after that long and report exit code 1. */
-  async function runCli(
-    args: string[],
-    timeoutMs?: number,
-  ): Promise<{ code: number; stdout: string; stderr: string }> {
-    return new Promise((resolve, reject) => {
-      const { cmd, args: cliArgs } = getCliCommand();
-      const proc = spawn(cmd, [...cliArgs, ...args], {
-        cwd: projectRoot,
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, VITEST_WORKER_ID: undefined },
-        timeout: timeoutMs,
-        killSignal: "SIGKILL",
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (data) => {
-        stdout += data.toString();
-      });
-
-      proc.stderr.on("data", (data) => {
-        stderr += data.toString();
-      });
-
-      proc.on("close", (code) => {
-        resolve({ code: code ?? 1, stdout, stderr });
-      });
-
-      proc.on("error", (err) => {
-        reject(err);
-      });
-    });
   }
 
   it("should show help with --help", async () => {
@@ -124,6 +89,39 @@ describe("CLI E2E", () => {
     }
     // Two CLI processes; generous for CI runners, which are several times slower
   }, 60000);
+
+  it("leaves the jobs of another process alone when it scrapes and refreshes locally", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-leave-"));
+    const configPath = writeTestConfig(storePath);
+    const statusOfBusy = () =>
+      withStore(storePath, async (store) => {
+        const busy = (await store.listLibraries()).find((lib) => lib.library === "Busy");
+        return busy?.versions[0]?.status;
+      });
+    const local = ["--store-path", storePath, "--config", configPath];
+
+    try {
+      // Another process (a server) is scraping Busy 1.0 in this store
+      await withStore(storePath, async (store) => {
+        const versionId = await store.ensureVersion({ library: "Busy", version: "1.0" });
+        await store.updateVersionStatus(versionId, VersionStatus.RUNNING);
+      });
+
+      const scraped = await runCli(
+        ["scrape", "Mine", fixtureUrl, ...local, "--scrape-mode", "fetch"],
+        40_000,
+      );
+      expect(scraped.code, scraped.stderr).toBe(0);
+      expect(await statusOfBusy()).toBe(VersionStatus.RUNNING);
+
+      const refreshed = await runCli(["refresh", "Mine", ...local], 40_000);
+      expect(refreshed.code, refreshed.stderr).toBe(0);
+      expect(await statusOfBusy()).toBe(VersionStatus.RUNNING);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+    // Two CLI processes; generous for CI runners, which are several times slower
+  }, 60_000);
 
   it("fails with the URL to check when no worker answers", async () => {
     const deadUrl = `http://127.0.0.1:${await getFreePort()}/api`;
@@ -299,7 +297,7 @@ describe("CLI E2E", () => {
           appConfig,
           eventBus: new EventBusService(),
           serverUrl: "serverUrl" in target ? target.serverUrl : undefined,
-          jobs: { recoverJobs: false },
+          jobs: { interruptedJobs: "fail" },
         });
         try {
           const jobId = await backend.pipeline.enqueueScrapeJob(library, version, {

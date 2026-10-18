@@ -4,7 +4,8 @@
  * Spawns a worker, starts a scrape of a slow local site, kills the worker with
  * SIGKILL mid-scrape, and starts a new worker on the same store. With job
  * recovery (the worker's default) the new worker scrapes the version again to
- * the end; with `--no-resume` it marks the version failed.
+ * the end; with `--no-resume` it marks the version failed. A local `scrape`
+ * that runs on the store in between leaves the crashed job to the next worker.
  */
 
 import type { ChildProcess } from "node:child_process";
@@ -16,6 +17,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScrapeMode, type ScraperOptions } from "../src/scraper/types";
 import { createApiClient } from "../src/services/apiClient";
 import {
+  HTML_FIXTURE_URL,
+  runCli,
   startSlowSite,
   startWorker,
   stopChildProcess,
@@ -32,8 +35,8 @@ describe("Jobs a crashed worker leaves unfinished", () => {
   /** The status and error message of the crashed version, as stored. */
   function storedVersion() {
     return withStore(storePath, async (store) => {
-      const [library] = await store.listLibraries();
-      return library?.versions[0];
+      const libraries = await store.listLibraries();
+      return libraries.find((library) => library.library === "crashed")?.versions[0];
     });
   }
 
@@ -100,6 +103,34 @@ describe("Jobs a crashed worker leaves unfinished", () => {
       interval: 200,
     });
     expect((await storedVersion())?.counts.uniqueUrls).toBe(3);
+  }, 90_000);
+
+  it("leaves the crashed job to the next worker when a local scrape runs first", async () => {
+    await crashDuringScrape();
+
+    const scraped = await runCli(
+      [
+        "scrape",
+        "other",
+        HTML_FIXTURE_URL,
+        "--store-path",
+        storePath,
+        "--config",
+        configPath,
+        "--scrape-mode",
+        "fetch",
+      ],
+      40_000,
+    );
+    expect(scraped.code, scraped.stderr).toBe(0);
+    expect((await storedVersion())?.status).toBe("running");
+
+    const restarted = await startWorker(storePath, configPath);
+    workers.push(restarted.process);
+    await vi.waitFor(async () => expect((await storedVersion())?.status).toBe("completed"), {
+      timeout: 30_000,
+      interval: 200,
+    });
   }, 90_000);
 
   it("marks the version failed when the next worker does not recover jobs", async () => {

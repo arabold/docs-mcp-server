@@ -26,7 +26,7 @@ import { logger } from "../utils/logger";
 import { CancellationError, PipelineStateError } from "./errors";
 import { PipelineWorker } from "./PipelineWorker"; // Import the worker
 import type { EnqueueScrapeOptions, IPipeline } from "./trpc/interfaces";
-import type { InternalPipelineJob, PipelineJob } from "./types";
+import type { InternalPipelineJob, InterruptedJobs, PipelineJob } from "./types";
 import { PipelineJobStatus } from "./types";
 
 /** The states of a job that has ended; in any other, it may still write. */
@@ -49,20 +49,20 @@ export class PipelineManager implements IPipeline {
   private concurrency: number;
   private store: DocumentManagementService;
   private scraperService: ScraperService;
-  private shouldRecoverJobs: boolean;
+  private interruptedJobs: InterruptedJobs;
   private eventBus: EventBusService;
   private appConfig: AppConfig;
 
   constructor(
     store: DocumentManagementService,
     eventBus: EventBusService,
-    options: { recoverJobs?: boolean; appConfig: AppConfig },
+    options: { interruptedJobs: InterruptedJobs; appConfig: AppConfig },
   ) {
     this.store = store;
     this.eventBus = eventBus;
     this.appConfig = options.appConfig;
     this.concurrency = this.appConfig.scraper.maxConcurrency;
-    this.shouldRecoverJobs = options.recoverJobs ?? true; // Default to true for backward compatibility
+    this.interruptedJobs = options.interruptedJobs;
     // ScraperService needs a registry. We create one internally for the manager.
     const registry = new ScraperRegistry(this.appConfig);
     this.scraperService = new ScraperService(registry);
@@ -124,13 +124,12 @@ export class PipelineManager implements IPipeline {
     }
     this.isRunning = true;
     logger.debug(
-      `PipelineManager started with concurrency ${this.concurrency}, recoverJobs: ${this.shouldRecoverJobs}.`,
+      `PipelineManager started with concurrency ${this.concurrency}, interrupted jobs: ${this.interruptedJobs}.`,
     );
 
-    // Recover pending jobs from database on startup only if enabled
-    if (this.shouldRecoverJobs) {
+    if (this.interruptedJobs === "recover") {
       await this.recoverPendingJobs();
-    } else {
+    } else if (this.interruptedJobs === "fail") {
       // Mark any interrupted jobs as failed so users can manually retry
       await this.markInterruptedJobsAsFailed();
     }
@@ -188,7 +187,7 @@ export class PipelineManager implements IPipeline {
 
   /**
    * Marks all interrupted jobs (RUNNING/QUEUED) as FAILED.
-   * Called when recoverJobs is false to allow users to manually retry via UI.
+   * Called at startup when interrupted jobs are set to fail, so users can retry them via the UI.
    */
   async markInterruptedJobsAsFailed(): Promise<void> {
     try {
