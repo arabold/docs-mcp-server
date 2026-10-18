@@ -49,7 +49,8 @@ export async function withStore<T>(
 
 /**
  * Returns the command and arguments to run the CLI.
- * Prefers the built 'dist/index.js' if available for faster execution.
+ * Prefers the built 'dist/index.js' if available for faster execution;
+ * `global-setup.ts` rebuilds it first when it is older than the sources.
  * Falls back to vite-node on 'src/index.ts' for development, as in CI, which
  * tests before it builds.
  *
