@@ -1322,6 +1322,52 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
     });
   });
 
+  describe("Stop words in queries", () => {
+    const hooksContent = "Hooks let function components keep state.";
+    const shelfContent = "It is on the shelf and in the box.";
+
+    beforeEach(async () => {
+      store = new DocumentStore(":memory:", appConfig);
+      await store.initialize();
+
+      await store.addDocuments(
+        "stopwords",
+        "1.0.0",
+        1,
+        createScrapeResult("Hooks", "https://example.com/hooks", hooksContent),
+      );
+      await store.addDocuments(
+        "stopwords",
+        "1.0.0",
+        1,
+        createScrapeResult("Shelf", "https://example.com/shelf", shelfContent),
+      );
+    });
+
+    const search = async (query: string) =>
+      (await store.findByContent("stopwords", "1.0.0", query, 10)).map(
+        (result) => result.content,
+      );
+
+    it("finds a chunk by its other words when the query also has stop words", async () => {
+      expect(await search("What is the use of hooks?")).toEqual([hooksContent]);
+    });
+
+    it("does not match chunks on stop words alone when the query has other words", async () => {
+      expect(await search("Is it, in the sidecar?")).toEqual([]);
+    });
+
+    it("matches stop words when the query has nothing else", async () => {
+      expect(await search("is it in the")).toEqual([shelfContent]);
+    });
+
+    it("keeps stop words that the user put in quotes", async () => {
+      expect(await search('"on the" hooks')).toEqual(
+        expect.arrayContaining([hooksContent, shelfContent]),
+      );
+    });
+  });
+
   describe("Chunk Explorer without embeddings", () => {
     beforeEach(async () => {
       store = new DocumentStore(":memory:", appConfig);
