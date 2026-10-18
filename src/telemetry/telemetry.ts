@@ -10,6 +10,7 @@
 import { logger } from "../utils/logger";
 import type { TelemetryEventPropertiesMap } from "./eventTypes";
 import { PostHogClient } from "./postHogClient";
+import { sanitizeErrorForTracking } from "./sanitizer";
 import { generateInstallationId, TelemetryConfig } from "./TelemetryConfig";
 
 /**
@@ -37,14 +38,17 @@ export class Telemetry {
   /**
    * Create a new Telemetry instance with proper initialization
    * This is the recommended way to create Telemetry instances
+   *
+   * @param storePath - Store directory that holds the installation ID; defaults to the standard data directory.
+   * @returns The telemetry instance.
    */
-  static create(): Telemetry {
+  static create(storePath?: string): Telemetry {
     const config = TelemetryConfig.getInstance();
 
     // Single determination point for enabled status
     const shouldEnable = config.isEnabled() && !!__POSTHOG_API_KEY__;
 
-    const telemetry = new Telemetry(shouldEnable);
+    const telemetry = new Telemetry(shouldEnable, storePath);
 
     // Single log message after everything is initialized with better context
     if (telemetry.isEnabled()) {
@@ -63,9 +67,9 @@ export class Telemetry {
   /**
    * Private constructor - use Telemetry.create() instead
    */
-  private constructor(enabled: boolean = true) {
+  private constructor(enabled: boolean, storePath?: string) {
     this.enabled = enabled;
-    this.distinctId = generateInstallationId();
+    this.distinctId = generateInstallationId(storePath);
     this.postHogClient = new PostHogClient(this.enabled);
   }
 
@@ -107,7 +111,8 @@ export class Telemetry {
   }
 
   /**
-   * Capture exception using PostHog's native error tracking with global context
+   * Capture exception using PostHog's native error tracking with global context.
+   * The error is sent without URLs, file paths or credentials in its message and stack.
    */
   captureException(
     error: Error | unknown,
@@ -126,7 +131,7 @@ export class Telemetry {
     );
     this.postHogClient.captureException(
       this.distinctId,
-      error instanceof Error ? error : new Error(String(error)),
+      sanitizeErrorForTracking(error instanceof Error ? error : new Error(String(error))),
       enrichedProperties,
     );
   }
@@ -172,11 +177,8 @@ export function initTelemetry(options: { enabled: boolean; storePath?: string })
   // Configure telemetry enabled state
   TelemetryConfig.getInstance().setEnabled(options.enabled);
 
-  // Generate/retrieve installation ID with correct storePath
-  generateInstallationId(options.storePath);
-
-  // Create the telemetry instance with proper configuration (only once)
-  telemetryInstance = Telemetry.create();
+  // Create the telemetry instance, reading the installation ID from the store path
+  telemetryInstance = Telemetry.create(options.storePath);
 }
 
 // Export a proxy object that always delegates to the current telemetry instance.

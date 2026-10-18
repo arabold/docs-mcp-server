@@ -347,7 +347,8 @@ export class AppServer {
             component: "FastifyServer",
             statusCode: error.statusCode || 500,
             method: request.method,
-            route: request.routeOptions?.url || request.url,
+            // The route pattern, never the request URL with its parameters
+            route: request.routeOptions?.url ?? "unmatched",
             context: "http_request_error",
           });
         }

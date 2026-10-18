@@ -5,7 +5,12 @@
 import type { Argv } from "yargs";
 import { ScrapeMode } from "../../scraper/types";
 import { openBackend } from "../../services/backend";
-import { TelemetryEvent, telemetry } from "../../telemetry";
+import {
+  extractHostname,
+  extractProtocol,
+  TelemetryEvent,
+  telemetry,
+} from "../../telemetry";
 import { ScrapeTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
@@ -172,7 +177,8 @@ export function createScrapeCommand(cli: Argv) {
         command: "scrape",
         library,
         version: argv.version,
-        url,
+        url: extractHostname(url), // Host only, never the full URL
+        urlProtocol: extractProtocol(url),
         maxPages,
         maxDepth,
         maxConcurrency,

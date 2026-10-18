@@ -5,7 +5,12 @@
 import type { Argv } from "yargs";
 import { AutoDetectFetcher } from "../../scraper/fetcher";
 import { ScrapeMode } from "../../scraper/types";
-import { TelemetryEvent, telemetry } from "../../telemetry";
+import {
+  extractHostname,
+  extractProtocol,
+  TelemetryEvent,
+  telemetry,
+} from "../../telemetry";
 import { FetchUrlTool } from "../../tools";
 import { loadConfig } from "../../utils/config";
 import { renderTextOutput } from "../output";
@@ -49,7 +54,8 @@ export function createFetchUrlCommand(cli: Argv) {
     async (argv) => {
       await telemetry.track(TelemetryEvent.CLI_COMMAND, {
         command: "fetch-url",
-        url: argv.url,
+        url: extractHostname(argv.url as string), // Host only, never the full URL
+        urlProtocol: extractProtocol(argv.url as string),
         scrapeMode: argv.scrapeMode,
         followRedirects: argv.followRedirects,
         hasHeaders: (argv.header as string[])?.length > 0,
