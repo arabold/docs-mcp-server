@@ -11,6 +11,7 @@
 import { afterEach, beforeEach } from "vitest";
 import { EventBusService, EventType } from "../src/events";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
+import type { EnqueueScrapeOptions } from "../src/pipeline/trpc/interfaces";
 import { type PipelineJob, PipelineJobStatus } from "../src/pipeline/types";
 import { type PageOutcome, ScrapeMode, type ScraperOptions } from "../src/scraper/types";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
@@ -64,12 +65,16 @@ export interface PipelineHarness {
   readonly docService: DocumentManagementService;
   /** Progress events of the most recently started job, in order. */
   readonly events: readonly ProgressRecord[];
-  /** Starts a scrape and returns its job ID without waiting for it. */
-  enqueueScrape(request?: ScrapeRequest): Promise<string>;
+  /**
+   * Starts a scrape and returns its job ID without waiting for it. `enqueue`
+   * says what happens to a version that already exists; by default the scrape
+   * is refused.
+   */
+  enqueueScrape(request?: ScrapeRequest, enqueue?: EnqueueScrapeOptions): Promise<string>;
   /** Waits for a job to end, however it ends, and returns its final record. */
   finish(jobId: string): Promise<PipelineJob>;
   /** Runs a scrape to its end and returns the job record. Never throws for a failed job. */
-  scrape(request?: ScrapeRequest): Promise<PipelineJob>;
+  scrape(request?: ScrapeRequest, enqueue?: EnqueueScrapeOptions): Promise<PipelineJob>;
   /** Runs a refresh of the version to its end and returns the job record. */
   refresh(): Promise<PipelineJob>;
   /** URLs of the stored pages, sorted. */
@@ -188,7 +193,7 @@ export function usePipelineHarness(options: PipelineHarnessOptions): PipelineHar
     get events() {
       return events();
     },
-    async enqueueScrape(request = {}) {
+    async enqueueScrape(request = {}, enqueue) {
       const scrapeOptions = {
         url: "",
         maxPages: 100,
@@ -200,7 +205,7 @@ export function usePipelineHarness(options: PipelineHarnessOptions): PipelineHar
         version,
       } satisfies ScraperOptions;
       return track(
-        await active().pipelineManager.enqueueScrapeJob(library, version, scrapeOptions),
+        await active().pipelineManager.enqueueScrapeJob(library, version, scrapeOptions, enqueue),
       );
     },
     async finish(jobId) {
@@ -212,8 +217,8 @@ export function usePipelineHarness(options: PipelineHarnessOptions): PipelineHar
       if (!job) throw new Error(`Job ${jobId} vanished after it ended`);
       return job;
     },
-    async scrape(request) {
-      return harness.finish(await harness.enqueueScrape(request));
+    async scrape(request, enqueue) {
+      return harness.finish(await harness.enqueueScrape(request, enqueue));
     },
     async refresh() {
       const jobId = track(

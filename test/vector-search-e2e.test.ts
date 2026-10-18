@@ -129,7 +129,7 @@ describe("Vector search E2E", () => {
     expect(results[0]?.content).toContain("revoked at any time");
   });
 
-  it("finds pages for a query that matches no keyword", async () => {
+  it("finds the page a query is about when it matches no keyword", async () => {
     // Every word is misspelled, so full-text search matches nothing and only
     // the vector side of the hybrid search can return a page.
     const { results } = await searchTool.execute({
@@ -138,7 +138,7 @@ describe("Vector search E2E", () => {
       query: "autentication tokn",
     });
 
-    expect(results).not.toEqual([]);
+    expect(results.map((result) => result.url)).toContain(`${docsUrl}/authentication.md`);
   });
 
   // Blocked: rows full-text search did not match still get an FTS rank (by row order).
