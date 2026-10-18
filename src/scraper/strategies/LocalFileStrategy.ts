@@ -13,6 +13,14 @@ import type { QueueItem, ScraperOptions } from "../types";
 import { BaseScraperStrategy, type ProcessItemResult } from "./BaseScraperStrategy";
 
 /**
+ * Orders two names by Unicode code point, which is the byte order of their
+ * UTF-8 encoding, so the result is the same on every platform and locale.
+ */
+function compareCodePoints(a: string, b: string): number {
+  return Buffer.compare(Buffer.from(a), Buffer.from(b));
+}
+
+/**
  * LocalFileStrategy handles crawling and scraping of local files and folders using file:// URLs.
  *
  * Files are routed to the appropriate pipeline based on their detected MIME type:
@@ -84,7 +92,12 @@ export class LocalFileStrategy extends BaseScraperStrategy {
 
       // Handle physical directory
       if (stats?.isDirectory()) {
-        const contents = await fs.readdir(filePath);
+        // Pages get their row ids in crawl order, which search uses to break
+        // score ties. fs.readdir happens to return names in byte order on
+        // macOS and Linux but in NTFS order (case-insensitive) on Windows, and
+        // Node promises neither, so sort explicitly to crawl the same way on
+        // every platform.
+        const contents = (await fs.readdir(filePath)).sort(compareCodePoints);
         const visibleContents = this.config.scraper.security.fileAccess.includeHidden
           ? contents
           : contents.filter((name) => !name.startsWith("."));
