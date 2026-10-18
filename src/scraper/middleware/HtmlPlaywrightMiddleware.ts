@@ -367,7 +367,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
 
       // Wait for all iframes to load in parallel
       const iframePromises = iframes.map((iframe, index) =>
-        this.processIframe(page, iframe, index),
+        this.processIframe(iframe, index),
       );
 
       await Promise.all(iframePromises);
@@ -380,13 +380,11 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   /**
    * Processes a single iframe: validates, extracts content, and replaces in main page.
    *
-   * @param page The main page containing the iframe
    * @param iframe The iframe element handle
-   * @param index The iframe index for logging/identification
+   * @param index The iframe index for logging
    */
   private async processIframe(
-    page: Page,
-    iframe: ElementHandle,
+    iframe: ElementHandle<HTMLIFrameElement>,
     index: number,
   ): Promise<void> {
     try {
@@ -436,7 +434,7 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
       }
 
       if (content && content.trim().length > 0) {
-        await this.replaceIframeWithContent(page, index, content);
+        await this.replaceIframeWithContent(iframe, content);
         logger.debug(
           `Successfully extracted and replaced content for iframe ${index + 1}: ${src}`,
         );
@@ -483,30 +481,21 @@ export class HtmlPlaywrightMiddleware implements ContentProcessorMiddleware {
   /**
    * Replaces an iframe element with its extracted content in the main page.
    *
-   * @param page The main page containing the iframe
-   * @param index The iframe index (0-based)
+   * Acts on the iframe's own handle: iframes are processed in parallel, and
+   * each replacement shifts the position of the iframes after it.
+   *
+   * @param iframe The iframe element handle
    * @param content The extracted content to replace the iframe with
    */
   private async replaceIframeWithContent(
-    page: Page,
-    index: number,
+    iframe: ElementHandle<HTMLIFrameElement>,
     content: string,
   ): Promise<void> {
-    await page.evaluate(
-      (args: [number, string]) => {
-        const [iframeIndex, bodyContent] = args;
-        const iframe = document.querySelectorAll("iframe")[iframeIndex];
-        if (iframe && bodyContent) {
-          // Create a replacement div with the iframe content
-          const replacement = document.createElement("div");
-          replacement.innerHTML = bodyContent;
-
-          // Replace the iframe with the extracted content
-          iframe.parentNode?.replaceChild(replacement, iframe);
-        }
-      },
-      [index, content] as [number, string],
-    );
+    await iframe.evaluate((element, bodyContent) => {
+      const replacement = document.createElement("div");
+      replacement.innerHTML = bodyContent;
+      element.replaceWith(replacement);
+    }, content);
   }
 
   /**

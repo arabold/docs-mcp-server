@@ -48,8 +48,17 @@ export async function withStore<T>(
 }
 
 /**
+ * Environment for a spawned CLI that has to stay on full-text search. Without
+ * it, an `OPENAI_API_KEY` from the shell or `.env` makes `loadConfig()` pick an
+ * embedding model despite the test config, and the child calls the real
+ * service. Empty strings also keep dotenv from filling the values in.
+ */
+export const FTS_ONLY_ENV = { OPENAI_API_KEY: "", DOCS_MCP_EMBEDDING_MODEL: "" } as const;
+
+/**
  * Returns the command and arguments to run the CLI.
- * Prefers the built 'dist/index.js' if available for faster execution.
+ * Prefers the built 'dist/index.js' if available for faster execution;
+ * `global-setup.ts` rebuilds it first when it is older than the sources.
  * Falls back to vite-node on 'src/index.ts' for development, as in CI, which
  * tests before it builds.
  *
@@ -214,7 +223,7 @@ async function startLocalServer(
       configPath,
       ...extraArgs,
     ],
-    { LOG_LEVEL: "info" },
+    { LOG_LEVEL: "info", ...FTS_ONLY_ENV },
   );
 }
 
@@ -329,6 +338,7 @@ export async function startRunningSlowJob(
  * @param options.maxConcurrency How many jobs run at once; the default otherwise.
  * @param options.jobHeartbeatMs How often running jobs are marked alive; the
  *   default otherwise. A server finds a crashed job after four intervals.
+ * @param options.telemetryEnabled Turn telemetry on, for the suite that checks how it is switched off.
  * @returns The config file's path.
  */
 export function writeTestConfig(
@@ -337,6 +347,7 @@ export function writeTestConfig(
     allowPrivateNetworks?: boolean;
     maxConcurrency?: number;
     jobHeartbeatMs?: number;
+    telemetryEnabled?: boolean;
   } = {},
 ): string {
   const configPath = path.join(dir, "config.yaml");
@@ -345,7 +356,7 @@ export function writeTestConfig(
     [
       "app:",
       '  embeddingModel: ""',
-      "  telemetryEnabled: false",
+      `  telemetryEnabled: ${options.telemetryEnabled ?? false}`,
       "scraper:",
       ...(options.maxConcurrency ? [`  maxConcurrency: ${options.maxConcurrency}`] : []),
       ...(options.jobHeartbeatMs ? [`  jobHeartbeatMs: ${options.jobHeartbeatMs}`] : []),
@@ -665,7 +676,8 @@ export async function stopChildProcess(
   child: ChildProcess | undefined,
   timeoutMs = 5000,
 ): Promise<void> {
-  if (!child || child.exitCode !== null) {
+  // A child killed by a signal keeps `exitCode` null and sets `signalCode`
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
   await new Promise<void>((resolve) => {
