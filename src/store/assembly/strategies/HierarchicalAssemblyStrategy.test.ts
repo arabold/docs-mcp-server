@@ -131,6 +131,67 @@ describe("HierarchicalAssemblyStrategy", () => {
       expect(result.length).toBeGreaterThanOrEqual(3);
     });
 
+    it("returns the enclosing class with all its methods for a hit inside one method", async () => {
+      // Chunks as the TypeScript splitter emits them for a class and a function
+      await documentStore.addDocuments("test-class-subtree", "1.0", 0, {
+        url: "UserService.ts",
+        title: "UserService.ts",
+        sourceContentType: "text/typescript",
+        contentType: "text/typescript",
+        textContent: "",
+        chunks: [
+          {
+            content: "export class UserService {\n",
+            section: { path: ["UserService"], level: 1 },
+            types: ["code", "structural"],
+          },
+          {
+            content: "  getUser(id: string) {\n    return db.find(id);\n  }\n",
+            section: { path: ["UserService", "getUser"], level: 2 },
+            types: ["code"],
+          },
+          {
+            content: "  deleteUser(id: string) {\n    return db.delete(id);\n  }\n",
+            section: { path: ["UserService", "deleteUser"], level: 2 },
+            types: ["code"],
+          },
+          {
+            content: "}\n",
+            section: { path: ["UserService"], level: 1 },
+            types: ["code"],
+          },
+          {
+            content: "export function helper() {\n  return 1;\n}\n",
+            section: { path: ["helper"], level: 1 },
+            types: ["code"],
+          },
+        ],
+        links: [],
+        errors: [],
+      });
+      const chunks = await documentStore.findChunksByUrl(
+        "test-class-subtree",
+        "1.0",
+        "UserService.ts",
+      );
+      const deleteUser = chunks[2];
+
+      const result = await strategy.selectChunks(
+        "test-class-subtree",
+        "1.0",
+        [deleteUser],
+        documentStore,
+      );
+
+      const content = result.map((chunk) => chunk.content);
+      expect(content).toContain("export class UserService {\n");
+      expect(content).toContain(
+        "  getUser(id: string) {\n    return db.find(id);\n  }\n",
+      );
+      expect(content).toContain(deleteUser.content);
+      expect(content.some((c) => c.includes("helper"))).toBe(false);
+    });
+
     it("should handle hierarchical gaps in parent chain", async () => {
       // Use the public API to add documents with a gap in the hierarchy
       await documentStore.addDocuments("test-gaps", "1.0", 0, {

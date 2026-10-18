@@ -2234,6 +2234,69 @@ describe("DocumentStore - Common Functionality", () => {
     });
   });
 
+  describe("Child Chunk Lookup", () => {
+    const library = "tree-lib";
+    const version = "1.0.0";
+    const url = "https://example.com/tree";
+
+    /** Stores one page whose chunks carry the given paths in order, and returns them. */
+    async function storeChunks(paths: string[][]) {
+      await store.addDocuments(library, version, 1, {
+        ...createScrapeResult("Tree", url, "tree"),
+        chunks: paths.map((path) => ({
+          types: ["text"],
+          content: `chunk ${path.join("/")}`,
+          section: { level: path.length, path },
+        })),
+      });
+      return store.findChunksByUrl(library, version, url);
+    }
+
+    async function childPaths(parentId: string) {
+      const children = await store.findChildChunks(library, version, parentId, 10);
+      return children.map((child) => child.metadata.path);
+    }
+
+    it("returns the chunks one level below the parent's path", async () => {
+      const [parent] = await storeChunks([
+        ["A"],
+        ["A", "B"],
+        ["A", "B", "C"],
+        ["A", "D"],
+      ]);
+
+      expect(await childPaths(parent.id)).toEqual([
+        ["A", "B"],
+        ["A", "D"],
+      ]);
+    });
+
+    it("ignores a path that only shares a text prefix with the parent", async () => {
+      const [parent] = await storeChunks([["A"], ["AB", "X"], ["A", "B"]]);
+
+      expect(await childPaths(parent.id)).toEqual([["A", "B"]]);
+    });
+
+    it("treats LIKE wildcards in path segments as literal text", async () => {
+      const [parent] = await storeChunks([["a_c%"], ["abcd", "X"], ["a_c%", "Y"]]);
+
+      expect(await childPaths(parent.id)).toEqual([["a_c%", "Y"]]);
+    });
+
+    it("matches path segments that contain quotes, backslashes or non-ASCII text", async () => {
+      const heading = 'Say "hi" \\ 日本語';
+      const [parent] = await storeChunks([[heading], [heading, "Détails"]]);
+
+      expect(await childPaths(parent.id)).toEqual([[heading, "Détails"]]);
+    });
+
+    it("returns top-level chunks as the children of a root chunk", async () => {
+      const [root] = await storeChunks([[], ["A"], [], ["A", "B"]]);
+
+      expect(await childPaths(root.id)).toEqual([["A"]]);
+    });
+  });
+
   describe("Search Security", () => {
     beforeEach(async () => {
       await store.addDocuments(
