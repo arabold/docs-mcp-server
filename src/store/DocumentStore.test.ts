@@ -801,6 +801,72 @@ describe("DocumentStore - With Embeddings", () => {
       expect(result.map((r) => r.url)).toEqual(["https://example.com/js-guide"]);
       expectVersionFilteredFullTextPlan(plan);
     });
+
+    it("scores a chunk found by one search method with that method's RRF term alone", async () => {
+      // Each method returns as many candidates as the limit, so with a limit
+      // of 3 the vector search misses the farthest page.
+      await store.shutdown();
+      store = new DocumentStore(":memory:", {
+        ...appConfig,
+        search: {
+          ...appConfig.search,
+          overfetchFactor: 1,
+          vectorMultiplier: 1,
+          weightVec: 1,
+          weightFts: 1,
+        },
+      });
+      await store.initialize();
+
+      // Vector distance from the query grows with the angle: a, b, d, then c.
+      const angles: Record<string, number> = {
+        "https://example.com/a": 0,
+        "https://example.com/b": 10,
+        "https://example.com/d": 20,
+        "https://example.com/c": 80,
+      };
+      const direction = (degrees: number) => {
+        const vector = new Array(mockEmbeddingDimension.value).fill(0);
+        vector[0] = Math.cos((degrees * Math.PI) / 180);
+        vector[1] = Math.sin((degrees * Math.PI) / 180);
+        return vector;
+      };
+      const embeddings = embeddingsOf(store);
+      vi.mocked(embeddings.embedQuery).mockImplementation(async () => direction(0));
+      vi.mocked(embeddings.embedDocuments).mockImplementation(async (texts) =>
+        texts.map((text) => {
+          const url = Object.keys(angles).find((u) => text.includes(`<url>${u}</url>`));
+          return direction(url ? angles[url] : 90);
+        }),
+      );
+
+      // Only a and c contain the query word; c ranks first in full-text search.
+      const pages = [
+        ["A", "a", "A needle hidden somewhere in a long description of the haystack"],
+        ["B", "b", "A haystack described without the word"],
+        ["C", "c", "needle needle"],
+        ["D", "d", "Another haystack described without the word"],
+      ];
+      for (const [title, path, content] of pages) {
+        await store.addDocuments(
+          "rrflib",
+          "1.0.0",
+          1,
+          createScrapeResult(title, `https://example.com/${path}`, content),
+        );
+      }
+
+      const results = await store.findByContent("rrflib", "1.0.0", "needle", 3);
+
+      expect(
+        results.map((r) => ({ url: r.url, vec_rank: r.vec_rank, fts_rank: r.fts_rank })),
+      ).toEqual([
+        { url: "https://example.com/a", vec_rank: 1, fts_rank: 2 },
+        { url: "https://example.com/c", vec_rank: undefined, fts_rank: 1 },
+        { url: "https://example.com/b", vec_rank: 2, fts_rank: undefined },
+      ]);
+      expect(results.map((r) => r.score)).toEqual([1 / 61 + 1 / 62, 1 / 61, 1 / 62]);
+    });
   });
 
   describe("Embedding Batch Processing", () => {
