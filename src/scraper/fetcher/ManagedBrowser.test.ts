@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../../utils/config";
+import { DEFAULT_CONFIG, loadConfig } from "../../utils/config";
 
 vi.mock("playwright", () => ({
   chromium: {
@@ -13,7 +13,15 @@ import { ManagedBrowser } from "./ManagedBrowser";
 
 /** A mocked Playwright browser with the parts ManagedBrowser touches. */
 function buildBrowser() {
+  // The browser target's CDP session, where redirects are checked.
+  const cdpSession = {
+    on: vi.fn(),
+    send: vi.fn().mockResolvedValue({}),
+    detach: vi.fn().mockResolvedValue(undefined),
+  };
   return {
+    cdpSession,
+    newBrowserCDPSession: vi.fn().mockResolvedValue(cdpSession),
     close: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
   };
@@ -83,6 +91,96 @@ describe("ManagedBrowser", () => {
     });
   });
 
+  describe("redirect guard", () => {
+    const METADATA_URL = "http://169.254.169.254/latest/meta-data/";
+
+    /** A request Chromium paused, as the browser's CDP session receives it. */
+    function pausedRequest(url: string, redirect = true) {
+      return {
+        requestId: "interception-2",
+        ...(redirect ? { redirectedRequestId: "interception-1" } : {}),
+        request: { url },
+        resourceType: "Script",
+      };
+    }
+
+    /** Launches a browser and returns its CDP session and paused-request handler. */
+    async function launchGuarded() {
+      const browser = buildBrowser();
+      vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+      const managed = new ManagedBrowser(DEFAULT_CONFIG.scraper);
+      await managed.get();
+      const handler = browser.cdpSession.on.mock.calls.find(
+        ([event]) => event === "Fetch.requestPaused",
+      )?.[1];
+      if (typeof handler !== "function") throw new Error("no redirect guard registered");
+      return {
+        session: browser.cdpSession,
+        pause: handler as (event: ReturnType<typeof pausedRequest>) => void,
+      };
+    }
+
+    it("intercepts every request of the browser before handing it out", async () => {
+      const { session } = await launchGuarded();
+
+      expect(session.send).toHaveBeenCalledWith("Fetch.enable", {
+        patterns: [{ urlPattern: "*" }],
+      });
+    });
+
+    it("fails a redirect to a private address", async () => {
+      const { session, pause } = await launchGuarded();
+
+      pause(pausedRequest(METADATA_URL));
+
+      await vi.waitFor(() =>
+        expect(session.send).toHaveBeenCalledWith("Fetch.failRequest", {
+          requestId: "interception-2",
+          errorReason: "BlockedByClient",
+        }),
+      );
+      expect(session.send).not.toHaveBeenCalledWith(
+        "Fetch.continueRequest",
+        expect.anything(),
+      );
+    });
+
+    it("lets a redirect to a public address through", async () => {
+      const { session, pause } = await launchGuarded();
+
+      pause(pausedRequest("http://93.184.215.14/moved"));
+
+      await vi.waitFor(() =>
+        expect(session.send).toHaveBeenCalledWith("Fetch.continueRequest", {
+          requestId: "interception-2",
+        }),
+      );
+    });
+
+    it("leaves first requests to the routes of the browser's users", async () => {
+      // Their routes check first requests, with their own options.
+      const { session, pause } = await launchGuarded();
+
+      pause(pausedRequest(METADATA_URL, false));
+
+      await vi.waitFor(() =>
+        expect(session.send).toHaveBeenCalledWith("Fetch.continueRequest", {
+          requestId: "interception-2",
+        }),
+      );
+    });
+
+    it("closes a browser whose guard could not be set up instead of handing it out", async () => {
+      const browser = buildBrowser();
+      browser.cdpSession.send.mockRejectedValue(new Error("Fetch.enable failed"));
+      vi.mocked(chromium.launch).mockResolvedValue(browser as never);
+      const managed = new ManagedBrowser(scraperConfig);
+
+      await expect(managed.get()).rejects.toThrow("Fetch.enable failed");
+      expect(browser.close).toHaveBeenCalled();
+    });
+  });
+
   describe("isCurrent", () => {
     it("stops treating a retired browser as current before it disconnects", async () => {
       const launched = mockLaunches();
@@ -116,6 +214,7 @@ describe("ManagedBrowser", () => {
         close: vi.fn(() => new Promise(() => {})),
         // Chromium reports its own process ID over CDP.
         newBrowserCDPSession: vi.fn().mockResolvedValue({
+          on: vi.fn(),
           send: vi.fn().mockResolvedValue({
             processInfo: [
               { type: "GPU", id: 4243 },

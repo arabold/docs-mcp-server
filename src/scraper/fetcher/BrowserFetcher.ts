@@ -1,7 +1,12 @@
-import type { Browser, Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
-import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
+import {
+  AccessPolicyError,
+  HttpStatusError,
+  RedirectError,
+  ScraperError,
+} from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
 import { FingerprintGenerator } from "./FingerprintGenerator";
@@ -121,8 +126,7 @@ export class BrowserFetcher implements ContentFetcher {
     options?: FetchOptions,
   ): Promise<RawContent> {
     let page: Page | null = null;
-    let browserContext: { newPage(): Promise<Page>; close(): Promise<void> } | null =
-      null;
+    let browserContext: BrowserContext | null = null;
     // Aborting closes the context, which ends a navigation in progress instead
     // of letting it run until it times out.
     const closeOnAbort = (): void => {
@@ -153,6 +157,18 @@ export class BrowserFetcher implements ContentFetcher {
         }
 
         return await route.continue();
+      });
+      // The browser fails redirects to blocked addresses (see ManagedBrowser);
+      // remember which hop stopped the navigation, to name it in the error.
+      let blockedNavigation: string | undefined;
+      page.on("requestfailed", (request) => {
+        if (
+          request.frame() === page?.mainFrame() &&
+          request.isNavigationRequest() &&
+          request.failure()?.errorText.includes("ERR_BLOCKED_BY_CLIENT")
+        ) {
+          blockedNavigation = request.url();
+        }
       });
 
       // Compose the browser-like fingerprint headers used both for the page's
@@ -193,6 +209,11 @@ export class BrowserFetcher implements ContentFetcher {
         response = await page.goto(source, { waitUntil: "load", timeout });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (/ERR_BLOCKED_BY_CLIENT/.test(message)) {
+          throw new AccessPolicyError(
+            `Security policy blocked network access to ${blockedNavigation ?? source}`,
+          );
+        }
         // Non-navigable resources (Markdown, JSON, binary files, ...) make the
         // browser begin a download, so page.goto rejects with
         // ERR_INVALID_ARGUMENT / ERR_ABORTED, or with "Download is starting"
