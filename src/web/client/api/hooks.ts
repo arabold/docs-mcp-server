@@ -78,12 +78,24 @@ export function useVersionStats(
 }
 
 /**
+ * How long activity data counts as fresh. `useLiveInvalidation` refetches it
+ * whenever a job changes status or a version is removed, so this only bounds
+ * how late the chart shows writes the server doesn't announce, such as a CLI
+ * scrape into the same store. It also keeps tab focus from rerunning the
+ * query, which reads every page created in the window.
+ */
+const ACTIVITY_STALE_TIME_MS = 60_000;
+
+/**
  * Fetches per-day indexing activity (pages/chunks added) over a trailing
  * window for the Overview "Indexing activity" chart.
  * @param days - Window length in days; defaults to the server's 90-day window.
  */
 export function useActivityHistory(days?: number) {
-  return trpc.getActivityHistory.useQuery({ days });
+  return trpc.getActivityHistory.useQuery(
+    { days },
+    { staleTime: ACTIVITY_STALE_TIME_MS, retry: 1 },
+  );
 }
 
 /** Fetches per-version content composition and size for the library-detail Composition panel. */

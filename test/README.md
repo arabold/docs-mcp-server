@@ -1,120 +1,114 @@
-# Testing Setup
+# Test Harnesses
 
-This directory contains end-to-end (e2e) tests for the docs-mcp-server project.
+This directory holds the system-wide E2E suites and the shared code they run on.
+Unit and integration tests live next to the code they cover under `src/`, and
+the search benchmark's own tests live under `tests/search-eval/`.
 
-## Test Structure
-
-The project uses a unified testing configuration in `vite.config.ts` that handles both unit tests and e2e tests:
-
-- **Unit tests**: Located in `src/` alongside source files with `.test.ts` or `.test.tsx` extensions
-- **E2E tests**: Located in `test/` directory
-- **Live tests**: Special e2e tests that hit real websites (excluded from default runs)
+The testing conventions (which level to test at, where a test file goes) are in
+[AGENTS.md](../AGENTS.md#tests), and each suite's `describe` blocks say what
+it covers. This file explains how to run the tests and how the shared harnesses
+work.
 
 ## Running Tests
 
-```bash
-# Run all tests (unit + e2e with mock server)
-npm test
+| Command | What it runs |
+|---|---|
+| `npm test` | Every test under `src/`, `test/` and `tests/`, except the Docker and live suites |
+| `npm run test:unit` | The tests under `src/` |
+| `npx vitest run test/ --exclude test/docker-e2e.test.ts` | The E2E suites in this directory |
+| `npx vitest run <file>` | One test file |
+| `npm run test:watch` | Vitest in watch mode |
+| `npm run test:coverage` | The `npm test` set with coverage. Install `@vitest/coverage-v8` first; it is not a dev dependency. |
+| `npm run test:live` | The live HTML pipeline suite against real documentation sites |
+| `npm run test:docker` | The production Docker image suite (needs a Docker daemon) |
 
-# Run only unit tests
-npm run test:unit
+`npm run test:e2e` runs `npm run build` first and then the same set as
+`npm test`: its `test` filter matches every test file path, not only this
+directory.
 
-# Run only e2e tests
-npm run test:e2e
+`npm run typecheck` checks `src/`, `test/` and `tests/` together.
+`npm run typecheck:build` checks production code only, through
+`tsconfig.build.json`.
 
-# Run live website tests (requires internet, slower)
-npm run test:live
+## What Runs Around Every Test File
 
-# Run tests in watch mode
-npm run test:watch
+`vite.config.ts` holds the test configuration. Each test file runs in its own
+child process (`pool: "forks"`), and output from passing tests is suppressed.
+Set `ENABLE_TEST_LOGS=1` to see it.
 
-# Run tests with coverage
-npm run test:coverage
-```
+- `test/global-setup.ts` runs once per test run and rebuilds the web UI when its
+  build is missing or stale.
+- `test/setup-env.ts` replaces `src/utils/logger` with an automatic mock, so
+  every `logger.*` method is a spy a test can assert on, and adds a
+  `localStorage` stand-in.
+- `test/setup-e2e.ts` starts the MSW mock server described below.
 
-## Mock Server
+`npm run test:live` uses `vite.config.live.ts` instead. It drops
+`setup-e2e.ts`, so the live suite reaches the real network.
 
-E2E tests use a mock server (powered by MSW) to intercept requests to external services like `httpbin.org`. This makes tests:
+## Network Isolation
 
-- **Fast**: No actual network requests
-- **Reliable**: No dependency on external services
-- **Consistent**: Predictable responses every time
+`test/mock-server.ts` defines one MSW server that answers every outgoing HTTP
+request a test makes in its own process:
 
-### Mock Server Setup
+- Fixed handlers answer the endpoints the suites share: OpenAI embeddings and a
+  set of `httpbin.org` paths. The embedding handler returns deterministic
+  vectors built from character trigrams, so texts with shared words get
+  similar vectors and vector search ranks in a meaningful order.
+- A catch-all handler comes last. A request to loopback (`localhost`,
+  `127.0.0.1`, `[::1]`) goes through, and any other request fails at once as a
+  network error. `test/setup-e2e.ts` treats WebSocket connections the same way.
+- An opt-in live suite calls `allowLiveNetwork()` in `beforeAll` once its
+  credentials are set, and calls the function it returns in `afterAll`.
 
-- **Configuration**: `test/mock-server.ts`
-- **Fixtures**: `test/fixtures/` contains sample responses
-- **Setup file**: `test/setup-e2e.ts` initializes the mock server
-- **Unmocked requests fail**: the last handler in `test/mock-server.ts` answers
-  every request no other handler claims with a network error, and
-  `test/setup-e2e.ts` refuses WebSocket connections the same way. Only loopback
-  passes through, so a test cannot reach the real network by accident. Opt-in
-  live suites call `allowLiveNetwork()` in `beforeAll` once their credentials
-  are set, and release it in `afterAll`.
+To add a shared endpoint, put its response body in `test/fixtures/` and add a
+handler before the catch-all in `test/mock-server.ts`. A test that needs a
+response only for itself adds a handler with `server.use(...)`;
+`test/setup-e2e.ts` resets those handlers after each test.
 
-### Adding New Mock Endpoints
+MSW intercepts requests only inside the test process. A spawned CLI or worker
+process makes real requests, so those tests point it at `file://` fixtures or
+at a server the test starts on loopback.
 
-1. Add fixture data to `test/fixtures/`
-2. Update `test/mock-server.ts` to add the new handler
-3. The mock server will automatically intercept matching requests
+## Crawl Suites
 
-### Crawl Suites
+Suites that crawl a website describe the site in the test instead of adding
+handlers to `mock-server.ts`. Two helpers make this work:
 
-Suites that crawl a website (refresh, progress, unprocessable content, empty
-pages, Markdown identity) describe the site per test instead of adding handlers
-to `mock-server.ts`:
+- `mockSite(origin)` (`test/mock-site.ts`) serves one origin through the global
+  MSW server from a route table. The routes describe the site's current state:
+  a page with an ETag answers `304` to a request that carries it, so a refresh
+  against an unchanged site needs no extra setup. The site logs every request
+  with its `If-None-Match` value, and a request for a path with no route fails
+  the test. Helpers such as `stall()`, `redirect()` and `notFound()` cover the
+  error paths.
+- `usePipelineHarness(...)` (`test/pipeline-harness.ts`) gives each test a real
+  `PipelineManager` over an in-memory store. It runs scrapes and refreshes to
+  completion, records their progress events, and reads back what the store
+  holds, so a test asserts on what a user of the server would see.
 
-- `mockSite(origin)` (`test/mock-site.ts`) serves one origin from a route table
-  through the same MSW server. A page with an ETag answers `304` to a request
-  carrying it, `llms.txt` answers `404` unless defined, `stall()` holds a request
-  open until the test ends, and every request is logged with its
-  `If-None-Match`. A request for a path with no route fails the test.
-- `usePipelineHarness(...)` (`test/pipeline-harness.ts`) builds a real
-  `PipelineManager` over an in-memory store for each test, runs scrapes and
-  refreshes to completion, records their progress events, and reads back what
-  the store holds.
+Read the module comments in both files for the full API.
 
-### Worker Suites
+## Server and Worker Suites
 
-Suites for a remote worker (`--server-url`) run the worker one of two ways:
+Suites that need a running server or a remote worker (`--server-url`) start it
+one of two ways:
 
 - `startInProcessServer(...)` (`test/in-process-server.ts`) runs the whole
-  application in the test process, so its scrapes reach `mockSite()` origins.
-  Integration tests of the remote backend and `PipelineClient` use it.
-- `startWorker(storePath, configPath)` (`test/test-helpers.ts`) spawns a real
-  `worker` process. MSW does not reach into it, so its jobs scrape `file://`
-  fixtures or `startSlowSite()`, a loopback site that answers each page after a
-  delay. `startRunningSlowJob()` submits a scrape of that site that runs until it
-  is cancelled. `createTcpProxy()` sits between a client and the worker: `cut()`
-  drops the connection, `listen()` restores it, and `blockUpgrades` refuses
-  WebSockets like a proxy without WebSocket support. Configs for spawned
-  processes come from `writeTestConfig()`.
+  application in the test process with a fresh store. Its scrapes reach
+  `mockSite()` origins, and a test can set the public URL and authentication
+  without spawning the CLI.
+- `startWorker(...)` (`test/test-helpers.ts`) spawns a real `worker` process.
+  Its jobs scrape `file://` fixtures or `startSlowSite()`, a loopback site that
+  answers each page after a delay. `startRunningSlowJob()` submits a scrape of
+  that site that runs until it is cancelled.
 
-## Live Tests
+`test/test-helpers.ts` also holds the helpers these suites share:
+`writeTestConfig()` writes the config a spawned process starts with,
+`createTcpProxy()` sits between a client and a worker to cut and restore the
+connection or refuse WebSocket upgrades, and `runCli()` runs a CLI command to
+the end.
 
-Tests in `test/*-live-e2e.test.ts` are excluded from the default test run because they:
-
-- Hit real websites (MDN, Salesforce, etc.)
-- Take longer to execute
-- May be rate-limited or blocked
-- Can fail due to external factors
-
-Run them manually when needed with `npm run test:live`.
-
-## Type Checking
-
-```bash
-# Type check all code (src + tests)
-npm run typecheck
-
-# Type check only production code (no tests)
-npm run typecheck:build
-```
-
-## Configuration Files
-
-- `vite.config.ts`: Unified test configuration for Vitest
-- `tsconfig.json`: Includes all source and test files for development
-- `tsconfig.build.json`: Production-only TypeScript config (excludes tests)
-- `test/setup-env.ts`: Common test setup (logger mock, localStorage polyfill)
-- `test/setup-e2e.ts`: E2E-specific setup (includes mock server)
+A spawned CLI runs `dist/index.js` when it exists and `src/index.ts` through
+vite-node otherwise. After a source change, run `npm run build` (or delete
+`dist/`) before the CLI and worker suites, so they test the current code.

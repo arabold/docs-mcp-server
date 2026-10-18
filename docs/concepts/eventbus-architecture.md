@@ -1,77 +1,70 @@
 # Event Bus Architecture
 
-This document describes the event-driven architecture used for real-time communication between backend services and the web UI. The system uses a central event bus to decouple event producers from consumers, enabling flexible and scalable status updates.
+Each process has one `EventBusService` ([src/events/EventBusService.ts](../../src/events/EventBusService.ts)), an in-memory publish/subscribe bus. The pipeline and the store publish what changed; the web UI, CLI commands, job waits and telemetry listen. Producers do not know who listens, and a consumer sees the same events whether a job runs in its own process or on a remote worker.
 
-## Overview
+Events are notifications, not state. A consumer that needs the current state reads it: the web UI refetches its queries, and a wait for a remote job also asks the worker. A lost event therefore only delays an update.
 
-The core of the system is the `EventBusService`, an in-memory pub/sub service. It allows different parts of the application, such as the job processing pipeline, to emit events without being directly coupled to the components that consume them, like the Server-Sent Events (SSE) endpoint for the web UI.
+## Events
 
-This architecture achieves two primary goals:
+[src/events/types.ts](../../src/events/types.ts) defines the event types and their payloads.
 
-1.  **Decoupling:** The `PipelineManager` does not need to know about the web server or its clients. It simply emits events about its state.
-2.  **Real-Time Updates:** The web UI receives immediate feedback on background job progress and status changes.
+| Event | Emitted by | When |
+|---|---|---|
+| `JOB_STATUS_CHANGE` | `PipelineManager` | A job changes status. Carries the job. |
+| `JOB_PROGRESS` | `PipelineManager` | A running job reports a page outcome. Carries the job and the progress report. |
+| `LIBRARY_CHANGE` | `PipelineManager`, `DocumentManagementService` | Indexed content may have changed: on every job status change, and when the store writes or deletes a page or removes a version. No payload. |
+| `JOB_LIST_CHANGE` | `PipelineManager`, `RemoteEventProxy` | Finished jobs were cleared, or the relay from a worker is live again after a drop. No payload. |
 
-## Core Components
+## Consumers
 
-| Component          | Location                   | Responsibility                                                                                                                                         |
-| :----------------- | :------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PipelineManager`  | `src/pipeline/`            | Manages the lifecycle of scraping and indexing jobs. It is the primary **producer** of job-related events, emitting directly to the `EventBusService`. |
-| `EventBusService`  | `src/events/`              | The central pub/sub bus that receives all events and distributes them to registered listeners.                                                         |
-| **SSE Route**      | `src/web/routes/events.ts` | A **consumer** that listens to the event bus and forwards events to connected web UI clients over SSE.                                                 |
-| `RemoteEventProxy` | `src/events/`              | Subscribes to a remote worker's events through the backend's API client and re-emits them on the local event bus. Every remote backend with a pipeline has one. |
-| **CLI Commands**   | `src/cli/commands/`        | `scrape` and `refresh` show status and progress for the job they submitted, local or remote, through `JobOutputFollower` (`src/cli/`).                 |
+- The events router ([src/events/trpc/router.ts](../../src/events/trpc/router.ts)) serves the `events.subscribe` subscription on the API's WebSocket. A subscriber names the event types it wants, or gets all of them. The web UI subscribes once in its app shell and invalidates the affected queries, which refetch over HTTP (`useLiveInvalidation` in [src/web/client/hooks/useLiveInvalidation.ts](../../src/web/client/hooks/useLiveInvalidation.ts)). A coordinator's `RemoteEventProxy` subscribes to its worker the same way.
+- `JobOutputFollower` ([src/cli/JobOutputFollower.ts](../../src/cli/JobOutputFollower.ts)) passes `scrape` and `refresh` the status and progress of the job they submitted, which they log. A shared worker reports other clients' jobs too, and a job can report before the command knows its id. The follower therefore subscribes before the job is submitted, buffers what arrives, and replays that job's events once it has the id.
+- `PipelineClient.waitForJobCompletion` listens for its job's `JOB_STATUS_CHANGE`.
+- `TelemetryService` ([src/telemetry/TelemetryService.ts](../../src/telemetry/TelemetryService.ts)) reports job events. A local backend starts it together with its pipeline, so only the process that runs a job reports it, and relayed copies are not reported again.
 
 ## Local Event Flow
 
-The following diagram illustrates the flow of an event when the worker is running within the same process as the web server.
+When a job runs in the same process, its events reach the listeners directly. Which listeners exist depends on the process: a server has the events router, and a CLI command has its follower.
 
 ```mermaid
 sequenceDiagram
-    participant PipelineManager
-    participant EventBusService
-    participant SSERoute as "SSE Route"
-    participant WebUI as "Web UI Client"
-    participant CLI as "CLI Command"
+    participant PM as PipelineManager
+    participant Bus as EventBusService
+    participant Router as Events router
+    participant UI as Web UI
+    participant CLI as JobOutputFollower
 
-    PipelineManager->>EventBusService: Emits JOB_STATUS_CHANGE event
-    EventBusService->>SSERoute: Notifies listener of event
-    EventBusService->>CLI: Notifies listener of event
-    SSERoute->>WebUI: Sends SSE message
-    CLI->>CLI: Updates ora spinner
+    PM->>Bus: JOB_STATUS_CHANGE, JOB_PROGRESS
+    Bus->>Router: Notifies subscription
+    Router->>UI: Event over WebSocket
+    UI->>UI: Invalidates and refetches queries over HTTP
+    Bus->>CLI: Notifies listener
+    CLI->>CLI: Logs the job's status and progress
 ```
-
-1.  The `PipelineManager` updates the status of a job and directly emits a `JOB_STATUS_CHANGE` event to the `EventBusService`.
-2.  The `EventBusService` forwards the event to all its registered listeners:
-    - The SSE Route (for web UI updates)
-    - CLI commands (for terminal progress indicators)
-3.  The SSE Route formats the event data and sends it to all connected web UI clients.
-4.  CLI commands update their progress indicators (e.g., `ora` spinner).
 
 ## External Worker Event Flow
 
-When a process uses an external worker (a web or MCP server, or a CLI command given `--server-url`), the `RemoteEventProxy` of its backend brings the worker's events onto the local bus.
+A process whose backend uses a remote worker and runs jobs (a web or MCP server, or a CLI command given `--server-url`) gets the worker's events through `RemoteEventProxy` ([src/events/RemoteEventProxy.ts](../../src/events/RemoteEventProxy.ts)). The proxy holds one `events.subscribe` subscription on the backend's API client and re-emits every event on the local bus, where it follows the local flow. A web server behind it passes the events on to its own browsers.
 
 ```mermaid
 sequenceDiagram
-    participant WorkerProcess as "External Worker"
-    participant RemoteEventProxy
-    participant EventBusService
-    participant Consumers as "Web UI, MCP Server or CLI"
+    participant WPM as Worker PipelineManager
+    participant WBus as Worker EventBusService
+    participant WRouter as Worker events router
+    participant Proxy as RemoteEventProxy
+    participant Bus as Local EventBusService
+    participant Consumers as Local consumers
 
-    WorkerProcess->>RemoteEventProxy: Sends event over the tRPC subscription
-    RemoteEventProxy->>EventBusService: Emits event locally
-    EventBusService->>Consumers: Notifies listeners of event
+    WPM->>WBus: Emits event
+    WBus->>WRouter: Notifies subscription
+    WRouter->>Proxy: Event over WebSocket
+    Proxy->>Bus: Re-emits event
+    Bus->>Consumers: Notifies listeners
 ```
 
-1.  An event occurs in the external worker process.
-2.  The worker sends it over the `events.subscribe` subscription that the coordinator's `RemoteEventProxy` holds on the backend's API client.
-3.  The proxy re-emits the event on the local `EventBusService`, at which point it follows the same flow as a local event.
-4.  A dropped connection is reconnected by the WebSocket client. Events sent while it is down are lost, so when the stream is live again the proxy emits `JOB_LIST_CHANGE` and `LIBRARY_CHANGE` locally, and views refetch.
+The relay is best effort:
 
-## Key Event Types
-
-| Event Name          | Payload                                                | Description                                                                          |
-| :------------------ | :----------------------------------------------------- | :----------------------------------------------------------------------------------- |
-| `JOB_STATUS_CHANGE` | `PipelineJob`                                          | Fired when a job's status changes (e.g., QUEUED, RUNNING, COMPLETED).                |
-| `JOB_PROGRESS`      | `{ job: PipelineJob, progress: ScraperProgressEvent }` | Fired periodically during a running job to provide progress updates.                 |
-| `LIBRARY_CHANGE`    | `undefined`                                            | Fired when a library's state may have changed, signaling the UI to refresh its data. |
+- The WebSocket client reconnects a dropped connection. When the subscription itself ends, the proxy subscribes again with backoff.
+- Events sent while the stream is down are lost. When it is live again, the proxy emits `JOB_LIST_CHANGE` and `LIBRARY_CHANGE` locally, and views refetch what they missed.
+- `PipelineClient` waits briefly for the stream before its first job, so a job that starts at once does not lose its first events. Its waits also ask the worker, so they finish without the stream.
+- A backend that only reads documents opens no WebSocket and has no proxy.
