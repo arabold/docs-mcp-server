@@ -15,12 +15,32 @@ import { loadConfig } from "../src/utils/config";
 import { chromiumPids, listenOnFreePort } from "./test-helpers";
 
 /** How long the slow pages take to answer the browser. */
-const SLOW_PAGE_MS = 3000;
+const SLOW_PAGE_MS = 1000;
+
+/** A promise that resolves once `tick()` has been called `count` times. */
+function countdown(count: number): { done: Promise<void>; tick: () => void } {
+  let left = count;
+  let resolve = () => {};
+  const done = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return {
+    done,
+    tick: () => {
+      left -= 1;
+      if (left === 0) resolve();
+    },
+  };
+}
 
 describe.skipIf(process.platform === "win32")("Shared Chromium for a crawl", () => {
   const requests: string[] = [];
   /** How many Chromium processes were running at each request. */
   const chromiumCounts: number[] = [];
+  /** Counts the browser's requests for the two slow pages. */
+  let slowPagesLoading = countdown(2);
+  /** Counts the slow pages' answers. */
+  let slowPagesAnswered = countdown(2);
   let server: Server;
   let baseUrl: string;
 
@@ -47,22 +67,30 @@ describe.skipIf(process.platform === "win32")("Shared Chromium for a crawl", () 
       if (path.startsWith("/failing/")) {
         // Every page refuses the plain HTTP request, so each one goes to the
         // browser fetcher. There, `fails` is refused again and ends the crawl,
-        // while `slow1` and `slow2` take seconds to answer.
-        const firstRequest = requests.filter((seen) => seen === path).length === 1;
-        if (firstRequest || path === "/failing/fails") {
+        // but only once the browser is loading `slow1` and `slow2`, which take
+        // a second to answer.
+        const blocked = () => {
           res.writeHead(403, { "content-type": "text/html" });
           res.end("<html><body>Blocked</body></html>");
-          return;
-        }
-        const body =
-          path === "/failing/"
-            ? '<a href="/failing/fails">x</a><a href="/failing/slow1">y</a><a href="/failing/slow2">z</a>'
-            : `<h1>${path}</h1>`;
-        const delayMs = path === "/failing/" ? 0 : SLOW_PAGE_MS;
-        setTimeout(() => {
+        };
+        const firstRequest = requests.filter((seen) => seen === path).length === 1;
+        if (firstRequest) {
+          blocked();
+        } else if (path === "/failing/fails") {
+          void slowPagesLoading.done.then(blocked);
+        } else if (path === "/failing/") {
           res.writeHead(200, { "content-type": "text/html" });
-          res.end(`<html><body>${body}</body></html>`);
-        }, delayMs);
+          res.end(
+            '<html><body><a href="/failing/fails">x</a><a href="/failing/slow1">y</a><a href="/failing/slow2">z</a></body></html>',
+          );
+        } else {
+          slowPagesLoading.tick();
+          setTimeout(() => {
+            res.writeHead(200, { "content-type": "text/html" });
+            res.end(`<html><body><h1>${path}</h1></body></html>`);
+            slowPagesAnswered.tick();
+          }, SLOW_PAGE_MS);
+        }
         return;
       }
       res.writeHead(404);
@@ -74,6 +102,8 @@ describe.skipIf(process.platform === "win32")("Shared Chromium for a crawl", () 
   beforeEach(() => {
     requests.length = 0;
     chromiumCounts.length = 0;
+    slowPagesLoading = countdown(2);
+    slowPagesAnswered = countdown(2);
   });
 
   afterAll(async () => {
@@ -136,9 +166,9 @@ describe.skipIf(process.platform === "win32")("Shared Chromium for a crawl", () 
       await strategy.cleanup();
     }
 
-    // Wait until the slow pages would have answered: nothing may relaunch a
-    // browser or retry them after the cleanup.
-    await new Promise((resolve) => setTimeout(resolve, SLOW_PAGE_MS + 500));
+    // Wait until the slow pages answered: nothing may relaunch a browser or
+    // retry them after the cleanup.
+    await slowPagesAnswered.done;
     expect(chromiumPids()).toHaveLength(0);
     expect(requests.filter((path) => path === "/failing/slow1")).toHaveLength(2);
     expect(requests.filter((path) => path === "/failing/slow2")).toHaveLength(2);
