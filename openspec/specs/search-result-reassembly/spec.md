@@ -98,12 +98,11 @@ All collected chunk IDs SHALL be deduplicated and fetched in a single batch quer
 For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconstruct complete structural subtrees rather than using fixed-limit context expansion:
 
 **Single match in a document:**
-1. Find the nearest **structural ancestor** by walking up the parent chain looking for a chunk whose `metadata.types` array includes `"structural"`.
-2. If no structural ancestor is found in source code, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk. For JSON, the system SHALL NOT promote to the top level, which is the whole document; it SHALL use the object or array the match opens (a key whose value is an object or array), otherwise the object or array that contains the match.
-3. Walk the promoted ancestor to the root, collecting the full parent chain (limited by `assembly.maxParentChainDepth`, default 10).
-4. Find the **full subtree** of the promoted ancestor: the ancestor, the chunks right before it that carry the same path (such as a JSON key and its bracket), and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. The subtree SHALL include the ancestor's closing chunk, which carries the ancestor's own path.
-5. For each ancestor on the parent chain, add its **opening and closing chunks** (the chunks with its own path before its first and after its last nested member) but none of its other members.
-6. A match with an empty path (code at the page root) SHALL be returned on its own.
+1. Find the nearest **structural ancestor**: the match itself when its `metadata.types` array includes `"structural"`, otherwise the first such chunk found by walking up the parent chain.
+2. If no structural ancestor is found in source code, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk. For JSON, the system SHALL NOT promote to the top level, which is the whole document; it SHALL use the object or array the match opens (a key whose value is an object or array, including an empty one, recognized by the chunk holding only its opening bracket at the key's path), otherwise the object or array that contains the match.
+3. Find the **full subtree** of the promoted ancestor: the ancestor, the chunks right before it that carry the same path (such as a JSON key and its bracket), and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. The subtree SHALL include the ancestor's closing chunk, which carries the ancestor's own path.
+4. For each scope that encloses the promoted ancestor (limited by `assembly.maxParentChainDepth`, default 10), add its **opening and closing chunks** (the chunks with its own path before its first and after its last nested member) but none of its other members. A scope SHALL open at the first chunk of the run of chunks inside its path that precedes the ancestor, so statements or members between the scope's declaration and the ancestor are not included. A scope with no chunk at its own path adds nothing.
+5. A match with an empty path (code at the page root) SHALL be returned on its own.
 
 **Multiple matches in the same document:**
 1. Find the **common ancestor path** (longest common prefix of all chunks' paths).
@@ -131,6 +130,16 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 - **THEN** the system SHALL return the whole class and the namespace's opening and closing lines
 - **AND** SHALL NOT include the namespace's other members
 
+#### Scenario: Match on a class declaration inside a namespace
+- **WHEN** a search matches the declaration line of a class declared inside a namespace
+- **THEN** the system SHALL return the whole class and the namespace's opening and closing lines
+- **AND** SHALL NOT include the namespace's other members
+
+#### Scenario: Statement between a scope's declaration and the match
+- **WHEN** a namespace declares a class, then a statement, then a second class, and a search matches a method of the second class
+- **THEN** the system SHALL return the namespace's declaration line, the whole second class and the namespace's closing brace
+- **AND** SHALL NOT include the statement or the first class
+
 #### Scenario: Match in code at the page root
 - **WHEN** a search matches a chunk with an empty path, such as a top-level statement
 - **THEN** the system SHALL return that chunk alone
@@ -143,6 +152,11 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 #### Scenario: Match on a JSON key that opens an object
 - **WHEN** a search matches the `"server":` key whose value is an object
 - **THEN** the system SHALL return that key and its whole object
+- **AND** SHALL NOT include the document's other properties
+
+#### Scenario: Match on a JSON key whose value is empty
+- **WHEN** a search matches a key whose value is `{}` or `[]`
+- **THEN** the system SHALL return that key and its empty object or array
 - **AND** SHALL NOT include the document's other properties
 
 #### Scenario: Multiple matches in same code file

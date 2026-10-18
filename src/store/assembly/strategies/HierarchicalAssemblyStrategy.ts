@@ -5,6 +5,19 @@ import type { DocumentStore } from "../../DocumentStore";
 import type { DbPageChunk } from "../../types";
 import type { ContentAssemblyStrategy } from "../types";
 
+/** Returns whether `path` begins with every segment of `prefix`. */
+function startsWithPath(path: string[], prefix: string[]): boolean {
+  return (
+    path.length >= prefix.length &&
+    prefix.every((segment, index) => segment === path[index])
+  );
+}
+
+/** Returns whether two paths have the same segments. */
+function isSamePath(a: string[], b: string[]): boolean {
+  return a.length === b.length && startsWithPath(a, b);
+}
+
 /**
  * Assembly strategy for structured content (source code, JSON, config files).
  *
@@ -72,47 +85,32 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
         if (documentChunks.length === 1) {
           // Single match: reconstruct complete structural subtree containing the match
           const matched = documentChunks[0];
+          const pageChunks = await documentStore.findChunksByUrl(
+            library,
+            version,
+            matched.url,
+          );
 
           // The container to reconstruct: the JSON object or array holding the match,
           // or for code its structural ancestor (class / namespace, etc.)
           const promotedAncestor = MimeTypeUtils.isJson(matched.content_type ?? "")
-            ? await this.findJsonContainer(library, version, matched, documentStore)
+            ? this.findJsonContainer(pageChunks, matched)
             : await this.findCodeContainer(library, version, matched, documentStore);
 
           // IMPORTANT: Always include the original matched chunk first
           allChunkIds.add(matched.id);
 
-          // Use promoted ancestor (may still be the original matched chunk if promotion not applicable)
-          const ancestorParentChain = await this.walkToRoot(
-            library,
-            version,
-            promotedAncestor,
-            documentStore,
-          );
-          for (const id of ancestorParentChain) {
-            allChunkIds.add(id);
+          // Add the container's full subtree, through its closing chunk
+          const subtree = this.collectContainer(pageChunks, promotedAncestor.id);
+          for (const chunk of subtree.length > 0 ? subtree : [promotedAncestor]) {
+            allChunkIds.add(chunk.id);
           }
 
-          // Add full subtree of the structural ancestor (ensures full class / container reconstruction)
-          const subtreeIds = await this.findSubtreeChunks(
-            library,
-            version,
-            promotedAncestor,
-            documentStore,
-          );
-          for (const id of subtreeIds) {
-            allChunkIds.add(id);
-          }
-
-          // Open and close the scopes that enclose the subtree, without their other members
-          const boundaryIds = await this.findScopeBoundaryChunks(
-            library,
-            version,
-            promotedAncestor.url,
-            ancestorParentChain.filter((id) => id !== promotedAncestor.id),
-            documentStore,
-          );
-          for (const id of boundaryIds) {
+          // Open and close the scopes that enclose the container, without their other members
+          for (const id of this.findEnclosingScopeBoundaries(
+            pageChunks,
+            promotedAncestor.id,
+          )) {
             allChunkIds.add(id);
           }
         } else {
@@ -167,9 +165,9 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   }
 
   /**
-   * Finds the code container to reconstruct for a single match: its nearest structural
-   * ancestor, otherwise the top-level container named by the first path element, otherwise
-   * the match itself.
+   * Finds the code container to reconstruct for a single match: the match itself when it
+   * is structural, else its nearest structural ancestor, otherwise the top-level container
+   * named by the first path element, otherwise the match itself.
    */
   private async findCodeContainer(
     library: string,
@@ -184,12 +182,11 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       matched,
       documentStore,
     );
-    if (structuralAncestor && structuralAncestor !== matched) {
+    if (structuralAncestor) {
       return structuralAncestor;
     }
 
     // If no structural ancestor was found (e.g. we matched a deeply nested anonymous or inner function),
-    // or the match is structural itself,
     // attempt to promote to the top-level container represented by the first path element.
     // Example: path ['applyMigrations','overallTransaction','overallTransaction','<anonymous_arrow>']
     // We want to reconstruct the whole top-level function 'applyMigrations', not just the arrow body.
@@ -222,28 +219,39 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
 
   /**
    * Finds the JSON object or array to reconstruct for a single match: the one the match
-   * opens (a key or bracket followed by nested members), otherwise the one that contains
-   * it. Unlike code, a match is not promoted to the top level, which in JSON is the
-   * whole document.
+   * opens, otherwise the one that contains it. Unlike code, a match is not promoted to
+   * the top level, which in JSON is the whole document.
+   *
+   * The JSON splitter puts a key whose value is an object or array, the opening bracket
+   * and the closing bracket at the key's path, the bracket in a chunk of its own. That
+   * bracket chunk marks an object or array even when it is empty, and a primitive value
+   * split into several chunks never has one.
    */
-  private async findJsonContainer(
-    library: string,
-    version: string,
+  private findJsonContainer(
+    pageChunks: DbPageChunk[],
     matched: DbPageChunk,
-    documentStore: DocumentStore,
-  ): Promise<DbPageChunk> {
-    const pageChunks = await documentStore.findChunksByUrl(library, version, matched.url);
+  ): DbPageChunk {
     const ownContainer = this.collectContainer(pageChunks, matched.id);
-    const depth = ownContainer[0]?.metadata.path?.length ?? 0;
-    const opensContainer = ownContainer.some(
-      (chunk) => (chunk.metadata.path?.length ?? 0) > depth,
-    );
-    if (opensContainer) {
+    if (ownContainer.length === 0) {
       return matched;
     }
 
-    const parent = await documentStore.findParentChunk(library, version, matched.id);
-    return parent ?? matched;
+    const path = ownContainer[0].metadata.path ?? [];
+    const opensContainer = ownContainer.some(
+      (chunk) =>
+        isSamePath(chunk.metadata.path ?? [], path) &&
+        /^[[{]$/.test(chunk.content.trim()),
+    );
+    if (opensContainer || path.length <= 1) {
+      return matched;
+    }
+
+    const start = this.findScopeStart(
+      pageChunks,
+      pageChunks.indexOf(ownContainer[0]),
+      path.slice(0, -1),
+    );
+    return start === undefined ? matched : pageChunks[start];
   }
 
   /**
@@ -611,43 +619,89 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   }
 
   /**
-   * Finds the chunks that open and close each of the given containers: the chunks
-   * that carry the container's own path before its first nested member (a class
-   * declaration, or a JSON key and its bracket) and after its last one (a closing
-   * brace). Containers without nested members add nothing.
+   * Finds the chunks that open and close each scope enclosing a container, innermost
+   * first and up to `assembly.maxParentChainDepth` scopes. A scope opens where the run
+   * of chunks inside its path begins, so the members and statements between its
+   * declaration and the container are left out. A scope with no chunk at its own path,
+   * such as a level the splitter skipped, adds nothing.
+   *
+   * @param pageChunks All chunks of one page, in document order.
+   * @param containerId ID of a chunk that opens the container.
+   * @returns The IDs of the scopes' opening and closing chunks.
    */
-  private async findScopeBoundaryChunks(
-    library: string,
-    version: string,
-    url: string,
-    containerIds: string[],
-    documentStore: DocumentStore,
-  ): Promise<string[]> {
-    if (containerIds.length === 0) {
+  private findEnclosingScopeBoundaries(
+    pageChunks: DbPageChunk[],
+    containerId: string,
+  ): string[] {
+    const container = this.collectContainer(pageChunks, containerId);
+    if (container.length === 0) {
       return [];
     }
 
-    const pageChunks = await documentStore.findChunksByUrl(library, version, url);
+    const path = container[0].metadata.path ?? [];
+    const { maxParentChainDepth } = this.config.assembly;
     const boundaryIds: string[] = [];
-    for (const containerId of containerIds) {
-      const container = this.collectContainer(pageChunks, containerId);
-      const depth = container[0]?.metadata.path?.length ?? 0;
-      const isNested = (chunk: DbPageChunk) => (chunk.metadata.path?.length ?? 0) > depth;
-      const firstNested = container.findIndex(isNested);
-      // Without nested members there is nothing to open or close
-      if (firstNested === -1) continue;
-      let lastNested = container.length - 1;
-      while (!isNested(container[lastNested])) {
-        lastNested--;
-      }
-      for (const chunk of container.slice(0, firstNested)) {
-        boundaryIds.push(chunk.id);
-      }
-      for (const chunk of container.slice(lastNested + 1)) {
+    let index = pageChunks.indexOf(container[0]);
+    for (
+      let length = path.length - 1;
+      length > 0 && path.length - length < maxParentChainDepth;
+      length--
+    ) {
+      const start = this.findScopeStart(pageChunks, index, path.slice(0, length));
+      if (start === undefined) continue;
+      index = start;
+      const scope = this.collectContainer(pageChunks, pageChunks[start].id);
+      for (const chunk of this.scopeBoundaries(scope)) {
         boundaryIds.push(chunk.id);
       }
     }
     return boundaryIds;
+  }
+
+  /**
+   * Finds where the scope with the given path opens, looking back from the chunk at
+   * `index`: the first chunk of the run of chunks inside that path.
+   *
+   * @param pageChunks All chunks of one page, in document order.
+   * @param index Position of a chunk inside the scope.
+   * @param scopePath Path of the scope.
+   * @returns The position of the scope's opening chunk, or undefined when the run does
+   *   not begin with a chunk at the scope's own path.
+   */
+  private findScopeStart(
+    pageChunks: DbPageChunk[],
+    index: number,
+    scopePath: string[],
+  ): number | undefined {
+    let start = index;
+    while (
+      start > 0 &&
+      startsWithPath(pageChunks[start - 1].metadata.path ?? [], scopePath)
+    ) {
+      start--;
+    }
+    return isSamePath(pageChunks[start].metadata.path ?? [], scopePath)
+      ? start
+      : undefined;
+  }
+
+  /**
+   * Returns the chunks that open and close a scope: those at the scope's own path before
+   * its first nested member (a class declaration, or a JSON key and its bracket) and
+   * after its last one (a closing brace). A scope without nested members has none.
+   */
+  private scopeBoundaries(scope: DbPageChunk[]): DbPageChunk[] {
+    const depth = scope[0]?.metadata.path?.length ?? 0;
+    const isNested = (chunk: DbPageChunk) => (chunk.metadata.path?.length ?? 0) > depth;
+    const firstNested = scope.findIndex(isNested);
+    if (firstNested === -1) {
+      return [];
+    }
+    let lastNested = scope.length - 1;
+    while (!isNested(scope[lastNested])) {
+      lastNested--;
+    }
+    return [...scope.slice(0, firstNested), ...scope.slice(lastNested + 1)];
   }
 
   /**
@@ -674,25 +728,14 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       return [pageChunks[rootIndex]];
     }
 
-    const hasRootPath = (chunk: DbPageChunk) => {
-      const path = chunk.metadata.path ?? [];
-      return (
-        path.length === rootPath.length &&
-        rootPath.every((segment, index) => segment === path[index])
-      );
-    };
     let start = rootIndex;
-    while (start > 0 && hasRootPath(pageChunks[start - 1])) {
+    while (start > 0 && isSamePath(pageChunks[start - 1].metadata.path ?? [], rootPath)) {
       start--;
     }
 
     const container = pageChunks.slice(start, rootIndex + 1);
     for (const chunk of pageChunks.slice(rootIndex + 1)) {
-      const path = chunk.metadata.path ?? [];
-      const isInside =
-        path.length >= rootPath.length &&
-        rootPath.every((segment, index) => segment === path[index]);
-      if (!isInside) break;
+      if (!startsWithPath(chunk.metadata.path ?? [], rootPath)) break;
       container.push(chunk);
     }
     return container;

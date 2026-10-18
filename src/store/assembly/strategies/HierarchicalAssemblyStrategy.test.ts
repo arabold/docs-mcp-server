@@ -192,9 +192,95 @@ describe("HierarchicalAssemblyStrategy", () => {
       );
     });
 
-    it("closes every enclosing scope without adding its other members", async () => {
-      // Chunks as the TypeScript splitter emits them for a class inside a namespace
-      await documentStore.addDocuments("test-nested-scopes", "1.0", 0, {
+    describe("a class inside a namespace", () => {
+      /** Stores the chunks the TypeScript splitter emits for a class inside a namespace. */
+      async function storeNamespace(): Promise<DbPageChunk[]> {
+        await documentStore.addDocuments("test-nested-scopes", "1.0", 0, {
+          url: "Accounts.ts",
+          title: "Accounts.ts",
+          sourceContentType: "text/typescript",
+          contentType: "text/typescript",
+          textContent: "",
+          chunks: [
+            {
+              content: "export namespace Accounts {\n",
+              section: { path: ["Accounts"], level: 1 },
+              types: ["code", "structural"],
+            },
+            {
+              content: "  export class UserService {\n",
+              section: { path: ["Accounts", "UserService"], level: 2 },
+              types: ["code", "structural"],
+            },
+            {
+              content: "    getUser(id: string) {\n      return id;\n    }\n",
+              section: { path: ["Accounts", "UserService", "getUser"], level: 3 },
+              types: ["code"],
+            },
+            {
+              content: "  }\n",
+              section: { path: ["Accounts", "UserService"], level: 2 },
+              types: ["code"],
+            },
+            {
+              content: "  export const limit = 5;\n",
+              section: { path: ["Accounts", "limit"], level: 2 },
+              types: ["code"],
+            },
+            {
+              content: "}\n",
+              section: { path: ["Accounts"], level: 1 },
+              types: ["code"],
+            },
+            {
+              content: "const after = 1;\n",
+              section: { path: ["after"], level: 1 },
+              types: ["code"],
+            },
+          ],
+          links: [],
+          errors: [],
+        });
+        return documentStore.findChunksByUrl("test-nested-scopes", "1.0", "Accounts.ts");
+      }
+
+      const classInNamespace =
+        "export namespace Accounts {\n" +
+        "  export class UserService {\n" +
+        "    getUser(id: string) {\n      return id;\n    }\n" +
+        "  }\n" +
+        "}\n";
+
+      it("closes every enclosing scope without adding its other members", async () => {
+        const chunks = await storeNamespace();
+
+        const result = await strategy.selectChunks(
+          "test-nested-scopes",
+          "1.0",
+          [chunks[2]],
+          documentStore,
+        );
+
+        expect(strategy.assembleContent(result)).toBe(classInNamespace);
+      });
+
+      it("returns only the class for a match on its declaration", async () => {
+        const chunks = await storeNamespace();
+
+        const result = await strategy.selectChunks(
+          "test-nested-scopes",
+          "1.0",
+          [chunks[1]],
+          documentStore,
+        );
+
+        expect(strategy.assembleContent(result)).toBe(classInNamespace);
+      });
+    });
+
+    it("opens an enclosing scope at its declaration, skipping the members before the match", async () => {
+      // Chunks as the TypeScript splitter emits them for a namespace with a statement between two classes
+      await documentStore.addDocuments("test-scope-opening", "1.0", 0, {
         url: "Accounts.ts",
         title: "Accounts.ts",
         sourceContentType: "text/typescript",
@@ -207,23 +293,38 @@ describe("HierarchicalAssemblyStrategy", () => {
             types: ["code", "structural"],
           },
           {
-            content: "  export class UserService {\n",
-            section: { path: ["Accounts", "UserService"], level: 2 },
+            content: "  export class First {\n",
+            section: { path: ["Accounts", "First"], level: 2 },
             types: ["code", "structural"],
           },
           {
-            content: "    getUser(id: string) {\n      return id;\n    }\n",
-            section: { path: ["Accounts", "UserService", "getUser"], level: 3 },
+            content: "    a() { return 1; }\n",
+            section: { path: ["Accounts", "First", "a"], level: 3 },
             types: ["code"],
           },
           {
             content: "  }\n",
-            section: { path: ["Accounts", "UserService"], level: 2 },
+            section: { path: ["Accounts", "First"], level: 2 },
             types: ["code"],
           },
           {
-            content: "  export const limit = 5;\n",
-            section: { path: ["Accounts", "limit"], level: 2 },
+            content: '  console.log("between");\n',
+            section: { path: ["Accounts"], level: 1 },
+            types: ["code"],
+          },
+          {
+            content: "  export class Second {\n",
+            section: { path: ["Accounts", "Second"], level: 2 },
+            types: ["code", "structural"],
+          },
+          {
+            content: "    b() { return 2; }\n",
+            section: { path: ["Accounts", "Second", "b"], level: 3 },
+            types: ["code"],
+          },
+          {
+            content: "  }\n",
+            section: { path: ["Accounts", "Second"], level: 2 },
             types: ["code"],
           },
           {
@@ -231,33 +332,27 @@ describe("HierarchicalAssemblyStrategy", () => {
             section: { path: ["Accounts"], level: 1 },
             types: ["code"],
           },
-          {
-            content: "const after = 1;\n",
-            section: { path: ["after"], level: 1 },
-            types: ["code"],
-          },
         ],
         links: [],
         errors: [],
       });
       const chunks = await documentStore.findChunksByUrl(
-        "test-nested-scopes",
+        "test-scope-opening",
         "1.0",
         "Accounts.ts",
       );
-      const getUser = chunks[2];
 
       const result = await strategy.selectChunks(
-        "test-nested-scopes",
+        "test-scope-opening",
         "1.0",
-        [getUser],
+        [chunks[6]],
         documentStore,
       );
 
       expect(strategy.assembleContent(result)).toBe(
         "export namespace Accounts {\n" +
-          "  export class UserService {\n" +
-          "    getUser(id: string) {\n      return id;\n    }\n" +
+          "  export class Second {\n" +
+          "    b() { return 2; }\n" +
           "  }\n" +
           "}\n",
       );
@@ -319,8 +414,11 @@ describe("HierarchicalAssemblyStrategy", () => {
         users: [{ name: "Alice" }],
       };
 
-      /** Stores the config as the JSON splitter chunks it and returns the chunk holding `text`. */
-      async function storeConfigAndFind(text: string): Promise<DbPageChunk> {
+      /** Stores a document as the JSON splitter chunks it and returns the chunk holding `text`. */
+      async function storeConfigAndFind(
+        text: string,
+        document: object = config,
+      ): Promise<DbPageChunk> {
         const splitter = new JsonDocumentSplitter(appConfig.splitter, {
           preserveFormatting: true,
         });
@@ -330,7 +428,7 @@ describe("HierarchicalAssemblyStrategy", () => {
           sourceContentType: "application/json",
           contentType: "application/json",
           textContent: "",
-          chunks: await splitter.splitText(JSON.stringify(config, null, 2)),
+          chunks: await splitter.splitText(JSON.stringify(document, null, 2)),
           links: [],
           errors: [],
         });
@@ -377,6 +475,29 @@ describe("HierarchicalAssemblyStrategy", () => {
         expect(assembled).toContain('"timeout": 30');
         expect(assembled).not.toContain("demo");
         expect(assembled).not.toContain("Alice");
+      });
+
+      it.each([
+        ["object", {}],
+        ["array", []],
+      ])("returns an empty %s a matched key opens", async (_kind, empty) => {
+        const target = await storeConfigAndFind('"target"', {
+          name: "unrelated",
+          target: empty,
+          other: 1,
+        });
+
+        const result = await strategy.selectChunks(
+          "test-json",
+          "1.0",
+          [target],
+          documentStore,
+        );
+
+        const assembled = strategy.assembleContent(result);
+        expect(assembled).toContain('"target": ');
+        expect(assembled).not.toContain("unrelated");
+        expect(assembled).not.toContain("other");
       });
     });
 
