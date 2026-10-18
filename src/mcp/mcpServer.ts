@@ -3,7 +3,12 @@ import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { PipelineJobStatus } from "../pipeline/types";
 import { libraryNamesMatch } from "../store/types";
-import { TelemetryEvent, telemetry } from "../telemetry";
+import {
+  extractHostname,
+  extractProtocol,
+  TelemetryEvent,
+  telemetry,
+} from "../telemetry";
 import type { JobInfo } from "../tools";
 import { ToolError } from "../tools/errors";
 import type { AppConfig } from "../utils/config";
@@ -378,7 +383,8 @@ function createMcpServerInstance(
           context: "mcp_server",
           library,
           version,
-          url: new URL(url).hostname, // Privacy-safe URL tracking
+          url: extractHostname(url), // Host only, never the full URL
+          urlProtocol: extractProtocol(url),
           maxPages,
           maxDepth,
           scope,
@@ -491,7 +497,7 @@ function createMcpServerInstance(
         context: "mcp_server",
         library,
         version,
-        query: query.substring(0, 100), // Truncate query for privacy
+        queryLength: query.length, // Never the query itself
         limit,
       });
 
@@ -866,7 +872,8 @@ ${r.content}\n`,
       telemetry.track(TelemetryEvent.TOOL_USED, {
         tool: "fetch_url",
         context: "mcp_server",
-        url: new URL(url).hostname, // Privacy-safe URL tracking
+        url: extractHostname(url), // Host only, never the full URL
+        urlProtocol: extractProtocol(url),
         followRedirects,
       });
 

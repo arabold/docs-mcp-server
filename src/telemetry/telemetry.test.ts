@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TelemetryConfig } from "./TelemetryConfig";
-import { initTelemetry, Telemetry, TelemetryEvent, telemetry } from "./telemetry";
+import { generateInstallationId, TelemetryConfig } from "./TelemetryConfig";
+import {
+  getTelemetryInstance,
+  initTelemetry,
+  Telemetry,
+  TelemetryEvent,
+  telemetry,
+} from "./telemetry";
 
 // Set the global __POSTHOG_API_KEY__ for testing
 (global as any).__POSTHOG_API_KEY__ = "test-api-key";
@@ -152,13 +158,26 @@ describe("Telemetry", () => {
 
       expect(mockPostHogClient.captureException).toHaveBeenCalledWith(
         "test-installation-id",
-        error,
+        expect.objectContaining({ name: "Error", message: "Test error" }),
         {
           appVersion: "1.0.0",
           context: "test",
           timestamp: expect.any(String),
         },
       );
+    });
+
+    it("should send exceptions without URLs or paths", () => {
+      const error = new Error(
+        "Failed to fetch https://intranet.example.com/secret into /Users/john/docs",
+      );
+
+      telemetry.captureException(error);
+
+      const sent = mockPostHogClient.captureException.mock.calls[0][1] as Error;
+      expect(sent.message).toBe("Failed to fetch [url] into [path]");
+      expect(sent.stack).not.toContain("intranet.example.com");
+      expect(sent.stack).not.toContain("/Users/");
     });
   });
 
@@ -219,6 +238,26 @@ describe("telemetry proxy", () => {
     // The proxy should now reflect the disabled state
     expect(telemetry.isEnabled()).toBe(false);
     expect(mockConfig.setEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("should identify events by the installation ID in the store path", () => {
+    vi.mocked(TelemetryConfig.getInstance).mockReturnValue({
+      isEnabled: vi.fn(() => true),
+      setEnabled: vi.fn(),
+    } as any);
+    vi.mocked(generateInstallationId).mockImplementationOnce((storePath?: string) =>
+      storePath ? `id-from-${storePath}` : "id-from-default-dir",
+    );
+
+    initTelemetry({ enabled: true, storePath: "/data" });
+    telemetry.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+
+    const instance = getTelemetryInstance() as any;
+    expect(instance.postHogClient.capture).toHaveBeenCalledWith(
+      "id-from-/data",
+      TelemetryEvent.TOOL_USED,
+      expect.any(Object),
+    );
   });
 
   it("should not track events when disabled via initTelemetry", () => {
