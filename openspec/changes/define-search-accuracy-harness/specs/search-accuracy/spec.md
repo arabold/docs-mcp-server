@@ -15,6 +15,12 @@ The benchmark SHALL index a corpus defined by a checked-in manifest that pins ea
 - **WHEN** the benchmark runs
 - **THEN** it makes no network request to fetch documents
 
+#### Scenario: Moving the cache does not change results
+- **GIVEN** the same manifest, golden set and configuration
+- **WHEN** the benchmark runs from two different cache directories
+- **THEN** it ranks every query the same way in both
+- **AND** reuses cached vectors in both
+
 #### Scenario: Changed pin is fetched again
 - **GIVEN** the manifest pins a source to a revision that is not in the cache
 - **WHEN** the benchmark runs
@@ -84,6 +90,11 @@ For each query, mode and level the benchmark SHALL record the rank of the first 
 - **WHEN** the query is scored
 - **THEN** its page-level first rank is 1
 - **AND** its chunk-level first rank is 3
+
+#### Scenario: A result holding two passages counts for both
+- **GIVEN** a query with two golden passages on one page
+- **WHEN** its first result holds both passages
+- **THEN** its chunk-level Recall@10 is 1
 
 #### Scenario: Grades order nDCG
 - **GIVEN** a query with a grade 3 passage and a grade 1 passage

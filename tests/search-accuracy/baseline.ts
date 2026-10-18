@@ -8,6 +8,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { AppConfig } from "../../src/utils/config";
+import { canonicalModelSpec } from "./embedding-cache";
 import {
   type Aggregate,
   aggregate,
@@ -171,8 +172,10 @@ function sharedMismatches(current: RunSnapshot, baseline: RunSnapshot): string[]
 }
 
 function embeddingMismatch(current: RunSnapshot, baseline: RunSnapshot): string | null {
+  const model = (snapshot: RunSnapshot) =>
+    snapshot.embeddingModel === null ? null : canonicalModelSpec(snapshot.embeddingModel);
   if (
-    current.embeddingModel === baseline.embeddingModel &&
+    model(current) === model(baseline) &&
     current.vectorDimension === baseline.vectorDimension
   ) {
     return null;
@@ -272,7 +275,8 @@ export function compareWithBaseline(
  * Builds the baseline from a run over the full golden set.
  *
  * Modes the run did not score keep their previous entries when the shared
- * snapshot is unchanged; otherwise they are dropped.
+ * snapshot is unchanged and, for the vector and hybrid modes, the run used the
+ * same embedding model or none at all; otherwise they are dropped.
  *
  * @param run A run over every golden query.
  * @param previous The current baseline, or null.
@@ -299,7 +303,13 @@ export function buildBaseline(run: RunResult, previous: Baseline | null): Baseli
             outcome.levels[level].map((score) => [score.queryId, toBaselineQuery(score)]),
           );
       }
-    } else if (keepPrevious && previous?.queries[mode]) {
+    } else if (
+      keepPrevious &&
+      previous?.queries[mode] &&
+      (mode === "fts" ||
+        run.snapshot.embeddingModel === null ||
+        embeddingMismatch(run.snapshot, previous.snapshot) === null)
+    ) {
       baseline.summary[mode] = previous.summary[mode];
       baseline.queries[mode] = previous.queries[mode];
       if (mode !== "fts" && baseline.snapshot.embeddingModel === null) {
@@ -416,10 +426,14 @@ export function renderSummary(
           (regression) =>
             `- ${regression.mode} ${regression.level} ${regression.side} ${regression.metric}: ${fmt(regression.baseline)} → ${fmt(regression.current)}`,
         ),
-        ...comparison.notCompared.map(
-          (entry) => `- ${entry.mode} not compared: ${entry.reason}`,
-        ),
       );
+      if (comparison.notCompared.length > 0) {
+        lines.push(
+          `${comparison.notCompared.length} mode(s) could not be compared with the baseline, which fails the run:`,
+          ...comparison.notCompared.map((entry) => `- ${entry.mode}: ${entry.reason}`),
+          "Refresh the baseline, or limit the run with DOCS_ACCURACY_MODES.",
+        );
+      }
       break;
   }
   return lines.join("\n");

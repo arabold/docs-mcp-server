@@ -26,7 +26,7 @@ import {
   serializeBaseline,
 } from "./baseline";
 import { ensureCorpus, loadCorpusManifest } from "./corpus";
-import { sharedEmbeddingCacheStats } from "./embedding-cache";
+import { canonicalModelSpec, sharedEmbeddingCacheStats } from "./embedding-cache";
 import {
   evaluateMode,
   MODES,
@@ -46,8 +46,9 @@ import {
 
 vi.mock("../../src/store/embeddings/EmbeddingFactory", async (importOriginal) => {
   const { withEmbeddingCache } = await import("./embedding-cache");
-  const { cachePaths } = await import("./paths");
-  return withEmbeddingCache(await importOriginal(), cachePaths().embeddings);
+  const { cachePaths, stableCorpusText } = await import("./paths");
+  const { corpus, embeddings } = cachePaths();
+  return withEmbeddingCache(await importOriginal(), embeddings, stableCorpusText(corpus));
 });
 
 /** Prints a line; the default reporter drops `console.log` output of passing tests. */
@@ -99,7 +100,7 @@ describe("search accuracy", () => {
     if (!reuseIndex) {
       const started = Date.now();
       print(`Indexing ${checkouts.length} libraries…`);
-      await indexCorpus(checkouts, config);
+      await indexCorpus(checkouts, paths.corpus, config);
       print(`Indexed in ${Math.round((Date.now() - started) / 1000)} s`);
     }
 
@@ -123,7 +124,7 @@ describe("search accuracy", () => {
       const outcome = await evaluateMode(mode, dbPath, queries, config);
       run.modes[mode] = outcome;
       if (mode !== "fts" && outcome.status === "scored") {
-        run.snapshot.embeddingModel = config.app.embeddingModel;
+        run.snapshot.embeddingModel = canonicalModelSpec(config.app.embeddingModel);
       }
     }
     run.embeddingRequests = sharedEmbeddingCacheStats().misses;
@@ -147,6 +148,7 @@ describe("search accuracy", () => {
       `\n${renderSummary(run, comparison)}\n\nFull report: ${path.join(RESULTS_DIR, "report.md")}`,
     );
     expect(comparison.status).toBe("compared");
+    expect(comparison.notCompared).toEqual([]);
     expect(comparison.regressions).toEqual([]);
   });
 });

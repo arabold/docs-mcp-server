@@ -43,9 +43,10 @@ Options are environment variables:
 
 The run fails when chunk-level or page-level MRR, Hit@5 or nDCG@10 of any mode
 drops by more than 0.02 at either level, or when the baseline was recorded with
-a different corpus, golden set, search configuration or result limit. Vector
-and hybrid scores are compared only with a baseline recorded with the same
-embedding model.
+a different corpus, golden set, search configuration or result limit. It also
+fails when it scores the vector or hybrid mode with a different embedding model
+than the baseline's; run with `DOCS_ACCURACY_MODES=fts` to compare full-text
+search alone, or refresh the baseline.
 
 ## Reading the results
 
@@ -76,15 +77,26 @@ Scores:
   case, punctuation and Markdown syntax, or an unbroken run of at least half of
   it when the splitter cut the passage across chunks.
 - **Page level** counts a result when it is from the passage's page.
+- Each passage counts at the rank of the first result holding it, so one
+  result holding two passages (an assembled final result, say) counts for both.
 - **MRR** is 1 / rank of the first hit. **Hit@k** is 1 when a hit is in the
   top k. **Recall@10** is the share of a query's passages in the top 10.
-  **nDCG@10** rewards ranking grade 3 passages above grade 1 ones. All are
-  averaged over the queries. **Misses** counts queries with no hit in the top 10.
+  **nDCG@10** rewards ranking grade 3 passages above grade 1 ones, with gain
+  2^grade − 1; it is capped at 1, which a result holding every passage at the
+  top reaches. All are averaged over the queries. **Misses** counts queries
+  with no hit in the top 10.
 
 One query moves an average by about 0.008, so look at the per-query changes
 before reading a pattern into a small difference.
 
 ## The corpus
+
+Indexed pages are recorded under `file:///corpus/<library>@<revision>/…`
+instead of the checkout's real path, in the store, in its full-text index and
+in the text sent to the embedding provider, so results and cached vectors do
+not depend on where the cache lives. Libraries are indexed one page at a time,
+because search breaks score ties by row order and concurrent indexing would let
+timing decide it.
 
 [`corpus.yaml`](corpus.yaml) pins the Markdown documentation of react.dev
 (CC BY 4.0), FastAPI, Vite and Pydantic (MIT) to commit SHAs. Only the listed
@@ -125,5 +137,9 @@ chunks and is marked `status: draft` until a person has reviewed it.
 ## Limitations
 
 - The corpus is Markdown source, so HTML extraction is not measured.
+- The crawler reads directories in the order the file system returns, which
+  differs between macOS and Linux. Search breaks some score ties by that order,
+  so two operating systems can rank a few queries differently. Runs on one
+  machine repeat exactly.
 - The embedding cache wraps the provider's client. A Gemini model that relies on
   truncating its vectors to the store's dimension is not supported yet.

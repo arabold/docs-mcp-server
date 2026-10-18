@@ -1,9 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { Embeddings } from "@langchain/core/embeddings";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CachingEmbeddings, EmbeddingCache } from "./embedding-cache";
+import { STABLE_CORPUS_URL, stableCorpusText } from "./paths";
 
 /** Embeds a text as [length, first char code], and records every call. */
 class RecordingEmbeddings extends Embeddings {
@@ -119,5 +121,57 @@ describe("CachingEmbeddings", () => {
 
     expect(first).toEqual(cached);
     expect(first[0][0]).toBe(Math.fround(0.1));
+  });
+
+  it("keeps models whose names only differ in punctuation apart", async () => {
+    await new CachingEmbeddings(
+      new RecordingEmbeddings(),
+      openCache("custom:org/model"),
+    ).embedDocuments(["ab"]);
+    const other = new RecordingEmbeddings(100);
+
+    await new CachingEmbeddings(other, openCache("custom:org_model")).embedDocuments([
+      "ab",
+    ]);
+
+    expect(other.documentCalls).toEqual([["ab"]]);
+  });
+
+  it("shares vectors between a model's short and provider-qualified names", async () => {
+    await new CachingEmbeddings(
+      new RecordingEmbeddings(),
+      openCache("openai:text-embedding-3-small"),
+    ).embedDocuments(["ab"]);
+    const inner = new RecordingEmbeddings();
+
+    await new CachingEmbeddings(
+      inner,
+      openCache("text-embedding-3-small"),
+    ).embedDocuments(["ab"]);
+
+    expect(inner.documentCalls).toEqual([]);
+  });
+
+  it("embeds the same text wherever the corpus is checked out", async () => {
+    const inner = new RecordingEmbeddings();
+    const header = (dir: string) =>
+      `<url>${pathToFileURL(path.join(dir, "react@abc/learn/state.md")).href}</url>\nState`;
+    const here = new CachingEmbeddings(
+      inner,
+      openCache(),
+      stableCorpusText("/home/a/corpus"),
+    );
+    const there = new CachingEmbeddings(
+      inner,
+      openCache(),
+      stableCorpusText("/srv/b/corpus"),
+    );
+
+    await here.embedDocuments([header("/home/a/corpus")]);
+    await there.embedDocuments([header("/srv/b/corpus")]);
+
+    expect(inner.documentCalls).toEqual([
+      [`<url>${STABLE_CORPUS_URL}/react@abc/learn/state.md</url>\nState`],
+    ]);
   });
 });

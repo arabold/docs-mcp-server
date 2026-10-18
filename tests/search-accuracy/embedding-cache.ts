@@ -12,6 +12,18 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { Embeddings } from "@langchain/core/embeddings";
 import Database, { type Database as DatabaseType } from "better-sqlite3";
+import { splitModelSpec } from "../../src/store/embeddings/EmbeddingConfig";
+
+/**
+ * The provider-qualified name of an embedding model, so `text-embedding-3-small`
+ * and `openai:text-embedding-3-small` name the same model.
+ *
+ * @param modelSpec A model specification as configured.
+ */
+export function canonicalModelSpec(modelSpec: string): string {
+  const { provider, model } = splitModelSpec(modelSpec);
+  return `${provider}:${model}`;
+}
 
 /** Whether a text was embedded as a document or as a search query. */
 export type EmbeddingKind = "document" | "query";
@@ -40,8 +52,13 @@ export class EmbeddingCache {
    */
   constructor(cacheDir: string, modelSpec: string, vectorDimension: number) {
     mkdirSync(cacheDir, { recursive: true });
-    const slug = modelSpec.replace(/[^a-zA-Z0-9.-]+/g, "_");
-    this.db = new Database(path.join(cacheDir, `${slug}-${vectorDimension}.sqlite`));
+    const identity = `${canonicalModelSpec(modelSpec)}\0${vectorDimension}`;
+    // Readable prefix; the hash keeps specs that slug alike (`a/b`, `a_b`) apart
+    const slug = canonicalModelSpec(modelSpec).replace(/[^a-zA-Z0-9.-]+/g, "_");
+    const hash = createHash("sha256").update(identity).digest("hex").slice(0, 12);
+    this.db = new Database(
+      path.join(cacheDir, `${slug}-${vectorDimension}-${hash}.sqlite`),
+    );
     this.db.pragma("journal_mode = WAL");
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS vectors (key TEXT PRIMARY KEY, vector BLOB NOT NULL)",
@@ -96,11 +113,16 @@ function cacheKey(kind: EmbeddingKind, text: string): string {
  * Embeddings that answer from an {@link EmbeddingCache} and ask the wrapped
  * client only for texts the cache has not seen. Provider errors propagate
  * unchanged and nothing is cached for the failed texts.
+ *
+ * `normalize` rewrites every text before it is looked up or sent, so parts
+ * that depend on the machine (such as where the corpus is checked out) do not
+ * change the vectors.
  */
 export class CachingEmbeddings extends Embeddings {
   constructor(
     private readonly inner: Embeddings,
     private readonly cache: EmbeddingCache,
+    private readonly normalize: (text: string) => string = (text) => text,
   ) {
     super({});
   }
@@ -109,7 +131,8 @@ export class CachingEmbeddings extends Embeddings {
    * Embeds documents, requesting each distinct uncached text once in a single
    * call to the wrapped client.
    */
-  async embedDocuments(texts: string[]): Promise<number[][]> {
+  async embedDocuments(originalTexts: string[]): Promise<number[][]> {
+    const texts = originalTexts.map(this.normalize);
     const vectors: (number[] | undefined)[] = texts.map((text) =>
       this.cache.get("document", text),
     );
@@ -131,7 +154,8 @@ export class CachingEmbeddings extends Embeddings {
   }
 
   /** Embeds a search query, from the cache when it has been seen before. */
-  async embedQuery(text: string): Promise<number[]> {
+  async embedQuery(originalText: string): Promise<number[]> {
+    const text = this.normalize(originalText);
     const cached = this.cache.get("query", text);
     if (cached) return cached;
     const vector = toFloat32(await this.inner.embedQuery(text));
@@ -163,7 +187,7 @@ export function sharedEmbeddingCache(
   modelSpec: string,
   vectorDimension: number,
 ): EmbeddingCache {
-  const key = `${cacheDir}\0${modelSpec}\0${vectorDimension}`;
+  const key = `${cacheDir}\0${canonicalModelSpec(modelSpec)}\0${vectorDimension}`;
   let cache = sharedCaches.get(key);
   if (!cache) {
     cache = new EmbeddingCache(cacheDir, modelSpec, vectorDimension);
@@ -191,10 +215,12 @@ type EmbeddingFactoryModule =
  *
  * @param actual The real module.
  * @param cacheDir Directory of the embedding cache files.
+ * @param normalize Rewrites each text before lookup and embedding.
  */
 export function withEmbeddingCache(
   actual: EmbeddingFactoryModule,
   cacheDir: string,
+  normalize?: (text: string) => string,
 ): EmbeddingFactoryModule {
   return {
     ...actual,
@@ -204,6 +230,7 @@ export function withEmbeddingCache(
       return new CachingEmbeddings(
         inner,
         sharedEmbeddingCache(cacheDir, providerAndModel, dimension),
+        normalize,
       );
     },
   };

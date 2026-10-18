@@ -141,6 +141,19 @@ describe("compareWithBaseline", () => {
     expect(comparison.notCompared.map((entry) => entry.mode)).toEqual(["hybrid"]);
   });
 
+  it("compares vector modes when only the spelling of the model differs", () => {
+    const baseline = baselineOf(run({ hybrid: [1, 1, 1, 1] }));
+    const shortName = run(
+      { hybrid: [1, 1, 1, 1] },
+      { snapshot: { ...SNAPSHOT, embeddingModel: "text-embedding-3-small" } },
+    );
+
+    const comparison = compareWithBaseline(shortName, baseline);
+
+    expect(comparison.notCompared).toEqual([]);
+    expect(comparison.baselineSummary.hybrid).toBeDefined();
+  });
+
   it("compares a run over some libraries with the same queries of the baseline", () => {
     const baseline = baselineOf(run({ fts: [1, 1, null, null] }));
     const reactOnly = QUERIES.filter((query) => query.library === "react");
@@ -167,6 +180,21 @@ describe("serializeBaseline", () => {
 });
 
 describe("buildBaseline", () => {
+  it("drops another model's scores for modes a refresh with a new model skipped", () => {
+    const previous = baselineOf(run({ vector: [1, 1, 1, 1], hybrid: [2, 2, 2, 2] }));
+
+    const refreshed = buildBaseline(
+      run(
+        { vector: [3, 3, 3, 3] },
+        { snapshot: { ...SNAPSHOT, embeddingModel: "openai:text-embedding-3-large" } },
+      ),
+      previous,
+    );
+
+    expect(refreshed.queries.vector?.store["react-0"].ranks).toEqual([3, 3]);
+    expect(refreshed.queries.hybrid).toBeUndefined();
+  });
+
   it("keeps modes the refresh did not score while the configuration is unchanged", () => {
     const previous = baselineOf(run({ fts: [1, 1, 1, 1], hybrid: [2, 2, 2, 2] }));
 

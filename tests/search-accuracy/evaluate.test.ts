@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../../src/utils/config";
+import {
+  isVectorDimensionExplicit,
+  loadConfig,
+  markVectorDimensionSource,
+} from "../../src/utils/config";
 import { aggregate, modeConfig, scoreQuery } from "./evaluate";
 import type { GoldenQuery } from "./golden";
 
@@ -66,6 +70,22 @@ describe("scoreQuery", () => {
     });
   });
 
+  it("credits every passage a result holds", () => {
+    const twoPassages = query({
+      passages: [
+        { page: "a.md", text: "direct answer", grade: 3 },
+        { page: "a.md", text: "useful context", grade: 1 },
+      ],
+    });
+
+    const score = scoreQuery(twoPassages, [
+      result("a.md", "a direct answer and useful context"),
+    ]);
+
+    expect(score.chunk.recall_at_10).toBe(1);
+    expect(score.chunk.ndcg_at_10).toBe(1);
+  });
+
   it("ranks a grade 3 passage above a grade 1 passage higher in nDCG", () => {
     const graded = query({
       passages: [
@@ -116,6 +136,14 @@ describe("modeConfig", () => {
 
     expect(vector.search.weightFts).toBe(0);
     expect(vector.search.weightVec).toBe(config.search.weightVec);
+  });
+
+  it("keeps an explicitly configured vector dimension explicit", () => {
+    const explicit = markVectorDimensionSource(structuredClone(config), true);
+
+    for (const mode of ["fts", "vector", "hybrid"] as const) {
+      expect(isVectorDimensionExplicit(modeConfig(mode, explicit))).toBe(true);
+    }
   });
 
   it("leaves hybrid mode and the given configuration unchanged", () => {

@@ -3,23 +3,14 @@
  * indexed corpus in one mode and turns the ranked results into metrics.
  */
 
-import { createRequire } from "node:module";
 import Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { DocumentRetrieverService } from "../../src/store/DocumentRetrieverService";
 import { DocumentStore } from "../../src/store/DocumentStore";
 import type { AppConfig } from "../../src/utils/config";
 import type { GoldenQuery } from "./golden";
+import { cloneConfig } from "./index-corpus";
 import { isPage, matchPassage } from "./passages";
-
-const require = createRequire(import.meta.url);
-const { computeIrMetrics, mean } = require("../search-eval/lib/metrics.cjs") as {
-  computeIrMetrics: (
-    ranked: string[],
-    qrels: { url: string; grade: number }[],
-  ) => Record<string, number>;
-  mean: (values: number[]) => number;
-};
 
 /** Search configurations the benchmark compares. */
 export const MODES = ["fts", "vector", "hybrid"] as const;
@@ -107,27 +98,21 @@ export class PassageNotFoundError extends Error {
  * holds the passage (wholly, or at least half of it when the splitter cut it).
  * It counts at page level when it is from a golden passage's page.
  *
+ * Each passage is credited at the rank of the first result holding it, so a
+ * result that holds two passages (an assembled final result, say) earns both.
+ *
  * @param query The golden query.
  * @param results Results in rank order.
  */
 export function scoreQuery(query: GoldenQuery, results: RankedResult[]): QueryScore {
-  const chunkIds = results.map((result, index) => {
-    let best: { id: string; grade: number } | undefined;
-    query.passages.forEach((passage, passageIndex) => {
-      if (
+  const passageRanks = query.passages.map((passage) =>
+    firstRank(
+      results,
+      (result) =>
         isPage(result.url, passage.page) &&
-        matchPassage(result.content, passage.text) !== null &&
-        passage.grade > (best?.grade ?? 0)
-      ) {
-        best = { id: `${query.id}-p${passageIndex}`, grade: passage.grade };
-      }
-    });
-    return best?.id ?? `miss-${index}`;
-  });
-  const chunkQrels = query.passages.map((passage, passageIndex) => ({
-    url: `${query.id}-p${passageIndex}`,
-    grade: passage.grade,
-  }));
+        matchPassage(result.content, passage.text) !== null,
+    ),
+  );
 
   const pageGrades = new Map<string, number>();
   for (const passage of query.passages) {
@@ -136,39 +121,80 @@ export function scoreQuery(query: GoldenQuery, results: RankedResult[]): QuerySc
       Math.max(pageGrades.get(passage.page) ?? 0, passage.grade),
     );
   }
-  const pageIds = results.map(
-    (result, index) =>
-      [...pageGrades.keys()].find((page) => isPage(result.url, page)) ?? `other-${index}`,
+  const pages = [...pageGrades];
+  const pageRanks = pages.map(([page]) =>
+    firstRank(results, (result) => isPage(result.url, page)),
   );
-  const pageQrels = [...pageGrades].map(([page, grade]) => ({ url: page, grade }));
 
-  const chunkRank = firstRank(chunkIds, new Set(chunkQrels.map((qrel) => qrel.url)));
-  const pageRank = firstRank(pageIds, new Set(pageGrades.keys()));
+  const chunk = metricsFromRanks(
+    passageRanks,
+    query.passages.map((passage) => passage.grade),
+  );
+  const page = metricsFromRanks(
+    pageRanks,
+    pages.map(([, grade]) => grade),
+  );
   return {
     queryId: query.id,
-    chunkRank,
-    pageRank,
-    chunk: toMetrics(computeIrMetrics(chunkIds, chunkQrels), chunkRank),
-    page: toMetrics(computeIrMetrics(pageIds, pageQrels), pageRank),
+    chunkRank: minRank(passageRanks),
+    pageRank: minRank(pageRanks),
+    chunk,
+    page,
   };
 }
 
-function firstRank(ids: string[], relevant: Set<string>): number | null {
-  const index = ids.findIndex((id) => relevant.has(id));
+function firstRank(
+  results: RankedResult[],
+  holds: (result: RankedResult) => boolean,
+): number | null {
+  const index = results.findIndex(holds);
   return index === -1 ? null : index + 1;
 }
 
-function toMetrics(computed: Record<string, number>, rank: number | null): Metrics {
+function minRank(ranks: (number | null)[]): number | null {
+  const found = ranks.filter((rank): rank is number => rank !== null);
+  return found.length > 0 ? Math.min(...found) : null;
+}
+
+/** Graded gain, as in `tests/search-eval/lib/metrics.cjs`. */
+const gain = (grade: number) => 2 ** grade - 1;
+
+/**
+ * Metrics of one query from the rank at which each relevant item was first found.
+ *
+ * nDCG@10 credits every item at its own rank; the ideal places the items at
+ * ranks 1, 2, … by descending grade. Items found together in one top result can
+ * beat that ideal, so nDCG is capped at 1.
+ *
+ * @param ranks 1-based rank of each relevant item, or null when not found.
+ * @param grades Grade of each relevant item, in the same order.
+ */
+export function metricsFromRanks(ranks: (number | null)[], grades: number[]): Metrics {
+  const first = minRank(ranks);
+  const within = (k: number) => (first !== null && first <= k ? 1 : 0);
+  const inTop10 = ranks.filter((rank) => rank !== null && rank <= 10).length;
+  const dcg = ranks.reduce<number>(
+    (sum, rank, index) =>
+      rank !== null && rank <= 10 ? sum + gain(grades[index]) / Math.log2(rank + 1) : sum,
+    0,
+  );
+  const ideal = [...grades]
+    .sort((a, b) => b - a)
+    .slice(0, 10)
+    .reduce((sum, grade, index) => sum + gain(grade) / Math.log2(index + 2), 0);
   return {
-    mrr: computed.mrr,
-    hit_at_1: computed.hit_at_1,
-    hit_at_3: computed.hit_at_3,
-    hit_at_5: computed.hit_at_5,
-    hit_at_10: rank !== null && rank <= 10 ? 1 : 0,
-    recall_at_10: computed.recall_at_10,
-    ndcg_at_10: computed.ndcg_at_10,
+    mrr: first === null ? 0 : 1 / first,
+    hit_at_1: within(1),
+    hit_at_3: within(3),
+    hit_at_5: within(5),
+    hit_at_10: within(10),
+    recall_at_10: ranks.length === 0 ? 0 : inTop10 / ranks.length,
+    ndcg_at_10: ideal === 0 ? 0 : Math.min(1, dcg / ideal),
   };
 }
+
+const mean = (values: number[]) =>
+  values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
 
 /**
  * Averages query scores over all queries and per library, intent and style.
@@ -270,7 +296,7 @@ export function validatePassages(dbPath: string, queries: GoldenQuery[]): Passag
  * @param config The run's configuration; not modified.
  */
 export function modeConfig(mode: Mode, config: AppConfig): AppConfig {
-  const result = structuredClone(config);
+  const result = cloneConfig(config);
   if (mode === "fts") result.app.embeddingModel = "";
   if (mode === "vector") result.search.weightFts = 0;
   return result;

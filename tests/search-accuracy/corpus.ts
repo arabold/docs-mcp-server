@@ -4,8 +4,9 @@
  *
  * Each source is fetched once with a shallow, blobless, sparse `git` checkout
  * of its pinned commit, so only the documentation files are downloaded. A
- * checkout is reused for as long as its directory holds the revision marker
- * written after a successful checkout.
+ * checkout is reused while the marker written after a successful checkout
+ * names the same repository, revision, root and include patterns; a source
+ * whose selection changed is checked out again.
  */
 
 import { execFile } from "node:child_process";
@@ -16,8 +17,8 @@ import { parse } from "yaml";
 
 const execFileAsync = promisify(execFile);
 
-/** Marker written into a checkout once its revision is fully checked out. */
-const REVISION_MARKER = ".accuracy-revision";
+/** Marker written into a checkout once it is complete; holds {@link checkoutIdentity}. */
+const CHECKOUT_MARKER = ".accuracy-checkout";
 
 /** One documentation source of the corpus, pinned to a commit. */
 export interface CorpusSource {
@@ -125,7 +126,7 @@ export async function ensureCorpus(
   const checkouts: CorpusCheckout[] = [];
   for (const source of sources) {
     const checkoutDir = path.join(cacheDir, `${source.library}@${source.revision}`);
-    if (!isCheckedOut(checkoutDir, source.revision)) {
+    if (!isCheckedOut(checkoutDir, source)) {
       await checkOut(source, checkoutDir);
     }
     checkouts.push({ source, directory: path.join(checkoutDir, source.root) });
@@ -133,9 +134,33 @@ export async function ensureCorpus(
   return checkouts;
 }
 
-function isCheckedOut(checkoutDir: string, revision: string): boolean {
-  const marker = path.join(checkoutDir, REVISION_MARKER);
-  return existsSync(marker) && readFileSync(marker, "utf8").trim() === revision;
+/** What decides the files of a checkout. */
+function checkoutIdentity(source: CorpusSource): string {
+  const { repository, revision, root, include } = source;
+  return JSON.stringify({ repository, revision, root, include });
+}
+
+/**
+ * Whether a directory holds a complete checkout of exactly this source.
+ *
+ * @param checkoutDir The checkout's directory.
+ * @param source The source it should hold.
+ */
+export function isCheckedOut(checkoutDir: string, source: CorpusSource): boolean {
+  const marker = path.join(checkoutDir, CHECKOUT_MARKER);
+  return (
+    existsSync(marker) && readFileSync(marker, "utf8").trim() === checkoutIdentity(source)
+  );
+}
+
+/**
+ * Records that a directory holds a complete checkout of a source.
+ *
+ * @param checkoutDir The checkout's directory.
+ * @param source The source it holds.
+ */
+export function markCheckedOut(checkoutDir: string, source: CorpusSource): void {
+  writeFileSync(path.join(checkoutDir, CHECKOUT_MARKER), `${checkoutIdentity(source)}\n`);
 }
 
 /** Sparse patterns for `git sparse-checkout set --no-cone`, anchored at the repository root. */
@@ -177,5 +202,5 @@ async function checkOut(source: CorpusSource, checkoutDir: string): Promise<void
       new Error(`"${source.root}" does not exist at this revision`),
     );
   }
-  writeFileSync(path.join(checkoutDir, REVISION_MARKER), `${source.revision}\n`);
+  markCheckedOut(checkoutDir, source);
 }

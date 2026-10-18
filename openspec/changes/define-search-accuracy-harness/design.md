@@ -8,7 +8,6 @@ See proposal.md for why. Relevant facts about the current code:
 - `DocumentRetrieverService.search()` takes those chunks, groups them by page, clusters nearby chunks, assembles context around them and sorts the results by score. This is what the `search_docs` tool returns.
 - `DocumentStore` creates its embedding client through `createEmbeddingModel()` in `src/store/embeddings/EmbeddingFactory.ts` and uses it for both documents and queries.
 - Local directories are indexed through `file://` URLs by `LocalFileStrategy`, with the same splitter and storage as web pages. `test/pipeline-harness.ts` shows how to drive `PipelineManager` and `DocumentManagementService` to completion in-process.
-- `tests/search-eval/lib/metrics.cjs` already computes MRR, Hit@k, Recall@k and graded nDCG@k from a ranked list of identifiers and a list of graded relevant identifiers.
 - Vitest runs `tests/**/*.test.ts` in the default suite. `vite.config.live.ts` shows how a separate config replaces the exclude list and drops the MSW setup for a suite that needs the real network.
 
 ## Goals / Non-Goals
@@ -41,9 +40,13 @@ About 5.9 MB of Markdown. Four libraries in one store keep cross-library effects
 
 ### 2. Re-index every run, cache embeddings by text
 
-Every run indexes the corpus into a fresh store, so splitter and pipeline changes are always measured. Indexing stays cheap because every vector comes from a disk cache keyed by `sha256(model spec, vector dimension, text)`. Only texts the cache has not seen go to the provider, so a splitter change re-embeds only the chunks it changed. `DOCS_ACCURACY_REUSE_INDEX=1` skips re-indexing when iterating on ranking alone.
+Every run indexes the corpus into a fresh store, so splitter and pipeline changes are always measured. Indexing stays cheap because every vector comes from a disk cache, one SQLite file per model (named by the provider-qualified model spec, the vector dimension and a hash of both), keyed by `sha256(kind, text)`. Only texts the cache has not seen go to the provider, so a splitter change re-embeds only the chunks it changed. `DOCS_ACCURACY_REUSE_INDEX=1` skips re-indexing when iterating on ranking alone.
 
 *Alternatives:* keep the indexed store between runs keyed by a code hash (hard to define which code matters); record and replay at the HTTP layer (works only for OpenAI-compatible APIs).
+
+### 2a. Results must not depend on the machine
+
+`DocumentStore` puts each page URL into the text it embeds (`<url>…</url>`), and the full-text index weights the URL column. A `file://` URL of the checkout carries the user's home directory and cache path, so the same corpus would rank and embed differently per machine. The embedding cache therefore rewrites the corpus directory's URL to `file:///corpus` in every text before lookup and before calling the provider, and after indexing the benchmark rewrites `pages.url` and `documents_fts.url` the same way. Libraries are indexed one after another with `scraper.maxConcurrency = 1`, because the search code breaks score ties by row order and concurrent indexing would make row ids depend on timing. Directory listings still come in file-system order, which differs between macOS and Linux; sorting them belongs in `LocalFileStrategy` and is left to a separate change.
 
 ### 3. Run under Vitest and wrap the embedding factory with `vi.mock`
 
@@ -74,14 +77,11 @@ Both levels use the same limit, so the store pool the final results are built fr
 
 Passages and chunk contents are normalized the same way before comparing: Markdown links reduced to their text, emphasis and inline-code markers removed, whitespace collapsed, lower-cased. A chunk contains a passage when the normalized chunk includes the normalized passage. When it does not, the longest run of consecutive passage words found in the chunk decides: half the passage or more counts as a hit (and the passage is reported as split). Passages are one or two sentences of prose, which keeps splits rare and the check cheap.
 
-### 7. Scoring reuses `metrics.cjs` with identifiers
+### 7. Scoring from per-passage ranks
 
-For each query, every result is turned into an identifier and passed with graded relevant identifiers to `computeIrMetrics()`:
+For each query, every golden passage gets the rank of the first result that holds it, and every golden page the rank of the first result from it. MRR and Hit@k come from the best of those ranks, Recall@10 from how many are within 10, and nDCG@10 credits each passage at its own rank with the gain `2^grade − 1` used by `tests/search-eval/lib/metrics.cjs`. A result holding two passages credits both, so grouping and assembly are not penalised for putting answers together; nDCG is capped at 1 for that reason.
 
-- chunk level: a result containing passage *i* of query *q* becomes `q-p<i>`; any other result gets a unique `miss-<rank>`. The relevant list is `q-p<i>` with each passage's grade.
-- page level: a result becomes its page path; relevant pages carry the highest grade among their passages.
-
-Identifiers contain no `#`, `?`, trailing `/` or `.md`, which `normalizeUrl()` would strip. The first-hit rank is read from the same ranked list.
+*Alternative:* map each result to one identifier and reuse `computeIrMetrics()`. Rejected because a result can hold several passages and would then credit only one of them.
 
 ### 8. Golden set authoring
 
@@ -105,6 +105,7 @@ tests/search-accuracy/
 + index-corpus.ts          # benchmark config and indexing through PipelineManager
 + paths.ts                 # checked-in file paths and cache locations
 + corpus.ts                # manifest loading, sparse git checkout into the cache
++ corpus.test.ts           # checkout reuse; runs in npm test
 + golden.ts                # golden set loading and schema checks
 + golden.test.ts           # runs in npm test
 + passages.ts              # normalization and passage matching
@@ -157,7 +158,7 @@ function matchPassage(content: string, passage: string): PassageMatch;
 // embedding-cache.ts — a cache miss calls the inner client once per batch of misses;
 // provider errors propagate unchanged.
 class CachingEmbeddings extends Embeddings {
-  constructor(inner: Embeddings, cache: EmbeddingCache);
+  constructor(inner: Embeddings, cache: EmbeddingCache, normalize?: (text: string) => string);
 }
 
 // evaluate.ts — throws when a golden passage is not found in any chunk of its page.
@@ -178,6 +179,7 @@ accuracy.eval.ts
   loadGoldenSet()                         # fails fast before any download
   ensureCorpus()                          # git sparse checkout per missing revision
   indexCorpus()                           # index-corpus.ts; unless DOCS_ACCURACY_REUSE_INDEX=1
+                                          # one library, one page at a time; URLs moved to file:///corpus
     DocumentManagementService(config with storePath = index.sqlite)
     PipelineManager.enqueueScrapeJob(file://<checkout>/<root>)  # one job per library
     waitForJobCompletion()                # a failed job fails the run
@@ -186,7 +188,7 @@ accuracy.eval.ts
     evaluateMode()                        # skipped when embeddings are unavailable
       new DocumentStore(index.sqlite, modeConfig) + DocumentRetrieverService
       findByContent() / search()  per query
-      computeIrMetrics()                  # tests/search-eval/lib/metrics.cjs
+      metricsFromRanks()                  # per-passage and per-page first ranks
   compareWithBaseline() | write baseline  # --mode baseline
   write results/report.md and results/run.json; print summary
   expect(comparison.regressions).toEqual([])
