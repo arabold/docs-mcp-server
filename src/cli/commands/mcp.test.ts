@@ -87,128 +87,6 @@ vi.mock("../services", () => ({
   registerGlobalServices: vi.fn(),
 }));
 
-describe("mcp command", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
-  });
-
-  it("starts HTTP server when protocol is http", async () => {
-    const parser = yargs().scriptName("test");
-    createMcpCommand(parser);
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop");
-      });
-
-    // Mock resolveProtocol
-    const utils = await import("../utils");
-    // @ts-expect-error
-    utils.resolveProtocol.mockReturnValueOnce("http");
-
-    try {
-      await parser.parse(`mcp --protocol http`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    expect(appModule.startAppServer).toHaveBeenCalled();
-    const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[1];
-    expect(config.enableMcpServer).toBe(true);
-    expect(config.enableWebInterface).toBe(false);
-  });
-
-  it("starts Stdio server when protocol is stdio", async () => {
-    const parser = yargs().scriptName("test");
-    createMcpCommand(parser);
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop");
-      });
-
-    // Mock resolveProtocol
-    const utils = await import("../utils");
-    // @ts-expect-error
-    utils.resolveProtocol.mockReturnValueOnce("stdio");
-
-    try {
-      await parser.parse(`mcp --protocol stdio`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    expect(stdioModule.startStdioServer).toHaveBeenCalled();
-    expect(appModule.startAppServer).not.toHaveBeenCalled();
-  });
-
-  it("passes the server identity flags through to the config loader", async () => {
-    const parser = yargs().scriptName("test").strict();
-    createMcpCommand(parser);
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop");
-      });
-
-    try {
-      await parser.parse(
-        `mcp --protocol stdio --server-name acme-docs --server-title "Acme Docs" --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
-      );
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    const configModule = await import("../../utils/config");
-    expect(configModule.loadConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        serverName: "acme-docs",
-        serverTitle: "Acme Docs",
-        serverInstructions: "Use acme docs",
-        serverInstructionsFile: "/tmp/acme.md",
-      }),
-      expect.anything(),
-    );
-  });
-
-  it("checks the auth settings for the stdio transport it serves", async () => {
-    const parser = yargs().scriptName("test");
-    createMcpCommand(parser);
-    vi.mocked(loadConfig).mockReturnValueOnce({
-      app: { embeddingModel: "mock-model", storePath: "/mock/store" },
-      server: { ports: { mcp: 6280 } },
-      auth: { enabled: true, issuerUrl: "", audience: "" },
-    } as unknown as AppConfig);
-    vi.mocked(services.registerGlobalServices)
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop");
-      });
-    vi.mocked(utils.resolveProtocol).mockReturnValueOnce("stdio");
-
-    try {
-      await parser.parse(`mcp --protocol stdio`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    expect(stdioModule.startStdioServer).toHaveBeenCalled();
-    expect(utils.checkAuthForProtocol).toHaveBeenCalledWith(
-      expect.objectContaining({ enabled: true }),
-      "stdio",
-      6280,
-    );
-  });
-});
-
 /** Environment variables that could set the settings under test. */
 const PRECEDENCE_ENV = [
   "DOCS_MCP_CONFIG",
@@ -235,15 +113,20 @@ describe("mcp command configuration precedence", () => {
     }
     tempDir = mkdtempSync(path.join(tmpdir(), "mcp-precedence-"));
 
-    // Run the real loader and protocol resolution; only the servers stay mocked.
+    // Run the real loader, protocol resolution and auth check; only the
+    // servers stay mocked.
     const actualConfig =
       await vi.importActual<typeof import("../../utils/config")>("../../utils/config");
     vi.mocked(loadConfig).mockImplementationOnce(actualConfig.loadConfig);
     const actualUtils = await vi.importActual<typeof import("../utils")>("../utils");
     vi.mocked(utils.resolveProtocol).mockImplementationOnce(actualUtils.resolveProtocol);
+    vi.mocked(utils.checkAuthForProtocol).mockImplementationOnce(
+      actualUtils.checkAuthForProtocol,
+    );
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     for (const [name, value] of savedEnv) {
       if (value === undefined) {
         delete process.env[name];
@@ -260,7 +143,12 @@ describe("mcp command configuration precedence", () => {
   async function run(args: string, configYaml = ""): Promise<void> {
     const configPath = path.join(tempDir, "config.yaml");
     writeFileSync(configPath, configYaml);
-    const parser = yargs().scriptName("test");
+    // Strict, so an option the command does not declare fails the run.
+    // --config is a global option, declared here the way the CLI does.
+    const parser = yargs()
+      .scriptName("test")
+      .option("config", { type: "string" })
+      .strict();
     createMcpCommand(parser);
     vi.mocked(services.registerGlobalServices)
       .mockImplementationOnce(() => {})
@@ -279,6 +167,11 @@ describe("mcp command configuration precedence", () => {
   function httpAppConfig(): AppConfig {
     expect(appModule.startAppServer).toHaveBeenCalledTimes(1);
     return vi.mocked(appModule.startAppServer).mock.calls[0][2];
+  }
+
+  function stdioAppConfig(): AppConfig {
+    expect(stdioModule.startStdioServer).toHaveBeenCalledTimes(1);
+    return vi.mocked(stdioModule.startStdioServer).mock.calls[0][1];
   }
 
   function withoutTerminal(): void {
@@ -305,7 +198,39 @@ describe("mcp command configuration precedence", () => {
 
     await run("mcp");
 
-    expect(appModule.startAppServer).toHaveBeenCalled();
     expect(stdioModule.startStdioServer).not.toHaveBeenCalled();
+    expect(appModule.startAppServer).toHaveBeenCalledTimes(1);
+    // The MCP endpoint only, without the web UI
+    expect(vi.mocked(appModule.startAppServer).mock.calls[0][1]).toMatchObject({
+      enableMcpServer: true,
+      enableWebInterface: false,
+    });
+  });
+
+  it("reads the server identity flags", async () => {
+    await run(
+      `mcp --protocol stdio --server-name acme-docs --server-title "Acme Docs" --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
+    );
+
+    expect(stdioAppConfig().server).toMatchObject({
+      name: "acme-docs",
+      title: "Acme Docs",
+      instructions: "Use acme docs",
+      instructionsFile: "/tmp/acme.md",
+    });
+  });
+
+  it("serves stdio with auth enabled, warning that auth does not apply", async () => {
+    // An HTTP issuer fails the check over HTTP; over stdio it is never looked at.
+    process.env.DOCS_MCP_AUTH_ENABLED = "true";
+    process.env.DOCS_MCP_AUTH_ISSUER_URL = "http://issuer.example.com";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await run("mcp --protocol stdio");
+
+    expect(stdioAppConfig().auth.enabled).toBe(true);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("Authentication does not apply to MCP over stdio"),
+    );
   });
 });
