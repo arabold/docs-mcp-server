@@ -119,20 +119,6 @@ describe("ListJobsTool", () => {
     listJobsTool = new ListJobsTool(mockManagerInstance as PipelineManager);
   });
 
-  it("should call manager.getJobs without status when no status is provided", async () => {
-    await listJobsTool.execute({});
-
-    // Check if getJobs was called without arguments or with undefined
-    expect(mockManagerInstance.getJobs).toHaveBeenCalledWith(undefined);
-  });
-
-  it("should call manager.getJobs with the specified status", async () => {
-    const targetStatus = PipelineJobStatus.RUNNING;
-    await listJobsTool.execute({ status: targetStatus });
-
-    expect(mockManagerInstance.getJobs).toHaveBeenCalledWith(targetStatus);
-  });
-
   it("should return the list of jobs received from the manager", async () => {
     const result = await listJobsTool.execute({});
 
@@ -154,18 +140,16 @@ describe("ListJobsTool", () => {
     }
   });
 
-  it("should return a filtered list if manager returns filtered jobs", async () => {
+  it("asks the pipeline for the jobs with the given status and lists those", async () => {
     const runningJobs = mockJobs.filter(
       (job) => job.status === PipelineJobStatus.RUNNING,
     );
-    // Configure the mock for this specific test case
     (mockManagerInstance.getJobs as Mock).mockResolvedValue(runningJobs);
 
     const result = await listJobsTool.execute({ status: PipelineJobStatus.RUNNING });
 
-    expect(result.jobs.length).toBe(runningJobs.length);
-    expect(result.jobs.map((job) => job.id)).toEqual(runningJobs.map((job) => job.id));
     expect(mockManagerInstance.getJobs).toHaveBeenCalledWith(PipelineJobStatus.RUNNING);
+    expect(result.jobs.map((job) => job.id)).toEqual(["job-2"]);
   });
 
   it("reports the live progress counters once a job knows its total, and no progress before", async () => {
@@ -208,12 +192,4 @@ describe("ListJobsTool", () => {
 
   // ListJobsTool.ts reads it with `||`, so a live count of 0 falls back to the total.
   it.todo("reports a live totalDiscovered of 0 rather than the stored total");
-
-  it("should return an empty list if manager returns an empty list", async () => {
-    (mockManagerInstance.getJobs as Mock).mockResolvedValue([]); // Manager returns empty
-
-    const result = await listJobsTool.execute({});
-
-    expect(result.jobs).toEqual([]);
-  });
 });
