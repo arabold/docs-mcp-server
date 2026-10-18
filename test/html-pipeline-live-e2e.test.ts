@@ -6,11 +6,11 @@
  * sites, anti-scraping measures, and various content management systems.
  * 
  * IMPORTANT: These tests are excluded from the default test run to keep CI fast
- * and stable. Run them manually with: npm test -- html-pipeline-live-e2e.test.ts
+ * and stable. Run them manually with: npm run test:live
  * 
  * Note: 
  * - These tests require internet access and are slower due to network requests
- * - All tests use Playwright mode for full JavaScript support
+ * - Most tests use auto mode, which renders HTML with Playwright for full JavaScript support
  * - Timeouts are set to 60 seconds to accommodate complex sites
  * - For fast, reliable tests suitable for CI/CD, see fetch-url-tool-e2e.test.ts
  */
@@ -203,8 +203,12 @@ describe("HTML Pipeline Website Tests", () => {
         followRedirects: true,
       });
 
+      const content = result.toLowerCase();
       // Should contain main content
-      expect(result.toLowerCase()).not.toContain("Object/Function");
+      expect(content).toContain("array.prototype.map");
+      // But not the sidebar's "Inheritance" entry or the breadcrumb trail
+      expect(content).not.toContain("object/function");
+      expect(content).not.toContain("standard built-in objects");
     }, 60000);
   });
 
@@ -214,7 +218,7 @@ describe("HTML Pipeline Website Tests", () => {
     it("should work with Playwright mode", async () => {
       const result = await fetchUrlTool.execute({
         url: testUrl,
-        scrapeMode: ScrapeMode.Auto,
+        scrapeMode: ScrapeMode.Playwright,
         followRedirects: true,
       });
 
@@ -295,8 +299,10 @@ describe("HTML Pipeline Website Tests", () => {
       expect(result.toLowerCase()).toContain("a model is the single, definitive source of information about your data");
     }, 60000);
 
-    it("should extract content from PyPI package pages", async () => {
-      const url = "https://pypi.org/project/requests/";
+    // PyPI answers every page with a Fastly bot challenge that headless
+    // Chromium cannot pass, so the package README comes from pkg.go.dev.
+    it("should extract the README from Go package pages", async () => {
+      const url = "https://pkg.go.dev/github.com/spf13/cobra";
       
       const result = await fetchUrlTool.execute({
         url,
@@ -305,8 +311,8 @@ describe("HTML Pipeline Website Tests", () => {
       });
 
       expect(result).toBeTruthy();
-      // Verify specific PyPI requests content
-      expect(result.toLowerCase()).toContain("requests allows you to send http/1.1 requests extremely easily");
+      // Verify specific cobra README content
+      expect(result.toLowerCase()).toContain("cobra is a library for creating powerful modern cli applications");
     }, 60000);
   });
 });
