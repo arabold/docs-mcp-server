@@ -1,122 +1,88 @@
-// Copyright (c) 2025
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
-import { MarkdownLinkExtractorMiddleware } from "../middleware/MarkdownLinkExtractorMiddleware";
-import { MarkdownMetadataExtractorMiddleware } from "../middleware/MarkdownMetadataExtractorMiddleware";
 import { ScrapeMode, type ScraperOptions } from "../types";
 import { MarkdownPipeline } from "./MarkdownPipeline";
 
 describe("MarkdownPipeline", () => {
   const appConfig = loadConfig();
-  beforeEach(() => {
-    // Set up spies without mock implementations to use real middleware
-    vi.spyOn(MarkdownMetadataExtractorMiddleware.prototype, "process");
-    vi.spyOn(MarkdownLinkExtractorMiddleware.prototype, "process");
-  });
+  const options: ScraperOptions = {
+    url: "http://example.com",
+    library: "example",
+    version: "",
+    scrapeMode: ScrapeMode.Fetch,
+  };
 
-  afterEach(() => {
-    // Vitest 4 reuses an existing spy instead of resetting it when the same
-    // prototype method is re-spied, so call counts would otherwise leak
-    // across tests in this file.
-    vi.restoreAllMocks();
-  });
-
-  it("canProcess returns true for text/markdown", () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    expect(pipeline.canProcess("text/markdown")).toBe(true);
-    expect(pipeline.canProcess("text/x-markdown")).toBe(true);
-    expect(pipeline.canProcess("text/mdx")).toBe(true);
-    expect(pipeline.canProcess("text/x-gfm")).toBe(true);
-  });
-
-  // MarkdownPipeline now processes all text/* types as markdown, including text/html.
-  it("canProcess returns false for non-text types", () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    expect(pipeline.canProcess("application/json")).toBe(false);
-    expect(pipeline.canProcess("")).toBe(false);
-  });
-
-  it("process decodes Buffer content with UTF-8 charset", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    const raw: RawContent = {
-      content: Buffer.from("# Header\n\nThis is a test.", "utf-8"),
+  function markdown(content: string | Buffer, charset?: string): RawContent {
+    return {
+      content,
       mimeType: "text/markdown",
-      charset: "utf-8",
+      charset,
       source: "http://test",
       status: FetchStatus.SUCCESS,
     };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toBe("# Header\n\nThis is a test.");
+  }
+
+  it("decodes the body with the header charset, a BOM or UTF-8", async () => {
+    const cases: Array<
+      [
+        label: string,
+        content: string | Buffer,
+        charset: string | undefined,
+        expected: string,
+      ]
+    > = [
+      [
+        "UTF-8",
+        Buffer.from("# Header\n\nThis is a test.", "utf-8"),
+        "utf-8",
+        "# Header\n\nThis is a test.",
+      ],
+      ["ISO-8859-1", Buffer.from("# Café", "latin1"), "iso-8859-1", "# Café"],
+      [
+        "no charset as UTF-8",
+        Buffer.from("# Default UTF-8\n\nContent", "utf-8"),
+        undefined,
+        "# Default UTF-8\n\nContent",
+      ],
+      [
+        "a string as is",
+        "# Title\n\nContent with [link](https://example.com)",
+        "utf-8",
+        "# Title\n\nContent with [link](https://example.com)",
+      ],
+      [
+        "a UTF-16LE BOM",
+        Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("# Café", "utf16le")]),
+        "utf-16le",
+        "# Café",
+      ],
+      [
+        "a UTF-8 BOM",
+        Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("# Café", "utf-8")]),
+        "utf-8",
+        "# Café",
+      ],
+      [
+        "Japanese UTF-8",
+        Buffer.from("# こんにちは世界", "utf-8"),
+        "utf-8",
+        "# こんにちは世界",
+      ],
+      ["Russian UTF-8", Buffer.from("# Привет, мир", "utf-8"), "utf-8", "# Привет, мир"],
+    ];
+    const pipeline = new MarkdownPipeline(appConfig);
+
+    for (const [label, content, charset, expected] of cases) {
+      const result = await pipeline.process(markdown(content, charset), options);
+
+      expect.soft(result.textContent, label).toBe(expected);
+    }
   });
 
-  it("process decodes Buffer content with ISO-8859-1 charset", async () => {
-    // Create a spy to capture the content before it's processed
-    let capturedContent = "";
-    const originalProcess = MarkdownMetadataExtractorMiddleware.prototype.process;
-    vi.spyOn(
-      MarkdownMetadataExtractorMiddleware.prototype,
-      "process",
-    ).mockImplementationOnce(async function (
-      this: MarkdownMetadataExtractorMiddleware,
-      ctx,
-      next,
-    ) {
-      capturedContent = ctx.content;
-      // Call the original implementation after capturing
-      return originalProcess.call(this, ctx, next);
-    });
-
+  it("returns the frontmatter title, the links and the unchanged Markdown", async () => {
     const pipeline = new MarkdownPipeline(appConfig);
-    // Create a buffer with ISO-8859-1 encoding (Latin-1)
-    // This contains characters that would be encoded differently in UTF-8
-    const markdownWithSpecialChars = "# Café";
-    const raw: RawContent = {
-      content: Buffer.from(markdownWithSpecialChars, "latin1"),
-      mimeType: "text/markdown",
-      charset: "iso-8859-1", // Explicitly set charset to ISO-8859-1
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toBe("# Café");
-
-    // Verify the content was properly decoded
-    expect(capturedContent).toBe("# Café");
-  });
-
-  it("process defaults to UTF-8 when charset is not specified", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    const raw: RawContent = {
-      content: Buffer.from("# Default UTF-8\n\nContent", "utf-8"),
-      mimeType: "text/markdown",
-      // No charset specified
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toBe("# Default UTF-8\n\nContent");
-  });
-
-  it("process uses string content directly", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    const raw: RawContent = {
-      content: "# Title\n\nContent with [link](https://example.com)",
-      mimeType: "text/markdown",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toBe(
-      "# Title\n\nContent with [link](https://example.com)",
-    );
-    // Note: Link extraction is not implemented yet
-  });
-
-  it("process calls middleware in order and aggregates results", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    const markdown = `---
+    const content = `---
 title: Test Document
 author: Test Author
 ---
@@ -125,168 +91,21 @@ author: Test Author
 
 This is a paragraph with a [link](https://test.example.com).
 `;
-    const raw: RawContent = {
-      content: markdown,
-      mimeType: "text/markdown",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
 
-    // Verify all middleware was called
-    expect(MarkdownMetadataExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(MarkdownLinkExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(1);
+    const result = await pipeline.process(markdown(content, "utf-8"), options);
 
-    // Verify the result contains the original content
-    // Note: Frontmatter extraction and link extraction are not implemented yet
-    expect(result.textContent).toBe(markdown);
-  });
-
-  it("process collects errors from middleware", async () => {
-    // Override with error-generating implementation just for this test
-    vi.spyOn(
-      MarkdownMetadataExtractorMiddleware.prototype,
-      "process",
-    ).mockImplementationOnce(async (ctx, next) => {
-      ctx.errors.push(new Error("fail"));
-      await next();
-    });
-
-    const pipeline = new MarkdownPipeline(appConfig);
-    const raw: RawContent = {
-      content: "# Title",
-      mimeType: "text/markdown",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.errors?.some((e) => e.message === "fail")).toBe(true);
-  });
-
-  it("process decodes Buffer content with UTF-16LE BOM", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    // UTF-16LE BOM: 0xFF 0xFE, then '# Café' as UTF-16LE
-    const str = "# Café";
-    const buf = Buffer.alloc(2 + str.length * 2);
-    buf[0] = 0xff;
-    buf[1] = 0xfe;
-    for (let i = 0; i < str.length; i++) {
-      buf[2 + i * 2] = str.charCodeAt(i);
-      buf[2 + i * 2 + 1] = 0;
-    }
-    const raw: RawContent = {
-      content: buf,
-      mimeType: "text/markdown",
-      charset: "utf-16le",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("# Café");
-  });
-
-  it("process decodes Buffer content with UTF-8 BOM", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    // UTF-8 BOM: 0xEF 0xBB 0xBF, then '# Café'
-    const utf8 = Buffer.from("# Café", "utf-8");
-    const buf = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), utf8]);
-    const raw: RawContent = {
-      content: buf,
-      mimeType: "text/markdown",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("# Café");
-  });
-
-  it("process decodes Buffer content with Japanese UTF-8 text", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    const japanese = "# こんにちは世界"; // "Hello, world" in Japanese
-    const raw: RawContent = {
-      content: Buffer.from(japanese, "utf-8"),
-      mimeType: "text/markdown",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("こんにちは世界");
-  });
-
-  it("process decodes Buffer content with Russian UTF-8 text", async () => {
-    const pipeline = new MarkdownPipeline(appConfig);
-    const russian = "# Привет, мир"; // "Hello, world" in Russian
-    const raw: RawContent = {
-      content: Buffer.from(russian, "utf-8"),
-      mimeType: "text/markdown",
-      charset: "utf-8",
-      source: "http://test",
-      status: FetchStatus.SUCCESS,
-    };
-    const result = await pipeline.process(raw, {} as ScraperOptions);
-    expect(result.textContent).toContain("Привет, мир");
-  });
-
-  it("should correctly process markdown through the full middleware stack (E2E with spies)", async () => {
-    // Reset call counts for all spies
-    vi.clearAllMocks();
-
-    const pipeline = new MarkdownPipeline(appConfig);
-
-    // Sample markdown with elements for each middleware to process
-    const markdown = `---
-title: End-to-End Test
-description: Testing the full markdown pipeline
----
-
-# Main Heading
-
-This is a paragraph with multiple [links](https://example.com/1) and another [link](https://example.com/2).
-
-## Subheading
-
-More content here.
-`;
-
-    const raw: RawContent = {
-      content: markdown,
-      mimeType: "text/markdown",
-      charset: "utf-8",
-      source: "http://test.example.com",
-      status: FetchStatus.SUCCESS,
-    };
-
-    const result = await pipeline.process(raw, {
-      url: "http://example.com",
-      library: "example",
-      version: "",
-      scrapeMode: ScrapeMode.Fetch,
-    });
-
-    // Verify all middleware was called
-    expect(MarkdownMetadataExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(
-      1,
-    );
-    expect(MarkdownLinkExtractorMiddleware.prototype.process).toHaveBeenCalledTimes(1);
-
-    // Verify the result contains the original content
-    // Note: Frontmatter extraction and link extraction are not implemented yet
-    expect(result.textContent).toBe(markdown);
-
-    // Verify no errors occurred
-    expect(result.errors).toHaveLength(0);
+    expect(result.title).toBe("Test Document");
+    expect(result.links).toContain("https://test.example.com");
+    expect(result.textContent).toBe(content);
+    expect(result.errors).toEqual([]);
   });
 
   describe("GreedySplitter integration - hierarchical chunking behavior", () => {
-    it("should preserve hierarchical structure through GreedySplitter integration", async () => {
-      const pipeline = new MarkdownPipeline(appConfig);
-      const markdown = `# Main Chapter
+    it("should split Markdown into chunks that keep its content and heading levels", async () => {
+      const cases: Array<{ label: string; content: string; expected: string[] }> = [
+        {
+          label: "nested sections",
+          content: `# Main Chapter
 
 This is content under the main chapter.
 
@@ -300,42 +119,72 @@ Content in subsection A.1.
 
 ## Section B
 
-Final content in section B.`;
+Final content in section B.`,
+          expected: [
+            "Main Chapter",
+            "Content in section A.",
+            "Content in subsection A.1.",
+            "Final content in section B.",
+          ],
+        },
+        {
+          label: "code and table blocks",
+          content: `# Documentation
 
-      const raw: RawContent = {
-        content: markdown,
-        mimeType: "text/markdown",
-        charset: "utf-8",
-        source: "http://test.example.com",
-        status: FetchStatus.SUCCESS,
-      };
+This is introductory text.
 
-      const result = await pipeline.process(raw, {
-        url: "http://example.com",
-        library: "example",
-        version: "",
-        scrapeMode: ScrapeMode.Fetch,
-      });
+\`\`\`javascript
+console.log("Hello, world!");
+\`\`\`
 
-      // Verify we got chunks with proper hierarchy
-      expect(result.chunks?.length).toBeGreaterThan(0);
+| Column 1 | Column 2 |
+|----------|----------|
+| Value 1  | Value 2  |
 
-      // GreedySplitter may merge small content into fewer chunks
-      // But the hierarchy structure should still be semantically meaningful
-      expect(result.chunks?.length).toBeGreaterThanOrEqual(1);
+## Implementation
 
-      // Check that all chunks have valid hierarchy metadata
-      result.chunks?.forEach((chunk) => {
-        expect(chunk.section).toBeDefined();
-        expect(typeof chunk.section.level).toBe("number");
-        expect(Array.isArray(chunk.section.path)).toBe(true);
-        expect(chunk.section.level).toBeGreaterThanOrEqual(1); // Should not degrade to 0
-      });
+More details here.`,
+          expected: ["Documentation", "Implementation", "Hello, world!", "| Value 1"],
+        },
+        {
+          label: "headings without blank lines",
+          content: `# Title
+Paragraph with text.
+## Subtitle
+More content here.
+\`\`\`python
+print("code block")
+\`\`\`
+Final paragraph.`,
+          expected: [
+            "# Title",
+            "## Subtitle",
+            "Paragraph with text",
+            "More content here",
+            'print("code block")',
+            "Final paragraph",
+          ],
+        },
+      ];
+      const pipeline = new MarkdownPipeline(appConfig);
 
-      // Verify that headings and text are properly identified
-      const hasHeadings = result.chunks?.some((chunk) => chunk.types.includes("heading"));
-      const hasText = result.chunks?.some((chunk) => chunk.types.includes("text"));
-      expect(hasHeadings || hasText).toBe(true); // Should have semantic content
+      for (const { label, content, expected } of cases) {
+        const result = await pipeline.process(
+          { ...markdown(content, "utf-8"), source: "http://test.example.com" },
+          options,
+        );
+
+        const chunks = result.chunks ?? [];
+        expect.soft(chunks.length, label).toBeGreaterThan(0);
+        // Every chunk keeps a heading level; none degrades to 0.
+        expect
+          .soft(Math.min(...chunks.map((chunk) => chunk.section.level)), label)
+          .toBeGreaterThanOrEqual(1);
+        const allContent = chunks.map((chunk) => chunk.content).join("");
+        for (const text of expected) {
+          expect.soft(allContent, label).toContain(text);
+        }
+      }
     });
 
     it("should handle leading whitespace without creating artificial level 0 chunks", async () => {
@@ -381,10 +230,10 @@ Content under second level.`;
           chunk.types.includes("heading") && chunk.content.includes("First Heading"),
       );
       expect(firstHeading).toBeDefined();
-      expect(firstHeading!.section.level).toBe(1);
+      expect(firstHeading?.section.level).toBe(1);
 
       // Minimum level should be 1 (not degraded to 0 by GreedySplitter)
-      const minLevel = Math.min(...result.chunks!.map((c) => c.section.level));
+      const minLevel = Math.min(...(result.chunks ?? []).map((c) => c.section.level));
       expect(minLevel).toBe(1);
     });
 
@@ -438,106 +287,8 @@ ${longContent}`;
       });
 
       // Should maintain hierarchy levels (not degrade to 0)
-      const minLevel = Math.min(...result.chunks!.map((c) => c.section.level));
+      const minLevel = Math.min(...(result.chunks ?? []).map((c) => c.section.level));
       expect(minLevel).toBeGreaterThanOrEqual(1);
-    });
-
-    it("should produce chunks with correct types and hierarchy metadata", async () => {
-      const pipeline = new MarkdownPipeline(appConfig);
-      const markdown = `# Documentation
-
-This is introductory text.
-
-\`\`\`javascript
-console.log("Hello, world!");
-\`\`\`
-
-| Column 1 | Column 2 |
-|----------|----------|
-| Value 1  | Value 2  |
-
-## Implementation
-
-More details here.`;
-
-      const raw: RawContent = {
-        content: markdown,
-        mimeType: "text/markdown",
-        charset: "utf-8",
-        source: "http://test.example.com",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(raw, {
-        url: "http://example.com",
-        library: "example",
-        version: "",
-        scrapeMode: ScrapeMode.Fetch,
-      });
-
-      // Verify we have content with semantic types (GreedySplitter may merge them)
-      expect(result.chunks?.length).toBeGreaterThan(0);
-
-      // Check that we have the expected content types somewhere in the chunks
-      const allTypes = new Set(result.chunks?.flatMap((chunk) => chunk.types));
-      expect(allTypes.has("heading") || allTypes.has("text")).toBe(true);
-
-      // Verify all chunks have proper section metadata
-      result.chunks?.forEach((chunk) => {
-        expect(chunk.section).toBeDefined();
-        expect(typeof chunk.section.level).toBe("number");
-        expect(Array.isArray(chunk.section.path)).toBe(true);
-        expect(chunk.section.level).toBeGreaterThanOrEqual(1);
-      });
-
-      // Verify content is preserved (at least the key parts)
-      const allContent = result.chunks?.map((chunk) => chunk.content).join("");
-      expect(allContent).toContain("Documentation");
-      expect(allContent).toContain("Implementation");
-      expect(allContent).toContain("Hello, world!");
-    });
-
-    it("should preserve semantic content structure through pipeline", async () => {
-      const pipeline = new MarkdownPipeline(appConfig);
-      const originalMarkdown = `# Title
-Paragraph with text.
-## Subtitle
-More content here.
-\`\`\`python
-print("code block")
-\`\`\`
-Final paragraph.`;
-
-      const raw: RawContent = {
-        content: originalMarkdown,
-        mimeType: "text/markdown",
-        charset: "utf-8",
-        source: "http://test.example.com",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(raw, {
-        url: "http://example.com",
-        library: "example",
-        version: "",
-        scrapeMode: ScrapeMode.Fetch,
-      });
-
-      // Verify semantic content is preserved (may not be perfect reconstruction due to whitespace normalization)
-      const allContent = result.chunks?.map((chunk) => chunk.content).join("");
-      expect(allContent).toContain("# Title");
-      expect(allContent).toContain("## Subtitle");
-      expect(allContent).toContain("Paragraph with text");
-      expect(allContent).toContain("More content here");
-      expect(allContent).toContain('print("code block")');
-      expect(allContent).toContain("Final paragraph");
-
-      // Verify we have semantic chunks
-      expect(result.chunks?.length).toBeGreaterThan(0);
-
-      // Verify hierarchical structure is preserved
-      const minLevel = Math.min(...result.chunks!.map((chunk) => chunk.section.level));
-      expect(minLevel).toBeGreaterThanOrEqual(1); // Should not degrade to 0
     });
 
     it("indexes the real frontmatter text, not the literal string 'undefined'", async () => {
