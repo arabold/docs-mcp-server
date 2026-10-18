@@ -227,6 +227,10 @@ export class PipelineManager implements IPipeline {
       } else {
         await this.markInterruptedJobsAsFailed(interrupted);
       }
+      if (interrupted.length > 0) {
+        // Views refetch on this; failing a version emits no job event
+        this.eventBus.emit(EventType.LIBRARY_CHANGE, undefined);
+      }
       return recentlyWritten;
     } catch (error) {
       logger.error(`❌ Failed to handle interrupted jobs: ${error}`);
@@ -265,6 +269,10 @@ export class PipelineManager implements IPipeline {
 
     for (const version of versions) {
       const versionLabel = formatVersionLabel(version.library_name, version.name ?? "");
+      if (!(await this.store.claimInterruptedVersion(version.id, version.updated_at))) {
+        logger.debug(`Leaving ${versionLabel}: another process took it over`);
+        continue;
+      }
       try {
         // Use enqueueRefreshJob for recovery - it handles:
         // - Completed versions: incremental refresh with ETags
@@ -289,14 +297,18 @@ export class PipelineManager implements IPipeline {
     versions: DbVersionWithLibrary[],
   ): Promise<void> {
     for (const version of versions) {
-      await this.store.updateVersionStatus(
-        version.id,
-        VersionStatus.FAILED,
-        "Job interrupted",
-      );
-      logger.info(
-        `❌ Marked interrupted job as failed: ${formatVersionLabel(version.library_name, version.name ?? "")}`,
-      );
+      const versionLabel = formatVersionLabel(version.library_name, version.name ?? "");
+      if (
+        !(await this.store.claimInterruptedVersion(
+          version.id,
+          version.updated_at,
+          "Job interrupted",
+        ))
+      ) {
+        logger.debug(`Leaving ${versionLabel}: another process took it over`);
+        continue;
+      }
+      logger.info(`❌ Marked interrupted job as failed: ${versionLabel}`);
     }
   }
 

@@ -1074,6 +1074,31 @@ describe("PipelineManager", () => {
       expect(await manager.getJobs()).toEqual([]);
     });
 
+    it("does not recover a version another process failed after it was read", async () => {
+      const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
+      anHourLater();
+      const read = store.getVersionsByStatus.bind(store);
+      vi.spyOn(store, "getVersionsByStatus").mockImplementationOnce(async (statuses) => {
+        const versions = await read(statuses);
+        // A server starting at the same time fails it between this read and the claim
+        await store.updateVersionStatus(
+          versionId,
+          VersionStatus.FAILED,
+          "Job interrupted",
+        );
+        return versions;
+      });
+      manager = createManager({ interruptedJobs: "recover" });
+
+      await manager.start();
+
+      expect(await manager.getJobs()).toEqual([]);
+      expect(await store.getVersionById(versionId)).toMatchObject({
+        status: VersionStatus.FAILED,
+        error_message: "Job interrupted",
+      });
+    });
+
     it("leaves a version written within the bound while it starts", async () => {
       const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
       manager = createManager({ interruptedJobs: "fail" });
@@ -1095,6 +1120,19 @@ describe("PipelineManager", () => {
         status: VersionStatus.FAILED,
         error_message: "Job interrupted",
       });
+    });
+
+    it("tells views when it fails a version after the bound", async () => {
+      await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
+      fakeTimers();
+      manager = createManager({ interruptedJobs: "fail" });
+      await manager.start();
+      const libraryChanged = vi.fn();
+      eventBus.on(EventType.LIBRARY_CHANGE, libraryChanged);
+
+      await vi.advanceTimersByTimeAsync(bound());
+
+      expect(libraryChanged).toHaveBeenCalled();
     });
 
     it("stops deciding on recently written versions once stopped", async () => {

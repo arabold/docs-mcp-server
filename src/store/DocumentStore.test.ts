@@ -950,21 +950,28 @@ describe("DocumentStore - With Embeddings", () => {
       expect(queuedVersions[0].status).toBe(VersionStatus.QUEUED);
     });
 
-    it("marks only queued and running versions alive", async () => {
-      const backdated = "2000-01-01 00:00:00";
-      const seed = async (status: VersionStatus) => {
-        const versionId = await store.resolveVersionId("alivelib", status);
-        await store.updateVersionStatus(versionId, status);
-        return versionId;
-      };
-      const queued = await seed(VersionStatus.QUEUED);
-      const running = await seed(VersionStatus.RUNNING);
-      const completed = await seed(VersionStatus.COMPLETED);
+    const backdated = "2000-01-01 00:00:00";
+
+    async function seedStatus(status: VersionStatus): Promise<number> {
+      const versionId = await store.resolveVersionId("statuslib", status);
+      await store.updateVersionStatus(versionId, status);
+      return versionId;
+    }
+
+    /** Sets every version's updated_at to `backdated`, as a long-silent run leaves it. */
+    function backdateVersions() {
       // @ts-expect-error Accessing private property for testing
       const db: DatabaseType = store.db;
       // Without the trigger, which sets updated_at on every update, the rows can be backdated
-      db.exec("DROP TRIGGER versions_updated_at");
+      db.exec("DROP TRIGGER IF EXISTS versions_updated_at");
       db.prepare("UPDATE versions SET updated_at = ?").run(backdated);
+    }
+
+    it("marks only queued and running versions alive", async () => {
+      const queued = await seedStatus(VersionStatus.QUEUED);
+      const running = await seedStatus(VersionStatus.RUNNING);
+      const completed = await seedStatus(VersionStatus.COMPLETED);
+      backdateVersions();
 
       await store.markVersionsAlive([queued, running, completed]);
 
@@ -973,6 +980,39 @@ describe("DocumentStore - With Embeddings", () => {
       expect(await updatedAt(queued)).not.toBe(backdated);
       expect(await updatedAt(running)).not.toBe(backdated);
       expect(await updatedAt(completed)).toBe(backdated);
+    });
+
+    it("fails an interrupted version it claims", async () => {
+      const running = await seedStatus(VersionStatus.RUNNING);
+      backdateVersions();
+
+      const claimed = await store.claimInterruptedVersion(
+        running,
+        backdated,
+        "Job interrupted",
+      );
+
+      expect(claimed).toBe(true);
+      expect(await store.getVersionById(running)).toMatchObject({
+        status: VersionStatus.FAILED,
+        error_message: "Job interrupted",
+      });
+    });
+
+    it("refuses a claim once another process has claimed the version", async () => {
+      const running = await seedStatus(VersionStatus.RUNNING);
+      backdateVersions();
+      // Another process read the same version and claimed it to recover it
+      await store.claimInterruptedVersion(running, backdated);
+
+      const claimed = await store.claimInterruptedVersion(
+        running,
+        backdated,
+        "Job interrupted",
+      );
+
+      expect(claimed).toBe(false);
+      expect((await store.getVersionById(running))?.status).toBe(VersionStatus.RUNNING);
     });
 
     it("should store and retrieve scraper options", async () => {

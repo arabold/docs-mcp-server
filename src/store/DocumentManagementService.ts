@@ -197,6 +197,24 @@ export class DocumentManagementService {
   }
 
   /**
+   * Claims a version an earlier run left QUEUED or RUNNING, provided nothing
+   * has written it since `updatedAt` was read: fails it with `failure`, or
+   * marks it written now so the caller can recover it.
+   * @param versionId The version to claim
+   * @param updatedAt The `updated_at` the caller read
+   * @param failure The error message to fail the version with
+   * @returns Whether the claim succeeded
+   * @throws {StoreError} When the write fails
+   */
+  async claimInterruptedVersion(
+    versionId: number,
+    updatedAt: string | null,
+    failure?: string,
+  ): Promise<boolean> {
+    return this.store.claimInterruptedVersion(versionId, updatedAt, failure);
+  }
+
+  /**
    * Updates the status of a version.
    */
   async updateVersionStatus(

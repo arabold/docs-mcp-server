@@ -96,6 +96,8 @@ Only the process that hosts the store's jobs should act on the jobs another run 
 
 `start()` never treats the manager's own unfinished jobs as interrupted, such as jobs enqueued before it. A version written within the bound may belong to a live process, or to one that crashed moments ago, so `start()` checks it once more when the bound has passed: still unwritten, it gets the policy; written again, it is left to the process that runs it and not checked again. A server restarted right after a crash therefore recovers or fails the crashed job about a minute after it starts. The bound assumes every process on the store uses the same `jobHeartbeatMs`.
 
+Before it fails or recovers a version, the manager claims it with a write that only succeeds while the version is still RUNNING or QUEUED and nothing has written it since it was read, so of two servers that start together only one acts on it. A failed version emits `LIBRARY_CHANGE`, so open views show it without a reload.
+
 ## Remote Pipeline
 
 `PipelineClient` calls the worker's pipeline procedures ([src/pipeline/trpc/router.ts](../../src/pipeline/trpc/router.ts)) through the backend's shared API client. It removes a version through the application router's `removeDocs` ([src/services/appRouter.ts](../../src/services/appRouter.ts)), which cancels the worker's job for that version first. The coordinator keeps no job state of its own.

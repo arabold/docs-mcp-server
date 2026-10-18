@@ -53,6 +53,8 @@ A single check suffices: a version that was alive at start and is alive again at
 
 Handling is the same in both phases: `recover` enqueues a refresh job (marking the version FAILED when that fails), `fail` marks it FAILED with "Job interrupted".
 
+Both first claim the version with a conditional write (`DocumentStore.claimInterruptedVersion`): it succeeds only while the version is still QUEUED or RUNNING and its `updated_at` is the one read. `fail` claims by failing it; `recover` claims by setting `updated_at` to now, then enqueues. An interrupted read is more than a second old, so either write changes `updated_at`, and a second server acting on the same read finds nothing to claim. Without the claim, a worker could recover a version and a `web` that read it at the same time could then mark the new live job FAILED, which heartbeats cannot undo. After handling, the manager emits `LIBRARY_CHANGE`, since a status write alone notifies no view.
+
 ### Every local pipeline heartbeats, whatever its policy
 
 `leave` pipelines (`scrape`, `refresh`) run jobs too, and a server starting next to them must see those jobs alive. Read-only servers start a pipeline with no jobs, so their heartbeat writes nothing.
