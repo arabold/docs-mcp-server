@@ -101,7 +101,9 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 1. Find the nearest **structural ancestor** by walking up the parent chain looking for a chunk whose `metadata.types` array includes `"structural"`.
 2. If no structural ancestor is found, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk.
 3. Walk the promoted ancestor to the root, collecting the full parent chain (limited by `assembly.maxParentChainDepth`, default 10).
-4. Find the **full subtree** of the promoted ancestor via breadth-first traversal using `findChildChunks` with a limit of 1000.
+4. Find the **full subtree** of the promoted ancestor: the ancestor and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. The subtree SHALL include the ancestor's closing chunk, which carries the ancestor's own path.
+5. For each ancestor on the parent chain, add its **opening and closing chunks** (the chunks with its own path before its first and after its last nested member) but none of its other members.
+6. A match with an empty path (code at the page root) SHALL be returned on its own.
 
 **Multiple matches in the same document:**
 1. Find the **common ancestor path** (longest common prefix of all chunks' paths).
@@ -118,6 +120,20 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 - **WHEN** a search matches a single chunk inside a function body
 - **THEN** the system SHALL find the function's structural ancestor
 - **AND** reconstruct the complete function including its signature and body
+
+#### Scenario: Match inside a class method
+- **WHEN** a search matches a single method of a class
+- **THEN** the system SHALL return the class's opening line, all its methods and its closing brace
+- **AND** SHALL NOT include code that follows the class
+
+#### Scenario: Class inside a namespace
+- **WHEN** a search matches a method of a class declared inside a namespace
+- **THEN** the system SHALL return the whole class and the namespace's opening and closing lines
+- **AND** SHALL NOT include the namespace's other members
+
+#### Scenario: Match in code at the page root
+- **WHEN** a search matches a chunk with an empty path, such as a top-level statement
+- **THEN** the system SHALL return that chunk alone
 
 #### Scenario: Multiple matches in same code file
 - **WHEN** a search matches two chunks in different functions within the same class

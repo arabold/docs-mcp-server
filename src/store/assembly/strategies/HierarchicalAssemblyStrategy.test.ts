@@ -183,13 +183,132 @@ describe("HierarchicalAssemblyStrategy", () => {
         documentStore,
       );
 
-      const content = result.map((chunk) => chunk.content);
-      expect(content).toContain("export class UserService {\n");
-      expect(content).toContain(
-        "  getUser(id: string) {\n    return db.find(id);\n  }\n",
+      expect(strategy.assembleContent(result)).toBe(
+        "export class UserService {\n" +
+          "  getUser(id: string) {\n    return db.find(id);\n  }\n" +
+          "  deleteUser(id: string) {\n    return db.delete(id);\n  }\n" +
+          "}\n",
       );
-      expect(content).toContain(deleteUser.content);
-      expect(content.some((c) => c.includes("helper"))).toBe(false);
+    });
+
+    it("closes every enclosing scope without adding its other members", async () => {
+      // Chunks as the TypeScript splitter emits them for a class inside a namespace
+      await documentStore.addDocuments("test-nested-scopes", "1.0", 0, {
+        url: "Accounts.ts",
+        title: "Accounts.ts",
+        sourceContentType: "text/typescript",
+        contentType: "text/typescript",
+        textContent: "",
+        chunks: [
+          {
+            content: "export namespace Accounts {\n",
+            section: { path: ["Accounts"], level: 1 },
+            types: ["code", "structural"],
+          },
+          {
+            content: "  export class UserService {\n",
+            section: { path: ["Accounts", "UserService"], level: 2 },
+            types: ["code", "structural"],
+          },
+          {
+            content: "    getUser(id: string) {\n      return id;\n    }\n",
+            section: { path: ["Accounts", "UserService", "getUser"], level: 3 },
+            types: ["code"],
+          },
+          {
+            content: "  }\n",
+            section: { path: ["Accounts", "UserService"], level: 2 },
+            types: ["code"],
+          },
+          {
+            content: "  export const limit = 5;\n",
+            section: { path: ["Accounts", "limit"], level: 2 },
+            types: ["code"],
+          },
+          {
+            content: "}\n",
+            section: { path: ["Accounts"], level: 1 },
+            types: ["code"],
+          },
+          {
+            content: "const after = 1;\n",
+            section: { path: ["after"], level: 1 },
+            types: ["code"],
+          },
+        ],
+        links: [],
+        errors: [],
+      });
+      const chunks = await documentStore.findChunksByUrl(
+        "test-nested-scopes",
+        "1.0",
+        "Accounts.ts",
+      );
+      const getUser = chunks[2];
+
+      const result = await strategy.selectChunks(
+        "test-nested-scopes",
+        "1.0",
+        [getUser],
+        documentStore,
+      );
+
+      expect(strategy.assembleContent(result)).toBe(
+        "export namespace Accounts {\n" +
+          "  export class UserService {\n" +
+          "    getUser(id: string) {\n      return id;\n    }\n" +
+          "  }\n" +
+          "}\n",
+      );
+    });
+
+    it("returns only the matched chunk for a hit in global code", async () => {
+      // Chunks as the TypeScript splitter emits them for global code before a class
+      await documentStore.addDocuments("test-global-code", "1.0", 0, {
+        url: "main.ts",
+        title: "main.ts",
+        sourceContentType: "text/typescript",
+        contentType: "text/typescript",
+        textContent: "",
+        chunks: [
+          {
+            content: "console.log(start);\n",
+            section: { path: [], level: 0 },
+            types: ["code"],
+          },
+          {
+            content: "export class Worker {\n",
+            section: { path: ["Worker"], level: 1 },
+            types: ["code", "structural"],
+          },
+          {
+            content: "  run() {}\n",
+            section: { path: ["Worker", "run"], level: 2 },
+            types: ["code"],
+          },
+          {
+            content: "}\n",
+            section: { path: ["Worker"], level: 1 },
+            types: ["code"],
+          },
+        ],
+        links: [],
+        errors: [],
+      });
+      const chunks = await documentStore.findChunksByUrl(
+        "test-global-code",
+        "1.0",
+        "main.ts",
+      );
+
+      const result = await strategy.selectChunks(
+        "test-global-code",
+        "1.0",
+        [chunks[0]],
+        documentStore,
+      );
+
+      expect(strategy.assembleContent(result)).toBe("console.log(start);\n");
     });
 
     it("should handle hierarchical gaps in parent chain", async () => {

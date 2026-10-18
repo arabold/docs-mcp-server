@@ -40,7 +40,9 @@ For each match, `MarkdownAssemblyStrategy` collects the match, its parent, up to
 
 `HierarchicalAssemblyStrategy` returns the structure that contains the match rather than a fixed window.
 
-A single match in a page brings its nearest ancestor typed `structural` (a class, interface, enum or namespace), that ancestor's chain of parents, and the ancestor's subtree. When there is no structural ancestor, as for a top-level function or anything in JSON, the first chunk of the top-level element named by the match's first path segment takes its place.
+A single match in a page brings its nearest ancestor typed `structural` (a class, interface, enum or namespace), that ancestor's chain of parents, and the ancestor's subtree. When there is no structural ancestor, as for a top-level function or anything in JSON, the first chunk of the top-level element named by the match's first path segment takes its place. A match at the page root comes back on its own.
+
+The subtree is the ancestor and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. It therefore ends with the ancestor's closing line, which carries the ancestor's own path. Each enclosing scope on the chain of parents adds its opening and closing lines but none of its other members, so the passage is balanced without pulling in the rest of the page.
 
 Several matches in one page bring every chunk at their longest common path, such as a class's opening and closing lines, and the subtree of each match. When the matches share no path, each brings its chain of parents instead.
 

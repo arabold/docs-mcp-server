@@ -137,6 +137,18 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
           for (const id of subtreeIds) {
             allChunkIds.add(id);
           }
+
+          // Close the scopes that enclose the subtree, without their other members
+          const closingIds = await this.findClosingChunks(
+            library,
+            version,
+            promotedAncestor.url,
+            ancestorParentChain.filter((id) => id !== promotedAncestor.id),
+            documentStore,
+          );
+          for (const id of closingIds) {
+            allChunkIds.add(id);
+          }
         } else {
           // Multiple matches: use selective subtree reassembly
           // IMPORTANT: Always include all original matched chunks first
@@ -533,7 +545,8 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   }
 
   /**
-   * Finds all chunks in the subtree rooted at the given chunk.
+   * Finds all chunks in the subtree rooted at the given chunk, including the chunk
+   * that closes it (such as a class's closing brace).
    */
   private async findSubtreeChunks(
     library: string,
@@ -541,34 +554,87 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     rootChunk: DbPageChunk,
     documentStore: DocumentStore,
   ): Promise<string[]> {
-    const subtreeIds: string[] = [];
-    const visited = new Set<string>();
-    const queue: DbPageChunk[] = [rootChunk];
+    const pageChunks = await documentStore.findChunksByUrl(
+      library,
+      version,
+      rootChunk.url,
+    );
+    const container = this.collectContainer(pageChunks, rootChunk.id);
+    // Keep the root even if it is not stored under this URL
+    return container.length > 0 ? container.map((chunk) => chunk.id) : [rootChunk.id];
+  }
 
-    while (queue.length > 0) {
-      // biome-ignore lint/style/noNonNullAssertion: this is safe due to the while condition
-      const currentChunk = queue.shift()!;
-      const currentId = currentChunk.id;
-
-      if (visited.has(currentId)) continue;
-      visited.add(currentId);
-      subtreeIds.push(currentId);
-
-      // Add all children to the queue
-      try {
-        const children = await documentStore.findChildChunks(
-          library,
-          version,
-          currentId,
-          1000,
-        ); // Large limit
-        queue.push(...children);
-      } catch (error) {
-        logger.warn(`Failed to find children for chunk ${currentId}: ${error}`);
-      }
+  /**
+   * Finds the chunks that close each of the given containers: the chunks at the end
+   * of a container that repeat its path after its last nested member, such as a
+   * namespace's closing brace. Containers without a closing chunk add nothing.
+   */
+  private async findClosingChunks(
+    library: string,
+    version: string,
+    url: string,
+    containerIds: string[],
+    documentStore: DocumentStore,
+  ): Promise<string[]> {
+    if (containerIds.length === 0) {
+      return [];
     }
 
-    return subtreeIds;
+    const pageChunks = await documentStore.findChunksByUrl(library, version, url);
+    const closingIds: string[] = [];
+    for (const containerId of containerIds) {
+      const container = this.collectContainer(pageChunks, containerId);
+      const depth = container[0]?.metadata.path?.length ?? 0;
+      // Step back over the trailing chunks that repeat the container's path
+      let closingStart = container.length;
+      while (
+        closingStart > 0 &&
+        (container[closingStart - 1].metadata.path?.length ?? 0) === depth
+      ) {
+        closingStart--;
+      }
+      // Without nested members there is nothing to close
+      if (closingStart === 0) continue;
+      for (const chunk of container.slice(closingStart)) {
+        closingIds.push(chunk.id);
+      }
+    }
+    return closingIds;
+  }
+
+  /**
+   * Collects the container that starts at the given chunk: the chunk itself and the
+   * chunks right after it whose path starts with its path. The run ends at the first
+   * chunk outside the container, so it holds the nested members and the closing chunk,
+   * which repeats the container's path, but no unrelated code. A chunk with an empty
+   * path is global code and contains nothing else.
+   *
+   * @param pageChunks All chunks of one page, in document order.
+   * @param rootId ID of the chunk that opens the container.
+   * @returns The container's chunks in document order, or an empty array if the page
+   *   has no chunk with that ID.
+   */
+  private collectContainer(pageChunks: DbPageChunk[], rootId: string): DbPageChunk[] {
+    const start = pageChunks.findIndex((chunk) => chunk.id === rootId);
+    if (start === -1) {
+      return [];
+    }
+
+    const rootPath = pageChunks[start].metadata.path ?? [];
+    const container = [pageChunks[start]];
+    if (rootPath.length === 0) {
+      return container;
+    }
+
+    for (const chunk of pageChunks.slice(start + 1)) {
+      const path = chunk.metadata.path ?? [];
+      const isInside =
+        path.length >= rootPath.length &&
+        rootPath.every((segment, index) => segment === path[index]);
+      if (!isInside) break;
+      container.push(chunk);
+    }
+    return container;
   }
 
   /**
