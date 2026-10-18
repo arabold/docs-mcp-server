@@ -225,4 +225,4 @@ Ordering: this change is implemented first. `cli-defaults-do-not-override-env` f
 
 ## 12. Archive follow-up
 
-- [ ] 12.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.
+- [x] 12.1 When archiving, edit the Purpose of `openspec/specs/server-origin-urls/spec.md` so it no longer mentions OAuth metadata (the requirements that covered it are removed). Verify `openspec show server-origin-urls --type spec` reads correctly.
