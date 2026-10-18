@@ -71,22 +71,22 @@ function buildBrowser(pageOverrides: Record<string, unknown> = {}) {
     request: { get: vi.fn() },
     ...pageOverrides,
   };
-  // The CDP session that checks redirect hops.
-  const cdpSession = {
-    on: vi.fn(),
-    send: vi.fn().mockResolvedValue({}),
-  };
   const context = {
     newPage: vi.fn().mockResolvedValue(page),
-    newCDPSession: vi.fn().mockResolvedValue(cdpSession),
     close: vi.fn().mockResolvedValue(undefined),
   };
   const browser = {
     newContext: vi.fn().mockResolvedValue(context),
+    // The CDP session ManagedBrowser checks redirects in.
+    newBrowserCDPSession: vi.fn().mockResolvedValue({
+      on: vi.fn(),
+      send: vi.fn().mockResolvedValue({}),
+      detach: vi.fn().mockResolvedValue(undefined),
+    }),
     close: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
   };
-  return { page, cdpSession, context, browser };
+  return { page, context, browser };
 }
 
 /** Builds a mocked browser whose Chromium exits as soon as a page is opened. */
@@ -558,32 +558,12 @@ describe("BrowserFetcher", () => {
       };
     }
 
-    /** A request Chromium paused, as the CDP session receives it. */
-    function pausedRedirect(url: string, resourceType = "Script") {
-      return {
-        requestId: "interception-2",
-        redirectedRequestId: "interception-1",
-        request: { url },
-        resourceType,
-      };
-    }
-
     /** Fetches a page and returns the route handler it registered. */
     async function captureRouteHandler(page: ReturnType<typeof mockBrowser>["page"]) {
       await new BrowserFetcher(makeScraperConfig()).fetch("https://example.com");
       const handler = page.route.mock.calls[0]?.[1];
       if (typeof handler !== "function") throw new Error("no route handler registered");
       return (route: ReturnType<typeof fakeRoute>) => handler(route as unknown as Route);
-    }
-
-    /** The handler the page's CDP session registered for paused requests. */
-    function redirectHandler(cdpSession: ReturnType<typeof mockBrowser>["cdpSession"]) {
-      const handler = cdpSession.on.mock.calls.find(
-        ([event]) => event === "Fetch.requestPaused",
-      )?.[1];
-      if (typeof handler !== "function")
-        throw new Error("no redirect handler registered");
-      return handler as (event: ReturnType<typeof pausedRedirect>) => void;
     }
 
     it.each([
@@ -611,49 +591,25 @@ describe("BrowserFetcher", () => {
       expect(route.abort).not.toHaveBeenCalled();
     });
 
-    it("blocks a redirect to a private address", async () => {
-      // Chromium follows redirects without asking page.route, so the hops are
-      // checked in the CDP session.
-      const { cdpSession } = mockBrowser();
-      await new BrowserFetcher(makeScraperConfig()).fetch("https://example.com");
-
-      redirectHandler(cdpSession)(pausedRedirect(METADATA_URL));
-
-      await vi.waitFor(() =>
-        expect(cdpSession.send).toHaveBeenCalledWith("Fetch.failRequest", {
-          requestId: "interception-2",
-          errorReason: "BlockedByClient",
-        }),
-      );
-      expect(cdpSession.send).not.toHaveBeenCalledWith(
-        "Fetch.continueRequest",
-        expect.anything(),
-      );
-    });
-
-    it("lets a redirect to an allowed host through", async () => {
-      const { cdpSession } = mockBrowser();
-      await new BrowserFetcher(makeScraperConfig()).fetch("https://example.com");
-
-      redirectHandler(cdpSession)(pausedRedirect("https://example.com/moved.js"));
-
-      await vi.waitFor(() =>
-        expect(cdpSession.send).toHaveBeenCalledWith("Fetch.continueRequest", {
-          requestId: "interception-2",
-        }),
-      );
-    });
-
     it("reports a navigation stopped at a blocked redirect as an access policy error", async () => {
-      const { page, cdpSession } = mockBrowser();
+      // The browser fails the hop (see ManagedBrowser); the fetch names it.
+      const failed: Array<(request: unknown) => void> = [];
+      const mainFrame = {};
+      const { page } = mockBrowser({
+        mainFrame: vi.fn().mockReturnValue(mainFrame),
+        on: vi.fn((event: string, handler: (request: unknown) => void) => {
+          if (event === "requestfailed") failed.push(handler);
+        }),
+      });
       page.goto.mockImplementation(async () => {
-        redirectHandler(cdpSession)(pausedRedirect(METADATA_URL, "Document"));
-        await vi.waitFor(() =>
-          expect(cdpSession.send).toHaveBeenCalledWith(
-            "Fetch.failRequest",
-            expect.anything(),
-          ),
-        );
+        for (const handler of failed) {
+          handler({
+            url: () => METADATA_URL,
+            frame: () => mainFrame,
+            isNavigationRequest: () => true,
+            failure: () => ({ errorText: "net::ERR_BLOCKED_BY_CLIENT" }),
+          });
+        }
         throw new Error(
           "page.goto: net::ERR_BLOCKED_BY_CLIENT at https://example.com/moved",
         );

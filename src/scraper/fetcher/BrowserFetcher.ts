@@ -69,50 +69,6 @@ export class BrowserFetcher implements ContentFetcher {
     }
   }
 
-  /**
-   * Blocks the redirects the access policy denies.
-   *
-   * `page.route` only sees the first request of a redirect chain: Chromium
-   * follows redirects itself, so without this an allowed URL could send the
-   * page, a script or a form post on to a private address. Chromium's Fetch
-   * domain pauses every hop, so the hops are checked there and first requests
-   * are left to `page.route`.
-   *
-   * @param context - The context the page belongs to.
-   * @param page - The page whose redirects to check.
-   * @returns The document redirects blocked so far, updated as the page loads.
-   */
-  private async blockDisallowedRedirects(
-    context: BrowserContext,
-    page: Page,
-  ): Promise<string[]> {
-    const blockedDocuments: string[] = [];
-    const session = await context.newCDPSession(page);
-    session.on("Fetch.requestPaused", (event) => {
-      const resolve = async () => {
-        const blocked =
-          event.redirectedRequestId !== undefined &&
-          !(await this.isRequestAllowed(event.request.url));
-        if (!blocked) {
-          await session.send("Fetch.continueRequest", { requestId: event.requestId });
-          return;
-        }
-        logger.debug(`Blocked redirect to ${event.request.url}`);
-        if (event.resourceType === "Document") {
-          blockedDocuments.push(event.request.url);
-        }
-        await session.send("Fetch.failRequest", {
-          requestId: event.requestId,
-          errorReason: "BlockedByClient",
-        });
-      };
-      // The page may close while a request is paused.
-      resolve().catch(() => undefined);
-    });
-    await session.send("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
-    return blockedDocuments;
-  }
-
   async fetch(source: string, options?: FetchOptions): Promise<RawContent> {
     try {
       options?.signal?.throwIfAborted();
@@ -202,7 +158,18 @@ export class BrowserFetcher implements ContentFetcher {
 
         return await route.continue();
       });
-      const blockedRedirects = await this.blockDisallowedRedirects(browserContext, page);
+      // The browser fails redirects to blocked addresses (see ManagedBrowser);
+      // remember which hop stopped the navigation, to name it in the error.
+      let blockedNavigation: string | undefined;
+      page.on("requestfailed", (request) => {
+        if (
+          request.frame() === page?.mainFrame() &&
+          request.isNavigationRequest() &&
+          request.failure()?.errorText.includes("ERR_BLOCKED_BY_CLIENT")
+        ) {
+          blockedNavigation = request.url();
+        }
+      });
 
       // Compose the browser-like fingerprint headers used both for the page's
       // own navigation and (if needed) the non-navigable request-API fallback,
@@ -242,11 +209,9 @@ export class BrowserFetcher implements ContentFetcher {
         response = await page.goto(source, { waitUntil: "load", timeout });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // A blocked redirect ends the navigation with ERR_BLOCKED_BY_CLIENT.
-        const blockedRedirect = blockedRedirects.at(-1);
-        if (blockedRedirect && /ERR_BLOCKED_BY_CLIENT/.test(message)) {
+        if (/ERR_BLOCKED_BY_CLIENT/.test(message)) {
           throw new AccessPolicyError(
-            `Security policy blocked network access to ${blockedRedirect}`,
+            `Security policy blocked network access to ${blockedNavigation ?? source}`,
           );
         }
         // Non-navigable resources (Markdown, JSON, binary files, ...) make the

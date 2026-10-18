@@ -9,7 +9,8 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { chromium } from "playwright";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserFetcher } from "../src/scraper/fetcher/BrowserFetcher";
 import { FetchStatus } from "../src/scraper/fetcher/types";
 import { loadConfig } from "../src/utils/config";
@@ -90,17 +91,25 @@ describe("BrowserFetcher in a real browser", () => {
 
 describe("BrowserFetcher with private networks blocked", () => {
   // Both servers listen on loopback. The policy lets the docs site through by
-  // its host name, `localhost`, and blocks the loopback address `127.0.0.1`,
-  // under which the page reaches the internal service.
+  // its host names, `localhost` and `other.localhost`, and blocks the loopback
+  // address `127.0.0.1`, under which the page reaches the internal service.
   const docsRequests: string[] = [];
   const internalRequests: string[] = [];
   let docsServer: Server;
   let internalServer: Server;
   let docsUrl: string;
+  let frameUrl: string;
   let internalUrl: string;
   let fetcher: BrowserFetcher;
 
   beforeAll(async () => {
+    // Isolate sites, as the Chromium in the Docker image does, so a cross-site
+    // iframe runs in a process of its own. Playwright's headless shell does not.
+    const launch = chromium.launch.bind(chromium);
+    vi.spyOn(chromium, "launch").mockImplementation((options) =>
+      launch({ ...options, args: [...(options?.args ?? []), "--site-per-process"] }),
+    );
+
     internalServer = createServer((req, res) => {
       internalRequests.push(req.url ?? "/");
       res.writeHead(200, { "content-type": "text/html" });
@@ -126,6 +135,16 @@ describe("BrowserFetcher with private networks blocked", () => {
         res.end();
         return;
       }
+      if (path === "/framed") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(`<html><body><h1>Docs</h1><iframe src="${frameUrl}/frame"></iframe></body></html>`);
+        return;
+      }
+      if (path === "/frame") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end('<html><body><script src="/moved.js"></script></body></html>');
+        return;
+      }
       if (path === "/redirecting-script") {
         res.writeHead(200, { "content-type": "text/html" });
         res.end('<html><body><h1>Docs</h1><script src="/moved.js"></script></body></html>');
@@ -137,11 +156,13 @@ describe("BrowserFetcher with private networks blocked", () => {
           `<img src="${internalUrl}/pixel.png"><script src="/app.js"></script></body></html>`,
       );
     });
-    docsUrl = `http://localhost:${await listenOnFreePort(docsServer)}`;
+    const docsPort = await listenOnFreePort(docsServer);
+    docsUrl = `http://localhost:${docsPort}`;
+    frameUrl = `http://other.localhost:${docsPort}`;
 
     const config = loadConfig().scraper;
     config.security.network.allowPrivateNetworks = false;
-    config.security.network.allowedHosts = ["localhost"];
+    config.security.network.allowedHosts = ["localhost", "other.localhost"];
     fetcher = new BrowserFetcher(config);
   });
 
@@ -152,6 +173,7 @@ describe("BrowserFetcher with private networks blocked", () => {
 
   afterAll(async () => {
     await fetcher.close();
+    vi.restoreAllMocks();
     for (const server of [docsServer, internalServer]) {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -181,6 +203,14 @@ describe("BrowserFetcher with private networks blocked", () => {
 
     expect(result.status).toBe(FetchStatus.SUCCESS);
     expect(docsRequests).toContain("/moved.js");
+    expect(internalRequests).toEqual([]);
+  });
+
+  it("blocks a redirect inside a cross-site iframe", async () => {
+    const result = await fetcher.fetch(`${docsUrl}/framed`);
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(docsRequests).toEqual(expect.arrayContaining(["/frame", "/moved.js"]));
     expect(internalRequests).toEqual([]);
   });
 });

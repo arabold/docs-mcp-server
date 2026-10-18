@@ -40,7 +40,7 @@ Every strategy builds its pipelines with `PipelineFactory.createStandardPipeline
 A fetcher returns `RawContent`: the bytes, the MIME type and charset, and the `ETag` and `Last-Modified` values a refresh sends back (see [Refresh Architecture](refresh-architecture.md)).
 
 - `HttpFetcher` makes plain HTTP requests with retries. It follows redirects itself so it can check every hop against the access policy.
-- `BrowserFetcher` loads the page in Chromium. It checks every request the page makes, and every redirect Chromium follows, against the access policy.
+- `BrowserFetcher` loads the page in Chromium. It checks every request the page makes against the access policy, and the browser `ManagedBrowser` launches checks every redirect Chromium follows.
 - `AutoDetectFetcher` routes by URL scheme and falls back from `HttpFetcher` to `BrowserFetcher` when a request meets a challenge, a TLS certificate failure, or a 403 or 429 response. `WebScraperStrategy` uses it.
 - `FileFetcher` reads local files and takes the MIME type from the file extension.
 
