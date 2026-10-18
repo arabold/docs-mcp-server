@@ -14,21 +14,42 @@
  */
 
 import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { getCliCommand } from "./test-helpers";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getCliCommand, writeTestConfig } from "./test-helpers";
 
 describe("Telemetry E2E", () => {
   const projectRoot = path.resolve(import.meta.dirname, "..");
+  let tempDir: string;
+  let storePath: string;
+  /** Config files that turn telemetry on or off, so a flag or variable has to win against them. */
+  const configPaths = { on: "", off: "" };
+
+  beforeAll(() => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "telemetry-e2e-"));
+    storePath = path.join(tempDir, "store");
+    for (const setting of ["on", "off"] as const) {
+      const dir = path.join(tempDir, setting);
+      mkdirSync(dir);
+      configPaths[setting] = writeTestConfig(dir, { telemetryEnabled: setting === "on" });
+    }
+  });
+
+  afterAll(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
 
   /**
-   * Run the CLI with specific environment variables and capture output.
+   * Run the CLI on a temporary store with specific environment variables and capture output.
    * Uses LOG_LEVEL=debug to capture telemetry initialization messages.
    * Uses the 'list' command since --help exits before middleware runs.
    */
   async function runCliWithEnv(
     args: string[],
     env: Record<string, string>,
+    configTelemetry: "on" | "off",
   ): Promise<{ code: number; stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
       const { cmd, args: cliArgs } = getCliCommand();
@@ -41,6 +62,10 @@ describe("Telemetry E2E", () => {
           VITEST_WORKER_ID: undefined,
           // Enable debug logging to see telemetry messages
           LOG_LEVEL: "debug",
+          DOCS_MCP_STORE_PATH: storePath,
+          DOCS_MCP_CONFIG: configPaths[configTelemetry],
+          // A value from the shell would decide the outcome instead of the test
+          DOCS_MCP_TELEMETRY: undefined,
           // Apply test-specific environment
           ...env,
         },
@@ -69,9 +94,11 @@ describe("Telemetry E2E", () => {
 
   it("should log 'user preference' when DOCS_MCP_TELEMETRY=false", async () => {
     // Use 'list' command which fully initializes the app including telemetry
-    const { stdout, stderr } = await runCliWithEnv(["list"], {
-      DOCS_MCP_TELEMETRY: "false",
-    });
+    const { stdout, stderr } = await runCliWithEnv(
+      ["list"],
+      { DOCS_MCP_TELEMETRY: "false" },
+      "on",
+    );
 
     // Combine output since debug logs may go to either stream
     const output = stdout + stderr;
@@ -84,9 +111,11 @@ describe("Telemetry E2E", () => {
 
   it("should log 'no API key' when DOCS_MCP_TELEMETRY=true but no API key", async () => {
     // Run with telemetry explicitly enabled (but no POSTHOG key in test env)
-    const { stdout, stderr } = await runCliWithEnv(["list"], {
-      DOCS_MCP_TELEMETRY: "true",
-    });
+    const { stdout, stderr } = await runCliWithEnv(
+      ["list"],
+      { DOCS_MCP_TELEMETRY: "true" },
+      "off",
+    );
 
     const output = stdout + stderr;
 
@@ -97,9 +126,8 @@ describe("Telemetry E2E", () => {
   });
 
   it("should respect --no-telemetry CLI flag", async () => {
-    const { stdout, stderr } = await runCliWithEnv(["--no-telemetry", "list"], {
-      // Don't set env var - let CLI flag control it
-    });
+    // Don't set env var - let CLI flag control it
+    const { stdout, stderr } = await runCliWithEnv(["--no-telemetry", "list"], {}, "on");
 
     const output = stdout + stderr;
 
@@ -108,7 +136,7 @@ describe("Telemetry E2E", () => {
   });
 
   it("should respect --telemetry=false CLI flag", async () => {
-    const { stdout, stderr } = await runCliWithEnv(["--telemetry=false", "list"], {});
+    const { stdout, stderr } = await runCliWithEnv(["--telemetry=false", "list"], {}, "on");
 
     const output = stdout + stderr;
 

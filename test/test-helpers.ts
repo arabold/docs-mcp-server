@@ -301,11 +301,16 @@ export async function startRunningSlowJob(
  * @param dir Directory to write `config.yaml` into.
  * @param options.allowPrivateNetworks Let scrapes reach local test servers.
  * @param options.maxConcurrency How many jobs run at once; the default otherwise.
+ * @param options.telemetryEnabled Turn telemetry on, for the suite that checks how it is switched off.
  * @returns The config file's path.
  */
 export function writeTestConfig(
   dir: string,
-  options: { allowPrivateNetworks?: boolean; maxConcurrency?: number } = {},
+  options: {
+    allowPrivateNetworks?: boolean;
+    maxConcurrency?: number;
+    telemetryEnabled?: boolean;
+  } = {},
 ): string {
   const configPath = path.join(dir, "config.yaml");
   fs.writeFileSync(
@@ -313,7 +318,7 @@ export function writeTestConfig(
     [
       "app:",
       '  embeddingModel: ""',
-      "  telemetryEnabled: false",
+      `  telemetryEnabled: ${options.telemetryEnabled ?? false}`,
       "scraper:",
       ...(options.maxConcurrency ? [`  maxConcurrency: ${options.maxConcurrency}`] : []),
       "  security:",
