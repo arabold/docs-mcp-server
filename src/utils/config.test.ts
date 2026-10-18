@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import yaml from "yaml";
-import { expandConfiguredRoot } from "./accessPolicy";
 import {
-  camelToUpperSnake,
-  collectLeafPaths,
+  type AppConfig,
   defaults,
   getConfigMappedCliKeys,
   getConfigValue,
@@ -14,875 +12,576 @@ import {
   isVectorDimensionExplicit,
   loadConfig,
   parseConfigValue,
-  pathToEnvVar,
 } from "./config";
-import { normalizeEnvValue } from "./env";
 
-// Mock env-paths to return a controlled system path
+// env-paths names the directory of the managed default config. Each test points
+// it at a throwaway directory of its own, so no test reads or writes the
+// developer's config. loadConfig() reads `config` on every call, so the getter
+// sees the current test's directory.
+const managed = vi.hoisted(() => ({ dir: "" }));
 vi.mock("env-paths", () => ({
   default: () => ({
-    config: `${process.cwd()}/.vitest-config-mock`,
-    data: `${process.cwd()}/.vitest-data-mock`,
+    get config() {
+      return managed.dir;
+    },
   }),
 }));
 
-// Mock paths to control project root detection
-vi.mock("./paths", () => ({
-  getProjectRoot: vi.fn().mockReturnValue(undefined), // Default to undefined to rely on explicit searchDirs
-}));
+/** Environment variables without the DOCS_MCP_ prefix that loadConfig() reads. */
+const UNPREFIXED_ENV = ["PORT", "HOST", "DOCS_MCP_CONFIG", "OPENAI_API_KEY"];
 
-// vite.config.ts points DOCS_MCP_CONFIG at a missing file for every test run.
-// These tests cover config path resolution, including the managed default path,
-// so they start without it. Several describes below replace `process.env`
-// wholesale, which `vi.stubEnv` does not follow, so this edits it directly.
-let testRunConfigPath: string | undefined;
+let tmpDir: string;
 
 beforeEach(() => {
-  testRunConfigPath = process.env.DOCS_MCP_CONFIG;
-  delete process.env.DOCS_MCP_CONFIG;
-});
-
-afterEach(() => {
-  if (testRunConfigPath !== undefined) {
-    process.env.DOCS_MCP_CONFIG = testRunConfigPath;
+  tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-test-"));
+  managed.dir = path.join(tmpDir, "managed");
+  // Start every test from the built-in defaults. This also drops the
+  // DOCS_MCP_CONFIG that vite.config.ts sets, so the managed default path is
+  // reachable.
+  for (const name of Object.keys(process.env)) {
+    if (name.startsWith("DOCS_MCP_") || UNPREFIXED_ENV.includes(name)) {
+      vi.stubEnv(name, undefined);
+    }
   }
 });
 
-describe("Configuration Loading", () => {
-  let tmpDir: string;
-  let originalEnv: NodeJS.ProcessEnv;
-
-  beforeEach(() => {
-    // Create temp directory for each test
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-test-"));
-    originalEnv = { ...process.env };
-    fs.rmSync(path.join(process.cwd(), ".vitest-config-mock"), {
-      recursive: true,
-      force: true,
-    });
-
-    // Clear relevant env vars
-    delete process.env.DOCS_MCP_TELEMETRY;
-    delete process.env.DOCS_MCP_READ_ONLY;
-    delete process.env.DOCS_MCP_STORE_PATH;
-    delete process.env.DOCS_MCP_AUTH_ENABLED;
-    delete process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN;
-    delete process.env.DOCS_MCP_SERVER_NAME;
-    delete process.env.DOCS_MCP_SERVER_TITLE;
-    delete process.env.DOCS_MCP_SERVER_INSTRUCTIONS;
-    delete process.env.DOCS_MCP_SERVER_INSTRUCTIONS_FILE;
-    delete process.env.DOCS_MCP_SERVER_PUBLIC_URL;
-    delete process.env.DOCS_MCP_SERVER_ALLOWED_ORIGINS;
-  });
-
-  afterEach(() => {
-    // Cleanup
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-    fs.rmSync(path.join(process.cwd(), ".vitest-config-mock"), {
-      recursive: true,
-      force: true,
-    });
-    process.env = originalEnv;
-    vi.resetAllMocks();
-  });
-
-  describe("Integration & E2E Scenarios", () => {
-    it("should load system defaults and WRITE back when no config provided", () => {
-      const config = loadConfig({}, {}); // No args -> Default System Path
-
-      expect(config.server.host).toBe("127.0.0.1");
-      expect(config.server.publicOrigin).toBeUndefined();
-      expect(
-        fs.existsSync(path.join(process.cwd(), ".vitest-config-mock", "config.yaml")),
-      ).toBe(true);
-    });
-
-    it("should load explicit config from --config and NOT write back", () => {
-      const configPath = path.join(tmpDir, "read-only-config.yaml");
-      const initialContent = "app:\n  telemetryEnabled: false\n";
-      fs.writeFileSync(configPath, initialContent);
-
-      // Verify file creation timestamp
-      const statBefore = fs.statSync(configPath);
-
-      // Wait a tick to ensure mtime diff if it were to write
-      const start = Date.now();
-      while (Date.now() - start < 10) {
-        /* wait */
-      }
-
-      const config = loadConfig({ config: configPath });
-
-      expect(config.app.telemetryEnabled).toBe(false);
-
-      // Check it didn't write back defaults (like heartbeatMs)
-      const contentAfter = fs.readFileSync(configPath, "utf8");
-      // It should NOT contain default fields that weren't there
-      expect(contentAfter).not.toContain("heartbeatMs");
-
-      // Ensure file wasn't touched
-      const statAfter = fs.statSync(configPath);
-      expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs);
-    });
-
-    it("should load explicit config from ENV and NOT write back", () => {
-      const configPath = path.join(tmpDir, "env-config.yaml");
-      const initialContent = "server:\n  port: 9999\n";
-      fs.writeFileSync(configPath, initialContent);
-
-      process.env.DOCS_MCP_CONFIG = configPath;
-
-      const config = loadConfig({});
-
-      expect(config.server.ports.default).toBe(6280); // Default for 'default' port
-      // Wait, yaml was invalid? "port" vs "ports".
-      // `loadConfig` merges defaults.
-
-      const contentAfter = fs.readFileSync(configPath, "utf8");
-      expect(contentAfter).not.toContain("heartbeatMs");
-    });
-
-    it("should priority: CLI > Env > Config File", () => {
-      const configPath = path.join(tmpDir, "priority.yaml");
-      fs.writeFileSync(configPath, "server:\n  host: file-host\n");
-
-      process.env.DOCS_MCP_HOST = "env-host";
-
-      const config = loadConfig({ host: "cli-host" }, { configPath });
-
-      expect(config.server.host).toBe("cli-host");
-    });
-
-    it("loads and normalizes server.publicOrigin from config file", () => {
-      const configPath = path.join(tmpDir, "public-origin.yaml");
-      fs.writeFileSync(
-        configPath,
-        "server:\n  publicOrigin: https://docs.example.com/\n",
-      );
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.server.publicOrigin).toBe("https://docs.example.com");
-    });
-
-    it("applies server.publicOrigin precedence from CLI over env and config file", () => {
-      const configPath = path.join(tmpDir, "public-origin-priority.yaml");
-      fs.writeFileSync(configPath, "server:\n  publicOrigin: https://file.example.com\n");
-      process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN = "https://env.example.com";
-
-      const config = loadConfig(
-        { publicOrigin: "https://cli.example.com" },
-        { configPath },
-      );
-
-      expect(config.server.publicOrigin).toBe("https://cli.example.com");
-    });
-
-    it("treats empty server.publicOrigin env var as absent", () => {
-      process.env.DOCS_MCP_SERVER_PUBLIC_ORIGIN = "";
-
-      const config = loadConfig(
-        {},
-        { configPath: path.join(tmpDir, "empty-origin.yaml") },
-      );
-
-      expect(config.server.publicOrigin).toBeUndefined();
-    });
-
-    it("defaults server.name to docs-mcp-server", () => {
-      const config = loadConfig({}, { configPath: path.join(tmpDir, "none.yaml") });
-
-      expect(config.server.name).toBe("docs-mcp-server");
-    });
-
-    it("applies server.name precedence from CLI over env and config file", () => {
-      const configPath = path.join(tmpDir, "server-name.yaml");
-      fs.writeFileSync(configPath, "server:\n  name: file-name\n");
-      process.env.DOCS_MCP_SERVER_NAME = "env-name";
-
-      const config = loadConfig({ serverName: "cli-name" }, { configPath });
-
-      expect(config.server.name).toBe("cli-name");
-    });
-
-    it("applies server.title precedence from CLI over env and config file", () => {
-      const configPath = path.join(tmpDir, "server-title.yaml");
-      fs.writeFileSync(configPath, "server:\n  title: File Title\n");
-      process.env.DOCS_MCP_SERVER_TITLE = "Env Title";
-
-      const config = loadConfig({ serverTitle: "CLI Title" }, { configPath });
-
-      expect(config.server.title).toBe("CLI Title");
-    });
-
-    it("leaves server.title unset by default and treats an empty env var as absent", () => {
-      process.env.DOCS_MCP_SERVER_TITLE = " ";
-
-      const config = loadConfig(
-        {},
-        { configPath: path.join(tmpDir, "empty-title.yaml") },
-      );
-
-      expect(config.server.title).toBeUndefined();
-    });
-
-    it("applies server.instructions precedence from CLI over env and config file", () => {
-      const configPath = path.join(tmpDir, "server-instructions.yaml");
-      fs.writeFileSync(configPath, "server:\n  instructions: from file\n");
-      process.env.DOCS_MCP_SERVER_INSTRUCTIONS = "from env";
-
-      const config = loadConfig({ serverInstructions: "from cli" }, { configPath });
-
-      expect(config.server.instructions).toBe("from cli");
-    });
-
-    it("applies server.instructionsFile precedence from CLI over env and config file", () => {
-      const configPath = path.join(tmpDir, "server-instructions-file.yaml");
-      fs.writeFileSync(configPath, "server:\n  instructionsFile: /from/file.md\n");
-      process.env.DOCS_MCP_SERVER_INSTRUCTIONS_FILE = "/from/env.md";
-
-      const config = loadConfig(
-        { serverInstructionsFile: "/from/cli.md" },
-        { configPath },
-      );
-
-      expect(config.server.instructionsFile).toBe("/from/cli.md");
-    });
-
-    it("treats an empty server.name env var as absent", () => {
-      process.env.DOCS_MCP_SERVER_NAME = "";
-
-      const config = loadConfig({}, { configPath: path.join(tmpDir, "empty-name.yaml") });
-
-      expect(config.server.name).toBe("docs-mcp-server");
-    });
-
-    it("treats empty server.instructions and server.instructionsFile env vars as absent", () => {
-      process.env.DOCS_MCP_SERVER_INSTRUCTIONS = "";
-      process.env.DOCS_MCP_SERVER_INSTRUCTIONS_FILE = "  ";
-
-      const config = loadConfig(
-        {},
-        { configPath: path.join(tmpDir, "empty-instructions.yaml") },
-      );
-
-      expect(config.server.instructions).toBeUndefined();
-      expect(config.server.instructionsFile).toBeUndefined();
-    });
-
-    it("leaves server.instructions and server.instructionsFile unset by default", () => {
-      const config = loadConfig({}, { configPath: path.join(tmpDir, "none.yaml") });
-
-      expect(config.server.instructions).toBeUndefined();
-      expect(config.server.instructionsFile).toBeUndefined();
-    });
-
-    it("never writes instructions into the auto-saved default config file", () => {
-      const config = loadConfig({}, {}); // No args -> Default System Path, auto-saved
-
-      const saved = fs.readFileSync(
-        path.join(process.cwd(), ".vitest-config-mock", "config.yaml"),
-        "utf8",
-      );
-      expect(config.server.instructions).toBeUndefined();
-      expect(saved).not.toMatch(/^\s*instructions:/m);
-    });
-
-    it("applies server.name from env over config file", () => {
-      const configPath = path.join(tmpDir, "server-name-env.yaml");
-      fs.writeFileSync(configPath, "server:\n  name: file-name\n");
-      process.env.DOCS_MCP_SERVER_NAME = "env-name";
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.server.name).toBe("env-name");
-    });
-
-    it.each([
-      "ftp://docs.example.com",
-      "https://docs.example.com/path",
-      "https://docs.example.com?x=1",
-      "https://docs.example.com#fragment",
-    ])("rejects invalid server.publicOrigin %s", (publicOrigin) => {
-      expect(() =>
-        loadConfig(
-          { publicOrigin },
-          { configPath: path.join(tmpDir, "invalid-public-origin.yaml") },
-        ),
-      ).toThrow("server.publicOrigin");
-    });
-
-    it("loads server.publicUrl with its path from the config file", () => {
-      const configPath = path.join(tmpDir, "public-url.yaml");
-      fs.writeFileSync(configPath, "server:\n  publicUrl: https://example.com/docs/\n");
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.server.publicUrl).toBe("https://example.com/docs");
-    });
-
-    it("loads server.publicUrl from DOCS_MCP_SERVER_PUBLIC_URL", () => {
-      process.env.DOCS_MCP_SERVER_PUBLIC_URL = "https://example.com/docs";
-
-      const config = loadConfig({}, { configPath: path.join(tmpDir, "env-url.yaml") });
-
-      expect(config.server.publicUrl).toBe("https://example.com/docs");
-    });
-
-    it("loads server.publicUrl from the CLI over env", () => {
-      process.env.DOCS_MCP_SERVER_PUBLIC_URL = "https://env.example.com/docs";
-
-      const config = loadConfig(
-        { publicUrl: "https://cli.example.com/tools" },
-        { configPath: path.join(tmpDir, "cli-url.yaml") },
-      );
-
-      expect(config.server.publicUrl).toBe("https://cli.example.com/tools");
-    });
-
-    it.each([
-      "https://example.com/docs?x=1",
-      "ftp://example.com/docs",
-      "https://example.com/mcp",
-    ])(
-      "rejects invalid server.publicUrl %s instead of resetting to defaults",
-      (publicUrl) => {
-        expect(() =>
-          loadConfig(
-            { publicUrl },
-            { configPath: path.join(tmpDir, "invalid-url.yaml") },
-          ),
-        ).toThrow("server.publicUrl");
-      },
-    );
-
-    it("keeps both publicUrl and publicOrigin when both are set", () => {
-      const configPath = path.join(tmpDir, "both.yaml");
-      fs.writeFileSync(configPath, "server:\n  publicOrigin: https://old.example.com\n");
-
-      const config = loadConfig(
-        { publicUrl: "https://example.com/docs" },
-        { configPath },
-      );
-
-      expect(config.server.publicUrl).toBe("https://example.com/docs");
-      expect(config.server.publicOrigin).toBe("https://old.example.com");
-    });
-
-    it("defaults server.allowedOrigins to an empty list", () => {
-      const config = loadConfig({}, { configPath: path.join(tmpDir, "no-origins.yaml") });
-
-      expect(config.server.allowedOrigins).toEqual([]);
-    });
-
-    it("loads server.allowedOrigins from a JSON array env var", () => {
-      process.env.DOCS_MCP_SERVER_ALLOWED_ORIGINS =
-        '["https://inspector.example.com/", "http://localhost:3000"]';
-
-      const config = loadConfig(
-        {},
-        { configPath: path.join(tmpDir, "env-origins.yaml") },
-      );
-
-      expect(config.server.allowedOrigins).toEqual([
-        "https://inspector.example.com",
-        "http://localhost:3000",
-      ]);
-    });
-
-    it("rejects an allowed origin with a path", () => {
-      const configPath = path.join(tmpDir, "bad-origins.yaml");
-      fs.writeFileSync(
-        configPath,
-        "server:\n  allowedOrigins:\n    - https://inspector.example.com/app\n",
-      );
-
-      expect(() => loadConfig({}, { configPath })).toThrow("server.allowedOrigins");
-    });
-
-    it("loads server.heartbeatMs from a config file", () => {
-      const configPath = path.join(tmpDir, "heartbeat.yaml");
-      fs.writeFileSync(configPath, "server:\n  heartbeatMs: 15000\n  host: file-host\n");
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.server.host).toBe("file-host");
-      expect(config.server.heartbeatMs).toBe(15000);
-    });
-
-    it("loads scraper.jobHeartbeatMs from DOCS_MCP_SCRAPER_JOB_HEARTBEAT_MS", () => {
-      process.env.DOCS_MCP_SCRAPER_JOB_HEARTBEAT_MS = "250";
-
-      const config = loadConfig({}, { configPath: path.join(tmpDir, "absent.yaml") });
-
-      expect(config.scraper.jobHeartbeatMs).toBe(250);
-    });
-
-    it("falls back to the default for a scraper.jobHeartbeatMs that is not positive", () => {
-      const configPath = path.join(tmpDir, "job-heartbeat.yaml");
-      fs.writeFileSync(configPath, "scraper:\n  jobHeartbeatMs: 0\n");
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.scraper.jobHeartbeatMs).toBe(15_000);
-    });
-  });
-
-  describe("Unit Logic & Edge Cases", () => {
-    it("should handle nested defaults correctly (Assembly)", () => {
-      const configPath = path.join(tmpDir, "defaults.yaml");
-      fs.writeFileSync(configPath, "");
-      const config = loadConfig({ config: configPath });
-      expect(config.assembly.maxParentChainDepth).toBe(10);
-    });
-
-    it("should apply scraper retry and abort threshold defaults", () => {
-      const configPath = path.join(tmpDir, "scraper-defaults.yaml");
-      fs.writeFileSync(configPath, "");
-
-      const config = loadConfig({ config: configPath });
-
-      expect(config.scraper.fetcher.maxRetries).toBe(3);
-      expect(config.scraper.abortOnFailureRate).toBe(0.5);
-    });
-
-    it("should recover from malformed config file by using defaults (Read-Only mode)", () => {
-      // Should it overwrite? No, read-only mode should NOT overwrite even if invalid.
-      const configPath = path.join(tmpDir, "malformed.yaml");
-      fs.writeFileSync(configPath, ":");
-
-      const config = loadConfig({ config: configPath });
-
-      expect(config.server.host).toBe("127.0.0.1");
-
-      // Verify file is UNTOUCHED
-      const content = fs.readFileSync(configPath, "utf8");
-      expect(content).toBe(":");
-    });
-  });
+afterEach(() => {
+  vi.unstubAllEnvs();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-describe("Environment Variable Helpers", () => {
-  describe("camelToUpperSnake", () => {
-    it("converts simple camelCase", () => {
-      expect(camelToUpperSnake("maxSize")).toBe("MAX_SIZE");
-    });
+/** The managed default config file, which loadConfig() writes back. */
+const managedConfigPath = () => path.join(managed.dir, "config.yaml");
 
-    it("converts multiple humps", () => {
-      expect(camelToUpperSnake("maxNestingDepth")).toBe("MAX_NESTING_DEPTH");
-    });
+/** Writes a config file into the test's directory and returns its path. */
+function writeConfigFile(name: string, content: string): string {
+  const filePath = path.join(tmpDir, name);
+  fs.writeFileSync(filePath, content);
+  return filePath;
+}
 
-    it("handles already uppercase", () => {
-      expect(camelToUpperSnake("URL")).toBe("URL");
-    });
+/** Loads with an explicit config path that does not exist, so no file applies. */
+const loadWithoutFile = (cliArgs: Record<string, unknown> = {}) =>
+  loadConfig(cliArgs, { configPath: path.join(tmpDir, "absent.yaml") });
 
-    it("handles lowercase", () => {
-      expect(camelToUpperSnake("host")).toBe("HOST");
-    });
+/** Returns a deep copy of `config` with one dot-separated setting replaced. */
+function withSetting(config: AppConfig, setting: string, value: unknown): AppConfig {
+  const copy = structuredClone(config);
+  const keys = setting.split(".");
+  let node = copy as unknown as Record<string, unknown>;
+  for (const key of keys.slice(0, -1)) {
+    node = node[key] as Record<string, unknown>;
+  }
+  node[keys[keys.length - 1]] = value;
+  return copy;
+}
+
+/** The YAML of a config file that sets only `setting`. */
+function yamlWithSetting(setting: string, value: unknown): string {
+  const root: Record<string, unknown> = {};
+  const keys = setting.split(".");
+  let node = root;
+  for (const key of keys.slice(0, -1)) {
+    const child: Record<string, unknown> = {};
+    node[key] = child;
+    node = child;
+  }
+  node[keys[keys.length - 1]] = value;
+  return yaml.stringify(root);
+}
+
+describe("loadConfig", () => {
+  it("writes the managed default config on first load, without instructions", () => {
+    const config = loadConfig({}, {});
+
+    expect(config.server.host).toBe("127.0.0.1");
+    expect(config.server.publicOrigin).toBeUndefined();
+    const saved = fs.readFileSync(managedConfigPath(), "utf8");
+    expect(yaml.parse(saved).server.host).toBe("127.0.0.1");
+    expect(saved).not.toMatch(/^\s*instructions:/m);
   });
 
-  describe("pathToEnvVar", () => {
-    it("converts simple path", () => {
-      expect(pathToEnvVar(["scraper", "maxPages"])).toBe("DOCS_MCP_SCRAPER_MAX_PAGES");
-    });
-
-    it("converts deeply nested path", () => {
-      expect(pathToEnvVar(["scraper", "document", "maxSize"])).toBe(
-        "DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE",
-      );
-    });
-
-    it("converts path with camelCase segments", () => {
-      expect(pathToEnvVar(["splitter", "json", "maxNestingDepth"])).toBe(
-        "DOCS_MCP_SPLITTER_JSON_MAX_NESTING_DEPTH",
-      );
-    });
-
-    it("converts nested security path", () => {
-      expect(pathToEnvVar(["scraper", "security", "fileAccess", "followSymlinks"])).toBe(
-        "DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS",
-      );
-    });
-  });
-
-  describe("collectLeafPaths", () => {
-    it("collects leaf paths from nested object", () => {
-      const obj = {
-        a: 1,
-        b: {
-          c: 2,
-          d: { e: 3 },
+  it("reads an explicit config file without writing to it", () => {
+    const content = "app:\n  telemetryEnabled: false\n";
+    const ways: Array<[label: string, load: (configPath: string) => AppConfig]> = [
+      ["--config", (configPath) => loadConfig({ config: configPath })],
+      ["configPath option", (configPath) => loadConfig({}, { configPath })],
+      [
+        "DOCS_MCP_CONFIG",
+        (configPath) => {
+          vi.stubEnv("DOCS_MCP_CONFIG", configPath);
+          return loadConfig({});
         },
-      };
-      const paths = collectLeafPaths(obj);
-      expect(paths).toContainEqual(["a"]);
-      expect(paths).toContainEqual(["b", "c"]);
-      expect(paths).toContainEqual(["b", "d", "e"]);
-      expect(paths).toHaveLength(3);
-    });
+      ],
+    ];
 
-    it("handles empty object", () => {
-      expect(collectLeafPaths({})).toEqual([]);
-    });
-  });
-});
-
-describe("Config CLI Helpers", () => {
-  describe("getConfigMappedCliKeys", () => {
-    it("lists the CLI options that map onto settings", () => {
-      const keys = getConfigMappedCliKeys();
-
-      expect(keys).toContain("authEnabled");
-      expect(keys).toContain("readOnly");
-      expect(keys).toContain("protocol");
-    });
+    for (const [index, [label, load]] of ways.entries()) {
+      const configPath = writeConfigFile(`explicit-${index}.yaml`, content);
+      expect.soft(load(configPath).app.telemetryEnabled, label).toBe(false);
+      expect.soft(fs.readFileSync(configPath, "utf8"), label).toBe(content);
+    }
+    // Nor does it write the managed default config.
+    expect(fs.existsSync(managed.dir)).toBe(false);
   });
 
-  describe("isValidConfigPath", () => {
-    it("returns true for valid paths", () => {
-      expect(isValidConfigPath("scraper.maxPages")).toBe(true);
-      expect(isValidConfigPath("scraper.document.maxSize")).toBe(true);
-      expect(isValidConfigPath("app.telemetryEnabled")).toBe(true);
-      expect(isValidConfigPath("server.publicOrigin")).toBe(true);
-    });
-
-    it("returns false for invalid paths", () => {
-      expect(isValidConfigPath("invalid.path")).toBe(false);
-      expect(isValidConfigPath("scraper.nonexistent")).toBe(false);
-      expect(isValidConfigPath("toString")).toBe(false);
-      expect(isValidConfigPath("server.toString")).toBe(false);
-    });
-  });
-
-  describe("getConfigValue", () => {
-    const mockConfig = {
-      scraper: {
-        maxPages: 1000,
-        document: { maxSize: 10485760 },
+  it("takes a setting from the CLI over the environment over the config file over the defaults", () => {
+    const cases: Array<{
+      setting: string;
+      file: unknown;
+      env: [name: string, value: string, parsed?: unknown];
+      cli?: [key: string, value: unknown];
+    }> = [
+      {
+        setting: "server.host",
+        file: "file-host",
+        env: ["DOCS_MCP_HOST", "env-host"],
+        cli: ["host", "cli-host"],
       },
-      app: { telemetryEnabled: true },
-    };
+      {
+        setting: "server.publicOrigin",
+        file: "https://file.example.com",
+        env: ["DOCS_MCP_SERVER_PUBLIC_ORIGIN", "https://env.example.com"],
+        cli: ["publicOrigin", "https://cli.example.com"],
+      },
+      {
+        setting: "server.publicUrl",
+        file: "https://file.example.com/docs",
+        env: ["DOCS_MCP_SERVER_PUBLIC_URL", "https://env.example.com/docs"],
+        cli: ["publicUrl", "https://cli.example.com/tools"],
+      },
+      {
+        setting: "server.name",
+        file: "file-name",
+        env: ["DOCS_MCP_SERVER_NAME", "env-name"],
+        cli: ["serverName", "cli-name"],
+      },
+      {
+        setting: "server.title",
+        file: "File Title",
+        env: ["DOCS_MCP_SERVER_TITLE", "Env Title"],
+        cli: ["serverTitle", "CLI Title"],
+      },
+      {
+        setting: "server.instructions",
+        file: "from file",
+        env: ["DOCS_MCP_SERVER_INSTRUCTIONS", "from env"],
+        cli: ["serverInstructions", "from cli"],
+      },
+      {
+        setting: "server.instructionsFile",
+        file: "/from/file.md",
+        env: ["DOCS_MCP_SERVER_INSTRUCTIONS_FILE", "/from/env.md"],
+        cli: ["serverInstructionsFile", "/from/cli.md"],
+      },
+      {
+        setting: "server.heartbeatMs",
+        file: 15000,
+        env: ["DOCS_MCP_SERVER_HEARTBEAT_MS", "20000", 20000],
+      },
+      {
+        setting: "scraper.skipKnownTrackers",
+        file: false,
+        env: ["DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS", "true", true],
+      },
+      // A file written by an older release lacks newer keys; they keep their
+      // defaults while the file's own values apply.
+      {
+        setting: "scraper.maxPages",
+        file: 42,
+        env: ["DOCS_MCP_SCRAPER_MAX_PAGES", "500", 500],
+      },
+    ];
 
-    it("gets scalar value", () => {
-      expect(getConfigValue(mockConfig as any, "scraper.maxPages")).toBe(1000);
-    });
-
-    it("gets nested object", () => {
-      expect(getConfigValue(mockConfig as any, "scraper.document")).toEqual({
-        maxSize: 10485760,
-      });
-    });
-
-    it("returns undefined for invalid path", () => {
-      expect(getConfigValue(mockConfig as any, "invalid.path")).toBeUndefined();
-    });
-  });
-
-  describe("parseConfigValue", () => {
-    it("parses integers", () => {
-      expect(parseConfigValue("1000")).toBe(1000);
-      expect(parseConfigValue("0")).toBe(0);
-    });
-
-    it("parses floats", () => {
-      expect(parseConfigValue("3.14")).toBe(3.14);
-    });
-
-    it("parses booleans", () => {
-      expect(parseConfigValue("true")).toBe(true);
-      expect(parseConfigValue("false")).toBe(false);
-      expect(parseConfigValue("TRUE")).toBe(true);
-      expect(parseConfigValue("FALSE")).toBe(false);
-    });
-
-    it("returns strings for non-numeric/non-boolean", () => {
-      expect(parseConfigValue("hello")).toBe("hello");
-      expect(parseConfigValue("text-embedding-3-small")).toBe("text-embedding-3-small");
-    });
-
-    it("returns empty string as string", () => {
-      expect(parseConfigValue("")).toBe("");
-    });
-  });
-});
-
-describe("normalizeEnvValue", () => {
-  it("strips surrounding double quotes", () => {
-    expect(normalizeEnvValue('"http://localhost:11434/v1"')).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
-
-  it("strips surrounding single quotes", () => {
-    expect(normalizeEnvValue("'http://localhost:11434/v1'")).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
-
-  it("leaves unquoted strings unchanged", () => {
-    expect(normalizeEnvValue("http://localhost:11434/v1")).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
-
-  it("trims whitespace before checking quotes", () => {
-    expect(normalizeEnvValue('  "http://localhost:11434/v1"  ')).toBe(
-      "http://localhost:11434/v1",
-    );
-  });
-
-  it("does not strip mismatched quotes", () => {
-    expect(normalizeEnvValue("\"http://localhost:11434/v1'")).toBe(
-      "\"http://localhost:11434/v1'",
-    );
-  });
-
-  it("does not strip quotes that only appear on one side", () => {
-    expect(normalizeEnvValue('"only-start')).toBe('"only-start');
-    expect(normalizeEnvValue('only-end"')).toBe('only-end"');
-  });
-
-  it("handles empty string", () => {
-    expect(normalizeEnvValue("")).toBe("");
-  });
-
-  it("handles string that is just quotes", () => {
-    expect(normalizeEnvValue('""')).toBe("");
-    expect(normalizeEnvValue("''")).toBe("");
-  });
-});
-
-describe("Quoted configuration environment variable handling (GH-353)", () => {
-  let originalEnv: NodeJS.ProcessEnv;
-  let tmpDir: string;
-
-  beforeEach(() => {
-    originalEnv = { ...process.env };
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-env-test-"));
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it("should strip double-quoted DOCS_MCP_EMBEDDING_MODEL", () => {
-    process.env.DOCS_MCP_EMBEDDING_MODEL = '"openai:nomic-embed-text"';
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "quoted-config.yaml") },
-    );
-
-    expect(config.app.embeddingModel).toBe("openai:nomic-embed-text");
-  });
-
-  it("should strip single-quoted DOCS_MCP_EMBEDDING_MODEL", () => {
-    process.env.DOCS_MCP_EMBEDDING_MODEL = "'openai:nomic-embed-text'";
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "quoted-config.yaml") },
-    );
-
-    expect(config.app.embeddingModel).toBe("openai:nomic-embed-text");
-  });
-
-  it("should strip double-quoted OPENAI_API_KEY", () => {
-    process.env.OPENAI_API_KEY = '"ollama"';
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "quoted-config.yaml") },
-    );
-
-    // The key itself isn't in AppConfig, but the embedding model should default correctly
-    // when OPENAI_API_KEY is truthy (even quoted)
-    expect(config.app.embeddingModel).toBeTruthy();
-  });
-
-  it("should strip quotes from auto-generated env vars", () => {
-    process.env.DOCS_MCP_SCRAPER_MAX_PAGES = '"500"';
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "quoted-config.yaml") },
-    );
-
-    expect(config.scraper.maxPages).toBe(500);
-  });
-});
-
-describe("Auto-generated Environment Variable Overrides", () => {
-  let originalEnv: NodeJS.ProcessEnv;
-  let tmpDir: string;
-
-  beforeEach(() => {
-    originalEnv = { ...process.env };
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-config-auto-env-test-"));
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it("applies auto-generated env var override", () => {
-    process.env.DOCS_MCP_SCRAPER_MAX_PAGES = "500";
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
-    );
-
-    expect(config.scraper.maxPages).toBe(500);
-  });
-
-  it("auto-generated env var takes precedence over explicit alias", () => {
-    process.env.PORT = "3000";
-    process.env.DOCS_MCP_SERVER_PORTS_DEFAULT = "4000";
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
-    );
-
-    expect(config.server.ports.default).toBe(4000);
-  });
-
-  it("applies deeply nested env var", () => {
-    process.env.DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE = "52428800";
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
-    );
-
-    expect(config.scraper.document.maxSize).toBe(52428800);
-  });
-
-  it("applies scraper abort-on-failure-rate env var override", () => {
-    process.env.DOCS_MCP_SCRAPER_ABORT_ON_FAILURE_RATE = "0.25";
-
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "auto-env-config.yaml") },
-    );
-
-    expect(config.scraper.abortOnFailureRate).toBe(0.25);
-  });
-
-  describe("scraper.skipKnownTrackers", () => {
-    it("defaults to true when nothing is set", () => {
-      const config = loadConfig(
-        {},
-        { configPath: path.join(tmpDir, "tracker-default.yaml") },
+    for (const [index, { setting, file, env, cli }] of cases.entries()) {
+      const configPath = writeConfigFile(
+        `precedence-${index}.yaml`,
+        yamlWithSetting(setting, file),
       );
+      // The file's value merges over the defaults, which fill in everything else.
+      expect
+        .soft(loadConfig({}, { configPath }), `${setting}: file over defaults`)
+        .toEqual(withSetting(defaults, setting, file));
 
-      expect(config.scraper.skipKnownTrackers).toBe(true);
-    });
+      const [envName, envValue, envParsed = envValue] = env;
+      vi.stubEnv(envName, envValue);
+      expect
+        .soft(
+          getConfigValue(loadConfig({}, { configPath }), setting),
+          `${setting}: env over file`,
+        )
+        .toEqual(envParsed);
 
-    it("respects a file-set value", () => {
-      const configPath = path.join(tmpDir, "tracker-file.yaml");
-      fs.writeFileSync(configPath, "scraper:\n  skipKnownTrackers: false\n");
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.scraper.skipKnownTrackers).toBe(false);
-    });
-
-    it("respects env override", () => {
-      process.env.DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS = "false";
-
-      const config = loadConfig(
-        {},
-        { configPath: path.join(tmpDir, "tracker-env.yaml") },
-      );
-
-      expect(config.scraper.skipKnownTrackers).toBe(false);
-    });
-
-    it("env takes precedence over a conflicting file value", () => {
-      const configPath = path.join(tmpDir, "tracker-precedence.yaml");
-      fs.writeFileSync(configPath, "scraper:\n  skipKnownTrackers: true\n");
-      process.env.DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS = "false";
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.scraper.skipKnownTrackers).toBe(false);
-    });
-
-    it("fills in the new key when reading a pre-existing config that lacks it", () => {
-      // Simulate a config file written by a prior release that lacked the key.
-      // Explicit configPath is read-only (no disk-rewrite), but the resolved
-      // config still gains the new default.
-      const configPath = path.join(tmpDir, "tracker-upgrade.yaml");
-      fs.writeFileSync(configPath, "scraper:\n  maxPages: 42\n");
-
-      const config = loadConfig({}, { configPath });
-
-      expect(config.scraper.skipKnownTrackers).toBe(true);
-      expect(config.scraper.maxPages).toBe(42);
-    });
+      if (cli) {
+        const [cliKey, cliValue] = cli;
+        expect
+          .soft(
+            getConfigValue(loadConfig({ [cliKey]: cliValue }, { configPath }), setting),
+            `${setting}: CLI over env`,
+          )
+          .toEqual(cliValue);
+      }
+      vi.stubEnv(envName, undefined);
+    }
   });
 
-  it("resets an unrecognised htmlExtractor in the config file to the default", () => {
-    // A file-borne value that fails schema validation is not fatal: the loader
-    // warns and rebuilds from defaults, so a typo cannot select an
-    // unrecognised extractor.
-    const configPath = path.join(tmpDir, "bad-extractor.yaml");
-    fs.writeFileSync(configPath, "scraper:\n  htmlExtractor: nonsense\n");
+  it("treats a blank environment variable as unset", () => {
+    const cases: Array<[name: string, setting: string, expected: unknown]> = [
+      ["DOCS_MCP_SERVER_PUBLIC_ORIGIN", "server.publicOrigin", undefined],
+      ["DOCS_MCP_SERVER_NAME", "server.name", "docs-mcp-server"],
+      ["DOCS_MCP_SERVER_TITLE", "server.title", undefined],
+      ["DOCS_MCP_SERVER_INSTRUCTIONS", "server.instructions", undefined],
+      ["DOCS_MCP_SERVER_INSTRUCTIONS_FILE", "server.instructionsFile", undefined],
+    ];
+
+    for (const [name, setting, expected] of cases) {
+      for (const blank of ["", "  "]) {
+        vi.stubEnv(name, blank);
+        expect
+          .soft(getConfigValue(loadWithoutFile(), setting), `${name}="${blank}"`)
+          .toEqual(expected);
+      }
+      vi.stubEnv(name, undefined);
+    }
+  });
+
+  it("applies the built-in defaults", () => {
+    // An empty file holds no settings at all.
+    const config = loadConfig({}, { configPath: writeConfigFile("empty.yaml", "") });
+    const cases: Array<[setting: string, expected: unknown]> = [
+      ["server.host", "127.0.0.1"],
+      ["server.name", "docs-mcp-server"],
+      ["server.title", undefined],
+      ["server.instructions", undefined],
+      ["server.instructionsFile", undefined],
+      ["server.publicOrigin", undefined],
+      ["server.allowedOrigins", []],
+      ["assembly.maxParentChainDepth", 10],
+      ["scraper.fetcher.maxRetries", 3],
+      ["scraper.abortOnFailureRate", 0.5],
+      ["scraper.skipKnownTrackers", true],
+      // The scraper's security settings start closed.
+      ["scraper.security.network.allowPrivateNetworks", false],
+      ["scraper.security.network.allowedHosts", []],
+      ["scraper.security.network.allowedCidrs", []],
+      ["scraper.security.network.allowInvalidTls", false],
+      ["scraper.security.fileAccess.mode", "allowedRoots"],
+      ["scraper.security.fileAccess.allowedRoots", ["$DOCUMENTS"]],
+      ["scraper.security.fileAccess.followSymlinks", false],
+      ["scraper.security.fileAccess.includeHidden", false],
+    ];
+
+    for (const [setting, expected] of cases) {
+      expect.soft(getConfigValue(config, setting), setting).toEqual(expected);
+    }
+  });
+
+  it("normalizes server.publicOrigin and server.publicUrl from the config file", () => {
+    const configPath = writeConfigFile(
+      "public.yaml",
+      "server:\n  publicOrigin: https://docs.example.com/\n  publicUrl: https://example.com/docs/\n",
+    );
 
     const config = loadConfig({}, { configPath });
 
-    expect(config.scraper.htmlExtractor).toBe("cheerio");
+    expect(config.server.publicOrigin).toBe("https://docs.example.com");
+    expect(config.server.publicUrl).toBe("https://example.com/docs");
   });
 
-  it("rejects an unrecognised htmlExtractor supplied through the environment", () => {
+  it("rejects an invalid public location setting instead of resetting to defaults", () => {
+    // serverOrigin.test.ts covers the URL rules; these rows show that a broken
+    // value stops loading wherever it comes from.
+    const cases: Array<[source: "cli" | "file", setting: string, value: unknown]> = [
+      ["cli", "publicOrigin", "ftp://docs.example.com"],
+      ["cli", "publicOrigin", "https://docs.example.com/path"],
+      ["cli", "publicOrigin", "https://docs.example.com?x=1"],
+      ["cli", "publicOrigin", "https://docs.example.com#fragment"],
+      ["cli", "publicUrl", "https://example.com/docs?x=1"],
+      ["cli", "publicUrl", "ftp://example.com/docs"],
+      ["cli", "publicUrl", "https://example.com/mcp"],
+      ["file", "allowedOrigins", ["https://inspector.example.com/app"]],
+    ];
+
+    for (const [index, [source, setting, value]] of cases.entries()) {
+      const load =
+        source === "cli"
+          ? () => loadWithoutFile({ [setting]: value })
+          : () =>
+              loadConfig(
+                {},
+                {
+                  configPath: writeConfigFile(
+                    `invalid-location-${index}.yaml`,
+                    yamlWithSetting(`server.${setting}`, value),
+                  ),
+                },
+              );
+      expect.soft(load, `${source} ${setting} ${value}`).toThrow(`server.${setting}`);
+    }
+  });
+
+  it("keeps both publicUrl and publicOrigin when both are set", () => {
+    const configPath = writeConfigFile(
+      "both.yaml",
+      "server:\n  publicOrigin: https://old.example.com\n",
+    );
+
+    const config = loadConfig({ publicUrl: "https://example.com/docs" }, { configPath });
+
+    expect(config.server.publicUrl).toBe("https://example.com/docs");
+    expect(config.server.publicOrigin).toBe("https://old.example.com");
+  });
+
+  it("parses list settings from JSON array environment variables", () => {
+    vi.stubEnv(
+      "DOCS_MCP_SERVER_ALLOWED_ORIGINS",
+      '["https://inspector.example.com/", "http://localhost:3000"]',
+    );
+    vi.stubEnv(
+      "DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_HOSTS",
+      '["docs.internal.example","wiki.corp.local"]',
+    );
+    vi.stubEnv(
+      "DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS",
+      '["$DOCUMENTS", "/srv/docs"]',
+    );
+
+    const config = loadWithoutFile();
+
+    // Allowed origins are normalized as origins.
+    expect(config.server.allowedOrigins).toEqual([
+      "https://inspector.example.com",
+      "http://localhost:3000",
+    ]);
+    expect(config.scraper.security.network.allowedHosts).toEqual([
+      "docs.internal.example",
+      "wiki.corp.local",
+    ]);
+    expect(config.scraper.security.fileAccess.allowedRoots).toEqual([
+      "$DOCUMENTS",
+      "/srv/docs",
+    ]);
+  });
+
+  it("reads every setting from a DOCS_MCP_ environment variable named after its path", () => {
+    const cases: Array<
+      [name: string, value: string, setting: string, expected: unknown]
+    > = [
+      ["DOCS_MCP_SCRAPER_MAX_PAGES", "500", "scraper.maxPages", 500],
+      ["DOCS_MCP_SCRAPER_JOB_HEARTBEAT_MS", "250", "scraper.jobHeartbeatMs", 250],
+      [
+        "DOCS_MCP_SCRAPER_DOCUMENT_MAX_SIZE",
+        "52428800",
+        "scraper.document.maxSize",
+        52428800,
+      ],
+      [
+        "DOCS_MCP_SPLITTER_JSON_MAX_NESTING_DEPTH",
+        "7",
+        "splitter.json.maxNestingDepth",
+        7,
+      ],
+      // A float
+      [
+        "DOCS_MCP_SCRAPER_ABORT_ON_FAILURE_RATE",
+        "0.25",
+        "scraper.abortOnFailureRate",
+        0.25,
+      ],
+      // An enum, with each supported value
+      [
+        "DOCS_MCP_SCRAPER_HTML_EXTRACTOR",
+        "defuddle",
+        "scraper.htmlExtractor",
+        "defuddle",
+      ],
+      ["DOCS_MCP_SCRAPER_HTML_EXTRACTOR", "cheerio", "scraper.htmlExtractor", "cheerio"],
+      // A boolean turned off
+      [
+        "DOCS_MCP_SCRAPER_SKIP_KNOWN_TRACKERS",
+        "false",
+        "scraper.skipKnownTrackers",
+        false,
+      ],
+      // Four levels deep, with camelCase segments
+      [
+        "DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_INVALID_TLS",
+        "true",
+        "scraper.security.network.allowInvalidTls",
+        true,
+      ],
+      [
+        "DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS",
+        "true",
+        "scraper.security.fileAccess.followSymlinks",
+        true,
+      ],
+      [
+        "DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_INCLUDE_HIDDEN",
+        "true",
+        "scraper.security.fileAccess.includeHidden",
+        true,
+      ],
+    ];
+
+    for (const [name, value, setting, expected] of cases) {
+      vi.stubEnv(name, value);
+      expect
+        .soft(getConfigValue(loadWithoutFile(), setting), `${name}=${value}`)
+        .toEqual(expected);
+      vi.stubEnv(name, undefined);
+    }
+  });
+
+  it("prefers the generated variable over an alias for the same setting", () => {
+    vi.stubEnv("PORT", "3000");
+    vi.stubEnv("DOCS_MCP_SERVER_PORTS_DEFAULT", "4000");
+
+    const config = loadWithoutFile();
+
+    expect(config.server.ports.default).toBe(4000);
+    expect(config.server.ports.worker).toBe(3000);
+  });
+
+  it("strips the quotes around environment variable values (GH-353)", () => {
+    const cases: Array<
+      [name: string, value: string, setting: string, expected: unknown]
+    > = [
+      [
+        "DOCS_MCP_EMBEDDING_MODEL",
+        '"openai:nomic-embed-text"',
+        "app.embeddingModel",
+        "openai:nomic-embed-text",
+      ],
+      [
+        "DOCS_MCP_EMBEDDING_MODEL",
+        "'openai:nomic-embed-text'",
+        "app.embeddingModel",
+        "openai:nomic-embed-text",
+      ],
+      // A generated variable
+      ["DOCS_MCP_SCRAPER_MAX_PAGES", '"500"', "scraper.maxPages", 500],
+    ];
+
+    for (const [name, value, setting, expected] of cases) {
+      vi.stubEnv(name, value);
+      expect
+        .soft(getConfigValue(loadWithoutFile(), setting), `${name}=${value}`)
+        .toEqual(expected);
+      vi.stubEnv(name, undefined);
+    }
+  });
+
+  it("fails loading on an invalid environment value", () => {
     // Environment overrides are reapplied when the loader falls back, so an
     // invalid one fails loading outright rather than resetting to the default.
-    process.env.DOCS_MCP_SCRAPER_HTML_EXTRACTOR = "nonsense";
+    const cases: Array<[name: string, value: string]> = [
+      ["DOCS_MCP_SCRAPER_HTML_EXTRACTOR", "nonsense"],
+      // The embedding dimension must be at least 1.
+      ["DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION", "0"],
+      ["DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION", "-1"],
+    ];
 
-    expect(() =>
-      loadConfig({}, { configPath: path.join(tmpDir, "env-extractor.yaml") }),
-    ).toThrow();
+    for (const [name, value] of cases) {
+      vi.stubEnv(name, value);
+      expect.soft(() => loadWithoutFile(), `${name}=${value}`).toThrow();
+      vi.stubEnv(name, undefined);
+    }
   });
 
-  it("accepts the supported htmlExtractor values", () => {
-    process.env.DOCS_MCP_SCRAPER_HTML_EXTRACTOR = "defuddle";
-    expect(
-      loadConfig({}, { configPath: path.join(tmpDir, "defuddle.yaml") }).scraper
-        .htmlExtractor,
-    ).toBe("defuddle");
+  it("falls back to the defaults for an invalid explicit config file and leaves the file alone", () => {
+    // A file-borne value that fails validation is not fatal: the loader warns
+    // and rebuilds from the defaults, so a typo cannot select an unrecognised
+    // extractor. A file passed explicitly is read-only, so the loader neither
+    // rewrites nor moves it.
+    const cases: Array<{ label: string; content: string; setting: string }> = [
+      {
+        label: "jobHeartbeatMs that is not positive",
+        content: "scraper:\n  jobHeartbeatMs: 0\n",
+        setting: "scraper.jobHeartbeatMs",
+      },
+      { label: "malformed YAML", content: ":", setting: "server.host" },
+      {
+        label: "unrecognised htmlExtractor",
+        content: "scraper:\n  htmlExtractor: nonsense\n",
+        setting: "scraper.htmlExtractor",
+      },
+      {
+        label: "lists saved as objects",
+        content: [
+          "scraper:",
+          "  security:",
+          "    network:",
+          "      allowedHosts: {}",
+          "      allowedCidrs: {}",
+          "    fileAccess:",
+          '      allowedRoots: { "0": "$DOCUMENTS" }',
+          "",
+        ].join("\n"),
+        setting: "scraper.security",
+      },
+    ];
 
-    process.env.DOCS_MCP_SCRAPER_HTML_EXTRACTOR = "cheerio";
-    expect(
-      loadConfig({}, { configPath: path.join(tmpDir, "cheerio.yaml") }).scraper
-        .htmlExtractor,
-    ).toBe("cheerio");
+    for (const [index, { label, content, setting }] of cases.entries()) {
+      const configPath = writeConfigFile(`invalid-${index}.yaml`, content);
+      const config = loadConfig({}, { configPath });
+
+      expect
+        .soft(getConfigValue(config, setting), label)
+        .toEqual(getConfigValue(defaults, setting));
+      expect.soft(fs.readFileSync(configPath, "utf8"), `${label}: file`).toBe(content);
+    }
+    expect(fs.readdirSync(tmpDir).filter((name) => name.includes(".invalid-"))).toEqual(
+      [],
+    );
   });
 
-  it("rejects vectorDimension of 0 or negative values", () => {
-    // vectorDimension = 0 should fail Zod .min(1) validation
-    process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "0";
-    expect(() =>
-      loadConfig({}, { configPath: path.join(tmpDir, "dim-zero.yaml") }),
-    ).toThrow();
+  it("moves an invalid managed config aside and starts a fresh one from the defaults", () => {
+    // Array settings saved as objects by an older release would otherwise stop
+    // every start. The loader keeps the settings in `config.yaml.invalid-<ts>`
+    // so hand-edits are not lost.
+    fs.mkdirSync(managed.dir, { recursive: true });
+    fs.writeFileSync(
+      managedConfigPath(),
+      "scraper:\n  maxPages: 42\n  security:\n    network:\n      allowedHosts: {}\n",
+    );
 
-    // vectorDimension = -1 should also fail
-    process.env.DOCS_MCP_EMBEDDINGS_VECTOR_DIMENSION = "-1";
-    expect(() =>
-      loadConfig({}, { configPath: path.join(tmpDir, "dim-neg.yaml") }),
-    ).toThrow();
+    const config = loadConfig({}, {});
+
+    expect(config.scraper.maxPages).toBe(defaults.scraper.maxPages);
+    expect(config.scraper.security.network.allowedHosts).toEqual([]);
+    const quarantined = fs
+      .readdirSync(managed.dir)
+      .filter((name) => /^config\.yaml\.invalid-\d+$/.test(name));
+    expect(quarantined).toHaveLength(1);
+    const kept = yaml.parse(
+      fs.readFileSync(path.join(managed.dir, quarantined[0]), "utf8"),
+    );
+    expect(kept.scraper.maxPages).toBe(42);
+    expect(kept.scraper.security.network.allowedHosts).toEqual({});
+    const fresh = yaml.parse(fs.readFileSync(managedConfigPath(), "utf8"));
+    expect(fresh.scraper.maxPages).toBe(defaults.scraper.maxPages);
+    expect(fresh.scraper.security.network.allowedHosts).toEqual([]);
+  });
+
+  it("reads back the list defaults it saved to the managed config", () => {
+    // Regression: deepMerge used to recurse into arrays as if they were
+    // objects, producing `{}` when an array default merged with the same
+    // array read back from the saved YAML file. The loader then rejected and
+    // quarantined the file it had written itself.
+    loadConfig({}, {});
+    const second = loadConfig({}, {});
+
+    expect(fs.readdirSync(managed.dir)).toEqual(["config.yaml"]);
+    expect(second.server.allowedOrigins).toEqual([]);
+    expect(second.scraper.security.network.allowedHosts).toEqual([]);
+    expect(second.scraper.security.network.allowedCidrs).toEqual([]);
+    expect(second.scraper.security.fileAccess.allowedRoots).toEqual(["$DOCUMENTS"]);
   });
 
   describe("embeddings.vectorDimension explicitness", () => {
-    const systemConfigPath = () =>
-      path.join(process.cwd(), ".vitest-config-mock", "config.yaml");
-
     it("omits generated default vectorDimension from the managed default config", () => {
       const config = loadConfig({}, {});
-      const content = fs.readFileSync(systemConfigPath(), "utf8");
+      const content = fs.readFileSync(managedConfigPath(), "utf8");
       const parsed = yaml.parse(content) as {
         embeddings?: { vectorDimension?: unknown };
       };
@@ -894,13 +593,13 @@ describe("Auto-generated Environment Variable Overrides", () => {
 
     it("treats a default vectorDimension in a managed config as explicit", () => {
       loadConfig({}, {});
-      const generated = fs.readFileSync(systemConfigPath(), "utf8");
+      const generated = fs.readFileSync(managedConfigPath(), "utf8");
       const marker = generated
         .split("\n")
         .filter((line) => line.startsWith("#"))
         .join("\n");
       fs.writeFileSync(
-        systemConfigPath(),
+        managedConfigPath(),
         `${marker}\nembeddings:\n  vectorDimension: ${defaults.embeddings.vectorDimension}\n`,
       );
 
@@ -908,15 +607,15 @@ describe("Auto-generated Environment Variable Overrides", () => {
 
       expect(config.embeddings.vectorDimension).toBe(defaults.embeddings.vectorDimension);
       expect(isVectorDimensionExplicit(config)).toBe(true);
-      expect(fs.readFileSync(systemConfigPath(), "utf8")).toContain("vectorDimension");
+      expect(fs.readFileSync(managedConfigPath(), "utf8")).toContain("vectorDimension");
     });
 
     it("migrates legacy generated default vectorDimension to implicit omission", () => {
-      fs.mkdirSync(path.dirname(systemConfigPath()), { recursive: true });
-      fs.writeFileSync(systemConfigPath(), yaml.stringify(defaults));
+      fs.mkdirSync(managed.dir, { recursive: true });
+      fs.writeFileSync(managedConfigPath(), yaml.stringify(defaults));
 
       const config = loadConfig({}, {});
-      const content = fs.readFileSync(systemConfigPath(), "utf8");
+      const content = fs.readFileSync(managedConfigPath(), "utf8");
       const parsed = yaml.parse(content) as {
         embeddings?: { vectorDimension?: unknown };
       };
@@ -927,9 +626,9 @@ describe("Auto-generated Environment Variable Overrides", () => {
     });
 
     it("treats a user-authored default vectorDimension as explicit", () => {
-      fs.mkdirSync(path.dirname(systemConfigPath()), { recursive: true });
+      fs.mkdirSync(managed.dir, { recursive: true });
       fs.writeFileSync(
-        systemConfigPath(),
+        managedConfigPath(),
         `embeddings:\n  vectorDimension: ${defaults.embeddings.vectorDimension}\n`,
       );
 
@@ -939,105 +638,63 @@ describe("Auto-generated Environment Variable Overrides", () => {
       expect(isVectorDimensionExplicit(config)).toBe(true);
     });
   });
+});
 
-  it("loads scraper security defaults", () => {
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "security-defaults.yaml") },
-    );
+describe("config CLI helpers", () => {
+  it("lists the CLI options that map onto settings", () => {
+    const keys = getConfigMappedCliKeys();
 
-    expect(config.scraper.security.network.allowPrivateNetworks).toBe(false);
-    expect(config.scraper.security.network.allowedHosts).toEqual([]);
-    expect(config.scraper.security.network.allowedCidrs).toEqual([]);
-    expect(config.scraper.security.network.allowInvalidTls).toBe(false);
-    expect(config.scraper.security.fileAccess.mode).toBe("allowedRoots");
-    expect(config.scraper.security.fileAccess.allowedRoots).toEqual(["$DOCUMENTS"]);
-    expect(config.scraper.security.fileAccess.followSymlinks).toBe(false);
-    expect(config.scraper.security.fileAccess.includeHidden).toBe(false);
+    expect(keys).toContain("authEnabled");
+    expect(keys).toContain("readOnly");
+    expect(keys).toContain("protocol");
   });
 
-  it("applies nested security env overrides", () => {
-    process.env.DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_INVALID_TLS = "true";
-    process.env.DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_FOLLOW_SYMLINKS = "true";
-    process.env.DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_INCLUDE_HIDDEN = "true";
+  it("accepts only paths of existing settings", () => {
+    const cases: Array<[path: string, expected: boolean]> = [
+      ["scraper.maxPages", true],
+      ["scraper.document.maxSize", true],
+      ["app.telemetryEnabled", true],
+      ["server.publicOrigin", true],
+      ["invalid.path", false],
+      ["scraper.nonexistent", false],
+      // Inherited object properties are not settings.
+      ["toString", false],
+      ["server.toString", false],
+    ];
 
-    const config = loadConfig({}, { configPath: path.join(tmpDir, "security-env.yaml") });
-
-    expect(config.scraper.security.network.allowInvalidTls).toBe(true);
-    expect(config.scraper.security.fileAccess.followSymlinks).toBe(true);
-    expect(config.scraper.security.fileAccess.includeHidden).toBe(true);
+    for (const [settingPath, expected] of cases) {
+      expect.soft(isValidConfigPath(settingPath), settingPath).toBe(expected);
+    }
   });
 
-  it("parses security arrays from env", () => {
-    process.env.DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOWED_HOSTS =
-      '["docs.internal.example","wiki.corp.local"]';
-    process.env.DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS =
-      '["$DOCUMENTS", "/srv/docs"]';
+  it("reads a setting or a group of settings by its dot path", () => {
+    const cases: Array<[path: string, expected: unknown]> = [
+      ["scraper.maxPages", 1000],
+      ["scraper.document", { maxSize: 10485760 }],
+      ["invalid.path", undefined],
+    ];
 
-    const config = loadConfig(
-      {},
-      { configPath: path.join(tmpDir, "security-arrays.yaml") },
-    );
-
-    expect(config.scraper.security.network.allowedHosts).toEqual([
-      "docs.internal.example",
-      "wiki.corp.local",
-    ]);
-    expect(config.scraper.security.fileAccess.allowedRoots).toEqual([
-      "$DOCUMENTS",
-      "/srv/docs",
-    ]);
+    for (const [settingPath, expected] of cases) {
+      expect.soft(getConfigValue(defaults, settingPath), settingPath).toEqual(expected);
+    }
   });
 
-  it("recovers in-memory from a structurally invalid explicit config without touching the file", () => {
-    // Read-only mode (explicit `configPath`): we still return a valid config
-    // built from defaults rather than throwing, but we must not rewrite or
-    // move the user's file because they passed it deliberately.
-    const configPath = path.join(tmpDir, "invalid-shape.yaml");
-    const original = [
-      "scraper:",
-      "  security:",
-      "    network:",
-      "      allowedHosts: {}",
-      "      allowedCidrs: {}",
-      "    fileAccess:",
-      '      allowedRoots: { "0": "$DOCUMENTS" }',
-      "",
-    ].join("\n");
-    fs.writeFileSync(configPath, original);
+  it("parses a value as a number, then a boolean, then a string", () => {
+    const cases: Array<[value: string, expected: unknown]> = [
+      ["1000", 1000],
+      ["0", 0],
+      ["3.14", 3.14],
+      ["true", true],
+      ["false", false],
+      ["TRUE", true],
+      ["FALSE", false],
+      ["hello", "hello"],
+      ["text-embedding-3-small", "text-embedding-3-small"],
+      ["", ""],
+    ];
 
-    const config = loadConfig({}, { configPath });
-
-    expect(Array.isArray(config.scraper.security.network.allowedHosts)).toBe(true);
-    expect(Array.isArray(config.scraper.security.fileAccess.allowedRoots)).toBe(true);
-    // File contents preserved exactly in read-only mode.
-    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-    // No quarantine file in read-only mode either.
-    const quarantined = fs
-      .readdirSync(tmpDir)
-      .filter((name) => name.startsWith("invalid-shape.yaml.invalid-"));
-    expect(quarantined.length).toBe(0);
-  });
-
-  it("preserves array-valued defaults across a saved-then-reloaded config", () => {
-    // Regression: deepMerge used to recurse into arrays as if they were
-    // objects, producing `{}` when an array default merged with the same
-    // array shape read back from the saved YAML file.
-    const configPath = path.join(tmpDir, "roundtrip.yaml");
-    loadConfig({}, { configPath });
-    const second = loadConfig({}, { configPath });
-
-    expect(Array.isArray(second.scraper.security.network.allowedHosts)).toBe(true);
-    expect(Array.isArray(second.scraper.security.network.allowedCidrs)).toBe(true);
-    expect(Array.isArray(second.scraper.security.fileAccess.allowedRoots)).toBe(true);
-    expect(second.scraper.security.fileAccess.allowedRoots).toEqual(["$DOCUMENTS"]);
-  });
-
-  it("treats unresolved $DOCUMENTS as no access", async () => {
-    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue("/missing-home");
-
-    await expect(expandConfiguredRoot("$DOCUMENTS")).resolves.toBeNull();
-
-    homedirSpy.mockRestore();
+    for (const [value, expected] of cases) {
+      expect.soft(parseConfigValue(value), `"${value}"`).toEqual(expected);
+    }
   });
 });
