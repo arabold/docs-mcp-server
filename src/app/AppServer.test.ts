@@ -103,11 +103,20 @@ describe("AppServer", () => {
       { label: "all services", web: true, mcp: true, api: true },
     ];
 
-    for (const { label, web, mcp, api } of cases) {
-      const { app } = await start(
-        services({ enableWebInterface: web, enableMcpServer: mcp, enableApiServer: api }),
-      );
+    const servers = await Promise.all(
+      cases.map(({ web, mcp, api }) =>
+        start(
+          services({
+            enableWebInterface: web,
+            enableMcpServer: mcp,
+            enableApiServer: api,
+          }),
+        ),
+      ),
+    );
 
+    for (const [index, { label, web, mcp, api }] of cases.entries()) {
+      const { app } = servers[index];
       const shell = await app.inject({ method: "GET", url: "/" });
       expect.soft(shell.statusCode, `${label}: GET /`).toBe(web ? 200 : 404);
       if (web) {
