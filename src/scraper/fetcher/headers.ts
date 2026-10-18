@@ -63,22 +63,45 @@ export function withMarkdownPreferredAccept(
 }
 
 /**
- * Returns headers without the `Sec-Fetch-*` family.
+ * Connection-level headers that Chromium refuses to take from a page. A
+ * navigation that carries one fails with `net::ERR_INVALID_ARGUMENT`.
+ * Generated Firefox fingerprints include `TE: trailers`.
+ */
+const CONNECTION_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "cookie2",
+  "host",
+  "keep-alive",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+/**
+ * Returns headers without the ones Chromium sets for itself.
  *
- * A browser sets these itself, with values that fit each request: a script
- * gets `Sec-Fetch-Dest: script`, not the `document` of the page that loads it.
- * While Playwright intercepts requests, Chromium fails every sub-resource
- * request that carries an overridden one with `net::ERR_INVALID_ARGUMENT`.
+ * A browser sets the `Sec-Fetch-*` family with values that fit each request: a
+ * script gets `Sec-Fetch-Dest: script`, not the `document` of the page that
+ * loads it. While Playwright intercepts requests, Chromium fails every
+ * sub-resource request that carries an overridden one with
+ * `net::ERR_INVALID_ARGUMENT`. Connection-level headers, such as `TE` or
+ * `Transfer-Encoding`, belong to the browser's own connections, and Chromium
+ * fails the navigation itself when a page asks for one.
  *
  * @param headers Request headers, such as a generated fingerprint.
- * @returns The headers minus any `Sec-Fetch-*` entry, in any letter case.
+ * @returns The headers minus any `Sec-Fetch-*` or connection-level entry, in
+ * any letter case.
  */
-export function withoutSecFetchHeaders(
+export function withoutBrowserManagedHeaders(
   headers: Record<string, string>,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(headers).filter(
-      ([header]) => !header.toLowerCase().startsWith("sec-fetch-"),
-    ),
+    Object.entries(headers).filter(([header]) => {
+      const name = header.toLowerCase();
+      return !name.startsWith("sec-fetch-") && !CONNECTION_HEADERS.has(name);
+    }),
   );
 }

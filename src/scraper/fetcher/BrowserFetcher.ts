@@ -16,7 +16,7 @@ import {
   DEFAULT_BROWSER_USER_AGENT,
   getHeader,
   withMarkdownPreferredAccept,
-  withoutSecFetchHeaders,
+  withoutBrowserManagedHeaders,
 } from "./headers";
 import { ManagedBrowser } from "./ManagedBrowser";
 import {
@@ -183,10 +183,11 @@ export class BrowserFetcher implements ContentFetcher {
         },
         options?.headers,
       );
-      // Chromium sets the Sec-Fetch-* headers itself; overriding them would make
-      // it fail the page's scripts, styles and other sub-resources. The request
-      // API is Playwright's own client, so it keeps them.
-      await page.setExtraHTTPHeaders(withoutSecFetchHeaders(requestHeaders));
+      // Chromium sets the Sec-Fetch-* and connection-level headers itself;
+      // overriding them would make it fail the page's scripts, styles and other
+      // sub-resources, or the navigation itself. The request API is
+      // Playwright's own client, so it keeps them.
+      await page.setExtraHTTPHeaders(withoutBrowserManagedHeaders(requestHeaders));
 
       // Set timeout
       const timeout = options?.timeout || this.defaultTimeoutMs;
@@ -345,10 +346,10 @@ export class BrowserFetcher implements ContentFetcher {
    * @param options - The original fetch options (headers, redirect policy).
    * @param timeout - Navigation/request timeout in milliseconds.
    * @param headers - The composed fingerprint and caller headers, including
-   * any Sec-Fetch-* values among them. The page itself leaves those to
-   * Chromium; the request-API call sends them as composed, so it presents the
-   * same client identity as the browser that (potentially) just solved a
-   * challenge.
+   * any Sec-Fetch-* or connection-level values among them. The page itself
+   * leaves those to Chromium; the request-API call sends them as composed, so
+   * it presents the same client identity as the browser that (potentially)
+   * just solved a challenge.
    * @returns The fetched raw content.
    */
   private async fetchViaRequest(

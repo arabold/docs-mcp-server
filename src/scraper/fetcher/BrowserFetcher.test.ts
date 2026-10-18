@@ -181,6 +181,30 @@ describe("BrowserFetcher", () => {
     }
   });
 
+  it("keeps connection-level headers off the page so Chromium can navigate", async () => {
+    // Chromium fails a navigation that carries one of these; generated
+    // Firefox fingerprints include TE.
+    const generateHeaders = vi
+      .spyOn(FingerprintGenerator.prototype, "generateHeaders")
+      .mockReturnValue({ "user-agent": "Fingerprint/1.0", te: "trailers" });
+    try {
+      const { page } = mockBrowser();
+      const fetcher = new BrowserFetcher(makeScraperConfig());
+      await fetcher.fetch("https://example.com", {
+        headers: { Connection: "upgrade", "Transfer-Encoding": "chunked", "X-Test": "1" },
+      });
+
+      const [headers] = vi.mocked(page.setExtraHTTPHeaders).mock.calls[0];
+      expect(headers).toEqual({
+        "user-agent": "Fingerprint/1.0",
+        "X-Test": "1",
+        Accept: MARKDOWN_PREFERRED_ACCEPT,
+      });
+    } finally {
+      generateHeaders.mockRestore();
+    }
+  });
+
   it("returns raw response body for Markdown responses instead of rendered HTML", async () => {
     const { page } = mockBrowser({
       goto: vi.fn().mockResolvedValue({
