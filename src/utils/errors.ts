@@ -31,6 +31,7 @@ class RedirectError extends ScraperError {
   }
 }
 
+/** A bot-protection challenge answered the request in place of the page. */
 class ChallengeError extends ScraperError {
   constructor(
     public readonly url: string,
@@ -38,7 +39,7 @@ class ChallengeError extends ScraperError {
     public readonly challengeType: string,
   ) {
     super(
-      `Challenge detected for ${url} (status: ${statusCode}, type: ${challengeType})`,
+      `Challenge detected for ${url} (status: ${statusCode}, type: ${challengeType}): the site answered with a bot check instead of the page`,
       false,
     );
   }

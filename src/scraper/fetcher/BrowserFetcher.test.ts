@@ -1,8 +1,11 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { Route } from "playwright";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type AppConfig, DEFAULT_CONFIG } from "../../utils/config";
 import {
   AccessPolicyError,
+  ChallengeError,
   HttpStatusError,
   RedirectError,
   ScraperError,
@@ -20,6 +23,12 @@ import { BrowserFetcher } from "./BrowserFetcher";
 import { FingerprintGenerator } from "./FingerprintGenerator";
 import { ManagedBrowser } from "./ManagedBrowser";
 import { FetchStatus } from "./types";
+
+/** The page Fastly serves in place of the document (pypi.org, trimmed). */
+const FASTLY_CHALLENGE_PAGE = readFileSync(
+  path.join(__dirname, "../../../test/fixtures/fastly-client-challenge.html"),
+  "utf-8",
+);
 
 /**
  * The real scraper defaults, with the test host listed so the access policy
@@ -244,6 +253,28 @@ describe("BrowserFetcher", () => {
     expect((error as InstanceType<typeof ScraperError>).isRetryable).toBe(true);
   });
 
+  it("rejects a challenge page the request-API fallback receives with status 200", async () => {
+    const goto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("page.goto: net::ERR_ABORTED"))
+      .mockResolvedValue({ status: () => 200, headers: () => ({}) });
+    const requestGet = vi.fn().mockResolvedValue({
+      ok: () => true,
+      status: () => 200,
+      headers: () => ({ "content-type": "text/html; charset=utf-8" }),
+      body: vi.fn().mockResolvedValue(Buffer.from(FASTLY_CHALLENGE_PAGE)),
+    });
+    mockBrowser({ goto, request: { get: requestGet } });
+
+    const fetcher = new BrowserFetcher(makeScraperConfig());
+    const error = await fetcher
+      .fetch("https://example.com/automation/index.md")
+      .catch((e) => e);
+
+    expect(error).toBeInstanceOf(ChallengeError);
+    expect(error).toMatchObject({ statusCode: 200, challengeType: "fastly" });
+  });
+
   it("rejects a request-API redirect to a disallowed host before fetching it", async () => {
     const goto = vi
       .fn()
@@ -434,6 +465,20 @@ describe("BrowserFetcher", () => {
 
     const fetcher = new BrowserFetcher(makeScraperConfig());
     await expect(fetcher.fetch("https://example.com")).rejects.toThrow(/status 403/);
+  });
+
+  it("rejects a challenge page the browser did not get past, though its status is 200", async () => {
+    // The challenge fallback sends Fastly-challenged urls here; a page still
+    // showing the challenge once the load settles must not be indexed.
+    mockBrowser({
+      content: vi.fn().mockResolvedValue(FASTLY_CHALLENGE_PAGE),
+    });
+
+    const fetcher = new BrowserFetcher(makeScraperConfig());
+    const error = await fetcher.fetch("https://example.com").catch((e) => e);
+
+    expect(error).toBeInstanceOf(ChallengeError);
+    expect(error).toMatchObject({ statusCode: 200, challengeType: "fastly" });
   });
 
   it("reports a browser 404 as NOT_FOUND rather than success", async () => {

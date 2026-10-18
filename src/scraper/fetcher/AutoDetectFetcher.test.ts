@@ -55,6 +55,21 @@ describe("AutoDetectFetcher", () => {
     expect(browserSpy).toHaveBeenCalledWith(source, undefined);
   });
 
+  it("should fail with the challenge when the browser does not get past it either", async () => {
+    vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(
+      new ChallengeError(source, 200, "fastly"),
+    );
+    const browserError = new ChallengeError(source, 200, "fastly");
+    const browserSpy = vi
+      .spyOn(BrowserFetcher.prototype, "fetch")
+      .mockRejectedValue(browserError);
+
+    const fetcher = new AutoDetectFetcher(scraperConfig);
+
+    await expect(fetcher.fetch(source)).rejects.toBe(browserError);
+    expect(browserSpy).toHaveBeenCalledTimes(1);
+  });
+
   it.each([403, 429])(
     "should fall back to browser fetcher on a %i response",
     async (statusCode) => {

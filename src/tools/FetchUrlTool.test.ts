@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AutoDetectFetcher } from "../scraper/fetcher";
 import { ScrapeMode } from "../scraper/types";
 import { loadConfig } from "../utils/config";
-import { ScraperError } from "../utils/errors";
+import { ChallengeError, ScraperError } from "../utils/errors";
 import { ToolError, ValidationError } from "./errors";
 import { FetchUrlTool, type FetchUrlToolOptions } from "./FetchUrlTool";
 
@@ -148,6 +148,20 @@ describe("FetchUrlTool", () => {
     await expect(fetchUrlTool.execute(options)).rejects.toThrow(
       "Unable to fetch or process the URL",
     );
+  });
+
+  it("names the bot challenge that answered in place of the page", async () => {
+    const url = "https://pypi.org/project/requests/";
+    mockAutoDetectFetcher.canFetch = vi.fn().mockReturnValue(true);
+    mockAutoDetectFetcher.fetch = vi
+      .fn()
+      .mockRejectedValue(new ChallengeError(url, 200, "fastly"));
+
+    const error = await fetchUrlTool.execute({ url }).catch((e) => e);
+
+    expect(error).toBeInstanceOf(ToolError);
+    expect(error.message).toContain("fastly bot challenge");
+    expect(error.message).not.toContain("verify the URL is correct");
   });
 
   it("should provide user-friendly error messages for malformed URLs that pass initial validation", async () => {

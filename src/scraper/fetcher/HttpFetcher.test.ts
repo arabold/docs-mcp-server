@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import https from "node:https";
+import path from "node:path";
 import { Readable } from "node:stream";
 import axios from "axios";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +23,12 @@ vi.mock("axios");
 const mockedAxios = vi.mocked(axios, true);
 
 const PAGE_URL = "https://example.com/page";
+
+/** The page Fastly serves in place of the document (pypi.org, trimmed). */
+const FASTLY_CHALLENGE_PAGE = readFileSync(
+  path.join(__dirname, "../../../test/fixtures/fastly-client-challenge.html"),
+  "utf-8",
+);
 
 /**
  * Builds a scraper config whose access policy lists the test host, so the
@@ -582,6 +590,42 @@ describe("HttpFetcher", () => {
       expect(error).toBeInstanceOf(HttpStatusError);
       expect(error).not.toBeInstanceOf(ChallengeError);
       expect(error.statusCode).toBe(403);
+    });
+  });
+
+  describe("Fastly client challenge detection", () => {
+    it("fails a 200 challenge page as a ChallengeError without retrying", async () => {
+      mockedAxios.get.mockResolvedValue(
+        ok(FASTLY_CHALLENGE_PAGE, { "content-type": "text/html; charset=utf-8" }),
+      );
+
+      const error = await fetcher
+        .fetch(PAGE_URL, { maxRetries: 2, retryDelay: 1 })
+        .catch((e) => e);
+
+      expect(error).toBeInstanceOf(ChallengeError);
+      expect(error).toMatchObject({ statusCode: 200, challengeType: "fastly" });
+      expect(mockedAxios.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns a page titled Client Challenge that loads no challenge assets", async () => {
+      const page = "<html><head><title>Client Challenge</title></head></html>";
+      mockedAxios.get.mockResolvedValue(ok(page, { "content-type": "text/html" }));
+
+      const result = await fetcher.fetch(PAGE_URL);
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.content.toString()).toBe(page);
+    });
+
+    it("returns a non-HTML response that contains the challenge markup", async () => {
+      mockedAxios.get.mockResolvedValue(
+        ok(FASTLY_CHALLENGE_PAGE, { "content-type": "text/plain" }),
+      );
+
+      const result = await fetcher.fetch(PAGE_URL);
+
+      expect(result.status).toBe(FetchStatus.SUCCESS);
     });
   });
 
