@@ -3,13 +3,26 @@
  * Tests that commands accept the correct arguments according to the CLI Commands and Arguments Matrix.
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import type { Argv } from "yargs";
 import { Parser } from "yargs/helpers";
 import { openBackend } from "../services/backend";
 import { getConfigMappedCliKeys } from "../utils/config";
 import { resolveStorePath } from "../utils/paths";
-import { COMMAND_FACTORIES, createCli, registerGlobalOptions } from "./index";
+import {
+  CliUsageError,
+  COMMAND_FACTORIES,
+  createCli,
+  registerGlobalOptions,
+} from "./index";
 import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
 
 // Mocks for execution tests will be defined below in dedicated describe block
@@ -102,6 +115,47 @@ describe("CLI command handler parameters", () => {
       }),
     );
     expect(listToolExecuteCalled).toBe(true);
+  });
+});
+
+describe("CLI failure reporting", () => {
+  let consoleErrorSpy: MockInstance<typeof console.error>;
+
+  beforeEach(() => {
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
+  const printed = () =>
+    consoleErrorSpy.mock.calls.map((args) => args.join(" ")).join("\n");
+
+  it("prints the help and the reason for a command line it cannot parse", () => {
+    // yargs validates before any command runs, so the error is thrown, not rejected
+    expect(() => createCli([]).parseAsync(["list", "--unknown-flag"])).toThrow(
+      CliUsageError,
+    );
+
+    expect(printed()).toContain("Options:");
+    expect(printed()).toContain("Unknown argument");
+  });
+
+  it("passes a failing command's error on without the help", async () => {
+    vi.mocked(openBackend).mockResolvedValueOnce({
+      docService: {
+        validateLibraryExists: vi
+          .fn()
+          .mockRejectedValue(new Error("Library nolib not found in store.")),
+      },
+      close: vi.fn(),
+    } as any);
+
+    await expect(createCli([]).parseAsync(["remove", "nolib"])).rejects.toThrow(
+      "Library nolib not found in store.",
+    );
+    expect(printed()).not.toContain("Options:");
   });
 });
 

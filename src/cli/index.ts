@@ -24,6 +24,18 @@ import { createWebCommand } from "./commands/web";
 import { createWorkerCommand } from "./commands/worker";
 import { applyGlobalCliOutputMode, registerGlobalOutputOptions } from "./output";
 
+/**
+ * A command line that does not parse, such as an unknown option or a missing
+ * argument. The CLI has already printed the help and the reason when it throws
+ * this.
+ */
+export class CliUsageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliUsageError";
+  }
+}
+
 /** Every command the CLI registers. */
 export const COMMAND_FACTORIES: ReadonlyArray<(cli: Argv) => void> = [
   createCompactCommand,
@@ -173,7 +185,15 @@ export function createCli(argv: string[]): Argv {
     // We might need to move the `CLI_COMMAND` tracking into `main.ts` or inside `createDefaultAction`.
 
     .alias("help", "h")
-    .showHelpOnFail(true);
+    // yargs reports both a command line it cannot parse and an error a command
+    // throws here. Only the first earns the help text; the second goes on to
+    // runCli, which reports it once and shuts down.
+    .fail((message, error, instance) => {
+      if (error) throw error;
+      instance.showHelp("error");
+      console.error(`\n${message}`);
+      throw new CliUsageError(message);
+    });
 
   for (const registerCommand of COMMAND_FACTORIES) {
     registerCommand(cli);

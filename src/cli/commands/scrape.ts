@@ -242,11 +242,6 @@ export function createScrapeCommand(cli: Argv) {
         } else {
           renderTextOutput(`Scraping job started with ID: ${result.jobId}`);
         }
-      } catch (error) {
-        logger.error(
-          `❌ Scraping failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        throw error;
       } finally {
         follower.dispose();
 

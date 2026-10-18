@@ -9,7 +9,7 @@ import {
 } from "../store/embeddings/EmbeddingFactory";
 import { telemetry } from "../telemetry";
 import { logger } from "../utils/logger";
-import { createCli } from "./index";
+import { CliUsageError, createCli } from "./index";
 
 // Module-level variables are now in ./services.ts
 import {
@@ -80,8 +80,9 @@ export async function cleanupCliCommand(): Promise<void> {
     // Shutdown analytics for non-server CLI commands to ensure clean exit
     await telemetry.shutdown();
 
-    // Avoid hanging processes by explicitly exiting
-    process.exit(0);
+    // Avoid hanging processes by explicitly exiting, with the exit code a
+    // command sets for a failure it reports itself
+    process.exit();
   }
 }
 
@@ -111,15 +112,19 @@ export async function runCli(): Promise<void> {
 
     await cli.parse();
   } catch (error) {
-    // Handle embedding configuration errors with clean, helpful messages
-    if (
+    if (error instanceof CliUsageError) {
+      // The help and the reason are already printed
+    } else if (
       error instanceof ModelConfigurationError ||
       error instanceof UnsupportedProviderError
     ) {
       // These errors already have properly formatted messages
       logger.error(error.message);
     } else {
-      logger.error(`❌ Error in CLI: ${error}`);
+      logger.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
+      if (error instanceof Error && error.stack) {
+        logger.debug(error.stack);
+      }
     }
 
     if (!isShuttingDown) {

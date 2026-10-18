@@ -6,7 +6,6 @@ import type { Argv } from "yargs";
 import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
-import { logger } from "../../utils/logger";
 import { formatBytes } from "../../utils/string";
 import { renderTextOutput } from "../output";
 import { type CliContext, getEventBus } from "../utils";
@@ -61,11 +60,6 @@ export function createCompactCommand(cli: Argv) {
         } else {
           renderTextOutput("Store is already compact.");
         }
-      } catch (error) {
-        logger.error(
-          `❌ Failed to compact store: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        throw error;
       } finally {
         await backend.close();
       }

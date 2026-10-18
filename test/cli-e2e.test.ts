@@ -59,6 +59,35 @@ describe("CLI E2E", () => {
     expect(stderr).toContain("unknown-flag");
   });
 
+  it("reports a failing command in one line, without the help or a stack trace", async () => {
+    const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-failure-"));
+    const configPath = writeTestConfig(storePath);
+
+    try {
+      const { code, stderr } = await runCli([
+        "remove",
+        "nolib",
+        "--store-path",
+        storePath,
+        "--config",
+        configPath,
+      ]);
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("❌ Failed to remove nolib: Library nolib not found in store.");
+      expect(stderr).not.toContain("Options:");
+      expect(stderr).not.toMatch(/^\s+at /m);
+    } finally {
+      rmSync(storePath, { recursive: true, force: true });
+    }
+  });
+
+  it("exits with 1 when a command reports its own failure", async () => {
+    const { code, stderr } = await runCli(["config", "get", "no.such.key"]);
+    expect(stderr).toContain("Invalid config path 'no.such.key'");
+    expect(code).toBe(1);
+  });
+
   it("refuses to scrape an existing version unless --replace is given", async () => {
     const storePath = mkdtempSync(path.join(tmpdir(), "cli-e2e-replace-"));
     const configPath = writeTestConfig(storePath);

@@ -110,11 +110,6 @@ export function createRefreshCommand(cli: Argv) {
         } else {
           renderTextOutput(`Refresh job started with ID: ${result.jobId}`);
         }
-      } catch (error) {
-        logger.error(
-          `❌ Refresh failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-        throw error;
       } finally {
         follower.dispose();
 
