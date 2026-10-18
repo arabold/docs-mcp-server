@@ -1,5 +1,4 @@
 export * from "./CancelJobTool";
-export * from "./ClearCompletedJobsTool";
 export * from "./errors";
 export * from "./FetchUrlTool";
 export * from "./FindVersionTool";
