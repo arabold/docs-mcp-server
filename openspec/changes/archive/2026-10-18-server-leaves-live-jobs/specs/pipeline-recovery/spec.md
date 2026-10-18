@@ -27,7 +27,7 @@ A server that starts set to recover or mark failed interrupted jobs SHALL act on
 - **GIVEN** another process, such as an embedded stdio server or a worker, is scraping a library on a store
 - **WHEN** `web` starts on the same store and runs for longer than four intervals
 - **THEN** the version SHALL still be RUNNING
-- **AND** the scrape SHALL finish and complete the version
+- **AND** the other process's job SHALL still be running
 
 #### Scenario: Server restarted right after a crash
 

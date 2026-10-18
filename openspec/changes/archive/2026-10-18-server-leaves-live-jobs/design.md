@@ -47,11 +47,11 @@ The default interval is 15 s: one small `UPDATE` per process per interval, and a
 
 1. Versions of this manager's own unfinished jobs: never interrupted. This also settles the `it.todo` about jobs enqueued before `start()`.
 2. Silent past the bound: handled at once, before the queue starts, as today.
-3. Recently alive: recorded by version id, and checked again by a timer that fires one bound plus one second after `start()`. The check reads them again; those still RUNNING or QUEUED and now silent past the bound are handled, the rest are left to the process that runs them and are not watched further.
+3. Recently alive: recorded by version id, and checked again by a timer that fires one bound after `start()` (the bound already includes the extra second). The check reads them again; those still RUNNING or QUEUED and now silent past the bound are handled, the rest are left to the process that runs them and are not watched further.
 
 A single check suffices: a version that was alive at start and is alive again at the re-check has a live owner, and if that owner crashes later the next server start handles it, as today.
 
-Handling is the same function in both phases: `recover` enqueues a refresh job (marking the version FAILED when that fails), `fail` marks it FAILED with "Job interrupted".
+Handling is the same in both phases: `recover` enqueues a refresh job (marking the version FAILED when that fails), `fail` marks it FAILED with "Job interrupted".
 
 ### Every local pipeline heartbeats, whatever its policy
 
@@ -66,15 +66,19 @@ src/pipeline/
 ~ PipelineManager.ts        # heartbeat timer; start() splits interrupted versions and re-checks the recent ones once
 ~ PipelineManager.test.ts   # abandoned vs recently alive versions, own jobs, heartbeat
 src/store/
+~ types.ts                  # msSinceWritten and UPDATED_AT_RESOLUTION_MS, next to DbVersion
 ~ DocumentStore.ts          # markVersionsAlive statement
 ~ DocumentStore.test.ts     # it bumps updated_at of queued/running versions only
 ~ DocumentManagementService.ts  # passes markVersionsAlive through
 src/utils/
 ~ config.ts                 # scraper.jobHeartbeatMs
+~ config.test.ts            # env override, fallback for a non-positive value
+.vitest-config-mock/
+~ config.yaml               # the generated defaults include the new setting
 src/services/
 ~ backend.test.ts           # seeded RUNNING version is abandoned (fake Date) before expecting FAILED
 test/
-~ test-helpers.ts           # writeTestConfig({ jobHeartbeatMs })
+~ test-helpers.ts           # writeTestConfig({ jobHeartbeatMs }), startWeb, startRunningSlowJob(maxPages)
 ~ job-recovery-e2e.test.ts  # web beside a live job; web after a crash; restarted workers wait for the bound
 docs/
 ~ setup/configuration.md
@@ -94,28 +98,41 @@ openspec/specs/pipeline-recovery/spec.md  # cli-leaves-interrupted-jobs, then th
  */
 markVersionsAlive(versionIds: number[]): Promise<void>;
 
+// src/store/types.ts
+/** Milliseconds since the version's updated_at (UTC); Infinity when unreadable. */
+function msSinceWritten(version: DbVersion, now: number): number;
+const UPDATED_AT_RESOLUTION_MS = 1000;
+
+// src/pipeline/PipelineManager.ts
+/** 4 × jobHeartbeatMs + UPDATED_AT_RESOLUTION_MS; exported for the tests. */
+export function interruptedAfterMs(jobHeartbeatMs: number): number;
+
 // PipelineManager (private)
 private heartbeatTimer: NodeJS.Timeout | undefined;
 private recheckTimer: NodeJS.Timeout | undefined;
 private markJobsAlive(): Promise<void>;           // logs a failed write at warn, never throws
-private handleInterruptedJobs(): Promise<void>;    // replaces the policy branches in start()
-private handleInterrupted(versions: DbVersionWithLibrary[]): Promise<void>; // recover or fail, per policy
+// Recovers or fails the interrupted versions (all, or `only` these) and returns
+// those written within the bound. Logs a failure and returns [], never throws.
+private handleInterruptedJobs(only?: ReadonlySet<number>): Promise<DbVersionWithLibrary[]>;
+// Schedules one more handleInterruptedJobs(ids) after the bound; logs the ones it leaves.
+private checkAgainLater(versions: DbVersionWithLibrary[]): void;
+private recoverPendingJobs(versions: DbVersionWithLibrary[]): Promise<void>;
+private markInterruptedJobsAsFailed(versions: DbVersionWithLibrary[]): Promise<void>;
 ```
 
-`recoverPendingJobs()` and `markInterruptedJobsAsFailed()` have no callers outside `PipelineManager` and fold into `handleInterrupted`.
+`recoverPendingJobs()` and `markInterruptedJobsAsFailed()` have no callers outside `PipelineManager`; they become private and take the versions to act on instead of querying the store.
 
 ### Call order
 
 ```
 PipelineManager.start()
-+   handleInterruptedJobs()                      # skipped for "leave"
-+     store.getVersionsByStatus([RUNNING, QUEUED])
-+     skip versions of this.jobMap's unfinished jobs
-+     handleInterrupted(silent past the bound)   # awaited, before the queue starts
-+     recheckTimer = setTimeout(bound + 1s)      # only when recent versions exist; unref'd
-+       store.getVersionsByStatus(...) ∩ recent ids
-+       handleInterrupted(those silent past the bound now)
 +   heartbeatTimer = setInterval(markJobsAlive, jobHeartbeatMs)  # unref'd
++   recent = handleInterruptedJobs()             # skipped for "leave"
++     store.getVersionsByStatus([RUNNING, QUEUED]) minus this manager's unfinished jobs
++     recover or fail those unwritten for the bound  # awaited, before the queue starts
++   checkAgainLater(recent)                      # only when recent versions exist
++     recheckTimer = setTimeout(bound)           # unref'd
++       handleInterruptedJobs(recent ids)        # alive ones are logged and left
     _processQueue()
 
 PipelineManager.stop()
