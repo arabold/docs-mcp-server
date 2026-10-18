@@ -73,6 +73,13 @@ describe.skipIf(process.platform === "win32")("Shared Chromium for a crawl", () 
           res.writeHead(403, { "content-type": "text/html" });
           res.end("<html><body>Blocked</body></html>");
         };
+        if (!["/failing/", "/failing/fails", "/failing/slow1", "/failing/slow2"].includes(path)) {
+          // The crawl's llms.txt probe. A 403 would send it to the browser,
+          // where it would count as a slow page.
+          res.writeHead(404);
+          res.end();
+          return;
+        }
         const firstRequest = requests.filter((seen) => seen === path).length === 1;
         if (firstRequest) {
           blocked();
