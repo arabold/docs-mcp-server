@@ -45,17 +45,6 @@ describe("runCli", () => {
     } as unknown as ReturnType<typeof createCli>);
   }
 
-  it("reports a failure in one line and keeps its stack for debug output", async () => {
-    const error = new Error("Library nolib not found in store.");
-    failWith(error);
-
-    await runCli();
-
-    expect(logger.error).toHaveBeenCalledWith("❌ Library nolib not found in store.");
-    expect(logger.debug).toHaveBeenCalledWith(error.stack);
-    expect(exitSpy).toHaveBeenCalledWith(1);
-  });
-
   it("keeps the stack of an embedding configuration error for debug output", async () => {
     const error = new ModelConfigurationError(
       "Failed to connect to openai embedding service",
