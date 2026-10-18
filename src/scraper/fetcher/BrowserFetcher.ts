@@ -1,9 +1,15 @@
 import type { Browser, Page } from "playwright";
 import { ScraperAccessPolicy } from "../../utils/accessPolicy";
 import type { AppConfig } from "../../utils/config";
-import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
+import {
+  ChallengeError,
+  HttpStatusError,
+  RedirectError,
+  ScraperError,
+} from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
+import { detectChallengePage } from "./challenge";
 import { FingerprintGenerator } from "./FingerprintGenerator";
 import {
   DEFAULT_BROWSER_USER_AGENT,
@@ -277,6 +283,15 @@ export class BrowserFetcher implements ContentFetcher {
       const content = MimeTypeUtils.isHtml(mimeType)
         ? await page.content()
         : await response.body();
+
+      // A challenge the browser could not get past either is still on the page
+      // after the load settled; its status alone does not give it away.
+      const challengeType =
+        typeof content === "string" ? detectChallengePage(content) : null;
+      if (challengeType) {
+        throw new ChallengeError(source, finalStatus, challengeType);
+      }
+
       const contentBuffer = Buffer.isBuffer(content)
         ? content
         : Buffer.from(content, "utf-8");

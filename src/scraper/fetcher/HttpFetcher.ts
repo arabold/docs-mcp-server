@@ -12,6 +12,7 @@ import {
 } from "../../utils/errors";
 import { logger } from "../../utils/logger";
 import { MimeTypeUtils } from "../../utils/mimeTypeUtils";
+import { detectChallengePage } from "./challenge";
 import { FingerprintGenerator } from "./FingerprintGenerator";
 import { withMarkdownPreferredAccept } from "./headers";
 import {
@@ -265,6 +266,16 @@ export class HttpFetcher implements ContentFetcher {
 
             const content = await readStreamToBuffer(response.data, options?.signal);
             bodyConsumed = true;
+
+            // Some challenges answer with 200 rather than 403, so the status
+            // check in the catch block below never sees them. Their page is
+            // not the document and must not be returned as one.
+            const challengeType = MimeTypeUtils.isHtml(mimeType)
+              ? detectChallengePage(content)
+              : null;
+            if (challengeType) {
+              throw new ChallengeError(source, response.status, challengeType);
+            }
 
             return {
               content,

@@ -5,6 +5,7 @@ import { ScrapeMode } from "../scraper/types";
 import { convertToString } from "../scraper/utils/buffer";
 import { resolveCharset } from "../scraper/utils/charset";
 import type { AppConfig } from "../utils/config";
+import { ChallengeError } from "../utils/errors";
 import { logger } from "../utils/logger";
 import { ToolError, ValidationError } from "./errors";
 
@@ -148,6 +149,15 @@ export class FetchUrlTool {
       // Preserve ToolError as it already has user-friendly messages, wrap others
       if (error instanceof ToolError) {
         throw error;
+      }
+
+      // The generic advice below would send the user checking a URL that is
+      // fine; name the block instead.
+      if (error instanceof ChallengeError) {
+        throw new ToolError(
+          `Unable to fetch the URL "${url}": the site answered with a ${error.challengeType} bot challenge instead of the page, which cannot be passed automatically.`,
+          this.constructor.name,
+        );
       }
 
       throw new ToolError(

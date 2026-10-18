@@ -1,6 +1,13 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
-import { HttpStatusError, RedirectError, ScraperError } from "../../utils/errors";
+import {
+  ChallengeError,
+  HttpStatusError,
+  RedirectError,
+  ScraperError,
+} from "../../utils/errors";
 import { MARKDOWN_PREFERRED_ACCEPT } from "./headers";
 
 vi.mock("playwright", () => ({
@@ -404,6 +411,27 @@ describe("BrowserFetcher", () => {
 
     const fetcher = new BrowserFetcher(loadConfig().scraper);
     await expect(fetcher.fetch("https://example.com")).rejects.toThrow(/status 403/);
+  });
+
+  it("rejects a challenge page the browser did not get past, though its status is 200", async () => {
+    // The challenge fallback sends Fastly-challenged urls here; a page still
+    // showing the challenge once the load settles must not be indexed.
+    mockBrowser({
+      content: vi
+        .fn()
+        .mockResolvedValue(
+          readFileSync(
+            path.join(__dirname, "../../../test/fixtures/fastly-client-challenge.html"),
+            "utf-8",
+          ),
+        ),
+    });
+
+    const fetcher = new BrowserFetcher(loadConfig().scraper);
+    const error = await fetcher.fetch("https://example.com").catch((e) => e);
+
+    expect(error).toBeInstanceOf(ChallengeError);
+    expect(error).toMatchObject({ statusCode: 200, challengeType: "fastly" });
   });
 
   it("reports a browser 404 as NOT_FOUND rather than success", async () => {

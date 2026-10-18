@@ -44,6 +44,8 @@ A fetcher returns `RawContent`: the bytes, the MIME type and charset, and the `E
 - `AutoDetectFetcher` routes by URL scheme and falls back from `HttpFetcher` to `BrowserFetcher` when a request meets a challenge, a TLS certificate failure, or a 403 or 429 response. `WebScraperStrategy` uses it.
 - `FileFetcher` reads local files and takes the MIME type from the file extension.
 
+Some challenges answer with status 200, such as Fastly's client challenge on pypi.org. `HttpFetcher` and `BrowserFetcher` both check the HTML they return against the known challenge pages ([src/scraper/fetcher/challenge.ts](../../src/scraper/fetcher/challenge.ts)) and throw a `ChallengeError` on a match, so a page the browser fallback cannot get past either fails with an error that names the challenge and stores nothing. The HTML pipeline needs no check of its own: it renders the HTML a fetcher returned and does not request the page again.
+
 ## Content pipelines
 
 A pipeline ([src/scraper/pipelines/](../../src/scraper/pipelines/)) does two jobs: it converts raw content into text, and it splits that text into chunks. Splitting lives in the pipeline so each content type can use the splitter that understands its structure.
