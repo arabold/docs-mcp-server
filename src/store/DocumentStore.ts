@@ -965,7 +965,7 @@ export class DocumentStore {
    *
    * Unquoted words in `FTS_STOP_WORDS` ("the", "to", "is", ...) are left out of
    * the individual terms. They stay in the exact match and in quoted phrases. A
-   * query made only of stop words keeps every word as a term.
+   * query with nothing but stop words and punctuation keeps every word as a term.
    *
    * Examples:
    * - `foo bar` -> `"foo bar" OR "foo" OR "bar"`
@@ -974,6 +974,7 @@ export class DocumentStore {
    * - `how to use the hooks` -> `"how to use the hooks" OR "how" OR "use" OR "hooks"`
    * - `"is it" in the docs` -> `"is it in the docs" OR "is it" OR "docs"`
    * - `is it in the` -> `"is it in the" OR "is" OR "it" OR "in" OR "the"`
+   * - `is it in the ?` -> `"is it in the ?" OR "is" OR "it" OR "in" OR "the" OR "?"`
    */
   private escapeFtsQuery(query: string): string {
     // Tokenize the query using a simple quote-toggle state machine
@@ -1027,7 +1028,12 @@ export class DocumentStore {
     const keptTokens = tokens.filter(
       (token) => token.quoted || !isFtsStopWord(token.text),
     );
-    const termTokens = keptTokens.length > 0 ? keptTokens : tokens;
+    // FTS5 ignores tokens without letters or digits (`?`, `/`), so they don't
+    // count as something left to search for
+    const hasSearchableTerm = keptTokens.some((token) =>
+      /[\p{L}\p{N}]/u.test(token.text),
+    );
+    const termTokens = hasSearchableTerm ? keptTokens : tokens;
     const termsQuery = termTokens.map((token) => quote(token.text)).join(" OR ");
 
     return `${exactMatch} OR ${termsQuery}`;

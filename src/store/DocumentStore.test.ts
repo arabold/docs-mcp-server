@@ -1361,6 +1361,10 @@ describe("DocumentStore - Without Embeddings (FTS-only)", () => {
       expect(await search("is it in the")).toEqual([shelfContent]);
     });
 
+    it("matches stop words when the rest of the query is punctuation", async () => {
+      expect(await search("is it in the ?")).toEqual([shelfContent]);
+    });
+
     it("keeps stop words that the user put in quotes", async () => {
       expect(await search('"on the" hooks')).toEqual(
         expect.arrayContaining([hooksContent, shelfContent]),
