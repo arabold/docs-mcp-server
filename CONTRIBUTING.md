@@ -32,3 +32,11 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 ## Pull Requests
 
 Open the pull request against `main` and describe what changes and why.
+
+## Releases
+
+A maintainer cuts a release by running the Release workflow (`.github/workflows/release.yml`). semantic-release works out the version from the commit types, publishes the npm package, tags the release, and updates `CHANGELOG.md`; the Docker image is built from the tag.
+
+GitHub Copilot CLI writes the release notes from the pull requests merged since the last release, following `.github/prompts/release-changelog.prompt.md`. Each pull request becomes one bullet written from its title and commit messages, so those should say what changes for users. Because commit messages are untrusted input, Copilot runs in a job of its own, signed in with that job's `GITHUB_TOKEN`, which can read the code and make Copilot requests but cannot push, tag or publish; `scripts/release/ai-release-notes.mjs` also gives it no tools. The requests are billed to the repository owner's Copilot seat. The release job puts the notes under the version heading. When Copilot fails or returns something other than release notes, the release keeps semantic-release's list of commits and the workflow shows a warning.
+
+`npm run release:notes` previews the notes for the unreleased commits with your local, signed-in `copilot` CLI. `npm run release:notes -- --source` prints what Copilot receives.

@@ -92,6 +92,7 @@ export default defineConfig({
       // the baseline comparator, the metric aggregator — which is worth
       // covering even though the benchmark itself is run by hand.
       "tests/**/*.test.ts",
+      "scripts/**/*.test.ts",
     ],
     // Exclude live e2e tests by default (they can be run manually)
     exclude: ["test/**/*-live-e2e.test.ts"],

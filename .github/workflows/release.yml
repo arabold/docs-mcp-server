@@ -9,8 +9,57 @@ on:
         type: string
 
 jobs:
+  release_notes:
+    name: Write release notes
+    runs-on: ubuntu-latest
+    # Copilot CLI writes the notes from commit messages, which are untrusted,
+    # so it runs apart from the release with a token that can read the code and
+    # make Copilot requests (billed to the repository owner's Copilot seat) but
+    # cannot push, tag or publish.
+    permissions:
+      contents: read
+      copilot-requests: write
+    outputs:
+      written: ${{ steps.notes.outputs.written }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # The notes cover the commits since the latest release tag
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22.x"
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot@1.0.98
+
+      # A failure here never blocks the release, which then lists the commits.
+      - name: Write release notes
+        id: notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if node scripts/release/ai-release-notes.mjs > "$RUNNER_TEMP/release-notes.md"; then
+            echo "written=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Release notes::Copilot could not write the release notes; the release lists the commits instead."
+            : > "$RUNNER_TEMP/release-notes.md"
+            echo "written=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}/release-notes.md
+          retention-days: 7
+
   release:
     name: Release to npm and GitHub
+    needs: release_notes
     runs-on: ubuntu-latest
     # Permissions needed for semantic-release to commit/tag/release
     permissions:
@@ -39,6 +88,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Download release notes
+        uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: ${{ runner.temp }}
 
       - name: Determine release mode
         id: release-mode
@@ -82,6 +137,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Read by scripts/release/ai-release-notes.mjs
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
 
       - name: Publish manual npm release
         if: steps.release-mode.outputs.manual_release == 'true'
@@ -113,7 +170,8 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.release-mode.outputs.release_version }}
-          generate_release_notes: true
+          body_path: ${{ runner.temp }}/release-notes.md
+          generate_release_notes: ${{ needs.release_notes.outputs.written != 'true' }}
           name: v${{ steps.release-mode.outputs.release_version }}
 
       - name: Resolve release outputs
