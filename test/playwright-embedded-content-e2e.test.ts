@@ -57,6 +57,18 @@ const PAGES: Record<string, string> = {
   </html>`,
   "/frame-nav.html": "<html><body><p>Navigation frame text</p></body></html>",
   "/frame-main.html": "<html><body><p>Main frame text</p></body></html>",
+  "/scripted-frameset.html": `<html>
+    <frameset cols="100%">
+      <frame src="/frame-scripted.html">
+    </frameset>
+  </html>`,
+  // The text exists only once the frame's script has run.
+  "/frame-scripted.html": `<html><body>
+    <p id="out"></p>
+    <script>
+      document.getElementById("out").textContent = ["Scripted", "frame", "text"].join(" ");
+    </script>
+  </body></html>`,
 };
 
 describe("Embedded content in a real browser", () => {
@@ -144,5 +156,11 @@ describe("Embedded content in a real browser", () => {
     const found = positions(content, ["Navigation frame text", "Main frame text"]);
     expect(found).not.toContain(-1);
     expect(found).toEqual([...found].sort((a, b) => a - b));
+  });
+
+  it("takes a frame's content from the rendered frame, not its source", async () => {
+    const content = await render("/scripted-frameset.html");
+
+    expect(content).toContain("Scripted frame text");
   });
 });

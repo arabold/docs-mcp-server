@@ -105,6 +105,16 @@ function fakeResponse(body: string, contentType: string, status = 200) {
   };
 }
 
+/** A redirect as `route.fetch` returns it when told not to follow redirects. */
+function redirectResponse(location: string, status = 302) {
+  return {
+    status: () => status,
+    headers: () => ({ location }),
+    text: vi.fn().mockResolvedValue(""),
+    dispose: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
 function fakeRoute(
   url: string,
   request: {
@@ -499,6 +509,72 @@ describe("HtmlPlaywrightMiddleware", () => {
 
       expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
       expect(route.fetch).not.toHaveBeenCalled();
+    });
+
+    it("follows an allowed redirect one checked hop at a time", async () => {
+      const handleRoute = await captureRouteHandler(page);
+      const route = fakeRoute("https://example.com/lib.js");
+      const final = fakeResponse("", "text/javascript");
+      route.fetch
+        .mockResolvedValueOnce(redirectResponse("https://cdn.example.net/lib@1.js"))
+        .mockResolvedValueOnce(final);
+
+      await handleRoute(route);
+
+      const hops = route.fetch.mock.calls.map(([options]) => [
+        options?.url,
+        options?.maxRedirects,
+      ]);
+      expect(hops).toEqual([
+        ["https://example.com/lib.js", 0],
+        ["https://cdn.example.net/lib@1.js", 0],
+      ]);
+      expect(route.fulfill).toHaveBeenCalledWith({ response: final });
+    });
+
+    it("blocks a redirect to an address the access policy denies without requesting it", async () => {
+      const handleRoute = await captureRouteHandler(page);
+      const route = fakeRoute("https://example.com/frame.html", {
+        resourceType: "document",
+      });
+      route.fetch.mockResolvedValueOnce(
+        redirectResponse("http://169.254.169.254/latest/meta-data/"),
+      );
+
+      await handleRoute(route);
+
+      expect(route.fetch).toHaveBeenCalledTimes(1);
+      expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
+      // Chromium would follow a redirect it is handed, and Playwright does not
+      // route the next hop.
+      expect(route.fulfill).not.toHaveBeenCalled();
+    });
+
+    it("drops the page's credentials on a redirect to another origin", async () => {
+      const handleRoute = await captureRouteHandler(
+        page,
+        htmlContext("https://user:pass@example.com/page"),
+      );
+      const route = fakeRoute("https://example.com/app.js");
+      route.fetch
+        .mockResolvedValueOnce(redirectResponse("https://cdn.example.net/app.js"))
+        .mockResolvedValueOnce(fakeResponse("", "text/javascript"));
+
+      await handleRoute(route);
+
+      expect(route.fetch.mock.calls[0]?.[0]?.headers).toHaveProperty("Authorization");
+      expect(route.fetch.mock.calls[1]?.[0]?.headers).not.toHaveProperty("Authorization");
+    });
+
+    it("aborts a request that keeps redirecting", async () => {
+      const handleRoute = await captureRouteHandler(page);
+      const route = fakeRoute("https://example.com/loop.js");
+      route.fetch.mockResolvedValue(redirectResponse("https://example.com/loop.js"));
+
+      await handleRoute(route);
+
+      expect(route.abort).toHaveBeenCalledWith("failed");
+      expect(route.fulfill).not.toHaveBeenCalled();
     });
 
     it.each<Record<string, string>>([

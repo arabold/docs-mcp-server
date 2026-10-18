@@ -287,6 +287,52 @@ describe("Refresh pipeline E2E", () => {
       expect(await h.storedUrls()).toEqual([allowed.url("/")]);
     });
 
+    // The renderer fetches a page's scripts and frames itself, so their redirects
+    // need the same check as the page's own.
+    describe("rendering a page in playwright mode", () => {
+      const metadata = "/latest/meta-data/";
+
+      it("does not fetch the target of a script that redirects off the allowlist", async () => {
+        allowed
+          .page("/", '<html><head><script src="/app.js"></script></head><body>Hi</body></html>')
+          .redirect("/app.js", blocked.url(metadata));
+        blocked.page(metadata, "window.leaked = true;", { type: "text/javascript" });
+
+        const job = await h.scrape({
+          url: allowed.url("/"),
+          maxDepth: 0,
+          scrapeMode: ScrapeMode.Playwright,
+        });
+
+        expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+        expect(allowed.wasRequested("/app.js")).toBe(true);
+        expect(blocked.requests).toEqual([]);
+      });
+
+      it("neither fetches nor indexes the target of a frame that redirects off the allowlist", async () => {
+        allowed
+          .page(
+            "/",
+            '<html><frameset cols="20%,80%"><frame src="/nav.html"><frame src="/main.html"></frameset></html>',
+          )
+          .page("/nav.html", "<html><body><p>Navigation frame text</p></body></html>")
+          .redirect("/main.html", blocked.url(metadata));
+        blocked.page(metadata, leafPage("Metadata", "Instance credentials"));
+
+        const job = await h.scrape({
+          url: allowed.url("/"),
+          maxDepth: 0,
+          scrapeMode: ScrapeMode.Playwright,
+        });
+
+        expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+        expect(blocked.requests).toEqual([]);
+        const content = await h.contentOf(allowed.url("/"));
+        expect(content).toContain("Navigation frame text");
+        expect(content).not.toContain("Instance credentials");
+      });
+    });
+
     it("fails a job for an address off the allowlist without contacting it", async () => {
       const job = await h.scrape({ url: blocked.url("/"), maxDepth: 0 });
 
