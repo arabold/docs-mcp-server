@@ -4,7 +4,8 @@
  * Exercises the actual production container end-to-end:
  *   1. Container starts and runs as a non-root user (security hardening).
  *   2. Chromium is installed where the runtime expects it (Playwright path).
- *   3. The Playwright-backed scrape pipeline can fetch a real web page.
+ *   3. The Playwright-backed scrape pipeline renders a page served from the
+ *      host, running its JavaScript.
  *   4. The Xberg-backed PDF pipeline can extract a PDF from a mounted volume.
  *   5. The web server serves the built admin UI (SPA shell, hashed assets,
  *      client-route fallback) and the tRPC API over HTTP.
@@ -20,6 +21,8 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
@@ -99,6 +102,53 @@ async function createZipFixture(zipPath: string): Promise<void> {
   });
 }
 
+/** The text only the page's script writes, so finding it proves a browser ran the page. */
+const RENDERED_TEXT = "Text written by JavaScript";
+
+/**
+ * Serves a page whose only text is written by its script, on a port the
+ * container reaches as `host.docker.internal`.
+ *
+ * Docker Desktop forwards that name to the host's loopback. On Linux it is the
+ * bridge gateway, so the server listens on every interface there.
+ *
+ * @returns The page's port and a function that stops the server.
+ */
+async function startScriptedPage(): Promise<{ port: number; close: () => Promise<void> }> {
+  const words = JSON.stringify(RENDERED_TEXT.split(" "));
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "text/html" });
+    response.end(
+      `<html><head><title>Scripted page</title></head><body><main id="content"></main><script>document.getElementById("content").textContent = ${words}.join(" ");</script></body></html>`,
+    );
+  });
+  const host = process.platform === "linux" ? "0.0.0.0" : "127.0.0.1";
+  await new Promise<void>((resolve) => server.listen(0, host, resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+/** The stored text of `url`, its chunks joined in order. */
+function indexedContent(dbPath: string, url: string): string {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const rows = db
+      .prepare(
+        "SELECT d.content FROM documents d JOIN pages p ON d.page_id = p.id WHERE p.url = ? ORDER BY d.sort_order",
+      )
+      .all(url) as { content: string }[];
+    return rows.map((row) => row.content).join("\n");
+  } finally {
+    db.close();
+  }
+}
+
 function listIndexedUrls(dbPath: string): string[] {
   const db = new Database(dbPath, { readonly: true });
   try {
@@ -154,23 +204,29 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
     expect(r.stdout).toContain("OK");
   });
 
-  it("scrapes a live web page through the Playwright pipeline", async () => {
+  it("renders a page's JavaScript through the Playwright pipeline", async () => {
     const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-mcp-docker-web-"));
     // Make sure the host-side dir is writable by uid 1000 (the container user).
     fs.chmodSync(dataDir, 0o777);
+    const page = await startScriptedPage();
+    const pageUrl = `http://host.docker.internal:${page.port}/`;
     try {
       const r = await docker(
         [
           "run",
           "--rm",
+          "--add-host=host.docker.internal:host-gateway",
           "-v",
           `${dataDir}:/data`,
           "-e",
           "DOCS_MCP_TELEMETRY=false",
+          // The host is a private address, which the scraper refuses by default.
+          "-e",
+          "DOCS_MCP_SCRAPER_SECURITY_NETWORK_ALLOW_PRIVATE_NETWORKS=true",
           IMAGE_TAG,
           "scrape",
           "docker-e2e-web",
-          "https://example.com/",
+          pageUrl,
           "--max-pages",
           "1",
           "--max-depth",
@@ -187,7 +243,9 @@ describe.skipIf(!DOCKER_AVAILABLE)("Docker image", () => {
       ).toMatch(/Successfully scraped\s+([1-9]\d*)\s+pages?/);
       const dbPath = path.join(dataDir, "documents.db");
       expect(fs.existsSync(dbPath), "documents.db should be written").toBe(true);
+      expect(indexedContent(dbPath, pageUrl)).toContain(RENDERED_TEXT);
     } finally {
+      await page.close();
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   }, 240_000);
