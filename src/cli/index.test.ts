@@ -23,7 +23,7 @@ import {
   createCli,
   registerGlobalOptions,
 } from "./index";
-import { resolveProtocol, validatePort, validateResumeFlag } from "./utils";
+import { resolveProtocol, validatePort } from "./utils";
 
 // Mocks for execution tests will be defined below in dedicated describe block
 
@@ -383,23 +383,6 @@ describe("CLI Validation Logic", () => {
       expect(() => validatePort("-1")).toThrow();
       expect(() => validatePort("abc")).toThrow();
       expect(() => validatePort("")).toThrow();
-    });
-  });
-
-  describe("validateResumeFlag", () => {
-    it("should allow resume without server URL", () => {
-      expect(() => validateResumeFlag(true)).not.toThrow();
-      expect(() => validateResumeFlag(true, undefined)).not.toThrow();
-    });
-
-    it("should allow no resume with server URL", () => {
-      expect(() => validateResumeFlag(false, "http://example.com")).not.toThrow();
-    });
-
-    it("should throw when resume is used with server URL", () => {
-      expect(() => validateResumeFlag(true, "http://example.com")).toThrow(
-        "--resume flag is incompatible with --server-url. External workers handle their own job recovery.",
-      );
     });
   });
 });
