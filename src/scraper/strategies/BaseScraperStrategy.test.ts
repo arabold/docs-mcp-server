@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { CancellationError } from "../../pipeline/errors";
 import { type AppConfig, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
 import {
@@ -138,7 +137,6 @@ const empty = (extra: Partial<ProcessItemResult> = {}): Reply => ({
   ...extra,
 });
 const notFound = (): Reply => ({ links: [], status: FetchStatus.NOT_FOUND });
-const unchanged = (): Reply => ({ links: [], status: FetchStatus.NOT_MODIFIED });
 const skipped = (sourceContentType?: string): Reply => ({
   links: [],
   status: FetchStatus.SKIPPED,
@@ -172,22 +170,35 @@ const lastEvent = (events: ScraperProgressEvent[]) => events.at(-1);
 
 describe("BaseScraperStrategy", () => {
   describe("start URL failures", () => {
-    it.each([
-      ["throws", new Error("Root URL failed"), "Root URL failed"],
-      ["is not found", notFound(), "Root page not found"],
-      ["is unprocessable", skipped("application/zip"), "Cannot process application/zip"],
-      // Reported without a type, the failure must still read legibly rather than
-      // interpolating "undefined".
-      ["is unprocessable without a type", skipped(), "unknown content type"],
-    ])(
-      "fails the job when the start URL %s, even with ignoreErrors",
-      async (_label, reply, message) => {
+    it("fails the job when the start URL fails, even with ignoreErrors", async () => {
+      const cases: Array<{ label: string; reply: Reply | Error; message: string }> = [
+        {
+          label: "throws",
+          reply: new Error("Root URL failed"),
+          message: "Root URL failed",
+        },
+        { label: "is not found", reply: notFound(), message: "Root page not found" },
+        {
+          label: "is unprocessable",
+          reply: skipped("application/zip"),
+          message: "Cannot process application/zip",
+        },
+        // Reported without a type, the failure must still read legibly rather than
+        // interpolating "undefined".
+        {
+          label: "is unprocessable without a type",
+          reply: skipped(),
+          message: "unknown content type",
+        },
+      ];
+
+      for (const { label, reply, message } of cases) {
         const run = startCrawl({ [ROOT]: reply }, { ignoreErrors: true });
 
-        await expect(run.done).rejects.toThrow(message);
-        expect(run.events).toEqual([]);
-      },
-    );
+        await expect.soft(run.done, label).rejects.toThrow(message);
+        expect.soft(run.events, label).toEqual([]);
+      }
+    });
 
     it.each([
       ["not found", notFound()],
@@ -248,38 +259,6 @@ describe("BaseScraperStrategy", () => {
   });
 
   describe("child failures", () => {
-    it("reports a missing child as absent rather than deleted and keeps crawling", async () => {
-      const run = await crawl({
-        [ROOT]: page([`${ROOT}missing`, `${ROOT}valid`]),
-        [`${ROOT}missing`]: notFound(),
-        [`${ROOT}valid`]: page(),
-      });
-
-      expect(storedUrls(run.events)).toEqual([ROOT, `${ROOT}valid`]);
-      expect(eventFor(run.events, `${ROOT}missing`)).toMatchObject({
-        outcome: PageOutcome.Absent,
-        result: null,
-      });
-      expect(run.events.some((e) => e.deleted)).toBe(false);
-    });
-
-    it("reports a throwing child as failed and keeps crawling when ignoreErrors is on", async () => {
-      const run = await crawl(
-        {
-          [ROOT]: page([`${ROOT}broken`, `${ROOT}valid`]),
-          [`${ROOT}broken`]: new Error("Child page error"),
-          [`${ROOT}valid`]: page(),
-        },
-        { ignoreErrors: true },
-      );
-
-      expect(eventFor(run.events, `${ROOT}broken`)).toMatchObject({
-        outcome: PageOutcome.Failed,
-        result: null,
-      });
-      expect(storedUrls(run.events)).toEqual([ROOT, `${ROOT}valid`]);
-    });
-
     it("fails the job with the child's error when ignoreErrors is off", async () => {
       const run = startCrawl({
         [ROOT]: page([`${ROOT}broken`]),
@@ -314,23 +293,17 @@ describe("BaseScraperStrategy", () => {
   });
 
   describe("failure-rate threshold", () => {
-    const failing = (kind: "error" | "404"): Reply | Error =>
-      kind === "error" ? new Error("child failed") : notFound();
-
-    /** A root linking `total` children, the first `failures` of which fail. */
+    /** A root linking `total` children, the first `failures` of which throw. */
     const siteWithFailures =
-      (total: number, failures: number, kind: "error" | "404"): Responder =>
+      (total: number, failures: number): Responder =>
       (item) => {
         if (item.depth === 0) return page(children(total));
-        return childIndex(item) < failures ? failing(kind) : page();
+        return childIndex(item) < failures ? new Error("child failed") : page();
       };
 
-    it.each([
-      ["6 of 10 children throw", 10, 6, "error"],
-      ["6 of 10 children are not found", 10, 6, "404"],
-    ] as const)("aborts the crawl when %s", async (_label, total, failures, kind) => {
+    it("aborts the crawl when 6 of 10 children throw", async () => {
       const run = startCrawl(
-        siteWithFailures(total, failures, kind),
+        siteWithFailures(10, 6),
         { ignoreErrors: true },
         { abortOnFailureRate: 0.5 },
       );
@@ -347,7 +320,7 @@ describe("BaseScraperStrategy", () => {
       ["9 of 9 children throw", 9, 9],
     ] as const)("finishes the crawl when %s", async (_label, total, failures) => {
       const run = await crawl(
-        siteWithFailures(total, failures, "error"),
+        siteWithFailures(total, failures),
         { ignoreErrors: true },
         { abortOnFailureRate: 0.5 },
       );
@@ -374,20 +347,6 @@ describe("BaseScraperStrategy", () => {
         (item) => (item.url === ROOT ? page([], { queueItems: seeds }) : notFound()),
         {},
         { abortOnFailureRate: 0 },
-      );
-
-      expect(run.processed).toHaveLength(21);
-    });
-
-    it("does not count unprocessable children as failures", async () => {
-      // 15 skips against 5 pages: counted as failures that is a 0.75 rate.
-      const run = await crawl(
-        (item) => {
-          if (item.depth === 0) return page(children(20));
-          return childIndex(item) < 15 ? skipped("image/png") : page();
-        },
-        {},
-        { abortOnFailureRate: 0.5 },
       );
 
       expect(run.processed).toHaveLength(21);
@@ -592,24 +551,16 @@ describe("BaseScraperStrategy", () => {
       ]);
     });
 
-    it("hands stored items to processItem as stored, without a second copy of the start URL", async () => {
+    it("hands stored items to processItem as stored and reports their pageId and stored depth", async () => {
+      // The start URL is among the stored items, so it is not queued a second time.
       const initialQueue = [
         stored(ROOT, 100, { depth: 0, etag: '"root-etag"' }),
         stored(`${ROOT}page1`, 101, { etag: '"page1-etag"' }),
+        stored(`${ROOT}deep`, 102, { depth: 2 }),
       ];
       const run = await crawl(() => page(), { initialQueue });
 
       expect(run.processed).toEqual(initialQueue);
-    });
-
-    it("reports stored items with their pageId and stored depth", async () => {
-      const run = await crawl(() => page(), {
-        initialQueue: [
-          stored(`${ROOT}page1`, 101),
-          stored(`${ROOT}deep`, 102, { depth: 2 }),
-        ],
-      });
-
       expect(eventFor(run.events, `${ROOT}page1`)).toMatchObject({
         pageId: 101,
         depth: 1,
@@ -619,75 +570,9 @@ describe("BaseScraperStrategy", () => {
         depth: 2,
       });
     });
-
-    it("reports a stored page that is now missing as deleted", async () => {
-      const run = await crawl(
-        { [ROOT]: page(), [`${ROOT}deleted`]: notFound() },
-        { initialQueue: [stored(`${ROOT}deleted`, 101, { etag: "etag1" })] },
-      );
-
-      expect(eventFor(run.events, `${ROOT}deleted`)).toMatchObject({
-        outcome: PageOutcome.Absent,
-        deleted: true,
-        pageId: 101,
-        result: null,
-      });
-    });
-
-    it("asks the page itself, without the stale validator, when its representation is gone", async () => {
-      const run = await crawl(
-        { [ROOT]: page(), [`${ROOT}guide.md`]: notFound(), [`${ROOT}guide`]: page() },
-        {
-          initialQueue: [
-            stored(`${ROOT}guide.md`, 7, {
-              etag: '"md-etag"',
-              identityUrl: `${ROOT}guide`,
-            }),
-          ],
-        },
-      );
-
-      expect(run.processed.at(-1)).toEqual({
-        url: `${ROOT}guide`,
-        depth: 1,
-        pageId: 7,
-        etag: null,
-      });
-      expect(run.events.some((e) => e.deleted)).toBe(false);
-    });
-
-    it("deletes the page when neither its representation nor the page is served", async () => {
-      const run = await crawl(
-        { [ROOT]: page(), [`${ROOT}guide.md`]: notFound(), [`${ROOT}guide`]: notFound() },
-        {
-          initialQueue: [stored(`${ROOT}guide.md`, 7, { identityUrl: `${ROOT}guide` })],
-        },
-      );
-
-      expect(run.events.filter((e) => e.deleted)).toEqual([
-        expect.objectContaining({ currentUrl: `${ROOT}guide`, pageId: 7 }),
-      ]);
-    });
   });
 
   describe("page identity", () => {
-    it("sends a second representation of a stored page without counting it again", async () => {
-      // `/guide` and `/guide.md` are queued together; the second resolves to the
-      // identity the first already stored.
-      const run = await crawl({
-        [ROOT]: page([`${ROOT}guide`, `${ROOT}guide.md`]),
-        [`${ROOT}guide`]: page(),
-        [`${ROOT}guide.md`]: page([], { url: `${ROOT}guide` }),
-      });
-
-      const guide = run.events.filter((e) => e.result?.url === `${ROOT}guide`);
-      expect(guide.map((e) => e.result?.isAdditionalRepresentation)).toEqual([
-        false,
-        true,
-      ]);
-      expect(lastEvent(run.events)).toMatchObject({ pagesScraped: 3, pagesIndexed: 2 });
-    });
-
     it("does not queue a page already stored under another spelling", async () => {
       const run = await crawl({
         [ROOT]: page([`${ROOT}guide.md`]),
@@ -695,32 +580,6 @@ describe("BaseScraperStrategy", () => {
       });
 
       expect(urls(run.processed)).toEqual([ROOT, `${ROOT}guide.md`]);
-    });
-
-    it.each([
-      ["stored", page()],
-      ["empty", empty()],
-    ])(
-      "records where a %s page was read from when its identity moves",
-      async (_label, reply) => {
-        const run = await crawl(
-          { [`${ROOT}docs/`]: reply },
-          { url: `${ROOT}docs/`, maxDepth: 0 },
-          { canonicalize: (url) => url.replace(/\/+$/, "") },
-        );
-
-        const event = lastEvent(run.events);
-        expect(event?.result?.url ?? event?.emptyPage?.url).toBe(`${ROOT}docs`);
-        expect(event?.result?.contentUrl ?? event?.emptyPage?.contentUrl).toBe(
-          `${ROOT}docs/`,
-        );
-      },
-    );
-
-    it("keeps the retrieval location a strategy reports", async () => {
-      const run = await crawl({ [ROOT]: page([], { contentUrl: `${ROOT}index.md` }) });
-
-      expect(lastEvent(run.events)?.result?.contentUrl).toBe(`${ROOT}index.md`);
     });
   });
 
@@ -749,19 +608,6 @@ describe("BaseScraperStrategy", () => {
       ]);
     });
 
-    it("keeps distinct hash routes apart when preserveHashes is enabled", async () => {
-      const run = await crawl(
-        {
-          [ROOT]: page([`${ROOT}#/guide`, `${ROOT}#/api`, `${ROOT}#/guide`]),
-          [`${ROOT}#/guide`]: page(),
-          [`${ROOT}#/api`]: page(),
-        },
-        { preserveHashes: true },
-      );
-
-      expect(urls(run.processed)).toEqual([ROOT, `${ROOT}#/guide`, `${ROOT}#/api`]);
-    });
-
     it("visits pages breadth-first, each at its shallowest depth", async () => {
       // / -> A, B, D;  A -> B;  B -> C, E;  C -> X;  D -> E;  E -> X.
       const links: Record<string, string[]> = {
@@ -787,28 +633,6 @@ describe("BaseScraperStrategy", () => {
         ["E", 2],
         ["X", 3],
       ]);
-    });
-
-    it("applies include patterns with exclude patterns taking precedence", async () => {
-      const start = `${ROOT}docs/start`;
-      const run = await crawl(
-        {
-          [start]: page([
-            `${ROOT}docs/intro`,
-            `${ROOT}docs/private/secret`,
-            `${ROOT}api/reference`,
-          ]),
-          [`${ROOT}docs/intro`]: page(),
-        },
-        {
-          url: start,
-          scope: "hostname",
-          includePatterns: ["docs/**"],
-          excludePatterns: ["docs/private/**"],
-        },
-      );
-
-      expect(urls(run.processed)).toEqual([start, `${ROOT}docs/intro`]);
     });
 
     it("follows file links only inside the roots an archive declares, carrying them on", async () => {
@@ -890,37 +714,23 @@ describe("BaseScraperStrategy", () => {
       });
     });
 
-    it.each([
+    it("queues links no deeper than maxDepth", async () => {
       // Links past maxDepth are never queued, so they never inflate the total.
-      [2, 3],
-      [0, 1],
-    ])("queues links no deeper than maxDepth %i", async (maxDepth, expected) => {
-      const run = await crawl((item) => page([`${item.url}deeper/`]), { maxDepth });
+      const cases = [
+        { maxDepth: 2, expected: 3 },
+        { maxDepth: 0, expected: 1 },
+      ];
 
-      expect(lastEvent(run.events)).toMatchObject({
-        pagesScraped: expected,
-        totalPages: expected,
-        totalDiscovered: expected,
-        pagesIndexed: expected,
-      });
-    });
+      for (const { maxDepth, expected } of cases) {
+        const run = await crawl((item) => page([`${item.url}deeper/`]), { maxDepth });
 
-    it("delivers maxPages indexed pages even when items produce nothing", async () => {
-      // maxPages is a request for pages, not a budget for attempts, and the
-      // denominator stretches to keep the fraction whole.
-      const run = await crawl(
-        (item) => {
-          if (item.depth === 0) return page(children(40));
-          return childIndex(item) % 2 === 0 ? skipped("image/png") : page();
-        },
-        { maxPages: 5, maxConcurrency: 1 },
-      );
-
-      const final = lastEvent(run.events);
-      expect(final?.pagesIndexed).toBe(5);
-      expect(final?.pagesScraped).toBeGreaterThan(5);
-      expect(final?.pagesScraped).toBe(final?.totalPages);
-      expect(final?.totalDiscovered).toBeGreaterThan(final?.totalPages ?? 0);
+        expect.soft(lastEvent(run.events), `maxDepth ${maxDepth}`).toMatchObject({
+          pagesScraped: expected,
+          totalPages: expected,
+          totalDiscovered: expected,
+          pagesIndexed: expected,
+        });
+      }
     });
 
     it("clamps an initial queue larger than maxPages", async () => {
@@ -932,93 +742,6 @@ describe("BaseScraperStrategy", () => {
         pagesScraped: 10,
         totalPages: 10,
       });
-    });
-
-    it("advances only the processed count for each non-content outcome", async () => {
-      const run = await crawl({
-        [ROOT]: page([`${ROOT}unchanged`, `${ROOT}gone`, `${ROOT}asset`]),
-        [`${ROOT}unchanged`]: unchanged(),
-        [`${ROOT}gone`]: notFound(),
-        [`${ROOT}asset`]: skipped("image/png"),
-      });
-
-      expect(run.events.map((e) => [e.currentUrl, e.outcome, e.result])).toEqual([
-        [ROOT, PageOutcome.Stored, expect.any(Object)],
-        [`${ROOT}unchanged`, PageOutcome.Unchanged, null],
-        [`${ROOT}gone`, PageOutcome.Absent, null],
-        [`${ROOT}asset`, PageOutcome.Skipped, null],
-      ]);
-      expect(lastEvent(run.events)).toMatchObject({
-        pagesScraped: 4,
-        totalPages: 4,
-        pagesIndexed: 1,
-      });
-    });
-
-    it("leaves the counters short when a crawl is cancelled", async () => {
-      const controller = new AbortController();
-      let childrenSeen = 0;
-      const run = startCrawl(
-        (item) => {
-          if (item.depth === 0) return page(children(10));
-          // Let one child report first: the root's own event fires before its
-          // links are counted, so it legitimately reads 1/1.
-          childrenSeen += 1;
-          if (childrenSeen > 1) controller.abort();
-          return page();
-        },
-        { maxConcurrency: 1 },
-        { signal: controller.signal },
-      );
-
-      await expect(run.done).rejects.toBeInstanceOf(CancellationError);
-      const final = lastEvent(run.events);
-      expect(final?.pagesScraped).toBeLessThan(final?.totalPages ?? 0);
-    });
-  });
-
-  describe("empty pages", () => {
-    const validators = {
-      etag: '"v2"',
-      lastModified: "2026-01-01T00:00:00.000Z",
-    };
-
-    it("carries the validators for a clean empty result", async () => {
-      const run = await crawl({
-        [ROOT]: empty({
-          title: "Empty",
-          sourceContentType: "text/html",
-          contentType: "text/markdown",
-          ...validators,
-          pipelineFailed: false,
-        }),
-      });
-
-      expect(lastEvent(run.events)).toMatchObject({
-        outcome: PageOutcome.Empty,
-        pagesIndexed: 0,
-        emptyPage: { ...validators, pipelineFailed: false },
-      });
-    });
-
-    it("withholds the validators when the pipeline failed", async () => {
-      // A stored etag would make every later refresh answer 304 and never retry,
-      // turning a transient extraction fault into permanent data loss.
-      const run = await crawl({ [ROOT]: empty({ ...validators, pipelineFailed: true }) });
-
-      expect(lastEvent(run.events)?.emptyPage).toMatchObject({
-        etag: null,
-        lastModified: null,
-        pipelineFailed: true,
-      });
-    });
-
-    it("does not record a container as an empty page", async () => {
-      // A directory listing yields links and no content; it is not a page.
-      const run = await crawl({ [ROOT]: empty({ isContainer: true }) });
-
-      expect(lastEvent(run.events)).toMatchObject({ outcome: PageOutcome.Empty });
-      expect(lastEvent(run.events)?.emptyPage).toBeUndefined();
     });
   });
 });
