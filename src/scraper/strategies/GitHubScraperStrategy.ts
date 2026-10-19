@@ -611,33 +611,23 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     }
 
     // For the main repository URL (depth 0), perform discovery
-    // This includes blob URLs at depth 0, which should return themselves as discovered links
     if (item.depth === 0) {
       const repoInfo = this.parseGitHubUrl(options.url);
       const { owner, repo } = repoInfo;
 
+      // A single file (blob) URL is scoped strictly to that file, so the root
+      // item is the file itself. Returning its URL as a link instead would
+      // index nothing: the crawl has already marked the root URL as visited.
+      if (repoInfo.isBlob && repoInfo.filePath) {
+        logger.debug(
+          `Single file URL detected: ${owner}/${repo}/${repoInfo.filePath} - indexing file only`,
+        );
+        return await this.repoProcessor.process(item, options, headers, signal);
+      }
+
       logger.debug(`Discovering GitHub repository ${owner}/${repo}`);
 
       const discoveredLinks: string[] = [];
-
-      // Handle single file (blob) URLs - strict scoping: index ONLY the file
-      if ("isBlob" in repoInfo && repoInfo.isBlob && repoInfo.filePath) {
-        const { branch = "main", filePath } = repoInfo;
-        logger.debug(
-          `Single file URL detected: ${owner}/${repo}/${filePath} - indexing file only`,
-        );
-
-        // Generate HTTPS blob URL for storage
-        discoveredLinks.push(
-          `https://github.com/${owner}/${repo}/blob/${branch}/${filePath}`,
-        );
-
-        return {
-          url: item.url,
-          links: discoveredLinks,
-          status: FetchStatus.SUCCESS,
-        };
-      }
 
       // Discover wiki URL for full repo scrapes (will be processed by GitHubWikiScraperStrategy)
       const wikiUrl = `${options.url.replace(/\/$/, "")}/wiki`;

@@ -397,19 +397,6 @@ describe("GitHubScraperStrategy", () => {
       expect(result.links).toEqual([]);
     });
 
-    it("should handle single blob file URLs with strict scoping", async () => {
-      const blobOptions = {
-        ...options,
-        url: "https://github.com/owner/repo/blob/main/README.md",
-      };
-      const item = { url: "https://github.com/owner/repo/blob/main/README.md", depth: 0 };
-      const result = await strategy.processItem(item, blobOptions);
-
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      // Strict scoping: blob URL should index ONLY that file, not discover wiki
-      expect(result.links).toEqual(["https://github.com/owner/repo/blob/main/README.md"]);
-    });
-
     it("should mark legacy github-file:// URLs as NOT_FOUND", async () => {
       const item = { url: "github-file://src/cli/types.ts", depth: 1 };
       const result = await strategy.processItem(item, options);
