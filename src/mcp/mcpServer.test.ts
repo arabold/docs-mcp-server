@@ -10,6 +10,7 @@ import path from "node:path";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler, type McpServer } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { VersionAlreadyExistsError } from "../store/errors";
 import { telemetry } from "../telemetry";
 import type { AppConfig } from "../utils/config";
 import { createMcpServerFactory, resolveServerInstructions } from "./mcpServer";
@@ -251,6 +252,21 @@ describe("MCP tools", () => {
       },
     });
     expect(calls[1]).toMatchObject({ replace: false });
+  });
+
+  it("returns a failed tool call as a tool error naming the remedy", async () => {
+    vi.mocked(mockTools.scrape.execute).mockRejectedValueOnce(
+      new VersionAlreadyExistsError("React", ""),
+    );
+    const client = await connectClient(createServer(mockConfig));
+
+    const result = await client.callTool({
+      name: "scrape_docs",
+      arguments: { url: "https://example.com", library: "react" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toContain("replace: true");
   });
 
   it("splits scrape_docs pattern strings without breaking regex or glob constructs", async () => {

@@ -12,7 +12,7 @@ import { Parser } from "yargs/helpers";
 import { openBackend } from "../services/backend";
 import { getConfigMappedCliKeys } from "../utils/config";
 import { COMMAND_FACTORIES, createCli, registerGlobalOptions } from "./index";
-import { resolveProtocol, validatePort } from "./utils";
+import { resolveProtocol, validateHost, validatePort } from "./utils";
 
 vi.mock("../telemetry", () => ({
   initTelemetry: vi.fn(),
@@ -104,6 +104,28 @@ describe("validatePort", () => {
         expect.soft(() => validatePort(input), label).toThrow("Invalid port number");
       } else {
         expect.soft(validatePort(input), label).toBe(expected);
+      }
+    }
+  });
+});
+
+describe("validateHost", () => {
+  it("trims a host and rejects an empty one or one with whitespace inside", () => {
+    const cases: Array<{ input: string; expected: string | RegExp }> = [
+      { input: "  localhost ", expected: "localhost" },
+      { input: "0.0.0.0", expected: "0.0.0.0" },
+      { input: "::1", expected: "::1" },
+      { input: "", expected: /cannot be empty/ },
+      { input: "   ", expected: /cannot be empty/ },
+      { input: "local host", expected: /cannot contain whitespace/ },
+    ];
+
+    for (const { input, expected } of cases) {
+      const label = JSON.stringify(input);
+      if (expected instanceof RegExp) {
+        expect.soft(() => validateHost(input), label).toThrow(expected);
+      } else {
+        expect.soft(validateHost(input), label).toBe(expected);
       }
     }
   });
