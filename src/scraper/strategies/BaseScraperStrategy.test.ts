@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { CancellationError } from "../../pipeline/errors";
 import { type AppConfig, loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
 import {
@@ -289,6 +290,27 @@ describe("BaseScraperStrategy", () => {
 
       await expect(run.done).rejects.toThrow("Child failed");
       expect(slowItemSettled).toBe(true);
+    });
+
+    it("stops with a cancellation, reporting nothing more, once the signal aborts mid-item", async () => {
+      const controller = new AbortController();
+      const run = startCrawl(
+        (item) => {
+          if (item.depth === 0) return page(children(3));
+          // The job is cancelled while this item is being processed.
+          controller.abort();
+          return page();
+        },
+        { maxConcurrency: 1 },
+        { signal: controller.signal },
+      );
+
+      const error = await run.done.catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(CancellationError);
+      expect(error).toHaveProperty("message", "Scraping cancelled while processing");
+      expect(urls(run.processed)).toEqual([ROOT, `${ROOT}p0`]);
+      expect(storedUrls(run.events)).toEqual([ROOT]);
     });
   });
 

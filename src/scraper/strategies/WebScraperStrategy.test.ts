@@ -197,6 +197,27 @@ describe("WebScraperStrategy", () => {
       }
     });
 
+    it("skips a child no pipeline can read without failing the crawl", async () => {
+      // Served as text, so the type gates let it through, but the body is
+      // binary, so the text pipeline refuses it once it is read.
+      site
+        .page("/", html("Root", ["/data", "/page"]))
+        .page("/data", new Uint8Array([0x41, 0x00, 0x42, 0x43]), PLAIN_TEXT)
+        .page("/page", html("Page"));
+
+      const events = await crawl();
+
+      expect(pages()).toEqual(["/", "/data", "/page"]);
+      // Skipped rather than empty: nothing read the body, so a refresh must not
+      // treat it as a page that lost its content.
+      expect(eventFor(events, `${ROOT}data`)).toMatchObject({
+        outcome: PageOutcome.Skipped,
+        result: null,
+      });
+      expect(eventFor(events, `${ROOT}data`)?.emptyPage).toBeUndefined();
+      expect(storedUrls(events)).toEqual([ROOT, `${ROOT}page`]);
+    });
+
     it("follows links found in Markdown content", async () => {
       site
         .page("/docs/", "# Start\n\nContinue to the [guide](guide).", MARKDOWN)

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mockSite } from "../../../test/mock-site";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
-import type { ScraperOptions } from "../types";
+import type { ScraperOptions, ScraperProgressEvent } from "../types";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
 import * as githubAuth from "./github-auth";
 
@@ -274,6 +274,44 @@ describe("GitHubScraperStrategy", () => {
     api.page(treePath("main"), "not valid json {{{", json);
 
     await expect(discover()).rejects.toThrow(/Failed to parse GitHub API response/);
+  });
+
+  it("indexes the repository wiki, following links only within the wiki", async () => {
+    serveRepo([]);
+    // The issues link leaves the wiki, so it is not followed.
+    web
+      .page(
+        "/owner/repo/wiki",
+        '<html><head><title>Home · owner/repo Wiki</title></head><body><p>Welcome to the wiki.</p><a href="/owner/repo/wiki/Guide">Guide</a><a href="/owner/repo/issues">Issues</a></body></html>',
+      )
+      .page(
+        "/owner/repo/wiki/Guide",
+        '<html><head><title>Guide · owner/repo Wiki</title></head><body><p>How to use the library.</p><a href="/owner/repo/wiki">Home</a></body></html>',
+      );
+    const events: ScraperProgressEvent[] = [];
+
+    await new GitHubScraperStrategy(config).scrape(options(), async (event) => {
+      events.push(event);
+    });
+
+    expect(events.map((event) => event.currentUrl)).toEqual([
+      REPO_URL,
+      `${REPO_URL}/wiki`,
+      `${REPO_URL}/wiki/Guide`,
+    ]);
+    const stored = events.flatMap((event) => (event.result ? [event.result] : []));
+    expect(stored).toEqual([
+      expect.objectContaining({
+        url: `${REPO_URL}/wiki`,
+        title: "Home · owner/repo Wiki",
+        textContent: expect.stringContaining("Welcome to the wiki."),
+      }),
+      expect.objectContaining({
+        url: `${REPO_URL}/wiki/Guide`,
+        title: "Guide · owner/repo Wiki",
+        textContent: expect.stringContaining("How to use the library."),
+      }),
+    ]);
   });
 
   it("should resolve GitHub auth once per scrape", async () => {

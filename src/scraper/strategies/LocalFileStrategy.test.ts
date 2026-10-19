@@ -2,6 +2,7 @@ import { vol } from "memfs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressCallback } from "../../types";
 import { loadConfig } from "../../utils/config";
+import { FetchStatus } from "../fetcher/types";
 import {
   PageOutcome,
   type ScrapeResult,
@@ -408,6 +409,20 @@ describe("LocalFileStrategy", () => {
         } satisfies Partial<ScrapeResult>),
       } satisfies Partial<ScraperProgressEvent>),
     );
+  });
+
+  it("reports a file as not found when no part of its path exists", async () => {
+    // The path is walked up in search of an archive holding it; finding no
+    // existing parent at all, it is simply missing.
+    const strategy = new LocalFileStrategy(appConfig);
+    const url = "file:///gone/sub/page.md";
+
+    const result = await strategy.processItem(
+      { url, depth: 1 },
+      { url: "file:///gone", library: "test", version: "1.0" },
+    );
+
+    expect(result).toEqual({ url, links: [], status: FetchStatus.NOT_FOUND });
   });
 
   it("should handle malformed file URLs with only two slashes", async () => {
