@@ -12,12 +12,21 @@ import * as githubAuth from "./github-auth";
 vi.mock("../fetcher/FingerprintGenerator");
 
 const baseConfig = loadConfig();
-// One attempt per request, so a request that fails fails the test at once.
 const config = {
   ...baseConfig,
   scraper: {
     ...baseConfig.scraper,
+    // One attempt per request, so a request that fails fails the test at once.
     fetcher: { ...baseConfig.scraper.fetcher, maxRetries: 0 },
+    security: {
+      ...baseConfig.scraper.security,
+      network: {
+        ...baseConfig.scraper.security.network,
+        // Listed hosts pass the access policy without a DNS lookup, so the
+        // mock sites below never depend on the machine's resolver.
+        allowedHosts: ["github.com", "api.github.com", "raw.githubusercontent.com"],
+      },
+    },
   },
 };
 
