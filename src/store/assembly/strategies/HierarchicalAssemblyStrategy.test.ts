@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { JsonDocumentSplitter } from "../../../splitter/JsonDocumentSplitter";
+import type { Chunk } from "../../../splitter/types";
 import { type AppConfig, loadConfig } from "../../../utils/config";
 import { DocumentStore } from "../../DocumentStore";
 import type { DbChunkMetadata, DbPageChunk } from "../../types";
@@ -132,372 +133,212 @@ describe("HierarchicalAssemblyStrategy", () => {
       expect(result.length).toBeGreaterThanOrEqual(3);
     });
 
-    it("returns the enclosing class with all its methods for a hit inside one method", async () => {
-      // Chunks as the TypeScript splitter emits them for a class and a function
-      await documentStore.addDocuments("test-class-subtree", "1.0", 0, {
-        url: "UserService.ts",
-        title: "UserService.ts",
-        sourceContentType: "text/typescript",
-        contentType: "text/typescript",
-        textContent: "",
-        chunks: [
-          {
-            content: "export class UserService {\n",
-            section: { path: ["UserService"], level: 1 },
-            types: ["code", "structural"],
-          },
-          {
-            content: "  getUser(id: string) {\n    return db.find(id);\n  }\n",
-            section: { path: ["UserService", "getUser"], level: 2 },
-            types: ["code"],
-          },
-          {
-            content: "  deleteUser(id: string) {\n    return db.delete(id);\n  }\n",
-            section: { path: ["UserService", "deleteUser"], level: 2 },
-            types: ["code"],
-          },
-          {
-            content: "}\n",
-            section: { path: ["UserService"], level: 1 },
-            types: ["code"],
-          },
-          {
-            content: "export function helper() {\n  return 1;\n}\n",
-            section: { path: ["helper"], level: 1 },
-            types: ["code"],
-          },
-        ],
-        links: [],
-        errors: [],
-      });
-      const chunks = await documentStore.findChunksByUrl(
-        "test-class-subtree",
-        "1.0",
-        "UserService.ts",
-      );
-      const deleteUser = chunks[2];
+    describe("single matches in splitter output", () => {
+      /** Builds a chunk the way the source code splitter emits it. */
+      function chunk(content: string, path: string[], structural = false): Chunk {
+        return {
+          content,
+          section: { path, level: path.length },
+          types: structural ? ["code", "structural"] : ["code"],
+        };
+      }
 
-      const result = await strategy.selectChunks(
-        "test-class-subtree",
-        "1.0",
-        [deleteUser],
-        documentStore,
-      );
-
-      expect(strategy.assembleContent(result)).toBe(
-        "export class UserService {\n" +
-          "  getUser(id: string) {\n    return db.find(id);\n  }\n" +
-          "  deleteUser(id: string) {\n    return db.delete(id);\n  }\n" +
-          "}\n",
-      );
-    });
-
-    describe("a class inside a namespace", () => {
-      /** Stores the chunks the TypeScript splitter emits for a class inside a namespace. */
-      async function storeNamespace(): Promise<DbPageChunk[]> {
-        await documentStore.addDocuments("test-nested-scopes", "1.0", 0, {
-          url: "Accounts.ts",
-          title: "Accounts.ts",
-          sourceContentType: "text/typescript",
-          contentType: "text/typescript",
+      /** Stores one page of chunks and returns them as stored, in document order. */
+      async function storePage(
+        url: string,
+        contentType: string,
+        chunks: Chunk[],
+      ): Promise<DbPageChunk[]> {
+        await documentStore.addDocuments("test-single", "1.0", 0, {
+          url,
+          title: url,
+          sourceContentType: contentType,
+          contentType,
           textContent: "",
-          chunks: [
-            {
-              content: "export namespace Accounts {\n",
-              section: { path: ["Accounts"], level: 1 },
-              types: ["code", "structural"],
-            },
-            {
-              content: "  export class UserService {\n",
-              section: { path: ["Accounts", "UserService"], level: 2 },
-              types: ["code", "structural"],
-            },
-            {
-              content: "    getUser(id: string) {\n      return id;\n    }\n",
-              section: { path: ["Accounts", "UserService", "getUser"], level: 3 },
-              types: ["code"],
-            },
-            {
-              content: "  }\n",
-              section: { path: ["Accounts", "UserService"], level: 2 },
-              types: ["code"],
-            },
-            {
-              content: "  export const limit = 5;\n",
-              section: { path: ["Accounts", "limit"], level: 2 },
-              types: ["code"],
-            },
-            {
-              content: "}\n",
-              section: { path: ["Accounts"], level: 1 },
-              types: ["code"],
-            },
-            {
-              content: "const after = 1;\n",
-              section: { path: ["after"], level: 1 },
-              types: ["code"],
-            },
-          ],
+          chunks,
           links: [],
           errors: [],
         });
-        return documentStore.findChunksByUrl("test-nested-scopes", "1.0", "Accounts.ts");
+        return documentStore.findChunksByUrl("test-single", "1.0", url);
       }
 
-      const classInNamespace =
-        "export namespace Accounts {\n" +
-        "  export class UserService {\n" +
-        "    getUser(id: string) {\n      return id;\n    }\n" +
-        "  }\n" +
-        "}\n";
-
-      it("closes every enclosing scope without adding its other members", async () => {
-        const chunks = await storeNamespace();
-
+      /** Returns the reassembled text for a single match. */
+      async function assemble(match: DbPageChunk): Promise<string> {
         const result = await strategy.selectChunks(
-          "test-nested-scopes",
+          "test-single",
           "1.0",
-          [chunks[2]],
+          [match],
           documentStore,
         );
-
-        expect(strategy.assembleContent(result)).toBe(classInNamespace);
-      });
-
-      it("returns only the class for a match on its declaration", async () => {
-        const chunks = await storeNamespace();
-
-        const result = await strategy.selectChunks(
-          "test-nested-scopes",
-          "1.0",
-          [chunks[1]],
-          documentStore,
-        );
-
-        expect(strategy.assembleContent(result)).toBe(classInNamespace);
-      });
-    });
-
-    it("opens an enclosing scope at its declaration, skipping the members before the match", async () => {
-      // Chunks as the TypeScript splitter emits them for a namespace with a statement between two classes
-      await documentStore.addDocuments("test-scope-opening", "1.0", 0, {
-        url: "Accounts.ts",
-        title: "Accounts.ts",
-        sourceContentType: "text/typescript",
-        contentType: "text/typescript",
-        textContent: "",
-        chunks: [
-          {
-            content: "export namespace Accounts {\n",
-            section: { path: ["Accounts"], level: 1 },
-            types: ["code", "structural"],
-          },
-          {
-            content: "  export class First {\n",
-            section: { path: ["Accounts", "First"], level: 2 },
-            types: ["code", "structural"],
-          },
-          {
-            content: "    a() { return 1; }\n",
-            section: { path: ["Accounts", "First", "a"], level: 3 },
-            types: ["code"],
-          },
-          {
-            content: "  }\n",
-            section: { path: ["Accounts", "First"], level: 2 },
-            types: ["code"],
-          },
-          {
-            content: '  console.log("between");\n',
-            section: { path: ["Accounts"], level: 1 },
-            types: ["code"],
-          },
-          {
-            content: "  export class Second {\n",
-            section: { path: ["Accounts", "Second"], level: 2 },
-            types: ["code", "structural"],
-          },
-          {
-            content: "    b() { return 2; }\n",
-            section: { path: ["Accounts", "Second", "b"], level: 3 },
-            types: ["code"],
-          },
-          {
-            content: "  }\n",
-            section: { path: ["Accounts", "Second"], level: 2 },
-            types: ["code"],
-          },
-          {
-            content: "}\n",
-            section: { path: ["Accounts"], level: 1 },
-            types: ["code"],
-          },
-        ],
-        links: [],
-        errors: [],
-      });
-      const chunks = await documentStore.findChunksByUrl(
-        "test-scope-opening",
-        "1.0",
-        "Accounts.ts",
-      );
-
-      const result = await strategy.selectChunks(
-        "test-scope-opening",
-        "1.0",
-        [chunks[6]],
-        documentStore,
-      );
-
-      expect(strategy.assembleContent(result)).toBe(
-        "export namespace Accounts {\n" +
-          "  export class Second {\n" +
-          "    b() { return 2; }\n" +
-          "  }\n" +
-          "}\n",
-      );
-    });
-
-    it("returns only the matched chunk for a hit in global code", async () => {
-      // Chunks as the TypeScript splitter emits them for global code before a class
-      await documentStore.addDocuments("test-global-code", "1.0", 0, {
-        url: "main.ts",
-        title: "main.ts",
-        sourceContentType: "text/typescript",
-        contentType: "text/typescript",
-        textContent: "",
-        chunks: [
-          {
-            content: "console.log(start);\n",
-            section: { path: [], level: 0 },
-            types: ["code"],
-          },
-          {
-            content: "export class Worker {\n",
-            section: { path: ["Worker"], level: 1 },
-            types: ["code", "structural"],
-          },
-          {
-            content: "  run() {}\n",
-            section: { path: ["Worker", "run"], level: 2 },
-            types: ["code"],
-          },
-          {
-            content: "}\n",
-            section: { path: ["Worker"], level: 1 },
-            types: ["code"],
-          },
-        ],
-        links: [],
-        errors: [],
-      });
-      const chunks = await documentStore.findChunksByUrl(
-        "test-global-code",
-        "1.0",
-        "main.ts",
-      );
-
-      const result = await strategy.selectChunks(
-        "test-global-code",
-        "1.0",
-        [chunks[0]],
-        documentStore,
-      );
-
-      expect(strategy.assembleContent(result)).toBe("console.log(start);\n");
-    });
-
-    describe("JSON matches", () => {
-      const config = {
-        name: "demo",
-        server: { host: "localhost", timeout: 30 },
-        users: [{ name: "Alice" }],
-      };
-
-      /** Stores a document as the JSON splitter chunks it and returns the chunk holding `text`. */
-      async function storeConfigAndFind(
-        text: string,
-        document: object = config,
-      ): Promise<DbPageChunk> {
-        const splitter = new JsonDocumentSplitter(appConfig.splitter, {
-          preserveFormatting: true,
-        });
-        await documentStore.addDocuments("test-json", "1.0", 0, {
-          url: "config.json",
-          title: "config.json",
-          sourceContentType: "application/json",
-          contentType: "application/json",
-          textContent: "",
-          chunks: await splitter.splitText(JSON.stringify(document, null, 2)),
-          links: [],
-          errors: [],
-        });
-        const chunks = await documentStore.findChunksByUrl(
-          "test-json",
-          "1.0",
-          "config.json",
-        );
-        const match = chunks.find((chunk) => chunk.content.includes(text));
-        if (!match) throw new Error(`No chunk contains ${text}`);
-        return match;
+        return strategy.assembleContent(result);
       }
 
-      it("returns the object that contains the match instead of the whole document", async () => {
-        const timeout = await storeConfigAndFind('"timeout"');
+      it("returns the enclosing class with all its methods for a hit inside one method", async () => {
+        const chunks = await storePage("UserService.ts", "text/typescript", [
+          chunk("export class UserService {\n", ["UserService"], true),
+          chunk("  getUser(id: string) {\n    return db.find(id);\n  }\n", [
+            "UserService",
+            "getUser",
+          ]),
+          chunk("  deleteUser(id: string) {\n    return db.delete(id);\n  }\n", [
+            "UserService",
+            "deleteUser",
+          ]),
+          chunk("}\n", ["UserService"]),
+          chunk("export function helper() {\n  return 1;\n}\n", ["helper"]),
+        ]);
 
-        const result = await strategy.selectChunks(
-          "test-json",
-          "1.0",
-          [timeout],
-          documentStore,
+        expect(await assemble(chunks[2])).toBe(
+          "export class UserService {\n" +
+            "  getUser(id: string) {\n    return db.find(id);\n  }\n" +
+            "  deleteUser(id: string) {\n    return db.delete(id);\n  }\n" +
+            "}\n",
         );
-
-        const assembled = strategy.assembleContent(result);
-        expect(assembled).toContain('"server": ');
-        expect(assembled).toContain('"host": "localhost"');
-        expect(assembled).toContain('"timeout": 30');
-        expect(assembled).not.toContain("demo");
-        expect(assembled).not.toContain("Alice");
-      });
-
-      it("returns the object a matched key opens", async () => {
-        const server = await storeConfigAndFind('"server"');
-
-        const result = await strategy.selectChunks(
-          "test-json",
-          "1.0",
-          [server],
-          documentStore,
-        );
-
-        const assembled = strategy.assembleContent(result);
-        expect(assembled).toContain('"host": "localhost"');
-        expect(assembled).toContain('"timeout": 30');
-        expect(assembled).not.toContain("demo");
-        expect(assembled).not.toContain("Alice");
       });
 
       it.each([
-        ["object", {}],
-        ["array", []],
-      ])("returns an empty %s a matched key opens", async (_kind, empty) => {
-        const target = await storeConfigAndFind('"target"', {
-          name: "unrelated",
-          target: empty,
-          other: 1,
-        });
+        ["inside a method", 2],
+        ["on the class declaration", 1],
+      ])(
+        "returns a namespaced class and the namespace boundaries for a match %s",
+        async (_where, index) => {
+          const chunks = await storePage("Accounts.ts", "text/typescript", [
+            chunk("export namespace Accounts {\n", ["Accounts"], true),
+            chunk("  export class UserService {\n", ["Accounts", "UserService"], true),
+            chunk("    getUser(id: string) {\n      return id;\n    }\n", [
+              "Accounts",
+              "UserService",
+              "getUser",
+            ]),
+            chunk("  }\n", ["Accounts", "UserService"]),
+            chunk("  export const limit = 5;\n", ["Accounts", "limit"]),
+            chunk("}\n", ["Accounts"]),
+            chunk("const after = 1;\n", ["after"]),
+          ]);
 
-        const result = await strategy.selectChunks(
-          "test-json",
-          "1.0",
-          [target],
-          documentStore,
+          expect(await assemble(chunks[index])).toBe(
+            "export namespace Accounts {\n" +
+              "  export class UserService {\n" +
+              "    getUser(id: string) {\n      return id;\n    }\n" +
+              "  }\n" +
+              "}\n",
+          );
+        },
+      );
+
+      it("finds the class around a match when a field sits between its methods", async () => {
+        const chunks = await storePage("Accounts.ts", "text/typescript", [
+          chunk("export namespace Accounts {\n", ["Accounts"], true),
+          chunk("  export class UserService {\n", ["Accounts", "UserService"], true),
+          chunk("    getUser() {}\n", ["Accounts", "UserService", "getUser"]),
+          chunk("    private cache = new Map();\n", ["Accounts", "UserService"]),
+          chunk("    deleteUser() {}\n", ["Accounts", "UserService", "deleteUser"]),
+          chunk("  }\n", ["Accounts", "UserService"]),
+          chunk("  export const other = 1;\n", ["Accounts", "other"]),
+          chunk("}\n", ["Accounts"]),
+        ]);
+
+        expect(await assemble(chunks[4])).toBe(
+          "export namespace Accounts {\n" +
+            "  export class UserService {\n" +
+            "    getUser() {}\n" +
+            "    private cache = new Map();\n" +
+            "    deleteUser() {}\n" +
+            "  }\n" +
+            "}\n",
+        );
+      });
+
+      it("opens an enclosing scope at its declaration, skipping the members before the match", async () => {
+        const chunks = await storePage("Accounts.ts", "text/typescript", [
+          chunk("export namespace Accounts {\n", ["Accounts"], true),
+          chunk("  export class First {\n", ["Accounts", "First"], true),
+          chunk("    a() { return 1; }\n", ["Accounts", "First", "a"]),
+          chunk("  }\n", ["Accounts", "First"]),
+          chunk('  console.log("between");\n', ["Accounts"]),
+          chunk("  export class Second {\n", ["Accounts", "Second"], true),
+          chunk("    b() { return 2; }\n", ["Accounts", "Second", "b"]),
+          chunk("  }\n", ["Accounts", "Second"]),
+          chunk("}\n", ["Accounts"]),
+        ]);
+
+        expect(await assemble(chunks[6])).toBe(
+          "export namespace Accounts {\n" +
+            "  export class Second {\n" +
+            "    b() { return 2; }\n" +
+            "  }\n" +
+            "}\n",
+        );
+      });
+
+      it("returns only the matched chunk for a hit in global code", async () => {
+        const chunks = await storePage("main.ts", "text/typescript", [
+          chunk("console.log(start);\n", []),
+          chunk("export class Worker {\n", ["Worker"], true),
+          chunk("  run() {}\n", ["Worker", "run"]),
+          chunk("}\n", ["Worker"]),
+        ]);
+
+        expect(await assemble(chunks[0])).toBe("console.log(start);\n");
+      });
+
+      describe("JSON", () => {
+        /** Stores a document as the JSON splitter chunks it and returns the chunk holding `text`. */
+        async function storeJsonAndFind(
+          document: object,
+          text: string,
+        ): Promise<DbPageChunk> {
+          const splitter = new JsonDocumentSplitter(appConfig.splitter, {
+            preserveFormatting: true,
+          });
+          const chunks = await storePage(
+            "config.json",
+            "application/json",
+            await splitter.splitText(JSON.stringify(document, null, 2)),
+          );
+          const match = chunks.find((stored) => stored.content.includes(text));
+          if (!match) throw new Error(`No chunk contains ${text}`);
+          return match;
+        }
+
+        it.each([
+          ["a value inside it", '"timeout"'],
+          ["its key", '"server"'],
+        ])(
+          "returns the object for a match on %s instead of the whole document",
+          async (_what, text) => {
+            const match = await storeJsonAndFind(
+              {
+                name: "demo",
+                server: { host: "localhost", timeout: 30 },
+                users: [{ name: "Alice" }],
+              },
+              text,
+            );
+
+            const assembled = await assemble(match);
+            expect(assembled).toContain('"server": ');
+            expect(assembled).toContain('"host": "localhost"');
+            expect(assembled).toContain('"timeout": 30');
+            expect(assembled).not.toContain("demo");
+            expect(assembled).not.toContain("Alice");
+          },
         );
 
-        const assembled = strategy.assembleContent(result);
-        expect(assembled).toContain('"target": ');
-        expect(assembled).not.toContain("unrelated");
-        expect(assembled).not.toContain("other");
+        it.each([
+          ["object", {}],
+          ["array", []],
+        ])("returns an empty %s a matched key opens", async (_kind, empty) => {
+          const match = await storeJsonAndFind(
+            { name: "unrelated", target: empty, other: 1 },
+            '"target"',
+          );
+
+          const assembled = await assemble(match);
+          expect(assembled).toContain('"target": ');
+          expect(assembled).not.toContain("unrelated");
+          expect(assembled).not.toContain("other");
+        });
       });
     });
 
