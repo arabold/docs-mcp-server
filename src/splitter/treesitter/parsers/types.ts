@@ -10,11 +10,6 @@ export interface ParseResult {
   errorNodes: SyntaxNode[];
 }
 
-export interface LineRange {
-  startLine: number;
-  endLine: number;
-}
-
 /**
  * Simplified boundary interface for focused chunk generation
  * This is what we actually need for semantic splitting
@@ -58,8 +53,6 @@ export interface LanguageParser {
   readonly mimeTypes: string[];
 
   parse(source: string): ParseResult;
-  getNodeText(node: SyntaxNode, source: string): string;
-  getNodeLines(node: SyntaxNode, source: string): LineRange;
 
   /** NEW: Simplified boundary extraction for focused chunking */
   extractBoundaries(tree: Tree, source: string): CodeBoundary[];

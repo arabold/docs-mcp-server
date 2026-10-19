@@ -389,17 +389,6 @@ export class TypeScriptParser implements LanguageParser {
     }
   }
 
-  getNodeText(node: SyntaxNode, source: string): string {
-    return source.slice(node.startIndex, node.endIndex);
-  }
-
-  getNodeLines(node: SyntaxNode, _source: string) {
-    return {
-      startLine: node.startPosition.row + 1,
-      endLine: node.endPosition.row + 1,
-    };
-  }
-
   /**
    * Boundary extraction: produces CodeBoundary[] directly from AST.
    */
