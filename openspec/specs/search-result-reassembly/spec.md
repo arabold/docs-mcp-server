@@ -105,13 +105,13 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 5. A match with an empty path (code at the page root) SHALL be returned on its own.
 
 **Multiple matches in the same document:**
-1. Find the **common ancestor path** (longest common prefix of all chunks' paths).
-2. Find container chunks for the common ancestor path.
-3. Reconstruct the full subtree under the common ancestor.
+1. Include each match's **full subtree** (as in single-match step 3) and the **opening and closing chunks** of every scope that encloses it (as in single-match step 4), but none of those scopes' other members.
+2. Find the **common ancestor path** (longest common prefix of the matches' paths). Within the scope at that path, include the chunks at the path itself, such as fields or statements.
+3. When the matches share no path, step 2 adds nothing; each match still comes back inside its own scopes' opening and closing chunks.
 
-**Gap-aware ancestor search**: When intermediate parent chunks are missing (merged or absent), the strategy SHALL progressively shorten the path prefix to find the nearest available ancestor.
+**Gap-aware ancestor search**: When a scope has no chunk at its own path (merged or absent), the strategy SHALL skip it and progressively shorten the path prefix to find the nearest available ancestor.
 
-**Fallback**: If any error occurs during hierarchical traversal, the strategy SHALL fall back to returning the initial chunks plus immediate parent and up to 3 children each.
+**Fallback**: If any error occurs while loading the page's chunks, the strategy SHALL fall back to returning the initial chunks plus immediate parent and up to 3 children each.
 
 **Code reference:** `src/store/assembly/strategies/HierarchicalAssemblyStrategy.ts:47-615`
 
@@ -166,15 +166,25 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 
 #### Scenario: Multiple matches in same code file
 - **WHEN** a search matches two chunks in different functions within the same class
-- **THEN** the system SHALL find the common ancestor (the class)
-- **AND** reconstruct the class subtree including both functions
+- **THEN** the system SHALL return both functions inside the class's opening and closing lines
+- **AND** SHALL NOT include the class's other methods
+
+#### Scenario: Multiple matches in a class inside a namespace
+- **WHEN** a search matches two methods of a class declared inside a namespace
+- **THEN** the system SHALL also return the namespace's opening and closing lines
+- **AND** SHALL NOT include the namespace's other members
+
+#### Scenario: Multiple matches without a common path
+- **WHEN** a search matches a method of one top-level class and a method of another
+- **THEN** the system SHALL return each method inside its own class's opening and closing lines
+- **AND** SHALL NOT include the code between the two classes
 
 #### Scenario: Missing intermediate parent
 - **WHEN** the chunk's direct parent is missing from the database (merged during splitting)
 - **THEN** the system SHALL use gap-aware ancestor search to find the nearest available ancestor by progressively shortening the path
 
 #### Scenario: Hierarchical traversal error fallback
-- **WHEN** an error occurs during structural ancestor detection or subtree reconstruction
+- **WHEN** an error occurs while loading the page's chunks for ancestor detection or subtree reconstruction
 - **THEN** the system SHALL fall back to returning the matched chunks with immediate parent and up to 3 children each
 
 ### Requirement: Content Joining

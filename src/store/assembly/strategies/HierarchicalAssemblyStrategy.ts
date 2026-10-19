@@ -29,6 +29,16 @@ function isSamePath(a: string[], b: string[]): boolean {
   return a.length === b.length && startsWithPath(a, b);
 }
 
+/** Returns the longest path that every given path starts with. */
+function commonPrefix(paths: string[][]): string[] {
+  const [first = [], ...rest] = paths;
+  let length = 0;
+  while (length < first.length && rest.every((path) => path[length] === first[length])) {
+    length++;
+  }
+  return first.slice(0, length);
+}
+
 /** Returns whether a chunk opens a declaration such as a class or namespace. */
 function isStructural(chunk: DbPageChunk): boolean {
   return chunk.metadata.types?.includes("structural") ?? false;
@@ -39,9 +49,9 @@ function isStructural(chunk: DbPageChunk): boolean {
  *
  * Uses selective subtree reassembly: a single match brings the structure that contains
  * it, such as its class or JSON object, with the opening and closing chunks of the scopes
- * around it. Multiple matches within the same document bring the chunks at their common
- * ancestor path and the subtree of each match, avoiding inclusion of excessive unrelated
- * content. Simple concatenation leverages splitter concatenation guarantees.
+ * around it. Multiple matches within the same document bring only their own subtrees,
+ * inside the opening and closing chunks of their scopes, avoiding inclusion of excessive
+ * unrelated content. Simple concatenation leverages splitter concatenation guarantees.
  */
 export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   constructor(private config: AppConfig) {}
@@ -72,7 +82,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
   /**
    * Selects the chunks to reassemble around the matches of each document.
    * For a single match: the subtree of its container plus the boundaries of the enclosing scopes.
-   * For multiple matches in same document: finds common ancestor and reconstructs minimal subtree.
+   * For multiple matches in same document: each match's subtree plus the boundaries of its scopes.
    */
   async selectChunks(
     library: string,
@@ -98,56 +108,29 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       const allChunkIds = new Set<string>();
 
       // Process each document group
-      for (const [_url, documentChunks] of Array.from(chunksByDocument.entries())) {
-        if (documentChunks.length === 1) {
-          // Single match: reconstruct complete structural subtree containing the match
-          const matched = documentChunks[0];
-
-          // IMPORTANT: Always include the original matched chunk first
+      for (const [url, documentChunks] of Array.from(chunksByDocument.entries())) {
+        // IMPORTANT: Always include the original matched chunks first
+        for (const matched of documentChunks) {
           allChunkIds.add(matched.id);
+        }
 
-          const pageChunks = await documentStore.findChunksByUrl(
-            library,
-            version,
-            matched.url,
-          );
-          const matchIndex = pageChunks.findIndex((chunk) => chunk.id === matched.id);
-          if (matchIndex === -1) continue;
+        const pageChunks = await documentStore.findChunksByUrl(library, version, url);
+        const matchedIds = new Set(documentChunks.map((matched) => matched.id));
+        const matchIndices = pageChunks.flatMap((chunk, index) =>
+          matchedIds.has(chunk.id) ? [index] : [],
+        );
+        if (matchIndices.length === 0) continue;
 
-          // The container to reconstruct: the JSON object or array holding the match,
-          // or for code its structural ancestor (class / namespace, etc.)
-          const containerIndex = MimeTypeUtils.isJson(matched.content_type ?? "")
-            ? this.findJsonContainer(pageChunks, matchIndex)
-            : this.findCodeContainer(pageChunks, matchIndex);
-
-          // Add the container's full subtree, through its closing chunk, and open and
-          // close the scopes that enclose it, without their other members
-          const container = this.containerRange(pageChunks, containerIndex);
-          for (const chunk of pageChunks.slice(container.start, container.end)) {
-            allChunkIds.add(chunk.id);
-          }
-          for (const chunk of this.findEnclosingScopeBoundaries(
-            pageChunks,
-            container.start,
-          )) {
-            allChunkIds.add(chunk.id);
-          }
-        } else {
-          // Multiple matches: use selective subtree reassembly
-          // IMPORTANT: Always include all original matched chunks first
-          for (const matched of documentChunks) {
-            allChunkIds.add(matched.id);
-          }
-
-          const subtreeIds = await this.selectSubtreeChunks(
-            library,
-            version,
-            documentChunks,
-            documentStore,
-          );
-          for (const id of subtreeIds) {
-            allChunkIds.add(id);
-          }
+        const selected =
+          documentChunks.length === 1
+            ? this.selectAroundMatch(
+                pageChunks,
+                matchIndices[0],
+                MimeTypeUtils.isJson(documentChunks[0].content_type ?? ""),
+              )
+            : this.selectAroundMatches(pageChunks, matchIndices);
+        for (const chunk of selected) {
+          allChunkIds.add(chunk.id);
         }
       }
 
@@ -157,9 +140,9 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
 
       return chunks;
     } catch (error) {
-      // Fallback to simpler selection if parent chain walking fails
+      // Fallback to simpler selection if loading the page fails
       logger.warn(
-        `Hierarchical parent chain walking failed, falling back to basic selection: ${error}`,
+        `Hierarchical chunk selection failed, falling back to basic selection: ${error}`,
       );
       return this.fallbackSelection(library, version, initialChunks, documentStore);
     }
@@ -181,6 +164,71 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     }
     // Production/default: simple concatenation leveraging splitter guarantees.
     return chunks.map((chunk) => chunk.content).join("");
+  }
+
+  /**
+   * Selects the chunks around a single match: the subtree of its container (for code
+   * its structural ancestor, such as its class; for JSON the object or array holding
+   * it) and the opening and closing chunks of the scopes that enclose that container.
+   *
+   * @param pageChunks All chunks of one page, in document order.
+   * @param matchIndex Position of the match.
+   * @param isJson Whether the page is JSON.
+   */
+  private selectAroundMatch(
+    pageChunks: DbPageChunk[],
+    matchIndex: number,
+    isJson: boolean,
+  ): DbPageChunk[] {
+    const containerIndex = isJson
+      ? this.findJsonContainer(pageChunks, matchIndex)
+      : this.findCodeContainer(pageChunks, matchIndex);
+    return this.selectSubtree(pageChunks, containerIndex);
+  }
+
+  /**
+   * Selects the chunks around several matches in one page: each match's subtree with
+   * the opening and closing chunks of the scopes that enclose it, but none of their
+   * other members. Within the scope that holds all matches, the chunks at that scope's
+   * own path, such as fields or statements, are included as well.
+   *
+   * @param pageChunks All chunks of one page, in document order.
+   * @param matchIndices Positions of the matches, in document order.
+   */
+  private selectAroundMatches(
+    pageChunks: DbPageChunk[],
+    matchIndices: number[],
+  ): DbPageChunk[] {
+    const selected = matchIndices.flatMap((index) =>
+      this.selectSubtree(pageChunks, index),
+    );
+
+    const commonPath = commonPrefix(
+      matchIndices.map((index) => pathOf(pageChunks[index])),
+    );
+    const commonScope =
+      commonPath.length > 0
+        ? this.findScopeStart(pageChunks, matchIndices[0], commonPath)
+        : undefined;
+    if (commonScope !== undefined) {
+      const scope = this.containerRange(pageChunks, commonScope);
+      for (const chunk of pageChunks.slice(scope.start, scope.end)) {
+        if (isSamePath(pathOf(chunk), commonPath)) selected.push(chunk);
+      }
+    }
+    return selected;
+  }
+
+  /**
+   * Selects the subtree that the chunk at `index` opens, through its closing chunk, and
+   * the opening and closing chunks of the scopes that enclose it.
+   */
+  private selectSubtree(pageChunks: DbPageChunk[], index: number): DbPageChunk[] {
+    const subtree = this.containerRange(pageChunks, index);
+    return [
+      ...pageChunks.slice(subtree.start, subtree.end),
+      ...this.findEnclosingScopeBoundaries(pageChunks, subtree.start),
+    ];
   }
 
   /**
@@ -234,213 +282,6 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
       return matchIndex;
     }
     return this.findScopeStart(pageChunks, own.start, path.slice(0, -1)) ?? matchIndex;
-  }
-
-  /**
-   * Walks up the parent hierarchy from a chunk to collect the complete parent chain.
-   * Includes the chunk itself and every parent until reaching the root.
-   * Protected against circular references and infinite loops.
-   *
-   * Handles hierarchical gaps by attempting to find ancestors at progressively shorter
-   * path lengths when direct parent lookup fails (e.g., when intermediate chunks
-   * have been merged or are missing).
-   */
-  private async walkToRoot(
-    library: string,
-    version: string,
-    chunk: DbPageChunk,
-    documentStore: DocumentStore,
-  ): Promise<string[]> {
-    const chainIds: string[] = [];
-    const visited = new Set<string>();
-    let currentChunk: DbPageChunk | null = chunk;
-    const { maxParentChainDepth } = this.config.assembly; // Safety limit to prevent runaway loops
-    let depth = 0;
-
-    // Walk up parent chain until we reach the root
-    while (currentChunk && depth < maxParentChainDepth) {
-      const currentId = currentChunk.id;
-
-      // Check for circular references
-      if (visited.has(currentId)) {
-        logger.warn(`Circular reference detected in parent chain for chunk ${currentId}`);
-        break;
-      }
-
-      visited.add(currentId);
-      chainIds.push(currentId);
-      depth++;
-
-      // Try normal parent lookup first
-      let parentChunk = await documentStore.findParentChunk(library, version, currentId);
-
-      // If no direct parent found, try gap-aware ancestor search
-      if (!parentChunk) {
-        parentChunk = await this.findAncestorWithGaps(
-          library,
-          version,
-          currentChunk.url,
-          currentChunk.metadata.path ?? [],
-          documentStore,
-        );
-      }
-
-      currentChunk = parentChunk;
-    }
-
-    if (depth >= maxParentChainDepth) {
-      logger.warn(
-        `Maximum parent chain depth (${maxParentChainDepth}) reached for chunk ${chunk.id}`,
-      );
-    }
-
-    return chainIds;
-  }
-
-  /**
-   * Attempts to find ancestors when there are gaps in the hierarchy.
-   * Tries progressively shorter path prefixes to find existing ancestor chunks.
-   */
-  private async findAncestorWithGaps(
-    library: string,
-    version: string,
-    url: string,
-    path: string[],
-    documentStore: DocumentStore,
-  ): Promise<DbPageChunk | null> {
-    if (path.length <= 1) {
-      return null; // Already at or near root
-    }
-
-    // Try progressively shorter path prefixes to find existing ancestors
-    // Start from immediate parent and work backwards to root
-    for (let pathLength = path.length - 1; pathLength > 0; pathLength--) {
-      const ancestorPath = path.slice(0, pathLength);
-
-      try {
-        // Search for chunks that have this exact path in the same document
-        const potentialAncestors = await this.findChunksByExactPath(
-          library,
-          version,
-          url,
-          ancestorPath,
-          documentStore,
-        );
-
-        if (potentialAncestors.length > 0) {
-          // Return the first matching ancestor found
-          return potentialAncestors[0];
-        }
-      } catch (error) {
-        logger.debug(
-          `Failed to find ancestor with path ${ancestorPath.join("/")}: ${error}`,
-        );
-        // Continue trying shorter paths
-      }
-    }
-
-    return null; // No ancestors found
-  }
-
-  /**
-   * Finds the chunks of a document whose path equals the given path.
-   */
-  private async findChunksByExactPath(
-    library: string,
-    version: string,
-    url: string,
-    targetPath: string[],
-    documentStore: DocumentStore,
-  ): Promise<DbPageChunk[]> {
-    try {
-      const pageChunks = await documentStore.findChunksByUrl(library, version, url);
-      return pageChunks.filter((chunk) => isSamePath(pathOf(chunk), targetPath));
-    } catch (error) {
-      logger.warn(`Error in findChunksByExactPath: ${error}`);
-      return [];
-    }
-  }
-
-  /**
-   * Selects chunks for selective subtree reassembly when multiple matches exist in the same document.
-   * Finds the common ancestor and reconstructs only the relevant subtrees.
-   */
-  private async selectSubtreeChunks(
-    library: string,
-    version: string,
-    documentChunks: DbPageChunk[],
-    documentStore: DocumentStore,
-  ): Promise<string[]> {
-    const chunkIds = new Set<string>();
-
-    // Find common ancestor path
-    const commonAncestorPath = this.findCommonAncestorPath(documentChunks);
-
-    if (commonAncestorPath.length === 0) {
-      // No common ancestor found, fall back to individual parent chains
-      logger.warn(
-        "No common ancestor found for multiple matches, using individual parent chains",
-      );
-      for (const chunk of documentChunks) {
-        const parentChain = await this.walkToRoot(library, version, chunk, documentStore);
-        for (const id of parentChain) {
-          chunkIds.add(id);
-        }
-      }
-      return Array.from(chunkIds);
-    }
-
-    const pageChunks = await documentStore.findChunksByUrl(
-      library,
-      version,
-      documentChunks[0].url,
-    );
-
-    // Include the container chunks (opening/closing) at the common ancestor path
-    for (const chunk of pageChunks) {
-      if (isSamePath(pathOf(chunk), commonAncestorPath)) {
-        chunkIds.add(chunk.id);
-      }
-    }
-
-    // For each matched chunk, include its full subtree
-    for (const matched of documentChunks) {
-      const index = pageChunks.findIndex((chunk) => chunk.id === matched.id);
-      if (index === -1) continue;
-      const subtree = this.containerRange(pageChunks, index);
-      for (const chunk of pageChunks.slice(subtree.start, subtree.end)) {
-        chunkIds.add(chunk.id);
-      }
-    }
-
-    return Array.from(chunkIds);
-  }
-
-  /**
-   * Finds the common ancestor path from a list of chunks by finding the longest common prefix.
-   */
-  private findCommonAncestorPath(chunks: DbPageChunk[]): string[] {
-    if (chunks.length === 0) return [];
-    if (chunks.length === 1) return (chunks[0].metadata.path as string[]) ?? [];
-
-    const paths = chunks.map((chunk) => (chunk.metadata.path as string[]) ?? []);
-
-    if (paths.length === 0) return [];
-
-    // Find the longest common prefix
-    const minLength = Math.min(...paths.map((path) => path.length));
-    const commonPrefix: string[] = [];
-
-    for (let i = 0; i < minLength; i++) {
-      const currentElement = paths[0][i];
-      if (paths.every((path) => path[i] === currentElement)) {
-        commonPrefix.push(currentElement);
-      } else {
-        break;
-      }
-    }
-
-    return commonPrefix;
   }
 
   /**

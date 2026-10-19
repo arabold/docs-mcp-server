@@ -44,9 +44,9 @@ A single match in a page brings its nearest chunk typed `structural` (a class, i
 
 The subtree is the ancestor, the chunks right before it that carry the same path (such as a JSON key and its bracket), and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. It therefore ends with the ancestor's closing line, which carries the ancestor's own path. Each enclosing scope adds its opening and closing lines but none of its other members, so the passage is balanced without pulling in the rest of the page. A scope opens where the run of chunks inside its path begins, so a statement or member between its declaration and the match is left out. The structural chunk is found the same way, so a field between two methods does not hide the class. `assembly.maxParentChainDepth` bounds the number of enclosing scopes.
 
-Several matches in one page bring every chunk at their longest common path, such as a class's opening and closing lines, and the subtree of each match. When the matches share no path, each brings its chain of parents instead.
+Several matches in one page bring the subtree of each match and the opening and closing lines of every scope around it, but none of the scopes' other members, so unmatched methods of the same class stay out. Inside the scope that holds all the matches, the chunks at that scope's own path, such as fields, come along too. Matches that share no path each come back inside their own scopes.
 
-A parent chain skips missing levels: when no chunk has the parent path, the walk tries shorter prefixes. `assembly.maxParentChainDepth` bounds the walk. If a lookup fails, the strategy falls back to each match with its parent and a few children.
+A scope that no chunk opens, such as a level the splitter skipped, is passed over and the next shorter path is tried. `assembly.maxParentChainDepth` bounds the number of enclosing scopes. If loading the page fails, the strategy falls back to each match with its parent and a few children.
 
 The chunks are concatenated without a separator. Source code chunks carry their own line breaks, so adjacent chunks join back into the original lines. JSON chunks carry their own commas and brackets, so a complete selection joins into compact JSON. A comma that separated the selection from a left-out sibling stays in place.
 

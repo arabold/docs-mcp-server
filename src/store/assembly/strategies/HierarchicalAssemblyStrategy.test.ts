@@ -133,7 +133,7 @@ describe("HierarchicalAssemblyStrategy", () => {
       expect(result.length).toBeGreaterThanOrEqual(3);
     });
 
-    describe("single matches in splitter output", () => {
+    describe("matches in splitter output", () => {
       /** Builds a chunk the way the source code splitter emits it. */
       function chunk(content: string, path: string[], structural = false): Chunk {
         return {
@@ -162,12 +162,12 @@ describe("HierarchicalAssemblyStrategy", () => {
         return documentStore.findChunksByUrl("test-single", "1.0", url);
       }
 
-      /** Returns the reassembled text for a single match. */
-      async function assemble(match: DbPageChunk): Promise<string> {
+      /** Returns the text reassembled for the given matches. */
+      async function assemble(...matches: DbPageChunk[]): Promise<string> {
         const result = await strategy.selectChunks(
           "test-single",
           "1.0",
-          [match],
+          matches,
           documentStore,
         );
         return strategy.assembleContent(result);
@@ -280,6 +280,51 @@ describe("HierarchicalAssemblyStrategy", () => {
         ]);
 
         expect(await assemble(chunks[0])).toBe("console.log(start);\n");
+      });
+
+      it("closes every scope around several matches in one class", async () => {
+        const chunks = await storePage("Accounts.ts", "text/typescript", [
+          chunk("export namespace Accounts {\n", ["Accounts"], true),
+          chunk("  export class UserService {\n", ["Accounts", "UserService"], true),
+          chunk("    getUser() {}\n", ["Accounts", "UserService", "getUser"]),
+          chunk("    createUser() {}\n", ["Accounts", "UserService", "createUser"]),
+          chunk("    deleteUser() {}\n", ["Accounts", "UserService", "deleteUser"]),
+          chunk("  }\n", ["Accounts", "UserService"]),
+          chunk("  export const limit = 5;\n", ["Accounts", "limit"]),
+          chunk("}\n", ["Accounts"]),
+        ]);
+
+        expect(await assemble(chunks[2], chunks[4])).toBe(
+          "export namespace Accounts {\n" +
+            "  export class UserService {\n" +
+            "    getUser() {}\n" +
+            "    deleteUser() {}\n" +
+            "  }\n" +
+            "}\n",
+        );
+      });
+
+      it("closes each match's own scopes when the matches share no path", async () => {
+        const chunks = await storePage("services.ts", "text/typescript", [
+          chunk("class First {\n", ["First"], true),
+          chunk("  a() {}\n", ["First", "a"]),
+          chunk("  b() {}\n", ["First", "b"]),
+          chunk("}\n", ["First"]),
+          chunk("function helper() {}\n", ["helper"]),
+          chunk("class Second {\n", ["Second"], true),
+          chunk("  c() {}\n", ["Second", "c"]),
+          chunk("  d() {}\n", ["Second", "d"]),
+          chunk("}\n", ["Second"]),
+        ]);
+
+        expect(await assemble(chunks[2], chunks[6])).toBe(
+          "class First {\n" +
+            "  b() {}\n" +
+            "}\n" +
+            "class Second {\n" +
+            "  c() {}\n" +
+            "}\n",
+        );
       });
 
       describe("JSON", () => {
