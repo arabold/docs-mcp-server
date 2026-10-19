@@ -69,4 +69,37 @@ describe("GitHub scraping E2E", () => {
       expect(await h.storedUrls()).toEqual([FILE_URL]);
     });
   });
+
+  it("stores wiki pages under the title GitHub gives them, with or without text", async () => {
+    api
+      .page("/repos/owner/repo", JSON.stringify({ default_branch: "main" }), {
+        type: "application/json",
+      })
+      .page(
+        "/repos/owner/repo/git/trees/main?recursive=1",
+        JSON.stringify({ sha: "t", url: "", tree: [], truncated: false }),
+        { type: "application/json" },
+      );
+    web
+      .page(
+        "/owner/repo/wiki",
+        '<html><head><title>Home · owner/repo Wiki · GitHub</title></head><body><p>Welcome to the wiki.</p><a href="/owner/repo/wiki/Draft">Draft</a></body></html>',
+      )
+      .page(
+        "/owner/repo/wiki/Draft",
+        "<html><head><title>Draft · owner/repo Wiki · GitHub</title></head><body></body></html>",
+      );
+
+    const job = await h.scrape({ url: REPO_URL });
+
+    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+    expect(h.outcomeOf(`${REPO_URL}/wiki/Draft`)).toBe(PageOutcome.Empty);
+    const { pages } = await h.docService.listPages(LIBRARY, VERSION, {
+      contains: "/wiki",
+    });
+    expect(pages.map(({ url, title }) => ({ url, title }))).toEqual([
+      { url: `${REPO_URL}/wiki`, title: "Home · owner/repo Wiki · GitHub" },
+      { url: `${REPO_URL}/wiki/Draft`, title: "Draft · owner/repo Wiki · GitHub" },
+    ]);
+  });
 });

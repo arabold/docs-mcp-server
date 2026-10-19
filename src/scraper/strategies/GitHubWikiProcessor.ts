@@ -132,13 +132,8 @@ export class GitHubWikiProcessor {
         logger.warn(`⚠️  Processing error for ${currentUrl}: ${err.message}`);
       }
 
-      // Extract wiki page title from URL
       const parsedUrl = new URL(currentUrl);
       const wikiInfo = this.parseGitHubWikiUrl(currentUrl);
-      const wikiPagePath = parsedUrl.pathname
-        .replace(`/${wikiInfo.owner}/${wikiInfo.repo}/wiki`, "")
-        .replace(/^\//, "");
-      const pageTitle = wikiPagePath || "Home";
 
       // Extract links from the processed content
       const links = processed.links || [];
@@ -181,7 +176,10 @@ export class GitHubWikiProcessor {
 
       return {
         url: currentUrl,
-        title: pageTitle,
+        // The crawl stores the pipeline's title for a page with text and this
+        // one for a page without, so both get the <title> GitHub serves with
+        // every wiki page.
+        title: processed.title,
         etag: rawContent.etag,
         lastModified: rawContent.lastModified,
         contentType: rawContent.mimeType,
