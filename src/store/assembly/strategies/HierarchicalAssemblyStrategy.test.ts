@@ -726,26 +726,5 @@ describe("HierarchicalAssemblyStrategy", () => {
       const result = strategy.assembleContent([]);
       expect(result).toBe("");
     });
-
-    it("should provide debug output when requested", () => {
-      const chunks: DbPageChunk[] = [
-        {
-          id: "1",
-          content: "function test() {",
-          metadata: { path: ["test"], level: 0 },
-        } as DbPageChunk,
-        {
-          id: "2",
-          content: "  return 42;",
-          metadata: { path: ["test", "return"], level: 1 },
-        } as DbPageChunk,
-      ];
-
-      const result = strategy.assembleContent(chunks, true);
-      expect(result).toContain("=== #1");
-      expect(result).toContain("=== #2");
-      expect(result).toContain("function test() {");
-      expect(result).toContain("  return 42;");
-    });
   });
 });

@@ -169,17 +169,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
    * Assembles chunks using simple concatenation.
    * Relies on splitter concatenation guarantees - chunks are designed to join seamlessly.
    */
-  assembleContent(chunks: DbPageChunk[], debug = false): string {
-    if (debug) {
-      return chunks
-        .map(
-          (chunk) =>
-            `=== #${chunk.id} ${chunk.metadata.path?.join("/")} [${chunk.metadata.level}] ===\n` +
-            chunk.content,
-        )
-        .join("");
-    }
-    // Production/default: simple concatenation leveraging splitter guarantees.
+  assembleContent(chunks: DbPageChunk[]): string {
     return chunks.map((chunk) => chunk.content).join("");
   }
 
