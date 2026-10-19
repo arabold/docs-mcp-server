@@ -86,6 +86,15 @@ describe("Telemetry", () => {
     expect(sent.stack).not.toContain("/Users/");
   });
 
+  it("flushes the SDK's queued events on shutdown", async () => {
+    const instance = Telemetry.create(storePath);
+    instance.track(TelemetryEvent.TOOL_USED, { tool: "test" });
+
+    await instance.shutdown();
+
+    expect(posthog.shutdown).toHaveBeenCalledOnce();
+  });
+
   it("sends nothing when the user turned telemetry off", () => {
     TelemetryConfig.getInstance().setEnabled(false);
     const instance = Telemetry.create(storePath);
