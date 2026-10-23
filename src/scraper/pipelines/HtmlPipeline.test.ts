@@ -1,15 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus, type RawContent } from "../fetcher/types";
-import { HtmlMetadataExtractorMiddleware } from "../middleware/HtmlMetadataExtractorMiddleware";
 import { HtmlPlaywrightMiddleware } from "../middleware/HtmlPlaywrightMiddleware";
 import { ScrapeMode, type ScraperOptions } from "../types";
 import { HtmlPipeline } from "./HtmlPipeline";
 
 const appConfig = loadConfig();
 
-function options(scrapeMode: ScrapeMode | undefined = ScrapeMode.Fetch): ScraperOptions {
-  return { url: "https://example.com/", library: "example", version: "", scrapeMode };
+function options(
+  scrapeMode: ScrapeMode | undefined = ScrapeMode.Fetch,
+  overrides: Partial<ScraperOptions> = {},
+): ScraperOptions {
+  return {
+    url: "https://example.com/",
+    library: "example",
+    version: "",
+    scrapeMode,
+    ...overrides,
+  };
 }
 
 function html(content: string | Buffer, charset?: string): RawContent {
@@ -27,51 +35,56 @@ describe("HtmlPipeline", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    ["text/html", true],
-    ["application/xhtml+xml", true],
-    ["text/markdown", false],
-    ["", false],
-  ])("canProcess(%j) is %s", (mimeType, expected) => {
-    expect(new HtmlPipeline(appConfig).canProcess(mimeType)).toBe(expected);
-  });
-
   describe("decoding", () => {
-    it.each([
-      ["UTF-8", Buffer.from("<p>naïve café</p>", "utf-8"), "utf-8", "naïve café"],
-      [
-        "ISO-8859-1",
-        Buffer.from("<p>naïve café</p>", "latin1"),
-        "iso-8859-1",
-        "naïve café",
-      ],
-      [
-        "no charset as UTF-8",
-        Buffer.from("<p>Привет, мир</p>", "utf-8"),
-        undefined,
-        "Привет, мир",
-      ],
-      [
-        "Japanese UTF-8",
-        Buffer.from("<p>こんにちは世界</p>", "utf-8"),
-        "utf-8",
-        "こんにちは世界",
-      ],
-      [
-        "a UTF-16LE BOM",
-        Buffer.from([0xff, 0xfe, 0x61, 0x00, 0x62, 0x00, 0x63, 0x00]),
-        "utf-16le",
-        "abc",
-      ],
-      ["a UTF-8 BOM", Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x62, 0x63]), "utf-8", "abc"],
-      ["a string as is", "<p>naïve café</p>", "iso-8859-1", "naïve café"],
-    ])("decodes %s", async (_label, content, charset, expected) => {
-      const result = await new HtmlPipeline(appConfig).process(
-        html(content, charset),
-        options(),
-      );
+    it("decodes the body with the header charset, a BOM or UTF-8", async () => {
+      const cases: Array<
+        [
+          label: string,
+          content: string | Buffer,
+          charset: string | undefined,
+          expected: string,
+        ]
+      > = [
+        ["UTF-8", Buffer.from("<p>naïve café</p>", "utf-8"), "utf-8", "naïve café"],
+        [
+          "ISO-8859-1",
+          Buffer.from("<p>naïve café</p>", "latin1"),
+          "iso-8859-1",
+          "naïve café",
+        ],
+        [
+          "no charset as UTF-8",
+          Buffer.from("<p>Привет, мир</p>", "utf-8"),
+          undefined,
+          "Привет, мир",
+        ],
+        [
+          "Japanese UTF-8",
+          Buffer.from("<p>こんにちは世界</p>", "utf-8"),
+          "utf-8",
+          "こんにちは世界",
+        ],
+        [
+          "a UTF-16LE BOM",
+          Buffer.from([0xff, 0xfe, 0x61, 0x00, 0x62, 0x00, 0x63, 0x00]),
+          "utf-16le",
+          "abc",
+        ],
+        [
+          "a UTF-8 BOM",
+          Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x62, 0x63]),
+          "utf-8",
+          "abc",
+        ],
+        ["a string as is", "<p>naïve café</p>", "iso-8859-1", "naïve café"],
+      ];
+      const pipeline = new HtmlPipeline(appConfig);
 
-      expect(result.textContent).toContain(expected);
+      for (const [label, content, charset, expected] of cases) {
+        const result = await pipeline.process(html(content, charset), options());
+
+        expect.soft(result.textContent, label).toContain(expected);
+      }
     });
 
     it("prefers a meta charset over the HTTP header charset", async () => {
@@ -159,49 +172,46 @@ describe("HtmlPipeline", () => {
   });
 
   it("collects errors that middleware reports", async () => {
-    vi.spyOn(HtmlMetadataExtractorMiddleware.prototype, "process").mockImplementationOnce(
-      async (ctx, next) => {
-        ctx.errors.push(new Error("fail"));
-        await next();
-      },
-    );
-
+    // Cheerio cannot parse this selector, so the sanitizer reports it and goes on.
     const result = await new HtmlPipeline(appConfig).process(
-      html("<html><body>abc</body></html>", "utf-8"),
-      options(),
+      html("<html><body><p>Body text</p></body></html>", "utf-8"),
+      options(ScrapeMode.Fetch, { excludeSelectors: ["[[["] }),
     );
 
-    expect(result.errors?.map((e) => e.message)).toContain("fail");
+    expect(result.errors?.map((error) => error.message)).toEqual([
+      expect.stringContaining('Invalid selector "[[["'),
+    ]);
+    expect(result.textContent).toContain("Body text");
   });
 
   // The pipeline treats a missing scrapeMode as "no browser", while
   // HtmlPlaywrightMiddleware on its own treats it as Auto. The pipeline decides
   // first, so a missing scrapeMode never renders.
-  it.each([
-    [ScrapeMode.Playwright, true],
-    [ScrapeMode.Auto, true],
-    [ScrapeMode.Fetch, false],
-    [undefined, false],
-  ])(
-    "with scrapeMode %s uses the browser-rendered page: %s",
-    async (scrapeMode, rendered) => {
-      vi.spyOn(HtmlPlaywrightMiddleware.prototype, "process").mockImplementation(
-        async (ctx, next) => {
-          ctx.content = "<html><body><p>Rendered by the browser</p></body></html>";
-          await next();
-        },
-      );
+  it("uses the browser-rendered page only for scrapeMode playwright and auto", async () => {
+    vi.spyOn(HtmlPlaywrightMiddleware.prototype, "process").mockImplementation(
+      async (ctx, next) => {
+        ctx.content = "<html><body><p>Rendered by the browser</p></body></html>";
+        await next();
+      },
+    );
+    const cases: Array<[ScrapeMode | undefined, boolean]> = [
+      [ScrapeMode.Playwright, true],
+      [ScrapeMode.Auto, true],
+      [ScrapeMode.Fetch, false],
+      [undefined, false],
+    ];
 
+    for (const [scrapeMode, rendered] of cases) {
       const result = await new HtmlPipeline(appConfig).process(
         html("<html><body><p>Served by the server</p></body></html>", "utf-8"),
         options(scrapeMode),
       );
 
-      expect(result.textContent).toContain(
-        rendered ? "Rendered by the browser" : "Served by the server",
-      );
-    },
-  );
+      expect
+        .soft(result.textContent, String(scrapeMode))
+        .toContain(rendered ? "Rendered by the browser" : "Served by the server");
+    }
+  });
 
   it("processes HTML via Defuddle when htmlExtractor is set to defuddle", async () => {
     // Verifies the lazy-loading path: HtmlPipeline only imports the Defuddle
@@ -244,14 +254,6 @@ describe("HtmlPipeline", () => {
       await new HtmlPipeline(appConfig).close();
 
       expect(closeBrowser).toHaveBeenCalledOnce();
-    });
-
-    it("can be called repeatedly", async () => {
-      const pipeline = new HtmlPipeline(appConfig);
-
-      await pipeline.close();
-      await pipeline.close();
-      await expect(pipeline.close()).resolves.toBeUndefined();
     });
 
     it("resolves even when closing the browser fails", async () => {

@@ -7,8 +7,6 @@ import {
 import type { StoreSearchResult } from "../store/types";
 import { SearchTool, type SearchToolOptions } from "./SearchTool";
 
-// Mock dependencies
-
 describe("SearchTool", () => {
   let mockDocService: Partial<DocumentManagementService>;
   let searchTool: SearchTool;
@@ -20,7 +18,6 @@ describe("SearchTool", () => {
       validateLibraryExists: vi.fn(),
       findBestVersion: vi.fn(),
       searchStore: vi.fn(),
-      listVersions: vi.fn(),
       listLibraries: vi.fn(),
     };
 
@@ -45,35 +42,32 @@ describe("SearchTool", () => {
     },
   ];
 
-  // --- Search Logic & Version Resolution Tests ---
-
-  it("should search with exact version when exactMatch is true", async () => {
-    const options: SearchToolOptions = {
-      ...baseOptions,
-      version: "1.0.0",
-      exactMatch: true,
-    };
+  it("searches the exact version with the default or given limit", async () => {
     (mockDocService.searchStore as Mock).mockResolvedValue(mockSearchResults);
+    const cases: Array<{ label: string; limit?: number; expectedLimit: number }> = [
+      { label: "default limit", expectedLimit: 5 },
+      { label: "given limit", limit: 10, expectedLimit: 10 },
+    ];
 
-    const result = await searchTool.execute(options);
+    for (const { label, limit, expectedLimit } of cases) {
+      const result = await searchTool.execute({
+        ...baseOptions,
+        version: "1.0.0",
+        exactMatch: true,
+        limit,
+      });
 
+      expect
+        .soft(mockDocService.searchStore, label)
+        .toHaveBeenLastCalledWith("test-lib", "1.0.0", "test query", expectedLimit);
+      expect.soft(result.results, label).toEqual(mockSearchResults);
+    }
     expect(mockDocService.findBestVersion).not.toHaveBeenCalled();
-    expect(mockDocService.searchStore).toHaveBeenCalledWith(
-      "test-lib",
-      "1.0.0", // Exact version
-      "test query",
-      5, // Default limit
-    );
-    expect(result.results).toEqual(mockSearchResults);
   });
 
-  it("should throw VersionNotFoundInStoreError when exactMatch is true but no version is specified", async () => {
-    const options: SearchToolOptions = {
-      ...baseOptions,
-      exactMatch: true,
-    };
-    // Mock listLibraries for this specific test case
-    const mockLibraryDetails = [
+  it("refuses an exact match without a version or with 'latest'", async () => {
+    (mockDocService.validateLibraryExists as Mock).mockResolvedValue(undefined);
+    (mockDocService.listLibraries as Mock).mockResolvedValue([
       {
         library: "test-lib",
         versions: [
@@ -88,16 +82,17 @@ describe("SearchTool", () => {
           },
         ],
       },
+    ]);
+    const cases: Array<{ label: string; version?: string }> = [
+      { label: "no version" },
+      { label: "'latest'", version: "latest" },
     ];
-    (mockDocService.validateLibraryExists as Mock).mockResolvedValue(undefined);
-    (mockDocService.listLibraries as Mock).mockResolvedValue(mockLibraryDetails); // Mock listLibraries call
 
-    await expect(searchTool.execute(options)).rejects.toThrow(
-      "Version latest for library test-lib not found in store",
-    );
-    expect(mockDocService.validateLibraryExists).toHaveBeenCalledWith("test-lib");
-    expect(mockDocService.listLibraries).toHaveBeenCalled(); // Expect listLibraries now
-    expect(mockDocService.listVersions).not.toHaveBeenCalled(); // Should not be called here
+    for (const { label, version } of cases) {
+      await expect
+        .soft(searchTool.execute({ ...baseOptions, version, exactMatch: true }), label)
+        .rejects.toThrow("Version latest for library test-lib not found in store");
+    }
     expect(mockDocService.searchStore).not.toHaveBeenCalled();
   });
 
@@ -132,202 +127,83 @@ describe("SearchTool", () => {
     });
   });
 
-  it("should throw VersionNotFoundInStoreError when exactMatch is true with 'latest' version", async () => {
-    const options: SearchToolOptions = {
-      ...baseOptions,
-      version: "latest",
-      exactMatch: true,
-    };
-    // Mock listLibraries for this specific test case
-    const mockLibraryDetails = [
+  it("searches the version findBestVersion resolves the request to", async () => {
+    (mockDocService.searchStore as Mock).mockResolvedValue(mockSearchResults);
+    const cases: Array<{
+      label: string;
+      version?: string;
+      bestMatch: string | null;
+      hasUnversioned: boolean;
+    }> = [
+      { label: "range", version: "1.x", bestMatch: "1.2.0", hasUnversioned: false },
       {
-        library: "test-lib",
-        versions: [
-          {
-            id: 1,
-            ref: { library: "test-lib", version: "1.0.0" },
-            status: "NOT_INDEXED",
-            progress: { pages: 0, maxPages: 1 },
-            counts: { documents: 1, uniqueUrls: 1 },
-            indexedAt: "2024-01-01T00:00:00Z",
-            sourceUrl: null,
-          },
-        ],
+        // searchStore normalizes null to "" and searches the unversioned docs
+        label: "no matching version, unversioned docs",
+        version: "2.0.0",
+        bestMatch: null,
+        hasUnversioned: true,
+      },
+      {
+        // Regression for issue #475: a library indexed only as "latest" answered
+        // search_docs with "Library not found in store", because the tag never
+        // reached the resolver. It now resolves literally and is searched.
+        label: "tag",
+        bestMatch: "latest",
+        hasUnversioned: false,
+      },
+      {
+        // The request is passed through as given: substituting "latest" would make
+        // an omitted version match a stored tag literally named "latest".
+        label: "omitted version",
+        bestMatch: "1.2.0",
+        hasUnversioned: false,
       },
     ];
-    (mockDocService.validateLibraryExists as Mock).mockResolvedValue(undefined);
-    (mockDocService.listLibraries as Mock).mockResolvedValue(mockLibraryDetails); // Mock listLibraries call
 
-    await expect(searchTool.execute(options)).rejects.toThrow(
-      "Version latest for library test-lib not found in store",
-    );
-    expect(mockDocService.validateLibraryExists).toHaveBeenCalledWith("test-lib");
-    expect(mockDocService.listLibraries).toHaveBeenCalled(); // Expect listLibraries now
-    expect(mockDocService.listVersions).not.toHaveBeenCalled(); // Should not be called here
-    expect(mockDocService.searchStore).not.toHaveBeenCalled();
+    for (const { label, version, bestMatch, hasUnversioned } of cases) {
+      (mockDocService.findBestVersion as Mock).mockResolvedValueOnce({
+        bestMatch,
+        hasUnversioned,
+      });
+
+      const result = await searchTool.execute({ ...baseOptions, version });
+
+      expect
+        .soft(mockDocService.findBestVersion, label)
+        .toHaveBeenLastCalledWith("test-lib", version);
+      expect
+        .soft(mockDocService.searchStore, label)
+        .toHaveBeenLastCalledWith("test-lib", bestMatch, "test query", 5);
+      expect.soft(result.results, label).toEqual(mockSearchResults);
+    }
   });
 
-  it("should find best version and search when exactMatch is false (default)", async () => {
-    const options: SearchToolOptions = { ...baseOptions, version: "1.x" };
-    const findVersionResult = { bestMatch: "1.2.0", hasUnversioned: false };
-    (mockDocService.findBestVersion as Mock).mockResolvedValue(findVersionResult);
-    (mockDocService.searchStore as Mock).mockResolvedValue(mockSearchResults);
+  it("passes a store error on unchanged", async () => {
+    const cases: Array<{
+      method: "validateLibraryExists" | "findBestVersion" | "searchStore";
+      error: Error;
+    }> = [
+      {
+        method: "validateLibraryExists",
+        error: new LibraryNotFoundInStoreError("test-lib", ["test-lib-correct"]),
+      },
+      {
+        method: "findBestVersion",
+        error: new VersionNotFoundInStoreError("test-lib", "nonexistent", ["1.0.0"]),
+      },
+      { method: "searchStore", error: new Error("Search index corrupted") },
+    ];
 
-    const result = await searchTool.execute(options);
+    for (const { method, error } of cases) {
+      (mockDocService.validateLibraryExists as Mock).mockResolvedValue(undefined);
+      (mockDocService.findBestVersion as Mock).mockResolvedValue({
+        bestMatch: "1.0.0",
+        hasUnversioned: false,
+      });
+      (mockDocService.searchStore as Mock).mockResolvedValue([]);
+      (mockDocService[method] as Mock).mockRejectedValueOnce(error);
 
-    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("test-lib", "1.x");
-    expect(mockDocService.searchStore).toHaveBeenCalledWith(
-      "test-lib",
-      "1.2.0", // Best matched version
-      "test query",
-      5,
-    );
-    expect(result.results).toEqual(mockSearchResults);
-  });
-
-  it("should search unversioned docs if findBestVersion returns null bestMatch but hasUnversioned", async () => {
-    const options: SearchToolOptions = { ...baseOptions, version: "2.0.0" }; // Version doesn't exist
-    const findVersionResult = { bestMatch: null, hasUnversioned: true };
-    (mockDocService.findBestVersion as Mock).mockResolvedValue(findVersionResult);
-    (mockDocService.searchStore as Mock).mockResolvedValue(mockSearchResults); // Assume searchStore handles null/"" correctly
-
-    const result = await searchTool.execute(options);
-
-    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("test-lib", "2.0.0");
-    // searchStore receives null, which it should normalize to "" for unversioned search
-    expect(mockDocService.searchStore).toHaveBeenCalledWith(
-      "test-lib",
-      null,
-      "test query",
-      5,
-    );
-    expect(result.results).toEqual(mockSearchResults);
-  });
-
-  it("should search a resolved tag bucket rather than falling back to unversioned", async () => {
-    // Regression for issue #475: a library indexed only as "latest" answered
-    // search_docs with "Library not found in store", because the tag never
-    // reached the resolver. It now resolves literally and is searched.
-    const options: SearchToolOptions = { ...baseOptions };
-    (mockDocService.findBestVersion as Mock).mockResolvedValue({
-      bestMatch: "latest",
-      hasUnversioned: false,
-    });
-    (mockDocService.searchStore as Mock).mockResolvedValue(mockSearchResults);
-
-    await searchTool.execute(options);
-
-    expect(mockDocService.searchStore).toHaveBeenCalledWith(
-      "test-lib",
-      "latest",
-      "test query",
-      5,
-    );
-  });
-
-  it("should pass an omitted version through to findBestVersion unchanged", async () => {
-    const options: SearchToolOptions = { ...baseOptions }; // No version
-    const findVersionResult = { bestMatch: "1.2.0", hasUnversioned: false };
-    (mockDocService.findBestVersion as Mock).mockResolvedValue(findVersionResult);
-    (mockDocService.searchStore as Mock).mockResolvedValue(mockSearchResults);
-
-    await searchTool.execute(options);
-
-    // The request is passed through as given: substituting "latest" would make
-    // an omitted version match a stored tag literally named "latest".
-    expect(mockDocService.findBestVersion).toHaveBeenCalledWith("test-lib", undefined);
-    expect(mockDocService.searchStore).toHaveBeenCalledWith(
-      "test-lib",
-      "1.2.0",
-      "test query",
-      5,
-    );
-  });
-
-  // --- Limit Handling ---
-
-  it("should use the specified limit", async () => {
-    const options: SearchToolOptions = {
-      ...baseOptions,
-      version: "1.0.0",
-      exactMatch: true,
-      limit: 10,
-    };
-    (mockDocService.searchStore as Mock).mockResolvedValue([]);
-
-    await searchTool.execute(options);
-
-    expect(mockDocService.searchStore).toHaveBeenCalledWith(
-      "test-lib",
-      "1.0.0",
-      "test query",
-      10, // Specified limit
-    );
-  });
-
-  // --- Error Handling & Result Structure ---
-
-  it("should throw VersionNotFoundInStoreError and include available versions", async () => {
-    const options: SearchToolOptions = { ...baseOptions, version: "nonexistent" };
-    const error = new VersionNotFoundInStoreError("test-lib", "nonexistent", ["1.0.0"]);
-    (mockDocService.findBestVersion as Mock).mockRejectedValue(error);
-
-    const caughtError = (await searchTool
-      .execute(options)
-      .catch((e) => e)) as VersionNotFoundInStoreError;
-
-    expect(caughtError).toBeInstanceOf(VersionNotFoundInStoreError);
-    expect(caughtError.library).toBe("test-lib");
-    expect(caughtError.version).toBe("nonexistent");
-    expect(caughtError.availableVersions).toEqual(["1.0.0"]);
-    expect(caughtError.message).toContain("Version nonexistent");
-    expect(caughtError.message).toContain("test-lib");
-  });
-
-  it("should re-throw unexpected errors from findBestVersion", async () => {
-    const options: SearchToolOptions = { ...baseOptions, version: "1.x" };
-    const unexpectedError = new Error("Store connection failed");
-    (mockDocService.findBestVersion as Mock).mockRejectedValue(unexpectedError);
-
-    await expect(searchTool.execute(options)).rejects.toThrow("Store connection failed");
-  });
-
-  it("should throw LibraryNotFoundInStoreError and include suggestions", async () => {
-    const options: SearchToolOptions = { ...baseOptions };
-    const similarLibraries = ["test-lib-correct", "another-test-lib"];
-    const error = new LibraryNotFoundInStoreError("test-lib", similarLibraries);
-    (mockDocService.validateLibraryExists as Mock).mockRejectedValue(error);
-
-    const caughtError = (await searchTool
-      .execute(options)
-      .catch((e) => e)) as LibraryNotFoundInStoreError;
-
-    expect(caughtError).toBeInstanceOf(LibraryNotFoundInStoreError);
-    expect(caughtError.library).toBe("test-lib");
-    expect(caughtError.similarLibraries).toEqual(similarLibraries);
-    expect(caughtError.message).toContain("Library test-lib not found");
-    expect(caughtError.message).toContain("Did you mean:");
-  });
-
-  it("should re-throw unexpected errors from validateLibraryExists", async () => {
-    const options: SearchToolOptions = { ...baseOptions };
-    const unexpectedError = new Error("Validation DB connection failed");
-    (mockDocService.validateLibraryExists as Mock).mockRejectedValue(unexpectedError);
-
-    await expect(searchTool.execute(options)).rejects.toThrow(
-      "Validation DB connection failed",
-    );
-  });
-
-  it("should re-throw unexpected errors from searchStore", async () => {
-    const options: SearchToolOptions = {
-      ...baseOptions,
-      version: "1.0.0",
-      exactMatch: true,
-    };
-    const unexpectedError = new Error("Search index corrupted");
-    (mockDocService.searchStore as Mock).mockRejectedValue(unexpectedError);
-
-    await expect(searchTool.execute(options)).rejects.toThrow("Search index corrupted");
+      await expect.soft(searchTool.execute(baseOptions), method).rejects.toBe(error);
+    }
   });
 });

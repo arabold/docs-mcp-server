@@ -6,8 +6,11 @@ describe("checkAuthForProtocol", () => {
     vi.restoreAllMocks();
   });
 
-  it("ignores auth settings over stdio, with a warning on stderr", () => {
+  it("warns over stdio only when auth is enabled, and ignores its settings", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    checkAuthForProtocol({ enabled: false }, "stdio", 6280);
+    expect(errorSpy).not.toHaveBeenCalled();
 
     // An HTTP issuer would fail validation; over stdio it is never looked at.
     checkAuthForProtocol(
@@ -15,7 +18,6 @@ describe("checkAuthForProtocol", () => {
       "stdio",
       6280,
     );
-
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining("Authentication does not apply to MCP over stdio"),
     );
@@ -29,13 +31,5 @@ describe("checkAuthForProtocol", () => {
         6280,
       ),
     ).toThrow(/Issuer URL must use HTTPS/);
-  });
-
-  it("does nothing when auth is disabled", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-
-    checkAuthForProtocol({ enabled: false }, "stdio", 6280);
-
-    expect(errorSpy).not.toHaveBeenCalled();
   });
 });

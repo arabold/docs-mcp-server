@@ -20,7 +20,7 @@ work.
 | `npx vitest run <file>` | One test file |
 | `npm run test:watch` | Vitest in watch mode |
 | `npm run test:coverage` | The `npm test` set with coverage. Install `@vitest/coverage-v8` first; it is not a dev dependency. |
-| `npm run test:live` | The live HTML pipeline suite against real documentation sites |
+| `npm run test:live` | The live suites: the HTML pipeline against real documentation sites, and GitHub scraping against this repository |
 | `npm run test:docker` | The production Docker image suite (needs a Docker daemon) |
 | `npm run evaluate:accuracy` | The search accuracy benchmark ([tests/search-accuracy/README.md](../tests/search-accuracy/README.md)); not part of `npm test` |
 
@@ -45,8 +45,16 @@ Set `ENABLE_TEST_LOGS=1` to see it.
   `localStorage` stand-in.
 - `test/setup-e2e.ts` starts the MSW mock server described below.
 
+The `env` block of `vite.config.ts` keeps the developer's own files away from
+tests and the CLIs they spawn: `DOCS_MCP_CONFIG` names a config file and
+`DOTENV_CONFIG_PATH` a `.env` file, neither of which exists. Suites that need
+real credentials from `.env` load it with dotenv's `config()`, which ignores
+`DOTENV_CONFIG_PATH`. `runCli()` and `startCliServer()` also clear
+`OPENAI_API_KEY`, since the test config's empty `embeddingModel` falls back to
+the default model whenever a key is set.
+
 `npm run test:live` uses `vite.config.live.ts` instead. It drops
-`setup-e2e.ts`, so the live suite reaches the real network.
+`setup-e2e.ts`, so the live suites reach the real network.
 
 `npm run evaluate:accuracy` uses `vite.config.accuracy.ts`, which also drops
 `setup-e2e.ts` (the benchmark downloads its corpus and calls the embedding
@@ -64,6 +72,9 @@ request a test makes in its own process:
 - A catch-all handler comes last. A request to loopback (`localhost`,
   `127.0.0.1`, `[::1]`) goes through, and any other request fails at once as a
   network error. `test/setup-e2e.ts` treats WebSocket connections the same way.
+- `http` and `https` requests to loopback skip MSW altogether. MSW cannot pass
+  through a request whose agent connects later, as Playwright's request API does
+  for `localhost`, so such a request would hang until it timed out.
 - An opt-in live suite calls `allowLiveNetwork()` in `beforeAll` once its
   credentials are set, and calls the function it returns in `afterAll`.
 

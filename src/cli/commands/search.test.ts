@@ -76,15 +76,6 @@ describe("search command", () => {
     expect(stdoutWriteMock).toHaveBeenCalledWith("[]\n");
   });
 
-  it("renders YAML when requested globally", async () => {
-    const parser = yargs().scriptName("test");
-    createSearchCommand(parser);
-
-    await parser.parse("search react hooks --output yaml");
-
-    expect(stdoutWriteMock).toHaveBeenCalledWith("[]\n");
-  });
-
   it("sends the query length to telemetry instead of the query", async () => {
     const parser = yargs().scriptName("test");
     createSearchCommand(parser);

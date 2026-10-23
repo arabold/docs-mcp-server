@@ -47,182 +47,135 @@ describe("resolveGitHubAuth", () => {
     vi.restoreAllMocks();
   });
 
-  describe("explicit Authorization header", () => {
-    it("should return explicit Authorization header unchanged", async () => {
-      const headers = { Authorization: "Bearer explicit-token" };
-      const result = await resolveGitHubAuth(headers);
+  /** Makes the mocked `gh auth token` call fail or print the given output. */
+  async function mockGhCli(error: Error | null, stdout: string): Promise<void> {
+    const { exec } = await import("node:child_process");
+    (exec as unknown as Mock).mockImplementation(
+      (
+        _cmd: string,
+        _opts: unknown,
+        callback: (err: Error | null, stdout: string) => void,
+      ) => {
+        callback(error, stdout);
+      },
+    );
+  }
 
-      expect(result).toEqual({ Authorization: "Bearer explicit-token" });
-    });
+  it("keeps an explicit Authorization header in any case, with the other headers", async () => {
+    process.env.GITHUB_TOKEN = "github-token-value";
+    const cases: Array<{ label: string; headers: Record<string, string> }> = [
+      { label: "Authorization", headers: { Authorization: "Bearer explicit-token" } },
+      {
+        label: "lowercase authorization",
+        headers: { authorization: "Bearer explicit-token" },
+      },
+      {
+        label: "Authorization with another header",
+        headers: { Authorization: "Bearer explicit-token", "X-Custom-Header": "value" },
+      },
+    ];
 
-    it("should handle case-insensitive authorization header", async () => {
-      const headers = { authorization: "Bearer explicit-token" };
-      const result = await resolveGitHubAuth(headers);
-
-      expect(result).toEqual({ authorization: "Bearer explicit-token" });
-    });
-
-    it("should preserve other headers when Authorization is present", async () => {
-      const headers = {
-        Authorization: "Bearer explicit-token",
-        "X-Custom-Header": "value",
-      };
-      const result = await resolveGitHubAuth(headers);
-
-      expect(result).toEqual({
-        Authorization: "Bearer explicit-token",
-        "X-Custom-Header": "value",
-      });
-    });
+    for (const { label, headers } of cases) {
+      expect.soft(await resolveGitHubAuth({ ...headers }), label).toEqual(headers);
+    }
   });
 
-  describe("GITHUB_TOKEN environment variable", () => {
-    it("should use GITHUB_TOKEN when no explicit header", async () => {
-      process.env.GITHUB_TOKEN = "github-token-value";
+  it("uses GITHUB_TOKEN before GH_TOKEN and keeps the other headers", async () => {
+    const cases: Array<{
+      label: string;
+      env: { GITHUB_TOKEN?: string; GH_TOKEN?: string };
+      headers?: Record<string, string>;
+      expected: Record<string, string>;
+    }> = [
+      {
+        label: "GITHUB_TOKEN alone",
+        env: { GITHUB_TOKEN: "github-token-value" },
+        expected: { Authorization: "Bearer github-token-value" },
+      },
+      {
+        label: "GITHUB_TOKEN with another header",
+        env: { GITHUB_TOKEN: "github-token-value" },
+        headers: { "X-Custom-Header": "value" },
+        expected: {
+          Authorization: "Bearer github-token-value",
+          "X-Custom-Header": "value",
+        },
+      },
+      {
+        label: "GITHUB_TOKEN and GH_TOKEN",
+        env: { GITHUB_TOKEN: "github-token-value", GH_TOKEN: "gh-token-value" },
+        expected: { Authorization: "Bearer github-token-value" },
+      },
+      {
+        label: "GH_TOKEN alone",
+        env: { GH_TOKEN: "gh-token-value" },
+        expected: { Authorization: "Bearer gh-token-value" },
+      },
+    ];
 
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({ Authorization: "Bearer github-token-value" });
-    });
-
-    it("should use GITHUB_TOKEN with existing non-auth headers", async () => {
-      process.env.GITHUB_TOKEN = "github-token-value";
-      const headers = { "X-Custom-Header": "value" };
-
-      const result = await resolveGitHubAuth(headers);
-
-      expect(result).toEqual({
-        Authorization: "Bearer github-token-value",
-        "X-Custom-Header": "value",
-      });
-    });
-
-    it("should prefer GITHUB_TOKEN over GH_TOKEN", async () => {
-      process.env.GITHUB_TOKEN = "github-token-value";
-      process.env.GH_TOKEN = "gh-token-value";
-
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({ Authorization: "Bearer github-token-value" });
-    });
+    for (const { label, env, headers, expected } of cases) {
+      process.env = { ...originalEnv, ...env };
+      if (!env.GITHUB_TOKEN) delete process.env.GITHUB_TOKEN;
+      if (!env.GH_TOKEN) delete process.env.GH_TOKEN;
+      expect.soft(await resolveGitHubAuth(headers), label).toEqual(expected);
+    }
   });
 
-  describe("GH_TOKEN environment variable", () => {
-    it("should use GH_TOKEN as fallback when GITHUB_TOKEN not set", async () => {
-      process.env.GH_TOKEN = "gh-token-value";
-
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({ Authorization: "Bearer gh-token-value" });
-    });
-  });
-  describe("sanitized environment values", () => {
-    it("should use sanitized GITHUB_TOKEN values", async () => {
-      process.env.GITHUB_TOKEN = '"ghp_test_token"';
+  it("uses the sanitized value of either token variable", async () => {
+    for (const variable of ["GITHUB_TOKEN", "GH_TOKEN"] as const) {
+      process.env = { ...originalEnv };
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GH_TOKEN;
+      process.env[variable] = '"ghp_test_token"';
       sanitizeEnvironment(process.env);
 
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({ Authorization: "Bearer ghp_test_token" });
-    });
-
-    it("should use sanitized GH_TOKEN values", async () => {
-      process.env.GH_TOKEN = '"ghp_test_token"';
-      sanitizeEnvironment(process.env);
-
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({ Authorization: "Bearer ghp_test_token" });
-    });
+      expect
+        .soft(await resolveGitHubAuth(), variable)
+        .toEqual({ Authorization: "Bearer ghp_test_token" });
+    }
   });
 
-  describe("gh CLI fallback", () => {
-    it("should call gh CLI when no env vars are set", async () => {
-      const { exec } = await import("node:child_process");
-      (exec as any).mockImplementation(
-        (
-          _cmd: string,
-          _opts: unknown,
-          callback: (err: Error | null, stdout: string) => void,
-        ) => {
-          callback(null, "cli-token-value\n");
-        },
-      );
+  it("should call gh CLI when no env vars are set", async () => {
+    await mockGhCli(null, "cli-token-value\n");
 
-      const result = await resolveGitHubAuth();
+    const result = await resolveGitHubAuth();
 
-      expect(result).toEqual({ Authorization: "Bearer cli-token-value" });
-    });
-
-    it("should return empty object when gh CLI fails", async () => {
-      const { exec } = await import("node:child_process");
-      (exec as any).mockImplementation(
-        (
-          _cmd: string,
-          _opts: unknown,
-          callback: (err: Error | null, stdout: string) => void,
-        ) => {
-          callback(new Error("gh: command not found"), "");
-        },
-      );
-
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({});
-    });
-
-    it("should return empty object when gh CLI returns empty", async () => {
-      const { exec } = await import("node:child_process");
-      (exec as any).mockImplementation(
-        (
-          _cmd: string,
-          _opts: unknown,
-          callback: (err: Error | null, stdout: string) => void,
-        ) => {
-          callback(null, "");
-        },
-      );
-
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({});
-    });
+    expect(result).toEqual({ Authorization: "Bearer cli-token-value" });
   });
 
-  describe("no authentication available", () => {
-    it("should return empty object when nothing is available", async () => {
-      const { exec } = await import("node:child_process");
-      (exec as any).mockImplementation(
-        (
-          _cmd: string,
-          _opts: unknown,
-          callback: (err: Error | null, stdout: string) => void,
-        ) => {
-          callback(new Error("not authenticated"), "");
-        },
-      );
+  it("returns the original headers when no token is available", async () => {
+    const cases: Array<{
+      label: string;
+      error: Error | null;
+      stdout: string;
+      headers?: Record<string, string>;
+      expected: Record<string, string>;
+    }> = [
+      {
+        label: "gh is not installed",
+        error: new Error("gh: command not found"),
+        stdout: "",
+        expected: {},
+      },
+      { label: "gh prints nothing", error: null, stdout: "", expected: {} },
+      {
+        label: "gh is not authenticated",
+        error: new Error("not authenticated"),
+        stdout: "",
+        expected: {},
+      },
+      {
+        label: "gh is not authenticated, with another header",
+        error: new Error("not authenticated"),
+        stdout: "",
+        headers: { "X-Custom-Header": "value" },
+        expected: { "X-Custom-Header": "value" },
+      },
+    ];
 
-      const result = await resolveGitHubAuth();
-
-      expect(result).toEqual({});
-    });
-
-    it("should return original headers when no auth found", async () => {
-      const { exec } = await import("node:child_process");
-      (exec as any).mockImplementation(
-        (
-          _cmd: string,
-          _opts: unknown,
-          callback: (err: Error | null, stdout: string) => void,
-        ) => {
-          callback(new Error("not authenticated"), "");
-        },
-      );
-
-      const headers = { "X-Custom-Header": "value" };
-      const result = await resolveGitHubAuth(headers);
-
-      expect(result).toEqual({ "X-Custom-Header": "value" });
-    });
+    for (const { label, error, stdout, headers, expected } of cases) {
+      await mockGhCli(error, stdout);
+      expect.soft(await resolveGitHubAuth(headers), label).toEqual(expected);
+    }
   });
 });

@@ -20,68 +20,77 @@ const { normalizeUrl, LIBRARY_MAP, fetchContext7 } = require("./context7-provide
 };
 
 describe("normalizeUrl — python version segment", () => {
-  it("rewrites a versioned docs URL to the /3/ alias our qrels use", () => {
-    expect(normalizeUrl("python", "https://docs.python.org/3.16/library/pathlib.html")).toBe(
-      "https://docs.python.org/3/library/pathlib.html",
-    );
-  });
+  it("rewrites any versioned docs.python.org URL, and only that, to the /3/ alias our qrels use", () => {
+    const cases: Array<[label: string, library: string, raw: string, expected: string]> = [
+      [
+        "versioned docs URL",
+        "python",
+        "https://docs.python.org/3.16/library/pathlib.html",
+        "https://docs.python.org/3/library/pathlib.html",
+      ],
+      // Context7 retired /websites/python_3 and now ships per-version libraries,
+      // so the version we point at is expected to move. The rule must not need
+      // editing when it does.
+      ...["3.9", "3.10", "3.14", "3.16"].map(
+        (v): [string, string, string, string] => [
+          `any version: ${v}`,
+          "python",
+          `https://docs.python.org/${v}/library/json.html`,
+          "https://docs.python.org/3/library/json.html",
+        ],
+      ),
+      [
+        "already unversioned",
+        "python",
+        "https://docs.python.org/3/library/pathlib.html",
+        "https://docs.python.org/3/library/pathlib.html",
+      ],
+      [
+        "different host that looks similar",
+        "python",
+        "https://example.com/3.16/library/pathlib.html",
+        "https://example.com/3.16/library/pathlib.html",
+      ],
+      [
+        "other library",
+        "react",
+        "https://docs.python.org/3.16/library/pathlib.html",
+        "https://docs.python.org/3.16/library/pathlib.html",
+      ],
+    ];
 
-  it("handles any version, not just the one mapped today", () => {
-    // Context7 retired /websites/python_3 and now ships per-version libraries,
-    // so the version we point at is expected to move. The rule must not need
-    // editing when it does.
-    for (const v of ["3.9", "3.10", "3.14", "3.16"]) {
-      expect(normalizeUrl("python", `https://docs.python.org/${v}/library/json.html`)).toBe(
-        "https://docs.python.org/3/library/json.html",
-      );
+    for (const [label, library, raw, expected] of cases) {
+      expect.soft(normalizeUrl(library, raw), label).toBe(expected);
     }
   });
-
-  it("leaves an already-unversioned URL alone", () => {
-    expect(normalizeUrl("python", "https://docs.python.org/3/library/pathlib.html")).toBe(
-      "https://docs.python.org/3/library/pathlib.html",
-    );
-  });
-
-  it("does not rewrite a different host that happens to look similar", () => {
-    const url = "https://example.com/3.16/library/pathlib.html";
-    expect(normalizeUrl("python", url)).toBe(url);
-  });
-
-  it("does not apply the python rule to other libraries", () => {
-    const url = "https://docs.python.org/3.16/library/pathlib.html";
-    expect(normalizeUrl("react", url)).toBe(url);
-  });
 });
 
-describe("normalizeUrl — shared trimming", () => {
-  it("strips a trailing slash so fastapi URLs match the qrels", () => {
-    expect(normalizeUrl("fastapi", "https://fastapi.tiangolo.com/tutorial/path-params/")).toBe(
-      "https://fastapi.tiangolo.com/tutorial/path-params",
-    );
-  });
-
-  it("drops a query string", () => {
-    expect(normalizeUrl("vite", "https://vite.dev/guide/?x=1")).toBe("https://vite.dev/guide");
-  });
-});
-
-describe("normalizeUrl — tailwindcss source paths", () => {
-  it("rewrites a docs .mdx source path to the rendered page", () => {
-    expect(
-      normalizeUrl(
-        "tailwindcss",
-        "https://github.com/tailwindlabs/tailwindcss.com/blob/main/src/docs/flex.mdx",
-      ),
-    ).toBe("https://tailwindcss.com/docs/flex");
-  });
-
-  it("leaves non-docs source paths alone", () => {
-    // Blog posts and layout files have no qrel counterpart; rewriting them
-    // would invent a docs URL that does not exist.
+describe("normalizeUrl — shared trimming and tailwindcss source paths", () => {
+  it("trims URLs and maps tailwindcss docs sources to the rendered page", () => {
     const blog =
       "https://github.com/tailwindlabs/tailwindcss.com/blob/main/src/blog/tailwindcss-v2/index.mdx";
-    expect(normalizeUrl("tailwindcss", blog)).toBe(blog);
+    const cases: Array<[label: string, library: string, raw: string, expected: string]> = [
+      [
+        "trailing slash stripped so fastapi URLs match the qrels",
+        "fastapi",
+        "https://fastapi.tiangolo.com/tutorial/path-params/",
+        "https://fastapi.tiangolo.com/tutorial/path-params",
+      ],
+      ["query string dropped", "vite", "https://vite.dev/guide/?x=1", "https://vite.dev/guide"],
+      [
+        "tailwindcss docs .mdx source becomes the rendered page",
+        "tailwindcss",
+        "https://github.com/tailwindlabs/tailwindcss.com/blob/main/src/docs/flex.mdx",
+        "https://tailwindcss.com/docs/flex",
+      ],
+      // Blog posts and layout files have no qrel counterpart; rewriting them
+      // would invent a docs URL that does not exist.
+      ["tailwindcss non-docs source left alone", "tailwindcss", blog, blog],
+    ];
+
+    for (const [label, library, raw, expected] of cases) {
+      expect.soft(normalizeUrl(library, raw), label).toBe(expected);
+    }
   });
 });
 
@@ -121,42 +130,41 @@ describe("fetchContext7 — responses that must not look like an empty result", 
     );
   }
 
-  it("rejects a 202 for a library that is not finalized", async () => {
-    // What a retired library id actually returns. It parses as valid JSON and
-    // carries no snippets, so accepting it yields zero results and exit code 0.
-    context7Replies(202, {
-      error: "library_not_finalized",
-      message: "Library /websites/python_3 is still being processed.",
-    });
+  it("rejects every response that is not a usable result set", async () => {
+    const cases: Array<
+      [label: string, status: number, body: string | Record<string, unknown>, error: RegExp]
+    > = [
+      // What a retired library id actually returns. It parses as valid JSON and
+      // carries no snippets, so accepting it yields zero results and exit code 0.
+      [
+        "202 for a library that is not finalized",
+        202,
+        {
+          error: "library_not_finalized",
+          message: "Library /websites/python_3 is still being processed.",
+        },
+        /HTTP 202/,
+      ],
+      [
+        "429 quota response",
+        429,
+        { error: "Quota Exceeded", message: "Monthly quota exceeded." },
+        /HTTP 429/,
+      ],
+      // The same trap by another route: a success status with a failure payload.
+      [
+        "200 whose body carries an error",
+        200,
+        { error: "internal", message: "something went wrong" },
+        /returned error "internal"/,
+      ],
+      ["body that is not JSON", 200, "<html>gateway timeout</html>", /bad JSON/],
+    ];
 
-    await expect(fetchContext7("/websites/python_3", "pathlib")).rejects.toThrow(
-      /HTTP 202/,
-    );
-  });
-
-  it("rejects a 429 quota response", async () => {
-    context7Replies(429, { error: "Quota Exceeded", message: "Monthly quota exceeded." });
-
-    await expect(fetchContext7("/websites/react_dev", "hooks")).rejects.toThrow(
-      /HTTP 429/,
-    );
-  });
-
-  it("rejects a 200 whose body carries an error", async () => {
-    // The same trap by another route: a success status with a failure payload.
-    context7Replies(200, { error: "internal", message: "something went wrong" });
-
-    await expect(fetchContext7("/websites/react_dev", "hooks")).rejects.toThrow(
-      /returned error "internal"/,
-    );
-  });
-
-  it("rejects a body that is not JSON", async () => {
-    context7Replies(200, "<html>gateway timeout</html>");
-
-    await expect(fetchContext7("/websites/react_dev", "hooks")).rejects.toThrow(
-      /bad JSON/,
-    );
+    for (const [label, status, body, error] of cases) {
+      context7Replies(status, body);
+      await expect.soft(fetchContext7("/websites/python_3", "pathlib"), label).rejects.toThrow(error);
+    }
   });
 
   it("resolves a well-formed 200", async () => {

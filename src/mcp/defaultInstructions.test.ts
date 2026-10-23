@@ -2,18 +2,26 @@ import { describe, expect, it } from "vitest";
 import { buildDefaultInstructions } from "./defaultInstructions";
 
 describe("buildDefaultInstructions", () => {
-  it("explains how to index a missing library when indexing is available", () => {
-    const text = buildDefaultInstructions(false);
+  it("names the indexing tools only when the server can index", () => {
+    const cases = [
+      {
+        mode: "normal",
+        readOnly: false,
+        present: ["`scrape_docs`", "`get_job_info`"],
+        absent: ["cannot index new documentation"],
+      },
+      {
+        mode: "read-only",
+        readOnly: true,
+        present: ["cannot index new documentation"],
+        absent: ["`scrape_docs`", "`get_job_info`"],
+      },
+    ];
 
-    expect(text).toContain("`scrape_docs`");
-    expect(text).toContain("`get_job_info`");
-  });
-
-  it("leaves out indexing tools and says the server cannot index in read-only mode", () => {
-    const text = buildDefaultInstructions(true);
-
-    expect(text).not.toContain("`scrape_docs`");
-    expect(text).not.toContain("`get_job_info`");
-    expect(text).toContain("cannot index new documentation");
+    for (const { mode, readOnly, present, absent } of cases) {
+      const text = buildDefaultInstructions(readOnly);
+      for (const phrase of present) expect.soft(text, mode).toContain(phrase);
+      for (const phrase of absent) expect.soft(text, mode).not.toContain(phrase);
+    }
   });
 });

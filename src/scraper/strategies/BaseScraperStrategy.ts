@@ -159,8 +159,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     }
   }
 
-  abstract canHandle(url: string): boolean;
-
   protected options: BaseScraperStrategyOptions;
   protected config: AppConfig;
 
@@ -202,6 +200,17 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
   }
 
   /**
+   * Returns the URL that `scope` is measured from: the root after any redirect
+   * on its first fetch, or else the URL the scrape started from.
+   *
+   * @param options Scraper options naming the URL the scrape started from.
+   * @returns The scope base URL.
+   */
+  protected getScopeBaseUrl(options: ScraperOptions): URL {
+    return this.canonicalBaseUrl ?? new URL(options.url);
+  }
+
+  /**
    * Determines if a URL should be processed based on scope and include/exclude patterns in ScraperOptions.
    * Scope is checked first, then patterns.
    *
@@ -232,7 +241,7 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     if (!isInternalArchiveMember) {
       const scope = options.scope ?? "subpages";
       try {
-        const base = this.canonicalBaseUrl ?? new URL(options.url);
+        const base = this.getScopeBaseUrl(options);
         const target = new URL(url);
         if (!isInScope(base, target, scope)) return false;
       } catch {
@@ -606,6 +615,9 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
         const wasPage = result.isContainer !== true;
         await report(PageOutcome.Empty, {
           currentUrl: finalUrl,
+          // A stored row for a container was written by a version that kept
+          // containers as pages, so a refresh deletes it.
+          ...(!wasPage && item.pageId !== undefined ? { deleted: true } : {}),
           emptyPage: !wasPage
             ? undefined
             : {

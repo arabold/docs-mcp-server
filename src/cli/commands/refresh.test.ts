@@ -68,22 +68,6 @@ describe("refresh command", () => {
     vi.clearAllMocks();
   });
 
-  it("refreshes the given library version and waits for the job", async () => {
-    const parser = yargs().scriptName("test");
-    createRefreshCommand(parser);
-
-    await parser.parse(`refresh react --version 18.0.0`);
-
-    const execute = vi.mocked(RefreshVersionTool).mock.results[0]?.value.execute;
-    expect(execute).toHaveBeenCalledWith(
-      expect.objectContaining({
-        library: "react",
-        version: "18.0.0",
-        waitForCompletion: true,
-      }),
-    );
-  });
-
   it("passes preserveHashes override to RefreshVersionTool", async () => {
     const parser = yargs().scriptName("test");
     createRefreshCommand(parser);

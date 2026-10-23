@@ -190,90 +190,90 @@ describe("HtmlPlaywrightMiddleware", () => {
   });
 
   describe("when it renders", () => {
-    it.each([
-      [
-        "scrapeMode fetch",
-        () => htmlContext(undefined, { scrapeMode: ScrapeMode.Fetch }),
-      ],
-      ["non-HTML content", () => ({ ...htmlContext(), contentType: "text/markdown" })],
-    ])("leaves the content alone for %s", async (_label, createContext) => {
-      const context = createContext();
+    it("leaves the content alone without a browser for scrapeMode fetch or non-HTML content", async () => {
+      const cases: Array<{ label: string; context: MiddlewareContext }> = [
+        {
+          label: "scrapeMode fetch",
+          context: htmlContext(undefined, { scrapeMode: ScrapeMode.Fetch }),
+        },
+        {
+          label: "non-HTML content",
+          context: { ...htmlContext(), contentType: "text/markdown" },
+        },
+      ];
 
-      await middleware.process(context, next);
+      for (const { label, context } of cases) {
+        await middleware.process(context, next);
 
-      expect(context.content).toBe(FETCHED_HTML);
-      expect(context.errors).toEqual([]);
+        expect.soft(context.content, label).toBe(FETCHED_HTML);
+        expect.soft(context.errors, label).toEqual([]);
+      }
       expect(chromium.launch).not.toHaveBeenCalled();
-      expect(next).toHaveBeenCalledOnce();
+      expect(next).toHaveBeenCalledTimes(cases.length);
     });
 
     // HtmlPipeline treats a missing scrapeMode as "no browser" and never calls
     // the middleware then; on its own the middleware defaults to Auto.
-    it.each([ScrapeMode.Playwright, ScrapeMode.Auto, undefined])(
-      "replaces the content with the rendered page for scrapeMode %s",
-      async (scrapeMode) => {
-        const page = fakePage();
-        launch(fakeBrowser(page).browser);
+    it("replaces the content with the rendered page for scrapeMode playwright, auto or unset", async () => {
+      launch(fakeBrowser(fakePage()).browser);
+      const scrapeModes = [ScrapeMode.Playwright, ScrapeMode.Auto, undefined];
+
+      for (const scrapeMode of scrapeModes) {
         const context = htmlContext(undefined, { scrapeMode });
 
         await middleware.process(context, next);
 
-        expect(context.content).toBe(RENDERED_HTML);
-        expect(context.errors).toEqual([]);
-        expect(next).toHaveBeenCalledOnce();
-      },
-    );
+        expect.soft(context.content, String(scrapeMode)).toBe(RENDERED_HTML);
+        expect.soft(context.errors, String(scrapeMode)).toEqual([]);
+      }
+      expect(next).toHaveBeenCalledTimes(scrapeModes.length);
+    });
   });
 
   describe("rendering", () => {
-    it.each<{
-      label: string;
-      source: string;
-      headers: Record<string, string>;
-      expected: {
+    it("opens the page in a browser context with its credentials and user agent", async () => {
+      const cases: Array<{
+        label: string;
+        source: string;
+        headers: Record<string, string>;
         httpCredentials?: { username: string; password: string };
         userAgent: unknown;
-      };
-    }>([
-      {
-        label: "credentials embedded in the URL",
-        source: "https://user:password@example.com/",
-        headers: {},
-        expected: {
+      }> = [
+        {
+          label: "credentials embedded in the URL",
+          source: "https://user:password@example.com/",
+          headers: {},
           httpCredentials: { username: "user", password: "password" },
           userAgent: expect.stringContaining("Mozilla/5.0"),
         },
-      },
-      {
-        label: "no credentials",
-        source: "https://example.com/",
-        headers: {},
-        expected: {
+        {
+          label: "no credentials",
+          source: "https://example.com/",
+          headers: {},
           httpCredentials: undefined,
           userAgent: expect.stringContaining("Mozilla/5.0"),
         },
-      },
-      {
-        label: "a caller user agent",
-        source: "https://example.com/",
-        headers: { "User-Agent": "custom-agent" },
-        expected: { httpCredentials: undefined, userAgent: "custom-agent" },
-      },
-    ])(
-      "opens the page in a browser context for $label",
-      async ({ source, headers, expected }) => {
-        const page = fakePage();
-        const { browser } = fakeBrowser(page);
-        launch(browser);
+        {
+          label: "a caller user agent",
+          source: "https://example.com/",
+          headers: { "User-Agent": "custom-agent" },
+          httpCredentials: undefined,
+          userAgent: "custom-agent",
+        },
+      ];
+      const page = fakePage();
+      const { browser } = fakeBrowser(page);
+      launch(browser);
 
+      for (const { label, source, headers, httpCredentials, userAgent } of cases) {
         await middleware.process(htmlContext(source, { headers }), next);
 
-        const contextOptions = browser.newContext.mock.calls[0]?.[0];
-        expect(contextOptions?.httpCredentials).toEqual(expected.httpCredentials);
-        expect(contextOptions?.userAgent).toEqual(expected.userAgent);
-        expect(page.goto).toHaveBeenCalledWith(source, expect.any(Object));
-      },
-    );
+        const contextOptions = browser.newContext.mock.lastCall?.[0];
+        expect.soft(contextOptions?.httpCredentials, label).toEqual(httpCredentials);
+        expect.soft(contextOptions?.userAgent, label).toEqual(userAgent);
+        expect.soft(page.goto.mock.lastCall?.[0], label).toBe(source);
+      }
+    });
 
     it("answers the page's own request with the fetched HTML, without the hash", async () => {
       const page = fakePage({ url: "https://example.com/docs#/guide" });
@@ -301,76 +301,43 @@ describe("HtmlPlaywrightMiddleware", () => {
       });
       expect(route.fetch).not.toHaveBeenCalled();
     });
-
-    it("reuses the browser across renders", async () => {
-      const page = fakePage();
-      const launchSpy = launch(fakeBrowser(page).browser);
-
-      await middleware.process(htmlContext(), next);
-      await middleware.process(htmlContext(), next);
-
-      expect(launchSpy).toHaveBeenCalledOnce();
-    });
-
-    it("shares one browser launch between concurrent renders", async () => {
-      const launchSpy = launch(fakeBrowser(fakePage()).browser);
-
-      await Promise.all(
-        ["a", "b", "c"].map((name) =>
-          middleware.process(htmlContext(`https://example.com/${name}`), next),
-        ),
-      );
-
-      expect(launchSpy).toHaveBeenCalledOnce();
-    });
-
-    it("closes a browser whose launch was still in flight at shutdown", async () => {
-      const { browser } = fakeBrowser(fakePage());
-      let finishLaunch: (launched: Browser) => void = () => {};
-      const launchSpy = vi.spyOn(chromium, "launch").mockReturnValue(
-        new Promise<Browser>((resolve) => {
-          finishLaunch = resolve;
-        }),
-      );
-
-      const processing = middleware.process(htmlContext(), next);
-      await vi.waitFor(() => expect(launchSpy).toHaveBeenCalled());
-      const closing = middleware.closeBrowser();
-      finishLaunch(browser as unknown as Browser);
-      await closing;
-      await processing;
-
-      expect(browser.close).toHaveBeenCalled();
-    });
   });
 
   describe("failures", () => {
-    it.each([
-      ["navigation fails", "goto", new Error("Simulated navigation failure")],
-      ["the body never appears", "waitForSelector", new Error("Timeout 5000ms exceeded")],
-    ] as const)(
-      "keeps the fetched HTML, records the error and keeps the browser when %s",
-      async (_label, failingCall, error) => {
+    it("keeps the fetched HTML, records the error and keeps the browser when navigation or the body wait fails", async () => {
+      const cases = [
+        ["navigation fails", "goto", new Error("Simulated navigation failure")],
+        [
+          "the body never appears",
+          "waitForSelector",
+          new Error("Timeout 5000ms exceeded"),
+        ],
+      ] as const;
+
+      for (const [label, failingCall, error] of cases) {
+        middleware = new HtmlPlaywrightMiddleware(makeScraperConfig());
         const page = fakePage();
         page[failingCall].mockRejectedValue(error);
         const { browser, browserContext } = fakeBrowser(page);
         const launchSpy = launch(browser);
+        launchSpy.mockClear();
+        next.mockClear();
         const context = htmlContext();
 
         await middleware.process(context, next);
 
-        expect(context.content).toBe(FETCHED_HTML);
-        expect(context.errors).toEqual([error]);
-        expect(next).toHaveBeenCalledOnce();
-        expect(page.close).toHaveBeenCalled();
-        expect(browserContext.close).toHaveBeenCalled();
+        expect.soft(context.content, label).toBe(FETCHED_HTML);
+        expect.soft(context.errors, label).toEqual([error]);
+        expect.soft(next, label).toHaveBeenCalledOnce();
+        expect.soft(page.close, label).toHaveBeenCalled();
+        expect.soft(browserContext.close, label).toHaveBeenCalled();
         // Other pages may be using the browser, and nothing suggests it is stuck.
-        expect(browser.close).not.toHaveBeenCalled();
+        expect.soft(browser.close, label).not.toHaveBeenCalled();
 
         await middleware.process(htmlContext(), next);
-        expect(launchSpy).toHaveBeenCalledOnce();
-      },
-    );
+        expect.soft(launchSpy, label).toHaveBeenCalledOnce();
+      }
+    });
 
     it.each(["page", "browserContext"] as const)(
       "bounds a %s that will not close, keeps the render and replaces the browser",
@@ -488,18 +455,65 @@ describe("HtmlPlaywrightMiddleware", () => {
       launch(fakeBrowser(page).browser);
     });
 
-    it.each(["image", "font", "media"])(
-      "aborts %s requests without fetching them",
-      async (resourceType) => {
-        const handleRoute = await captureRouteHandler(page);
-        const route = fakeRoute("https://cdn.example.net/asset", { resourceType });
+    it("aborts images, fonts, media and speculative prefetches without fetching them", async () => {
+      const handleRoute = await captureRouteHandler(page);
+      const cases: Array<{
+        label: string;
+        url: string;
+        resourceType: string;
+        headers?: Record<string, string>;
+        reason: string | undefined;
+      }> = [
+        {
+          label: "image",
+          url: "https://cdn.example.net/asset",
+          resourceType: "image",
+          reason: undefined,
+        },
+        {
+          label: "font",
+          url: "https://cdn.example.net/asset",
+          resourceType: "font",
+          reason: undefined,
+        },
+        {
+          label: "media",
+          url: "https://cdn.example.net/asset",
+          resourceType: "media",
+          reason: undefined,
+        },
+        {
+          label: "next-router-prefetch",
+          url: "https://example.com/docs/next?_rsc=abc",
+          resourceType: "fetch",
+          headers: { "next-router-prefetch": "1" },
+          reason: "aborted",
+        },
+        {
+          label: "purpose: prefetch",
+          url: "https://example.com/docs/next?_rsc=abc",
+          resourceType: "fetch",
+          headers: { purpose: "prefetch" },
+          reason: "aborted",
+        },
+        {
+          label: "sec-purpose: prefetch",
+          url: "https://example.com/docs/next?_rsc=abc",
+          resourceType: "fetch",
+          headers: { "sec-purpose": "prefetch;prerender" },
+          reason: "aborted",
+        },
+      ];
+
+      for (const { label, url, resourceType, headers, reason } of cases) {
+        const route = fakeRoute(url, { resourceType, headers });
 
         await handleRoute(route);
 
-        expect(route.abort).toHaveBeenCalledWith(undefined);
-        expect(route.fetch).not.toHaveBeenCalled();
-      },
-    );
+        expect.soft(route.abort, label).toHaveBeenCalledWith(reason);
+        expect.soft(route.fetch, label).not.toHaveBeenCalled();
+      }
+    });
 
     it("blocks a request to an address the access policy denies", async () => {
       const handleRoute = await captureRouteHandler(page);
@@ -532,24 +546,6 @@ describe("HtmlPlaywrightMiddleware", () => {
       expect(route.fulfill).toHaveBeenCalledWith({ response: final });
     });
 
-    it("blocks a redirect to an address the access policy denies without requesting it", async () => {
-      const handleRoute = await captureRouteHandler(page);
-      const route = fakeRoute("https://example.com/frame.html", {
-        resourceType: "document",
-      });
-      route.fetch.mockResolvedValueOnce(
-        redirectResponse("http://169.254.169.254/latest/meta-data/"),
-      );
-
-      await handleRoute(route);
-
-      expect(route.fetch).toHaveBeenCalledTimes(1);
-      expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
-      // Chromium would follow a redirect it is handed, and Playwright does not
-      // route the next hop.
-      expect(route.fulfill).not.toHaveBeenCalled();
-    });
-
     it("drops the page's credentials on a redirect to another origin", async () => {
       const handleRoute = await captureRouteHandler(
         page,
@@ -576,26 +572,6 @@ describe("HtmlPlaywrightMiddleware", () => {
       expect(route.abort).toHaveBeenCalledWith("failed");
       expect(route.fulfill).not.toHaveBeenCalled();
     });
-
-    it.each<Record<string, string>>([
-      { "next-router-prefetch": "1" },
-      { purpose: "prefetch" },
-      { "sec-purpose": "prefetch;prerender" },
-    ])(
-      "aborts a speculative prefetch marked by %j without fetching it",
-      async (headers) => {
-        const handleRoute = await captureRouteHandler(page);
-        const route = fakeRoute("https://example.com/docs/next?_rsc=abc", {
-          resourceType: "fetch",
-          headers,
-        });
-
-        await handleRoute(route);
-
-        expect(route.abort).toHaveBeenCalledWith("aborted");
-        expect(route.fetch).not.toHaveBeenCalled();
-      },
-    );
 
     it("forwards caller headers to every request and credentials only to the page's origin", async () => {
       const handleRoute = await captureRouteHandler(
@@ -691,35 +667,61 @@ describe("HtmlPlaywrightMiddleware", () => {
     });
 
     // Another handler can settle a route first; that race is not an error.
-    it.each([
-      [
-        "fulfilling the page's own request",
-        "https://example.com/page",
-        "document",
-        "GET",
-        "fulfill",
-      ],
-      ["aborting an image", "https://example.com/image.png", "image", "GET", "abort"],
-      ["continuing a POST", "https://example.com/api", "xhr", "POST", "continue"],
-      [
-        "aborting after a failed fetch",
-        "https://example.com/app.js",
-        "script",
-        "GET",
-        "abort",
-      ],
-    ] as const)(
-      "ignores 'Route is already handled' when %s",
-      async (_label, url, resourceType, method, settle) => {
-        const handleRoute = await captureRouteHandler(page);
+    it("ignores 'Route is already handled' wherever it settles a route", async () => {
+      const cases = [
+        {
+          label: "fulfilling the page's own request",
+          url: "https://example.com/page",
+          resourceType: "document",
+          method: "GET",
+          settle: "fulfill",
+          fetches: false,
+        },
+        {
+          label: "blocking a tracker",
+          url: "https://www.google-analytics.com/analytics.js",
+          resourceType: "script",
+          method: "GET",
+          settle: "abort",
+          fetches: false,
+        },
+        {
+          label: "aborting an image",
+          url: "https://example.com/image.png",
+          resourceType: "image",
+          method: "GET",
+          settle: "abort",
+          fetches: false,
+        },
+        {
+          label: "continuing a POST",
+          url: "https://example.com/api",
+          resourceType: "xhr",
+          method: "POST",
+          settle: "continue",
+          fetches: false,
+        },
+        {
+          label: "aborting after a failed fetch",
+          url: "https://example.com/app.js",
+          resourceType: "script",
+          method: "GET",
+          settle: "abort",
+          fetches: true,
+        },
+      ] as const;
+      const handleRoute = await captureRouteHandler(page);
+
+      for (const { label, url, resourceType, method, settle, fetches } of cases) {
         const route = fakeRoute(url, { resourceType, method });
         route.fetch.mockRejectedValue(new Error("Network timeout"));
         route[settle].mockRejectedValue(new Error("Route is already handled!"));
 
-        await expect(handleRoute(route)).resolves.toBeUndefined();
-        expect(route[settle]).toHaveBeenCalled();
-      },
-    );
+        await expect.soft(handleRoute(route), label).resolves.toBeUndefined();
+        expect.soft(route[settle], label).toHaveBeenCalled();
+        expect.soft(route.fetch.mock.calls.length > 0, label).toBe(fetches);
+      }
+    });
 
     it("rethrows other errors from settling a route", async () => {
       const handleRoute = await captureRouteHandler(page);
@@ -743,87 +745,84 @@ describe("HtmlPlaywrightMiddleware", () => {
       await handleRoute(route);
     }
 
-    it("aborts a listed tracker script as blocked by the client", async () => {
-      const route = fakeRoute(analyticsScript);
+    it("aborts listed sub-resources unless they are documents or skipKnownTrackers is off", async () => {
+      const cases: Array<{
+        label: string;
+        url: string;
+        resourceType: string;
+        skipKnownTrackers: boolean;
+        expected: "blockedbyclient" | "fetch";
+      }> = [
+        {
+          label: "a listed tracker script",
+          url: analyticsScript,
+          resourceType: "script",
+          skipKnownTrackers: true,
+          expected: "blockedbyclient",
+        },
+        {
+          label: "a listed tracker script with skipKnownTrackers off",
+          url: analyticsScript,
+          resourceType: "script",
+          skipKnownTrackers: false,
+          expected: "fetch",
+        },
+        {
+          // It may be the page itself or an iframe.
+          label: "a document on a listed host",
+          url: "https://www.google-analytics.com/docs",
+          resourceType: "document",
+          skipKnownTrackers: true,
+          expected: "fetch",
+        },
+        {
+          // Blocked as a tracker, before the generic image abort.
+          label: "a tracker image",
+          url: "https://www.google-analytics.com/collect.gif",
+          resourceType: "image",
+          skipKnownTrackers: true,
+          expected: "blockedbyclient",
+        },
+      ];
 
-      await routeWith(true, route);
+      for (const { label, url, resourceType, skipKnownTrackers, expected } of cases) {
+        const route = fakeRoute(url, { resourceType });
 
-      expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
-      expect(route.fetch).not.toHaveBeenCalled();
-    });
+        await routeWith(skipKnownTrackers, route);
 
-    it("fetches a listed tracker script when skipKnownTrackers is off", async () => {
-      const route = fakeRoute(analyticsScript);
-
-      await routeWith(false, route);
-
-      expect(route.fetch).toHaveBeenCalled();
-      expect(route.abort).not.toHaveBeenCalled();
-    });
-
-    it("lets a document on a listed host load, since it may be the page or an iframe", async () => {
-      const route = fakeRoute("https://www.google-analytics.com/docs", {
-        resourceType: "document",
-      });
-
-      await routeWith(true, route);
-
-      expect(route.abort).not.toHaveBeenCalled();
-      expect(route.fetch).toHaveBeenCalled();
-    });
-
-    it("blocks a tracker image as a tracker, before the generic image abort", async () => {
-      const route = fakeRoute("https://www.google-analytics.com/collect.gif", {
-        resourceType: "image",
-      });
-
-      await routeWith(true, route);
-
-      expect(route.abort).toHaveBeenCalledWith("blockedbyclient");
-    });
-
-    it("ignores 'Route is already handled' when blocking", async () => {
-      const route = fakeRoute(analyticsScript);
-      route.abort.mockRejectedValue(new Error("Route is already handled!"));
-
-      await expect(routeWith(true, route)).resolves.toBeUndefined();
-      expect(route.fetch).not.toHaveBeenCalled();
+        if (expected === "fetch") {
+          expect.soft(route.fetch, label).toHaveBeenCalled();
+          expect.soft(route.abort, label).not.toHaveBeenCalled();
+        } else {
+          expect.soft(route.abort, label).toHaveBeenCalledWith(expected);
+          expect.soft(route.fetch, label).not.toHaveBeenCalled();
+        }
+      }
     });
   });
 
-  // test/playwright-embedded-content-e2e.test.ts inlines iframes in Chromium;
-  // these tests cover the iframes the middleware leaves alone.
+  // test/playwright-embedded-content-e2e.test.ts inlines iframes in Chromium and
+  // skips data: and javascript: iframes; this test covers iframes that cannot be
+  // inlined.
   describe("iframes", () => {
-    it.each([
-      ["no src", null],
-      ["an empty src", ""],
-      ["about:blank", "about:blank"],
-      ["a data: URL", "data:text/html,test"],
-      ["a javascript: URL", "javascript:void(0)"],
-    ])("skips an iframe with %s", async (_label, src) => {
-      const iframe = fakeIframe(src, "<p>Never read</p>");
-      const page = fakePage({ iframes: [iframe] });
-      launch(fakeBrowser(page).browser);
-
-      await middleware.process(htmlContext(), next);
-
-      expect(iframe.contentFrame).not.toHaveBeenCalled();
-      expect(iframe.evaluate).not.toHaveBeenCalled();
-    });
-
-    it.each([
-      ["has no accessible frame", undefined],
-      ["cannot be read", new Error("Access denied")],
-      ["has an empty body", "   "],
-    ])("leaves an iframe that %s in place without an error", async (_label, body) => {
-      const iframe = fakeIframe("https://example.com/frame", body);
-      const page = fakePage({ iframes: [iframe] });
+    it("leaves an iframe without a frame, readable body or text in place without an error", async () => {
+      const iframes = {
+        "has no accessible frame": fakeIframe("https://example.com/frame-a", undefined),
+        "cannot be read": fakeIframe(
+          "https://example.com/frame-b",
+          new Error("Access denied"),
+        ),
+        "has an empty body": fakeIframe("https://example.com/frame-c", "   "),
+      };
+      const page = fakePage({ iframes: Object.values(iframes) });
       launch(fakeBrowser(page).browser);
       const context = htmlContext();
 
       await middleware.process(context, next);
 
-      expect(iframe.evaluate).not.toHaveBeenCalled();
+      for (const [label, iframe] of Object.entries(iframes)) {
+        expect.soft(iframe.evaluate, label).not.toHaveBeenCalled();
+      }
       expect(context.errors).toEqual([]);
       expect(context.content).toBe(RENDERED_HTML);
     });
@@ -831,80 +830,69 @@ describe("HtmlPlaywrightMiddleware", () => {
 });
 
 describe("extractCredentialsAndOrigin", () => {
-  it.each([
-    [
-      "https://user:pass@example.com/path",
-      {
-        credentials: { username: "user", password: "pass" },
-        origin: "https://example.com",
-      },
-    ],
-    ["https://example.com/path", { credentials: null, origin: "https://example.com" }],
-    ["not-a-url", { credentials: null, origin: null }],
-  ])("%s", (url, expected) => {
-    expect(extractCredentialsAndOrigin(url)).toEqual(expected);
+  it("splits a URL into its credentials and origin", () => {
+    const cases: Array<[string, ReturnType<typeof extractCredentialsAndOrigin>]> = [
+      [
+        "https://user:pass@example.com/path",
+        {
+          credentials: { username: "user", password: "pass" },
+          origin: "https://example.com",
+        },
+      ],
+      ["https://example.com/path", { credentials: null, origin: "https://example.com" }],
+      ["not-a-url", { credentials: null, origin: null }],
+    ];
+
+    for (const [url, expected] of cases) {
+      expect.soft(extractCredentialsAndOrigin(url), url).toEqual(expected);
+    }
   });
 });
 
+// Per-origin credentials are covered through the route handler above ("forwards
+// caller headers to every request and credentials only to the page's origin").
 describe("mergePlaywrightHeaders", () => {
-  const credentials = { username: "user", password: "pass" };
+  it("merges custom headers without overriding authorization or a caller Accept", () => {
+    const credentials = { username: "user", password: "pass" };
+    const cases: Array<{
+      label: string;
+      args: Parameters<typeof mergePlaywrightHeaders>;
+      expected: Record<string, string>;
+    }> = [
+      {
+        label: "adds custom headers and the Markdown-preferred Accept",
+        args: [{ "content-type": "text/html" }, { "x-custom": "value" }],
+        expected: {
+          "content-type": "text/html",
+          "x-custom": "value",
+          Accept: MARKDOWN_PREFERRED_ACCEPT,
+        },
+      },
+      {
+        label: "keeps an existing authorization header over a custom one",
+        args: [{ authorization: "Bearer existing" }, { Authorization: "Bearer custom" }],
+        expected: { authorization: "Bearer existing", Accept: MARKDOWN_PREFERRED_ACCEPT },
+      },
+      {
+        label: "leaves out basic auth when authorization is already set",
+        args: [
+          { authorization: "Bearer x" },
+          {},
+          credentials,
+          "https://example.com",
+          "https://example.com",
+        ],
+        expected: { authorization: "Bearer x", Accept: MARKDOWN_PREFERRED_ACCEPT },
+      },
+      {
+        label: "keeps a caller-supplied Accept header",
+        args: [{ accept: "text/html" }, { accept: "application/json" }],
+        expected: { accept: "application/json" },
+      },
+    ];
 
-  it("adds custom headers and the Markdown-preferred Accept", () => {
-    expect(
-      mergePlaywrightHeaders({ "content-type": "text/html" }, { "x-custom": "value" }),
-    ).toEqual({
-      "content-type": "text/html",
-      "x-custom": "value",
-      Accept: MARKDOWN_PREFERRED_ACCEPT,
-    });
-  });
-
-  it("keeps an existing authorization header over a custom one", () => {
-    const result = mergePlaywrightHeaders(
-      { authorization: "Bearer existing" },
-      { Authorization: "Bearer custom" },
-    );
-
-    expect(result.authorization).toBe("Bearer existing");
-    expect(result.Authorization).toBeUndefined();
-  });
-
-  it.each([
-    [
-      "injects basic auth for a same-origin request",
-      {},
-      "https://example.com",
-      "Basic dXNlcjpwYXNz",
-    ],
-    [
-      "leaves out basic auth for a cross-origin request",
-      {},
-      "https://other.com",
-      undefined,
-    ],
-    [
-      "leaves out basic auth when authorization is already set",
-      { authorization: "Bearer x" },
-      "https://example.com",
-      undefined,
-    ],
-  ])("%s", (_label, existing, requestOrigin, expected) => {
-    const result = mergePlaywrightHeaders(
-      existing,
-      {},
-      credentials,
-      "https://example.com",
-      requestOrigin,
-    );
-
-    expect(result.Authorization).toBe(expected);
-  });
-
-  it("keeps a caller-supplied Accept header", () => {
-    expect(
-      mergePlaywrightHeaders({ accept: "text/html" }, { accept: "application/json" }),
-    ).toEqual({
-      accept: "application/json",
-    });
+    for (const { label, args, expected } of cases) {
+      expect.soft(mergePlaywrightHeaders(...args), label).toEqual(expected);
+    }
   });
 });

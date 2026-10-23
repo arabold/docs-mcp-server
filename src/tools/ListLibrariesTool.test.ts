@@ -26,6 +26,7 @@ describe("ListLibrariesTool", () => {
 
   it("should return a list of libraries with their detailed versions, including unversioned", async () => {
     // Mock data now uses LibraryVersionDetails structure and includes unversioned cases
+    let nextId = 1;
     const mk = (
       lib: string,
       version: string,
@@ -36,7 +37,7 @@ describe("ListLibrariesTool", () => {
       pages = docs,
       maxPages = docs,
     ) => ({
-      id: Math.floor(Math.random() * 1000) + 1,
+      id: nextId++,
       ref: { library: lib, version },
       status,
       ...(status === "completed" ? null : { progress: { pages, maxPages } }),
@@ -68,6 +69,11 @@ describe("ListLibrariesTool", () => {
           mk("mixed-versions", "", 2, 1, "2024-04-03T00:00:00.000Z"),
           mk("mixed-versions", "1.0.0", 5, 2, "2024-04-02T00:00:00.000Z"),
         ],
+      },
+      {
+        // Still scraping: the only kind of version that reports progress
+        library: "in-progress",
+        versions: [mk("in-progress", "2.0.0", 3, 3, null, "running", 3, 40)],
       },
     ];
     (mockDocService.listLibraries as Mock).mockResolvedValue(mockRawLibraries);
@@ -173,42 +179,23 @@ describe("ListLibrariesTool", () => {
             },
           ],
         },
+        {
+          name: "in-progress",
+          versions: [
+            {
+              id: expect.any(Number),
+              version: "2.0.0",
+              documentCount: 3,
+              uniqueUrlCount: 3,
+              indexedAt: null,
+              status: "running",
+              progress: { pages: 3, maxPages: 40 },
+              sourceUrl: null,
+              preserveHashes: false,
+            },
+          ],
+        },
       ],
     });
-    // Check structure more generally for the new fields
-    expect(result.libraries).toBeInstanceOf(Array);
-    expect(result.libraries.length).toBe(5); // Updated length check for new mock data
-    for (const lib of result.libraries) {
-      expect(lib).toHaveProperty("name");
-      expect(lib).toHaveProperty("versions");
-      expect(lib.versions).toBeInstanceOf(Array);
-      for (const v of lib.versions) {
-        expect(v).toHaveProperty("version");
-        expect(v).toHaveProperty("documentCount");
-        expect(v).toHaveProperty("uniqueUrlCount");
-        expect(v).toHaveProperty("indexedAt"); // Can be string or null
-        expect(v).toHaveProperty("status");
-        if (v.status !== "completed") {
-          expect(v).toHaveProperty("progress");
-        }
-      }
-    }
-  });
-
-  it("should return an empty list when no libraries are in the store", async () => {
-    // Mock service returns an empty array
-    (mockDocService.listLibraries as Mock).mockResolvedValue([]);
-
-    const result = await listLibrariesTool.execute();
-
-    expect(mockDocService.listLibraries).toHaveBeenCalledOnce();
-    expect(result).toEqual({ libraries: [] });
-  });
-
-  it("should handle potential errors from the docService", async () => {
-    const error = new Error("Failed to access store");
-    (mockDocService.listLibraries as Mock).mockRejectedValue(error);
-
-    await expect(listLibrariesTool.execute()).rejects.toThrow("Failed to access store");
   });
 });

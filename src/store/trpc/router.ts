@@ -71,6 +71,9 @@ export function createDataRouter(trpc: unknown) {
         },
       ),
 
+    // Searches the given version bucket as is, with "" meaning unversioned.
+    // Remote clients send it versions that are already resolved, so CLI
+    // `--exact-match` keeps working; the web UI uses `searchDocs` instead.
     search: tt.procedure
       .input(
         z.object({

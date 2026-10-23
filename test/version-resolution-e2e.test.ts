@@ -14,10 +14,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventBusService } from "../src/events";
 import { PipelineManager } from "../src/pipeline/PipelineManager";
 import { pipelineRouter } from "../src/pipeline/trpc/router";
+import { appRouter, createAppRouterContext } from "../src/services/appRouter";
+import { buildSystemInfo } from "../src/services/systemInfo";
 import { DocumentManagementService } from "../src/store/DocumentManagementService";
 import { normalizeVersionLabel } from "../src/store/types";
 import { RefreshVersionTool } from "../src/tools/RefreshVersionTool";
 import { ScrapeTool } from "../src/tools/ScrapeTool";
+import { SearchTool } from "../src/tools/SearchTool";
 import { type AppConfig, loadConfig } from "../src/utils/config";
 
 describe("Version resolution end-to-end", () => {
@@ -30,6 +33,7 @@ describe("Version resolution end-to-end", () => {
     tempDir = mkdtempSync(join(tmpdir(), "version-resolution-e2e-"));
     appConfig = loadConfig();
     appConfig.app.storePath = tempDir;
+    appConfig.app.embeddingModel = ""; // FTS-only: the read path searches without credentials
     docService = new DocumentManagementService(new EventBusService(), appConfig);
     await docService.initialize();
     // Never started: jobs stay QUEUED, so nothing is actually scraped and we can
@@ -183,6 +187,97 @@ describe("Version resolution end-to-end", () => {
       // ScrapeTool used to coerce "1.20" to "1.20.0", merging the two buckets.
       expect(partial).not.toBe(full);
       expect(await docService.listVersions(library)).toEqual(["1.20.0", "1.20"]);
+    });
+  });
+
+  describe("read path parity", () => {
+    const library = "readparity";
+    const pageUrls = {
+      "3.0.0": "https://example.com/v3/refine",
+      "4.1.0": "https://example.com/v4/refine",
+    };
+    let api: ReturnType<typeof appRouter.createCaller>;
+
+    beforeAll(async () => {
+      // The API the web UI and remote clients call, with a request's context.
+      api = appRouter.createCaller(
+        createAppRouterContext({
+          pipeline,
+          docService,
+          eventBus: new EventBusService(),
+          systemInfo: buildSystemInfo(
+            { enableWebInterface: true, enableMcpServer: true, enableApiServer: true, port: 0 },
+            appConfig,
+            "http://127.0.0.1:6280/mcp",
+            undefined,
+          ),
+        }),
+      );
+
+      for (const [version, url] of Object.entries(pageUrls)) {
+        await docService.addScrapeResult(library, version, 1, {
+          url,
+          title: "Refinements",
+          sourceContentType: "text/markdown",
+          contentType: "text/markdown",
+          textContent: "",
+          links: [],
+          errors: [],
+          chunks: [
+            {
+              types: ["text"],
+              content: "Use refine to add custom validation logic.",
+              section: { level: 1, path: ["Refinements"] },
+            },
+          ],
+        });
+      }
+    });
+
+    /**
+     * Searches through one real entry point and returns the URLs it found, so
+     * an entry point that skips version resolution shows up as other results.
+     */
+    const urlsFromEntryPoint = async (
+      entryPoint: "searchTool" | "trpc",
+      version: string | undefined,
+    ): Promise<string[]> => {
+      const request = { library, version, query: "refine" };
+      const { results } =
+        entryPoint === "searchTool"
+          ? // What the MCP search_docs tool runs.
+            await new SearchTool(docService).execute(request)
+          : // What the web UI's search playground calls.
+            await api.searchDocs(request);
+      return results.map((result) => result.url);
+    };
+
+    const READ_ENTRY_POINTS = ["searchTool", "trpc"] as const;
+
+    it.each([
+      // An MCP client omits the version; the playground's "Latest" sends "".
+      { requested: "no version", version: undefined, expected: pageUrls["4.1.0"] },
+      { requested: "an empty version", version: "", expected: pageUrls["4.1.0"] },
+      { requested: "a version range", version: "3.x", expected: pageUrls["3.0.0"] },
+    ])(
+      "resolves $requested to the same version at every entry point",
+      async ({ version, expected }) => {
+        const urls = await Promise.all(
+          READ_ENTRY_POINTS.map((e) => urlsFromEntryPoint(e, version)),
+        );
+
+        expect(urls).toEqual(READ_ENTRY_POINTS.map(() => [expected]));
+      },
+    );
+
+    it("keeps the store-level search literal for remote clients", async () => {
+      // Remote clients send `search` a version that is already resolved, so it
+      // searches the bucket it is given; "" is the unversioned one.
+      await expect(
+        api.search({ library, version: "", query: "refine" }),
+      ).resolves.toEqual([]);
+      const [result] = await api.search({ library, version: "3.0.0", query: "refine" });
+      expect(result.url).toBe(pageUrls["3.0.0"]);
     });
   });
 });
