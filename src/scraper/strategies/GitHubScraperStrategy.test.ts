@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mockSite } from "../../../test/mock-site";
 import { loadConfig } from "../../utils/config";
 import { FetchStatus } from "../fetcher/types";
-import type { ScraperOptions, ScraperProgressEvent } from "../types";
+import { PageOutcome, type ScraperOptions, type ScraperProgressEvent } from "../types";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
 import * as githubAuth from "./github-auth";
 
@@ -206,6 +206,51 @@ describe("GitHubScraperStrategy", () => {
     );
   });
 
+  describe("a single-file blob URL", () => {
+    const FILE_URL = blobUrl("docs/guide.md");
+    const RAW_PATH = "/owner/repo/main/docs/guide.md";
+
+    it("indexes exactly that file", async () => {
+      // No API or wiki route: discovering the repository would fail the test.
+      raw.page(RAW_PATH, "# Guide\n\nHow to use the library.", { type: "text/plain" });
+      const events: ScraperProgressEvent[] = [];
+
+      await new GitHubScraperStrategy(config).scrape(
+        options({ url: FILE_URL }),
+        async (event) => {
+          events.push(event);
+        },
+      );
+
+      expect(events.map((event) => event.result)).toEqual([
+        expect.objectContaining({
+          url: FILE_URL,
+          textContent: expect.stringContaining("How to use the library."),
+        }),
+      ]);
+    });
+
+    it("is refreshed with the file's stored ETag", async () => {
+      raw.page(RAW_PATH, "# Guide", { type: "text/plain", etag: '"v1"' });
+      const events: ScraperProgressEvent[] = [];
+
+      await new GitHubScraperStrategy(config).scrape(
+        options({
+          url: FILE_URL,
+          initialQueue: [{ url: FILE_URL, depth: 0, pageId: 1, etag: '"v1"' }],
+        }),
+        async (event) => {
+          events.push(event);
+        },
+      );
+
+      expect(raw.requestsTo(RAW_PATH).map((request) => request.ifNoneMatch)).toEqual([
+        '"v1"',
+      ]);
+      expect(events.map((event) => event.outcome)).toEqual([PageOutcome.Unchanged]);
+    });
+  });
+
   it("marks legacy github-file:// URLs as not found at any depth", async () => {
     const strategy = new GitHubScraperStrategy(config);
     const items = [
@@ -268,7 +313,7 @@ describe("GitHubScraperStrategy", () => {
     await expect(discover()).rejects.toThrow(/Failed to parse GitHub API response/);
   });
 
-  it("indexes the repository wiki, following links only within the wiki", async () => {
+  it("indexes the repository wiki under its page titles, following links only within the wiki", async () => {
     serveRepo([]);
     // The issues link leaves the wiki, so it is not followed.
     web
@@ -278,7 +323,12 @@ describe("GitHubScraperStrategy", () => {
       )
       .page(
         "/owner/repo/wiki/Guide",
-        '<html><head><title>Guide · owner/repo Wiki</title></head><body><p>How to use the library.</p><a href="/owner/repo/wiki">Home</a></body></html>',
+        '<html><head><title>Guide · owner/repo Wiki</title></head><body><p>How to use the library.</p><a href="/owner/repo/wiki">Home</a><a href="/owner/repo/wiki/Draft">Draft</a></body></html>',
+      )
+      // A page without text is not stored, but its record keeps the title.
+      .page(
+        "/owner/repo/wiki/Draft",
+        "<html><head><title>Draft · owner/repo Wiki</title></head><body></body></html>",
       );
     const events: ScraperProgressEvent[] = [];
 
@@ -290,6 +340,7 @@ describe("GitHubScraperStrategy", () => {
       REPO_URL,
       `${REPO_URL}/wiki`,
       `${REPO_URL}/wiki/Guide`,
+      `${REPO_URL}/wiki/Draft`,
     ]);
     const stored = events.flatMap((event) => (event.result ? [event.result] : []));
     expect(stored).toEqual([
@@ -304,6 +355,12 @@ describe("GitHubScraperStrategy", () => {
         textContent: expect.stringContaining("How to use the library."),
       }),
     ]);
+    expect(events.at(-1)?.emptyPage).toEqual(
+      expect.objectContaining({
+        url: `${REPO_URL}/wiki/Draft`,
+        title: "Draft · owner/repo Wiki",
+      }),
+    );
   });
 
   it("should resolve GitHub auth once per scrape", async () => {
