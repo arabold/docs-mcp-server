@@ -206,18 +206,6 @@ describe("GitHubScraperStrategy", () => {
     );
   });
 
-  it("reports a URL below the root that is neither a file nor a wiki page as not found", async () => {
-    const strategy = new GitHubScraperStrategy(config);
-
-    const result = await strategy.processItem(
-      { url: `${REPO_URL}/tree/main/wiki`, depth: 1 },
-      options(),
-    );
-
-    expect(result.status).toBe(FetchStatus.NOT_FOUND);
-    expect(result.links).toEqual([]);
-  });
-
   it("marks legacy github-file:// URLs as not found at any depth", async () => {
     const strategy = new GitHubScraperStrategy(config);
     const items = [

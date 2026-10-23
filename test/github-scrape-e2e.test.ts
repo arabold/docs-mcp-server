@@ -82,125 +82,91 @@ describe("GitHub scraping E2E", () => {
     });
   }
 
-  describe("a repository URL", () => {
-    beforeEach(() => {
-      serveRepo(["docs/guide.md"]);
-      web.page("/owner/repo/wiki", WIKI_HOME);
-    });
+  /** Sends the wiki URL to the repository page, as GitHub does when a repository has no wiki. */
+  function serveNoWiki(): void {
+    web
+      .redirect("/owner/repo/wiki", "/owner/repo", 302)
+      .page("/owner/repo", "<html><body><p>The repository page.</p></body></html>", {
+        etag: '"repo"',
+      });
+  }
 
-    it("stores the files and wiki pages, not the repository URL", async () => {
-      const job = await h.scrape({ url: REPO_URL });
+  it("stores only files and wiki pages, whatever URL the scrape starts from", async () => {
+    const guide = `${REPO_URL}/blob/main/docs/guide.md`;
+    const index = `${REPO_URL}/blob/main/src/index.ts`;
+    const cases: Array<{
+      label: string;
+      url: string;
+      serveWiki?: () => void;
+      wikiOutcome?: PageOutcome;
+      expected: string[];
+    }> = [
+      {
+        label: "repository URL",
+        url: REPO_URL,
+        serveWiki: () => web.page("/owner/repo/wiki", WIKI_HOME),
+        wikiOutcome: PageOutcome.Stored,
+        expected: [guide, index, WIKI_URL],
+      },
+      {
+        label: "branch tree URL",
+        url: `${REPO_URL}/tree/main`,
+        serveWiki: () => web.page("/owner/repo/wiki", WIKI_HOME),
+        wikiOutcome: PageOutcome.Stored,
+        expected: [guide, index, WIKI_URL],
+      },
+      {
+        // The scrape is narrowed to a directory, so the wiki is never asked for.
+        label: "directory tree URL",
+        url: `${REPO_URL}/tree/main/docs`,
+        expected: [guide],
+      },
+      {
+        label: "repository without a wiki",
+        url: REPO_URL,
+        serveWiki: serveNoWiki,
+        wikiOutcome: PageOutcome.Absent,
+        expected: [guide, index],
+      },
+    ];
 
-      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(await listedUrls()).toEqual([
-        `${REPO_URL}/blob/main/docs/guide.md`,
-        WIKI_URL,
-      ]);
-    });
+    for (const { label, url, serveWiki, wikiOutcome, expected } of cases) {
+      for (const site of [api, raw, web]) site.reset();
+      serveRepo(["docs/guide.md", "src/index.ts"]);
+      serveWiki?.();
 
-    it("discovers files added since the scrape on refresh", async () => {
-      await h.scrape({ url: REPO_URL });
-      serveRepo(["docs/guide.md", "docs/new.md"]);
+      const job = await h.scrape({ url }, { onExisting: "replace" });
 
-      const job = await h.refresh();
-
-      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(await listedUrls()).toEqual([
-        `${REPO_URL}/blob/main/docs/guide.md`,
-        `${REPO_URL}/blob/main/docs/new.md`,
-        WIKI_URL,
-      ]);
-    });
-
-    it("deletes the repository page an older version stored on refresh", async () => {
-      await h.scrape({ url: REPO_URL });
-      await storeLegacyEmptyPage(REPO_URL, 0);
-
-      const job = await h.refresh();
-
-      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(await listedUrls()).toEqual([
-        `${REPO_URL}/blob/main/docs/guide.md`,
-        WIKI_URL,
-      ]);
-    });
+      expect.soft(job.status, label).toBe(PipelineJobStatus.COMPLETED);
+      expect.soft(h.outcomeOf(WIKI_URL), label).toBe(wikiOutcome);
+      expect.soft(await listedUrls(), label).toEqual(expected);
+    }
   });
 
-  describe("a branch tree URL", () => {
-    const TREE_URL = `${REPO_URL}/tree/main`;
+  it("brings a refreshed repository to what a new scrape stores", async () => {
+    const guide = `${REPO_URL}/blob/main/docs/guide.md`;
+    serveRepo(["docs/guide.md"]);
+    serveNoWiki();
+    await h.scrape({ url: REPO_URL });
+    // Rows older versions stored: the repository URL, the wiki URL appended to
+    // a tree URL, and the repository page under the wiki URL with that page's
+    // ETag, which the refresh sends through the redirect.
+    await storeLegacyEmptyPage(REPO_URL, 0);
+    await storeLegacyEmptyPage(`${REPO_URL}/tree/main/wiki`, 1);
+    await storeLegacyEmptyPage(WIKI_URL, 1, '"repo"');
+    expect(await listedUrls()).toEqual([
+      REPO_URL,
+      guide,
+      `${REPO_URL}/tree/main/wiki`,
+      WIKI_URL,
+    ]);
+    serveRepo(["docs/guide.md", "docs/new.md"]);
 
-    beforeEach(() => {
-      // The URL names the branch, so the strategy never asks for the default.
-      serveBranch("main", ["docs/guide.md"]);
-      web.page("/owner/repo/wiki", WIKI_HOME);
-    });
-
-    it("stores the branch's files and the repository's wiki", async () => {
-      const job = await h.scrape({ url: TREE_URL });
-
-      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(await listedUrls()).toEqual([
-        `${REPO_URL}/blob/main/docs/guide.md`,
-        WIKI_URL,
-      ]);
-    });
-
-    it("deletes the empty pages an older version stored on refresh", async () => {
-      await h.scrape({ url: TREE_URL });
-      await storeLegacyEmptyPage(TREE_URL, 0);
-      await storeLegacyEmptyPage(`${TREE_URL}/wiki`, 1);
-
-      const job = await h.refresh();
-
-      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(await listedUrls()).toEqual([
-        `${REPO_URL}/blob/main/docs/guide.md`,
-        WIKI_URL,
-      ]);
-    });
-  });
-
-  describe("a repository without a wiki", () => {
-    beforeEach(() => {
-      serveRepo(["docs/guide.md"]);
-      // GitHub sends the wiki URL of a repository without a wiki to the
-      // repository page.
-      web
-        .redirect("/owner/repo/wiki", "/owner/repo", 302)
-        .page("/owner/repo", "<html><body><p>The repository page.</p></body></html>", {
-          etag: '"repo"',
-        });
-    });
-
-    it("stores no wiki page", async () => {
-      const job = await h.scrape({ url: REPO_URL });
-
-      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
-    });
-
-    it("deletes the wiki page an older version stored, even when the repository page is unchanged", async () => {
-      await h.scrape({ url: REPO_URL });
-      // Older versions stored the repository page under the wiki URL, with the
-      // repository page's ETag, which the refresh sends through the redirect.
-      await storeLegacyEmptyPage(WIKI_URL, 1, '"repo"');
-
-      const job = await h.refresh();
-
-      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(web.requestsTo("/owner/repo").at(-1)?.ifNoneMatch).toBe('"repo"');
-      expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
-    });
-  });
-
-  it("leaves the wiki out of a scrape narrowed to a directory", async () => {
-    serveBranch("main", ["docs/guide.md", "src/index.ts"]);
-
-    // No wiki route: requesting the wiki would fail the test.
-    const job = await h.scrape({ url: `${REPO_URL}/tree/main/docs` });
+    const job = await h.refresh();
 
     expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-    expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
+    expect(web.requestsTo("/owner/repo").at(-1)?.ifNoneMatch).toBe('"repo"');
+    expect(await listedUrls()).toEqual([guide, `${REPO_URL}/blob/main/docs/new.md`]);
   });
 
   describe("a single-file blob URL", () => {
