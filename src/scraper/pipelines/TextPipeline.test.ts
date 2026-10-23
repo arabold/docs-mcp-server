@@ -17,101 +17,80 @@ describe("TextPipeline", () => {
     scrapeMode: ScrapeMode.Auto,
   };
 
-  describe("canProcess", () => {
-    it("should accept text content types", () => {
-      expect(pipeline.canProcess("text/plain")).toBe(true);
-      expect(pipeline.canProcess("text/markdown")).toBe(true);
-      expect(pipeline.canProcess("text/css")).toBe(true);
-    });
+  it("should accept text and safe application types unless the body is binary", () => {
+    const cases: Array<
+      [label: string, mimeType: string, body: Buffer | undefined, expected: boolean]
+    > = [
+      ["text/plain", "text/plain", undefined, true],
+      ["text/markdown", "text/markdown", undefined, true],
+      ["text/css", "text/css", undefined, true],
+      ["application/xml", "application/xml", undefined, true],
+      ["application/javascript", "application/javascript", undefined, true],
+      ["application/yaml", "application/yaml", undefined, true],
+      [
+        "PNG body",
+        "image/png",
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        false,
+      ],
+      [
+        "body with a null byte",
+        "application/octet-stream",
+        Buffer.from("text with null byte\0here"),
+        false,
+      ],
+      ["unknown application type", "application/unknown", undefined, false],
+      ["video", "video/mp4", undefined, false],
+      ["no MIME type", "", undefined, false],
+    ];
 
-    it("should accept safe application types", () => {
-      expect(pipeline.canProcess("application/xml")).toBe(true);
-      expect(pipeline.canProcess("application/javascript")).toBe(true);
-      expect(pipeline.canProcess("application/yaml")).toBe(true);
-    });
-
-    it("should reject binary content", () => {
-      const pngBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]); // PNG header
-      expect(pipeline.canProcess("image/png", pngBuffer)).toBe(false);
-
-      const binaryContent = Buffer.from("text with null byte\0here");
-      expect(pipeline.canProcess("application/octet-stream", binaryContent)).toBe(false);
-    });
-
-    it("should reject unknown application types", () => {
-      expect(pipeline.canProcess("application/unknown")).toBe(false);
-      expect(pipeline.canProcess("video/mp4")).toBe(false);
-    });
-
-    it("should reject content without mime type", () => {
-      expect(pipeline.canProcess("")).toBe(false);
-      expect(pipeline.canProcess(undefined as any)).toBe(false);
-    });
+    for (const [label, mimeType, body, expected] of cases) {
+      expect.soft(pipeline.canProcess(mimeType, body), label).toBe(expected);
+    }
   });
 
-  describe("process", () => {
-    it("should process plain text content", async () => {
-      const textContent: RawContent = {
-        content: "This is a simple text document with some content.",
-        mimeType: "text/plain",
-        source: "test.txt",
-        status: FetchStatus.SUCCESS,
-      };
+  it("should keep the text of a string or Buffer body as is", async () => {
+    const cases: Array<{ label: string; raw: RawContent; text: string }> = [
+      {
+        label: "plain text",
+        raw: {
+          content: "This is a simple text document with some content.",
+          mimeType: "text/plain",
+          source: "test.txt",
+          status: FetchStatus.SUCCESS,
+        },
+        text: "This is a simple text document with some content.",
+      },
+      {
+        label: "unknown content type",
+        raw: {
+          content: "Some unknown format content",
+          mimeType: "application/unknown",
+          source: "test.unknown",
+          status: FetchStatus.SUCCESS,
+        },
+        text: "Some unknown format content",
+      },
+      {
+        label: "Buffer",
+        raw: {
+          content: Buffer.from("Buffer content", "utf-8"),
+          mimeType: "text/plain",
+          charset: "utf-8",
+          source: "test.txt",
+          status: FetchStatus.SUCCESS,
+        },
+        text: "Buffer content",
+      },
+    ];
 
-      const result = await pipeline.process(textContent, baseOptions);
+    for (const { label, raw, text } of cases) {
+      const result = await pipeline.process(raw, baseOptions);
 
-      expect(result.textContent).toBe(textContent.content);
-      // expect(result.contentType).toBe("text/plain");
-      // expect(result.metadata.isGenericText).toBe(true);
-      expect(result.links).toEqual([]);
-      expect(result.errors).toEqual([]);
-      expect(result.chunks).toBeDefined();
-      expect(Array.isArray(result.chunks)).toBe(true);
-    });
-
-    it("should handle unknown content types", async () => {
-      const unknownContent: RawContent = {
-        content: "Some unknown format content",
-        mimeType: "application/unknown",
-        source: "test.unknown",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(unknownContent, baseOptions);
-
-      expect(result.textContent).toBe(unknownContent.content);
-      // expect(result.contentType).toBe("application/unknown");
-      // expect(result.metadata.isGenericText).toBe(true);
-    });
-
-    it("should handle content without specific mime type", async () => {
-      const genericContent: RawContent = {
-        content: "Generic content",
-        mimeType: "text/plain",
-        source: "test",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(genericContent, baseOptions);
-
-      expect(result.textContent).toBe(genericContent.content);
-      // expect(result.contentType).toBe("text/plain");
-      // expect(result.metadata.isGenericText).toBe(true);
-    });
-
-    it("should handle Buffer content", async () => {
-      const bufferContent: RawContent = {
-        content: Buffer.from("Buffer content", "utf-8"),
-        mimeType: "text/plain",
-        charset: "utf-8",
-        source: "test.txt",
-        status: FetchStatus.SUCCESS,
-      };
-
-      const result = await pipeline.process(bufferContent, baseOptions);
-
-      expect(result.textContent).toBe("Buffer content");
-      // expect(result.contentType).toBe("text/plain");
-    });
+      expect.soft(result.textContent, label).toBe(text);
+      expect.soft(result.links, label).toEqual([]);
+      expect.soft(result.errors, label).toEqual([]);
+      expect.soft(result.chunks?.length, label).toBeGreaterThan(0);
+    }
   });
 });

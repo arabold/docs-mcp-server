@@ -219,9 +219,6 @@ export const DEFAULT_CONFIG = {
     weightFts: 1,
     vectorMultiplier: 10,
   },
-  sandbox: {
-    defaultTimeoutMs: 5000,
-  },
   assembly: {
     maxParentChainDepth: 10,
     childLimit: 3,
@@ -453,14 +450,6 @@ export const AppConfigSchema = z.object({
         .default(DEFAULT_CONFIG.search.vectorMultiplier),
     })
     .default(DEFAULT_CONFIG.search),
-  sandbox: z
-    .object({
-      defaultTimeoutMs: z.coerce
-        .number()
-        .int()
-        .default(DEFAULT_CONFIG.sandbox.defaultTimeoutMs),
-    })
-    .default(DEFAULT_CONFIG.sandbox),
   assembly: z
     .object({
       maxParentChainDepth: z.coerce
