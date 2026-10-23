@@ -211,27 +211,38 @@ export class DocumentNotFoundError extends StoreError {
 }
 
 /**
+ * Names an embedding model with its vector dimension for model-change messages.
+ * @param model - The model specification.
+ * @param dimension - The vector dimension, or null when it is not known.
+ * @returns The model, followed by its dimension when known.
+ */
+export function describeEmbeddingModel(model: string, dimension: string | null): string {
+  return dimension === null ? model : `${model} (${dimension} dimensions)`;
+}
+
+/**
  * Error thrown when the configured embedding model or vector dimension differs from the
  * values stored in the database metadata. This indicates that existing vectors are
  * incompatible with the new configuration and must be invalidated before proceeding.
  *
- * The CLI layer catches this error to either prompt the user interactively (TTY) or
- * fail startup entirely (non-interactive/MCP/stdio mode).
+ * The CLI layer catches this error to accept the change when `--accept-model-change`
+ * is set, prompt the user interactively (TTY), or fail startup entirely
+ * (non-interactive/MCP/stdio mode). A dimension is null when it is not known.
  */
 export class EmbeddingModelChangedError extends StoreError {
   constructor(
     public readonly previousModel: string,
-    public readonly previousDimension: string,
+    public readonly previousDimension: string | null,
     public readonly currentModel: string,
-    public readonly currentDimension: string,
+    public readonly currentDimension: string | null,
   ) {
     super(
       `Embedding model change detected:\n` +
-        `  Previous: ${previousModel} (${previousDimension} dimensions)\n` +
-        `  Current:  ${currentModel} (${currentDimension} dimensions)\n\n` +
+        `  Previous: ${describeEmbeddingModel(previousModel, previousDimension)}\n` +
+        `  Current:  ${describeEmbeddingModel(currentModel, currentDimension)}\n\n` +
         `All existing vectors are incompatible and must be invalidated.\n` +
-        `To confirm this change, start the server interactively (with a TTY connected)\n` +
-        `and follow the prompts.`,
+        `To confirm this change, start the server once with --accept-model-change\n` +
+        `(or DOCS_MCP_ACCEPT_MODEL_CHANGE=true), or start it in a terminal and answer the prompt.`,
     );
   }
 }

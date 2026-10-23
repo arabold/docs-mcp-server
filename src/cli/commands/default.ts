@@ -12,6 +12,7 @@ import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import {
   withAuthOptions,
+  withModelChangeOptions,
   withPublicUrlOptions,
   withServerIdentityOptions,
 } from "../options";
@@ -35,7 +36,7 @@ export function createDefaultAction(cli: Argv) {
       withAuthOptions(
         withServerIdentityOptions(
           withPublicUrlOptions(
-            yargs
+            withModelChangeOptions(yargs)
               .option("protocol", {
                 type: "string",
                 description: "Protocol for MCP server",
@@ -125,7 +126,12 @@ export function createDefaultAction(cli: Argv) {
               ? "recover"
               : "fail",
         },
-        onEmbeddingModelChange: handleEmbeddingModelChange,
+        onEmbeddingModelChange: (error, service) =>
+          handleEmbeddingModelChange(
+            error,
+            service,
+            argv.acceptModelChange as boolean | undefined,
+          ),
       });
       // Registered first, so shutdown closes it even when a server fails to start
       registerGlobalServices({ backend });

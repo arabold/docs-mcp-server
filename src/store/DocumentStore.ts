@@ -724,11 +724,17 @@ export class DocumentStore {
       stored.dimension !== null && stored.dimension !== currentDimension;
 
     if (modelChanged || dimensionChanged) {
+      // A changed model is not probed before confirmation, so the dimension of
+      // one that is neither a known model nor configured is not known yet
+      const currentDimensionKnown =
+        !modelChanged ||
+        this.embeddingConfig.dimensions !== null ||
+        isVectorDimensionExplicit(this.config);
       throw new EmbeddingModelChangedError(
         stored.model,
-        stored.dimension ?? "unknown",
+        stored.dimension,
         currentModel,
-        currentDimension,
+        currentDimensionKnown ? currentDimension : null,
       );
     }
   }

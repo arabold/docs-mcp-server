@@ -111,6 +111,7 @@ These variables are not settings in the config file:
 |:---------|:------------|
 | `DOCS_MCP_CONFIG` | Path to an explicit config file (see [Using an Explicit Config File](#using-an-explicit-config-file)). |
 | `DOCS_MCP_STORE_PATH` | Data directory (see [Data Directory](#data-directory)). |
+| `DOCS_MCP_ACCEPT_MODEL_CHANGE` | Set to `true` to confirm a changed embedding model without a prompt, deleting all stored vectors. `--accept-model-change` wins over it. See [Changing the Model](../guides/embedding-models.md#changing-the-model). |
 | `LOG_LEVEL` | `ERROR`, `WARN`, `INFO` or `DEBUG`. Without it, commands log at `INFO` in a terminal and `ERROR` otherwise. `--verbose` and `--quiet` win over it, and a server on stdio logs errors only. |
 | `OPENAI_API_KEY` and other provider credentials | Credentials of the embedding provider. See [Embedding Models](../guides/embedding-models.md#provider-credentials). |
 | `GITHUB_TOKEN`, `GH_TOKEN` | GitHub token for private repositories (see [GitHub Authentication](#github-authentication)). |
@@ -136,6 +137,7 @@ These flags set a configuration value for one run. `docs-mcp-server <command> --
 | `--server-instructions-file <path>` | `server.instructionsFile` |
 | `--embedding-model <model>` | `app.embeddingModel` |
 | `--read-only` | `app.readOnly` |
+| `--accept-model-change` | Confirm a changed embedding model without a prompt (default command, `mcp` and `worker`) |
 | `--no-telemetry` | `app.telemetryEnabled` |
 | `--auth-enabled` | `auth.enabled` |
 | `--auth-issuer-url <url>` | `auth.issuerUrl` |
