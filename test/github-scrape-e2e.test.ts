@@ -16,6 +16,9 @@ import { usePipelineHarness } from "./pipeline-harness";
 const LIBRARY = "github-lib";
 const VERSION = "1.0.0";
 const REPO_URL = "https://github.com/owner/repo";
+const WIKI_URL = `${REPO_URL}/wiki`;
+const WIKI_HOME =
+  '<html><head><title>Home · owner/repo Wiki · GitHub</title></head><body><p>Welcome to the wiki.</p></body></html>';
 
 describe("GitHub scraping E2E", () => {
   const api = mockSite("https://api.github.com");
@@ -32,6 +35,149 @@ describe("GitHub scraping E2E", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  /** Serves the default branch `main` with these files, each holding its own path. */
+  function serveRepo(paths: string[]): void {
+    api.page("/repos/owner/repo", JSON.stringify({ default_branch: "main" }), {
+      type: "application/json",
+    });
+    serveBranch("main", paths);
+  }
+
+  /** Serves `branch` through the tree API and its files through raw content. */
+  function serveBranch(branch: string, paths: string[]): void {
+    const tree = paths.map((path) => ({ path, type: "blob", sha: path, url: "" }));
+    api.page(
+      `/repos/owner/repo/git/trees/${branch}?recursive=1`,
+      JSON.stringify({ sha: "t", url: "", tree, truncated: false }),
+      { type: "application/json" },
+    );
+    for (const path of paths) {
+      raw.page(`/owner/repo/${branch}/${path}`, `# ${path}\n\nThe text of ${path}.`, {
+        type: "text/plain",
+      });
+    }
+  }
+
+  /** Lists the stored pages the way a client sees them. */
+  async function listedUrls(): Promise<string[]> {
+    const { pages } = await h.docService.listPages(LIBRARY, VERSION);
+    return pages.map((page) => page.url).sort();
+  }
+
+  /** Stores an empty page the way versions before containers were declared did. */
+  async function storeLegacyEmptyPage(url: string, depth: number): Promise<void> {
+    await h.docService.addEmptyPage(LIBRARY, VERSION, depth, {
+      url,
+      title: "",
+      sourceContentType: null,
+      contentType: null,
+      etag: null,
+      lastModified: null,
+    });
+  }
+
+  describe("a repository URL", () => {
+    beforeEach(() => {
+      serveRepo(["docs/guide.md"]);
+      web.page("/owner/repo/wiki", WIKI_HOME);
+    });
+
+    it("stores the files and wiki pages, not the repository URL", async () => {
+      const job = await h.scrape({ url: REPO_URL });
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await listedUrls()).toEqual([
+        `${REPO_URL}/blob/main/docs/guide.md`,
+        WIKI_URL,
+      ]);
+    });
+
+    it("discovers files added since the scrape on refresh", async () => {
+      await h.scrape({ url: REPO_URL });
+      serveRepo(["docs/guide.md", "docs/new.md"]);
+
+      const job = await h.refresh();
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await listedUrls()).toEqual([
+        `${REPO_URL}/blob/main/docs/guide.md`,
+        `${REPO_URL}/blob/main/docs/new.md`,
+        WIKI_URL,
+      ]);
+    });
+
+    it("deletes the repository page an older version stored on refresh", async () => {
+      await h.scrape({ url: REPO_URL });
+      await storeLegacyEmptyPage(REPO_URL, 0);
+
+      const job = await h.refresh();
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await listedUrls()).toEqual([
+        `${REPO_URL}/blob/main/docs/guide.md`,
+        WIKI_URL,
+      ]);
+    });
+  });
+
+  describe("a branch tree URL", () => {
+    const TREE_URL = `${REPO_URL}/tree/main`;
+
+    beforeEach(() => {
+      // The URL names the branch, so the strategy never asks for the default.
+      serveBranch("main", ["docs/guide.md"]);
+      web.page("/owner/repo/wiki", WIKI_HOME);
+    });
+
+    it("stores the branch's files and the repository's wiki", async () => {
+      const job = await h.scrape({ url: TREE_URL });
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await listedUrls()).toEqual([
+        `${REPO_URL}/blob/main/docs/guide.md`,
+        WIKI_URL,
+      ]);
+    });
+
+    it("deletes the empty pages an older version stored on refresh", async () => {
+      await h.scrape({ url: TREE_URL });
+      await storeLegacyEmptyPage(TREE_URL, 0);
+      await storeLegacyEmptyPage(`${TREE_URL}/wiki`, 1);
+
+      const job = await h.refresh();
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await listedUrls()).toEqual([
+        `${REPO_URL}/blob/main/docs/guide.md`,
+        WIKI_URL,
+      ]);
+    });
+  });
+
+  it("stores no wiki page for a repository without a wiki", async () => {
+    serveRepo(["docs/guide.md"]);
+    // GitHub sends the wiki URL of a repository without a wiki to the
+    // repository page.
+    web
+      .redirect("/owner/repo/wiki", "/owner/repo", 302)
+      .page("/owner/repo", "<html><body><p>The repository page.</p></body></html>");
+
+    const job = await h.scrape({ url: REPO_URL });
+
+    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+    expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
+  });
+
+  it("leaves the wiki out of a scrape narrowed to a directory", async () => {
+    serveBranch("main", ["docs/guide.md", "src/index.ts"]);
+
+    // No wiki route: requesting the wiki would fail the test.
+    const job = await h.scrape({ url: `${REPO_URL}/tree/main/docs` });
+
+    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+    expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
   });
 
   describe("a single-file blob URL", () => {
@@ -94,9 +240,7 @@ describe("GitHub scraping E2E", () => {
 
     expect(job.status).toBe(PipelineJobStatus.COMPLETED);
     expect(h.outcomeOf(`${REPO_URL}/wiki/Draft`)).toBe(PageOutcome.Empty);
-    const { pages } = await h.docService.listPages(LIBRARY, VERSION, {
-      contains: "/wiki",
-    });
+    const { pages } = await h.docService.listPages(LIBRARY, VERSION);
     expect(pages.map(({ url, title }) => ({ url, title }))).toEqual([
       { url: `${REPO_URL}/wiki`, title: "Home · owner/repo Wiki · GitHub" },
       { url: `${REPO_URL}/wiki/Draft`, title: "Draft · owner/repo Wiki · GitHub" },

@@ -580,6 +580,22 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
     }
   }
 
+  /**
+   * Measures scope from the repository root rather than the URL the scrape
+   * started from.
+   *
+   * A `/tree/<branch>` URL names a branch, but the files discovered under it
+   * live at `/blob/<branch>/...` and the wiki at `/wiki`, so measured from the
+   * tree URL the default `subpages` scope rejects every one of them.
+   *
+   * @param options Scraper options naming the GitHub URL the scrape started from.
+   * @returns The repository root URL.
+   */
+  protected override getScopeBaseUrl(options: ScraperOptions): URL {
+    const { owner, repo } = this.parseGitHubUrl(options.url);
+    return new URL(`/${owner}/${repo}`, options.url);
+  }
+
   async processItem(
     item: QueueItem,
     options: ScraperOptions,
@@ -629,10 +645,14 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
 
       const discoveredLinks: string[] = [];
 
-      // Discover wiki URL for full repo scrapes (will be processed by GitHubWikiScraperStrategy)
-      const wikiUrl = `${options.url.replace(/\/$/, "")}/wiki`;
-      discoveredLinks.push(wikiUrl);
-      logger.debug(`Discovered wiki URL: ${wikiUrl}`);
+      // The wiki belongs to the repository, not to a branch, so it is built
+      // from the repository root: appended to a tree URL it would name
+      // nothing. A scrape narrowed to a directory leaves the wiki out.
+      if (!repoInfo.subPath) {
+        const wikiUrl = new URL(`/${owner}/${repo}/wiki`, options.url).href;
+        discoveredLinks.push(wikiUrl);
+        logger.debug(`Discovered wiki URL: ${wikiUrl}`);
+      }
 
       // 3. Discover all files in the repository
       const { tree, resolvedBranch } = await this.fetchRepositoryTree(
@@ -659,10 +679,16 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       discoveredLinks.push(...fileUrls);
 
       logger.debug(
-        `Discovery complete: ${fileUrls.length} repo file(s) + 1 wiki URL = ${discoveredLinks.length} total URLs`,
+        `Discovery complete: ${fileUrls.length} repo file(s), ${discoveredLinks.length} total URLs`,
       );
 
-      return { url: item.url, links: discoveredLinks, status: FetchStatus.SUCCESS };
+      // The repository or tree URL only lists what to index; it is not a page.
+      return {
+        url: item.url,
+        links: discoveredLinks,
+        isContainer: true,
+        status: FetchStatus.SUCCESS,
+      };
     }
 
     // Handle HTTPS blob URLs at depth > 0 (from database during refresh or discovered files)
@@ -679,9 +705,11 @@ export class GitHubScraperStrategy extends BaseScraperStrategy {
       return { url: item.url, links: [], status: FetchStatus.SUCCESS };
     }
 
-    // For any other URLs at non-zero depth, return empty (shouldn't happen in practice)
-    logger.debug(`No further processing for URL at depth ${item.depth}: ${item.url}`);
-    return { url: item.url, links: [], status: FetchStatus.SUCCESS };
+    // Neither a file nor a wiki page, so nothing this strategy indexes. Older
+    // versions stored such URLs, such as a wiki URL appended to a tree URL, and
+    // reporting them as gone lets a refresh remove them.
+    logger.debug(`Not a GitHub file or wiki page at depth ${item.depth}: ${item.url}`);
+    return { url: item.url, links: [], status: FetchStatus.NOT_FOUND };
   }
 
   async scrape(

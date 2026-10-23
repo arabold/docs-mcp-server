@@ -291,6 +291,9 @@ export interface ScraperProgressEvent {
   };
   /** Database page ID (for refresh operations or tracking) */
   pageId?: number;
-  /** Indicates this page was deleted (404 during refresh or broken link) */
+  /**
+   * Indicates the stored page is to be deleted: a 404 during refresh or a
+   * broken link, or a container that an older version stored as a page.
+   */
   deleted?: boolean;
 }

@@ -104,6 +104,15 @@ export class GitHubWikiProcessor {
         return { url: currentUrl, links: [], status: rawContent.status };
       }
 
+      // GitHub redirects the wiki of a repository that has none to the
+      // repository page. That page is not a wiki page, so the wiki is absent.
+      const wikiInfo = this.parseGitHubWikiUrl(currentUrl);
+      const wikiPath = `/${wikiInfo.owner}/${wikiInfo.repo}/wiki`;
+      if (!new URL(rawContent.source, currentUrl).pathname.startsWith(wikiPath)) {
+        logger.debug(`Wiki URL redirected out of the wiki: ${currentUrl}`);
+        return { url: currentUrl, links: [], status: FetchStatus.NOT_FOUND };
+      }
+
       // Process content through appropriate pipeline
       let processed: PipelineResult | undefined;
 
@@ -133,7 +142,6 @@ export class GitHubWikiProcessor {
       }
 
       const parsedUrl = new URL(currentUrl);
-      const wikiInfo = this.parseGitHubWikiUrl(currentUrl);
 
       // Extract links from the processed content
       const links = processed.links || [];
@@ -167,7 +175,7 @@ export class GitHubWikiProcessor {
             // Only include links that are within the same wiki
             return (
               linkUrl.hostname === parsedUrl.hostname &&
-              linkUrl.pathname.startsWith(`/${wikiInfo.owner}/${wikiInfo.repo}/wiki`)
+              linkUrl.pathname.startsWith(wikiPath)
             );
           } catch {
             return false;

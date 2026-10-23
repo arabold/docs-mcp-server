@@ -389,11 +389,11 @@ describe("GitHubScraperStrategy", () => {
       );
     });
 
-    it("should return empty links for non-depth-0 items", async () => {
-      const item = { url: "https://github.com/owner/repo", depth: 1 };
+    it("reports a URL below the root that is neither a file nor a wiki page as not found", async () => {
+      const item = { url: "https://github.com/owner/repo/tree/main/wiki", depth: 1 };
       const result = await strategy.processItem(item, options);
 
-      expect(result.status).toBe(FetchStatus.SUCCESS);
+      expect(result.status).toBe(FetchStatus.NOT_FOUND);
       expect(result.links).toEqual([]);
     });
 
