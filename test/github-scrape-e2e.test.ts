@@ -67,13 +67,17 @@ describe("GitHub scraping E2E", () => {
   }
 
   /** Stores an empty page the way versions before containers were declared did. */
-  async function storeLegacyEmptyPage(url: string, depth: number): Promise<void> {
+  async function storeLegacyEmptyPage(
+    url: string,
+    depth: number,
+    etag: string | null = null,
+  ): Promise<void> {
     await h.docService.addEmptyPage(LIBRARY, VERSION, depth, {
       url,
       title: "",
       sourceContentType: null,
       contentType: null,
-      etag: null,
+      etag,
       lastModified: null,
     });
   }
@@ -156,18 +160,37 @@ describe("GitHub scraping E2E", () => {
     });
   });
 
-  it("stores no wiki page for a repository without a wiki", async () => {
-    serveRepo(["docs/guide.md"]);
-    // GitHub sends the wiki URL of a repository without a wiki to the
-    // repository page.
-    web
-      .redirect("/owner/repo/wiki", "/owner/repo", 302)
-      .page("/owner/repo", "<html><body><p>The repository page.</p></body></html>");
+  describe("a repository without a wiki", () => {
+    beforeEach(() => {
+      serveRepo(["docs/guide.md"]);
+      // GitHub sends the wiki URL of a repository without a wiki to the
+      // repository page.
+      web
+        .redirect("/owner/repo/wiki", "/owner/repo", 302)
+        .page("/owner/repo", "<html><body><p>The repository page.</p></body></html>", {
+          etag: '"repo"',
+        });
+    });
 
-    const job = await h.scrape({ url: REPO_URL });
+    it("stores no wiki page", async () => {
+      const job = await h.scrape({ url: REPO_URL });
 
-    expect(job.status).toBe(PipelineJobStatus.COMPLETED);
-    expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
+    });
+
+    it("deletes the wiki page an older version stored, even when the repository page is unchanged", async () => {
+      await h.scrape({ url: REPO_URL });
+      // Older versions stored the repository page under the wiki URL, with the
+      // repository page's ETag, which the refresh sends through the redirect.
+      await storeLegacyEmptyPage(WIKI_URL, 1, '"repo"');
+
+      const job = await h.refresh();
+
+      expect(job.status).toBe(PipelineJobStatus.COMPLETED);
+      expect(web.requestsTo("/owner/repo").at(-1)?.ifNoneMatch).toBe('"repo"');
+      expect(await listedUrls()).toEqual([`${REPO_URL}/blob/main/docs/guide.md`]);
+    });
   });
 
   it("leaves the wiki out of a scrape narrowed to a directory", async () => {

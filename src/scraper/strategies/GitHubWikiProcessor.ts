@@ -99,18 +99,22 @@ export class GitHubWikiProcessor {
         headers,
       });
 
-      // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
-      if (rawContent.status !== FetchStatus.SUCCESS) {
-        return { url: currentUrl, links: [], status: rawContent.status };
-      }
-
       // GitHub redirects the wiki of a repository that has none to the
       // repository page. That page is not a wiki page, so the wiki is absent.
+      // Checked before the status: a refresh sends the stored ETag through the
+      // redirect, and a row that older versions stored for the repository page
+      // carries that page's ETag, so the answer can be a 304 from outside the
+      // wiki.
       const wikiInfo = this.parseGitHubWikiUrl(currentUrl);
       const wikiPath = `/${wikiInfo.owner}/${wikiInfo.repo}/wiki`;
       if (!new URL(rawContent.source, currentUrl).pathname.startsWith(wikiPath)) {
         logger.debug(`Wiki URL redirected out of the wiki: ${currentUrl}`);
         return { url: currentUrl, links: [], status: FetchStatus.NOT_FOUND };
+      }
+
+      // Return the status directly - BaseScraperStrategy handles NOT_MODIFIED and NOT_FOUND
+      if (rawContent.status !== FetchStatus.SUCCESS) {
+        return { url: currentUrl, links: [], status: rawContent.status };
       }
 
       // Process content through appropriate pipeline
