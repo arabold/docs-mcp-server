@@ -25,34 +25,35 @@ describe("AutoDetectFetcher", () => {
     vi.restoreAllMocks();
   });
 
-  it("should fall back to browser fetcher on TLS certificate errors", async () => {
-    vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(
-      new TlsCertificateError(source, "UNABLE_TO_VERIFY_LEAF_SIGNATURE"),
-    );
-    const browserSpy = vi
-      .spyOn(BrowserFetcher.prototype, "fetch")
-      .mockResolvedValue(browserResult);
+  it("falls back to the browser fetcher on a TLS error, a challenge, a 403 or a 429", async () => {
+    const cases: Array<{ label: string; error: Error }> = [
+      {
+        label: "a TLS certificate error",
+        error: new TlsCertificateError(source, "UNABLE_TO_VERIFY_LEAF_SIGNATURE"),
+      },
+      { label: "a challenge", error: new ChallengeError(source, 403, "cloudflare") },
+      ...[403, 429].map((statusCode) => ({
+        label: `a ${statusCode} response`,
+        error: new HttpStatusError(
+          `Failed to fetch ${source} after 1 attempts: Request failed with status code ${statusCode}`,
+          true,
+          statusCode,
+        ),
+      })),
+    ];
 
-    const fetcher = new AutoDetectFetcher(scraperConfig);
-    const result = await fetcher.fetch(source);
+    for (const { label, error } of cases) {
+      vi.restoreAllMocks();
+      vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(error);
+      const browserSpy = vi
+        .spyOn(BrowserFetcher.prototype, "fetch")
+        .mockResolvedValue(browserResult);
 
-    expect(result).toBe(browserResult);
-    expect(browserSpy).toHaveBeenCalledWith(source, undefined);
-  });
+      const result = await new AutoDetectFetcher(scraperConfig).fetch(source);
 
-  it("should fall back to browser fetcher on challenge errors", async () => {
-    vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(
-      new ChallengeError(source, 403, "cloudflare"),
-    );
-    const browserSpy = vi
-      .spyOn(BrowserFetcher.prototype, "fetch")
-      .mockResolvedValue(browserResult);
-
-    const fetcher = new AutoDetectFetcher(scraperConfig);
-    const result = await fetcher.fetch(source);
-
-    expect(result).toBe(browserResult);
-    expect(browserSpy).toHaveBeenCalledWith(source, undefined);
+      expect.soft(result, label).toBe(browserResult);
+      expect.soft(browserSpy, label).toHaveBeenCalledWith(source, undefined);
+    }
   });
 
   it("should fail with the challenge when the browser does not get past it either", async () => {
@@ -70,63 +71,31 @@ describe("AutoDetectFetcher", () => {
     expect(browserSpy).toHaveBeenCalledTimes(1);
   });
 
-  it.each([403, 429])(
-    "should fall back to browser fetcher on a %i response",
-    async (statusCode) => {
-      vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(
-        new HttpStatusError(
-          `Failed to fetch ${source} after 1 attempts: Request failed with status code ${statusCode}`,
+  it("rethrows any other failure without falling back", async () => {
+    const cases: Array<{ label: string; url: string; error: Error }> = [
+      {
+        // The error message embeds the source url, so a substring check would
+        // misread this connection failure as an anti-bot block.
+        label: "a connection failure whose url mentions 403",
+        url: "https://example.com/errors/403",
+        error: new ScraperError(
+          "Failed to fetch https://example.com/errors/403 after 3 attempts: connect ECONNREFUSED",
           true,
-          statusCode,
         ),
-      );
-      const browserSpy = vi
-        .spyOn(BrowserFetcher.prototype, "fetch")
-        .mockResolvedValue(browserResult);
+      },
+      { label: "a 404", url: source, error: new HttpStatusError("not found", true, 404) },
+      { label: "an unexpected error", url: source, error: new Error("boom") },
+    ];
 
-      const fetcher = new AutoDetectFetcher(scraperConfig);
+    for (const { label, url, error } of cases) {
+      vi.restoreAllMocks();
+      vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(error);
+      const browserSpy = vi.spyOn(BrowserFetcher.prototype, "fetch");
 
-      expect(await fetcher.fetch(source)).toBe(browserResult);
-      expect(browserSpy).toHaveBeenCalledWith(source, undefined);
-    },
-  );
-
-  it("should not fall back when a non-anti-bot failure mentions 403 in the url", async () => {
-    // The error message embeds the source url, so a substring check would
-    // misread this connection failure as an anti-bot block.
-    const errorSource = "https://example.com/errors/403";
-    const error = new ScraperError(
-      `Failed to fetch ${errorSource} after 3 attempts: connect ECONNREFUSED`,
-      true,
-    );
-    vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(error);
-    const browserSpy = vi.spyOn(BrowserFetcher.prototype, "fetch");
-
-    const fetcher = new AutoDetectFetcher(scraperConfig);
-
-    await expect(fetcher.fetch(errorSource)).rejects.toThrow(error);
-    expect(browserSpy).not.toHaveBeenCalled();
-  });
-
-  it("should not fall back on a 404", async () => {
-    const error = new HttpStatusError("not found", true, 404);
-    vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(error);
-    const browserSpy = vi.spyOn(BrowserFetcher.prototype, "fetch");
-
-    const fetcher = new AutoDetectFetcher(scraperConfig);
-
-    await expect(fetcher.fetch(source)).rejects.toThrow(error);
-    expect(browserSpy).not.toHaveBeenCalled();
-  });
-
-  it("should rethrow non-fallback errors", async () => {
-    const error = new Error("boom");
-    vi.spyOn(HttpFetcher.prototype, "fetch").mockRejectedValue(error);
-    const browserSpy = vi.spyOn(BrowserFetcher.prototype, "fetch");
-
-    const fetcher = new AutoDetectFetcher(scraperConfig);
-
-    await expect(fetcher.fetch(source)).rejects.toThrow(error);
-    expect(browserSpy).not.toHaveBeenCalled();
+      await expect
+        .soft(new AutoDetectFetcher(scraperConfig).fetch(url), label)
+        .rejects.toBe(error);
+      expect.soft(browserSpy, label).not.toHaveBeenCalled();
+    }
   });
 });

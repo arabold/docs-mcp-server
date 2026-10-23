@@ -158,36 +158,40 @@ describe("ai-release-notes", () => {
     },
   );
 
-  it.each([
-    [
-      "prints something other than release notes",
-      fakeAgent(`process.stdout.write("Sorry, I cannot help with that.")`),
-      /did not return release notes/,
-    ],
-    [
-      "prints an error under a heading",
-      fakeAgent(
-        `process.stdout.write("### Error\\n\\nUnable to generate release notes.")`,
-      ),
-      /did not return release notes/,
-    ],
-    [
-      "prints a heading without bullets",
-      fakeAgent(`process.stdout.write("### Features\\n")`),
-      /did not return release notes/,
-    ],
-    [
-      "exits with an error",
-      fakeAgent(
-        `process.stderr.write("No authentication information found."); process.exit(1)`,
-      ),
-      /exited with code 1: No authentication information found/,
-    ],
-    ["is not installed", ["release-notes-agent-that-is-not-installed"], /ENOENT/],
-  ])("rejects when the agent %s", async (_case, command, error) => {
-    await expect(
-      renderReleaseNotes({ source: "=== Pull request #12", command }),
-    ).rejects.toThrow(error);
+  it("rejects agent output that is not release notes, and agents that fail", async () => {
+    const cases: Array<[label: string, command: string[], error: RegExp]> = [
+      [
+        "prints something other than release notes",
+        fakeAgent(`process.stdout.write("Sorry, I cannot help with that.")`),
+        /did not return release notes/,
+      ],
+      [
+        "prints an error under a heading",
+        fakeAgent(
+          `process.stdout.write("### Error\\n\\nUnable to generate release notes.")`,
+        ),
+        /did not return release notes/,
+      ],
+      [
+        "prints a heading without bullets",
+        fakeAgent(`process.stdout.write("### Features\\n")`),
+        /did not return release notes/,
+      ],
+      [
+        "exits with an error",
+        fakeAgent(
+          `process.stderr.write("No authentication information found."); process.exit(1)`,
+        ),
+        /exited with code 1: No authentication information found/,
+      ],
+      ["is not installed", ["release-notes-agent-that-is-not-installed"], /ENOENT/],
+    ];
+
+    for (const [label, command, error] of cases) {
+      await expect
+        .soft(renderReleaseNotes({ source: "=== Pull request #12", command }), label)
+        .rejects.toThrow(error);
+    }
   });
 
   it("gives the agent an empty directory and only its own variables", async () => {
@@ -226,31 +230,33 @@ describe("ai-release-notes", () => {
     expect(body.join("\n\n")).toBe("### Features\n\n- Adds a thing to the CLI (#12)\n");
   });
 
-  it.each([
-    ["is empty", ""],
-    ["holds something other than release notes", "Sorry, I cannot help with that."],
-    ["holds an error under a heading", "### Error\n\nUnable to generate release notes."],
-    ["has a heading without bullets", "### Features\n"],
-    ["is missing", undefined],
-  ])("keeps the conventional notes when the notes file %s", async (name, content) => {
-    const notesFile = path.join(workDir, `release-notes-${name.replaceAll(" ", "-")}.md`);
-    if (content !== undefined) {
-      writeFileSync(notesFile, content);
+  it("keeps the conventional notes when the notes file is unusable or not set", async () => {
+    type NotesFile = { content: string } | "missing" | "unset";
+    const cases: Array<[label: string, file: NotesFile, warnings: number]> = [
+      ["is empty", { content: "" }, 1],
+      ["holds something other than release notes", { content: "Sorry, I cannot help with that." }, 1],
+      [
+        "holds an error under a heading",
+        { content: "### Error\n\nUnable to generate release notes." },
+        1,
+      ],
+      ["has a heading without bullets", { content: "### Features\n" }, 1],
+      ["is missing", "missing", 1],
+      // A dry run sets no notes file, so there is nothing to warn about.
+      ["is not set, as in a dry run", "unset", 0],
+    ];
+
+    for (const [label, file, warnings] of cases) {
+      const notesFile = path.join(workDir, `release-notes-${label.replaceAll(" ", "-")}.md`);
+      if (typeof file === "object") {
+        writeFileSync(notesFile, file.content);
+      }
+      const context = releaseContext(file === "unset" ? {} : { RELEASE_NOTES_FILE: notesFile });
+
+      const notes = await generateNotes({}, context);
+
+      expect.soft(notes, label).toBe(await generateConventionalNotes({}, context));
+      expect.soft(context.logger.warn, label).toHaveBeenCalledTimes(warnings);
     }
-    const context = releaseContext({ RELEASE_NOTES_FILE: notesFile });
-
-    const notes = await generateNotes({}, context);
-
-    expect(notes).toBe(await generateConventionalNotes({}, context));
-    expect(context.logger.warn).toHaveBeenCalledOnce();
-  });
-
-  it("keeps the conventional notes without a notes file, as in a dry run", async () => {
-    const context = releaseContext();
-
-    const notes = await generateNotes({}, context);
-
-    expect(notes).toBe(await generateConventionalNotes({}, context));
-    expect(context.logger.warn).not.toHaveBeenCalled();
   });
 });

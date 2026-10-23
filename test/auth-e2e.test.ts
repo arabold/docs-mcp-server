@@ -162,7 +162,11 @@ describe("Authentication End-to-End", () => {
       const response = await mcpRequest(`Bearer ${token}`);
 
       expect(response.status).toBe(401);
-      expect(response.headers.get("www-authenticate")).toContain('error="invalid_token"');
+      const challenge = response.headers.get("www-authenticate");
+      expect(challenge).toContain('error="invalid_token"');
+      expect(challenge).toContain(
+        `resource_metadata="${publicUrl}/.well-known/oauth-protected-resource/mcp"`,
+      );
     });
 
     it("rejects a token signed with a key the issuer does not publish", async () => {

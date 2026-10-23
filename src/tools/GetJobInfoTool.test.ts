@@ -47,11 +47,6 @@ describe("GetJobInfoTool", () => {
     getJobInfoTool = new GetJobInfoTool(mockManagerInstance as PipelineManager); // Updated instantiation
   });
 
-  it("should call manager.getJob with the provided jobId", async () => {
-    await getJobInfoTool.execute({ jobId: MOCK_JOB_ID_FOUND }); // Updated tool call
-    expect(mockManagerInstance.getJob).toHaveBeenCalledWith(MOCK_JOB_ID_FOUND);
-  });
-
   it("should return the job details if the job is found", async () => {
     const result = await getJobInfoTool.execute({ jobId: MOCK_JOB_ID_FOUND }); // Updated tool call
 

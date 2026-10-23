@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as loggerModule from "../utils/logger";
 import {
   applyGlobalCliOutputMode,
-  formatStructuredOutput,
   renderScalarOutput,
   renderStructuredOutput,
   renderTextOutput,
@@ -37,77 +36,94 @@ describe("CLI output helpers", () => {
     vi.restoreAllMocks();
   });
 
-  it("defaults to error log level in non-interactive mode", () => {
+  /** Makes stdout and stderr look like a terminal or not. */
+  function setInteractive(interactive: boolean): void {
+    for (const stream of [process.stdout, process.stderr]) {
+      Object.defineProperty(stream, "isTTY", { value: interactive, configurable: true });
+    }
+  }
+
+  it("picks the log level from --verbose, --quiet and the terminal", () => {
     const setLogLevelSpy = vi.spyOn(loggerModule, "setLogLevel");
+    const cases: Array<{
+      label: string;
+      interactive: boolean;
+      options: { verbose?: boolean; quiet?: boolean };
+      expected: loggerModule.LogLevel;
+    }> = [
+      {
+        label: "no terminal",
+        interactive: false,
+        options: {},
+        expected: loggerModule.LogLevel.ERROR,
+      },
+      {
+        label: "terminal",
+        interactive: true,
+        options: {},
+        expected: loggerModule.LogLevel.INFO,
+      },
+      {
+        label: "--quiet",
+        interactive: true,
+        options: { quiet: true },
+        expected: loggerModule.LogLevel.ERROR,
+      },
+      {
+        label: "--verbose",
+        interactive: false,
+        options: { verbose: true },
+        expected: loggerModule.LogLevel.DEBUG,
+      },
+    ];
 
-    Object.defineProperty(process.stdout, "isTTY", { value: false, configurable: true });
-    Object.defineProperty(process.stderr, "isTTY", { value: false, configurable: true });
-
-    applyGlobalCliOutputMode({});
-
-    expect(setLogLevelSpy).toHaveBeenCalledWith(loggerModule.LogLevel.ERROR);
+    for (const { label, interactive, options, expected } of cases) {
+      setLogLevelSpy.mockClear();
+      setInteractive(interactive);
+      applyGlobalCliOutputMode(options);
+      expect.soft(setLogLevelSpy.mock.lastCall?.[0], label).toBe(expected);
+    }
   });
 
-  it("defaults to info log level in interactive mode", () => {
-    const setLogLevelSpy = vi.spyOn(loggerModule, "setLogLevel");
-
-    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
-
-    applyGlobalCliOutputMode({});
-
-    expect(setLogLevelSpy).toHaveBeenCalledWith(loggerModule.LogLevel.INFO);
-  });
-
-  it("sets error log level for quiet mode", () => {
-    const setLogLevelSpy = vi.spyOn(loggerModule, "setLogLevel");
-
-    applyGlobalCliOutputMode({ quiet: true });
-
-    expect(setLogLevelSpy).toHaveBeenCalledWith(loggerModule.LogLevel.ERROR);
-  });
-
-  it("sets debug log level for verbose mode", () => {
-    const setLogLevelSpy = vi.spyOn(loggerModule, "setLogLevel");
-
-    applyGlobalCliOutputMode({ verbose: true });
-
-    expect(setLogLevelSpy).toHaveBeenCalledWith(loggerModule.LogLevel.DEBUG);
-  });
-
-  it("formats structured output as TOON", () => {
-    const output = formatStructuredOutput({ users: [{ id: 1, name: "Ada" }] }, "toon");
-
-    expect(output).toContain("users[1]{id,name}:");
-  });
-
-  it("renders structured output to stdout", () => {
+  it("writes each kind of output to stdout in the requested format", () => {
     const writeSpy = vi
       .spyOn(process.stdout, "write")
-      .mockImplementation((() => true) as any);
+      .mockImplementation((() => true) as typeof process.stdout.write);
+    const cases: Array<{ label: string; render: () => void; expected: string }> = [
+      {
+        label: "structured, no format",
+        render: () => renderStructuredOutput({ ok: true }, {}),
+        expected: '{\n  "ok": true\n}\n',
+      },
+      {
+        label: "structured as YAML",
+        render: () => renderStructuredOutput({ ok: true }, { output: "yaml" }),
+        expected: "ok: true\n",
+      },
+      {
+        label: "structured as TOON",
+        render: () =>
+          renderStructuredOutput({ users: [{ id: 1, name: "Ada" }] }, { output: "toon" }),
+        expected: "users[1]{id,name}:\n  1,Ada\n",
+      },
+      {
+        label: "scalar, no format",
+        render: () => renderScalarOutput(42, {}),
+        expected: "42\n",
+      },
+      {
+        label: "plain text",
+        render: () => renderTextOutput("hello"),
+        expected: "hello\n",
+      },
+    ];
 
-    renderStructuredOutput({ ok: true }, {});
-
-    expect(writeSpy).toHaveBeenCalledWith(expect.stringContaining('"ok": true'));
-  });
-
-  it("renders scalar values as plain text when no format is requested", () => {
-    const writeSpy = vi
-      .spyOn(process.stdout, "write")
-      .mockImplementation((() => true) as any);
-
-    renderScalarOutput(42, {});
-
-    expect(writeSpy).toHaveBeenCalledWith("42\n");
-  });
-
-  it("keeps plain text output unstructured", () => {
-    const writeSpy = vi
-      .spyOn(process.stdout, "write")
-      .mockImplementation((() => true) as any);
-
-    renderTextOutput("hello");
-
-    expect(writeSpy).toHaveBeenCalledWith("hello\n");
+    for (const { label, render, expected } of cases) {
+      writeSpy.mockClear();
+      render();
+      expect
+        .soft(writeSpy.mock.calls.map(([chunk]) => chunk).join(""), label)
+        .toBe(expected);
+    }
   });
 });

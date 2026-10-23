@@ -125,18 +125,6 @@ export function resolveProtocol(protocol: string): "stdio" | "http" {
 }
 
 /**
- * Validates that --resume flag is only used with in-process workers.
- */
-export function validateResumeFlag(resume: boolean, serverUrl?: string): void {
-  if (resume && serverUrl) {
-    throw new Error(
-      "--resume flag is incompatible with --server-url. " +
-        "External workers handle their own job recovery.",
-    );
-  }
-}
-
-/**
  * Validates and parses port number
  */
 export function validatePort(portString: string): number {
