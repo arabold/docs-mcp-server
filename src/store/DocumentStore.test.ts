@@ -2872,6 +2872,20 @@ describe("DocumentStore - Embedding Model Change Safety", () => {
       expect(() => store.checkEmbeddingModelChange()).not.toThrow();
     });
 
+    it("reports no current dimension for a changed model whose dimension is not known yet", async () => {
+      const dbPath = join(tempDir, "changed-to-unknown.sqlite");
+      store = await createStore("openai:text-embedding-3-small", undefined, dbPath);
+      await store.shutdown();
+
+      const cfg = loadConfig();
+      cfg.app.embeddingModel = "openai:custom-unprobed-model";
+      store = new DocumentStore(dbPath, cfg);
+      const error = await store.initialize().catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(EmbeddingModelChangedError);
+      expect(error).toMatchObject({ previousDimension: "1536", currentDimension: null });
+    });
+
     // 9.7 Test checkEmbeddingModelChange does not throw on first run (no stored metadata)
     it("should not throw on first run when no metadata exists", async () => {
       // Create store but clear metadata to simulate first run

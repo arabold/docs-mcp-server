@@ -8,13 +8,14 @@ import { openBackend } from "../../services/backend";
 import { TelemetryEvent, telemetry } from "../../telemetry";
 import { loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
-import { withPublicUrlOptions } from "../options";
+import { withModelChangeOptions, withPublicUrlOptions } from "../options";
 import { registerGlobalServices } from "../services";
 import {
   type CliContext,
   createAppServerConfig,
   ensurePlaywrightBrowsersInstalled,
   getEventBus,
+  handleEmbeddingModelChange,
   validateHost,
   validatePort,
 } from "../utils";
@@ -25,7 +26,7 @@ export function createWorkerCommand(cli: Argv) {
     "Start a background worker for processing scraping jobs",
     (yargs) => {
       return withPublicUrlOptions(
-        yargs
+        withModelChangeOptions(yargs)
           .option("port", {
             type: "string",
             description: "Port for worker API",
@@ -82,6 +83,12 @@ export function createWorkerCommand(cli: Argv) {
           jobs: {
             interruptedJobs: ((argv.resume as boolean) ?? true) ? "recover" : "fail",
           },
+          onEmbeddingModelChange: (error, service) =>
+            handleEmbeddingModelChange(
+              error,
+              service,
+              argv.acceptModelChange as boolean | undefined,
+            ),
         });
         // Registered first, so shutdown closes it even when a server fails to start
         registerGlobalServices({ backend });

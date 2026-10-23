@@ -54,6 +54,16 @@ const envBoolean = z
   .pipe(z.boolean());
 
 /**
+ * Parses a boolean environment variable the way configuration settings are
+ * parsed: "false", "0", "no", "off" and blank are false, anything else true.
+ * @param value - The variable's value.
+ * @returns The boolean, or undefined when the variable is unset.
+ */
+export function parseEnvBoolean(value: string | undefined): boolean | undefined {
+  return value === undefined ? undefined : envBoolean.parse(value);
+}
+
+/**
  * Treats blank strings (empty env vars, `--flag ""`) as an absent value so that
  * defaults and fallbacks apply instead of an empty string.
  */

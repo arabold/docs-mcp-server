@@ -12,6 +12,7 @@ import { loadConfig } from "../../utils/config";
 import { LogLevel, logger, setLogLevel } from "../../utils/logger";
 import {
   withAuthOptions,
+  withModelChangeOptions,
   withPublicUrlOptions,
   withServerIdentityOptions,
 } from "../options";
@@ -35,7 +36,7 @@ export function createMcpCommand(cli: Argv) {
       withAuthOptions(
         withServerIdentityOptions(
           withPublicUrlOptions(
-            yargs
+            withModelChangeOptions(yargs)
               .option("protocol", {
                 type: "string",
                 description: "Protocol for MCP server",
@@ -118,7 +119,12 @@ export function createMcpCommand(cli: Argv) {
           // No job recovery here; a read-only server runs no jobs, so it leaves
           // interrupted ones to the process that does
           jobs: { interruptedJobs: appConfig.app.readOnly ? "leave" : "fail" },
-          onEmbeddingModelChange: handleEmbeddingModelChange,
+          onEmbeddingModelChange: (error, service) =>
+            handleEmbeddingModelChange(
+              error,
+              service,
+              argv.acceptModelChange as boolean | undefined,
+            ),
         });
         // Registered first, so shutdown closes it even when a server fails to start
         registerGlobalServices({ backend });

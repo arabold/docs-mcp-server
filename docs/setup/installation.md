@@ -68,6 +68,8 @@ docker run --rm -i \
 
 `-e DOCS_MCP_SERVER_PROTOCOL=stdio` has the same effect. `-e DOCS_MCP_SERVER_PROTOCOL=auto` selects stdio when the container has no terminal and HTTP otherwise.
 
+**Changing the embedding model:** A container has no terminal to confirm a [model change](../guides/embedding-models.md#changing-the-model), so the server refuses to start. Add `-e DOCS_MCP_ACCEPT_MODEL_CHANGE=true` for one start (with Docker Compose, put it in `.env`) to confirm the change and delete the stored vectors, then remove it again.
+
 **Local folders:** A container reads only the folders you mount into it, and the image has no `Documents` folder for the default allowed root. Mount the folder and set `DOCS_MCP_SCRAPER_SECURITY_FILE_ACCESS_ALLOWED_ROOTS` to its path inside the container. [Basic Usage](../guides/basic-usage.md#docker) shows the command.
 
 **Non-root runtime:** The container runs as the unprivileged `node` user (uid 1000). Named volumes, such as `docs-mcp-data` and `docs-mcp-config` above, take this ownership automatically. If you bind-mount a host directory instead (`-v ./data:/data`), make it writable by uid 1000: run `chown 1000:1000 ./data` once, or start the container with `--user "$(id -u):$(id -g)"` to match your host user.

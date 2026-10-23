@@ -82,3 +82,19 @@ export function withServerIdentityOptions<T>(yargs: Argv<T>) {
       alias: "serverInstructionsFile",
     });
 }
+
+/**
+ * Declare `--accept-model-change`, which confirms a changed embedding model
+ * without a prompt. Without the flag, `DOCS_MCP_ACCEPT_MODEL_CHANGE` decides.
+ * @param yargs - The command's builder.
+ * @returns The builder, for chaining.
+ */
+export function withModelChangeOptions<T>(yargs: Argv<T>) {
+  return yargs.option("accept-model-change", {
+    type: "boolean",
+    description:
+      "Confirm a changed embedding model without a prompt; deletes all stored vectors",
+    defaultDescription: "false",
+    alias: "acceptModelChange",
+  });
+}

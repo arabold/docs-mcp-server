@@ -125,7 +125,7 @@ To fix the dimension instead, set `embeddings.vectorDimension` in the config fil
 
 Vectors from different models, or of different dimensions, cannot be compared. The database records the model and dimension in use, and the server checks them at every start.
 
-When they changed, a server started in a terminal (the default command or `mcp`) asks for confirmation:
+When they changed, a server started in a terminal (the default command, `mcp` or `worker`) asks for confirmation:
 
 ```
 ⚠️  Embedding model change detected:
@@ -139,9 +139,9 @@ When they changed, a server started in a terminal (the default command or `mcp`)
    Proceed with model change? (y/N)
 ```
 
-Answering anything but `y` stops startup and changes nothing.
+Answering anything but `y` stops startup and changes nothing. The prompt leaves out the dimension of a new model the server does not know yet; it detects that dimension after you confirm.
 
-A server without a terminal, as under an MCP client or in a container, fails to start with an error that describes the change, and so does every other command, such as `worker`, `web` or `scrape`. Start the server (`docs-mcp-server` or `docs-mcp-server mcp`) once in a terminal with the new model to confirm the change. For Docker, run the image's default command once with `-it` on the same volumes.
+A server without a terminal, as under an MCP client or in a container, fails to start with an error that describes the change, and so does every other command, such as `web` or `scrape`. To confirm the change without a terminal, start the server (the default command, `mcp` or `worker`) once with `--accept-model-change` or `DOCS_MCP_ACCEPT_MODEL_CHANGE=true`, for example `-e DOCS_MCP_ACCEPT_MODEL_CHANGE=true` with Docker. Remove it afterwards: while it is set, every later model change also deletes the stored vectors without asking.
 
 After you confirm:
 
