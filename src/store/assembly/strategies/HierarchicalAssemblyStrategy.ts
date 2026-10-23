@@ -211,14 +211,51 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
 
   /**
    * Selects the subtree that the chunk at `index` opens, through its closing chunk, and
-   * the opening and closing chunks of the scopes that enclose it.
+   * the opening and closing chunks of the scopes that enclose it. A chunk that opens
+   * nothing, such as a field or statement that follows other members of its scope, comes
+   * back on its own inside its scope's opening and closing chunks.
    */
   private selectSubtree(pageChunks: DbPageChunk[], index: number): DbPageChunk[] {
+    if (!this.opensContainer(pageChunks, index)) {
+      const scopeStart = this.findScopeStart(
+        pageChunks,
+        index,
+        pathOf(pageChunks[index]),
+      );
+      const scope =
+        scopeStart === undefined
+          ? []
+          : this.scopeBoundaries(pageChunks, this.containerRange(pageChunks, scopeStart));
+      return [
+        pageChunks[index],
+        ...scope,
+        ...this.findEnclosingScopeBoundaries(pageChunks, scopeStart ?? index),
+      ];
+    }
+
     const subtree = this.containerRange(pageChunks, index);
     return [
       ...pageChunks.slice(subtree.start, subtree.end),
       ...this.findEnclosingScopeBoundaries(pageChunks, subtree.start),
     ];
+  }
+
+  /**
+   * Returns whether the chunk at `index` opens a container: no chunk nested deeper in its
+   * path comes before it in the run of chunks inside that path. A field between two
+   * methods carries its class's path but follows the first method, so it opens nothing.
+   */
+  private opensContainer(pageChunks: DbPageChunk[], index: number): boolean {
+    const path = pathOf(pageChunks[index]);
+    if (path.length === 0) {
+      return true;
+    }
+    for (let previous = index - 1; previous >= 0; previous--) {
+      const previousPath = pathOf(pageChunks[previous]);
+      if (!startsWithPath(previousPath, path)) return true;
+      if (previousPath.length > path.length) return false;
+    }
+    return true;
   }
 
   /**
@@ -251,10 +288,11 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
    * opens, otherwise the one that contains it. Unlike code, a match is not promoted to
    * the top level, which in JSON is the whole document.
    *
-   * The JSON splitter puts a key whose value is an object or array, the opening bracket
-   * and the closing bracket at the key's path, the bracket in a chunk of its own. That
-   * bracket chunk marks an object or array even when it is empty, and a primitive value
-   * split into several chunks never has one.
+   * The JSON splitter puts a key whose value is an object or array at the key's path,
+   * followed by a chunk at the same path that begins with the opening bracket: the
+   * bracket alone, or, past `splitter.json.maxNestingDepth`, the whole value serialized
+   * as text. That chunk marks an object or array even when it is empty. A primitive
+   * value never begins with a bracket.
    *
    * @param pageChunks All chunks of one page, in document order.
    * @param matchIndex Position of the match.
@@ -266,7 +304,7 @@ export class HierarchicalAssemblyStrategy implements ContentAssemblyStrategy {
     const opensContainer = pageChunks
       .slice(own.start, own.end)
       .some(
-        (chunk) => isSamePath(pathOf(chunk), path) && /^[[{]$/.test(chunk.content.trim()),
+        (chunk) => isSamePath(pathOf(chunk), path) && /^[[{]/.test(chunk.content.trim()),
       );
     if (opensContainer || path.length <= 1) {
       return matchIndex;

@@ -126,6 +126,11 @@ console.log("done");
         ["a() {}", '"done"'],
         'export namespace Accounts { export class First { a() {} } } console.log("done");',
       ],
+      [
+        "a field keeps its class's declaration but not the class's methods",
+        ["private cache", "function migrate"],
+        "export namespace Accounts { export class UserService { private cache = new Map(); } } export function migrate() {}",
+      ],
     ];
 
     for (const [label, matches, expected] of cases) {
@@ -138,6 +143,8 @@ console.log("done");
       name: "demo",
       server: { host: "localhost", timeout: 30 },
       users: [{ name: "Alice" }],
+      // Nested past splitter.json.maxNestingDepth, so "deep" is stored as serialized text
+      nested: { b: { c: { d: { sibling: 1, deep: { x: 1 }, other: 2 } } } },
       target: {},
       list: [],
     };
@@ -150,6 +157,7 @@ console.log("done");
       await splitter.splitText(JSON.stringify(document, null, 2)),
     );
     const server = '{ "server": { "host": "localhost", "timeout": 30 },}';
+    const deep = '{ "nested": { "b": { "c": { "d": { "deep": { "x": 1 }, } } } },}';
 
     // A comma that separated the selection from a left-out sibling stays in place
     const cases: [label: string, match: string, expected: string][] = [
@@ -157,6 +165,8 @@ console.log("done");
       ["a key brings the object it opens", '"server"', server],
       ["a key brings an empty object", '"target"', '{ "target": { },}'],
       ["a key brings an empty array", '"list"', '{ "list": [ ]}'],
+      ["a key brings an object the splitter stored as text", '"deep"', deep],
+      ["a value inside an object stored as text brings that object", '"x": 1', deep],
     ];
 
     for (const [label, match, expected] of cases) {

@@ -99,13 +99,13 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 
 **Single match in a document:**
 1. Find the nearest **structural ancestor**: the innermost scope around the match, the match's own path included, whose opening chunk has `"structural"` in its `metadata.types` array. Scopes open as described in step 4, so a field or statement between a declaration and the match SHALL NOT hide the declaration.
-2. If no structural ancestor is found in source code, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk. For JSON, the system SHALL NOT promote to the top level, which is the whole document; it SHALL use the object or array the match opens (a key whose value is an object or array, including an empty one, recognized by the chunk holding only its opening bracket at the key's path), otherwise the object or array that contains the match.
+2. If no structural ancestor is found in source code, attempt **top-level promotion**: use the first element of the chunk's path to find a container chunk. For JSON, the system SHALL NOT promote to the top level, which is the whole document; it SHALL use the object or array the match opens (a key whose value is an object or array, including an empty one, recognized by a chunk at the key's path that begins with the opening bracket: the bracket alone, or the whole value serialized as text past `splitter.json.maxNestingDepth`), otherwise the object or array that contains the match.
 3. Find the **full subtree** of the promoted ancestor: the ancestor, the chunks right before it that carry the same path (such as a JSON key and its bracket), and the chunks right after it whose path starts with the ancestor's path, up to the first chunk outside it. The subtree SHALL include the ancestor's closing chunk, which carries the ancestor's own path.
 4. For each scope that encloses the promoted ancestor (limited by `assembly.maxParentChainDepth`, default 10), add its **opening and closing chunks** (the chunks with its own path before its first and after its last nested member) but none of its other members. A scope SHALL open at the first chunk of the run of chunks inside its path that precedes the ancestor, so statements or members between the scope's declaration and the ancestor are not included. A scope with no chunk at its own path adds nothing.
 5. A match with an empty path (code at the page root) SHALL be returned on its own.
 
 **Multiple matches in the same document:**
-1. Include each match's **full subtree** (as in single-match step 3) and the **opening and closing chunks** of every scope that encloses it (as in single-match step 4), but none of those scopes' other members.
+1. Include each match's **full subtree** (as in single-match step 3) and the **opening and closing chunks** of every scope that encloses it (as in single-match step 4), but none of those scopes' other members. A match that opens nothing, such as a field or statement that follows other members of its scope, SHALL come back on its own inside its scope's opening and closing chunks.
 2. Find the **common ancestor path** (longest common prefix of the matches' paths). Within the scope at that path, include the chunks at the path itself, such as fields or statements.
 3. When the matches share no path, step 2 adds nothing; each match still comes back inside its own scopes' opening and closing chunks.
 
@@ -159,6 +159,11 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 - **THEN** the system SHALL return that key and its whole object
 - **AND** SHALL NOT include the document's other properties
 
+#### Scenario: Match on a JSON key past the nesting limit
+- **WHEN** a search matches a key nested deeper than `splitter.json.maxNestingDepth`, whose object value the splitter stored as text
+- **THEN** the system SHALL return that key and its value inside the keys and brackets of the enclosing objects
+- **AND** SHALL NOT include the key's sibling properties
+
 #### Scenario: Match on a JSON key whose value is empty
 - **WHEN** a search matches a key whose value is `{}` or `[]`
 - **THEN** the system SHALL return that key and its empty object or array
@@ -173,6 +178,11 @@ For source code and JSON content, the HierarchicalAssemblyStrategy SHALL reconst
 - **WHEN** a search matches two methods of a class declared inside a namespace
 - **THEN** the system SHALL also return the namespace's opening and closing lines
 - **AND** SHALL NOT include the namespace's other members
+
+#### Scenario: A field matched together with a top-level function
+- **WHEN** a search matches a field between two methods of a class and a top-level function after the class
+- **THEN** the system SHALL return the field inside the class's opening and closing lines, and the function
+- **AND** SHALL NOT include the class's methods
 
 #### Scenario: Multiple matches without a common path
 - **WHEN** a search matches a method of one top-level class and a method of another
