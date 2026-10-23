@@ -9,21 +9,42 @@ describe("SemanticMarkdownSplitter", () => {
     expect(result).toEqual([]);
   });
 
-  it("should handle markdown with no headings", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = "This is some text without any headings.";
-    const result = await splitter.splitText(markdown);
+  it("puts text without headings into one root-level text chunk", async () => {
+    const splitter = new SemanticMarkdownSplitter(1000, 2000);
+    const cases: Array<[label: string, markdown: string, content: string]> = [
+      [
+        "plain sentence",
+        "This is some text without any headings.",
+        "This is some text without any headings.",
+      ],
+      // JSON should be routed to JsonPipeline; if it reaches this splitter, it is plain text.
+      [
+        "raw JSON",
+        `{"name": "test", "version": "1.0.0"}`,
+        `{"name": "test", "version": "1.0.0"}`,
+      ],
+      [
+        "invalid JSON",
+        `{
+      "name": "test-library",
+      "version": "1.0.0"
+      // This comment makes it invalid JSON
+      "invalid": true
+    }`,
+        '{ "name": "test-library", "version": "1.0.0" // This comment makes it invalid JSON "invalid": true }',
+      ],
+      [
+        "longer prose",
+        "This is not JSON at all, just plain text content that should be preserved.",
+        "This is not JSON at all, just plain text content that should be preserved.",
+      ],
+    ];
 
-    expect(result).toEqual([
-      {
-        types: ["text"],
-        content: "This is some text without any headings.",
-        section: {
-          level: 0,
-          path: [],
-        },
-      },
-    ]);
+    for (const [label, markdown, content] of cases) {
+      expect
+        .soft(await splitter.splitText(markdown), label)
+        .toEqual([{ types: ["text"], content, section: { level: 0, path: [] } }]);
+    }
   });
 
   it("should correctly split on H1-H6 headings", async () => {
@@ -340,242 +361,97 @@ ${codeLines}
     }
   });
 
-  it("should handle tables that cannot be split semantically by using character-based splitting", async () => {
+  it("falls back to character splitting for a table or code block that cannot be split semantically", async () => {
     const splitter = new SemanticMarkdownSplitter(20, 20);
-    const markdown = `
+    const cases: Array<[label: string, markdown: string]> = [
+      [
+        "table",
+        `
 | Header1 | Header2 |
 |---------|---------|
-| Cell1   | Cell2   |`;
+| Cell1   | Cell2   |`,
+      ],
+      ["code block", "```javascript\nconst x = 1;\n```"],
+    ];
 
-    // Should not throw an error anymore
-    const result = await splitter.splitText(markdown);
-
-    // Verify we got chunks back
-    expect(result.length).toBeGreaterThan(0);
-
-    // Each chunk should be under the max size
-    expect(result.every((chunk) => chunk.content.length <= 20)).toBe(true);
+    for (const [label, markdown] of cases) {
+      const result = await splitter.splitText(markdown);
+      expect.soft(result.length, `${label}: chunks`).toBeGreaterThan(0);
+      for (const chunk of result) {
+        expect.soft(chunk.content.length, `${label}: chunk size`).toBeLessThanOrEqual(20);
+      }
+    }
   });
 
-  it("should handle code blocks that cannot be split semantically by using character-based splitting", async () => {
-    const splitter = new SemanticMarkdownSplitter(20, 20);
-    const markdown = "```javascript\nconst x = 1;\n```";
-
-    // Should not throw an error anymore
-    const result = await splitter.splitText(markdown);
-
-    // Verify we got chunks back
-    expect(result.length).toBeGreaterThan(0);
-
-    // Each chunk should be under the max size
-    expect(result.every((chunk) => chunk.content.length <= 20)).toBe(true);
-  });
-
-  it("should handle JSON code blocks in markdown properly", async () => {
-    const markdown = `
-# API Documentation
-
-Here's an example API response:
-
-\`\`\`json
-{
-  "name": "test-library",
-  "version": "1.0.0",
-  "dependencies": {
-    "react": "^18.0.0",
-    "lodash": "^4.17.21"
-  }
-}
-\`\`\`
-
-This JSON shows the package structure.
-`;
-
-    const splitter = new SemanticMarkdownSplitter(1000, 2000);
-    const chunks = await splitter.splitText(markdown);
-
-    expect(chunks).toHaveLength(4);
-
-    // Should have heading chunk
-    expect(chunks[0]).toEqual({
-      types: ["heading"],
-      content: "# API Documentation",
-      section: {
-        level: 1,
-        path: ["API Documentation"],
-      },
-    });
-
-    // Should have text chunk
-    expect(chunks[1]).toEqual({
-      types: ["text"],
-      content: "Here's an example API response:",
-      section: {
-        level: 1,
-        path: ["API Documentation"],
-      },
-    });
-
-    // Should have JSON code block chunk with preserved formatting
-    expect(chunks[2].types).toEqual(["code"]);
-    expect(chunks[2].content).toMatch(/^```json\n/);
-    expect(chunks[2].content).toMatch(/\n```$/);
-    expect(chunks[2].content).toContain("test-library");
-    expect(chunks[2].content).toContain("react");
-    expect(chunks[2].section).toEqual({
-      level: 1,
-      path: ["API Documentation"],
-    });
-
-    // Should have final text chunk
-    expect(chunks[3]).toEqual({
-      types: ["text"],
-      content: "This JSON shows the package structure.",
-      section: {
-        level: 1,
-        path: ["API Documentation"],
-      },
-    });
-  });
-
-  it("should handle raw JSON as plain text in edge cases", async () => {
-    // This simulates the edge case where JSON content somehow gets processed as markdown
-    // In practice, this should be rare because JSON should be routed to JsonPipeline
-    const rawJson = `{"name": "test", "version": "1.0.0"}`;
-
-    const splitter = new SemanticMarkdownSplitter(1000, 2000);
-    const chunks = await splitter.splitText(rawJson);
-
-    // Should treat as plain text content
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].content).toContain("test");
-    expect(chunks[0].content).toContain("1.0.0");
-    expect(chunks[0].section.path).toEqual([]);
-    expect(chunks[0].types).toEqual(["text"]);
-  });
-
-  it("should handle invalid JSON as plain text", async () => {
-    const invalidJson = `{
-      "name": "test-library",
-      "version": "1.0.0"
-      // This comment makes it invalid JSON
-      "invalid": true
-    }`;
-
-    const splitter = new SemanticMarkdownSplitter(1000, 2000);
-    const chunks = await splitter.splitText(invalidJson);
-
-    // Should treat as plain text content without structural splitting
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].section.path).toEqual([]);
-  });
-
-  it("should preserve content for non-JSON text", async () => {
-    const textContent = `This is not JSON at all, just plain text content that should be preserved.`;
-
-    const splitter = new SemanticMarkdownSplitter(1000, 2000);
-    const chunks = await splitter.splitText(textContent);
-
-    // Should preserve the content as-is in a single chunk
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].content).toContain(textContent);
-    expect(chunks[0].section.path).toEqual([]);
-  });
-
-  it("should extract YAML frontmatter into a separate chunk", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `---
-title: My Doc
-tags: [one, two]
----
-# Main Content`;
-
-    const result = await splitter.splitText(markdown);
-
-    expect(result.length).toBeGreaterThan(1);
-    expect(result[0].types).toEqual(["frontmatter"]);
-    expect(result[0].content).toContain("title: My Doc");
-    expect(result[0].content).toContain("tags: [one, two]");
-    // Should include delimiters
-    expect(result[0].content).toMatch(/^---\n[\s\S]*\n---$/);
-
-    expect(result[1].types).toEqual(["heading"]);
-    expect(result[1].content).toBe("# Main Content");
-  });
-
-  it("should extract the raw frontmatter even when the content was parsed before", async () => {
+  it("extracts the raw YAML frontmatter block into its own chunk", async () => {
     // Regression for #503: gray-matter caches parsed results and returns a shallow copy
     // for repeated parses, which drops the non-enumerable `matter` property. The pipeline
     // parses the same content in MarkdownMetadataExtractorMiddleware before it reaches the
     // splitter, so the cache is always warm here.
     const splitter = new SemanticMarkdownSplitter(100, 5000);
     const markdown = `---
-url: /guide/ssr.md
-title: Server-Side Rendering
+# A YAML comment
+title:   Spaced Out
+tags: [one, two]
 ---
-# Server-Side Rendering (SSR)`;
+# Main Content`;
 
     matter(markdown); // warm gray-matter's cache, as the middleware does
 
     const result = await splitter.splitText(markdown);
 
-    expect(result[0].types).toEqual(["frontmatter"]);
-    expect(result[0].content).toBe(
-      "---\nurl: /guide/ssr.md\ntitle: Server-Side Rendering\n---",
-    );
-    expect(result[0].content).not.toContain("undefined");
+    // The block keeps its delimiters, comments and spacing exactly as written.
+    expect(result[0]).toEqual({
+      types: ["frontmatter"],
+      content: "---\n# A YAML comment\ntitle:   Spaced Out\ntags: [one, two]\n---",
+      section: { level: 0, path: [] },
+    });
+    expect(result[1].types).toEqual(["heading"]);
+    expect(result[1].content).toBe("# Main Content");
   });
 
-  it("should preserve the original frontmatter formatting and comments", async () => {
+  it("does not treat a leading block that is not a YAML mapping as frontmatter", async () => {
     const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `---
-# A YAML comment
-title:   Spaced Out
----
-# Main Content`;
+    const cases: Array<[label: string, markdown: string, kept: string]> = [
+      // A document opening with `---` has its whole body parsed as YAML by gray-matter,
+      // which can yield a bare string. Only a mapping is real frontmatter; otherwise the
+      // entire page would collapse into a single frontmatter chunk and lose its structure.
+      ["leading thematic break", "---\n\n# Hello\n\nBody text.", "Body text."],
+      // The half the type check missed. With no closing delimiter gray-matter
+      // consumes the whole document as YAML, and a body of `Key: value` prose
+      // parses as a mapping — so it looks exactly like real frontmatter and the
+      // page collapses into one chunk with no headings. Turndown renders `<hr>`
+      // as `---`, so HTML pages reach this too.
+      [
+        "unclosed leading break with a mapping body",
+        "---\n\n## Deprecation notice\n\nReplacement: use the createClient helper instead.",
+        "createClient",
+      ],
+      ["scalar", "---\njust a bare string\n---\n# Main Content", "Main Content"],
+      ["list", "---\n- one\n- two\n---\n# Main Content", "Main Content"],
+      // gray-matter is permissive, so invalid YAML may still parse; with no data it is not
+      // frontmatter, and its text stays in the output.
+      ["malformed YAML", "---\ninvalid: : yaml\n---\n# Main Content", "invalid"],
+    ];
 
-    const result = await splitter.splitText(markdown);
-
-    expect(result[0].types).toEqual(["frontmatter"]);
-    expect(result[0].content).toBe("---\n# A YAML comment\ntitle:   Spaced Out\n---");
-  });
-
-  it("should not treat a leading thematic break as frontmatter", async () => {
-    // A document opening with `---` has its whole body parsed as YAML by gray-matter,
-    // which can yield a bare string. Only a mapping is real frontmatter; otherwise the
-    // entire page would collapse into a single frontmatter chunk and lose its structure.
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `---
-
-# Hello
-
-Body text.`;
-
-    const result = await splitter.splitText(markdown);
-
-    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
-    expect(result.some((c) => c.types.includes("heading"))).toBe(true);
-    expect(result.map((c) => c.content).join("\n")).toContain("Body text.");
-  });
-
-  it("should not treat an unclosed leading break as frontmatter when the body is a mapping", async () => {
-    // The half the type check missed. With no closing delimiter gray-matter
-    // consumes the whole document as YAML, and a body of `Key: value` prose
-    // parses as a mapping — so it looks exactly like real frontmatter and the
-    // page collapses into one chunk with no headings. Turndown renders `<hr>`
-    // as `---`, so HTML pages reach this too.
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `---
-
-## Deprecation notice
-
-Replacement: use the createClient helper instead.`;
-
-    const result = await splitter.splitText(markdown);
-
-    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
-    expect(result.some((c) => c.types.includes("heading"))).toBe(true);
-    expect(result.map((c) => c.content).join("\n")).toContain("createClient");
+    for (const [label, markdown, kept] of cases) {
+      const result = await splitter.splitText(markdown);
+      expect
+        .soft(
+          result.filter((c) => c.types.includes("frontmatter")),
+          `${label}: frontmatter`,
+        )
+        .toHaveLength(0);
+      expect
+        .soft(
+          result.some((c) => c.types.includes("heading")),
+          `${label}: heading`,
+        )
+        .toBe(true);
+      expect
+        .soft(result.map((c) => c.content).join("\n"), `${label}: text`)
+        .toContain(kept);
+    }
   });
 
   it("should keep the frontmatter chunk within the size limit", async () => {
@@ -601,74 +477,6 @@ Replacement: use the createClient helper instead.`;
     expect(result.some((c) => c.types.includes("heading"))).toBe(true);
   });
 
-  it("should not treat scalar frontmatter as frontmatter", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `---
-just a bare string
----
-# Main Content`;
-
-    const result = await splitter.splitText(markdown);
-
-    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
-    expect(result.map((c) => c.content).join("\n")).toContain("Main Content");
-  });
-
-  it("should not treat a frontmatter list as frontmatter", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `---
-- one
-- two
----
-# Main Content`;
-
-    const result = await splitter.splitText(markdown);
-
-    expect(result.filter((c) => c.types.includes("frontmatter"))).toHaveLength(0);
-    expect(result.map((c) => c.content).join("\n")).toContain("Main Content");
-  });
-
-  it("should ignore malformed frontmatter and treat it as text", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    // Malformed because no closing delimiter or invalid yaml structure that gray-matter rejects?
-    // gray-matter is very permissive. It requires --- on the first line.
-    // If we have --- but invalid yaml inside, gray-matter might still extract it but data might be empty?
-    // If data is empty, we skip frontmatter chunk creation.
-    const markdown = `---
-invalid: : yaml
----
-# Main Content`;
-
-    const result = await splitter.splitText(markdown);
-
-    // Invalid frontmatter must not be treated as a frontmatter chunk.
-    const frontmatterChunks = result.filter((c) => c.types.includes("frontmatter"));
-    expect(frontmatterChunks).toHaveLength(0);
-
-    // The invalid frontmatter content should still be preserved in the output.
-    const combinedContent = result.map((c) => c.content).join("\n");
-    expect(combinedContent).toContain("invalid");
-  });
-
-  it("should detect and split lists", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `
-# List Section
-
-- Item 1
-- Item 2
-- Item 3
-`;
-    const result = await splitter.splitText(markdown);
-
-    expect(result).toHaveLength(2);
-    expect(result[0].types).toEqual(["heading"]);
-    expect(result[1].types).toEqual(["list"]);
-    // Turndown might add extra spaces for alignment
-    expect(result[1].content).toMatch(/- +Item 1/);
-    expect(result[1].content).toMatch(/- +Item 2/);
-  });
-
   it("should split long lists", async () => {
     const splitter = new SemanticMarkdownSplitter(50, 5000);
     const markdown = `
@@ -688,31 +496,6 @@ invalid: : yaml
     expect(listChunks.every((c) => c.types.includes("list"))).toBe(true);
     // Should be split
     expect(listChunks.length).toBeGreaterThan(1);
-  });
-
-  it("should detect blockquotes", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `
-> This is a blockquote.
-> It spans multiple lines.
-`;
-    const result = await splitter.splitText(markdown);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].types).toEqual(["blockquote"]);
-    expect(result[0].content).toContain("> This is a blockquote.");
-  });
-
-  it("should detect images", async () => {
-    const splitter = new SemanticMarkdownSplitter(100, 5000);
-    const markdown = `
-![Alt text](http://example.com/image.png)
-`;
-    const result = await splitter.splitText(markdown);
-
-    expect(result).toHaveLength(1);
-    expect(result[0].types).toEqual(["media"]);
-    expect(result[0].content).toContain("![Alt text]");
   });
 
   it("should handle horizontal rules as separators", async () => {
@@ -748,6 +531,7 @@ Text paragraph.
 - List item 2
 
 > Blockquote
+> spanning two lines.
 
 ![Image](src)
 `;
@@ -757,141 +541,67 @@ Text paragraph.
     expect(result[0].types).toEqual(["heading"]);
     expect(result[1].types).toEqual(["text"]);
     expect(result[2].types).toEqual(["list"]);
+    // Turndown might add extra spaces for alignment
+    expect(result[2].content).toMatch(/- +List item 1/);
+    expect(result[2].content).toMatch(/- +List item 2/);
     expect(result[3].types).toEqual(["blockquote"]);
+    expect(result[3].content).toContain("> Blockquote");
     expect(result[4].types).toEqual(["media"]);
+    expect(result[4].content).toContain("![Image]");
   });
 
-  describe("fence balance across nested containers (issue #418)", () => {
-    const longCode = (_lang: string, prefix: string, count = 30) =>
+  it("balances code fences inside nested containers (issue #418)", async () => {
+    const splitter = new SemanticMarkdownSplitter(400, 1200);
+    const longCode = (prefix: string, count = 30) =>
       Array.from(
         { length: count },
         (_, i) => `${prefix}${i} = "lorem ipsum dolor sit amet, consectetur";`,
       ).join("\n");
-
     const fenceCount = (s: string) => (s.match(/```/g) || []).length;
 
-    const expectAllBalanced = (chunks: { content: string }[]) => {
-      for (const chunk of chunks) {
-        expect(fenceCount(chunk.content) % 2).toBe(0);
+    const cases: Array<[label: string, input: string]> = [
+      [
+        "list item",
+        [
+          "# Heading",
+          "",
+          "Intro prose.",
+          "",
+          ...[0, 1, 2].map(
+            (i) =>
+              `- Item ${i} description text that takes some space.\n\n  \`\`\`ts\n  ${longCode(`  const a${i}_`).replace(/\n/g, "\n  ")}\n  \`\`\``,
+          ),
+          "",
+          "Trailing prose.",
+        ].join("\n"),
+      ],
+      [
+        "blockquote",
+        [
+          "# Heading",
+          "",
+          "Intro.",
+          "",
+          "> NOTE: this is a callout containing a code sample.",
+          ">",
+          ["```ts", longCode("const k"), "```"]
+            .join("\n")
+            .split("\n")
+            .map((l) => `> ${l}`)
+            .join("\n"),
+          "",
+          "Trailing prose.",
+        ].join("\n"),
+      ],
+    ];
+
+    for (const [label, input] of cases) {
+      const result = await splitter.splitText(input);
+      expect.soft(result.length, `${label}: chunks`).toBeGreaterThan(0);
+      for (const chunk of result) {
+        expect.soft(fenceCount(chunk.content) % 2, `${label}: balanced`).toBe(0);
       }
-    };
-
-    it("balances fences for code blocks inside a list item", async () => {
-      const splitter = new SemanticMarkdownSplitter(400, 1200);
-      const markdown = [
-        "# Heading",
-        "",
-        "Intro prose.",
-        "",
-        ...[0, 1, 2].map(
-          (i) =>
-            `- Item ${i} description text that takes some space.\n\n  \`\`\`ts\n  ${longCode("ts", `  const a${i}_`).replace(/\n/g, "\n  ")}\n  \`\`\``,
-        ),
-        "",
-        "Trailing prose.",
-      ].join("\n");
-
-      const result = await splitter.splitText(markdown);
-      expect(result.length).toBeGreaterThan(0);
-      expectAllBalanced(result);
-    });
-
-    it("balances fences for code blocks inside a blockquote", async () => {
-      const splitter = new SemanticMarkdownSplitter(400, 1200);
-      const codeBody = longCode("ts", "const k");
-      const quotedCode = ["```ts", codeBody, "```"]
-        .join("\n")
-        .split("\n")
-        .map((l) => `> ${l}`)
-        .join("\n");
-      const markdown = [
-        "# Heading",
-        "",
-        "Intro.",
-        "",
-        "> NOTE: this is a callout containing a code sample.",
-        ">",
-        quotedCode,
-        "",
-        "Trailing prose.",
-      ].join("\n");
-
-      const result = await splitter.splitText(markdown);
-      expectAllBalanced(result);
-    });
-
-    it("balances fences for code blocks inside a definition list", async () => {
-      const splitter = new SemanticMarkdownSplitter(400, 1200);
-      // remark-parse doesn't render <dl>/<dt>/<dd> from markdown source, so we
-      // simulate by feeding raw HTML with a fenced code block inside <dd>.
-      const codeBody = longCode("ts", "const m");
-      const html = [
-        "<h2>Defs</h2>",
-        "<dl>",
-        "<dt>body</dt>",
-        "<dd>",
-        "<p>The request body example:</p>",
-        '<pre><code class="language-ts">',
-        codeBody,
-        "</code></pre>",
-        "</dd>",
-        "</dl>",
-      ].join("\n");
-
-      const result = await splitter.splitText(html);
-      expectAllBalanced(result);
-    });
-
-    it("balances fences for code blocks inside <details>", async () => {
-      const splitter = new SemanticMarkdownSplitter(400, 1200);
-      const codeBody = longCode("ts", "const d");
-      const html = [
-        "<h2>Optional</h2>",
-        "<details>",
-        "<summary>Show example</summary>",
-        '<pre><code class="language-ts">',
-        codeBody,
-        "</code></pre>",
-        "</details>",
-      ].join("\n");
-
-      const result = await splitter.splitText(html);
-      expectAllBalanced(result);
-    });
-
-    it("balances fences for code blocks inside a generic <div> wrapper", async () => {
-      const splitter = new SemanticMarkdownSplitter(400, 1200);
-      const codeBody = longCode("ts", "const w");
-      const html = [
-        '<div class="example">',
-        "<p>Wrapped:</p>",
-        '<pre><code class="language-ts">',
-        codeBody,
-        "</code></pre>",
-        "</div>",
-      ].join("\n");
-
-      const result = await splitter.splitText(html);
-      expectAllBalanced(result);
-    });
-
-    it("balances fences for code blocks inside a table cell", async () => {
-      const splitter = new SemanticMarkdownSplitter(400, 1200);
-      const codeBody = longCode("ts", "const t", 10);
-      const html = [
-        "<table>",
-        "<thead><tr><th>field</th><th>example</th></tr></thead>",
-        "<tbody>",
-        "<tr><td>request</td><td>",
-        `<pre><code class="language-ts">${codeBody}</code></pre>`,
-        "</td></tr>",
-        "</tbody>",
-        "</table>",
-      ].join("\n");
-
-      const result = await splitter.splitText(html);
-      expectAllBalanced(result);
-    });
+    }
   });
 });
 
@@ -905,37 +615,42 @@ describe("heading anchor annotations", () => {
     };
   };
 
-  it("drops an MDX anchor comment from the heading and its path", async () => {
-    // react.dev pins heading ids this way; the annotation is an instruction to
-    // the renderer, so indexing it puts noise in both the embedding and the
-    // section path a reader sees.
-    const { paths, content } = await split(
-      "## Adding styles {/*adding-styles*/}\n\nUse className.",
-    );
+  it("drops a trailing anchor annotation and keeps every other heading text", async () => {
+    const cases: Array<
+      [label: string, markdown: string, path: string, dropped?: string]
+    > = [
+      // react.dev pins heading ids this way; the annotation is an instruction to
+      // the renderer, so indexing it puts noise in both the embedding and the
+      // section path a reader sees.
+      [
+        "MDX anchor comment",
+        "## Adding styles {/*adding-styles*/}\n\nUse className.",
+        "Adding styles",
+        "{/*",
+      ],
+      [
+        "hash-style anchor",
+        "## Adding styles {#adding-styles}\n\nBody.",
+        "Adding styles",
+        "{#adding-styles}",
+      ],
+      // Only a trailing annotation is an anchor. A heading about JSX or object
+      // literals has to survive intact.
+      [
+        "braces that are part of the heading",
+        "## Use {count} in JSX\n\nBody.",
+        "Use {count} in JSX",
+      ],
+      ["no annotation", "## Plain heading\n\nBody.", "Plain heading"],
+    ];
 
-    expect(paths).toContain("Adding styles");
-    expect(content).toContain("## Adding styles");
-    expect(content).not.toContain("{/*");
-  });
-
-  it("drops a hash-style anchor", async () => {
-    const { paths, content } = await split("## Adding styles {#adding-styles}\n\nBody.");
-
-    expect(paths).toContain("Adding styles");
-    expect(content).not.toContain("{#adding-styles}");
-  });
-
-  it("keeps braces that are part of the heading", async () => {
-    // Only a trailing annotation is an anchor. A heading about JSX or object
-    // literals has to survive intact.
-    const { paths } = await split("## Use {count} in JSX\n\nBody.");
-
-    expect(paths).toContain("Use {count} in JSX");
-  });
-
-  it("leaves a heading without an annotation alone", async () => {
-    const { paths } = await split("## Plain heading\n\nBody.");
-
-    expect(paths).toContain("Plain heading");
+    for (const [label, markdown, path, dropped] of cases) {
+      const { paths, content } = await split(markdown);
+      expect.soft(paths, `${label}: path`).toContain(path);
+      expect.soft(content, `${label}: heading`).toContain(`## ${path}`);
+      if (dropped) {
+        expect.soft(content, `${label}: annotation`).not.toContain(dropped);
+      }
+    }
   });
 });

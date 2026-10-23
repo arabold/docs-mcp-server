@@ -2,11 +2,13 @@
  * End-to-end tests for scrape progress counter semantics.
  *
  * The `scrape-progress-reporting` capability defines four counters and an
- * invariant relating them. Unit tests pin the arithmetic inside
- * `BaseScraperStrategy`; these tests cover what only a whole-pipeline run can
- * show: that the numbers a real crawl or refresh produces survive the trip
- * through `PipelineManager` into the job record, and that the value an MCP
- * client reads back after completion is the value the scraper computed.
+ * invariant relating them. These tests pin that arithmetic on whole crawls and
+ * refreshes: the numbers a real job produces for each outcome, that they
+ * survive the trip through `PipelineManager` into the job record, and that the
+ * value an MCP client reads back after completion is the value the scraper
+ * computed. The harness processes one item at a time by default, so the
+ * counters under concurrency are covered by the unit tests of
+ * `BaseScraperStrategy`.
  */
 
 import { describe, expect, it } from "vitest";

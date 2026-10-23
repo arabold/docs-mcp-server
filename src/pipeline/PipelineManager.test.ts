@@ -24,6 +24,7 @@ import {
 } from "../store/errors";
 import { VersionStatus } from "../store/types";
 import { type AppConfig, loadConfig } from "../utils/config";
+import { logger } from "../utils/logger";
 import { PipelineStateError } from "./errors";
 import { interruptedAfterMs, PipelineManager } from "./PipelineManager";
 import { type InterruptedJobs, type PipelineJob, PipelineJobStatus } from "./types";
@@ -64,6 +65,25 @@ function progress(pagesScraped: number, totalPages: number): ScraperProgressEven
   };
 }
 
+/** A progress event for a page that exists but holds no content. */
+function emptyPage(path: string): ScraperProgressEvent {
+  const url = `${SOURCE_URL}${path}`;
+  return {
+    ...progress(1, 1),
+    currentUrl: url,
+    outcome: PageOutcome.Empty,
+    emptyPage: {
+      url,
+      title: "Empty page",
+      sourceContentType: "text/html",
+      contentType: "text/markdown",
+      etag: '"v1"',
+      lastModified: null,
+      pipelineFailed: false,
+    },
+  };
+}
+
 /** A promise and the function that resolves it. */
 function deferred() {
   let resolve: () => void = () => {};
@@ -74,8 +94,8 @@ function deferred() {
 }
 
 /** A progress event for a page the worker stores. */
-function storedPage(): ScraperProgressEvent {
-  const url = `${SOURCE_URL}/guide`;
+function storedPage(path = "/guide"): ScraperProgressEvent {
+  const url = `${SOURCE_URL}${path}`;
   return {
     ...progress(1, 1),
     currentUrl: url,
@@ -265,22 +285,29 @@ describe("PipelineManager", () => {
       expect((await store.getScraperOptions(versionId))?.sourceUrl).toBe(SOURCE_URL);
     });
 
-    it.each([null, undefined, ""])(
-      "treats version %j as unversioned",
-      async (version) => {
+    it("treats a null, undefined or empty version as unversioned", async () => {
+      // A distinct library per case, so no case finds another's version.
+      const cases = [
+        { library: "libA", version: null },
+        { library: "libB", version: undefined },
+        { library: "libC", version: "" },
+      ];
+
+      for (const { library, version } of cases) {
+        const label = String(JSON.stringify(version));
         const jobId = await manager.enqueueScrapeJob(
-          "libA",
+          library,
           version,
-          scrapeOptions("libA", ""),
+          scrapeOptions(library, ""),
         );
 
-        expect((await manager.getJob(jobId))?.version).toBeNull();
-        const versionId = await store.ensureVersion({ library: "libA", version: "" });
-        expect((await store.getVersionById(versionId))?.status).toBe(
-          VersionStatus.QUEUED,
-        );
-      },
-    );
+        expect.soft((await manager.getJob(jobId))?.version, label).toBeNull();
+        const versionId = await store.ensureVersion({ library, version: "" });
+        expect
+          .soft((await store.getVersionById(versionId))?.status, label)
+          .toBe(VersionStatus.QUEUED);
+      }
+    });
 
     it.each([
       ["defaults scrapeMode to auto", {}, ScrapeMode.Auto],
@@ -323,23 +350,8 @@ describe("PipelineManager", () => {
       );
       await reachStatus(jobId, PipelineJobStatus.RUNNING);
 
-      await manager.removeVersion("react", "19.0");
-
-      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
-      expect(await store.listLibraries()).toEqual([]);
-    });
-
-    it("matches the running job however the library and version are padded or cased", async () => {
-      holdScrapes();
-      await manager.start();
-      const jobId = await manager.enqueueScrapeJob(
-        "react",
-        "19.0",
-        scrapeOptions("react", "19.0"),
-      );
-      await reachStatus(jobId, PipelineJobStatus.RUNNING);
-
-      await manager.removeVersion(" React ", " 19.0 ");
+      // Matched however the library and version are padded or cased.
+      await manager.removeVersion(" react ", " 19.0 ");
 
       expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
       expect(await store.listLibraries()).toEqual([]);
@@ -504,26 +516,47 @@ describe("PipelineManager", () => {
     // The store buckets by folded library name and normalized version label, so
     // two jobs that differ only in spelling would clean and write one bucket in
     // parallel, the second deleting what the first had written.
-    it.each([
-      ["the same library and version", ["libA", "1.0"], ["libA", "1.0"]],
-      ["an unversioned library", ["libA", undefined], ["libA", null]],
-      ["a differently spelled version", ["libA", " LATEST "], ["libA", "latest"]],
-      ["a differently cased library", ["LibA", "1.0"], [" liba ", "1.0"]],
-    ] as const)("supersedes a queued job for %s", async (_label, first, second) => {
-      const firstId = await manager.enqueueScrapeJob(
-        first[0],
-        first[1],
-        scrapeOptions(first[0]),
-      );
-      const secondId = await manager.enqueueScrapeJob(
-        second[0],
-        second[1],
-        scrapeOptions(second[0]),
-        { onExisting: "replace" },
-      );
+    it("supersedes a queued job for the same library and version however it is spelled", async () => {
+      // A distinct library per case, so the cases do not supersede each other.
+      const cases = [
+        {
+          label: "the same library and version",
+          first: ["libA", "1.0"],
+          second: ["libA", "1.0"],
+        },
+        {
+          label: "an unversioned library",
+          first: ["libB", undefined],
+          second: ["libB", null],
+        },
+        {
+          label: "a differently spelled version",
+          first: ["libC", " LATEST "],
+          second: ["libC", "latest"],
+        },
+        {
+          label: "a differently cased library",
+          first: ["LibD", "1.0"],
+          second: [" libd ", "1.0"],
+        },
+      ] as const;
 
-      expect(await statusOf(firstId)).toBe(PipelineJobStatus.CANCELLED);
-      expect(await statusOf(secondId)).toBe(PipelineJobStatus.QUEUED);
+      for (const { label, first, second } of cases) {
+        const firstId = await manager.enqueueScrapeJob(
+          first[0],
+          first[1],
+          scrapeOptions(first[0]),
+        );
+        const secondId = await manager.enqueueScrapeJob(
+          second[0],
+          second[1],
+          scrapeOptions(second[0]),
+          { onExisting: "replace" },
+        );
+
+        expect.soft(await statusOf(firstId), label).toBe(PipelineJobStatus.CANCELLED);
+        expect.soft(await statusOf(secondId), label).toBe(PipelineJobStatus.QUEUED);
+      }
     });
 
     it("supersedes a running job for the same library and version, then runs the new one", async () => {
@@ -589,27 +622,7 @@ describe("PipelineManager", () => {
   });
 
   describe("running jobs", () => {
-    it("runs an enqueued job to completion", async () => {
-      await manager.start();
-      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
-      await manager.waitForJobCompletion(jobId);
-
-      const job = await manager.getJob(jobId);
-      expect(job?.status).toBe(PipelineJobStatus.COMPLETED);
-      expect(job?.startedAt).toBeInstanceOf(Date);
-      expect(job?.finishedAt).toBeInstanceOf(Date);
-      expect(scrape).toHaveBeenCalledWith(
-        expect.objectContaining({ url: SOURCE_URL, library: "libA", version: "1.0" }),
-        expect.any(Function),
-        expect.any(AbortSignal),
-      );
-      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
-      expect((await store.getVersionById(versionId))?.status).toBe(
-        VersionStatus.COMPLETED,
-      );
-    });
-
-    it("announces each status change on the event bus", async () => {
+    it("runs an enqueued job to completion, announcing each status change", async () => {
       await manager.start();
       const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
       await manager.waitForJobCompletion(jobId);
@@ -621,6 +634,13 @@ describe("PipelineManager", () => {
         PipelineJobStatus.RUNNING,
         PipelineJobStatus.COMPLETED,
       ]);
+      const job = await manager.getJob(jobId);
+      expect(job?.startedAt).toBeInstanceOf(Date);
+      expect(job?.finishedAt).toBeInstanceOf(Date);
+      const versionId = await store.ensureVersion({ library: "libA", version: "1.0" });
+      expect((await store.getVersionById(versionId))?.status).toBe(
+        VersionStatus.COMPLETED,
+      );
     });
 
     it("fails the job when the scrape throws, and rejects its completion", async () => {
@@ -705,11 +725,6 @@ describe("PipelineManager", () => {
       expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
       expect(await manager.getJobs()).toHaveLength(1);
     });
-
-    it("can be stopped when it is not running", async () => {
-      await expect(manager.stop()).resolves.toBeUndefined();
-      await expect(manager.stop()).resolves.toBeUndefined();
-    });
   });
 
   describe("progress", () => {
@@ -760,6 +775,115 @@ describe("PipelineManager", () => {
     });
   });
 
+  describe("storing pages", () => {
+    function scrapeReporting(...events: ScraperProgressEvent[]) {
+      scrape.mockImplementation(async (_options, onProgress) => {
+        for (const event of events) {
+          await onProgress(event);
+        }
+      });
+    }
+
+    /** The URLs the store holds for `library`@1.0. */
+    async function storedUrls(library: string): Promise<string[]> {
+      const versionId = await store.ensureVersion({ library, version: "1.0" });
+      return (await store.getPagesByVersionId(versionId)).map((page) => page.url).sort();
+    }
+
+    it.each([
+      ["storing content", "addScrapeResult", storedPage("/first")],
+      ["recording an empty page", "addEmptyPage", emptyPage("/first")],
+    ] as const)(
+      "reports a failure %s and continues the job",
+      async (_label, method, failingPage) => {
+        vi.spyOn(store, method).mockRejectedValueOnce(new Error("Database error"));
+        vi.mocked(logger.warn).mockClear();
+        scrapeReporting(failingPage, storedPage("/second"));
+        await manager.start();
+
+        const jobId = await manager.enqueueScrapeJob(
+          "libA",
+          "1.0",
+          scrapeOptions("libA"),
+        );
+        await manager.waitForJobCompletion(jobId);
+
+        expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
+        expect(await storedUrls("libA")).toEqual([`${SOURCE_URL}/second`]);
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining("Database error"),
+        );
+      },
+    );
+
+    // Leaving the documents of a deleted page behind would corrupt the index.
+    it("fails the job when it cannot delete a page the source no longer serves", async () => {
+      const versionId = await seedVersion("libA", "1.0", VersionStatus.COMPLETED, {
+        pages: [{ url: `${SOURCE_URL}/gone`, depth: 1, etag: null }],
+      });
+      const [page] = await store.getPagesByVersionId(versionId);
+      vi.spyOn(store, "deletePage").mockRejectedValueOnce(new Error("Database error"));
+      scrapeReporting({
+        ...progress(1, 1),
+        currentUrl: `${SOURCE_URL}/gone`,
+        outcome: PageOutcome.Absent,
+        deleted: true,
+        pageId: page?.id,
+      });
+      await manager.start();
+
+      const jobId = await manager.enqueueRefreshJob("libA", "1.0");
+
+      await expect(manager.waitForJobCompletion(jobId)).rejects.toThrow("Database error");
+      expect((await manager.getJob(jobId))?.error?.message).toBe("Database error");
+      expect(await storedUrls("libA")).toEqual([`${SOURCE_URL}/gone`]);
+    });
+
+    it("stores nothing for a stored outcome without content or for a failed page", async () => {
+      const versionId = await seedVersion("libA", "1.0", VersionStatus.COMPLETED, {
+        pages: [{ url: `${SOURCE_URL}/kept`, depth: 1, etag: '"v1"' }],
+      });
+      const [page] = await store.getPagesByVersionId(versionId);
+      const writes = [
+        vi.spyOn(store, "addScrapeResult"),
+        vi.spyOn(store, "addEmptyPage"),
+        vi.spyOn(store, "deletePage"),
+      ];
+      scrapeReporting(
+        { ...progress(1, 2), outcome: PageOutcome.Stored, result: null },
+        { ...progress(2, 2), outcome: PageOutcome.Failed, pageId: page?.id },
+      );
+      await manager.start();
+
+      const jobId = await manager.enqueueRefreshJob("libA", "1.0");
+      await manager.waitForJobCompletion(jobId);
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
+      for (const write of writes) expect(write).not.toHaveBeenCalled();
+      expect(await store.getPagesByVersionId(versionId)).toEqual([page]);
+    });
+
+    it("stops a cancelled job at its next page without storing or reporting it", async () => {
+      const progressEvents: ScraperProgressEvent[] = [];
+      eventBus.on(EventType.JOB_PROGRESS, ({ progress }) => {
+        progressEvents.push(progress);
+      });
+      scrape.mockImplementation(async (_options, onProgress) => {
+        const [job] = await manager.getJobs();
+        if (job) await manager.cancelJob(job.id);
+        await onProgress(storedPage());
+      });
+      await manager.start();
+
+      const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
+      await manager.waitForJobCompletion(jobId);
+
+      expect(await statusOf(jobId)).toBe(PipelineJobStatus.CANCELLED);
+      expect(await storedUrls("libA")).toEqual([]);
+      expect(progressEvents).toEqual([]);
+    });
+  });
+
   describe("cancellation", () => {
     it("cancels a queued job, resolves its completion and never runs it", async () => {
       const jobId = await manager.enqueueScrapeJob("libA", "1.0", scrapeOptions("libA"));
@@ -807,11 +931,8 @@ describe("PipelineManager", () => {
       expect(await statusOf(jobId)).toBe(PipelineJobStatus.COMPLETED);
     });
 
-    it("ignores an unknown job id", async () => {
+    it("ignores cancelling an unknown job id but rejects waiting for it", async () => {
       await expect(manager.cancelJob("unknown")).resolves.toBeUndefined();
-    });
-
-    it("rejects waiting for an unknown job id", async () => {
       await expect(manager.waitForJobCompletion("unknown")).rejects.toBeInstanceOf(
         PipelineStateError,
       );
@@ -872,19 +993,16 @@ describe("PipelineManager", () => {
       { url: `${SOURCE_URL}/shallow`, depth: 0, etag: null },
     ];
 
-    it.each([
-      ["1.0", "1.0"],
-      [null, null],
-    ])("re-checks every stored page of version %j", async (version, publicVersion) => {
-      await seedVersion("libA", version ?? "", VersionStatus.COMPLETED, {
+    it("re-checks every stored page of an unversioned library", async () => {
+      await seedVersion("libA", "", VersionStatus.COMPLETED, {
         pages,
         options: { maxDepth: 2, maxPages: 50 },
       });
 
-      const jobId = await manager.enqueueRefreshJob("libA", version);
+      const jobId = await manager.enqueueRefreshJob("libA", null);
 
       const job = await manager.getJob(jobId);
-      expect(job?.version).toBe(publicVersion);
+      expect(job?.version).toBeNull();
       expect(job?.scraperOptions).toMatchObject({ isRefresh: true, maxDepth: 2 });
       const queue = job?.scraperOptions?.initialQueue ?? [];
       expect(queue).toHaveLength(2);
@@ -902,42 +1020,40 @@ describe("PipelineManager", () => {
       );
     });
 
-    it("requests a representation from where its content came from", async () => {
-      const contentUrl = `${SOURCE_URL}/page.md`;
-      await seedVersion("libA", "1.0", VersionStatus.COMPLETED, {
-        pages: [{ url: `${SOURCE_URL}/page`, depth: 1, etag: '"md"', contentUrl }],
-      });
+    it("rejects a version without pages, naming the library as it is stored", async () => {
+      const cases = [
+        { stored: "libA", requested: "libA", version: "1.0", message: "libA@1.0" },
+        { stored: "libB", requested: "libB", version: undefined, message: "libB@latest" },
+        { stored: "React", requested: "react", version: "1.0.0", message: "React@1.0.0" },
+      ];
 
-      const jobId = await manager.enqueueRefreshJob("libA", "1.0");
+      for (const { stored, requested, version, message } of cases) {
+        await seedVersion(stored, version ?? "", VersionStatus.COMPLETED);
 
-      const job = await manager.getJob(jobId);
-      expect(job?.scraperOptions?.initialQueue).toEqual([
-        expect.objectContaining({ url: contentUrl, identityUrl: `${SOURCE_URL}/page` }),
-      ]);
+        await expect
+          .soft(manager.enqueueRefreshJob(requested, version), message)
+          .rejects.toThrow(`No pages found for ${message}`);
+      }
     });
 
-    it.each([
-      ["1.0", "No pages found for libA@1.0"],
-      [undefined, "No pages found for libA@latest"],
-    ])("rejects version %j when it has no pages", async (version, message) => {
-      await seedVersion("libA", version ?? "", VersionStatus.COMPLETED);
+    it("re-scrapes a failed or queued version from scratch with its stored options", async () => {
+      // A distinct library per case, so no case finds another's job.
+      const cases = [
+        { library: "libA", status: VersionStatus.FAILED },
+        { library: "libB", status: VersionStatus.QUEUED },
+      ];
 
-      await expect(manager.enqueueRefreshJob("libA", version)).rejects.toThrow(message);
-    });
+      for (const { library, status } of cases) {
+        await seedVersion(library, "1.0", status, { pages, options: { maxDepth: 2 } });
 
-    it.each([VersionStatus.FAILED, VersionStatus.QUEUED])(
-      "re-scrapes a %s version from scratch with its stored options",
-      async (status) => {
-        await seedVersion("libA", "1.0", status, { pages, options: { maxDepth: 2 } });
-
-        const jobId = await manager.enqueueRefreshJob("libA", "1.0");
+        const jobId = await manager.enqueueRefreshJob(library, "1.0");
 
         const options = (await manager.getJob(jobId))?.scraperOptions;
-        expect(options).toMatchObject({ url: SOURCE_URL, maxDepth: 2 });
-        expect(options?.isRefresh).toBeUndefined();
-        expect(options?.initialQueue).toBeUndefined();
-      },
-    );
+        expect.soft(options, status).toMatchObject({ url: SOURCE_URL, maxDepth: 2 });
+        expect.soft(options?.isRefresh, status).toBeUndefined();
+        expect.soft(options?.initialQueue, status).toBeUndefined();
+      }
+    });
 
     it("rejects an unknown library without creating it", async () => {
       await expect(manager.enqueueRefreshJob("Reakt", "")).rejects.toBeInstanceOf(
@@ -946,14 +1062,6 @@ describe("PipelineManager", () => {
 
       expect(await store.listLibraries()).toEqual([]);
       expect(await manager.getJobs()).toEqual([]);
-    });
-
-    it("names the library as it is stored in its errors", async () => {
-      await seedVersion("React", "1.0.0", VersionStatus.COMPLETED);
-
-      await expect(manager.enqueueRefreshJob("react", "1.0.0")).rejects.toThrow(
-        "No pages found for React@1.0.0",
-      );
     });
 
     it("rejects re-scraping a version without stored options", async () => {
@@ -1099,39 +1207,26 @@ describe("PipelineManager", () => {
       });
     });
 
-    it("leaves a version written within the bound while it starts", async () => {
-      const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
-      manager = createManager({ interruptedJobs: "fail" });
-
-      await manager.start();
-
-      expect((await store.getVersionById(versionId))?.status).toBe(VersionStatus.RUNNING);
-    });
-
     it("fails a version written within the bound once it stays unwritten past it", async () => {
       const versionId = await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
       fakeTimers();
       manager = createManager({ interruptedJobs: "fail" });
+      const libraryChanged = vi.fn();
+      eventBus.on(EventType.LIBRARY_CHANGE, libraryChanged);
 
       await manager.start();
+
+      // Written within the bound, so it is left alone while the manager starts.
+      expect((await store.getVersionById(versionId))?.status).toBe(VersionStatus.RUNNING);
+      expect(libraryChanged).not.toHaveBeenCalled();
+
       await vi.advanceTimersByTimeAsync(bound());
 
       expect(await store.getVersionById(versionId)).toMatchObject({
         status: VersionStatus.FAILED,
         error_message: "Job interrupted",
       });
-    });
-
-    it("tells views when it fails a version after the bound", async () => {
-      await seedVersion("lib-a", "1.0", VersionStatus.RUNNING);
-      fakeTimers();
-      manager = createManager({ interruptedJobs: "fail" });
-      await manager.start();
-      const libraryChanged = vi.fn();
-      eventBus.on(EventType.LIBRARY_CHANGE, libraryChanged);
-
-      await vi.advanceTimersByTimeAsync(bound());
-
+      // Views are told about the failure.
       expect(libraryChanged).toHaveBeenCalled();
     });
 

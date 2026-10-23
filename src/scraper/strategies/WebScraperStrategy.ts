@@ -77,15 +77,6 @@ export class WebScraperStrategy extends BaseScraperStrategy {
     this.localFileStrategy = new LocalFileStrategy(config);
   }
 
-  canHandle(url: string): boolean {
-    try {
-      const parsedUrl = new URL(url);
-      return parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:";
-    } catch {
-      return false;
-    }
-  }
-
   private restorePreservedHash(requestedUrl: string, actualUrl: string): string {
     if (!requestedUrl.includes("#")) {
       return actualUrl;

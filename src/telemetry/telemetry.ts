@@ -81,13 +81,6 @@ export class Telemetry {
   }
 
   /**
-   * Get current global context
-   */
-  getGlobalContext(): Record<string, unknown> {
-    return { ...this.globalContext };
-  }
-
-  /**
    * Track an event with automatic global context inclusion
    *
    * Type-safe overloads for specific events:

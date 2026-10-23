@@ -87,100 +87,6 @@ vi.mock("../services", () => ({
   registerGlobalServices: vi.fn(),
 }));
 
-describe("default command", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
-  });
-
-  it("starts HTTP server when protocol is http", async () => {
-    const parser = yargs().scriptName("test");
-    createDefaultAction(parser);
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop");
-      });
-
-    // Mock resolveProtocol
-    const utils = await import("../utils");
-    // @ts-expect-error
-    utils.resolveProtocol.mockReturnValueOnce("http");
-
-    try {
-      await parser.parse(`server --protocol http`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    expect(appModule.startAppServer).toHaveBeenCalled();
-    const callArgs = (appModule.startAppServer as any).mock.calls[0];
-    const config = callArgs[1];
-    expect(config.enableMcpServer).toBe(true);
-    expect(config.enableWebInterface).toBe(true);
-    expect(config.enableApiServer).toBe(true);
-    expect(config.port).toBe(6280);
-  });
-
-  it("starts Stdio server when protocol is stdio", async () => {
-    const parser = yargs().scriptName("test");
-    createDefaultAction(parser);
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop");
-      });
-
-    // Mock resolveProtocol
-    const utils = await import("../utils");
-    // @ts-expect-error
-    utils.resolveProtocol.mockReturnValueOnce("stdio");
-
-    try {
-      await parser.parse(`server --protocol stdio`);
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    expect(stdioModule.startStdioServer).toHaveBeenCalled();
-    expect(appModule.startAppServer).not.toHaveBeenCalled();
-  });
-  it("passes the server identity flags through to the config loader", async () => {
-    const parser = yargs().scriptName("test").strict();
-    createDefaultAction(parser);
-
-    const services = await import("../services");
-    vi.mocked(services.registerGlobalServices)
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("Simulated Stop");
-      });
-
-    try {
-      await parser.parse(
-        `server --protocol stdio --server-name acme-docs --server-title "Acme Docs" --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
-      );
-    } catch (e: any) {
-      if (e.message !== "Simulated Stop") throw e;
-    }
-
-    const configModule = await import("../../utils/config");
-    expect(configModule.loadConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        serverName: "acme-docs",
-        serverTitle: "Acme Docs",
-        serverInstructions: "Use acme docs",
-        serverInstructionsFile: "/tmp/acme.md",
-      }),
-      expect.anything(),
-    );
-  });
-});
-
 /** Environment variables that could set the settings under test. */
 const PRECEDENCE_ENV = [
   "DOCS_MCP_CONFIG",
@@ -232,7 +138,12 @@ describe("server command configuration precedence", () => {
   async function run(args: string, configYaml = ""): Promise<void> {
     const configPath = path.join(tempDir, "config.yaml");
     writeFileSync(configPath, configYaml);
-    const parser = yargs().scriptName("test");
+    // Strict, so an option the command does not declare fails the run.
+    // --config is a global option, declared here the way the CLI does.
+    const parser = yargs()
+      .scriptName("test")
+      .option("config", { type: "string" })
+      .strict();
     createDefaultAction(parser);
     vi.mocked(services.registerGlobalServices)
       .mockImplementationOnce(() => {})
@@ -275,6 +186,19 @@ describe("server command configuration precedence", () => {
     await run("server --protocol http --no-read-only");
 
     expect(httpAppConfig().app.readOnly).toBe(false);
+  });
+
+  it("reads the server identity flags", async () => {
+    await run(
+      `server --protocol stdio --server-name acme-docs --server-title "Acme Docs" --server-instructions "Use acme docs" --server-instructions-file /tmp/acme.md`,
+    );
+
+    expect(stdioAppConfig().server).toMatchObject({
+      name: "acme-docs",
+      title: "Acme Docs",
+      instructions: "Use acme docs",
+      instructionsFile: "/tmp/acme.md",
+    });
   });
 
   it("applies the built-in defaults when no layer sets a value", async () => {

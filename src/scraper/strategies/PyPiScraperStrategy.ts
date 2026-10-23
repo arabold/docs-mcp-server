@@ -6,11 +6,6 @@ import { WebScraperStrategy } from "./WebScraperStrategy";
 export class PyPiScraperStrategy implements ScraperStrategy {
   private defaultStrategy: WebScraperStrategy;
 
-  canHandle(url: string): boolean {
-    const { hostname } = new URL(url);
-    return ["pypi.org", "www.pypi.org"].includes(hostname);
-  }
-
   constructor(config: AppConfig) {
     this.defaultStrategy = new WebScraperStrategy(config, {
       urlNormalizerOptions: {

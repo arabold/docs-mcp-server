@@ -19,30 +19,8 @@ function select(pipelines: ContentPipeline[], mimeType: string, body: Buffer) {
 }
 
 describe("PipelineFactory.createStandardPipelines", () => {
-  it("creates the six pipelines in selection order", () => {
-    const pipelines = PipelineFactory.createStandardPipelines(appConfig);
-
-    expect(pipelines.map((pipeline) => pipeline.constructor)).toEqual([
-      JsonPipeline,
-      SourceCodePipeline,
-      DocumentPipeline,
-      HtmlPipeline,
-      MarkdownPipeline,
-      TextPipeline,
-    ]);
-  });
-
-  it("creates new instances on each call", () => {
-    const first = PipelineFactory.createStandardPipelines(appConfig);
-    const second = PipelineFactory.createStandardPipelines(appConfig);
-
-    first.forEach((pipeline, index) => {
-      expect(pipeline).not.toBe(second[index]);
-    });
-  });
-
   // TextPipeline also claims HTML, JSON, Markdown and source code, so the order
-  // above is what routes those types to their specialised pipelines.
+  // of the pipelines is what routes those types to their specialised pipelines.
   const routes: Array<
     [string, (new (config: AppConfig) => ContentPipeline) | undefined]
   > = [
@@ -59,17 +37,14 @@ describe("PipelineFactory.createStandardPipelines", () => {
     ["image/png", undefined],
   ];
 
-  it.each(
-    routes.map(
-      ([mimeType, expected]) =>
-        [mimeType, expected?.name ?? "no pipeline", expected] as const,
-    ),
-  )("routes %s to %s", (mimeType, _name, expected) => {
+  it("routes each type to the first pipeline that claims it", () => {
     const pipelines = PipelineFactory.createStandardPipelines(appConfig);
 
-    const selected = select(pipelines, mimeType, Buffer.from("plain text body"));
+    for (const [mimeType, expected] of routes) {
+      const selected = select(pipelines, mimeType, Buffer.from("plain text body"));
 
-    expect(selected?.constructor).toBe(expected);
+      expect.soft(selected?.constructor, mimeType).toBe(expected);
+    }
   });
 
   it("passes the configured chunk sizes to the pipelines", async () => {

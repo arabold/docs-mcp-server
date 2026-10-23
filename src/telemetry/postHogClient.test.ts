@@ -18,8 +18,7 @@ vi.mock("posthog-node", () => ({
   }),
 }));
 
-// Set the global __POSTHOG_API_KEY__ for testing
-(global as any).__POSTHOG_API_KEY__ = "test-api-key";
+vi.stubGlobal("__POSTHOG_API_KEY__", "test-api-key");
 
 describe("PostHogClient property conversion", () => {
   let client: PostHogClient;
@@ -29,148 +28,128 @@ describe("PostHogClient property conversion", () => {
     client = new PostHogClient(true);
   });
 
-  it("should convert camelCase properties to snake_case", () => {
-    const properties = {
-      appInterface: "mcp",
-      appVersion: "1.0.0",
-      appPlatform: "darwin",
-      appAuthEnabled: true,
-      appReadOnly: false,
-      appServicesEnabled: ["mcp", "web"],
-      mcpProtocol: "stdio",
-      mcpTransport: "sse",
-      webRoute: "/dashboard",
-      cliCommand: "scrape",
-      aiEmbeddingProvider: "openai",
-      aiEmbeddingModel: "text-embedding-3-small",
-      aiEmbeddingDimensions: 1536,
-    };
-
-    client.capture("test-user", "test_event", properties);
-
-    expect(mockPostHogInstance.capture).toHaveBeenCalledWith({
-      distinctId: "test-user",
-      event: "test_event",
-      properties: {
-        // PostHog standard properties
-        $app_version: "1.0.0",
-        // Converted custom properties (note: appVersion is removed as duplicate)
-        ai_embedding_dimensions: 1536,
-        ai_embedding_model: "text-embedding-3-small",
-        ai_embedding_provider: "openai",
-        app_auth_enabled: true,
-        app_interface: "mcp",
-        app_platform: "darwin",
-        app_read_only: false,
-        app_services_enabled: ["mcp", "web"],
-        cli_command: "scrape",
-        mcp_protocol: "stdio",
-        mcp_transport: "sse",
-        web_route: "/dashboard",
-      },
-    });
-  });
-
-  it("should handle nested objects", () => {
-    const properties = {
-      sessionContext: {
-        appInterface: "web",
-        appVersion: "1.0.0",
-        nestedConfig: {
-          authEnabled: true,
-          servicesList: ["web", "api"],
+  it("converts property keys from camelCase to snake_case at any depth, leaving values untouched", () => {
+    const cases: Array<{
+      label: string;
+      properties: Record<string, unknown>;
+      sent: Record<string, unknown>;
+    }> = [
+      {
+        label: "flat properties",
+        properties: {
+          appInterface: "mcp",
+          appVersion: "1.0.0",
+          appPlatform: "darwin",
+          appAuthEnabled: true,
+          appReadOnly: false,
+          appServicesEnabled: ["mcp", "web"],
+          mcpProtocol: "stdio",
+          mcpTransport: "sse",
+          webRoute: "/dashboard",
+          cliCommand: "scrape",
+          aiEmbeddingProvider: "openai",
+          aiEmbeddingModel: "text-embedding-3-small",
+          aiEmbeddingDimensions: 1536,
+        },
+        sent: {
+          // PostHog standard property; appVersion is removed as a duplicate
+          $app_version: "1.0.0",
+          ai_embedding_dimensions: 1536,
+          ai_embedding_model: "text-embedding-3-small",
+          ai_embedding_provider: "openai",
+          app_auth_enabled: true,
+          app_interface: "mcp",
+          app_platform: "darwin",
+          app_read_only: false,
+          app_services_enabled: ["mcp", "web"],
+          cli_command: "scrape",
+          mcp_protocol: "stdio",
+          mcp_transport: "sse",
+          web_route: "/dashboard",
         },
       },
-      userPreferences: {
-        darkMode: true,
-        emailNotifications: false,
-      },
-    };
-
-    client.capture("test-user", "test_event", properties);
-
-    expect(mockPostHogInstance.capture).toHaveBeenCalledWith({
-      distinctId: "test-user",
-      event: "test_event",
-      properties: {
-        session_context: {
-          app_interface: "web",
-          app_version: "1.0.0",
-          nested_config: {
-            auth_enabled: true,
-            services_list: ["web", "api"],
+      {
+        label: "nested objects",
+        properties: {
+          sessionContext: {
+            appInterface: "web",
+            appVersion: "1.0.0",
+            nestedConfig: { authEnabled: true, servicesList: ["web", "api"] },
           },
+          userPreferences: { darkMode: true, emailNotifications: false },
         },
-        user_preferences: {
-          dark_mode: true,
-          email_notifications: false,
+        sent: {
+          session_context: {
+            app_interface: "web",
+            app_version: "1.0.0",
+            nested_config: { auth_enabled: true, services_list: ["web", "api"] },
+          },
+          user_preferences: { dark_mode: true, email_notifications: false },
         },
       },
-    });
-  });
-
-  it("should handle arrays with objects", () => {
-    const properties = {
-      serviceConfigs: [
-        { serviceName: "mcp", isEnabled: true },
-        { serviceName: "web", isEnabled: false },
-      ],
-      simpleArray: ["value1", "value2"],
-      mixedArray: [
-        { camelCaseKey: "test" },
-        "string-value",
-        123,
-        { anotherKey: { nestedProp: true } },
-      ],
-    };
-
-    client.capture("test-user", "test_event", properties);
-
-    expect(mockPostHogInstance.capture).toHaveBeenCalledWith({
-      distinctId: "test-user",
-      event: "test_event",
-      properties: {
-        service_configs: [
-          { service_name: "mcp", is_enabled: true },
-          { service_name: "web", is_enabled: false },
-        ],
-        simple_array: ["value1", "value2"],
-        mixed_array: [
-          { camel_case_key: "test" },
-          "string-value",
-          123,
-          { another_key: { nested_prop: true } },
-        ],
+      {
+        label: "arrays with objects",
+        properties: {
+          serviceConfigs: [
+            { serviceName: "mcp", isEnabled: true },
+            { serviceName: "web", isEnabled: false },
+          ],
+          simpleArray: ["value1", "value2"],
+          mixedArray: [
+            { camelCaseKey: "test" },
+            "string-value",
+            123,
+            { anotherKey: { nestedProp: true } },
+          ],
+        },
+        sent: {
+          service_configs: [
+            { service_name: "mcp", is_enabled: true },
+            { service_name: "web", is_enabled: false },
+          ],
+          simple_array: ["value1", "value2"],
+          mixed_array: [
+            { camel_case_key: "test" },
+            "string-value",
+            123,
+            { another_key: { nested_prop: true } },
+          ],
+        },
       },
-    });
-  });
-
-  it("should preserve special values", () => {
-    const properties = {
-      dateValue: new Date("2025-08-24T10:00:00Z"),
-      nullValue: null,
-      undefinedValue: undefined,
-      booleanValue: true,
-      numberValue: 42,
-      stringValue: "test-string",
-      camelCaseString: "preserveThisValue",
-    };
-
-    client.capture("test-user", "test_event", properties);
-
-    expect(mockPostHogInstance.capture).toHaveBeenCalledWith({
-      distinctId: "test-user",
-      event: "test_event",
-      properties: {
-        date_value: new Date("2025-08-24T10:00:00Z"),
-        null_value: null,
-        undefined_value: undefined,
-        boolean_value: true,
-        number_value: 42,
-        string_value: "test-string",
-        camel_case_string: "preserveThisValue",
+      {
+        label: "special values",
+        properties: {
+          dateValue: new Date("2025-08-24T10:00:00Z"),
+          nullValue: null,
+          undefinedValue: undefined,
+          booleanValue: true,
+          numberValue: 42,
+          stringValue: "test-string",
+          camelCaseString: "preserveThisValue",
+        },
+        sent: {
+          date_value: new Date("2025-08-24T10:00:00Z"),
+          null_value: null,
+          undefined_value: undefined,
+          boolean_value: true,
+          number_value: 42,
+          string_value: "test-string",
+          camel_case_string: "preserveThisValue",
+        },
       },
-    });
+    ];
+
+    for (const { label, properties, sent } of cases) {
+      mockPostHogInstance.capture.mockClear();
+
+      client.capture("test-user", "test_event", properties);
+
+      expect.soft(mockPostHogInstance.capture, label).toHaveBeenCalledWith({
+        distinctId: "test-user",
+        event: "test_event",
+        properties: sent,
+      });
+    }
   });
 
   it("should add PostHog standard properties and remove duplicates", () => {
@@ -205,45 +184,31 @@ describe("PostHogClient property conversion", () => {
     expect(props.custom_property).toBe("value");
   });
 
-  it("should convert properties in captureException with PostHog standards", () => {
+  it("converts captureException properties the same way, and sends none when given none", () => {
     const error = new Error("Test error");
-    const properties = {
+
+    client.captureException("test-user", error, {
       sessionId: "error-session",
       appVersion: "1.0.0",
       errorContext: "test_context",
       userAction: "button_click",
-    };
-
-    client.captureException("test-user", error, properties);
-
-    const [capturedError, distinctId, props] =
-      mockPostHogInstance.captureException.mock.calls[0];
-    expect(capturedError).toBe(error);
-    expect(distinctId).toBe("test-user");
-
-    // Should have PostHog standard properties
-    expect(props.$session_id).toBe("error-session");
-    expect(props.$app_version).toBe("1.0.0");
-
-    // Should have converted custom properties
-    expect(props.error_context).toBe("test_context");
-    expect(props.user_action).toBe("button_click");
-
-    // Should NOT have duplicates
-    expect(props.sessionId).toBeUndefined();
-    expect(props.appVersion).toBeUndefined();
-  });
-
-  it("should handle captureException without properties", () => {
-    const error = new Error("Test error");
-
+    });
     client.captureException("test-user", error);
 
-    expect(mockPostHogInstance.captureException).toHaveBeenCalledWith(
-      error,
-      "test-user",
-      {},
-    );
+    expect(mockPostHogInstance.captureException.mock.calls).toEqual([
+      [
+        error,
+        "test-user",
+        {
+          // PostHog standard properties replace their duplicates
+          $session_id: "error-session",
+          $app_version: "1.0.0",
+          error_context: "test_context",
+          user_action: "button_click",
+        },
+      ],
+      [error, "test-user", {}],
+    ]);
   });
 
   it("should not convert properties when client is disabled", () => {

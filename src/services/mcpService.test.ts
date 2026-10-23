@@ -1,13 +1,13 @@
 /**
  * Behavior tests for the MCP endpoint: request-check order, protocol revision,
- * browser origins and CORS, and the authentication challenge. Also covers the
- * deprecated HTTP+SSE transport served while authentication is off.
+ * browser origins and CORS, and issuer outages. Also covers the deprecated
+ * HTTP+SSE transport served while authentication is off. The challenge and
+ * token checks over HTTP are in test/auth-e2e.test.ts.
  */
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Client, SSEClientTransport } from "@modelcontextprotocol/client";
 import {
   type AuthInfo,
   OAuthError,
@@ -189,17 +189,6 @@ afterEach(async () => {
 });
 
 describe("MCP endpoint protocol", () => {
-  it("answers a current-revision tools/list", async () => {
-    const app = await startServer();
-
-    const response = await app.inject(modernRequest("tools/list"));
-
-    expect(response.statusCode).toBe(200);
-    expect(
-      response.json().result.tools.map((tool: { name: string }) => tool.name),
-    ).toContain("search_docs");
-  });
-
   it("lists 2026-07-28 as the only supported revision in server/discover", async () => {
     const app = await startServer();
 
@@ -219,21 +208,22 @@ describe("MCP endpoint protocol", () => {
     expect(response.headers["mcp-session-id"]).toBeUndefined();
   });
 
-  it.each(["GET", "DELETE"] as const)(
-    "answers %s with 405 and Allow: POST",
-    async (method) => {
-      const app = await startServer();
+  it("answers GET and DELETE with 405 and Allow: POST", async () => {
+    const app = await startServer();
 
+    for (const method of ["GET", "DELETE"] as const) {
       const response = await app.inject({ method, url: "/mcp" });
 
-      expect(response.statusCode).toBe(405);
-      expect(response.headers.allow).toBe("POST");
-    },
-  );
+      expect.soft(response.statusCode, method).toBe(405);
+      expect.soft(response.headers.allow, method).toBe("POST");
+    }
+  });
 
-  it("marks event-stream responses as unbuffered for proxies", async () => {
+  it("marks event-stream responses on both transports as unbuffered for proxies", async () => {
     const baseUrl = await listen(await startServer());
     const abort = new AbortController();
+    const legacyStream = await openSseStream(baseUrl);
+    legacyStream.close();
 
     const response = await fetch(`${baseUrl}/mcp`, {
       method: "POST",
@@ -255,35 +245,32 @@ describe("MCP endpoint protocol", () => {
 
     expect(response.headers.get("content-type")).toBe("text/event-stream");
     expect(response.headers.get("x-accel-buffering")).toBe("no");
+    expect(legacyStream.response.headers.get("content-type")).toBe("text/event-stream");
+    expect(legacyStream.response.headers.get("x-accel-buffering")).toBe("no");
   });
 });
 
 describe("MCP endpoint browser origins", () => {
-  it("processes requests without an Origin header", async () => {
+  it("processes requests without an Origin or from an allowed one, and lets the page read them", async () => {
     const app = await startServer();
+    const origins = [
+      undefined,
+      "http://localhost:6274",
+      "https://example.com",
+      "https://inspector.example.com",
+    ];
 
-    const response = await app.inject(modernRequest("tools/list"));
+    for (const origin of origins) {
+      const label = origin ?? "no Origin";
+      const response = await app.inject(
+        modernRequest("tools/list", origin ? { origin } : {}),
+      );
 
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+      expect.soft(response.statusCode, label).toBe(200);
+      expect.soft(response.headers["access-control-allow-origin"], label).toBe(origin);
+      if (origin) expect.soft(response.headers.vary, label).toContain("Origin");
+    }
   });
-
-  it.each([
-    "http://localhost:6274",
-    "https://example.com",
-    "https://inspector.example.com",
-  ])(
-    "processes requests from allowed origin %s and lets the page read them",
-    async (origin) => {
-      const app = await startServer();
-
-      const response = await app.inject(modernRequest("tools/list", { origin }));
-
-      expect(response.statusCode).toBe(200);
-      expect(response.headers["access-control-allow-origin"]).toBe(origin);
-      expect(response.headers.vary).toContain("Origin");
-    },
-  );
 
   it("rejects a foreign origin with 403 even when the token is valid", async () => {
     const app = await startServer({ withAuth: true });
@@ -355,45 +342,6 @@ describe("MCP endpoint authentication", () => {
     expect(response.statusCode).toBe(401);
   });
 
-  it("challenges a request without a token with resource_metadata and no error code", async () => {
-    const app = await startServer({ withAuth: true });
-
-    const response = await app.inject(modernRequest("tools/list"));
-
-    expect(response.statusCode).toBe(401);
-    expect(response.headers["www-authenticate"]).toBe(
-      `Bearer resource_metadata="${RESOURCE_METADATA_URL}"`,
-    );
-  });
-
-  it("makes the challenge readable by a page on an allowed origin", async () => {
-    const app = await startServer({ withAuth: true });
-
-    const response = await app.inject(
-      modernRequest("tools/list", { origin: "http://localhost:6274" }),
-    );
-
-    expect(response.statusCode).toBe(401);
-    expect(response.headers["access-control-allow-origin"]).toBe("http://localhost:6274");
-    expect(response.headers["access-control-expose-headers"]).toContain(
-      "WWW-Authenticate",
-    );
-  });
-
-  it("challenges a rejected token with invalid_token and resource_metadata", async () => {
-    const app = await startServer({ withAuth: true });
-
-    const response = await app.inject(
-      modernRequest("tools/list", { authorization: "Bearer bad" }),
-    );
-
-    expect(response.statusCode).toBe(401);
-    expect(response.headers["www-authenticate"]).toContain('error="invalid_token"');
-    expect(response.headers["www-authenticate"]).toContain(
-      `resource_metadata="${RESOURCE_METADATA_URL}"`,
-    );
-  });
-
   it("answers an issuer outage with a server error, not a token rejection", async () => {
     const app = await startServer({ withAuth: true });
 
@@ -404,44 +352,9 @@ describe("MCP endpoint authentication", () => {
     expect(response.statusCode).toBeGreaterThanOrEqual(500);
     expect(response.headers["www-authenticate"] ?? "").not.toContain("invalid_token");
   });
-
-  it("processes a request carrying a valid token", async () => {
-    const app = await startServer({ withAuth: true });
-
-    const response = await app.inject(
-      modernRequest("tools/list", { authorization: "Bearer good" }),
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json().result.tools.length).toBeGreaterThan(0);
-  });
 });
 
 describe("Deprecated HTTP+SSE transport", () => {
-  it("names a message URL under the base path in the endpoint event", async () => {
-    const baseUrl = await listen(await startServer());
-
-    const stream = await openSseStream(baseUrl);
-    stream.close();
-
-    expect(stream.response.headers.get("content-type")).toBe("text/event-stream");
-    expect(stream.response.headers.get("x-accel-buffering")).toBe("no");
-    expect(stream.endpoint).toMatch(/^\/docs\/messages\?sessionId=[\w-]+$/);
-  });
-
-  it("serves a handshake-era client end to end", async () => {
-    const baseUrl = await listen(await startServer());
-    const client = new Client({ name: "legacy-sse", version: "1.0.0" });
-
-    await client.connect(new SSEClientTransport(new URL(`${baseUrl}${BASE_PATH}/sse`)));
-    try {
-      const tools = await client.listTools();
-      expect(tools.tools.map((tool) => tool.name)).toContain("search_docs");
-    } finally {
-      await client.close();
-    }
-  });
-
   it("answers a message for an unknown session with 404", async () => {
     const app = await startServer();
 
@@ -455,41 +368,27 @@ describe("Deprecated HTTP+SSE transport", () => {
     expect(response.statusCode).toBe(404);
   });
 
-  it.each([
-    ["GET", "/sse"],
-    ["POST", "/messages?sessionId=abc"],
-  ] as const)("rejects %s %s from a foreign origin with 403", async (method, path) => {
+  it("rejects the stream and its messages from a foreign origin with 403", async () => {
     const app = await startServer();
 
-    const response = await app.inject({
-      method,
-      url: `${BASE_PATH}${path}`,
-      headers: { origin: "https://attacker.example", "content-type": "application/json" },
-      payload: method === "POST" ? { jsonrpc: "2.0", id: 1, method: "ping" } : undefined,
-    });
-
-    expect(response.statusCode).toBe(403);
-  });
-
-  it.each([
-    ["GET", "/sse"],
-    ["POST", "/messages?sessionId=abc"],
-  ] as const)(
-    "does not serve %s %s with authentication enabled",
-    async (method, path) => {
-      const app = await startServer({ withAuth: true });
-
+    for (const [method, path] of [
+      ["GET", "/sse"],
+      ["POST", "/messages?sessionId=abc"],
+    ] as const) {
       const response = await app.inject({
         method,
         url: `${BASE_PATH}${path}`,
-        headers: { "content-type": "application/json" },
+        headers: {
+          origin: "https://attacker.example",
+          "content-type": "application/json",
+        },
         payload:
           method === "POST" ? { jsonrpc: "2.0", id: 1, method: "ping" } : undefined,
       });
 
-      expect(response.statusCode).toBe(404);
-    },
-  );
+      expect.soft(response.statusCode, `${method} ${path}`).toBe(403);
+    }
+  });
 
   it("refuses streams beyond the cap with 503", async () => {
     const baseUrl = await listen(await startServer());

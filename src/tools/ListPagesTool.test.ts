@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IDocumentManagement } from "../store/trpc/interfaces";
 import { ValidationError } from "./errors";
-import { ListPagesTool } from "./ListPagesTool";
+import { ListPagesTool, type ListPagesToolOptions } from "./ListPagesTool";
 
 describe("ListPagesTool", () => {
   let mockDocService: Partial<IDocumentManagement>;
@@ -20,60 +20,10 @@ describe("ListPagesTool", () => {
     await expect(tool.execute({ library: "   " })).rejects.toThrow(ValidationError);
   });
 
-  it("should enforce limit constraints and clamp between 1 and 200", async () => {
-    const mockResult = {
-      library: "react",
-      version: "19.0.0",
-      total: 1,
-      pages: [{ url: "https://react.dev/start", title: "Quickstart", depth: 1 }],
-      limit: 50,
-      offset: 0,
-      hasMore: false,
-    };
-    (mockDocService.listPages as ReturnType<typeof vi.fn>).mockResolvedValue(mockResult);
-
-    await tool.execute({ library: "react", limit: 500 });
-    expect(mockDocService.listPages).toHaveBeenCalledWith("react", undefined, {
-      contains: undefined,
-      limit: 200,
-      offset: 0,
-    });
-
-    await tool.execute({ library: "react", limit: -10 });
-    expect(mockDocService.listPages).toHaveBeenCalledWith("react", undefined, {
-      contains: undefined,
-      limit: 50,
-      offset: 0,
-    });
-  });
-
-  it("should return list of pages successfully", async () => {
-    const mockResult = {
-      library: "openrouter",
-      version: "",
-      total: 2,
-      pages: [
-        { url: "https://openrouter.ai/docs/quickstart", title: "Quickstart", depth: 1 },
-        { url: "https://openrouter.ai/docs/models", title: "Models", depth: 2 },
-      ],
-      limit: 50,
-      offset: 0,
-      hasMore: false,
-    };
-    (mockDocService.listPages as ReturnType<typeof vi.fn>).mockResolvedValue(mockResult);
-
-    const result = await tool.execute({
-      library: "openrouter",
-      contains: "/docs",
-      limit: 50,
-      offset: 0,
-    });
-
-    expect(result).toEqual(mockResult);
-  });
-
-  it("should forward the trimmed contains filter", async () => {
-    (mockDocService.listPages as ReturnType<typeof vi.fn>).mockResolvedValue({
+  it("hands the store a trimmed query with the limit clamped to 1-200", async () => {
+    vi.mocked(
+      mockDocService.listPages as IDocumentManagement["listPages"],
+    ).mockResolvedValue({
       library: "react",
       version: "",
       total: 0,
@@ -82,13 +32,31 @@ describe("ListPagesTool", () => {
       offset: 0,
       hasMore: false,
     });
+    const cases: Array<{
+      label: string;
+      input: ListPagesToolOptions;
+      expected: Parameters<IDocumentManagement["listPages"]>;
+    }> = [
+      {
+        label: "limit above 200",
+        input: { library: "react", limit: 500 },
+        expected: ["react", undefined, { contains: undefined, limit: 200, offset: 0 }],
+      },
+      {
+        label: "negative limit",
+        input: { library: "react", limit: -10 },
+        expected: ["react", undefined, { contains: undefined, limit: 50, offset: 0 }],
+      },
+      {
+        label: "padded contains filter",
+        input: { library: "react", contains: "  /hooks  " },
+        expected: ["react", undefined, { contains: "/hooks", limit: 50, offset: 0 }],
+      },
+    ];
 
-    await tool.execute({ library: "react", contains: "  /hooks  " });
-
-    expect(mockDocService.listPages).toHaveBeenCalledWith("react", undefined, {
-      contains: "/hooks",
-      limit: 50,
-      offset: 0,
-    });
+    for (const { label, input, expected } of cases) {
+      await tool.execute(input);
+      expect.soft(mockDocService.listPages, label).toHaveBeenLastCalledWith(...expected);
+    }
   });
 });

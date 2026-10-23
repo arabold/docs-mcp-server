@@ -1,732 +1,496 @@
 import { describe, expect, it } from "vitest";
-import { MimeTypeUtils } from "./mimeTypeUtils";
+import { MimeTypeUtils, type ParsedContentType } from "./mimeTypeUtils";
+
+/** A missing MIME type, which callers pass despite the `string` signature. */
+const missing = (value: null | undefined) => value as unknown as string;
 
 describe("MimeTypeUtils", () => {
-  describe("isBinary", () => {
-    it("should detect binary content with null bytes", () => {
-      const binaryContent = "text content\0with null byte";
-      expect(MimeTypeUtils.isBinary(binaryContent)).toBe(true);
-    });
-
-    it("should detect binary Buffer content", () => {
-      const binaryBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0a, 0x1a, 0x0a]); // PNG-like header with null byte
-      expect(MimeTypeUtils.isBinary(binaryBuffer)).toBe(true);
-    });
-
-    it("should not detect text content as binary", () => {
-      const textContent = "This is plain text content without null bytes";
-      expect(MimeTypeUtils.isBinary(textContent)).toBe(false);
-    });
-
-    it("should not detect text Buffer as binary", () => {
-      const textBuffer = Buffer.from("This is text content", "utf8");
-      expect(MimeTypeUtils.isBinary(textBuffer)).toBe(false);
-    });
-  });
-
-  describe("isText", () => {
-    it("should accept basic text/* MIME types", () => {
-      expect(MimeTypeUtils.isText("text/plain")).toBe(true);
-      expect(MimeTypeUtils.isText("text/css")).toBe(true);
-      expect(MimeTypeUtils.isText("TEXT/HTML")).toBe(true); // Case insensitive
-    });
-
-    it("should exclude structured text formats for specific pipelines", () => {
-      expect(MimeTypeUtils.isText("text/markdown")).toBe(false); // Should go to MarkdownPipeline
-      expect(MimeTypeUtils.isText("application/json")).toBe(false); // Should go to JsonPipeline
-      expect(MimeTypeUtils.isText("text/json")).toBe(false); // Should go to JsonPipeline
-    });
-
-    it("should reject application types", () => {
-      expect(MimeTypeUtils.isText("application/xml")).toBe(false);
-      expect(MimeTypeUtils.isText("application/javascript")).toBe(false);
-      expect(MimeTypeUtils.isText("application/octet-stream")).toBe(false);
-      expect(MimeTypeUtils.isText("application/pdf")).toBe(false);
-    });
-
-    it("should reject image and video types", () => {
-      expect(MimeTypeUtils.isText("image/png")).toBe(false);
-      expect(MimeTypeUtils.isText("image/jpeg")).toBe(false);
-      expect(MimeTypeUtils.isText("video/mp4")).toBe(false);
-      expect(MimeTypeUtils.isText("audio/mpeg")).toBe(false);
-    });
-
-    it("should reject empty or null MIME types", () => {
-      expect(MimeTypeUtils.isText("")).toBe(false);
-      expect(MimeTypeUtils.isText(null as any)).toBe(false);
-      expect(MimeTypeUtils.isText(undefined as any)).toBe(false);
-    });
-  });
-
-  describe("isSafeForTextProcessing", () => {
-    it("should accept all text/* MIME types", () => {
-      expect(MimeTypeUtils.isSafeForTextProcessing("text/plain")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("text/markdown")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("text/css")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("TEXT/HTML")).toBe(true); // Case insensitive
-    });
-
-    it("should accept safe application types", () => {
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/xml")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/javascript")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/x-javascript")).toBe(
+  it("detects binary content by its null bytes", () => {
+    const cases: Array<[label: string, content: string | Buffer, expected: boolean]> = [
+      ["string with a null byte", "text content\0with null byte", true],
+      // PNG-like header with a null byte
+      [
+        "Buffer with a null byte",
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0a, 0x1a, 0x0a]),
         true,
-      );
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/x-sh")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/x-yaml")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/yaml")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/json")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/xslt+xml")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/xml-dtd")).toBe(true);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/wsdl+xml")).toBe(true);
-    });
+      ],
+      ["plain string", "This is plain text content without null bytes", false],
+      ["plain Buffer", Buffer.from("This is text content", "utf8"), false],
+    ];
 
-    it("should reject unsafe application types", () => {
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/octet-stream")).toBe(
-        false,
-      );
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/pdf")).toBe(false);
-      expect(MimeTypeUtils.isSafeForTextProcessing("application/zip")).toBe(false);
-    });
-
-    it("should reject image and video types", () => {
-      expect(MimeTypeUtils.isSafeForTextProcessing("image/png")).toBe(false);
-      expect(MimeTypeUtils.isSafeForTextProcessing("image/jpeg")).toBe(false);
-      expect(MimeTypeUtils.isSafeForTextProcessing("video/mp4")).toBe(false);
-      expect(MimeTypeUtils.isSafeForTextProcessing("audio/mpeg")).toBe(false);
-    });
-
-    it("should reject empty or null MIME types", () => {
-      expect(MimeTypeUtils.isSafeForTextProcessing("")).toBe(false);
-      expect(MimeTypeUtils.isSafeForTextProcessing(null as any)).toBe(false);
-      expect(MimeTypeUtils.isSafeForTextProcessing(undefined as any)).toBe(false);
-    });
+    for (const [label, content, expected] of cases) {
+      expect.soft(MimeTypeUtils.isBinary(content), label).toBe(expected);
+    }
   });
 
-  describe("existing methods", () => {
-    it("should correctly identify HTML", () => {
-      expect(MimeTypeUtils.isHtml("text/html")).toBe(true);
-      expect(MimeTypeUtils.isHtml("application/xhtml+xml")).toBe(true);
-      expect(MimeTypeUtils.isHtml("text/plain")).toBe(false);
-    });
+  it("accepts plain text types and leaves structured text to its own pipeline", () => {
+    const cases: Array<[mimeType: string, expected: boolean]> = [
+      ["text/plain", true],
+      ["text/css", true],
+      ["text/html", true],
+      ["TEXT/HTML", true], // case insensitive
+      ["text/markdown", false], // goes to MarkdownPipeline
+      ["application/json", false], // goes to JsonPipeline
+      ["text/json", false], // goes to JsonPipeline
+      ["application/xml", false],
+      ["application/javascript", false],
+      ["application/octet-stream", false],
+      ["application/pdf", false],
+      ["image/png", false],
+      ["image/jpeg", false],
+      ["video/mp4", false],
+      ["audio/mpeg", false],
+      ["", false],
+      [missing(null), false],
+      [missing(undefined), false],
+    ];
 
-    it("should correctly identify Markdown", () => {
-      expect(MimeTypeUtils.isMarkdown("text/markdown")).toBe(true);
-      expect(MimeTypeUtils.isMarkdown("text/x-markdown")).toBe(true);
-      expect(MimeTypeUtils.isMarkdown("text/mdx")).toBe(true);
-      expect(MimeTypeUtils.isMarkdown("text/x-gfm")).toBe(true);
-      expect(MimeTypeUtils.isMarkdown("text/plain")).toBe(false);
-    });
-
-    it("should correctly identify text types", () => {
-      expect(MimeTypeUtils.isText("text/plain")).toBe(true);
-      expect(MimeTypeUtils.isText("text/html")).toBe(true);
-      expect(MimeTypeUtils.isText("application/json")).toBe(false); // JSON should go to JsonPipeline
-    });
-
-    it("should correctly identify JSON", () => {
-      expect(MimeTypeUtils.isJson("application/json")).toBe(true);
-      expect(MimeTypeUtils.isJson("text/json")).toBe(true);
-      expect(MimeTypeUtils.isJson("text/x-json")).toBe(true);
-      expect(MimeTypeUtils.isJson("text/plain")).toBe(false);
-    });
-
-    it("should correctly identify source code", () => {
-      expect(MimeTypeUtils.isSourceCode("text/x-typescript")).toBe(true);
-      expect(MimeTypeUtils.isSourceCode("text/x-python")).toBe(true);
-      expect(MimeTypeUtils.isSourceCode("text/plain")).toBe(false);
-    });
+    for (const [mimeType, expected] of cases) {
+      expect.soft(MimeTypeUtils.isText(mimeType), String(mimeType)).toBe(expected);
+    }
   });
 
-  describe("document format detection", () => {
-    it("should identify modern Office documents", () => {
-      expect(
-        MimeTypeUtils.isOfficeDocument(
+  it("accepts every text type and the text-based application types for text processing", () => {
+    const cases: Array<[mimeType: string, expected: boolean]> = [
+      ["text/plain", true],
+      ["text/markdown", true],
+      ["text/css", true],
+      ["TEXT/HTML", true], // case insensitive
+      ["application/xml", true],
+      ["application/javascript", true],
+      ["application/x-javascript", true],
+      ["application/x-sh", true],
+      ["application/x-yaml", true],
+      ["application/yaml", true],
+      ["application/json", true],
+      ["application/xslt+xml", true],
+      ["application/xml-dtd", true],
+      ["application/wsdl+xml", true],
+      ["application/octet-stream", false],
+      ["application/pdf", false],
+      ["application/zip", false],
+      ["application/unknown", false],
+      ["image/png", false],
+      ["image/jpeg", false],
+      ["video/mp4", false],
+      ["audio/mpeg", false],
+      ["", false],
+      [missing(null), false],
+      [missing(undefined), false],
+    ];
+
+    for (const [mimeType, expected] of cases) {
+      expect
+        .soft(MimeTypeUtils.isSafeForTextProcessing(mimeType), String(mimeType))
+        .toBe(expected);
+    }
+  });
+
+  it("recognizes the HTML, Markdown and JSON types", () => {
+    const predicates = {
+      isHtml: MimeTypeUtils.isHtml,
+      isMarkdown: MimeTypeUtils.isMarkdown,
+      isJson: MimeTypeUtils.isJson,
+    };
+    const cases: Array<
+      [predicate: keyof typeof predicates, mimeType: string, expected: boolean]
+    > = [
+      ["isHtml", "text/html", true],
+      ["isHtml", "application/xhtml+xml", true],
+      ["isHtml", "text/plain", false],
+      ["isMarkdown", "text/markdown", true],
+      ["isMarkdown", "text/x-markdown", true],
+      ["isMarkdown", "text/mdx", true],
+      ["isMarkdown", "text/x-gfm", true],
+      ["isMarkdown", "text/plain", false],
+      ["isJson", "application/json", true],
+      ["isJson", "text/json", true],
+      ["isJson", "text/x-json", true],
+      ["isJson", "text/plain", false],
+    ];
+
+    for (const [predicate, mimeType, expected] of cases) {
+      expect
+        .soft(predicates[predicate](mimeType), `${predicate}(${mimeType})`)
+        .toBe(expected);
+    }
+  });
+
+  it("detects each document format and assigns it to exactly one document family", () => {
+    const families = {
+      pdf: MimeTypeUtils.isPdf,
+      office: MimeTypeUtils.isOfficeDocument,
+      legacyOffice: MimeTypeUtils.isLegacyOfficeDocument,
+      openDocument: MimeTypeUtils.isOpenDocument,
+      rtf: MimeTypeUtils.isRtf,
+      ebook: MimeTypeUtils.isEbook,
+      jupyter: MimeTypeUtils.isJupyterNotebook,
+    };
+    // A null path is a MIME type that arrives without one, e.g. from a header.
+    // A null family is a type DocumentPipeline must not claim.
+    const cases: Array<{
+      path: string | null;
+      mimeType: string;
+      family: keyof typeof families | null;
+    }> = [
+      { path: "file.pdf", mimeType: "application/pdf", family: "pdf" },
+      {
+        path: "file.docx",
+        mimeType:
           "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ),
-      ).toBe(true);
-      expect(
-        MimeTypeUtils.isOfficeDocument(
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ),
-      ).toBe(true);
-      expect(
-        MimeTypeUtils.isOfficeDocument(
+        family: "office",
+      },
+      {
+        path: "file.xlsx",
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        family: "office",
+      },
+      {
+        path: "file.pptx",
+        mimeType:
           "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        ),
-      ).toBe(true);
-      expect(MimeTypeUtils.isOfficeDocument("application/msword")).toBe(false);
-    });
+        family: "office",
+      },
+      { path: "file.doc", mimeType: "application/msword", family: "legacyOffice" },
+      { path: "file.xls", mimeType: "application/vnd.ms-excel", family: "legacyOffice" },
+      {
+        path: "file.ppt",
+        mimeType: "application/vnd.ms-powerpoint",
+        family: "legacyOffice",
+      },
+      {
+        path: "file.odt",
+        mimeType: "application/vnd.oasis.opendocument.text",
+        family: "openDocument",
+      },
+      {
+        path: "file.ods",
+        mimeType: "application/vnd.oasis.opendocument.spreadsheet",
+        family: "openDocument",
+      },
+      {
+        path: "file.odp",
+        mimeType: "application/vnd.oasis.opendocument.presentation",
+        family: "openDocument",
+      },
+      { path: "file.rtf", mimeType: "application/rtf", family: "rtf" },
+      { path: null, mimeType: "text/rtf", family: "rtf" },
+      { path: "book.epub", mimeType: "application/epub+zip", family: "ebook" },
+      { path: "book.fb2", mimeType: "application/x-fictionbook+xml", family: "ebook" },
+      { path: "notebook.ipynb", mimeType: "application/x-ipynb+json", family: "jupyter" },
+      { path: null, mimeType: "text/html", family: null },
+      { path: null, mimeType: "text/plain", family: null },
+      { path: null, mimeType: "application/json", family: null },
+    ];
 
-    it("should identify legacy Office documents", () => {
-      expect(MimeTypeUtils.isLegacyOfficeDocument("application/msword")).toBe(true);
-      expect(MimeTypeUtils.isLegacyOfficeDocument("application/vnd.ms-excel")).toBe(true);
-      expect(MimeTypeUtils.isLegacyOfficeDocument("application/vnd.ms-powerpoint")).toBe(
-        true,
-      );
-      expect(
-        MimeTypeUtils.isLegacyOfficeDocument(
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ),
-      ).toBe(false);
-    });
-
-    it("should identify OpenDocument formats", () => {
-      expect(
-        MimeTypeUtils.isOpenDocument("application/vnd.oasis.opendocument.text"),
-      ).toBe(true);
-      expect(
-        MimeTypeUtils.isOpenDocument("application/vnd.oasis.opendocument.spreadsheet"),
-      ).toBe(true);
-      expect(
-        MimeTypeUtils.isOpenDocument("application/vnd.oasis.opendocument.presentation"),
-      ).toBe(true);
-      expect(MimeTypeUtils.isOpenDocument("application/pdf")).toBe(false);
-    });
-
-    it("should identify RTF", () => {
-      expect(MimeTypeUtils.isRtf("application/rtf")).toBe(true);
-      expect(MimeTypeUtils.isRtf("text/rtf")).toBe(true);
-      expect(MimeTypeUtils.isRtf("text/plain")).toBe(false);
-    });
-
-    it("should identify eBook formats", () => {
-      expect(MimeTypeUtils.isEbook("application/epub+zip")).toBe(true);
-      expect(MimeTypeUtils.isEbook("application/x-fictionbook+xml")).toBe(true);
-      expect(MimeTypeUtils.isEbook("application/pdf")).toBe(false);
-    });
-
-    it("should identify all supported document types via isSupportedDocument", () => {
-      // PDF
-      expect(MimeTypeUtils.isSupportedDocument("application/pdf")).toBe(true);
-      // Modern Office
-      expect(
-        MimeTypeUtils.isSupportedDocument(
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ),
-      ).toBe(true);
-      // Legacy Office
-      expect(MimeTypeUtils.isSupportedDocument("application/msword")).toBe(true);
-      expect(MimeTypeUtils.isSupportedDocument("application/vnd.ms-excel")).toBe(true);
-      expect(MimeTypeUtils.isSupportedDocument("application/vnd.ms-powerpoint")).toBe(
-        true,
-      );
-      // OpenDocument
-      expect(
-        MimeTypeUtils.isSupportedDocument("application/vnd.oasis.opendocument.text"),
-      ).toBe(true);
-      expect(
-        MimeTypeUtils.isSupportedDocument(
-          "application/vnd.oasis.opendocument.spreadsheet",
-        ),
-      ).toBe(true);
-      expect(
-        MimeTypeUtils.isSupportedDocument(
-          "application/vnd.oasis.opendocument.presentation",
-        ),
-      ).toBe(true);
-      // RTF
-      expect(MimeTypeUtils.isSupportedDocument("application/rtf")).toBe(true);
-      // eBooks
-      expect(MimeTypeUtils.isSupportedDocument("application/epub+zip")).toBe(true);
-      expect(MimeTypeUtils.isSupportedDocument("application/x-fictionbook+xml")).toBe(
-        true,
-      );
-      // Jupyter
-      expect(MimeTypeUtils.isSupportedDocument("application/x-ipynb+json")).toBe(true);
-      // Not supported
-      expect(MimeTypeUtils.isSupportedDocument("text/html")).toBe(false);
-      expect(MimeTypeUtils.isSupportedDocument("application/json")).toBe(false);
-    });
+    for (const { path, mimeType, family } of cases) {
+      const label = path ?? mimeType;
+      if (path !== null) {
+        expect
+          .soft(MimeTypeUtils.detectMimeTypeFromPath(path), `${label}: MIME type`)
+          .toBe(mimeType);
+      }
+      expect
+        .soft(MimeTypeUtils.isSupportedDocument(mimeType), `${label}: supported document`)
+        .toBe(family !== null);
+      for (const [name, isFamily] of Object.entries(families)) {
+        expect.soft(isFamily(mimeType), `${label}: ${name}`).toBe(name === family);
+      }
+    }
   });
 
-  describe("detectMimeTypeFromPath", () => {
-    describe("documentation formats (issue #311)", () => {
-      it("should detect RST (reStructuredText) files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("docs/readme.rst")).toBe(
-          "text/x-rst",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("README.RST")).toBe("text/x-rst");
-      });
+  it("maps a path to its MIME type and the MIME type to its code language", () => {
+    // A null path is a MIME type that arrives without one. An empty language
+    // means the type is not source code.
+    const cases: Array<{ path: string | null; mimeType: string; language: string }> = [
+      // Documentation formats (issue #311)
+      { path: "docs/readme.rst", mimeType: "text/x-rst", language: "rst" },
+      { path: "README.RST", mimeType: "text/x-rst", language: "rst" }, // extension case ignored
+      { path: "docs/guide.adoc", mimeType: "text/x-asciidoc", language: "asciidoc" },
+      { path: "README.asciidoc", mimeType: "text/x-asciidoc", language: "asciidoc" },
+      { path: "notes.org", mimeType: "text/x-org", language: "org" },
+      { path: "doc.textile", mimeType: "text/x-textile", language: "textile" },
+      { path: "doc.pod", mimeType: "text/x-pod", language: "pod" },
+      { path: "doc.rdoc", mimeType: "text/x-rdoc", language: "rdoc" },
+      { path: "doc.wiki", mimeType: "text/x-wiki", language: "wiki" },
+      { path: "doc.rmd", mimeType: "text/x-rmarkdown", language: "rmarkdown" },
 
-      it("should detect AsciiDoc files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("docs/guide.adoc")).toBe(
-          "text/x-asciidoc",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("README.asciidoc")).toBe(
-          "text/x-asciidoc",
-        );
-      });
+      // TypeScript and JavaScript
+      { path: "app.ts", mimeType: "text/x-typescript", language: "typescript" },
+      { path: "app.tsx", mimeType: "text/x-tsx", language: "tsx" },
+      { path: "app.mts", mimeType: "text/x-typescript", language: "typescript" },
+      { path: "app.cts", mimeType: "text/x-typescript", language: "typescript" },
+      { path: "app.js", mimeType: "text/javascript", language: "javascript" },
+      { path: "app.jsx", mimeType: "text/x-jsx", language: "jsx" },
+      { path: "app.cjs", mimeType: "text/javascript", language: "javascript" },
+      { path: "app.mjs", mimeType: "text/javascript", language: "javascript" },
+      { path: null, mimeType: "application/javascript", language: "javascript" },
 
-      it("should detect Org-mode files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("notes.org")).toBe("text/x-org");
-      });
+      // Python
+      { path: "script.py", mimeType: "text/x-python", language: "python" },
+      { path: "script.pyw", mimeType: "text/x-python", language: "python" },
+      { path: "types.pyi", mimeType: "text/x-python", language: "python" },
+      { path: "module.pyx", mimeType: "text/x-cython", language: "cython" },
 
-      it("should detect other documentation formats", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("doc.textile")).toBe(
-          "text/x-textile",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("doc.pod")).toBe("text/x-pod");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("doc.rdoc")).toBe("text/x-rdoc");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("doc.wiki")).toBe("text/x-wiki");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("doc.rmd")).toBe("text/x-rmarkdown");
-      });
-    });
+      // Systems languages
+      { path: "main.go", mimeType: "text/x-go", language: "go" },
+      { path: "main.rs", mimeType: "text/x-rust", language: "rust" },
+      { path: "main.c", mimeType: "text/x-csrc", language: "c" },
+      { path: "main.cpp", mimeType: "text/x-c++src", language: "cpp" },
+      { path: "main.zig", mimeType: "text/x-zig", language: "zig" },
+      { path: "main.nim", mimeType: "text/x-nim", language: "nim" },
 
-    describe("programming languages", () => {
-      it("should detect TypeScript variants", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.ts")).toBe("text/x-typescript");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.tsx")).toBe("text/x-tsx");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.mts")).toBe("text/x-typescript");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.cts")).toBe("text/x-typescript");
-      });
+      // JVM languages
+      { path: "Main.kt", mimeType: "text/x-kotlin", language: "kotlin" },
+      { path: "build.kts", mimeType: "text/x-kotlin", language: "kotlin" },
+      { path: "Main.scala", mimeType: "text/x-scala", language: "scala" },
+      { path: "Script.groovy", mimeType: "text/x-groovy", language: "groovy" },
+      { path: "build.gradle", mimeType: "text/x-gradle", language: "groovy" },
 
-      it("should detect JavaScript variants", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.js")).toBe("text/javascript");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.jsx")).toBe("text/x-jsx");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.cjs")).toBe("text/javascript");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.mjs")).toBe("text/javascript");
-      });
+      // Functional languages
+      { path: "Main.hs", mimeType: "text/x-haskell", language: "haskell" },
+      { path: "Main.elm", mimeType: "text/x-elm", language: "elm" },
+      { path: "app.ex", mimeType: "text/x-elixir", language: "elixir" },
+      { path: "app.exs", mimeType: "text/x-elixir", language: "elixir" },
+      { path: "core.clj", mimeType: "text/x-clojure", language: "clojure" },
+      { path: "script.jl", mimeType: "text/x-julia", language: "julia" },
 
-      it("should detect Python files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("script.py")).toBe("text/x-python");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("script.pyw")).toBe("text/x-python");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("types.pyi")).toBe("text/x-python");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("module.pyx")).toBe("text/x-cython");
-      });
+      // Scripting languages
+      { path: "script.rb", mimeType: "text/x-ruby", language: "ruby" },
+      { path: "Rakefile.rake", mimeType: "text/x-ruby", language: "ruby" },
+      { path: "script.lua", mimeType: "text/x-lua", language: "lua" },
+      { path: "script.pl", mimeType: "text/x-perl", language: "perl" },
+      { path: "analysis.r", mimeType: "text/x-r", language: "r" },
+      { path: "analysis.R", mimeType: "text/x-r", language: "r" },
 
-      it("should detect systems languages", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("main.go")).toBe("text/x-go");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("main.rs")).toBe("text/x-rust");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("main.c")).toBe("text/x-csrc");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("main.cpp")).toBe("text/x-c++src");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("main.zig")).toBe("text/x-zig");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("main.nim")).toBe("text/x-nim");
-      });
+      // Web3 and smart contract languages
+      { path: "Contract.sol", mimeType: "text/x-solidity", language: "solidity" },
+      { path: "module.move", mimeType: "text/x-move", language: "move" },
+      { path: "contract.cairo", mimeType: "text/x-cairo", language: "cairo" },
 
-      it("should detect JVM languages", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Main.kt")).toBe("text/x-kotlin");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("build.kts")).toBe("text/x-kotlin");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Main.scala")).toBe("text/x-scala");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Script.groovy")).toBe(
-          "text/x-groovy",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("build.gradle")).toBe(
-          "text/x-gradle",
-        );
-      });
+      // Web framework components
+      { path: "App.vue", mimeType: "text/x-vue", language: "vue" },
+      { path: "App.svelte", mimeType: "text/x-svelte", language: "svelte" },
+      { path: "Page.astro", mimeType: "text/x-astro", language: "astro" },
 
-      it("should detect functional languages", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Main.hs")).toBe("text/x-haskell");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Main.elm")).toBe("text/x-elm");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.ex")).toBe("text/x-elixir");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.exs")).toBe("text/x-elixir");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("core.clj")).toBe("text/x-clojure");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("script.jl")).toBe("text/x-julia");
-      });
+      // Configuration files
+      { path: "config.toml", mimeType: "text/x-toml", language: "toml" },
+      { path: "config.ini", mimeType: "text/x-ini", language: "ini" },
+      { path: "settings.cfg", mimeType: "text/x-ini", language: "ini" },
+      { path: "app.conf", mimeType: "text/x-conf", language: "conf" },
+      { path: ".env", mimeType: "text/x-dotenv", language: "dotenv" },
+      { path: "app.properties", mimeType: "text/x-properties", language: "properties" },
 
-      it("should detect scripting languages", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("script.rb")).toBe("text/x-ruby");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Rakefile.rake")).toBe("text/x-ruby");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("script.lua")).toBe("text/x-lua");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("script.pl")).toBe("text/x-perl");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("analysis.r")).toBe("text/x-r");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("analysis.R")).toBe("text/x-r");
-      });
+      // Build and infrastructure files, some matched by their whole file name
+      { path: "Dockerfile", mimeType: "text/x-dockerfile", language: "dockerfile" },
+      { path: "app.dockerfile", mimeType: "text/x-dockerfile", language: "dockerfile" },
+      { path: "Containerfile", mimeType: "text/x-dockerfile", language: "dockerfile" },
+      { path: "Makefile", mimeType: "text/x-makefile", language: "makefile" },
+      { path: "CMakeLists.cmake", mimeType: "text/x-cmake", language: "cmake" },
+      { path: "BUILD.bazel", mimeType: "text/x-bazel", language: "bazel" },
+      { path: "defs.bzl", mimeType: "text/x-bazel", language: "bazel" },
+      { path: "main.tf", mimeType: "text/x-terraform", language: "hcl" },
+      { path: "vars.tfvars", mimeType: "text/x-terraform", language: "hcl" },
+      { path: "config.hcl", mimeType: "text/x-hcl", language: "hcl" },
 
-      it("should detect Web3/smart contract languages", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Contract.sol")).toBe(
-          "text/x-solidity",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("module.move")).toBe("text/x-move");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("contract.cairo")).toBe(
-          "text/x-cairo",
-        );
-      });
-    });
+      // XML-based formats keep their standard MIME types and all read as XML
+      // source (issue #341)
+      { path: "transform.xslt", mimeType: "application/xslt+xml", language: "xml" },
+      { path: "transform.xsl", mimeType: "application/xml", language: "xml" },
+      { path: "schema.xsd", mimeType: "application/xml", language: "xml" },
+      { path: "doctype.dtd", mimeType: "application/xml-dtd", language: "xml" },
+      { path: "service.wsdl", mimeType: "application/wsdl+xml", language: "xml" },
+      { path: null, mimeType: "text/xml", language: "xml" },
 
-    describe("modern web frameworks", () => {
-      it("should detect Vue, Svelte, and Astro components", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("App.vue")).toBe("text/x-vue");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("App.svelte")).toBe("text/x-svelte");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Page.astro")).toBe("text/x-astro");
-      });
-    });
+      // Schema and API definitions
+      { path: "schema.graphql", mimeType: "text/x-graphql", language: "graphql" },
+      { path: "query.gql", mimeType: "text/x-graphql", language: "graphql" },
+      { path: "messages.proto", mimeType: "text/x-proto", language: "protobuf" },
+      { path: "schema.prisma", mimeType: "text/x-prisma", language: "prisma" },
+      { path: "service.thrift", mimeType: "text/x-thrift", language: "thrift" },
+      { path: "schema.avro", mimeType: "text/x-avro", language: "avro" },
 
-    describe("configuration files", () => {
-      it("should detect TOML and INI formats", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("config.toml")).toBe("text/x-toml");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("config.ini")).toBe("text/x-ini");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("settings.cfg")).toBe("text/x-ini");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.conf")).toBe("text/x-conf");
-      });
+      // TeX and LaTeX
+      { path: "document.tex", mimeType: "text/x-tex", language: "tex" },
+      { path: "document.latex", mimeType: "text/x-latex", language: "latex" },
 
-      it("should detect environment and properties files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath(".env")).toBe("text/x-dotenv");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.properties")).toBe(
-          "text/x-properties",
-        );
-      });
-    });
+      // The mime package files these plain-text scripts under application/*,
+      // which left them unindexed by the GitHub and local-file strategies and
+      // drove the binary-media narrowing of the crawl gate (issue #490).
+      { path: "/script.csh", mimeType: "text/x-shellscript", language: "bash" },
+      { path: "/script.tcsh", mimeType: "text/x-shellscript", language: "bash" },
+      { path: "/script.ksh", mimeType: "text/x-shellscript", language: "bash" },
+      { path: "/script.tcl", mimeType: "text/x-tcl", language: "tcl" },
+      { path: "/lib.scm", mimeType: "text/x-scheme", language: "scheme" },
+      { path: "/build.bat", mimeType: "text/x-batch", language: "batch" },
+      { path: "/build.cmd", mimeType: "text/x-batch", language: "batch" },
 
-    describe("build and infrastructure files", () => {
-      it("should detect Docker and container files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Dockerfile")).toBe(
-          "text/x-dockerfile",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("app.dockerfile")).toBe(
-          "text/x-dockerfile",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Containerfile")).toBe(
-          "text/x-dockerfile",
-        );
-      });
+      // Not source code. .ps is not a misfiled text script but a genuine
+      // document format, so it keeps application/postscript.
+      { path: "/Guess/guess.ps", mimeType: "application/postscript", language: "" },
+      { path: null, mimeType: "text/plain", language: "" },
+      { path: null, mimeType: "text/markdown", language: "" },
+      { path: null, mimeType: "text/html", language: "" },
+      { path: null, mimeType: "text/x-unknown", language: "" },
+      { path: null, mimeType: "application/octet-stream", language: "" },
+      { path: null, mimeType: "application/pdf", language: "" },
+      { path: null, mimeType: "image/png", language: "" },
+      { path: null, mimeType: "video/mp4", language: "" },
+    ];
 
-      it("should detect build system files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("Makefile")).toBe("text/x-makefile");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("CMakeLists.cmake")).toBe(
-          "text/x-cmake",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("BUILD.bazel")).toBe("text/x-bazel");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("defs.bzl")).toBe("text/x-bazel");
-      });
-
-      it("should detect Terraform and HCL files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("main.tf")).toBe("text/x-terraform");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("vars.tfvars")).toBe(
-          "text/x-terraform",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("config.hcl")).toBe("text/x-hcl");
-      });
-    });
-
-    describe("XML-based formats (issue #341)", () => {
-      it("should detect XSLT/XSL files with standard MIME types", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xslt")).toBe(
-          "application/xslt+xml",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("transform.xsl")).toBe(
-          "application/xml",
-        );
-      });
-
-      it("should detect XSD, DTD, and WSDL files with standard MIME types", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("schema.xsd")).toBe(
-          "application/xml",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("doctype.dtd")).toBe(
-          "application/xml-dtd",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("service.wsdl")).toBe(
-          "application/wsdl+xml",
-        );
-      });
-
-      it("should recognize all XML-variant MIME types as source code", () => {
-        expect(MimeTypeUtils.isSourceCode("application/xslt+xml")).toBe(true);
-        expect(MimeTypeUtils.isSourceCode("application/xml-dtd")).toBe(true);
-        expect(MimeTypeUtils.isSourceCode("application/wsdl+xml")).toBe(true);
-        expect(MimeTypeUtils.isSourceCode("application/xml")).toBe(true);
-        expect(MimeTypeUtils.isSourceCode("text/xml")).toBe(true);
-      });
-    });
-
-    describe("schema and API definitions", () => {
-      it("should detect GraphQL and Protocol Buffers", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("schema.graphql")).toBe(
-          "text/x-graphql",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("query.gql")).toBe("text/x-graphql");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("messages.proto")).toBe(
-          "text/x-proto",
-        );
-      });
-
-      it("should detect Prisma, Thrift, and Avro", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("schema.prisma")).toBe(
-          "text/x-prisma",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("service.thrift")).toBe(
-          "text/x-thrift",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("schema.avro")).toBe("text/x-avro");
-      });
-    });
-
-    describe("TeX and LaTeX", () => {
-      it("should detect TeX/LaTeX files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("document.tex")).toBe("text/x-tex");
-        expect(MimeTypeUtils.detectMimeTypeFromPath("document.latex")).toBe(
-          "text/x-latex",
-        );
-      });
-    });
-
-    describe("document formats", () => {
-      it("should detect legacy Office formats", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.doc")).toBe(
-          "application/msword",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.xls")).toBe(
-          "application/vnd.ms-excel",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.ppt")).toBe(
-          "application/vnd.ms-powerpoint",
-        );
-      });
-
-      it("should detect OpenDocument formats", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.odt")).toBe(
-          "application/vnd.oasis.opendocument.text",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.ods")).toBe(
-          "application/vnd.oasis.opendocument.spreadsheet",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.odp")).toBe(
-          "application/vnd.oasis.opendocument.presentation",
-        );
-      });
-
-      it("should detect RTF files", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.rtf")).toBe("application/rtf");
-      });
-
-      it("should detect eBook formats", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("book.epub")).toBe(
-          "application/epub+zip",
-        );
-        expect(MimeTypeUtils.detectMimeTypeFromPath("book.fb2")).toBe(
-          "application/x-fictionbook+xml",
-        );
-      });
-    });
-
-    describe("URL query parameters and hash fragments", () => {
-      it("should strip query parameters before detecting MIME type", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("report.pdf?token=abc123")).toBe(
-          "application/pdf",
-        );
-        expect(
-          MimeTypeUtils.detectMimeTypeFromPath(
-            "https://s3.amazonaws.com/bucket/report.docx?X-Amz-Signature=abc",
-          ),
-        ).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-      });
-
-      it("should strip hash fragments before detecting MIME type", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("document.pdf#page=5")).toBe(
-          "application/pdf",
-        );
-      });
-
-      it("should strip both query parameters and hash fragments", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("file.xlsx?v=2#sheet=1")).toBe(
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        );
-      });
-
-      it("should handle CDN URLs with query parameters", () => {
-        expect(
-          MimeTypeUtils.detectMimeTypeFromPath(
-            "https://cdn.example.com/files/report.pdf?t=1767868182094",
-          ),
-        ).toBe("application/pdf");
-      });
-
-      it("should handle source code files in URLs with query params", () => {
-        expect(MimeTypeUtils.detectMimeTypeFromPath("src/main.ts?ref=abc123")).toBe(
-          "text/x-typescript",
-        );
-      });
-    });
+    for (const { path, mimeType, language } of cases) {
+      const label = path ?? mimeType;
+      if (path !== null) {
+        expect
+          .soft(MimeTypeUtils.detectMimeTypeFromPath(path), `${label}: MIME type`)
+          .toBe(mimeType);
+      }
+      expect
+        .soft(MimeTypeUtils.extractLanguageFromMimeType(mimeType), `${label}: language`)
+        .toBe(language);
+      expect
+        .soft(MimeTypeUtils.isSourceCode(mimeType), `${label}: source code`)
+        .toBe(language !== "");
+    }
   });
 
-  describe("normalizeMimeType", () => {
-    it("should normalize incorrect mime package results", () => {
-      expect(MimeTypeUtils.normalizeMimeType("application/node")).toBe("text/javascript");
-      expect(MimeTypeUtils.normalizeMimeType("video/mp2t")).toBe("text/x-typescript");
-      expect(MimeTypeUtils.normalizeMimeType("application/rls-services+xml")).toBe(
-        "text/x-rust",
-      );
-      expect(MimeTypeUtils.normalizeMimeType("application/vnd.lotus-organizer")).toBe(
-        "text/x-org",
-      );
-      expect(MimeTypeUtils.normalizeMimeType("application/vnd.dart")).toBe("text/x-dart");
-      expect(MimeTypeUtils.normalizeMimeType("application/toml")).toBe("text/x-toml");
-    });
+  it("ignores query parameters and hash fragments when detecting from a URL", () => {
+    const cases: Array<[path: string, expected: string]> = [
+      ["report.pdf?token=abc123", "application/pdf"],
+      [
+        "https://s3.amazonaws.com/bucket/report.docx?X-Amz-Signature=abc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ],
+      ["document.pdf#page=5", "application/pdf"],
+      [
+        "file.xlsx?v=2#sheet=1",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      ],
+      ["https://cdn.example.com/files/report.pdf?t=1767868182094", "application/pdf"],
+      ["src/main.ts?ref=abc123", "text/x-typescript"],
+    ];
 
-    it("should pass through correct MIME types unchanged", () => {
-      expect(MimeTypeUtils.normalizeMimeType("text/html")).toBe("text/html");
-      expect(MimeTypeUtils.normalizeMimeType("application/json")).toBe(
-        "application/json",
-      );
-      expect(MimeTypeUtils.normalizeMimeType("text/x-python")).toBe("text/x-python");
-    });
-
-    it("should handle null input", () => {
-      expect(MimeTypeUtils.normalizeMimeType(null)).toBe(null);
-    });
+    for (const [path, expected] of cases) {
+      expect.soft(MimeTypeUtils.detectMimeTypeFromPath(path), path).toBe(expected);
+    }
   });
 
-  describe("extractLanguageFromMimeType", () => {
-    it("should extract language for documentation formats", () => {
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-rst")).toBe("rst");
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-asciidoc")).toBe(
-        "asciidoc",
-      );
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-org")).toBe("org");
-    });
+  it("reads a dot as an extension only in the final path segment", () => {
+    // The crawl's queue-time gate acts on this result before making any request, so
+    // a dot inside a directory segment must not be read as a file extension. That
+    // currently holds because the token after the last dot contains a "/" and cannot
+    // match the extension table. These cases pin the behaviour against a refactor.
+    const cases: Array<[pathname: string, expected: string | null]> = [
+      ["/docs/v1.0/guide", null],
+      ["/api/v2.0", null],
+      ["/2024.01.15/post", null],
+      ["/some.dir/index", null],
+      ["/node.js/api", null],
+      ["/lib/jquery.min/docs", null],
+      ["/u.s.a/history", null],
+      ["/spring.io/guides", null],
+      ["/rails-7.1/intro", null],
+      ["/archive.2019/index", null],
+      ["/pkg/[email protected]/readme", null],
+      ["/docs/getting-started", null],
+      ["/", null],
+      ["/assets/diagram.png", "image/png"],
+      ["/assets/flame.svg", "image/svg+xml"],
+      ["/x.mov", "video/quicktime"],
+      ["/rust.rs", "text/x-rust"],
+    ];
 
-    it("should extract language for programming languages", () => {
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-typescript")).toBe(
-        "typescript",
-      );
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-python")).toBe("python");
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-rust")).toBe("rust");
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-go")).toBe("go");
-    });
-
-    it("should extract language for modern frameworks", () => {
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-vue")).toBe("vue");
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-svelte")).toBe("svelte");
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-astro")).toBe("astro");
-    });
-
-    it("should extract language for config and build files", () => {
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-toml")).toBe("toml");
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-dockerfile")).toBe(
-        "dockerfile",
-      );
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/x-terraform")).toBe("hcl");
-    });
-
-    it("should extract xml for XML-variant application/* MIME types (issue #341)", () => {
-      expect(MimeTypeUtils.extractLanguageFromMimeType("application/xslt+xml")).toBe(
-        "xml",
-      );
-      expect(MimeTypeUtils.extractLanguageFromMimeType("application/xml-dtd")).toBe(
-        "xml",
-      );
-      expect(MimeTypeUtils.extractLanguageFromMimeType("application/wsdl+xml")).toBe(
-        "xml",
-      );
-    });
-
-    it("should return empty string for unknown MIME types", () => {
-      expect(MimeTypeUtils.extractLanguageFromMimeType("text/plain")).toBe("");
-      expect(MimeTypeUtils.extractLanguageFromMimeType("application/octet-stream")).toBe(
-        "",
-      );
-    });
-  });
-});
-
-describe("MimeTypeUtils.isBinaryMediaType", () => {
-  it.each([
-    "image/png",
-    "image/jpeg",
-    "image/svg+xml",
-    "video/mp4",
-    "video/quicktime",
-    "audio/mpeg",
-    "font/woff2",
-    "IMAGE/PNG",
-  ])("classifies %s as binary media", (mimeType) => {
-    expect(MimeTypeUtils.isBinaryMediaType(mimeType)).toBe(true);
+    for (const [pathname, expected] of cases) {
+      expect
+        .soft(MimeTypeUtils.detectMimeTypeFromPath(pathname), pathname)
+        .toBe(expected);
+    }
   });
 
-  // The application/* rows matter most: the mime package resolves real script
-  // extensions (.csh, .tcl, .bat, .scm, .ps) to those types, and treating the
-  // family as binary media would make the crawl gate reject pages that index
-  // correctly today (issue #490).
-  it.each([
-    "text/html",
-    "text/plain",
-    "text/x-python",
-    "application/pdf",
-    "application/json",
-    "application/zip",
-    "application/octet-stream",
-    "application/x-csh",
-    "application/x-tcl",
-    "application/x-msdownload",
-    "application/vnd.lotus-screencam",
-    "application/postscript",
-  ])("does not classify %s as binary media", (mimeType) => {
-    expect(MimeTypeUtils.isBinaryMediaType(mimeType)).toBe(false);
+  it("corrects the MIME types the mime package gets wrong and passes the rest through", () => {
+    const cases: Array<[mimeType: string | null, expected: string | null]> = [
+      ["application/node", "text/javascript"],
+      ["video/mp2t", "text/x-typescript"],
+      ["application/rls-services+xml", "text/x-rust"],
+      ["application/vnd.lotus-organizer", "text/x-org"],
+      ["application/vnd.dart", "text/x-dart"],
+      ["application/toml", "text/x-toml"],
+      // Script types arriving already wrong, e.g. in a Content-Type header (issue #490)
+      ["application/x-csh", "text/x-shellscript"],
+      ["application/x-tcl", "text/x-tcl"],
+      ["application/vnd.lotus-screencam", "text/x-scheme"],
+      ["application/x-msdownload", "text/x-batch"],
+      ["text/html", "text/html"],
+      ["application/json", "application/json"],
+      ["text/x-python", "text/x-python"],
+      [null, null],
+    ];
+
+    for (const [mimeType, expected] of cases) {
+      expect
+        .soft(MimeTypeUtils.normalizeMimeType(mimeType), String(mimeType))
+        .toBe(expected);
+    }
   });
 
-  it("returns false for an empty MIME type", () => {
-    expect(MimeTypeUtils.isBinaryMediaType("")).toBe(false);
-  });
-});
+  it("parses a Content-Type header into a normalized MIME type and charset", () => {
+    const cases: Array<[header: string | null | undefined, expected: ParsedContentType]> =
+      [
+        ["text/html; charset=utf-8", { mimeType: "text/html", charset: "utf-8" }],
+        // A server's misfiled script type is corrected like a path's would be
+        [
+          "application/x-tcl; charset=UTF-8",
+          { mimeType: "text/x-tcl", charset: "utf-8" },
+        ],
+        [
+          "Text/Plain; format=flowed; Charset=ISO-8859-1",
+          { mimeType: "text/plain", charset: "iso-8859-1" },
+        ],
+        ["application/json", { mimeType: "application/json" }],
+        ["", { mimeType: "application/octet-stream" }],
+        [null, { mimeType: "application/octet-stream" }],
+        [undefined, { mimeType: "application/octet-stream" }],
+      ];
 
-describe("MimeTypeUtils.detectMimeTypeFromPath dot handling", () => {
-  // The crawl's queue-time gate acts on this result before making any request, so
-  // a dot inside a directory segment must not be read as a file extension. That
-  // currently holds because the token after the last dot contains a "/" and cannot
-  // match the extension table. These cases pin the behaviour against a refactor.
-  it.each([
-    "/docs/v1.0/guide",
-    "/api/v2.0",
-    "/2024.01.15/post",
-    "/some.dir/index",
-    "/node.js/api",
-    "/lib/jquery.min/docs",
-    "/u.s.a/history",
-    "/spring.io/guides",
-    "/rails-7.1/intro",
-    "/archive.2019/index",
-    "/pkg/[email protected]/readme",
-    "/docs/getting-started",
-    "/",
-  ])("returns null for %s", (pathname) => {
-    expect(MimeTypeUtils.detectMimeTypeFromPath(pathname)).toBeNull();
+    for (const [header, expected] of cases) {
+      expect
+        .soft(MimeTypeUtils.parseContentType(header), String(header))
+        .toEqual(expected);
+    }
   });
 
-  it.each([
-    ["/assets/diagram.png", "image/png"],
-    ["/assets/flame.svg", "image/svg+xml"],
-    ["/x.mov", "video/quicktime"],
-    ["/rust.rs", "text/x-rust"],
-  ])("detects %s from the final path segment", (pathname, expected) => {
-    expect(MimeTypeUtils.detectMimeTypeFromPath(pathname)).toBe(expected);
-  });
-});
+  it("classifies only the image, video, audio and font families as binary media", () => {
+    const cases: Array<[mimeType: string, expected: boolean]> = [
+      ["image/png", true],
+      ["image/jpeg", true],
+      ["image/svg+xml", true],
+      ["video/mp4", true],
+      ["video/quicktime", true],
+      ["audio/mpeg", true],
+      ["font/woff2", true],
+      ["IMAGE/PNG", true],
+      ["text/html", false],
+      ["text/plain", false],
+      ["text/x-python", false],
+      // The application/* rows matter most: the mime package resolves real script
+      // extensions (.csh, .tcl, .bat, .scm, .ps) to those types, and treating the
+      // family as binary media would make the crawl gate reject pages that index
+      // correctly today (issue #490).
+      ["application/pdf", false],
+      ["application/json", false],
+      ["application/zip", false],
+      ["application/octet-stream", false],
+      ["application/x-csh", false],
+      ["application/x-tcl", false],
+      ["application/x-msdownload", false],
+      ["application/vnd.lotus-screencam", false],
+      // PostScript stays a document format, and the crawl gate still admits it
+      ["application/postscript", false],
+      ["", false],
+    ];
 
-describe("MimeTypeUtils script extensions the mime package misfiles", () => {
-  // The mime package files these plain-text scripts under application/*, which
-  // left them unindexed by the GitHub and local-file strategies and drove the
-  // binary-media narrowing of the crawl gate (issue #490).
-  it.each([
-    [".csh", "/script.csh", "text/x-shellscript", "bash"],
-    [".tcsh", "/script.tcsh", "text/x-shellscript", "bash"],
-    [".ksh", "/script.ksh", "text/x-shellscript", "bash"],
-    [".tcl", "/script.tcl", "text/x-tcl", "tcl"],
-    [".scm", "/lib.scm", "text/x-scheme", "scheme"],
-    [".bat", "/build.bat", "text/x-batch", "batch"],
-    [".cmd", "/build.cmd", "text/x-batch", "batch"],
-  ])("detects %s as a text script", (_label, pathname, mimeType, language) => {
-    expect(MimeTypeUtils.detectMimeTypeFromPath(pathname)).toBe(mimeType);
-    expect(MimeTypeUtils.extractLanguageFromMimeType(mimeType)).toBe(language);
-    expect(MimeTypeUtils.isSourceCode(mimeType)).toBe(true);
-  });
-
-  it.each([
-    ["application/x-csh", "text/x-shellscript"],
-    ["application/x-tcl", "text/x-tcl"],
-    ["application/vnd.lotus-screencam", "text/x-scheme"],
-    ["application/x-msdownload", "text/x-batch"],
-  ])("normalizes %s arriving already-wrong", (wrong, right) => {
-    expect(MimeTypeUtils.normalizeMimeType(wrong)).toBe(right);
-  });
-
-  it("leaves PostScript alone as a genuine document format", () => {
-    // .ps is not a misfiled text script, so it keeps application/postscript.
-    // The crawl gate still admits it, because that type is not binary media.
-    expect(MimeTypeUtils.detectMimeTypeFromPath("/Guess/guess.ps")).toBe(
-      "application/postscript",
-    );
-    expect(MimeTypeUtils.isBinaryMediaType("application/postscript")).toBe(false);
+    for (const [mimeType, expected] of cases) {
+      expect.soft(MimeTypeUtils.isBinaryMediaType(mimeType), mimeType).toBe(expected);
+    }
   });
 });
