@@ -159,8 +159,6 @@ export abstract class BaseScraperStrategy implements ScraperStrategy {
     }
   }
 
-  abstract canHandle(url: string): boolean;
-
   protected options: BaseScraperStrategyOptions;
   protected config: AppConfig;
 

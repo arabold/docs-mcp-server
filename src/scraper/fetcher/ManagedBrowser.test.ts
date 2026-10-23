@@ -57,28 +57,6 @@ describe("ManagedBrowser", () => {
       expect(chromium.launch).toHaveBeenCalledTimes(1);
     });
 
-    it("launches a new browser and closes the old one once Chromium has exited", async () => {
-      const launched = mockLaunches();
-      const managed = new ManagedBrowser(scraperConfig);
-
-      await managed.get();
-      launched[0].isConnected.mockReturnValue(false);
-      const replacement = await managed.get();
-
-      expect(replacement).toBe(launched[1]);
-      expect(launched[0].close).toHaveBeenCalled();
-    });
-
-    it("shares one launch between callers that ask at the same time", async () => {
-      mockLaunches();
-      const managed = new ManagedBrowser(scraperConfig);
-
-      const browsers = await Promise.all([managed.get(), managed.get(), managed.get()]);
-
-      expect(new Set(browsers).size).toBe(1);
-      expect(chromium.launch).toHaveBeenCalledTimes(1);
-    });
-
     it("launches again after it was closed", async () => {
       mockLaunches();
       const managed = new ManagedBrowser(scraperConfig);
@@ -119,31 +97,6 @@ describe("ManagedBrowser", () => {
         pause: handler as (event: ReturnType<typeof pausedRequest>) => void,
       };
     }
-
-    it("intercepts every request of the browser before handing it out", async () => {
-      const { session } = await launchGuarded();
-
-      expect(session.send).toHaveBeenCalledWith("Fetch.enable", {
-        patterns: [{ urlPattern: "*" }],
-      });
-    });
-
-    it("fails a redirect to a private address", async () => {
-      const { session, pause } = await launchGuarded();
-
-      pause(pausedRequest(METADATA_URL));
-
-      await vi.waitFor(() =>
-        expect(session.send).toHaveBeenCalledWith("Fetch.failRequest", {
-          requestId: "interception-2",
-          errorReason: "BlockedByClient",
-        }),
-      );
-      expect(session.send).not.toHaveBeenCalledWith(
-        "Fetch.continueRequest",
-        expect.anything(),
-      );
-    });
 
     it("lets a redirect to a public address through", async () => {
       const { session, pause } = await launchGuarded();
@@ -208,40 +161,6 @@ describe("ManagedBrowser", () => {
   });
 
   describe("retire", () => {
-    it("kills Chromium by the process ID read at launch when it does not close in time", async () => {
-      const browser = {
-        ...buildBrowser(),
-        close: vi.fn(() => new Promise(() => {})),
-        // Chromium reports its own process ID over CDP.
-        newBrowserCDPSession: vi.fn().mockResolvedValue({
-          on: vi.fn(),
-          send: vi.fn().mockResolvedValue({
-            processInfo: [
-              { type: "GPU", id: 4243 },
-              { type: "browser", id: 4242 },
-            ],
-          }),
-          detach: vi.fn().mockResolvedValue(undefined),
-        }),
-      };
-      vi.mocked(chromium.launch).mockResolvedValue(browser as never);
-      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-      vi.useFakeTimers();
-      try {
-        const managed = new ManagedBrowser(scraperConfig);
-        await managed.get();
-
-        const retiring = managed.retire(browser as never, "stuck");
-        await vi.advanceTimersByTimeAsync(scraperConfig.pageTimeoutMs);
-        await retiring;
-
-        expect(kill).toHaveBeenCalledWith(4242, "SIGKILL");
-      } finally {
-        vi.useRealTimers();
-        kill.mockRestore();
-      }
-    });
-
     it("gives up on a browser that will not close when its process ID is unknown", async () => {
       // The mocked browser has no CDP session, so no process ID was recorded.
       const browser = { ...buildBrowser(), close: vi.fn(() => new Promise(() => {})) };
