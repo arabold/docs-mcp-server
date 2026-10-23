@@ -31,11 +31,6 @@ describe("BrowserFetcher in a real browser", () => {
         res.end("document.body.dataset.ran = 'yes';");
         return;
       }
-      if (path === "/openapi.yaml") {
-        res.writeHead(200, { "content-type": "application/x-yaml" });
-        res.end("openapi: 3.1.0\n");
-        return;
-      }
       res.writeHead(200, { "content-type": "text/html" });
       res.end('<html><body><h1>Docs</h1><script src="/app.js"></script></body></html>');
     });
@@ -90,22 +85,6 @@ describe("BrowserFetcher in a real browser", () => {
       await fetcher.close();
     }
   });
-
-  it("fetches a file the browser would download through the request API", async () => {
-    const config = loadConfig().scraper;
-    config.security.network.allowPrivateNetworks = true;
-    const fetcher = new BrowserFetcher(config);
-
-    try {
-      const result = await fetcher.fetch(`${baseUrl}/openapi.yaml`);
-
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      expect(result.mimeType).toBe("application/x-yaml");
-      expect(result.content.toString()).toBe("openapi: 3.1.0\n");
-    } finally {
-      await fetcher.close();
-    }
-  });
 });
 
 describe("BrowserFetcher with private networks blocked", () => {
@@ -142,6 +121,11 @@ describe("BrowserFetcher with private networks blocked", () => {
       if (path === "/app.js") {
         res.writeHead(200, { "content-type": "text/javascript" });
         res.end("document.body.dataset.ran = 'yes';");
+        return;
+      }
+      if (path === "/openapi.yaml") {
+        res.writeHead(200, { "content-type": "application/x-yaml" });
+        res.end("openapi: 3.1.0\n");
         return;
       }
       if (path === "/moved") {
@@ -207,6 +191,14 @@ describe("BrowserFetcher with private networks blocked", () => {
     // The page's own script still ran: only the blocked address was cut off.
     expect(result.content.toString()).toContain('data-ran="yes"');
     expect(internalRequests).toEqual([]);
+  });
+
+  it("fetches a file the browser would download through the request API", async () => {
+    const result = await fetcher.fetch(`${docsUrl}/openapi.yaml`);
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.mimeType).toBe("application/x-yaml");
+    expect(result.content.toString()).toBe("openapi: 3.1.0\n");
   });
 
   it("refuses a redirect to a blocked address without following it", async () => {

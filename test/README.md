@@ -72,6 +72,9 @@ request a test makes in its own process:
 - A catch-all handler comes last. A request to loopback (`localhost`,
   `127.0.0.1`, `[::1]`) goes through, and any other request fails at once as a
   network error. `test/setup-e2e.ts` treats WebSocket connections the same way.
+- `http` and `https` requests to loopback skip MSW altogether. MSW cannot pass
+  through a request whose agent connects later, as Playwright's request API does
+  for `localhost`, so such a request would hang until it timed out.
 - An opt-in live suite calls `allowLiveNetwork()` in `beforeAll` once its
   credentials are set, and calls the function it returns in `afterAll`.
 

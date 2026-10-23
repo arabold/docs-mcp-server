@@ -180,6 +180,16 @@ export function allowLiveNetwork(): () => void {
 }
 
 /**
+ * Whether a host name addresses loopback, where the servers a test starts listen.
+ *
+ * @param hostname The host name, as `URL.hostname` gives it.
+ * @returns True for `localhost`, `127.0.0.1` and `[::1]`.
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+}
+
+/**
  * Whether a request may go through unmocked: to a server a test started on
  * loopback, or anywhere while an opt-in live suite runs.
  *
@@ -187,12 +197,7 @@ export function allowLiveNetwork(): () => void {
  * @returns True when the request should go through unmocked.
  */
 export function mayPassThrough(hostname: string): boolean {
-  return (
-    liveSuites > 0 ||
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "[::1]"
-  );
+  return liveSuites > 0 || isLoopbackHost(hostname);
 }
 
 /**
