@@ -59,6 +59,8 @@ describe("CLI E2E", () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(/Unknown argument/i);
     expect(stderr).toContain("unknown-flag");
+    // The help comes with the reason
+    expect(stderr).toContain("Options:");
   });
 
   it("reports a failing command without the help or a stack trace", async () => {

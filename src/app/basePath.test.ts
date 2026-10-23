@@ -7,102 +7,129 @@ import {
 } from "./basePath";
 
 describe("stripBasePath", () => {
-  it.each([
-    ["/docs", "/"],
-    ["/docs/", "/"],
-    ["/docs/mcp", "/mcp"],
-    ["/docs/api/health?x=1", "/api/health?x=1"],
-    ["/docs?tab=jobs", "/?tab=jobs"],
-  ])("strips the base path from %s", (url, expected) => {
-    expect(stripBasePath(url, "/docs")).toBe(expected);
-  });
+  it("strips the base path only from URLs under it", () => {
+    const cases: Array<{ url: string; basePath: string; expected: string }> = [
+      { url: "/docs", basePath: "/docs", expected: "/" },
+      { url: "/docs/", basePath: "/docs", expected: "/" },
+      { url: "/docs/mcp", basePath: "/docs", expected: "/mcp" },
+      { url: "/docs/api/health?x=1", basePath: "/docs", expected: "/api/health?x=1" },
+      { url: "/docs?tab=jobs", basePath: "/docs", expected: "/?tab=jobs" },
+      // Not under the base path: left alone
+      { url: "/docs-old", basePath: "/docs", expected: "/docs-old" },
+      { url: "/docsmcp", basePath: "/docs", expected: "/docsmcp" },
+      { url: "/mcp", basePath: "/docs", expected: "/mcp" },
+      { url: "/", basePath: "/docs", expected: "/" },
+      // The identity without a base path
+      { url: "/mcp?x=1", basePath: "", expected: "/mcp?x=1" },
+    ];
 
-  it.each(["/docs-old", "/docsmcp", "/mcp", "/"])(
-    "leaves %s alone, since it is not under the base path",
-    (url) => {
-      expect(stripBasePath(url, "/docs")).toBe(url);
-    },
-  );
-
-  it("is the identity without a base path", () => {
-    expect(stripBasePath("/mcp?x=1", "")).toBe("/mcp?x=1");
+    for (const { url, basePath, expected } of cases) {
+      expect
+        .soft(stripBasePath(url, basePath), `${url} under "${basePath}"`)
+        .toBe(expected);
+    }
   });
 });
 
 describe("injectBaseHref", () => {
-  const shell =
-    '<!doctype html><html><head><meta charset="UTF-8" /><script src="./assets/index.js"></script></head><body></body></html>';
+  it("inserts an escaped base element as the first child of head", () => {
+    const shell =
+      '<!doctype html><html><head><meta charset="UTF-8" /><script src="./assets/index.js"></script></head><body></body></html>';
+    // `expected` is a fragment of the output, or the whole output where `exact` is set
+    const cases: Array<{
+      label: string;
+      html: string;
+      basePath: string;
+      expected: string;
+      exact?: boolean;
+    }> = [
+      {
+        label: "first child of head",
+        html: shell,
+        basePath: "/docs",
+        expected: '<head><base href="/docs/"><meta charset="UTF-8" />',
+      },
+      {
+        label: "the root without a base path, so deep links still resolve assets",
+        html: shell,
+        basePath: "",
+        expected: '<head><base href="/">',
+      },
+      {
+        label: "a head tag with attributes",
+        html: '<html><head lang="en"><title>x</title></head></html>',
+        basePath: "/a",
+        expected: '<html><head lang="en"><base href="/a/"><title>x</title></head></html>',
+        exact: true,
+      },
+      {
+        label: "the base path escaped for the attribute",
+        html: "<head></head>",
+        basePath: '/a"b',
+        expected: '<base href="/a&quot;b/">',
+      },
+    ];
 
-  it("inserts the base element as the first child of head", () => {
-    expect(injectBaseHref(shell, "/docs")).toContain(
-      '<head><base href="/docs/"><meta charset="UTF-8" />',
-    );
-  });
-
-  it("uses the root without a base path, so deep links still resolve assets", () => {
-    expect(injectBaseHref(shell, "")).toContain('<head><base href="/">');
-  });
-
-  it("handles a head tag with attributes", () => {
-    expect(
-      injectBaseHref('<html><head lang="en"><title>x</title></head></html>', "/a"),
-    ).toBe('<html><head lang="en"><base href="/a/"><title>x</title></head></html>');
-  });
-
-  it("escapes the base path for the attribute", () => {
-    expect(injectBaseHref("<head></head>", '/a"b')).toContain('<base href="/a&quot;b/">');
+    for (const { label, html, basePath, expected, exact } of cases) {
+      const output = injectBaseHref(html, basePath);
+      if (exact) expect.soft(output, label).toBe(expected);
+      else expect.soft(output, label).toContain(expected);
+    }
   });
 });
 
 describe("servesSpaShell", () => {
-  it.each(["/", "/libraries", "/libraries/react", "/jobs?x=1"])(
-    "serves the shell for client route %s",
-    (url) => {
-      expect(servesSpaShell("GET", url)).toBe(true);
-    },
-  );
+  it("serves the shell only for GET requests to client routes", () => {
+    const cases: Array<{ method: string; url: string; expected: boolean }> = [
+      { method: "GET", url: "/", expected: true },
+      { method: "GET", url: "/libraries", expected: true },
+      { method: "GET", url: "/libraries/react", expected: true },
+      { method: "GET", url: "/jobs?x=1", expected: true },
+      { method: "GET", url: "/sse", expected: false },
+      { method: "GET", url: "/messages", expected: false },
+      { method: "GET", url: "/mcp", expected: false },
+      { method: "GET", url: "/mcp/anything", expected: false },
+      { method: "GET", url: "/api", expected: false },
+      { method: "GET", url: "/api/unknown", expected: false },
+      { method: "GET", url: "/.well-known/unknown-document", expected: false },
+      { method: "GET", url: "/assets/missing.js", expected: false },
+      { method: "GET", url: "/oauth/authorize", expected: false },
+      { method: "POST", url: "/libraries", expected: false },
+    ];
 
-  it.each([
-    "/sse",
-    "/messages",
-    "/mcp",
-    "/mcp/anything",
-    "/api",
-    "/api/unknown",
-    "/.well-known/unknown-document",
-    "/assets/missing.js",
-    "/oauth/authorize",
-  ])("does not serve the shell for %s", (url) => {
-    expect(servesSpaShell("GET", url)).toBe(false);
-  });
-
-  it("does not serve the shell for non-GET requests", () => {
-    expect(servesSpaShell("POST", "/libraries")).toBe(false);
+    for (const { method, url, expected } of cases) {
+      expect.soft(servesSpaShell(method, url), `${method} ${url}`).toBe(expected);
+    }
   });
 });
 
 describe("isApiSocketPath", () => {
-  it.each([
-    ["/api", ""],
-    ["/api?connectionParams=1", ""],
-    ["/", ""],
-    ["/docs/api", "/docs"],
-    ["/api", "/docs"],
-    ["/docs", "/docs"],
-    ["/docs/", "/docs"],
-  ])("accepts %s with base path %j", (url, basePath) => {
-    expect(isApiSocketPath(url, basePath)).toBe(true);
-  });
+  it("accepts only the API path under the base path", () => {
+    const cases: Array<{ url: string; basePath: string; expected: boolean }> = [
+      { url: "/api", basePath: "", expected: true },
+      { url: "/api?connectionParams=1", basePath: "", expected: true },
+      { url: "/", basePath: "", expected: true },
+      { url: "/docs/api", basePath: "/docs", expected: true },
+      { url: "/api", basePath: "/docs", expected: true },
+      { url: "/docs", basePath: "/docs", expected: true },
+      { url: "/docs/", basePath: "/docs", expected: true },
+      { url: "/mcp", basePath: "", expected: false },
+      { url: "/sse", basePath: "", expected: false },
+      { url: "/libraries", basePath: "", expected: false },
+      { url: "/apix", basePath: "", expected: false },
+      { url: "/docs/mcp", basePath: "/docs", expected: false },
+      { url: "/mcp", basePath: "/docs", expected: false },
+      {
+        url: "/docs/.well-known/oauth-protected-resource/mcp",
+        basePath: "/docs",
+        expected: false,
+      },
+    ];
 
-  it.each([
-    ["/mcp", ""],
-    ["/sse", ""],
-    ["/libraries", ""],
-    ["/apix", ""],
-    ["/docs/mcp", "/docs"],
-    ["/mcp", "/docs"],
-    ["/docs/.well-known/oauth-protected-resource/mcp", "/docs"],
-  ])("refuses %s with base path %j", (url, basePath) => {
-    expect(isApiSocketPath(url, basePath)).toBe(false);
+    for (const { url, basePath, expected } of cases) {
+      expect
+        .soft(isApiSocketPath(url, basePath), `${url} under "${basePath}"`)
+        .toBe(expected);
+    }
   });
 });

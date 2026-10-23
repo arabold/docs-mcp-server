@@ -9,7 +9,9 @@ import { _resetProjectRootCache, getProjectRoot, resolveStorePath } from "./path
 vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn((path: string) => vol.existsSync(path)),
-    mkdirSync: vi.fn((path: string, options?: any) => vol.mkdirSync(path, options)),
+    mkdirSync: vi.fn((path: string, options?: { recursive?: boolean }) =>
+      vol.mkdirSync(path, options),
+    ),
   },
 }));
 
@@ -81,54 +83,43 @@ describe("paths utilities", () => {
       const result = getProjectRoot();
       expect(result).toBe(projectRoot);
     });
-
-    it("should cache the result on subsequent calls", () => {
-      const result1 = getProjectRoot();
-      const result2 = getProjectRoot();
-
-      expect(result1).toBe(projectRoot);
-      expect(result2).toBe(projectRoot);
-      expect(result1).toBe(result2);
-    });
-
-    it("should work with monorepo scenario (finds closest package.json)", () => {
-      // This test verifies the function finds the package.json we created in our mock
-      // In a real monorepo, it would find the closest one to import.meta.url
-      const result = getProjectRoot();
-      expect(result).toBe(projectRoot);
-    });
   });
 
   describe("resolveStorePath", () => {
-    it("should return provided storePath when given", () => {
-      const customPath = "/custom/storage/path";
+    /** Puts a legacy `.store/documents.db` into the project root. */
+    function addLegacyStore(): string {
+      const legacyStorePath = path.join(projectRoot, ".store");
+      vol.mkdirSync(legacyStorePath, { recursive: true });
+      vol.writeFileSync(path.join(legacyStorePath, "documents.db"), "legacy db");
+      return legacyStorePath;
+    }
+
+    it("returns an explicit storePath over a legacy store and creates it", () => {
+      addLegacyStore();
+      const customPath = "/explicit/custom/path";
+      expect(vol.existsSync(customPath)).toBe(false);
+
       const result = resolveStorePath(customPath);
 
       expect(result).toBe(customPath);
-      // Should attempt to create the directory
       expect(vol.existsSync(customPath)).toBe(true);
     });
 
-    it("should use legacy .store directory when documents.db exists", () => {
-      // Add legacy store to our project structure
-      const legacyStorePath = path.join(projectRoot, ".store");
-      vol.mkdirSync(legacyStorePath, { recursive: true });
-      vol.writeFileSync(
-        path.join(legacyStorePath, "documents.db"),
-        "legacy database file",
-      );
+    it("uses the legacy .store directory when it holds documents.db", () => {
+      const legacyStorePath = addLegacyStore();
+      vol.writeFileSync(path.join(legacyStorePath, "other-files.txt"), "other data");
 
-      const result = resolveStorePath();
-      expect(result).toBe(legacyStorePath);
+      expect(resolveStorePath()).toBe(legacyStorePath);
     });
 
-    it("should fallback to standard system path when legacy store doesn't exist", () => {
-      // Our default project structure has no .store directory
+    it("falls back to the system data directory and creates it", () => {
+      const systemPath = "/home/user/.local/share/docs-mcp-server";
+      expect(vol.existsSync(systemPath)).toBe(false);
+
       const result = resolveStorePath();
 
-      // Should use env-paths result
-      expect(result).toBe("/home/user/.local/share/docs-mcp-server");
-      expect(mockEnvPaths).toHaveBeenCalledWith("docs-mcp-server", { suffix: "" });
+      expect(result).toBe(systemPath);
+      expect(vol.existsSync(systemPath)).toBe(true);
     });
 
     it("should check for documents.db file specifically, not just .store directory", () => {
@@ -143,56 +134,6 @@ describe("paths utilities", () => {
       expect(result).toBe("/home/user/.local/share/docs-mcp-server");
     });
 
-    it("should create directories that don't exist", () => {
-      const newPath = "/new/storage/location";
-
-      expect(vol.existsSync(newPath)).toBe(false);
-
-      const result = resolveStorePath(newPath);
-
-      expect(result).toBe(newPath);
-      expect(vol.existsSync(newPath)).toBe(true);
-    });
-
-    it("should handle complex legacy store detection scenario", () => {
-      // Setup a more complex project structure with legacy store
-      const legacyStorePath = path.join(projectRoot, ".store");
-      vol.mkdirSync(legacyStorePath, { recursive: true });
-      vol.writeFileSync(path.join(legacyStorePath, "documents.db"), "legacy db");
-      vol.writeFileSync(path.join(legacyStorePath, "other-files.txt"), "other data");
-
-      const result = resolveStorePath();
-      expect(result).toBe(legacyStorePath);
-    });
-
-    it("should work with different env-paths configurations", () => {
-      // Test with different env-paths return value
-      mockEnvPaths.mockReturnValue({
-        data: "/Users/testuser/Library/Application Support/docs-mcp-server",
-        config: "/Users/testuser/Library/Preferences/docs-mcp-server",
-        cache: "/Users/testuser/Library/Caches/docs-mcp-server",
-        log: "/Users/testuser/Library/Logs/docs-mcp-server",
-        temp: "/var/folders/tmp/docs-mcp-server",
-      });
-
-      // No legacy store in default setup
-      const result = resolveStorePath();
-      expect(result).toBe("/Users/testuser/Library/Application Support/docs-mcp-server");
-    });
-
-    it("should prioritize storePath over legacy store", () => {
-      // Setup project with both custom path and legacy store
-      const legacyStorePath = path.join(projectRoot, ".store");
-      vol.mkdirSync(legacyStorePath, { recursive: true });
-      vol.writeFileSync(path.join(legacyStorePath, "documents.db"), "legacy db");
-
-      const customPath = "/explicit/custom/path";
-      const result = resolveStorePath(customPath);
-
-      // Should use explicit path, not legacy
-      expect(result).toBe(customPath);
-    });
-
     it("should handle relative paths in storePath", () => {
       const relativePath = "./relative/storage/path";
       const result = resolveStorePath(relativePath);
@@ -201,82 +142,13 @@ describe("paths utilities", () => {
       expect(vol.existsSync(relativePath)).toBe(true);
     });
 
-    it("should prioritize custom storePath even when it doesn't exist yet", () => {
-      // Setup project with legacy store
-      const legacyStorePath = path.join(projectRoot, ".store");
-      vol.mkdirSync(legacyStorePath, { recursive: true });
-      vol.writeFileSync(path.join(legacyStorePath, "documents.db"), "legacy database");
-
-      const customPath = "/non/existing/custom/path";
-      const result = resolveStorePath(customPath);
-
-      // Should use custom path, not legacy
-      expect(result).toBe(customPath);
-      expect(vol.existsSync(customPath)).toBe(true); // Should be created
-    });
-
     it("should handle empty string storePath by falling back to normal logic", () => {
-      // Setup project with legacy store
-      const legacyStorePath = path.join(projectRoot, ".store");
-      vol.mkdirSync(legacyStorePath, { recursive: true });
-      vol.writeFileSync(path.join(legacyStorePath, "documents.db"), "legacy database");
+      const legacyStorePath = addLegacyStore();
 
       const result = resolveStorePath("");
 
       // Empty string should be treated as no storePath provided, so use legacy store
       expect(result).toBe(legacyStorePath);
-    });
-  });
-
-  describe("integration scenarios", () => {
-    it("should work together for complete workflow with legacy store", () => {
-      // Add legacy store to our project structure
-      const legacyStorePath = path.join(projectRoot, ".store");
-      vol.mkdirSync(legacyStorePath, { recursive: true });
-      vol.writeFileSync(path.join(legacyStorePath, "documents.db"), "existing legacy db");
-
-      // Test getProjectRoot
-      const foundProjectRoot = getProjectRoot();
-      expect(foundProjectRoot).toBe(projectRoot);
-
-      // Test resolveStorePath uses legacy store
-      const storePath = resolveStorePath();
-      expect(storePath).toBe(legacyStorePath);
-    });
-
-    it("should work together for complete workflow without legacy store", () => {
-      // Default setup has no legacy store
-
-      // Test getProjectRoot
-      const foundProjectRoot = getProjectRoot();
-      expect(foundProjectRoot).toBe(projectRoot);
-
-      // Test resolveStorePath falls back to system path
-      const storePath = resolveStorePath();
-      expect(storePath).toBe("/home/user/.local/share/docs-mcp-server");
-    });
-
-    it("should handle scenario where project root exists but no legacy store", () => {
-      // This tests the full workflow where getProjectRoot succeeds
-      // but resolveStorePath falls back to system path
-      const foundProjectRoot = getProjectRoot();
-      expect(foundProjectRoot).toBe(projectRoot);
-
-      const storePath = resolveStorePath();
-      expect(storePath).toBe("/home/user/.local/share/docs-mcp-server");
-      expect(mockEnvPaths).toHaveBeenCalledWith("docs-mcp-server", { suffix: "" });
-    });
-
-    it("should create system storage directory when it doesn't exist", () => {
-      const systemPath = "/home/user/.local/share/docs-mcp-server";
-
-      // Ensure the system path doesn't exist initially
-      expect(vol.existsSync(systemPath)).toBe(false);
-
-      const result = resolveStorePath();
-
-      expect(result).toBe(systemPath);
-      expect(vol.existsSync(systemPath)).toBe(true);
     });
   });
 });

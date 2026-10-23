@@ -9,36 +9,31 @@ describe("createMimeTypeCapabilityPredicate", () => {
   const pipelines = PipelineFactory.createStandardPipelines(appConfig);
   const canProcess = createMimeTypeCapabilityPredicate(pipelines);
 
-  describe("types the standard pipelines claim", () => {
-    it.each([
-      ["text/html", "HtmlPipeline"],
-      ["text/markdown", "MarkdownPipeline"],
-      ["application/json", "JsonPipeline"],
-      ["application/pdf", "DocumentPipeline"],
-      ["text/x-python", "SourceCodePipeline"],
-      ["text/x-typescript", "SourceCodePipeline"],
-      ["text/plain", "TextPipeline"],
-    ])("accepts %s (%s)", (mimeType) => {
-      expect(canProcess(mimeType)).toBe(true);
-    });
-  });
+  it("accepts the types the standard pipelines claim and rejects the rest", () => {
+    const cases: Array<[mimeType: string, expected: boolean]> = [
+      ["text/html", true], // HtmlPipeline
+      ["text/markdown", true], // MarkdownPipeline
+      ["application/json", true], // JsonPipeline
+      ["application/pdf", true], // DocumentPipeline
+      ["text/x-python", true], // SourceCodePipeline
+      ["text/x-typescript", true], // SourceCodePipeline
+      ["text/plain", true], // TextPipeline
+      ["image/png", false],
+      ["image/jpeg", false],
+      ["image/gif", false],
+      // Rejected because no pipeline claims image/svg+xml, not because it is
+      // special-cased anywhere. Teaching a pipeline the type is all that is needed.
+      ["image/svg+xml", false],
+      ["video/mp4", false],
+      ["audio/mpeg", false],
+      ["application/zip", false],
+      ["application/octet-stream", false],
+      ["font/woff2", false],
+    ];
 
-  // SVG appears below because no pipeline claims image/svg+xml, not because it is
-  // special-cased anywhere. Teaching a pipeline the type is all that is needed.
-  describe("types no pipeline claims", () => {
-    it.each([
-      "image/png",
-      "image/jpeg",
-      "image/gif",
-      "image/svg+xml",
-      "video/mp4",
-      "audio/mpeg",
-      "application/zip",
-      "application/octet-stream",
-      "font/woff2",
-    ])("rejects %s", (mimeType) => {
-      expect(canProcess(mimeType)).toBe(false);
-    });
+    for (const [mimeType, expected] of cases) {
+      expect.soft(canProcess(mimeType), mimeType).toBe(expected);
+    }
   });
 
   it("widens automatically when a pipeline claims a new type", () => {

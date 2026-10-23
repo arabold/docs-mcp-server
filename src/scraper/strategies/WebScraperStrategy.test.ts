@@ -1,11 +1,10 @@
 import { readdirSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig } from "../../utils/config";
+import { describe, expect, it, vi } from "vitest";
+import { type MockSite, mockSite } from "../../../test/mock-site";
+import { type AppConfig, loadConfig } from "../../utils/config";
 import { logger } from "../../utils/logger";
-import { HttpFetcher } from "../fetcher/HttpFetcher";
-import { FetchStatus, type RawContent } from "../fetcher/types";
 import { PipelineFactory } from "../pipelines/PipelineFactory";
 import type { ContentPipeline } from "../pipelines/types";
 import {
@@ -14,46 +13,40 @@ import {
   type ScraperOptions,
   type ScraperProgressEvent,
 } from "../types";
-import { isLlmsTxtUrl } from "../utils/llmsTxtParser";
 import { WebScraperStrategy, type WebScraperStrategyOptions } from "./WebScraperStrategy";
 
 // Building realistic request headers loads a large browser-fingerprint model on
-// every fetcher construction. Requests never leave the spy below, so the model
-// only costs time.
+// every fetcher construction, which only costs time here.
 vi.mock("../fetcher/FingerprintGenerator");
 
-const fetchSpy = vi.spyOn(HttpFetcher.prototype, "fetch");
-const config = loadConfig();
+const baseConfig = loadConfig();
+const config: AppConfig = {
+  ...baseConfig,
+  scraper: {
+    ...baseConfig.scraper,
+    // One item at a time, so a site receives its requests in queue order.
+    maxConcurrency: 1,
+    fetcher: { ...baseConfig.scraper.fetcher, maxRetries: 0 },
+    security: {
+      ...baseConfig.scraper.security,
+      // The mock hosts pass the access policy without a DNS lookup.
+      network: { ...baseConfig.scraper.security.network, allowPrivateNetworks: true },
+    },
+  },
+};
+
 const ROOT = "https://example.com/";
 
-type Response = Partial<RawContent>;
-
-/** Answers requests from `site`; every other URL, llms.txt included, is a 404. */
-function serve(site: Record<string, Response>): void {
-  fetchSpy.mockImplementation(async (url: string) => ({
-    content: "",
-    mimeType: "text/html",
-    source: url,
-    ...(site[url]
-      ? { status: FetchStatus.SUCCESS, ...site[url] }
-      : { status: FetchStatus.NOT_FOUND }),
-  }));
-}
-
 /** An HTML page headed `title` that links each of `hrefs`. */
-const html = (title: string, hrefs: string[] = []): Response => ({
-  content: `<html><head><title>${title}</title></head><body><h1>${title}</h1>${hrefs
+const html = (title: string, hrefs: string[] = []): string =>
+  `<html><head><title>${title}</title></head><body><h1>${title}</h1>${hrefs
     .map((href) => `<a href="${href}">${href}</a>`)
-    .join("")}</body></html>`,
-  mimeType: "text/html",
-});
-const markdown = (text: string): Response => ({
-  content: text,
-  mimeType: "text/markdown",
-});
+    .join("")}</body></html>`;
+const MARKDOWN = { type: "text/markdown" };
+const PLAIN_TEXT = { type: "text/plain" };
 /** An llms.txt index listing `links`. */
-const llmsTxt = (...links: string[]): Response =>
-  markdown(`# Docs\n\n${links.map((link) => `- [${link}](${link})`).join("\n")}`);
+const llmsTxt = (...links: string[]): string =>
+  `# Docs\n\n${links.map((link) => `- [${link}](${link})`).join("\n")}`;
 
 const opts = (overrides: Partial<ScraperOptions> = {}): ScraperOptions => ({
   url: ROOT,
@@ -81,183 +74,158 @@ async function crawl(
 const following = (shouldFollowLink: WebScraperStrategyOptions["shouldFollowLink"]) =>
   new WebScraperStrategy(config, { shouldFollowLink });
 
-const fetchedUrls = (): string[] => fetchSpy.mock.calls.map(([url]) => url);
-/** Requested URLs other than llms.txt probes, in request order. */
-const fetchedPages = (): string[] => fetchedUrls().filter((url) => !isLlmsTxtUrl(url));
-const probes = (): string[] => fetchedUrls().filter((url) => isLlmsTxtUrl(url));
-const requestOptions = (url: string) => fetchSpy.mock.calls.find(([u]) => u === url)?.[1];
 const storedUrls = (events: ScraperProgressEvent[]): string[] =>
   events.flatMap((event) => (event.result ? [event.result.url] : []));
 const eventFor = (events: ScraperProgressEvent[], url: string) =>
   events.find((event) => event.currentUrl === url);
+/** The pages processed after the start URL, in order. */
+const followed = (events: ScraperProgressEvent[]): string[] =>
+  events.slice(1).map((event) => event.currentUrl);
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  serve({});
-});
+const isProbe = (requestPath: string) => requestPath.endsWith("/llms.txt");
 
 describe("WebScraperStrategy", () => {
-  it("handles only http and https URLs", () => {
-    const strategy = new WebScraperStrategy(config);
+  const site = mockSite("https://example.com");
+  const httpSite = mockSite("http://example.com");
+  const www = mockSite("https://www.example.com");
+  const otherPort = mockSite("https://example.com:8443");
+  const docsHost = mockSite("https://docs.example.com");
+  const apiHost = mockSite("https://api.example.com");
+  const sites = [site, httpSite, www, otherPort, docsHost, apiHost];
 
-    expect(strategy.canHandle("https://example.com")).toBe(true);
-    expect(strategy.canHandle("http://example.com")).toBe(true);
-    expect(strategy.canHandle("file:///path/to/file.txt")).toBe(false);
-    expect(strategy.canHandle("invalid://example.com")).toBe(false);
-    expect(strategy.canHandle("any_string")).toBe(false);
-  });
+  /** Paths `on` was asked for, llms.txt probes excluded, in arrival order. */
+  const pages = (on: MockSite = site): string[] =>
+    on.requests.map((request) => request.path).filter((p) => !isProbe(p));
+  /** The llms.txt paths `on` was asked for, in arrival order. */
+  const probes = (on: MockSite = site): string[] =>
+    on.requests.map((request) => request.path).filter(isProbe);
 
-  it("sends followRedirects and the custom headers with every page request", async () => {
-    serve({ [ROOT]: html("Root", ["/child"]), [`${ROOT}child`]: html("Child") });
+  /** The site serving `url`. */
+  const siteFor = (url: string): MockSite => {
+    const { origin } = new URL(url);
+    const owner = sites.find((candidate) => candidate.origin === origin);
+    if (!owner) throw new Error(`No mock site serves ${url}`);
+    return owner;
+  };
+  /** The path and query of `url`, as a site's routes and requests name it. */
+  const pathOf = (url: string): string => {
+    const { pathname, search } = new URL(url);
+    return `${pathname}${search}`;
+  };
+  /** Serves an HTML page at an absolute URL. */
+  const serveAt = (url: string, body: string) => siteFor(url).page(pathOf(url), body);
+
+  /**
+   * Ends one case of a table test: fails the case if it asked for a path no
+   * route serves, then empties every site for the next case.
+   */
+  const endCase = (label: string) => {
+    for (const each of sites) {
+      expect
+        .soft(
+          each.unmatched.map((r) => r.path),
+          `${label}: unmatched`,
+        )
+        .toEqual([]);
+      each.reset();
+    }
+  };
+
+  it("sends the custom headers with every request and leaves redirects unfollowed when told to", async () => {
+    // `/target` has no route, so following the redirect would fail the test.
+    site
+      .page("/", html("Root", ["/child", "/moved"]))
+      .page("/child", html("Child"))
+      .redirect("/moved", "/target");
     const headers = { Authorization: "Bearer test-token", "X-Test-Header": "test-value" };
 
-    await crawl({ followRedirects: false, headers });
+    const events = await crawl({ followRedirects: false, headers, ignoreErrors: true });
 
-    for (const url of [ROOT, `${ROOT}child`]) {
-      expect(requestOptions(url)).toMatchObject({ followRedirects: false, headers });
+    expect(pages()).toEqual(["/", "/child", "/moved"]);
+    expect(eventFor(events, `${ROOT}moved`)?.outcome).toBe(PageOutcome.Failed);
+    for (const request of site.requests) {
+      expect
+        .soft(request.headers.get("authorization"), request.path)
+        .toBe("Bearer test-token");
+      expect.soft(request.headers.get("x-test-header"), request.path).toBe("test-value");
     }
   });
 
   describe("content processing", () => {
-    it.each([
-      [
-        "HTML",
-        html("HTML Test"),
+    it("processes HTML, Markdown and plain text through their pipelines", async () => {
+      const cases = [
         {
-          title: "HTML Test",
-          textContent: expect.stringContaining("# HTML Test"),
-          sourceContentType: "text/html",
+          label: "HTML",
+          body: html("HTML Test"),
+          type: "text/html",
+          expected: {
+            title: "HTML Test",
+            textContent: expect.stringContaining("# HTML Test"),
+            sourceContentType: "text/html",
+          },
         },
-      ],
-      [
-        "Markdown",
-        markdown("# Markdown Title\n\nThis is already markdown content."),
         {
-          textContent: expect.stringContaining("This is already markdown content."),
-          sourceContentType: "text/markdown",
-          contentType: "text/markdown",
+          label: "Markdown",
+          body: "# Markdown Title\n\nThis is already markdown content.",
+          type: "text/markdown",
+          expected: {
+            textContent: expect.stringContaining("This is already markdown content."),
+            sourceContentType: "text/markdown",
+            contentType: "text/markdown",
+          },
         },
-      ],
-      [
-        "plain text",
-        { content: "# Plain Title\n\nThis stays plain text.", mimeType: "text/plain" },
         {
-          textContent: expect.stringContaining("This stays plain text."),
-          contentType: "text/plain",
+          label: "plain text",
+          body: "# Plain Title\n\nThis stays plain text.",
+          type: "text/plain",
+          expected: {
+            textContent: expect.stringContaining("This stays plain text."),
+            contentType: "text/plain",
+          },
         },
-      ],
-    ])("processes %s through its pipeline", async (_label, response, expected) => {
-      serve({ [ROOT]: response });
+      ];
 
-      const events = await crawl({ maxDepth: 0 });
+      for (const { label, body, type, expected } of cases) {
+        site.page("/", body, { type });
 
-      expect(events.find((event) => event.result)?.result).toMatchObject(expected);
+        const events = await crawl({ maxDepth: 0 });
+
+        expect
+          .soft(events.find((event) => event.result)?.result, label)
+          .toMatchObject(expected);
+        endCase(label);
+      }
+    });
+
+    it("skips a child no pipeline can read without failing the crawl", async () => {
+      // Served as text, so the type gates let it through, but the body is
+      // binary, so the text pipeline refuses it once it is read.
+      site
+        .page("/", html("Root", ["/data", "/page"]))
+        .page("/data", new Uint8Array([0x41, 0x00, 0x42, 0x43]), PLAIN_TEXT)
+        .page("/page", html("Page"));
+
+      const events = await crawl();
+
+      expect(pages()).toEqual(["/", "/data", "/page"]);
+      // Skipped rather than empty: nothing read the body, so a refresh must not
+      // treat it as a page that lost its content.
+      expect(eventFor(events, `${ROOT}data`)).toMatchObject({
+        outcome: PageOutcome.Skipped,
+        result: null,
+      });
+      expect(eventFor(events, `${ROOT}data`)?.emptyPage).toBeUndefined();
+      expect(storedUrls(events)).toEqual([ROOT, `${ROOT}page`]);
     });
 
     it("follows links found in Markdown content", async () => {
-      serve({
-        [`${ROOT}docs/`]: markdown("# Start\n\nContinue to the [guide](guide)."),
-        [`${ROOT}docs/guide`]: markdown("# Guide\n\nMarkdown linked page."),
-      });
+      site
+        .page("/docs/", "# Start\n\nContinue to the [guide](guide).", MARKDOWN)
+        .page("/docs/guide", "# Guide\n\nMarkdown linked page.", MARKDOWN);
 
       const events = await crawl({ url: `${ROOT}docs/` });
 
       expect(storedUrls(events)).toEqual([`${ROOT}docs`, `${ROOT}docs/guide`]);
-    });
-
-    it("fails the job, naming the type, when no pipeline reads the start URL", async () => {
-      // Completing with zero documents would not tell the user whether they
-      // mistyped the URL or asked for a format this server cannot read.
-      serve({
-        [`${ROOT}image.png`]: {
-          content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-          mimeType: "image/png",
-        },
-      });
-
-      await expect(crawl({ url: `${ROOT}image.png` })).rejects.toThrow(
-        /Cannot process image\/png/,
-      );
-    });
-
-    it("skips a child no pipeline can read without failing the crawl", async () => {
-      serve({
-        [ROOT]: html("Root", ["/asset", "/page"]),
-        [`${ROOT}asset`]: {
-          content: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
-          mimeType: "image/png",
-        },
-        [`${ROOT}page`]: html("Page"),
-      });
-
-      const events = await crawl();
-
-      // Skipped rather than empty: nothing read the body, so a refresh must not
-      // treat it as a page that lost its content.
-      expect(eventFor(events, `${ROOT}asset`)).toMatchObject({
-        outcome: PageOutcome.Skipped,
-        result: null,
-      });
-      expect(eventFor(events, `${ROOT}asset`)?.emptyPage).toBeUndefined();
-      expect(storedUrls(events)).toEqual([ROOT, `${ROOT}page`]);
-    });
-
-    it("reports a clean empty extraction as an empty page carrying its validators", async () => {
-      // A pipeline that runs cleanly and extracts nothing is a statement that the
-      // page is empty, so the validators describe that state accurately.
-      serve({
-        [`${ROOT}page`]: {
-          content: "<html><body></body></html>",
-          etag: '"v2"',
-          lastModified: "2026-01-01T00:00:00.000Z",
-        },
-      });
-
-      const events = await crawl({ url: `${ROOT}page`, maxDepth: 0 });
-
-      expect(events).toEqual([
-        expect.objectContaining({
-          outcome: PageOutcome.Empty,
-          pagesIndexed: 0,
-          emptyPage: expect.objectContaining({
-            url: `${ROOT}page`,
-            etag: '"v2"',
-            lastModified: "2026-01-01T00:00:00.000Z",
-            pipelineFailed: false,
-          }),
-        }),
-      ]);
-    });
-
-    it("withholds the validators when the pipeline errors and extracts nothing", async () => {
-      // An oversized document is refused by its pipeline with an error, which says
-      // nothing about the page; a stored etag would stop the next refresh retrying.
-      const smallDocuments = {
-        ...config,
-        scraper: {
-          ...config.scraper,
-          document: { ...config.scraper.document, maxSize: 8 },
-        },
-      };
-      serve({
-        [`${ROOT}manual.pdf`]: {
-          content: Buffer.alloc(64),
-          mimeType: "application/pdf",
-          etag: '"v2"',
-          lastModified: "2026-01-01T00:00:00.000Z",
-        },
-      });
-
-      const events = await crawl(
-        { url: `${ROOT}manual.pdf`, maxDepth: 0 },
-        new WebScraperStrategy(smallDocuments),
-      );
-
-      expect(events[0]?.emptyPage).toMatchObject({
-        etag: null,
-        lastModified: null,
-        pipelineFailed: true,
-      });
     });
   });
 
@@ -265,13 +233,9 @@ describe("WebScraperStrategy", () => {
     it("records Markdown reached through a redirect under the requested URL", async () => {
       // Judged on where the bytes came from: an extensionless URL that redirects
       // to a .md file is a published Markdown representation of that page.
-      serve({
-        [`${ROOT}guide`]: {
-          content: "# Guide\n\nBody.",
-          mimeType: "text/plain",
-          source: `${ROOT}guide.md`,
-        },
-      });
+      site
+        .redirect("/guide", "/guide.md")
+        .page("/guide.md", "# Guide\n\nBody.", PLAIN_TEXT);
 
       const events = await crawl({ url: `${ROOT}guide`, maxDepth: 0 });
 
@@ -282,237 +246,281 @@ describe("WebScraperStrategy", () => {
       });
     });
 
-    it("records where an empty Markdown variant was read from", async () => {
-      // Without it, the next refresh would ask the page while sending the
-      // validator the Markdown file issued.
-      serve({ [`${ROOT}guide.md`]: markdown("") });
+    it("records each page under its page identity", async () => {
+      const cases = [
+        {
+          label: "a Markdown file",
+          url: `${ROOT}guide/ssr.md`,
+          body: "# Server-Side Rendering\n\nSome guidance about SSR.",
+          type: "text/markdown",
+          recorded: `${ROOT}guide/ssr`,
+        },
+        {
+          // react.dev serves its .md alternates as text/plain.
+          label: "a Markdown file served as plain text",
+          url: `${ROOT}learn.md`,
+          body: "# Quick Start\n\nWelcome.",
+          type: "text/plain",
+          recorded: `${ROOT}learn`,
+        },
+        {
+          // A soft 404 answering HTML must not fold onto a page it does not serve.
+          label: "a .md URL that answers HTML",
+          url: `${ROOT}docs/flex.md`,
+          body: html("Not found"),
+          type: "text/html",
+          recorded: `${ROOT}docs/flex.md`,
+        },
+        {
+          label: "Markdown at an extensionless URL",
+          url: `${ROOT}guide`,
+          body: "# Guide\n\nBody text.",
+          type: "text/markdown",
+          recorded: `${ROOT}guide`,
+        },
+        {
+          label: "a non-Markdown extension",
+          url: `${ROOT}notes.txt`,
+          body: "plain notes",
+          type: "text/plain",
+          recorded: `${ROOT}notes.txt`,
+        },
+        {
+          label: "a directory URL",
+          url: `${ROOT}docs/`,
+          body: html("Docs"),
+          type: "text/html",
+          recorded: `${ROOT}docs`,
+        },
+        {
+          label: "a bare origin",
+          url: "https://example.com",
+          body: html("Home"),
+          type: "text/html",
+          recorded: ROOT,
+        },
+      ];
 
-      const events = await crawl({ url: `${ROOT}guide.md`, maxDepth: 0 });
+      for (const { label, url, body, type, recorded } of cases) {
+        site.page(pathOf(url), body, { type });
 
-      expect(events[0]?.emptyPage).toMatchObject({
-        url: `${ROOT}guide`,
-        contentUrl: `${ROOT}guide.md`,
-      });
+        const events = await crawl({ url, maxDepth: 0 });
+
+        expect.soft(storedUrls(events), label).toEqual([recorded]);
+        endCase(label);
+      }
     });
 
-    it.each([
-      [
-        "a Markdown file",
-        "https://vite.dev/guide/ssr.md",
-        markdown("# Server-Side Rendering\n\nSome guidance about SSR."),
-        "https://vite.dev/guide/ssr",
-      ],
-      [
-        // react.dev serves its .md alternates as text/plain.
-        "a Markdown file served as plain text",
-        "https://react.dev/learn.md",
-        { content: "# Quick Start\n\nWelcome.", mimeType: "text/plain" },
-        "https://react.dev/learn",
-      ],
-      [
-        // A soft 404 answering HTML must not fold onto a page it does not serve.
-        "a .md URL that answers HTML",
-        "https://tailwindcss.com/docs/flex.md",
-        html("Not found"),
-        "https://tailwindcss.com/docs/flex.md",
-      ],
-      [
-        "Markdown at an extensionless URL",
-        `${ROOT}guide`,
-        markdown("# Guide\n\nBody text."),
-        `${ROOT}guide`,
-      ],
-      [
-        "a non-Markdown extension",
-        `${ROOT}notes.txt`,
-        { content: "plain notes", mimeType: "text/plain" },
-        `${ROOT}notes.txt`,
-      ],
-      ["a directory URL", `${ROOT}docs/`, html("Docs"), `${ROOT}docs`],
-      ["a bare origin", "https://example.com", html("Home"), ROOT],
-    ])("records %s under its page identity", async (_label, url, response, recorded) => {
-      serve({ [url]: response });
+    it("keeps the requested hash route when the server answers from another path spelling", async () => {
+      const start = `${ROOT}docs#/guide`;
+      const cases = [
+        {
+          label: "/docs",
+          serve: () => site.page("/docs", html("Guide")),
+          recorded: `${ROOT}docs#/guide`,
+        },
+        {
+          label: "/docs/",
+          serve: () => site.redirect("/docs", "/docs/").page("/docs/", html("Guide")),
+          recorded: `${ROOT}docs/#/guide`,
+        },
+      ];
 
-      const events = await crawl({ url, maxDepth: 0 });
-
-      expect(storedUrls(events)).toEqual([recorded]);
-    });
-
-    it.each([
-      ["/docs", `${ROOT}docs#/guide`],
-      ["/docs/", `${ROOT}docs/#/guide`],
-    ])(
-      "keeps the requested hash route when the server answers from %s",
-      async (path, recorded) => {
-        const start = `${ROOT}docs#/guide`;
-        serve({ [start]: { ...html("Guide"), source: `https://example.com${path}` } });
+      for (const { label, serve, recorded } of cases) {
+        serve();
 
         const events = await crawl({ url: start, preserveHashes: true, maxDepth: 0 });
 
-        expect(events.find((event) => event.result)).toMatchObject({
-          currentUrl: recorded,
-          result: { url: recorded },
-        });
-      },
-    );
+        expect
+          .soft(
+            events.find((event) => event.result),
+            label,
+          )
+          .toMatchObject({
+            currentUrl: recorded,
+            result: { url: recorded },
+          });
+        endCase(label);
+      }
+    });
   });
 
   describe("scope", () => {
-    // The scope matrix itself is covered in utils/scope.test.ts; these check that
-    // the crawl applies the configured mode to discovered links.
-    it.each([
-      [
-        "the default subpages",
-        undefined,
-        `${ROOT}api/`,
-        [`${ROOT}api/intro`],
-        [`${ROOT}blog/post`, "https://api.example.com/v1", "https://other.com/page"],
-      ],
-      [
-        "hostname",
-        "hostname",
-        `${ROOT}api`,
-        [`${ROOT}blog/post`],
-        ["https://api.example.com/v1"],
-      ],
-      [
-        "domain",
-        "domain",
-        "https://docs.example.com/",
-        ["https://api.example.com/v1"],
-        ["https://example.org/page"],
-      ],
-    ] as const)(
-      "follows only links within %s scope",
-      async (_label, scope, start, follows, skips) => {
-        serve({ [start]: html("Start", [...follows, ...skips]) });
+    // Links outside the scope get no route: asking for one fails the case.
+    it("follows only links within the configured scope", async () => {
+      // The scope matrix itself is covered in utils/scope.test.ts; this checks
+      // that the crawl applies the configured mode to discovered links.
+      const cases = [
+        {
+          label: "the default subpages",
+          scope: undefined,
+          start: `${ROOT}api/`,
+          follows: [`${ROOT}api/intro`],
+          skips: [
+            `${ROOT}blog/post`,
+            "https://api.example.com/v1",
+            "https://other.com/page",
+          ],
+        },
+        {
+          label: "hostname",
+          scope: "hostname",
+          start: `${ROOT}api`,
+          follows: [`${ROOT}blog/post`],
+          skips: ["https://api.example.com/v1"],
+        },
+        {
+          label: "domain",
+          scope: "domain",
+          start: "https://docs.example.com/",
+          follows: ["https://api.example.com/v1"],
+          skips: ["https://example.org/page"],
+        },
+      ] as const;
 
-        await crawl({ url: start, scope });
+      for (const { label, scope, start, follows, skips } of cases) {
+        for (const url of follows) serveAt(url, html(url));
+        serveAt(start, html("Start", [...follows, ...skips]));
 
-        expect(fetchedPages()).toEqual([start, ...follows]);
-      },
-    );
+        const events = await crawl({ url: start, scope });
 
-    it.each([
-      {
-        to: "a hash-suffixed path",
-        start: `${ROOT}foo`,
-        final: `${ROOT}foo~abc`,
-        follows: [`${ROOT}foo/child`],
-        skips: [],
-      },
-      {
-        to: "a deeper page",
-        start: `${ROOT}api`,
-        final: `${ROOT}api/v2/intro`,
-        follows: [`${ROOT}api/v1/intro`, `${ROOT}api/v2/intro/child`],
-        skips: [],
-      },
-      {
-        to: "a sibling path",
-        start: `${ROOT}v1/api`,
-        final: `${ROOT}v2/api`,
-        follows: [`${ROOT}v1/api/child`],
-        skips: [`${ROOT}v2/api/child`],
-      },
-      {
-        to: "the homepage",
-        start: `${ROOT}removed`,
-        final: ROOT,
-        follows: [],
-        skips: [`${ROOT}home/intro`],
-      },
-      {
-        to: "https",
-        start: "http://example.com/api",
-        final: `${ROOT}api`,
-        follows: [`${ROOT}api/child`],
-        skips: [],
-      },
-      {
-        to: "the www host",
-        start: `${ROOT}api`,
-        final: "https://www.example.com/api",
-        follows: ["https://www.example.com/api/child"],
-        skips: [],
-      },
-      {
-        to: "another port",
-        start: `${ROOT}api`,
-        final: "https://example.com:8443/api",
-        follows: ["https://example.com:8443/api/child"],
-        skips: [],
-      },
-      {
-        to: "a deeper path, keeping the hash route",
-        start: `${ROOT}docs#/guide`,
-        final: `${ROOT}docs/`,
-        follows: [`${ROOT}docs/#/api`],
-        skips: [],
-        preserveHashes: true,
-      },
-      {
-        to: "a sibling path, dropping the hash route",
-        start: `${ROOT}foo#/guide`,
-        final: `${ROOT}bar`,
-        follows: [],
-        skips: [`${ROOT}bar#/api`],
-        preserveHashes: true,
-      },
-    ])(
-      "anchors scope at the requested path after a redirect to $to",
-      async ({ start, final, follows, skips, preserveHashes }) => {
-        serve({ [start]: { ...html("Start", [...follows, ...skips]), source: final } });
+        expect.soft(followed(events), label).toEqual(follows);
+        endCase(label);
+      }
+    });
 
-        await crawl({ url: start, preserveHashes });
+    it("anchors scope at the requested path after a redirect", async () => {
+      const cases: Array<{
+        label: string;
+        start: string;
+        final: string;
+        follows: string[];
+        skips: string[];
+        preserveHashes?: boolean;
+      }> = [
+        {
+          label: "to a hash-suffixed path",
+          start: `${ROOT}foo`,
+          final: `${ROOT}foo~abc`,
+          follows: [`${ROOT}foo/child`],
+          skips: [],
+        },
+        {
+          label: "to a deeper page",
+          start: `${ROOT}api`,
+          final: `${ROOT}api/v2/intro`,
+          follows: [`${ROOT}api/v1/intro`, `${ROOT}api/v2/intro/child`],
+          skips: [],
+        },
+        {
+          label: "to a sibling path",
+          start: `${ROOT}v1/api`,
+          final: `${ROOT}v2/api`,
+          follows: [`${ROOT}v1/api/child`],
+          skips: [`${ROOT}v2/api/child`],
+        },
+        {
+          label: "to the homepage",
+          start: `${ROOT}removed`,
+          final: ROOT,
+          follows: [],
+          skips: [`${ROOT}home/intro`],
+        },
+        {
+          label: "to https",
+          start: "http://example.com/api",
+          final: `${ROOT}api`,
+          follows: [`${ROOT}api/child`],
+          skips: [],
+        },
+        {
+          label: "to the www host",
+          start: `${ROOT}api`,
+          final: "https://www.example.com/api",
+          follows: ["https://www.example.com/api/child"],
+          skips: [],
+        },
+        {
+          label: "to another port",
+          start: `${ROOT}api`,
+          final: "https://example.com:8443/api",
+          follows: ["https://example.com:8443/api/child"],
+          skips: [],
+        },
+        {
+          label: "to a deeper path, keeping the hash route",
+          start: `${ROOT}docs#/guide`,
+          final: `${ROOT}docs/`,
+          follows: [`${ROOT}docs/#/api`],
+          skips: [],
+          preserveHashes: true,
+        },
+        {
+          // `/bar` is served, so following the link would show in the events.
+          label: "to a sibling path, dropping the hash route",
+          start: `${ROOT}foo#/guide`,
+          final: `${ROOT}bar`,
+          follows: [],
+          skips: [`${ROOT}bar#/api`],
+          preserveHashes: true,
+        },
+      ];
 
-        expect(fetchedPages()).toEqual([start, ...follows]);
-      },
-    );
+      for (const { label, start, final, follows, skips, preserveHashes } of cases) {
+        for (const url of follows) serveAt(url, html(url));
+        siteFor(start).redirect(pathOf(start), final);
+        serveAt(final, html("Start", [...follows, ...skips]));
 
-    const siblingwiseWarnings = (): string[] =>
-      vi
-        .mocked(logger.warn)
-        .mock.calls.map(([message]) => String(message))
-        .filter((message) => message.includes("siblingwise"));
+        const events = await crawl({ url: start, preserveHashes });
 
-    it("warns once, naming the kept anchor, when a redirect moves to a sibling path", async () => {
-      serve({ [`${ROOT}v1/api`]: { ...html("Start"), source: `${ROOT}v2/api` } });
+        expect.soft(followed(events), label).toEqual(follows);
+        endCase(label);
+      }
+    });
 
+    it("warns once, naming the kept anchor, only when a redirect moves to a sibling path", async () => {
+      const siblingwiseWarnings = (): string[] =>
+        vi
+          .mocked(logger.warn)
+          .mock.calls.map(([message]) => String(message))
+          .filter((message) => message.includes("siblingwise"));
+      site
+        .redirect("/v1/api", "/v2/api")
+        .page("/v2/api", html("Start"))
+        .redirect("/docs", "/docs/installation/using-vite")
+        .page("/docs/installation/using-vite", html("Start"));
+
+      vi.mocked(logger.warn).mockClear();
       await crawl({ url: `${ROOT}v1/api` });
 
       const warnings = siblingwiseWarnings();
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain(`Requested: ${ROOT}v1/api`);
       expect(warnings[0]).toContain("Scope anchor: /v1/api");
-    });
 
-    it("does not warn when a redirect moves deeper below the requested path", async () => {
-      serve({
-        [`${ROOT}docs`]: {
-          ...html("Start"),
-          source: `${ROOT}docs/installation/using-vite`,
-        },
-      });
-
+      // A redirect deeper below the requested path keeps the subtree in scope.
+      vi.mocked(logger.warn).mockClear();
       await crawl({ url: `${ROOT}docs` });
 
       expect(siblingwiseWarnings()).toEqual([]);
     });
 
     it("resolves relative links against the URL the start page redirected to", async () => {
-      const start = "https://learn.microsoft.com/en-us/azure/bot-service";
-      serve({
-        [start]: {
-          ...html("Bot Service", ["bot-overview?view=azure-bot-service-4.0"]),
-          source: `${start}/?view=azure-bot-service-4.0`,
-        },
-      });
+      // learn.microsoft.com answers its section URLs this way.
+      const start = "/en-us/azure/bot-service";
+      site
+        .redirect(start, `${start}/?view=azure-bot-service-4.0`)
+        .page(
+          `${start}/?view=azure-bot-service-4.0`,
+          html("Bot Service", ["bot-overview?view=azure-bot-service-4.0"]),
+        )
+        .page(`${start}/bot-overview?view=azure-bot-service-4.0`, html("Overview"));
 
-      await crawl({ url: start });
+      await crawl({ url: site.url(start) });
 
-      expect(fetchedPages()).toEqual([
+      expect(pages()).toEqual([
         start,
+        `${start}/?view=azure-bot-service-4.0`,
         `${start}/bot-overview?view=azure-bot-service-4.0`,
       ]);
     });
@@ -520,186 +528,163 @@ describe("WebScraperStrategy", () => {
     it("resolves relative links against <base href> before checking scope", async () => {
       // Against the page, `guide` would be an in-scope /app/guide; against the
       // cross-origin base it is out of scope.
-      const start = `${ROOT}app/index.html`;
-      serve({
-        [start]: {
-          content:
-            '<html><head><base href="https://cdn.example.com/lib/"></head><body><a href="guide">Guide</a></body></html>',
-          mimeType: "text/html",
-        },
-      });
+      site.page(
+        "/app/index.html",
+        '<html><head><base href="https://cdn.example.com/lib/"></head><body><a href="guide">Guide</a></body></html>',
+      );
 
-      await crawl({ url: start });
+      await crawl({ url: `${ROOT}app/index.html` });
 
-      expect(fetchedPages()).toEqual([start]);
-    });
-
-    it("follows hash-route links as distinct pages when preserveHashes is enabled", async () => {
-      serve({ [ROOT]: html("Docs", ["#/Docs/welcome", "#/Docs/api"]) });
-
-      await crawl({ preserveHashes: true });
-
-      expect(fetchedPages()).toEqual([
-        ROOT,
-        `${ROOT}#/Docs/welcome`,
-        `${ROOT}#/Docs/api`,
-      ]);
+      expect(pages()).toEqual(["/app/index.html"]);
     });
 
     it("follows only the links a custom shouldFollowLink accepts", async () => {
-      serve({
-        [ROOT]: html("Base", ["/allowed-page", "/blocked-page", "/also-allowed"]),
-      });
+      site
+        .page("/", html("Base", ["/allowed-page", "/blocked-page", "/also-allowed"]))
+        .page("/allowed-page", html("Allowed"))
+        .page("/also-allowed", html("Also allowed"));
 
       await crawl(
         {},
         following((_base, target) => target.pathname.includes("allowed")),
       );
 
-      expect(fetchedPages()).toEqual([
-        ROOT,
-        `${ROOT}allowed-page`,
-        `${ROOT}also-allowed`,
-      ]);
+      expect(pages()).toEqual(["/", "/allowed-page", "/also-allowed"]);
     });
   });
 
   describe("llms.txt discovery", () => {
-    it.each([
-      [`${ROOT}docs/`, [`${ROOT}docs/llms.txt`, `${ROOT}llms.txt`]],
-      // A dotted version names a directory, not a file.
-      [
-        `${ROOT}docs/v1.0`,
-        [`${ROOT}docs/v1.0/llms.txt`, `${ROOT}docs/llms.txt`, `${ROOT}llms.txt`],
-      ],
-      // "index" and page files name a document, not a directory to descend into.
-      [`${ROOT}docs/index`, [`${ROOT}docs/llms.txt`, `${ROOT}llms.txt`]],
-      [`${ROOT}docs/page.mdx`, [`${ROOT}docs/llms.txt`, `${ROOT}llms.txt`]],
-      [`${ROOT}docs/page.html`, [`${ROOT}docs/llms.txt`, `${ROOT}llms.txt`]],
-    ])("probes for llms.txt from %s in order", async (start, expected) => {
-      serve({ [start]: html("Start") });
+    it("probes for llms.txt from the start URL up to the root, in order", async () => {
+      const cases = [
+        { start: "/docs/", expected: ["/docs/llms.txt", "/llms.txt"] },
+        // A dotted version names a directory, not a file.
+        {
+          start: "/docs/v1.0",
+          expected: ["/docs/v1.0/llms.txt", "/docs/llms.txt", "/llms.txt"],
+        },
+        // "index" and page files name a document, not a directory to descend into.
+        { start: "/docs/index", expected: ["/docs/llms.txt", "/llms.txt"] },
+        { start: "/docs/page.mdx", expected: ["/docs/llms.txt", "/llms.txt"] },
+        { start: "/docs/page.html", expected: ["/docs/llms.txt", "/llms.txt"] },
+      ];
 
-      await crawl({ url: start, maxDepth: 0 });
+      for (const { start, expected } of cases) {
+        site.page(start, html("Start"));
 
-      expect(probes()).toEqual(expected);
+        await crawl({ url: site.url(start), maxDepth: 0 });
+
+        expect.soft(probes(), start).toEqual(expected);
+        endCase(start);
+      }
     });
 
     it("stops at the first llms.txt with links and seeds its in-scope entries", async () => {
-      const start = `${ROOT}docs/`;
-      serve({
-        [start]: html("Docs"),
-        [`${ROOT}docs/llms.txt`]: markdown(
+      site
+        .page("/docs/", html("Docs"))
+        .page(
+          "/docs/llms.txt",
           "# Docs\n\n- [Intro](intro)\n- [Other](https://example.com/other)",
-        ),
-      });
+          MARKDOWN,
+        )
+        .notFound("/docs/intro/index.html.md")
+        .page("/docs/intro", html("Intro"));
       const headers = { Authorization: "Bearer token" };
 
-      await crawl({ url: start, maxDepth: 0, followRedirects: true, headers });
+      await crawl({ url: `${ROOT}docs/`, maxDepth: 0, headers });
 
-      expect(probes()).toEqual([`${ROOT}docs/llms.txt`]);
-      expect(requestOptions(`${ROOT}docs/llms.txt`)).toMatchObject({
-        followRedirects: true,
-        headers,
-      });
+      expect(probes()).toEqual(["/docs/llms.txt"]);
+      expect(site.requestsTo("/docs/llms.txt")[0]?.headers.get("authorization")).toBe(
+        "Bearer token",
+      );
       // A seed is asked for its Markdown variant first, then for the page itself.
-      expect(fetchedPages()).toEqual([
-        start,
-        `${ROOT}docs/intro/index.html.md`,
-        `${ROOT}docs/intro`,
-      ]);
+      expect(pages()).toEqual(["/docs/", "/docs/intro/index.html.md", "/docs/intro"]);
     });
 
     it("resolves llms.txt entries against the URL the index was served from", async () => {
-      const start = `${ROOT}docs/start`;
-      serve({
-        [`${ROOT}docs/llms.txt`]: {
-          ...markdown("# Docs\n\n- [Guide](guide)"),
-          source: "https://www.example.com/docs/llms.txt",
-        },
-        [start]: { ...html("Start"), source: "https://www.example.com/docs/start" },
-      });
+      // The relative entry would be /docs/guide on example.com, which has no route.
+      site
+        .redirect("/docs/llms.txt", "https://www.example.com/docs/llms.txt")
+        .redirect("/docs/start", "https://www.example.com/docs/start");
+      www
+        .page("/docs/llms.txt", "# Docs\n\n- [Guide](guide)", MARKDOWN)
+        .page("/docs/start", html("Start"))
+        .notFound("/docs/guide/index.html.md")
+        .page("/docs/guide", html("Guide"));
 
-      await crawl({ url: start, scope: "hostname", maxDepth: 0 });
+      await crawl({ url: `${ROOT}docs/start`, scope: "hostname", maxDepth: 0 });
 
-      expect(fetchedPages()).toContain(
-        "https://www.example.com/docs/guide/index.html.md",
-      );
-      expect(fetchedPages()).not.toContain(`${ROOT}docs/guide/index.html.md`);
+      expect(www.wasRequested("/docs/guide/index.html.md")).toBe(true);
     });
 
     it("admits llms.txt entries against the scope the start URL redirected to", async () => {
-      serve({
-        "http://example.com/docs/llms.txt": llmsTxt("https://www.example.com/docs/guide"),
-        "http://example.com/docs": {
-          ...html("Start"),
-          source: "https://www.example.com/docs/",
-        },
-      });
+      httpSite
+        .page("/docs/llms.txt", llmsTxt("https://www.example.com/docs/guide"), MARKDOWN)
+        .redirect("/docs", "https://www.example.com/docs/");
+      www
+        .page("/docs/", html("Start"))
+        .notFound("/docs/guide/index.html.md")
+        .page("/docs/guide", html("Guide"));
 
       await crawl({ url: "http://example.com/docs", maxDepth: 0 });
 
-      expect(fetchedPages()).toContain(
-        "https://www.example.com/docs/guide/index.html.md",
-      );
+      expect(www.wasRequested("/docs/guide/index.html.md")).toBe(true);
     });
 
     it("does not request the start URL again when llms.txt lists it", async () => {
-      const start = `${ROOT}docs/guide`;
-      serve({ [start]: html("Guide"), [`${ROOT}docs/llms.txt`]: llmsTxt(start) });
+      site
+        .page("/docs/guide", html("Guide"))
+        .page("/docs/llms.txt", llmsTxt(`${ROOT}docs/guide`), MARKDOWN);
 
-      await crawl({ url: start, maxDepth: 0 });
+      await crawl({ url: `${ROOT}docs/guide`, maxDepth: 0 });
 
-      expect(fetchedPages()).toEqual([start]);
+      expect(pages()).toEqual(["/docs/guide"]);
     });
 
     it("never follows a link to llms.txt", async () => {
-      serve({ [`${ROOT}docs/`]: html("Docs", ["/docs/llms.txt", "/docs/page"]) });
+      site
+        .page("/docs/", html("Docs", ["/docs/llms.txt", "/docs/page"]))
+        .page("/docs/page", html("Page"));
 
       await crawl({ url: `${ROOT}docs/` });
 
       // Requested once, as the probe.
-      expect(fetchedUrls().filter((url) => url === `${ROOT}docs/llms.txt`)).toHaveLength(
-        1,
-      );
-      expect(fetchedPages()).toEqual([`${ROOT}docs/`, `${ROOT}docs/page`]);
+      expect(site.requestsTo("/docs/llms.txt")).toHaveLength(1);
+      expect(pages()).toEqual(["/docs/", "/docs/page"]);
     });
 
-    it.each([
-      ["HTML", { content: "<html>wrong</html>", mimeType: "text/html" }],
-      [
-        "a non-Markdown text type",
-        { content: "body { color: red; }", mimeType: "text/css" },
-      ],
-    ])(
-      "falls back to the page when its Markdown variant answers %s",
-      async (_label, variant) => {
-        serve({
-          [ROOT]: html("Root"),
-          [`${ROOT}llms.txt`]: llmsTxt(`${ROOT}docs/page.html`),
-          [`${ROOT}docs/page.html.md`]: variant,
-          [`${ROOT}docs/page.html`]: html("Page"),
-        });
+    it("falls back to the page when its Markdown variant is not Markdown", async () => {
+      const cases = [
+        { label: "HTML", body: "<html>wrong</html>", type: "text/html" },
+        {
+          label: "a non-Markdown text type",
+          body: "body { color: red; }",
+          type: "text/css",
+        },
+      ];
+
+      for (const { label, body, type } of cases) {
+        site
+          .page("/", html("Root"))
+          .page("/llms.txt", llmsTxt(`${ROOT}docs/page.html`), MARKDOWN)
+          .page("/docs/page.html.md", body, { type })
+          .page("/docs/page.html", html("Page"));
 
         const events = await crawl({ maxDepth: 0 });
 
-        expect(fetchedPages()).toEqual([
-          ROOT,
-          `${ROOT}docs/page.html.md`,
-          `${ROOT}docs/page.html`,
-        ]);
-        expect(storedUrls(events)).toEqual([ROOT, `${ROOT}docs/page.html`]);
-      },
-    );
+        expect
+          .soft(pages(), label)
+          .toEqual(["/", "/docs/page.html.md", "/docs/page.html"]);
+        expect.soft(storedUrls(events), label).toEqual([ROOT, `${ROOT}docs/page.html`]);
+        endCase(label);
+      }
+    });
 
     it("records a plain-text Markdown variant as Markdown under its page", async () => {
-      serve({
-        [ROOT]: html("Root"),
-        [`${ROOT}llms.txt`]: llmsTxt(`${ROOT}docs/guide/`),
-        [`${ROOT}docs/guide/index.html.md`]: {
-          content: "# Guide\n\nMarkdown variant",
-          mimeType: "text/plain",
-        },
-      });
+      // `/docs/guide/` has no route, so asking for it would fail the test.
+      site
+        .page("/", html("Root"))
+        .page("/llms.txt", llmsTxt(`${ROOT}docs/guide/`), MARKDOWN)
+        .page("/docs/guide/index.html.md", "# Guide\n\nMarkdown variant", PLAIN_TEXT);
 
       const events = await crawl({ maxDepth: 0 });
 
@@ -710,26 +695,13 @@ describe("WebScraperStrategy", () => {
         contentUrl: `${ROOT}docs/guide/index.html.md`,
         contentType: "text/markdown",
       });
-      expect(fetchedPages()).not.toContain(`${ROOT}docs/guide/`);
-    });
-
-    it("requests a Markdown entry as listed, without another .md suffix", async () => {
-      serve({
-        [ROOT]: html("Root"),
-        [`${ROOT}llms.txt`]: llmsTxt(`${ROOT}docs/intro.md`),
-        [`${ROOT}docs/intro.md`]: markdown("# Intro\n\nMarkdown page"),
-      });
-
-      await crawl({ maxDepth: 0 });
-
-      expect(fetchedPages()).toEqual([ROOT, `${ROOT}docs/intro.md`]);
     });
 
     it("continues with llms.txt entries when the start URL is not found", async () => {
-      serve({
-        [`${ROOT}llms.txt`]: llmsTxt(`${ROOT}guide.md`),
-        [`${ROOT}guide.md`]: markdown("# Guide\n\nMarkdown page"),
-      });
+      site
+        .notFound("/")
+        .page("/llms.txt", llmsTxt(`${ROOT}guide.md`), MARKDOWN)
+        .page("/guide.md", "# Guide\n\nMarkdown page", MARKDOWN);
 
       const events = await crawl({ maxDepth: 0 });
 
@@ -737,93 +709,112 @@ describe("WebScraperStrategy", () => {
     });
 
     it("fails when the start URL is not found and llms.txt lists only the start URL", async () => {
-      serve({ [`${ROOT}llms.txt`]: llmsTxt(ROOT) });
+      site.notFound("/").page("/llms.txt", llmsTxt(ROOT), MARKDOWN);
 
       await expect(crawl({ maxDepth: 0 })).rejects.toThrow("Root page not found");
     });
 
     it("probes llms.txt during a refresh and seeds the entries it lists", async () => {
-      serve({
-        [ROOT]: { status: FetchStatus.NOT_MODIFIED },
-        [`${ROOT}llms.txt`]: llmsTxt(`${ROOT}new`),
-        [`${ROOT}existing`]: html("Existing"),
+      // The start page is unchanged, which must not stop its llms.txt seeds.
+      site
+        .page("/", html("Root"), { etag: '"root-v1"' })
+        .page("/llms.txt", llmsTxt(`${ROOT}new`), MARKDOWN)
+        .page("/existing", html("Existing"))
+        .notFound("/new/index.html.md")
+        .page("/new", html("New"));
+
+      await crawl({
+        initialQueue: [
+          { url: ROOT, depth: 0, pageId: 1, etag: '"root-v1"' },
+          { url: `${ROOT}existing`, depth: 1, pageId: 2 },
+        ],
       });
 
-      await crawl({ initialQueue: [{ url: `${ROOT}existing`, depth: 1, pageId: 1 }] });
-
-      expect(fetchedPages()).toContain(`${ROOT}new/index.html.md`);
+      expect(site.requestsTo("/")[0]?.ifNoneMatch).toBe('"root-v1"');
+      expect(site.wasRequested("/new/index.html.md")).toBe(true);
     });
 
     it("admits llms.txt entries through the same gates as discovered links", async () => {
-      serve({
-        [ROOT]: html("Root"),
-        [`${ROOT}llms.txt`]: llmsTxt(
-          `${ROOT}docs.zip`,
-          `${ROOT}diagram.png`,
-          `${ROOT}blocked`,
-          `${ROOT}ok`,
-        ),
-      });
+      site
+        .page("/", html("Root"))
+        .page(
+          "/llms.txt",
+          llmsTxt(`${ROOT}docs.zip`, `${ROOT}diagram.png`, `${ROOT}blocked`, `${ROOT}ok`),
+          MARKDOWN,
+        )
+        .notFound("/ok/index.html.md")
+        .page("/ok", html("OK"));
 
       await crawl(
         { maxDepth: 0 },
         following((_base, target) => !target.pathname.includes("blocked")),
       );
 
-      expect(fetchedPages()).toEqual([ROOT, `${ROOT}ok/index.html.md`, `${ROOT}ok`]);
+      expect(pages()).toEqual(["/", "/ok/index.html.md", "/ok"]);
     });
 
     it("probes llms.txt without the content-type gate pages are fetched with", async () => {
       // The index is parsed directly rather than by a pipeline, so the types the
       // pipelines read must not decide whether it is downloaded.
-      serve({ [ROOT]: html("Root") });
+      site
+        .page("/", html("Root"))
+        .page("/llms.txt", llmsTxt(`${ROOT}guide`), { type: "application/octet-stream" })
+        .notFound("/guide/index.html.md")
+        .page("/guide", html("Guide"));
 
-      await crawl({ maxDepth: 0 });
+      const events = await crawl({ maxDepth: 0 });
 
-      expect(requestOptions(`${ROOT}llms.txt`)).not.toHaveProperty("acceptsMimeType");
-      expect(requestOptions(ROOT)).toHaveProperty("acceptsMimeType");
+      expect(storedUrls(events)).toEqual([ROOT, `${ROOT}guide`]);
     });
   });
 
   describe("queue-time link gate", () => {
-    it.each([
-      "/assets/diagram.png",
-      "/assets/photo.jpg",
-      "/assets/flame.svg",
-      "/assets/demo.mp4",
-      // Archives are readable as a start URL but deliberately not followed.
-      "/downloads/docs.zip",
-      "/downloads/docs.tar.gz",
-    ])("never requests a link to %s", async (href) => {
-      serve({ [ROOT]: html("Root", [href]) });
+    it("never requests a link to binary media or an archive", async () => {
+      // None of these has a route, so a request for one would fail the test.
+      site.page(
+        "/",
+        html("Root", [
+          "/assets/diagram.png",
+          "/assets/photo.jpg",
+          "/assets/flame.svg",
+          "/assets/demo.mp4",
+          // Archives are readable as a start URL but deliberately not followed.
+          "/downloads/docs.zip",
+          "/downloads/docs.tar.gz",
+        ]),
+      );
 
       await crawl();
 
-      expect(fetchedPages()).toEqual([ROOT]);
+      expect(pages()).toEqual(["/"]);
     });
 
-    it.each([
-      // Binary, but a pipeline reads it.
-      "/guide.pdf",
-      "/example.py",
-      "/notes.txt",
-      // No extension: the fetch-time gate decides on the served type.
-      "/docs/getting-started",
-      // Extensions detection has no opinion on (issue #490).
-      "/Guess/guess.qbas",
-      "/Guess/guess.ps",
-      // The extension is in the query, not the path.
-      "/download?file=diagram.png",
-    ])("requests a link to %s", async (href) => {
-      serve({ [ROOT]: html("Root", [href]) });
+    it("requests a link a pipeline may read, or whose type only the response can tell", async () => {
+      const links = [
+        // Binary, but a pipeline reads it.
+        "/guide.pdf",
+        "/example.py",
+        "/notes.txt",
+        // No extension: the fetch-time gate decides on the served type.
+        "/docs/getting-started",
+        // Extensions detection has no opinion on (issue #490).
+        "/Guess/guess.qbas",
+        "/Guess/guess.ps",
+        // The extension is in the query, not the path.
+        "/download?file=diagram.png",
+      ];
+      site.page("/", html("Root", links));
+      for (const link of links) site.notFound(link);
 
       await crawl();
 
-      expect(fetchedPages()).toEqual([ROOT, new URL(href, ROOT).href]);
+      expect(pages()).toEqual(["/", ...links]);
     });
 
     it("keeps rejected links out of totalDiscovered", async () => {
-      serve({ [ROOT]: html("Root", ["/a.png", "/b.jpg", "/c.svg", "/real-page"]) });
+      site
+        .page("/", html("Root", ["/a.png", "/b.jpg", "/c.svg", "/real-page"]))
+        .page("/real-page", html("Real page"));
 
       const events = await crawl();
 
@@ -844,7 +835,7 @@ describe("WebScraperStrategy", () => {
       readdirSync(os.tmpdir()).filter((file) => file.endsWith(`-${name}`));
 
     it("reports a downloaded archive as a container rather than a page", async () => {
-      serve({ [`${ROOT}docs.zip`]: { content: archive, mimeType: "application/zip" } });
+      site.page("/docs.zip", archive, { type: "application/zip" });
       const strategy = new WebScraperStrategy(config);
 
       const events = await crawl({ url: `${ROOT}docs.zip`, maxDepth: 0 }, strategy);
@@ -856,7 +847,7 @@ describe("WebScraperStrategy", () => {
 
     it("deletes the downloaded archive on cleanup", async () => {
       const name = `cleanup-${Date.now()}.zip`;
-      serve({ [`${ROOT}${name}`]: { content: archive, mimeType: "application/zip" } });
+      site.page(`/${name}`, archive, { type: "application/zip" });
       const strategy = new WebScraperStrategy(config);
       await crawl({ url: `${ROOT}${name}`, maxDepth: 0 }, strategy);
       expect(tempCopies(name)).toHaveLength(1);
@@ -874,42 +865,6 @@ describe("WebScraperStrategy", () => {
     it.todo("indexes the members of an archive served at the start URL");
   });
 
-  describe("refresh", () => {
-    it("sends each stored validator and reports unchanged, deleted and updated pages", async () => {
-      serve({
-        [ROOT]: html("Root"),
-        [`${ROOT}unchanged`]: { status: FetchStatus.NOT_MODIFIED },
-        [`${ROOT}updated`]: { ...html("Updated"), etag: "new-etag" },
-      });
-      const initialQueue = [
-        { url: `${ROOT}unchanged`, depth: 1, pageId: 1, etag: "etag-1" },
-        { url: `${ROOT}deleted`, depth: 1, pageId: 2, etag: "etag-2" },
-        { url: `${ROOT}updated`, depth: 1, pageId: 3, etag: "etag-3" },
-      ];
-
-      const events = await crawl({ initialQueue });
-
-      for (const item of initialQueue) {
-        expect(requestOptions(item.url)).toMatchObject({ etag: item.etag });
-      }
-      expect(eventFor(events, `${ROOT}unchanged`)).toMatchObject({
-        outcome: PageOutcome.Unchanged,
-        pageId: 1,
-        result: null,
-      });
-      expect(eventFor(events, `${ROOT}deleted`)).toMatchObject({
-        outcome: PageOutcome.Absent,
-        pageId: 2,
-        deleted: true,
-      });
-      expect(eventFor(events, `${ROOT}updated`)).toMatchObject({
-        outcome: PageOutcome.Stored,
-        pageId: 3,
-        result: { url: `${ROOT}updated`, title: "Updated", etag: "new-etag" },
-      });
-    });
-  });
-
   describe("cleanup", () => {
     const fakePipeline = (close: () => Promise<void>): ContentPipeline => ({
       canProcess: () => false,
@@ -917,7 +872,7 @@ describe("WebScraperStrategy", () => {
       close: vi.fn(close),
     });
 
-    it("closes every pipeline even when one fails to close", async () => {
+    it("closes every pipeline even when one fails to close, and can be cleaned up again", async () => {
       const failing = fakePipeline(() => Promise.reject(new Error("close failed")));
       const healthy = fakePipeline(() => Promise.resolve());
       const factory = vi
@@ -929,12 +884,7 @@ describe("WebScraperStrategy", () => {
       await expect(strategy.cleanup()).resolves.toBeUndefined();
       expect(failing.close).toHaveBeenCalledOnce();
       expect(healthy.close).toHaveBeenCalledOnce();
-    });
 
-    it("can be cleaned up more than once", async () => {
-      const strategy = new WebScraperStrategy(config);
-
-      await strategy.cleanup();
       await expect(strategy.cleanup()).resolves.toBeUndefined();
     });
   });

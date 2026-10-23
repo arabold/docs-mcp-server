@@ -44,10 +44,6 @@ export class LocalFileStrategy extends BaseScraperStrategy {
     this.accessPolicy = new ScraperAccessPolicy(config.scraper.security);
   }
 
-  canHandle(url: string): boolean {
-    return url.startsWith("file://");
-  }
-
   async processItem(
     item: QueueItem,
     options: ScraperOptions,

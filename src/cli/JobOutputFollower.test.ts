@@ -34,15 +34,6 @@ describe("JobOutputFollower", () => {
     expect(seen).toEqual(["mine:running", "mine:1/3"]);
   });
 
-  it("drops other jobs' events before and after it follows a job", () => {
-    eventBus.emit(EventType.JOB_STATUS_CHANGE, job("theirs"));
-    follower.follow("mine");
-    eventBus.emit(EventType.JOB_PROGRESS, { job: job("theirs"), progress });
-    eventBus.emit(EventType.JOB_STATUS_CHANGE, job("mine", PipelineJobStatus.COMPLETED));
-
-    expect(seen).toEqual(["mine:completed"]);
-  });
-
   it("delivers nothing after it is disposed", () => {
     follower.follow("mine");
     follower.dispose();

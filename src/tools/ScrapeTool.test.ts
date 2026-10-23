@@ -1,262 +1,105 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
-import { PipelineManager } from "../pipeline/PipelineManager";
-import type { PipelineJob } from "../pipeline/types";
+import type { IPipeline } from "../pipeline/trpc/interfaces";
 import { PipelineJobStatus } from "../pipeline/types";
 import { ScrapeMode } from "../scraper/types";
 import { defaults } from "../utils/config";
 import { ScrapeTool, type ScrapeToolOptions } from "./ScrapeTool";
 
-// Mock dependencies
-vi.mock("../pipeline/PipelineManager");
-
+// Version labels are normalized by normalizeVersionLabel (src/store/types.test.ts);
+// test/version-resolution-e2e.test.ts checks this tool applies it. The page
+// count and job failures reach the CLI in test/cli-e2e.test.ts.
 describe("ScrapeTool", () => {
-  let mockManagerInstance: Partial<PipelineManager>; // Mock manager instance
+  let pipeline: {
+    enqueueScrapeJob: Mock<IPipeline["enqueueScrapeJob"]>;
+    waitForJobCompletion: Mock<IPipeline["waitForJobCompletion"]>;
+    getJob: Mock;
+  };
   let scrapeTool: ScrapeTool;
 
   const MOCK_JOB_ID = "test-job-123";
-  // Without replace, ScrapeTool leaves the overwrite default to the pipeline
-  const DEFAULT_INTENT = { onExisting: undefined };
-  const mockConfig = { scraper: defaults } as any;
 
   beforeEach(() => {
-    vi.resetAllMocks();
-
-    // Mock the manager instance methods
-    mockManagerInstance = {
-      start: vi.fn().mockResolvedValue(undefined),
-      enqueueScrapeJob: vi.fn().mockResolvedValue(MOCK_JOB_ID), // Return a mock job ID
-      waitForJobCompletion: vi.fn().mockResolvedValue(undefined), // Default success
+    pipeline = {
+      enqueueScrapeJob: vi.fn().mockResolvedValue(MOCK_JOB_ID),
+      waitForJobCompletion: vi.fn().mockResolvedValue(undefined),
       getJob: vi.fn().mockResolvedValue({
-        // Mock getJob for final status check
         id: MOCK_JOB_ID,
         status: PipelineJobStatus.COMPLETED,
-        progress: { pagesScraped: 0 }, // Default progress
-      } as Partial<PipelineJob>),
+        progress: { pagesScraped: 0 },
+      }),
     };
-
-    // Mock the constructor of PipelineManager to return our mock instance
-    (PipelineManager as Mock).mockImplementation(function () {
-      return mockManagerInstance;
-    });
-
-    // Pass mockManagerInstance to constructor
-    scrapeTool = new ScrapeTool(
-      mockManagerInstance as PipelineManager,
-      mockConfig.scraper,
-    );
-    // mockOnProgress initialization removed
-    // managerCallbacks reset removed
+    scrapeTool = new ScrapeTool(pipeline as unknown as IPipeline, defaults.scraper);
   });
 
-  // Helper function for basic options
-  const getBaseOptions = (version?: string | null): ScrapeToolOptions => ({
+  const baseOptions: ScrapeToolOptions = {
     library: "test-lib",
-    version: version,
+    version: "1.0.0",
     url: "http://example.com/docs",
-  });
+  };
 
   it("should report the job id before waiting for the job", async () => {
     const onJobEnqueued = vi.fn(() => {
-      expect(mockManagerInstance.waitForJobCompletion).not.toHaveBeenCalled();
+      expect(pipeline.waitForJobCompletion).not.toHaveBeenCalled();
     });
 
-    await scrapeTool.execute({ ...getBaseOptions("1.0.0"), onJobEnqueued });
+    await scrapeTool.execute({ ...baseOptions, onJobEnqueued });
 
     expect(onJobEnqueued).toHaveBeenCalledWith(MOCK_JOB_ID);
-    expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledTimes(1);
+    expect(pipeline.waitForJobCompletion).toHaveBeenCalledTimes(1);
   });
 
-  // --- Version Handling Tests ---
-
-  it.each([
-    { input: "1.2.3", expectedInternal: "1.2.3" },
-    { input: "1.2.3-beta.1", expectedInternal: "1.2.3-beta.1" },
-    { input: "1", expectedInternal: "1" }, // Verbatim - not coerced to 1.0.0
-    { input: "1.2", expectedInternal: "1.2" }, // Verbatim - not coerced to 1.2.0
-    { input: "1.20", expectedInternal: "1.20" }, // Verbatim - distinct from 1.20.0
-    { input: " 1.2.3 ", expectedInternal: "1.2.3" }, // Trimmed
-    { input: "V2.0.0", expectedInternal: "v2.0.0" }, // Lowercased
-    { input: null, expectedInternal: null }, // Null -> Unversioned (normalize to null for pipeline)
-    { input: undefined, expectedInternal: null }, // Undefined -> Unversioned (normalize to null for pipeline)
-    { input: "", expectedInternal: null }, // Empty -> Unversioned
-    { input: "   ", expectedInternal: null }, // Whitespace-only -> Unversioned
-  ])(
-    "should handle version input '$input' correctly",
-    async ({ input, expectedInternal }) => {
-      const options = getBaseOptions(input);
-      await scrapeTool.execute(options);
-
-      // Check enqueueScrapeJob call (implies constructor was called)
-      expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
-        "test-lib",
-        expectedInternal,
-        expect.objectContaining({ url: options.url, version: expectedInternal ?? "" }),
-        DEFAULT_INTENT,
-      );
-      expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
-    },
-  );
-
-  it.each(["latest", "stable", "1.x", "main", "release-2024"])(
-    "should accept the non-semver label '%s' and store it verbatim",
-    async (label) => {
-      // A version label is not required to be a semantic version. Labels like
-      // "stable" are stored as typed and resolved literally on read.
-      const options = getBaseOptions(label);
-
-      await expect(scrapeTool.execute(options)).resolves.toBeDefined();
-      expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
-        "test-lib",
-        label,
-        expect.objectContaining({ url: options.url }),
-        DEFAULT_INTENT,
-      );
-    },
-  );
-
-  // --- Pipeline Execution Tests ---
-
-  it("should execute the pipeline process with correct options", async () => {
-    const options: ScrapeToolOptions = {
-      ...getBaseOptions("1.0.0"),
-      options: {
-        maxPages: 50,
-        maxDepth: 2,
-        maxConcurrency: 5, // Test override
-        ignoreErrors: false,
-      },
+  it("fills defaults and passes crawl options through", async () => {
+    const headers = {
+      Authorization: "Bearer test-token",
+      "X-Custom-Header": "custom-value",
     };
-    await scrapeTool.execute(options);
 
-    // Check enqueueScrapeJob options
-    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
+    await scrapeTool.execute({
+      ...baseOptions,
+      options: { maxPages: 50, ignoreErrors: false, headers, preserveHashes: true },
+    });
+
+    expect(pipeline.enqueueScrapeJob).toHaveBeenCalledWith(
       "test-lib",
-      "1.0.0", // Normalized and lowercased
+      "1.0.0",
       {
         url: "http://example.com/docs",
         library: "test-lib",
         version: "1.0.0",
-        scope: "subpages", // Using new scope option instead of subpagesOnly
-        followRedirects: true, // Default value
-        maxPages: 50, // Overridden
-        maxDepth: 2, // Overridden
-        maxConcurrency: 5, // Test override
-        ignoreErrors: false, // Overridden
-        scrapeMode: ScrapeMode.Auto, // Use enum
+        // Given
+        maxPages: 50,
+        ignoreErrors: false,
+        headers,
+        preserveHashes: true,
+        // From the scraper config
+        maxDepth: defaults.scraper.maxDepth,
+        maxConcurrency: defaults.scraper.maxConcurrency,
+        // Built-in
+        scope: "subpages",
+        followRedirects: true,
+        scrapeMode: ScrapeMode.Auto,
       },
-      DEFAULT_INTENT,
+      { onExisting: undefined },
     );
-    expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
-  });
-
-  it("should return the number of pages scraped on successful completion", async () => {
-    const options = getBaseOptions("1.0.0");
-
-    // Removed simulation of progress via manager callbacks as they are no longer used internally by ScrapeTool
-
-    // Mock getJob to reflect final state
-    (mockManagerInstance.getJob as Mock).mockResolvedValue({
-      id: MOCK_JOB_ID,
-      status: PipelineJobStatus.COMPLETED,
-      progress: { pagesScraped: 25 },
-    } as Partial<PipelineJob>);
-
-    const result = await scrapeTool.execute(options);
-
-    expect(result).toEqual({ pagesScraped: 25 });
-    expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID);
   });
 
   it("should return jobId immediately if waitForCompletion is false", async () => {
-    const options = { ...getBaseOptions("1.0.0"), waitForCompletion: false };
-    const result = await scrapeTool.execute(options);
+    const result = await scrapeTool.execute({ ...baseOptions, waitForCompletion: false });
 
     expect(result).toEqual({ jobId: MOCK_JOB_ID });
-    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledOnce();
-    expect(mockManagerInstance.waitForJobCompletion).not.toHaveBeenCalled(); // Should not wait
+    expect(pipeline.enqueueScrapeJob).toHaveBeenCalledOnce();
+    expect(pipeline.waitForJobCompletion).not.toHaveBeenCalled();
   });
 
-  it("should wait for completion by default if waitForCompletion is omitted", async () => {
-    const options = getBaseOptions("1.0.0"); // waitForCompletion is omitted (defaults to true)
-    await scrapeTool.execute(options);
+  it("requests replacement only for replace: true and never stores it as a scraper option", async () => {
+    await scrapeTool.execute({ ...baseOptions, replace: true });
+    await scrapeTool.execute(baseOptions);
 
-    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledOnce();
-    expect(mockManagerInstance.waitForJobCompletion).toHaveBeenCalledWith(MOCK_JOB_ID); // Should wait
-  });
-
-  it("should propagate errors from waitForJobCompletion when waiting", async () => {
-    const options = getBaseOptions("1.0.0"); // Defaults to waitForCompletion: true
-    const jobError = new Error("Job failed");
-    (mockManagerInstance.waitForJobCompletion as Mock).mockRejectedValue(jobError);
-
-    await expect(scrapeTool.execute(options)).rejects.toThrow("Job failed");
-    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledOnce(); // Job was still enqueued
-  });
-
-  it("should pass custom headers to the pipeline manager", async () => {
-    const options: ScrapeToolOptions = {
-      ...getBaseOptions("2.0.0"),
-      options: {
-        headers: {
-          Authorization: "Bearer test-token",
-          "X-Custom-Header": "custom-value",
-        },
-      },
-    };
-    await scrapeTool.execute(options);
-    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
-      "test-lib",
-      "2.0.0",
-      expect.objectContaining({
-        headers: {
-          Authorization: "Bearer test-token",
-          "X-Custom-Header": "custom-value",
-        },
-      }),
-      DEFAULT_INTENT,
-    );
-  });
-
-  it("should pass preserveHashes to the pipeline manager", async () => {
-    const options: ScrapeToolOptions = {
-      ...getBaseOptions("2.0.0"),
-      options: {
-        preserveHashes: true,
-      },
-    };
-
-    await scrapeTool.execute(options);
-
-    expect(mockManagerInstance.enqueueScrapeJob).toHaveBeenCalledWith(
-      "test-lib",
-      "2.0.0",
-      expect.objectContaining({
-        preserveHashes: true,
-      }),
-      DEFAULT_INTENT,
-    );
-  });
-
-  it("should request replacement only when replace is true", async () => {
-    await scrapeTool.execute({ ...getBaseOptions("2.0.0"), replace: true });
-
-    const call = (mockManagerInstance.enqueueScrapeJob as Mock).mock.calls[0];
-    expect(call[3]).toEqual({ onExisting: "replace" });
-  });
-
-  it("should leave the overwrite default to the pipeline when replace is omitted", async () => {
-    await scrapeTool.execute(getBaseOptions("2.0.0"));
-
-    const call = (mockManagerInstance.enqueueScrapeJob as Mock).mock.calls[0];
-    expect(call[3]).toEqual({ onExisting: undefined });
-  });
-
-  it("should never persist replace as a scraper option", async () => {
-    await scrapeTool.execute({ ...getBaseOptions("2.0.0"), replace: true });
-
-    const scraperOptions = (mockManagerInstance.enqueueScrapeJob as Mock).mock
-      .calls[0][2];
-    expect(scraperOptions).not.toHaveProperty("replace");
-    expect(scraperOptions).not.toHaveProperty("onExisting");
+    const [replaced, omitted] = pipeline.enqueueScrapeJob.mock.calls;
+    expect(replaced?.[3]).toEqual({ onExisting: "replace" });
+    // Without replace, the pipeline applies its own default
+    expect(omitted?.[3]).toEqual({ onExisting: undefined });
+    expect(replaced?.[2]).not.toHaveProperty("replace");
+    expect(replaced?.[2]).not.toHaveProperty("onExisting");
   });
 });

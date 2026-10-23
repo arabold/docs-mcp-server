@@ -1,794 +1,396 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HttpResponse } from "msw";
+import { describe, expect, it, vi } from "vitest";
+import { mockSite } from "../../../test/mock-site";
 import { loadConfig } from "../../utils/config";
-import { ChallengeError, HttpStatusError, ScraperError } from "../../utils/errors";
-import { FetchStatus, HttpFetcher } from "../fetcher";
-import type { ScraperOptions } from "../types";
+import { FetchStatus } from "../fetcher/types";
+import type { ScraperOptions, ScraperProgressEvent } from "../types";
 import { GitHubScraperStrategy } from "./GitHubScraperStrategy";
-
-// Mock the dependencies
-vi.mock("../fetcher");
-
-const mockHttpFetcher = vi.mocked(HttpFetcher);
-
-describe("GitHubScraperStrategy", () => {
-  let strategy: GitHubScraperStrategy;
-  let httpFetcherInstance: any;
-  const appConfig = loadConfig();
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-
-    // Setup fetcher mock
-    httpFetcherInstance = {
-      fetch: vi.fn(),
-    };
-    mockHttpFetcher.mockImplementation(function () {
-      return httpFetcherInstance;
-    });
-
-    strategy = new GitHubScraperStrategy(appConfig);
-  });
-
-  describe("canHandle", () => {
-    it("should handle base GitHub repository URLs", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo")).toBe(true);
-      expect(strategy.canHandle("https://www.github.com/owner/repo")).toBe(true);
-      expect(strategy.canHandle("https://github.com/owner/repo/")).toBe(true);
-    });
-
-    it("should handle tree URLs with branch", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo/tree/main")).toBe(true);
-      expect(strategy.canHandle("https://github.com/owner/repo/tree/develop/src")).toBe(
-        true,
-      );
-    });
-
-    it("should handle blob URLs with file paths", () => {
-      expect(
-        strategy.canHandle("https://github.com/owner/repo/blob/main/README.md"),
-      ).toBe(true);
-      expect(
-        strategy.canHandle("https://github.com/owner/repo/blob/main/src/index.js"),
-      ).toBe(true);
-    });
-
-    it("should not handle non-GitHub URLs", () => {
-      expect(strategy.canHandle("https://gitlab.com/owner/repo")).toBe(false);
-      expect(strategy.canHandle("https://bitbucket.org/owner/repo")).toBe(false);
-      expect(strategy.canHandle("https://example.com")).toBe(false);
-    });
-
-    it("should handle legacy github-file:// URLs", () => {
-      expect(strategy.canHandle("github-file://src/cli/types.ts")).toBe(true);
-      expect(strategy.canHandle("github-file://README.md")).toBe(true);
-      expect(strategy.canHandle("github-file://src/index.js")).toBe(true);
-    });
-
-    it("should not handle GitHub wiki URLs", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo/wiki")).toBe(false);
-      expect(strategy.canHandle("https://github.com/owner/repo/wiki/Page")).toBe(false);
-    });
-
-    it("should not handle other GitHub paths", () => {
-      expect(strategy.canHandle("https://github.com/owner/repo/issues")).toBe(false);
-      expect(strategy.canHandle("https://github.com/owner/repo/pulls")).toBe(false);
-    });
-  });
-
-  describe("parseGitHubUrl", () => {
-    it("should parse basic repository URL", () => {
-      const result = (strategy as any).parseGitHubUrl("https://github.com/owner/repo");
-      expect(result).toEqual({ owner: "owner", repo: "repo" });
-    });
-
-    it("should parse tree URL with branch", () => {
-      const result = (strategy as any).parseGitHubUrl(
-        "https://github.com/owner/repo/tree/main",
-      );
-      expect(result).toEqual({ owner: "owner", repo: "repo", branch: "main" });
-    });
-
-    it("should parse tree URL with branch and subpath", () => {
-      const result = (strategy as any).parseGitHubUrl(
-        "https://github.com/owner/repo/tree/main/docs",
-      );
-      expect(result).toEqual({
-        owner: "owner",
-        repo: "repo",
-        branch: "main",
-        subPath: "docs",
-      });
-    });
-
-    it("should parse blob URL with file", () => {
-      const result = (strategy as any).parseGitHubUrl(
-        "https://github.com/owner/repo/blob/main/README.md",
-      );
-      expect(result).toEqual({
-        owner: "owner",
-        repo: "repo",
-        branch: "main",
-        filePath: "README.md",
-        isBlob: true,
-      });
-    });
-
-    it("should parse blob URL with nested file path", () => {
-      const result = (strategy as any).parseGitHubUrl(
-        "https://github.com/owner/repo/blob/main/src/index.js",
-      );
-      expect(result).toEqual({
-        owner: "owner",
-        repo: "repo",
-        branch: "main",
-        filePath: "src/index.js",
-        isBlob: true,
-      });
-    });
-
-    it("should throw error for invalid repository URL", () => {
-      expect(() => {
-        (strategy as any).parseGitHubUrl("https://github.com/invalid");
-      }).toThrow("Invalid GitHub repository URL");
-    });
-  });
-
-  describe("shouldProcessFile", () => {
-    const options: ScraperOptions = {
-      url: "https://github.com/owner/repo",
-      library: "test-lib",
-      version: "1.0.0",
-    };
-
-    it("should process text files with common extensions", () => {
-      const textFiles = [
-        { path: "README.md", type: "blob" as const },
-        { path: "src/index.js", type: "blob" as const },
-        { path: "docs/guide.rst", type: "blob" as const },
-        { path: "package.json", type: "blob" as const },
-        { path: "config.yaml", type: "blob" as const },
-        { path: "script.py", type: "blob" as const },
-      ];
-
-      for (const file of textFiles) {
-        // @ts-expect-error Accessing private method for testing
-        expect(strategy.shouldProcessFile(file, options)).toBe(true);
-      }
-    });
-
-    it("should process common text files without extensions", () => {
-      const commonFiles = [
-        { path: "Dockerfile", type: "blob" as const },
-        { path: "Makefile", type: "blob" as const },
-        { path: "README", type: "blob" as const },
-        { path: "CHANGELOG", type: "blob" as const },
-      ];
-
-      for (const file of commonFiles) {
-        // @ts-expect-error Accessing private method for testing
-        expect(strategy.shouldProcessFile(file, options)).toBe(true);
-      }
-    });
-
-    it("should process config files", () => {
-      const configFiles = [
-        { path: ".prettierrc", type: "blob" as const },
-        { path: ".eslintrc", type: "blob" as const },
-        { path: ".babelrc", type: "blob" as const },
-        { path: ".env", type: "blob" as const },
-        { path: ".env.local", type: "blob" as const },
-      ];
-
-      for (const file of configFiles) {
-        // @ts-expect-error Accessing private method for testing
-        expect(strategy.shouldProcessFile(file, options)).toBe(true);
-      }
-    });
-
-    it("should skip binary files", () => {
-      const binaryFiles = [
-        { path: "image.png", type: "blob" as const },
-        { path: "video.mp4", type: "blob" as const },
-        { path: "archive.zip", type: "blob" as const },
-        { path: "binary.exe", type: "blob" as const },
-        { path: "lib.so", type: "blob" as const },
-        { path: "app.dmg", type: "blob" as const },
-      ];
-
-      for (const file of binaryFiles) {
-        // @ts-expect-error Accessing private method for testing
-        expect(strategy.shouldProcessFile(file, options)).toBe(false);
-      }
-    });
-
-    it("should skip tree items (directories)", () => {
-      const treeItem = { path: "src", type: "tree" as const };
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.shouldProcessFile(treeItem, options)).toBe(false);
-    });
-
-    it("should respect include patterns", () => {
-      const optionsWithInclude = {
-        ...options,
-        includePatterns: ["*.md", "src/**"],
-      };
-
-      expect(
-        // @ts-expect-error Accessing private method for testing
-        strategy.shouldProcessFile(
-          { path: "README.md", type: "blob" as const, sha: "abc", url: "" },
-          optionsWithInclude,
-        ),
-      ).toBe(true);
-      expect(
-        // @ts-expect-error Accessing private method for testing
-        strategy.shouldProcessFile(
-          { path: "src/index.js", type: "blob" as const, sha: "def", url: "" },
-          optionsWithInclude,
-        ),
-      ).toBe(true);
-      expect(
-        // @ts-expect-error Accessing private method for testing
-        strategy.shouldProcessFile(
-          { path: "package.json", type: "blob" as const, sha: "ghi", url: "" },
-          optionsWithInclude,
-        ),
-      ).toBe(false);
-    });
-
-    it("should respect exclude patterns", () => {
-      const optionsWithExclude = {
-        ...options,
-        excludePatterns: ["**/*.test.js", "node_modules/**"],
-      };
-
-      expect(
-        // @ts-expect-error Accessing private method for testing
-        strategy.shouldProcessFile(
-          { path: "src/index.js", type: "blob" as const, sha: "abc", url: "" },
-          optionsWithExclude,
-        ),
-      ).toBe(true);
-      expect(
-        // @ts-expect-error Accessing private method for testing
-        strategy.shouldProcessFile(
-          { path: "src/index.test.js", type: "blob" as const, sha: "def", url: "" },
-          optionsWithExclude,
-        ),
-      ).toBe(false);
-      expect(
-        // @ts-expect-error Accessing private method for testing
-        strategy.shouldProcessFile(
-          {
-            path: "node_modules/package/index.js",
-            type: "blob" as const,
-            sha: "ghi",
-            url: "",
-          },
-          optionsWithExclude,
-        ),
-      ).toBe(false);
-    });
-  });
-
-  describe("isWithinSubPath", () => {
-    it("should return true when no subPath is specified", () => {
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("any/path", undefined)).toBe(true);
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("any/path", "")).toBe(true);
-    });
-
-    it("should return true for exact subPath match", () => {
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("docs", "docs")).toBe(true);
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("src/lib", "src/lib")).toBe(true);
-    });
-
-    it("should return true for paths within subPath", () => {
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("docs/guide.md", "docs")).toBe(true);
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("src/lib/index.js", "src/lib")).toBe(true);
-    });
-
-    it("should return false for paths outside subPath", () => {
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("README.md", "docs")).toBe(false);
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("src/index.js", "docs")).toBe(false);
-    });
-
-    it("should handle trailing slashes correctly", () => {
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("docs/guide.md", "docs/")).toBe(true);
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("docs/guide.md", "/docs")).toBe(true);
-      // @ts-expect-error Accessing private method for testing
-      expect(strategy.isWithinSubPath("docs/guide.md", "/docs/")).toBe(true);
-    });
-  });
-
-  describe("processItem", () => {
-    const options: ScraperOptions = {
-      url: "https://github.com/owner/repo",
-      library: "test-lib",
-      version: "1.0.0",
-    };
-
-    beforeEach(() => {
-      // Mock default branch fetch
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: JSON.stringify({ default_branch: "main" }),
-            mimeType: "application/json",
-            source: url,
-            charset: "utf-8",
-            status: FetchStatus.SUCCESS,
-          });
-        }
-        if (url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: JSON.stringify({
-              sha: "tree123",
-              url: "https://api.github.com/repos/owner/repo/git/trees/tree123",
-              tree: [
-                {
-                  path: "README.md",
-                  type: "blob",
-                  sha: "abc123",
-                  size: 1024,
-                  url: "...",
-                },
-                {
-                  path: "src/index.js",
-                  type: "blob",
-                  sha: "def456",
-                  size: 512,
-                  url: "...",
-                },
-                {
-                  path: "image.png",
-                  type: "blob",
-                  sha: "ghi789",
-                  size: 2048,
-                  url: "...",
-                },
-              ],
-              truncated: false,
-            }),
-            mimeType: "application/json",
-            source: url,
-            charset: "utf-8",
-            status: FetchStatus.SUCCESS,
-          });
-        }
-        return Promise.resolve({
-          content: "file content",
-          mimeType: "text/plain",
-          source: url,
-          charset: "utf-8",
-          status: FetchStatus.SUCCESS,
-        });
-      });
-    });
-
-    it("should discover files and return HTTPS blob URLs", async () => {
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-      const result = await strategy.processItem(item, options);
-
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      expect(result.links).toContain("https://github.com/owner/repo/blob/main/README.md");
-      expect(result.links).toContain(
-        "https://github.com/owner/repo/blob/main/src/index.js",
-      );
-      expect(result.links).not.toContain(
-        "https://github.com/owner/repo/blob/main/image.png",
-      );
-    });
-
-    it("should return empty links for non-depth-0 items", async () => {
-      const item = { url: "https://github.com/owner/repo", depth: 1 };
-      const result = await strategy.processItem(item, options);
-
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      expect(result.links).toEqual([]);
-    });
-
-    it("should handle single blob file URLs with strict scoping", async () => {
-      const blobOptions = {
-        ...options,
-        url: "https://github.com/owner/repo/blob/main/README.md",
-      };
-      const item = { url: "https://github.com/owner/repo/blob/main/README.md", depth: 0 };
-      const result = await strategy.processItem(item, blobOptions);
-
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      // Strict scoping: blob URL should index ONLY that file, not discover wiki
-      expect(result.links).toEqual(["https://github.com/owner/repo/blob/main/README.md"]);
-    });
-
-    it("should mark legacy github-file:// URLs as NOT_FOUND", async () => {
-      const item = { url: "github-file://src/cli/types.ts", depth: 1 };
-      const result = await strategy.processItem(item, options);
-
-      expect(result.status).toBe(FetchStatus.NOT_FOUND);
-      expect(result.links).toEqual([]);
-      expect(result.url).toBe("github-file://src/cli/types.ts");
-    });
-
-    it("should mark legacy github-file:// URLs as NOT_FOUND at any depth", async () => {
-      const item0 = { url: "github-file://README.md", depth: 0 };
-      const result0 = await strategy.processItem(item0, options);
-      expect(result0.status).toBe(FetchStatus.NOT_FOUND);
-
-      const item2 = { url: "github-file://src/index.js", depth: 2 };
-      const result2 = await strategy.processItem(item2, options);
-      expect(result2.status).toBe(FetchStatus.NOT_FOUND);
-    });
-
-    it("should throw user-friendly error when repository info fetch returns NOT_FOUND", async () => {
-      // Mock repo info API returning NOT_FOUND (private repo without auth)
-      // This tests the bug fix where we detect inaccessible repos early
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: Buffer.from(""),
-            mimeType: "application/json",
-            source: url,
-            status: FetchStatus.NOT_FOUND,
-          });
-        }
-        // Tree API should not be called if repo info fails
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.NOT_FOUND,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /Repository "owner\/repo" not found or not accessible/,
-      );
-      await expect(strategy.processItem(item, options)).rejects.toThrow(/GITHUB_TOKEN/);
-    });
-
-    it("should fall back to main when default branch is missing", async () => {
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: JSON.stringify({}),
-            mimeType: "application/json",
-            source: url,
-            charset: "utf-8",
-            status: FetchStatus.SUCCESS,
-          });
-        }
-        if (url.includes("/git/trees/main")) {
-          return Promise.resolve({
-            content: JSON.stringify({
-              sha: "tree123",
-              url: "https://api.github.com/repos/owner/repo/git/trees/tree123",
-              tree: [],
-              truncated: false,
-            }),
-            mimeType: "application/json",
-            source: url,
-            charset: "utf-8",
-            status: FetchStatus.SUCCESS,
-          });
-        }
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      const result = await strategy.processItem(item, options);
-      expect(result.status).toBe(FetchStatus.SUCCESS);
-      expect(httpFetcherInstance.fetch).toHaveBeenCalledWith(
-        expect.stringContaining("/git/trees/main"),
-        expect.any(Object),
-      );
-    });
-
-    it("should throw user-friendly error when tree API returns NOT_FOUND", async () => {
-      // Mock repo info succeeds but tree API returns NOT_FOUND
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: JSON.stringify({ default_branch: "main" }),
-            mimeType: "application/json",
-            source: url,
-            charset: "utf-8",
-            status: FetchStatus.SUCCESS,
-          });
-        }
-        if (url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: Buffer.from(""),
-            mimeType: "application/json",
-            source: url,
-            status: FetchStatus.NOT_FOUND,
-          });
-        }
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.NOT_FOUND,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /Repository "owner\/repo" not found or not accessible/,
-      );
-      await expect(strategy.processItem(item, options)).rejects.toThrow(/GITHUB_TOKEN/);
-    });
-
-    it("should throw user-friendly error when JSON parsing fails", async () => {
-      // Mock tree API returning invalid JSON
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/") && !url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: JSON.stringify({ default_branch: "main" }),
-            mimeType: "application/json",
-            source: url,
-            charset: "utf-8",
-            status: FetchStatus.SUCCESS,
-          });
-        }
-        if (url.includes("/git/trees/")) {
-          return Promise.resolve({
-            content: "not valid json {{{",
-            mimeType: "application/json",
-            source: url,
-            status: FetchStatus.SUCCESS,
-          });
-        }
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /Failed to parse GitHub API response/,
-      );
-    });
-
-    it("should pass headers to httpFetcher.fetch calls", async () => {
-      const optionsWithHeaders = {
-        ...options,
-        headers: { Authorization: "Bearer test-token" },
-      };
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      await strategy.processItem(item, optionsWithHeaders);
-
-      // Verify headers were passed to the fetch calls
-      const fetchCalls = httpFetcherInstance.fetch.mock.calls;
-      expect(fetchCalls.length).toBeGreaterThan(0);
-
-      // Check that at least one API call includes the headers
-      const apiCalls = fetchCalls.filter((call: unknown[]) =>
-        (call[0] as string).includes("api.github.com"),
-      );
-      expect(apiCalls.length).toBeGreaterThan(0);
-
-      // The headers should be passed in the options object
-      for (const call of apiCalls) {
-        expect(call[1]).toHaveProperty("headers");
-        expect(call[1].headers).toHaveProperty("Authorization", "Bearer test-token");
-      }
-    });
-
-    it("should resolve GitHub auth once per scrape", async () => {
-      const resolveSpy = vi.spyOn(await import("./github-auth"), "resolveGitHubAuth");
-      const optionsWithHeaders = {
-        ...options,
-        headers: { Authorization: "Bearer test-token" },
-      };
-
-      await strategy.scrape(optionsWithHeaders, vi.fn());
-
-      expect(resolveSpy).toHaveBeenCalledTimes(1);
-      resolveSpy.mockRestore();
-    });
-
-    it("should throw user-friendly error when authentication fails (401)", async () => {
-      // Mock repo info API throwing 401 error (invalid/expired token)
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/")) {
-          return Promise.reject(
-            new HttpStatusError(
-              "Failed to fetch https://api.github.com/repos/owner/repo after 1 attempts: Request failed with status code 401",
-              true,
-              401,
-            ),
-          );
-        }
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /GitHub authentication failed/,
-      );
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /invalid or expired/,
-      );
-    });
-
-    it("should translate a Cloudflare-challenged 403 into the access-denied message", async () => {
-      // HttpFetcher raises ChallengeError, not HttpStatusError, for a 403 with
-      // challenge markers — it still carries the status and still deserves the
-      // friendly message.
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/")) {
-          return Promise.reject(
-            new ChallengeError(
-              "https://api.github.com/repos/owner/repo",
-              403,
-              "cloudflare",
-            ),
-          );
-        }
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /GitHub access denied/,
-      );
-    });
-
-    it("should not report access denied when only the repo name contains 403", async () => {
-      // The error message embeds the api url, so a message-substring check
-      // would misreport this connection failure as a permissions problem.
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/")) {
-          return Promise.reject(
-            new ScraperError(
-              "Failed to fetch https://api.github.com/repos/owner/error-403 after 3 attempts: connect ECONNREFUSED",
-              true,
-            ),
-          );
-        }
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/error-403", depth: 0 };
-
-      await expect(strategy.processItem(item, options)).rejects.toThrow(/ECONNREFUSED/);
-      await expect(strategy.processItem(item, options)).rejects.not.toThrow(
-        /access denied/,
-      );
-    });
-
-    it("should throw user-friendly error when access is denied (403)", async () => {
-      // Mock repo info API throwing 403 error (forbidden/rate-limited)
-      httpFetcherInstance.fetch.mockImplementation((url: string) => {
-        if (url.includes("api.github.com/repos/")) {
-          return Promise.reject(
-            new HttpStatusError(
-              "Failed to fetch https://api.github.com/repos/owner/repo after 1 attempts: Request failed with status code 403",
-              true,
-              403,
-            ),
-          );
-        }
-        return Promise.resolve({
-          content: "",
-          mimeType: "text/plain",
-          source: url,
-          status: FetchStatus.SUCCESS,
-        });
-      });
-
-      const item = { url: "https://github.com/owner/repo", depth: 0 };
-
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /GitHub access denied/,
-      );
-      await expect(strategy.processItem(item, options)).rejects.toThrow(
-        /permissions|rate-limited/,
-      );
-    });
-  });
+import * as githubAuth from "./github-auth";
+
+// Building realistic request headers loads a large browser-fingerprint model on
+// every fetcher construction, which only costs time here.
+vi.mock("../fetcher/FingerprintGenerator");
+
+const baseConfig = loadConfig();
+const config = {
+  ...baseConfig,
+  scraper: {
+    ...baseConfig.scraper,
+    // One attempt per request, so a request that fails fails the test at once.
+    fetcher: { ...baseConfig.scraper.fetcher, maxRetries: 0 },
+    security: {
+      ...baseConfig.scraper.security,
+      network: {
+        ...baseConfig.scraper.security.network,
+        // Listed hosts pass the access policy without a DNS lookup, so the
+        // mock sites below never depend on the machine's resolver.
+        allowedHosts: ["github.com", "api.github.com", "raw.githubusercontent.com"],
+      },
+    },
+  },
+};
+
+const REPO_URL = "https://github.com/owner/repo";
+// An explicit token keeps the strategy from asking the local gh CLI for one.
+const AUTH = { Authorization: "Bearer test-token" };
+
+const options = (overrides: Partial<ScraperOptions> = {}): ScraperOptions => ({
+  url: REPO_URL,
+  library: "test-lib",
+  version: "1.0.0",
+  headers: AUTH,
+  ...overrides,
 });
 
-describe("GitHubScraperStrategy progress counters", () => {
-  // This strategy had no maxDepth, maxPages, initialQueue or counter coverage at
-  // all, despite having the most depth-heterogeneous initial queue of any
-  // strategy: a flat list of blobs at depth 1 alongside nested wiki pages.
-  let strategy: GitHubScraperStrategy;
-  const appConfig = loadConfig();
+/** A path in a repository tree; directories are listed as `tree` entries. */
+type TreeEntry = string | { path: string; type: "tree" };
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockHttpFetcher.mockImplementation(function () {
-      return { fetch: vi.fn() };
-    });
-    strategy = new GitHubScraperStrategy(appConfig);
+const treeBody = (entries: TreeEntry[]): string =>
+  JSON.stringify({
+    sha: "tree123",
+    url: "https://api.github.com/repos/owner/repo/git/trees/tree123",
+    tree: entries.map((entry) =>
+      typeof entry === "string"
+        ? { path: entry, type: "blob", sha: "abc", url: "" }
+        : { ...entry, sha: "abc", url: "" },
+    ),
+    truncated: false,
   });
 
-  it("satisfies the progress invariant over a refresh queue", async () => {
-    const processItem = vi
-      .spyOn(
-        strategy as unknown as {
-          processItem: (item: { url: string; pageId?: number }) => Promise<unknown>;
-        },
-        "processItem",
-      )
-      .mockImplementation(async (item: { url: string; pageId?: number }) => ({
+const blobUrl = (path: string, branch = "main") =>
+  `https://github.com/owner/repo/blob/${branch}/${path}`;
+
+describe("GitHubScraperStrategy", () => {
+  const api = mockSite("https://api.github.com");
+  const raw = mockSite("https://raw.githubusercontent.com");
+  const web = mockSite("https://github.com");
+
+  const json = { type: "application/json" };
+  const repoInfoPath = "/repos/owner/repo";
+  const treePath = (branch: string) =>
+    `/repos/owner/repo/git/trees/${branch}?recursive=1`;
+
+  /** Serves `owner/repo` with default branch `main` and `entries` in its tree. */
+  function serveRepo(entries: TreeEntry[]): void {
+    api.page(repoInfoPath, JSON.stringify({ default_branch: "main" }), json);
+    api.page(treePath("main"), treeBody(entries), json);
+  }
+
+  /** Runs the discovery step for the scrape's root URL. */
+  const discover = (overrides: Partial<ScraperOptions> = {}) => {
+    const scrapeOptions = options(overrides);
+    return new GitHubScraperStrategy(config).processItem(
+      { url: scrapeOptions.url, depth: 0 },
+      scrapeOptions,
+    );
+  };
+
+  it("discovers the wiki and every readable file of the default branch", async () => {
+    serveRepo([
+      "README.md",
+      "src/index.js",
+      "docs/guide.rst",
+      "package.json",
+      "config.yaml",
+      "script.py",
+      // Well-known names without an extension
+      "Dockerfile",
+      "Makefile",
+      "README",
+      "CHANGELOG",
+      // Config files
+      ".prettierrc",
+      ".eslintrc",
+      ".babelrc",
+      ".env",
+      ".env.local",
+      // Admitted only because its MIME type is text/*
+      "src/main.coffee",
+      // Binary files
+      "image.png",
+      "video.mp4",
+      "archive.zip",
+      "binary.exe",
+      "lib.so",
+      "app.dmg",
+      // A directory
+      { path: "src", type: "tree" },
+    ]);
+
+    const result = await discover();
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.links).toEqual([
+      `${REPO_URL}/wiki`,
+      ...[
+        "README.md",
+        "src/index.js",
+        "docs/guide.rst",
+        "package.json",
+        "config.yaml",
+        "script.py",
+        "Dockerfile",
+        "Makefile",
+        "README",
+        "CHANGELOG",
+        ".prettierrc",
+        ".eslintrc",
+        ".babelrc",
+        ".env",
+        ".env.local",
+        "src/main.coffee",
+      ].map((path) => blobUrl(path)),
+    ]);
+  });
+
+  it("sends the auth header with every GitHub API request", async () => {
+    serveRepo(["README.md"]);
+
+    await discover();
+
+    expect(api.requests.map((request) => request.path)).toEqual([
+      repoInfoPath,
+      treePath("main"),
+    ]);
+    for (const request of api.requests) {
+      expect(request.headers.get("authorization")).toBe("Bearer test-token");
+    }
+  });
+
+  it("scopes a tree URL to its branch and subpath", async () => {
+    // The branch is in the URL, so the repository info is never asked for.
+    api.page(
+      treePath("dev"),
+      treeBody([
+        { path: "docs", type: "tree" },
+        "docs/guide.md",
+        "docs/api/ref.md",
+        "docsx/other.md",
+        "README.md",
+      ]),
+      json,
+    );
+
+    const result = await discover({ url: `${REPO_URL}/tree/dev/docs` });
+
+    expect(result.links?.filter((link) => link.includes("/blob/"))).toEqual([
+      blobUrl("docs/guide.md", "dev"),
+      blobUrl("docs/api/ref.md", "dev"),
+    ]);
+  });
+
+  it("applies include and exclude patterns to repository paths", async () => {
+    serveRepo([
+      "README.md",
+      "src/index.js",
+      "src/index.test.js",
+      "package.json",
+      "node_modules/package/index.js",
+    ]);
+
+    const result = await discover({
+      includePatterns: ["*.md", "src/**", "node_modules/**"],
+      excludePatterns: ["**/*.test.js", "node_modules/**"],
+    });
+
+    expect(result.links).toEqual([
+      `${REPO_URL}/wiki`,
+      blobUrl("README.md"),
+      blobUrl("src/index.js"),
+    ]);
+  });
+
+  it("rejects an invalid repository URL", async () => {
+    await expect(discover({ url: "https://github.com/invalid" })).rejects.toThrow(
+      "Invalid GitHub repository URL",
+    );
+  });
+
+  it("should return empty links for non-depth-0 items", async () => {
+    const strategy = new GitHubScraperStrategy(config);
+
+    const result = await strategy.processItem({ url: REPO_URL, depth: 1 }, options());
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(result.links).toEqual([]);
+  });
+
+  it("should handle single blob file URLs with strict scoping", async () => {
+    const result = await discover({ url: blobUrl("README.md") });
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    // Strict scoping: blob URL should index ONLY that file, not discover wiki
+    expect(result.links).toEqual([blobUrl("README.md")]);
+  });
+
+  it("marks legacy github-file:// URLs as not found at any depth", async () => {
+    const strategy = new GitHubScraperStrategy(config);
+    const items = [
+      { url: "github-file://src/cli/types.ts", depth: 1 },
+      { url: "github-file://README.md", depth: 0 },
+      { url: "github-file://src/index.js", depth: 2 },
+    ];
+
+    for (const item of items) {
+      const result = await strategy.processItem(item, options());
+      expect.soft(result, `${item.url} at depth ${item.depth}`).toEqual({
         url: item.url,
         links: [],
-        status: FetchStatus.SUCCESS,
-        content: { textContent: "content", chunks: [], links: [], errors: [] },
-      }));
+        status: FetchStatus.NOT_FOUND,
+      });
+    }
+  });
 
-    const initialQueue = [
-      { url: "https://github.com/owner/repo/blob/main/a.md", depth: 1, pageId: 1 },
-      { url: "https://github.com/owner/repo/blob/main/b.md", depth: 1, pageId: 2 },
-      { url: "https://github.com/owner/repo/wiki/Deep", depth: 3, pageId: 3 },
+  it("names the token variable when the repository info or its tree is not found", async () => {
+    const cases: Array<{ label: string; serve: () => void }> = [
+      {
+        // The tree has no route, so asking for it would fail the test.
+        label: "repository info",
+        serve: () => api.notFound(repoInfoPath),
+      },
+      {
+        label: "tree",
+        serve: () => {
+          api.page(repoInfoPath, JSON.stringify({ default_branch: "main" }), json);
+          api.notFound(treePath("main"));
+        },
+      },
     ];
-    const options: ScraperOptions = {
-      url: "https://github.com/owner/repo",
-      library: "test",
-      version: "1.0",
-      maxPages: 100,
-      maxDepth: 3,
-      initialQueue,
-      isRefresh: true,
-      ignoreErrors: true,
-    };
-    const cb = vi.fn();
 
-    await strategy.scrape(options, cb);
+    for (const { label, serve } of cases) {
+      api.reset();
+      serve();
+      await expect
+        .soft(discover(), label)
+        .rejects.toThrow(
+          /Repository "owner\/repo" not found or not accessible.*GITHUB_TOKEN/,
+        );
+    }
+  });
 
-    // Four items: the three stored pages plus the root, which is unshifted
-    // because it is absent from the initial queue. The depth-3 wiki page is
-    // processed rather than dropped, and the fraction completes.
-    const final = cb.mock.calls.at(-1)?.[0];
-    expect(final).toMatchObject({
-      pagesScraped: 4,
-      totalPages: 4,
-      totalDiscovered: 4,
-      pagesIndexed: 4,
+  it("should fall back to main when default branch is missing", async () => {
+    api.page(repoInfoPath, JSON.stringify({}), json);
+    api.page(treePath("main"), treeBody([]), json);
+
+    const result = await discover();
+
+    expect(result.status).toBe(FetchStatus.SUCCESS);
+    expect(api.wasRequested(treePath("main"))).toBe(true);
+  });
+
+  it("should throw user-friendly error when JSON parsing fails", async () => {
+    api.page(repoInfoPath, JSON.stringify({ default_branch: "main" }), json);
+    api.page(treePath("main"), "not valid json {{{", json);
+
+    await expect(discover()).rejects.toThrow(/Failed to parse GitHub API response/);
+  });
+
+  it("indexes the repository wiki, following links only within the wiki", async () => {
+    serveRepo([]);
+    // The issues link leaves the wiki, so it is not followed.
+    web
+      .page(
+        "/owner/repo/wiki",
+        '<html><head><title>Home · owner/repo Wiki</title></head><body><p>Welcome to the wiki.</p><a href="/owner/repo/wiki/Guide">Guide</a><a href="/owner/repo/issues">Issues</a></body></html>',
+      )
+      .page(
+        "/owner/repo/wiki/Guide",
+        '<html><head><title>Guide · owner/repo Wiki</title></head><body><p>How to use the library.</p><a href="/owner/repo/wiki">Home</a></body></html>',
+      );
+    const events: ScraperProgressEvent[] = [];
+
+    await new GitHubScraperStrategy(config).scrape(options(), async (event) => {
+      events.push(event);
     });
-    expect(processItem).toHaveBeenCalledTimes(4);
+
+    expect(events.map((event) => event.currentUrl)).toEqual([
+      REPO_URL,
+      `${REPO_URL}/wiki`,
+      `${REPO_URL}/wiki/Guide`,
+    ]);
+    const stored = events.flatMap((event) => (event.result ? [event.result] : []));
+    expect(stored).toEqual([
+      expect.objectContaining({
+        url: `${REPO_URL}/wiki`,
+        title: "Home · owner/repo Wiki",
+        textContent: expect.stringContaining("Welcome to the wiki."),
+      }),
+      expect.objectContaining({
+        url: `${REPO_URL}/wiki/Guide`,
+        title: "Guide · owner/repo Wiki",
+        textContent: expect.stringContaining("How to use the library."),
+      }),
+    ]);
+  });
+
+  it("should resolve GitHub auth once per scrape", async () => {
+    const resolveSpy = vi.spyOn(githubAuth, "resolveGitHubAuth");
+    serveRepo(["a.md", "b.md"]);
+    web.notFound("/owner/repo/wiki");
+    raw.page("/owner/repo/main/a.md", "# A", { type: "text/plain" });
+    raw.page("/owner/repo/main/b.md", "# B", { type: "text/plain" });
+
+    try {
+      // The root, the wiki and both files are four items, which share one lookup.
+      await new GitHubScraperStrategy(config).scrape(options(), vi.fn());
+
+      // The files may be fetched concurrently, in any order.
+      expect(raw.requests.map((request) => request.path).sort()).toEqual([
+        "/owner/repo/main/a.md",
+        "/owner/repo/main/b.md",
+      ]);
+      expect(resolveSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      resolveSpy.mockRestore();
+    }
+  });
+
+  it("explains an authentication or access failure of the GitHub API", async () => {
+    const cases: Array<{ label: string; response: () => Response; message: RegExp }> = [
+      {
+        label: "401",
+        response: () => new HttpResponse(null, { status: 401 }),
+        message: /GitHub authentication failed.*invalid or expired/,
+      },
+      {
+        // The fetcher raises a challenge error, not a status error, for a 403
+        // with challenge markers. It still carries the status and still
+        // deserves the friendly message.
+        label: "403 with a Cloudflare challenge",
+        response: () =>
+          new HttpResponse("Just a moment...", {
+            status: 403,
+            headers: { "cf-mitigated": "challenge" },
+          }),
+        message: /GitHub access denied/,
+      },
+      {
+        label: "403",
+        response: () => new HttpResponse(null, { status: 403 }),
+        message: /GitHub access denied.*(permissions|rate-limited)/,
+      },
+    ];
+
+    for (const { label, response, message } of cases) {
+      api.reset();
+      api.respond(repoInfoPath, response);
+      await expect.soft(discover(), label).rejects.toThrow(message);
+    }
+  });
+
+  it("does not report access denied when only the repo name contains 403", async () => {
+    // The error message embeds the API url, so a message-substring check
+    // would misreport this connection failure as a permissions problem.
+    api.respond("/repos/owner/error-403", () => HttpResponse.error());
+
+    const error = await discover({ url: "https://github.com/owner/error-403" }).catch(
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toMatch(
+      /Failed to fetch https:\/\/api\.github\.com\/repos\/owner\/error-403/,
+    );
+    expect(String(error)).not.toMatch(/access denied/);
   });
 });
