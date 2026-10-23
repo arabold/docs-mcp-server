@@ -20,9 +20,12 @@ export function useGetJobs(input?: RouterInputs["getJobs"]) {
   return trpc.getJobs.useQuery(input);
 }
 
-/** Searches indexed documentation for a library/version. Disabled by default until `enabled` is true. */
-export function useSearch(input: RouterInputs["search"], enabled: boolean) {
-  return trpc.search.useQuery(input, { enabled });
+/**
+ * Searches a library the way the MCP `search_docs` tool does, resolving the
+ * version first. Disabled by default until `enabled` is true.
+ */
+export function useSearch(input: RouterInputs["searchDocs"], enabled: boolean) {
+  return trpc.searchDocs.useQuery(input, { enabled });
 }
 
 /** Enqueues a scrape job for a library. */

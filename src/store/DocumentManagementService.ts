@@ -837,7 +837,7 @@ export class DocumentManagementService {
    * where to continue.
    *
    * @param library Library name.
-   * @param version Version or version range; resolved like `searchStore`.
+   * @param version Version or version range, resolved like `findBestVersion`.
    * @param pathOrUrl Page URL or path.
    * @param options `startChunk` to continue reading, `maxChars` to bound the size.
    * @returns The assembled window and its position within the page.
@@ -886,7 +886,7 @@ export class DocumentManagementService {
    * Lists the stored pages of a library version.
    *
    * @param library Library name.
-   * @param version Version or version range; resolved like `searchStore`.
+   * @param version Version or version range, resolved like `findBestVersion`.
    * @param options `contains` filters URLs; `limit` (default 50) and `offset` paginate.
    * @returns One page of results and whether more follow.
    */
